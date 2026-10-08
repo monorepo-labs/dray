@@ -122,8 +122,12 @@ type SidebarProps = {
   /// deliberately leaves alone.
   issuesOpen: boolean;
   /// Saved tasks not yet started, scoped by the caller like `items`. Drawn in
-  /// the active list only, as the first run under their project.
+  /// the drafts view alone, grouped under their projects.
   drafts: Draft[];
+  /// The list shows drafts in place of sessions — a view of its own, like
+  /// settled, rather than rows mixed into the live list.
+  draftsShown: boolean;
+  onToggleDrafts: () => void;
   /// The draft the new-task composer is showing, lit like a selected row.
   openDraftId: string | null;
   onOpenDraft: (id: string) => void;
@@ -965,6 +969,8 @@ export default function Sidebar({
   openDraftId,
   onOpenDraft,
   onDeleteDraft,
+  draftsShown,
+  onToggleDrafts,
 }: SidebarProps) {
   const fullscreen = useFullscreen();
   // `SIDEBAR_MIN` is `w-60`, the width this opened at before it could be dragged — and
@@ -1061,10 +1067,9 @@ export default function Sidebar({
     return out;
   }, [groups, archivedShown, settledLimit, rowCount]);
   const more = archivedShown && rowCount > settledLimit;
-  // The settled list is a history, and a draft has not started.
   const runs = useMemo(
-    () => (archivedShown ? drawn : placeDrafts(drawn, drafts, projects)),
-    [archivedShown, drawn, drafts, projects],
+    () => (draftsShown ? placeDrafts([], drafts, projects) : drawn),
+    [draftsShown, drawn, drafts, projects],
   );
 
   // A window the list does not overflow fires no scroll event, so scrolling
@@ -1123,7 +1128,15 @@ export default function Sidebar({
   // and saying "No tasks yet" over a filter reads as data loss. The query leads
   // where there is one: it is the filter the reader is holding in their hands,
   // where the project and the settled split were already on screen.
-  const emptyText = search.trim()
+  const emptyText = draftsShown
+    ? search.trim()
+      ? `No drafts matching "${search.trim()}".`
+      : projectFilter
+        ? "No drafts in this project."
+        : space
+          ? `No drafts in ${space}.`
+          : "No drafts yet."
+    : search.trim()
     ? `No tasks matching "${search.trim()}".`
     : projectFilter
       ? archivedShown
@@ -1308,6 +1321,27 @@ export default function Sidebar({
         />
 
         <div className="flex items-center gap-0.5">
+          {/* Same bargain as settled beside it: the glyph names where the press
+              goes, so it swaps to `Undo2` while the drafts are what is shown.
+              A dashed circle, Linear's backlog shape in lucide's stroke: not yet on
+              anybody's list is what a draft is. */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={draftsShown ? "Show active" : "Show drafts"}
+                onClick={onToggleDrafts}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                {draftsShown ? <Undo2 /> : <CircleDashed />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {draftsShown ? "Show active" : "Show drafts"}
+            </TooltipContent>
+          </Tooltip>
+
           {/* The icon names the destination, not the current view: `CheckCheck`
               (the row control's single `Check`, doubled — every settled one) goes
               to the settled list, `Undo2` comes back. A pressed state on one icon
@@ -1487,7 +1521,7 @@ export default function Sidebar({
             Pinning it to the sidebar's bottom edge would keep it on screen
             forever, which is a permanent line of chrome for a one-time hint.
             Hidden with only one row: there's nothing to jump or switch to. */}
-        {rowCount > 1 && !more && (
+        {!draftsShown && rowCount > 1 && !more && (
           <ShortcutHint
             selected={selectedSessionId !== null}
             grouped={!archivedShown && splits.length > 0}
@@ -1948,6 +1982,7 @@ function RowMenu({
   onDelete,
   onDetach,
   onMarkUnread,
+  pin,
   children,
 }: {
   onFork: (worktree: boolean) => void;
@@ -1966,6 +2001,7 @@ function RowMenu({
   /// row with no Completed run to rejoin, and one already unread or mid-turn
   /// has nothing to take back.
   onMarkUnread?: () => void;
+  pin?: { pinned: boolean; toggle: () => void };
   children: React.ReactNode;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -2069,6 +2105,13 @@ function RowMenu({
               </ContextMenuSubContent>
             </ContextMenuSub>
 
+            {pin && (
+              <ContextMenuItem className="text-ui" onSelect={pin.toggle}>
+                <Pin />
+                {pin.pinned ? "Unpin" : "Pin"}
+              </ContextMenuItem>
+            )}
+
             {onMarkUnread && (
               <ContextMenuItem className="text-ui" onSelect={onMarkUnread}>
                 <Circle />
@@ -2114,11 +2157,10 @@ const ELBOW = 10;
 /// the click. Long enough that sweeping down the list reads nothing.
 const PREFETCH_HOVER_MS = 100;
 
-/// A saved task, drawn as a session row with its created time. No label says
-/// "draft": the run's own break sets it apart, and its title is the reader's
-/// raw text where a session's is a generated one. No rail and no hover
-/// controls, since nothing has run. Delete sits on right-click, asking first
-/// the way a session row's does, since the text is the reader's own.
+/// A saved task, drawn as a session row with its created time. No mark says
+/// "draft": the drafts view is the only place one is drawn. No rail and no
+/// hover controls, since nothing has run. Delete sits on right-click, asking
+/// first the way a session row's does, since the text is the reader's own.
 function DraftRow({
   draft,
   active,
@@ -2300,6 +2342,18 @@ function SessionRow({
         status === "idle" && !item.archived && !item.forkFrom
           ? () => onMarkUnread(item.sessionId)
           : undefined
+      }
+      // Absent on a row that follows a pinned ancestor: it sits in Pinned
+      // whichever way its own flag reads, so the verb would move nothing and
+      // leave a flag behind. Absent on a settled row too, where the list draws
+      // no Pinned group.
+      pin={
+        inheritsPin || item.archived
+          ? undefined
+          : {
+              pinned: !!item.pinned,
+              toggle: () => onSetFlags(item.sessionId, { pinned: !item.pinned }),
+            }
       }
     >
       {/* A button can't nest a button, so the row is a div with a click handler
@@ -2484,25 +2538,19 @@ function SessionRow({
 
         <span className="min-w-0 flex-1 truncate text-ui">{item.title}</span>
 
-        {/* One slot for both, sized by the buttons and always holding that width
-            — so a long title truncates against it either way and nothing reflows
-            on hover. The two children stack via `absolute` on the date and
+        {/* One grid cell holding both the timestamp and the hover button, so
+            the slot is as wide as the wider of the two and nothing reflows on
+            hover — a long title truncates against it either way. The two
             crossfade on `opacity` over the same duration, so they never both
             read at once; `visibility` would flip instantly while the button's
-            inherited `transition-all` still crossfades, which is what read as an
+            inherited `transition-all` still crossfades, which read as an
             overlap. */}
-        {/* The min-width is what the *date* needs, not the orb: the slot is
-            otherwise sized by the buttons, and a row drawing one button — or
-            none, which a row that inherits its pin while mid-turn does — leaves
-            the absolutely-drawn date shrink-to-fit inside 20-odd pixels, where
-            "Aug 18" wraps onto two lines. In `em` so it follows the interface
-            font size the reader picks, and wide enough for a month-and-day. */}
-        <div className="relative flex min-w-[4em] shrink-0 items-center justify-end self-stretch pl-2 text-ui">
+        <div className="grid shrink-0 items-center justify-items-end self-stretch pl-2 text-ui">
           {/* `pointer-events-none` unconditionally: it's never a target, and a
-              faded-but-present element still hit-tests — stacked on `right-0` it
-              would otherwise swallow the cursor over the last button, which reads
-              as that one button being dead while its neighbour works. */}
-          <span className="pointer-events-none absolute right-0 flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-data-[state=open]:opacity-0">
+              faded-but-present element still hit-tests — stacked over the button
+              it would otherwise swallow the cursor, which reads as a dead
+              button. */}
+          <span className="pointer-events-none col-start-1 row-start-1 flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-data-[state=open]:opacity-0">
             {/* The orb takes the timestamp's place rather than a slot of its
                 own: a row that's working right now is the one row whose "last
                 activity" reads as stale, and one indicator per row is what keeps
@@ -2543,28 +2591,7 @@ function SessionRow({
               `inline-flex`, and Tailwind emits that after `hidden` at equal
               specificity, so a `display` utility here silently loses.
               `pointer-events-none` keeps the invisible buttons unclickable. */}
-          <div className="pointer-events-none relative flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-data-[state=open]:pointer-events-auto group-data-[state=open]:opacity-100">
-            {/* Absent on a row that follows a pinned ancestor rather than
-                carrying the pin itself, the way 'Detach from parent' is absent
-                where there is no parent drawn: the row sits in the Pinned group
-                whichever way its own flag reads, so both verbs would move
-                nothing — and Pin would quietly leave a flag behind to surprise
-                the reader once the ancestor is unpinned.
-
-                Absent on a settled row for the same reason the settled list
-                draws no Pinned group: the verb moves nothing there. Unsettle
-                is next to it, and a pin the reader wants back is one press
-                away after that. */}
-            {!inheritsPin && !item.archived && (
-              <RowAction
-                label={item.pinned ? "Unpin" : "Pin"}
-                active={item.pinned}
-                onClick={() => onSetFlags(item.sessionId, { pinned: !item.pinned })}
-              >
-                <Pin />
-              </RowAction>
-            )}
-
+          <div className="pointer-events-none col-start-1 row-start-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-data-[state=open]:pointer-events-auto group-data-[state=open]:opacity-100">
             {/* No Settle while a turn is in flight: settling kills the child,
                 so the turn would die mid-work with nothing saying so. Unsettle
                 stays, since a settled row has no turn. */}

@@ -73,7 +73,6 @@ import Sidebar, {
   SidebarToggle,
   filterSessions,
   placeDrafts,
-  sessionGroups,
   sessionUnits,
   sortSessions,
 } from "@/components/Sidebar";
@@ -133,7 +132,7 @@ import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
 import { appendToDraft, onDraftWrite, readDraft, useHasDraft, writeDraft } from "@/hooks/useDraft";
-import { draftKey, useDrafts, type Draft } from "@/hooks/useDrafts";
+import { draftKey, useDrafts } from "@/hooks/useDrafts";
 import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
 import { loadOlder } from "@/lib/olderPages";
 import { authFailedTurn } from "@/lib/auth";
@@ -257,6 +256,8 @@ function App() {
     discardIfEmpty,
   } = useDrafts((e) => setError(String(e)));
   const [openDraftId, setOpenDraftId] = useState<string | null>(null);
+  // The sidebar's third view beside active and settled, in memory only.
+  const [draftsShown, setDraftsShown] = useState(false);
   // Read from the text listener, which registers once, and written ahead of
   // state on send — see `sendFromComposer`.
   const openDraftRef = useRef(openDraftId);
@@ -1680,46 +1681,14 @@ function App() {
           : Math.max(from - 1, 0);
     return units[next][0].sessionId;
   };
-  // Every sidebar row as drawn, drafts in place, with the same live reading as
-  // `ordered` so the sessions sit where the eye sees them.
-  const drawnRows = useMemo(
+  // The drafts view's rows, in the order it draws them.
+  const draftRows = useMemo(
     () =>
-      archivedShown
-        ? []
-        : placeDrafts(
-            sessionGroups(
-              searchedSessions,
-              projects,
-              { statusBySession, asking: sidebarAsking },
-              false,
-              spaceGroups,
-            ),
-            sidebarDrafts,
-            projects,
-          ).flatMap((run): { draft: Draft | null; session: SessionIndexItem | null }[] =>
-            run.kind === "drafts"
-              ? run.drafts.map((draft) => ({ draft, session: null }))
-              : run.rows.map((row) => ({ draft: null, session: row.item })),
-          ),
-    [archivedShown, searchedSessions, projects, statusBySession, sidebarAsking, spaceGroups, sidebarDrafts],
+      placeDrafts([], sidebarDrafts, projects).flatMap((run) =>
+        run.kind === "drafts" ? run.drafts : [],
+      ),
+    [sidebarDrafts, projects],
   );
-  // The walk enters drafts only from a draft already open: a draft is set aside
-  // on purpose, so stepping from a session or a new task passes them by.
-  const stepSession = (delta: number) => {
-    const drafts = drawnRows.flatMap((r) => (r.draft ? [r.draft] : []));
-    const at = drafts.findIndex((d) => d.id === openDraftId);
-    if (at === -1) return stepRow(delta);
-    const next = at + delta;
-    if (next >= 0 && next < drafts.length) return openDraft(drafts[next].id);
-    // Off either end of the drafts, the walk leaves for the session drawn just
-    // past that end — above the first draft or below the last. Where there is
-    // none the draft holds, reopened since the chord's `goToSession` closed it.
-    const edge = drawnRows.findIndex((r) => r.draft?.id === drafts[at].id);
-    const beyond = delta > 0 ? drawnRows.slice(edge + 1) : drawnRows.slice(0, edge).reverse();
-    const session = beyond.find((r) => r.session)?.session;
-    if (session) commitStep(session.sessionId);
-    else openDraft(drafts[at].id);
-  };
   const stepThrough = (units: SessionIndexItem[][], delta: number) => {
     const id = stepTarget(units, delta, selectedSessionId);
     if (id && id !== selectedSessionId) void handleSelectSessionIndexItem(id);
@@ -1742,9 +1711,18 @@ function App() {
   // The timer fires renders later, so it must reach this render's selection.
   const commitStepRef = useRef(commitStep);
   commitStepRef.current = commitStep;
+  // The walk steps whichever view the sidebar shows. A draft opens at once and
+  // ends any run, having no read to save.
   const stepRow = (delta: number) => {
-    const id = stepTarget(ordered.map((i) => [i]), delta, pendingStep ?? selectedSessionId);
-    if (!id) return;
+    const rows = draftsShown
+      ? draftRows.map((d) => ({ id: d.id, draft: true }))
+      : ordered.map((i) => ({ id: i.sessionId, draft: false }));
+    if (rows.length === 0) return;
+    const from = rows.findIndex((r) => r.id === (pendingStep ?? openDraftId ?? selectedSessionId));
+    const target =
+      rows[from === -1 ? 0 : delta > 0 ? (from + 1) % rows.length : Math.max(from - 1, 0)];
+    if (target.draft) return openDraft(target.id);
+    const id = target.id;
     const run = stepRun.current;
     const now = Date.now();
     const fast = !collapsed && now - run.last < STEP_RUN_MS;
@@ -2323,8 +2301,8 @@ function App() {
 
   // ⌘⇧ rather than plain ⌘: the composer is focused most of the time, where
   // ⌘↑/↓ is the webview's own jump-to-start/end of the input.
-  useHotkey("session.prev", () => goToSession(() => stepSession(-1), true));
-  useHotkey("session.next", () => goToSession(() => stepSession(1), true));
+  useHotkey("session.prev", () => goToSession(() => stepRow(-1), true));
+  useHotkey("session.next", () => goToSession(() => stepRow(1), true));
   useHotkey("group.prev", () => goToSession(() => stepGroup(-1)));
   useHotkey("group.next", () => goToSession(() => stepGroup(1)));
   // ⌘⌥ digits, the bare ⌘ digits being the view tabs' below. Not ⌘⇧, which
@@ -2704,7 +2682,15 @@ function App() {
           onMarkUnread={markSessionUnread}
           archivedShown={archivedShown}
           archivedRequested={archivedRequested}
-          onToggleArchived={() => setShowArchived((v) => !v)}
+          onToggleArchived={() => {
+            setDraftsShown(false);
+            setShowArchived((v) => draftsShown || !v);
+          }}
+          draftsShown={draftsShown}
+          onToggleDrafts={() => {
+            if (!draftsShown) setShowArchived(false);
+            setDraftsShown(!draftsShown);
+          }}
           updateStatus={updateStatus}
           updateBlocked={anyRunning}
           updateManual={updateManual}
@@ -3225,7 +3211,11 @@ function App() {
     {/* Outside `AppShell` on purpose: it is fixed to the window rather than
         placed in the layout, and the shell has no slot that isn't a pane. */}
     <NoticeStack
-      onSelect={(id) => goToSession(() => void openNotice(id))}
+      onSelect={(id) =>
+        drafts.some((d) => d.id === id)
+          ? (setShowArchived(false), setDraftsShown(true))
+          : goToSession(() => void openNotice(id))
+      }
       // The session and the pane both, since the card is about something the
       // transcript does not show. The pick is written the same way
       // `usePullRequest`'s `onOpened` writes it — `activeTab` honours a
