@@ -106,7 +106,7 @@ import { nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
+import { clearAttachments, pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
 import { closeFile, useOpenFiles } from "@/hooks/useOpenFiles";
@@ -2694,6 +2694,7 @@ function App() {
           onOpenDraft={openDraft}
           onDeleteDraft={(id) => {
             writeDraft(draftKey(id), "");
+            clearAttachments(draftKey(id));
             removeDraft(id);
           }}
           onDetach={detachSession}
