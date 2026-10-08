@@ -2642,17 +2642,19 @@ async fn deliver_prompt(
     // Nothing tracks turns yet; Claude Code opens one per `init`.
     let agent_event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
 
-    app.emit("agent_event", &agent_event)?;
-
-    append_session_event(session_id, agent_event).await?;
-
-    // The frontend clears it on this event, so the index has to agree. Best
-    // effort: a sidebar flag is not worth failing a delivery over.
+    // The frontend clears it on the event below, so the index has to agree —
+    // and first, so a Set aside the reader makes after seeing the event lands
+    // after this and wins. Best effort: a sidebar flag is not worth failing a
+    // delivery over.
     if queued {
         if let Err(e) = crate::store::clear_aside(session_id).await {
             eprintln!("[clear aside err] {e:#}");
         }
     }
+
+    app.emit("agent_event", &agent_event)?;
+
+    append_session_event(session_id, agent_event).await?;
 
     // Logged, not sent: the caller holds the text and opens the turn itself.
     if !send {
