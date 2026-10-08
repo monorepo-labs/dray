@@ -162,6 +162,10 @@ pub struct SessionIndexItem {
     /// `#[serde(default)]`: an entry written before the field reads as shown.
     #[serde(default)]
     pub hidden: bool,
+    /// Set aside by the reader: started, not wanted now. The sidebar sinks it
+    /// to the end of its project and fades it. Any send clears it.
+    #[serde(default)]
+    pub aside: bool,
     /// Every key this build does not know, carried through untouched.
     ///
     /// The index is rewritten **whole**, and `INDEX_LOCK` is an in-process
@@ -620,6 +624,7 @@ impl SessionIndexItem {
             archived: false,
             pinned: false,
             hidden: false,
+            aside: false,
             unknown: Default::default(),
         }
     }
@@ -710,6 +715,7 @@ impl SessionIndexItem {
             archived: false,
             pinned: false,
             hidden: false,
+            aside: false,
             unknown: Default::default(),
         }
     }
@@ -942,10 +948,13 @@ pub async fn touch_session_index_item(
         // the real model and make a later resume omit `--model` and run the new
         // provider's default. Only a real pick overwrites.
         let model = if model.is_unset() { item.model.clone() } else { model };
+        // A message brings a set-aside session back, whoever sent it.
         let changed = item.model != model
             || item.effort != effort
             || item.permission_mode != permission_mode
-            || item.fast != fast;
+            || item.fast != fast
+            || item.aside;
+        item.aside = false;
         item.model = model;
         item.effort = effort;
         item.permission_mode = permission_mode;
@@ -1008,7 +1017,7 @@ pub async fn archive_hidden_descendants(parent_id: &str, archived: bool) -> Resu
     Ok(ids)
 }
 
-/// Sets `archived`, `pinned` and/or `hidden` on one entry. `None` leaves that
+/// Sets `archived`, `pinned`, `hidden` and/or `aside` on one entry. `None` leaves that
 /// flag alone, so the controls share one command without clobbering each
 /// other's field. Returns the entry as written, or `None` if the id is unknown.
 ///
@@ -1019,6 +1028,7 @@ pub async fn set_session_flags(
     archived: Option<bool>,
     pinned: Option<bool>,
     hidden: Option<bool>,
+    aside: Option<bool>,
 ) -> Result<Option<SessionIndexItem>> {
     let written = update_item(session_id, |item| {
         // Collected here and reported after the write, so a failed write reports
@@ -1042,8 +1052,19 @@ pub async fn set_session_flags(
         if let Some(v) = hidden {
             item.hidden = v;
         }
+        if let Some(v) = aside {
+            if item.aside != v {
+                actions.push(if v { "set_aside" } else { "unset_aside" });
+            }
+            item.aside = v;
+            // The sidebar also reads three untouched days as set aside, so taking
+            // one back has to restart that clock or it would stay where it was.
+            if !v {
+                item.modified = now_rfc3339();
+            }
+        }
 
-        // `modified` is deliberately left alone: it orders the list, and flipping a
+        // `modified` is otherwise left alone: it orders the list, and flipping a
         // flag would jump the session to the top of it.
         (actions, item.clone())
     })
@@ -2004,6 +2025,7 @@ mod tests {
             "archived": false,
             "pinned": true,
             "hidden": true,
+            "aside": true,
             "somethingWeHaveNotShippedYet": {"keep": [1, 2]},
         });
 

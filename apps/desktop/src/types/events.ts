@@ -1721,7 +1721,12 @@ parentSessionId: string | null, created: string, modified: string, archived: boo
  *
  * `#[serde(default)]`: an entry written before the field reads as shown.
  */
-hidden: boolean, };
+hidden: boolean, 
+/**
+ * Set aside by the reader: started, not wanted now. The sidebar sinks it
+ * to the end of its project and fades it. Any send clears it.
+ */
+aside: boolean, };
 
 /**
  * Session-level facts, known at startup.
@@ -1861,7 +1866,12 @@ parentSessionId: string | null, created: string, modified: string, archived: boo
  *
  * `#[serde(default)]`: an entry written before the field reads as shown.
  */
-hidden: boolean, };
+hidden: boolean, 
+/**
+ * Set aside by the reader: started, not wanted now. The sidebar sinks it
+ * to the end of its project and fades it. Any send clears it.
+ */
+aside: boolean, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`

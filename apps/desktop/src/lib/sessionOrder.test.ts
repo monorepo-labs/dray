@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   filterSessions,
@@ -60,6 +60,12 @@ const label = (group: ReturnType<typeof sessionGroups>[number]) =>
 /// Each run as its heading and the rows drawn under it.
 const shape = (groups: ReturnType<typeof sessionGroups>) =>
   groups.map((g) => [label(g), g.rows.map((r) => r.item.sessionId)] as const);
+
+// Ahead of every fixture date, so three idle days never set a row aside here.
+// The cases that are about that move the clock themselves.
+beforeAll(() => {
+  vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00Z"), toFake: ["Date"] });
+});
 
 describe("sortSessions", () => {
   it("orders top-level sessions newest first", () => {
@@ -533,6 +539,32 @@ describe("sessionGroups by state", () => {
       ["completed", ["done", "done2"]],
       ["idle", ["idle", "busy"]],
     ]);
+  });
+
+  it("sinks set-aside and stale rows to the end of their project", () => {
+    vi.setSystemTime(new Date("2026-01-10T00:00:00Z"));
+    const items = [
+      // Set aside by the reader: goes, and its fresh child stays behind.
+      { ...item("parked", "2026-01-09T00:00:00Z"), aside: true },
+      item("parkedKid", "2026-01-09T00:00:00Z", "parked"),
+      item("fresh", "2026-01-08T00:00:00Z"),
+      // Stale, but one child moved yesterday, so it stays; its stale child goes.
+      item("old", "2026-01-01T00:00:00Z"),
+      item("kid", "2026-01-09T00:00:00Z", "old"),
+      item("oldKid", "2026-01-01T00:00:00Z", "old"),
+      item("stale", "2026-01-02T00:00:00Z"),
+    ];
+    try {
+      expect(states(sessionGroups(items, [], live({ parked: "completed" })))).toEqual([
+        ["idle", ["parkedKid", "fresh", "old", "kid"]],
+        ["aside", ["parked", "stale", "oldKid"]],
+      ]);
+      // The settled list is a history, and draws no aside run.
+      expect(sessionGroups(items, [], undefined, true).map((g) => g.kind === "project" && g.state))
+        .not.toContain("aside");
+    } finally {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    }
   });
 
   it("carries a whole nest into the strongest state anything in it holds", () => {

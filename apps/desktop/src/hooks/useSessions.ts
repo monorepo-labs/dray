@@ -861,6 +861,7 @@ const handleSendMsg = async (
       archived: false,
       pinned: false,
       hidden: false,
+      aside: false,
     };
     upsertSession(shell);
   } else {
@@ -948,7 +949,7 @@ const handleSendMsg = async (
       setSessionIndexItems((prev) =>
         prev.map((i) =>
           i.sessionId === sessionId
-            ? { ...i, model: modelId, effort, permissionMode, fast, modified: new Date().toISOString() }
+            ? { ...i, model: modelId, effort, permissionMode, fast, aside: false, modified: new Date().toISOString() }
             : i,
         ),
       );
@@ -1364,7 +1365,7 @@ const detachSession = async (sessionId: string) => {
 /// settle that did not happen — describes a move the index never made.
 const setSessionFlags = async (
   sessionId: string,
-  flags: { archived?: boolean; pinned?: boolean; hidden?: boolean },
+  flags: { archived?: boolean; pinned?: boolean; hidden?: boolean; aside?: boolean },
 ): Promise<boolean> => {
   const fail = failUnlessLeft();
   try {
@@ -1373,6 +1374,7 @@ const setSessionFlags = async (
       archived: flags.archived ?? null,
       pinned: flags.pinned ?? null,
       hidden: flags.hidden ?? null,
+      aside: flags.aside ?? null,
     });
     // Null is the backend finding no such session, which is a write that did
     // not happen like any other.
@@ -1964,6 +1966,14 @@ useEffect(() => {
                 ...prev,
                 [agentEvent.sessionId]: { tokens: 0 },
               }));
+              // Any message brings a set-aside session back — a relayed one
+              // too, which no send here saw. The backend cleared it already.
+              const modified = new Date().toISOString();
+              setSessionIndexItems((prev) =>
+                prev.map((i) =>
+                  i.sessionId === agentEvent.sessionId ? { ...i, aside: false, modified } : i,
+                ),
+              );
             }
 
             // A thinking block reports its size on `usage_update` and nowhere

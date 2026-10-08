@@ -31,6 +31,7 @@ const item = (
   archived: false,
   pinned: false,
   hidden: false,
+  aside: false,
   ...extra,
 });
 

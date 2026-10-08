@@ -638,8 +638,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         answer_questions(session_id: String, request_id: String, answers: HashMap<String, String>) =>
             crate::answer_questions(&session_id, &request_id, answers, sink).await;
         mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read).await;
-        set_session_flags(session_id: String, archived: Option<bool>, pinned: Option<bool>, hidden: Option<bool>) =>
-            crate::set_session_flags(&session_id, archived, pinned, hidden).await;
+        set_session_flags(session_id: String, archived: Option<bool>, pinned: Option<bool>, hidden: Option<bool>, aside: Option<bool>) =>
+            crate::set_session_flags(&session_id, archived, pinned, hidden, aside).await;
         rename_session(session_id: String, title: String) => crate::rename_session(session_id, title, sink).await;
         delete_session(session_id: String) => crate::delete_session(&session_id).await;
         fork_session(session_id: String, fork_id: String, worktree: bool) =>
