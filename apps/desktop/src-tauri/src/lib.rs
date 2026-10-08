@@ -510,8 +510,9 @@ async fn set_session_flags(
     archived: Option<bool>,
     pinned: Option<bool>,
     hidden: Option<bool>,
+    aside: Option<bool>,
 ) -> Result<Option<SessionIndexItem>, Fail> {
-    let updated = store::set_session_flags(session_id, archived, pinned, hidden).await?;
+    let updated = store::set_session_flags(session_id, archived, pinned, hidden, aside).await?;
     if updated.is_none() {
         return Ok(None);
     }

@@ -2216,7 +2216,7 @@ function App() {
   /// nowhere on screen.
   const handleSetSessionFlags = async (
     sessionId: string,
-    flags: { archived?: boolean; pinned?: boolean },
+    flags: { archived?: boolean; pinned?: boolean; aside?: boolean },
   ) => {
     // Everything below describes a move the index has made. A failed write —
     // or one naming a session that is no longer there — has moved nothing, so

@@ -1,5 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Archive,
+  ArchiveRestore,
   Check,
   CheckCheck,
   ChevronDown,
@@ -129,7 +131,7 @@ type SidebarProps = {
   onOpenDraft: (id: string) => void;
   onSetFlags: (
     sessionId: string,
-    flags: { archived?: boolean; pinned?: boolean },
+    flags: { archived?: boolean; pinned?: boolean; aside?: boolean },
   ) => Promise<void>;
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
@@ -300,10 +302,60 @@ type SessionGroup =
 /// saying so on its own row — the working indicator sits where the timestamp
 /// would be — and a run of its own moved a row twice for one piece of work,
 /// out on send and back on the turn ending.
-type SessionState = "asking" | "completed" | "idle";
+/// `aside` is the reader's own "not now", and it sits under everything else.
+type SessionState = "asking" | "completed" | "idle" | "aside";
 
 /// Strongest first, which is also the order the runs are drawn in.
-const SESSION_STATES: SessionState[] = ["asking", "completed", "idle"];
+const SESSION_STATES: SessionState[] = ["asking", "completed", "idle", "aside"];
+
+/// Three untouched days set a session aside without being asked.
+const ASIDE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
+
+/// Untouched long enough to count as set aside. Unsetting restamps
+/// `modified`, which is what lets an old one come back.
+// ponytail: read against the clock at render, so a row crosses the line on
+// the next re-render rather than on the minute; a timer if that ever shows.
+const stale = (item: SessionIndexItem) =>
+  Date.now() - Date.parse(item.modified) > ASIDE_AFTER_MS;
+
+/// The rows drawn in their project's aside run, and everything else.
+///
+/// Judged per row, so a child can go on its own. A row the reader set aside
+/// goes whatever its children are doing — the settle rule, where a parent
+/// leaves and its children stay. A stale row stays while anything below it is
+/// still moving, since that work hangs off it.
+function splitAside(
+  items: SessionIndexItem[],
+): [aside: SessionIndexItem[], rest: SessionIndexItem[]] {
+  const kids = new Map<string, SessionIndexItem[]>();
+  for (const item of items) {
+    if (!item.parentSessionId) continue;
+    const held = kids.get(item.parentSessionId);
+    if (held) held.push(item);
+    else kids.set(item.parentSessionId, [item]);
+  }
+
+  // Whether anything in this subtree is fresh and not set aside. Asked past a
+  // set-aside child, so a grandchild still working keeps its grandparent up.
+  // Seeded false before the children are asked, so a cycle in the index
+  // answers rather than recursing forever.
+  const memo = new Map<string, boolean>();
+  const moving = (item: SessionIndexItem): boolean => {
+    const known = memo.get(item.sessionId);
+    if (known !== undefined) return known;
+    memo.set(item.sessionId, false);
+    const v =
+      (!item.aside && !stale(item)) ||
+      (kids.get(item.sessionId) ?? []).some(moving);
+    memo.set(item.sessionId, v);
+    return v;
+  };
+
+  const aside: SessionIndexItem[] = [];
+  const rest: SessionIndexItem[] = [];
+  for (const item of items) (!item.aside && moving(item) ? rest : aside).push(item);
+  return [aside, rest];
+}
 
 /// How many rows a project needs before it is split at all.
 const STATE_SPLIT_MIN = 3;
@@ -353,6 +405,8 @@ function splitPinned(
   const byId = new Map(items.map((i) => [i.sessionId, i]));
 
   const underPin = (item: SessionIndexItem) => {
+    // The reader's own "not now" outranks a pin it only inherits.
+    if (item.aside) return false;
     // Guarded like the walk itself: a cycle in the index has to cost a strange
     // grouping, never a hung sidebar.
     const seen = new Set<string>();
@@ -440,13 +494,21 @@ export function sessionGroups(
   // under their own projects like any other row.
   const [pinned, rest] = settled ? [[], ungrouped] : splitPinned(ungrouped);
 
+  // The settled list is a history, so nothing in it is set aside. Split
+  // before the walk, so an aside child whose parent stayed is drawn as a root
+  // in its own run rather than reaching for a rail that isn't there.
+  const [asideItems, activeItems] = live ? splitAside(rest) : [[], rest];
+
   // Every subtree the walk emits opens with its own root, so a depth-0 row is
   // where one nest ends and the next begins.
-  const nests: SessionListRow[][] = [];
-  for (const row of sessionRows(rest)) {
-    if (row.depth === 0 || nests.length === 0) nests.push([]);
-    nests[nests.length - 1].push(row);
-  }
+  const nestsOf = (list: SessionIndexItem[]) => {
+    const nests: SessionListRow[][] = [];
+    for (const row of sessionRows(list)) {
+      if (row.depth === 0 || nests.length === 0) nests.push([]);
+      nests[nests.length - 1].push(row);
+    }
+    return nests;
+  };
 
   // A nest takes the strongest state anything in it holds, so a child blocked on
   // a question carries its parent up with it. Ranking on the root alone would
@@ -460,18 +522,27 @@ export function sessionGroups(
     ];
 
   // First appearance, which is what an unattached project is placed by.
-  const byPath = new Map<string, SessionListRow[][]>();
-  for (const nest of nests) {
-    const path = nest[0].item.projectPath;
-    const held = byPath.get(path);
-    if (held) held.push(nest);
-    else byPath.set(path, [nest]);
-  }
+  const byPath = new Map<string, { held: SessionListRow[][]; aside: SessionListRow[][] }>();
+  const file = (nests: SessionListRow[][], side: "held" | "aside") => {
+    for (const nest of nests) {
+      const path = nest[0].item.projectPath;
+      let runs = byPath.get(path);
+      if (!runs) byPath.set(path, (runs = { held: [], aside: [] }));
+      runs[side].push(nest);
+    }
+  };
+  file(nestsOf(activeItems), "held");
+  file(nestsOf(asideItems), "aside");
 
   type ProjectGroup = Extract<SessionGroup, { kind: "project" }>;
   const groups: ProjectGroup[] = [];
 
-  for (const [projectPath, held] of byPath) {
+  for (const [projectPath, { held, aside }] of byPath) {
+    // Its own run whatever the project's size, so it always sits at the end.
+    if (aside.length) {
+      groups.push({ kind: "project", projectPath, state: "aside", rows: aside.flat() });
+    }
+    if (!held.length) continue;
     const rows = held.reduce((n, nest) => n + nest.length, 0);
 
     // A short project draws as one run. The split earns its break by making a
@@ -1444,6 +1515,12 @@ export default function Sidebar({
                     // A row on a server that dropped stays listed — its agent
                     // is still running there — and fades with its heading.
                     faded={(archivedShown && !isToday(item.modified)) || offline(item.cwd)}
+                    // The flag too, for a row drawn in a split group or under a
+                    // pinned ancestor, where no aside run holds it.
+                    aside={
+                      !archivedShown &&
+                      ((group.kind === "project" && group.state === "aside") || item.aside)
+                    }
                     // Nothing refreshes marks over here: the archived view asks for
                     // no repos, so its rows draw from a cache nothing will update.
                     // A stale glyph is the accepted trade; a stale *spinner* is not,
@@ -1942,6 +2019,8 @@ const FORKS = [
 function RowMenu({
   onFork,
   forkDisabled,
+  aside,
+  onSetAside,
   onDelete,
   onDetach,
   onMarkUnread,
@@ -1963,6 +2042,10 @@ function RowMenu({
   /// row with no Completed run to rejoin, and one already unread or mid-turn
   /// has nothing to take back.
   onMarkUnread?: () => void;
+  /// Whether the row reads as set aside, and so which way the item turns.
+  /// Absent where the item would move nothing.
+  aside?: boolean;
+  onSetAside: (aside: boolean) => void;
   children: React.ReactNode;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -2066,6 +2149,13 @@ function RowMenu({
               </ContextMenuSubContent>
             </ContextMenuSub>
 
+            {aside !== undefined && (
+              <ContextMenuItem className="text-ui" onSelect={() => onSetAside(!aside)}>
+                {aside ? <ArchiveRestore /> : <Archive />}
+                {aside ? "Bring back" : "Set aside"}
+              </ContextMenuItem>
+            )}
+
             {onMarkUnread && (
               <ContextMenuItem className="text-ui" onSelect={onMarkUnread}>
                 <Circle />
@@ -2168,6 +2258,7 @@ function SessionRow({
   pr,
   active,
   faded = false,
+  aside = false,
   marksLive = true,
   onSelect,
   onPrefetch,
@@ -2194,6 +2285,9 @@ function SessionRow({
   pr?: PrMark;
   active: boolean;
   faded?: boolean;
+  /// Drawn in its project's set-aside run, or flagged aside itself. Faded
+  /// further than `faded`, since the reader asked for it out of the way.
+  aside?: boolean;
   /// Something is still refreshing this row's mark. False in the archived view,
   /// which asks for no repos — see the call site.
   marksLive?: boolean;
@@ -2216,7 +2310,7 @@ function SessionRow({
   inheritsPin?: boolean;
   onSetFlags: (
     sessionId: string,
-    flags: { archived?: boolean; pinned?: boolean },
+    flags: { archived?: boolean; pinned?: boolean; aside?: boolean },
   ) => Promise<void>;
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
@@ -2244,6 +2338,12 @@ function SessionRow({
       forkDisabled={status === "in_progress"}
       onDelete={() => void onDelete(item.sessionId)}
       onDetach={nested ? () => void onDetach(item.sessionId) : undefined}
+      // Never on a settled row, whose list draws no aside run.
+      aside={item.archived ? undefined : aside}
+      onSetAside={(v) =>
+        // Setting aside unpins, or the row would stay up in Pinned.
+        void onSetFlags(item.sessionId, v ? { aside: true, pinned: false } : { aside: false })
+      }
       // Only a read, finished session can take the mark back: a settled one
       // has left the live list the Completed run lives in, and anything but
       // `idle` is either already unread or still working.
@@ -2301,9 +2401,10 @@ function SessionRow({
           // moment the row is reached for — the fade sorts the list at a glance
           // and must not make an old row harder to read once it's the one being
           // used.
-          faded &&
+          (faded || aside) &&
             !active &&
-            "opacity-50 hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100",
+            "hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100",
+          !active && (aside ? "opacity-30" : faded && "opacity-50"),
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
           // `data-state` is the trigger's, set on this element by
           // `ContextMenuTrigger asChild` — an open menu holds the row lit, since
@@ -2519,7 +2620,12 @@ function SessionRow({
               <RowAction
                 label={item.pinned ? "Unpin" : "Pin"}
                 active={item.pinned}
-                onClick={() => onSetFlags(item.sessionId, { pinned: !item.pinned })}
+                onClick={() =>
+                  onSetFlags(
+                    item.sessionId,
+                    item.aside && !item.pinned ? { pinned: true, aside: false } : { pinned: !item.pinned },
+                  )
+                }
               >
                 <Pin />
               </RowAction>
