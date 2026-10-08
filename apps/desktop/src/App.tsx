@@ -3211,11 +3211,11 @@ function App() {
     {/* Outside `AppShell` on purpose: it is fixed to the window rather than
         placed in the layout, and the shell has no slot that isn't a pane. */}
     <NoticeStack
-      onSelect={(id) =>
-        drafts.some((d) => d.id === id)
-          ? (setShowArchived(false), setDraftsShown(true))
-          : goToSession(() => void openNotice(id))
-      }
+      onSelect={(id) => goToSession(() => void openNotice(id))}
+      onOpenDrafts={() => {
+        setShowArchived(false);
+        setDraftsShown(true);
+      }}
       // The session and the pane both, since the card is about something the
       // transcript does not show. The pick is written the same way
       // `usePullRequest`'s `onOpened` writes it — `activeTab` honours a

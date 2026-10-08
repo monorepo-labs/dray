@@ -28,6 +28,9 @@ type NoticeStackProps = {
   /// its PR tab. Selecting alone would land the reader on a transcript that
   /// says nothing about the pull request the card is about.
   onOpenPr: (sessionId: string) => void;
+  /// Where the saved-draft card goes. Its id names a draft, not a session, so
+  /// it travels apart from `onSelect`.
+  onOpenDrafts: () => void;
   /// Starts the removal, which answers nothing: git finishes in the background
   /// and a refusal comes back as a card of its own.
   onDeleteWorktree: (sessionId: string) => void;
@@ -55,7 +58,7 @@ const ACTION: Record<NoticeKind, string> = {
   // changed it from, and nothing moved — so the only thing this button can
   // honestly offer is taking the card away.
   "issue-failed": "Dismiss",
-  "draft-saved": "Dismiss",
+  "draft-saved": "View",
 };
 
 /// The kinds that go somewhere when taken. Everything else is read and
@@ -319,6 +322,7 @@ function NoticeCard({
 export default function NoticeStack({
   onSelect,
   onOpenPr,
+  onOpenDrafts,
   onDeleteWorktree,
 }: NoticeStackProps) {
   const notices = useNotices();
@@ -352,6 +356,7 @@ export default function NoticeStack({
   const take = (notice: Notice) => {
     dismissNotice(notice.sessionId, notice.kind);
     if (notice.kind === "pr") onOpenPr(notice.sessionId);
+    else if (notice.kind === "draft-saved") onOpenDrafts();
     else if (NAVIGATES.includes(notice.kind)) onSelect(notice.sessionId);
   };
 
