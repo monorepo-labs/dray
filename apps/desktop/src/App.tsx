@@ -145,7 +145,7 @@ import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { crewAnchor, crewRows, crewSeen, inSidebar, withHiddenAsks } from "@/lib/crew";
 import { panelMove, sidebarMove } from "@/lib/sidebarAuto";
-import { playCelebration } from "@/lib/sound";
+import { playCelebration, playNotification } from "@/lib/sound";
 import {
   activeSpace,
   allowedInSpace,
@@ -363,6 +363,7 @@ function App() {
     const now = readDraft(null);
     writeDraft(null, now.startsWith(prompt) ? now.slice(prompt.length) : now);
     pushNotice({ sessionId: id, kind: "draft-saved", label: "Saved as draft" });
+    playNotification();
   };
   const draftChord = useChord("composer.draft");
 
@@ -2691,6 +2692,10 @@ function App() {
           drafts={sidebarDrafts}
           openDraftId={issuesOpen ? null : openDraftId}
           onOpenDraft={openDraft}
+          onDeleteDraft={(id) => {
+            writeDraft(draftKey(id), "");
+            removeDraft(id);
+          }}
           onDetach={detachSession}
           onSetFlags={handleSetSessionFlags}
           onFork={forkSession}

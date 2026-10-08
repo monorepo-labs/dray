@@ -127,6 +127,7 @@ type SidebarProps = {
   /// The draft the new-task composer is showing, lit like a selected row.
   openDraftId: string | null;
   onOpenDraft: (id: string) => void;
+  onDeleteDraft: (id: string) => void;
   onSetFlags: (
     sessionId: string,
     flags: { archived?: boolean; pinned?: boolean },
@@ -963,6 +964,7 @@ export default function Sidebar({
   drafts,
   openDraftId,
   onOpenDraft,
+  onDeleteDraft,
 }: SidebarProps) {
   const fullscreen = useFullscreen();
   // `SIDEBAR_MIN` is `w-60`, the width this opened at before it could be dragged — and
@@ -1423,6 +1425,7 @@ export default function Sidebar({
                     draft={draft}
                     active={draft.id === openDraftId}
                     onOpen={onOpenDraft}
+                    onDelete={onDeleteDraft}
                   />
                 ))}
 
@@ -2114,47 +2117,84 @@ const PREFETCH_HOVER_MS = 100;
 /// A saved task, drawn as a session row with its created time. No label says
 /// "draft": the run's own break sets it apart, and its title is the reader's
 /// raw text where a session's is a generated one. No rail and no hover
-/// controls, since nothing has run. No delete either: clearing its text and
-/// leaving is how a draft goes.
+/// controls, since nothing has run. Delete sits on right-click, asking first
+/// the way a session row's does, since the text is the reader's own.
 function DraftRow({
   draft,
   active,
   onOpen,
+  onDelete,
 }: {
   draft: Draft;
   active: boolean;
   onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (active) ref.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
   return (
-    <div
-      ref={ref}
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpen(draft.id)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen(draft.id);
-        }
-      }}
-      className={cn(
-        "relative flex min-h-7 w-full cursor-pointer items-center rounded-md pr-0.5 pl-2 transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-        active
-          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
-      )}
-    >
-      <span className="min-w-0 flex-1 truncate text-ui">{draftTitle(draft)}</span>
-      <span className="shrink-0 pl-2 text-ui text-muted-foreground">
-        {relativeTime(draft.created)}
-      </span>
-    </div>
+    <ContextMenu onOpenChange={(open) => open && setConfirming(false)}>
+      <ContextMenuTrigger asChild>
+      <div
+        ref={ref}
+        role="button"
+        tabIndex={0}
+        onClick={() => onOpen(draft.id)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen(draft.id);
+          }
+        }}
+        className={cn(
+          "relative flex min-h-7 w-full cursor-pointer items-center rounded-md pr-0.5 pl-2 transition-colors select-none",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+          "data-[state=open]:bg-sidebar-accent/50",
+          active
+            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+            : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate text-ui">{draftTitle(draft)}</span>
+        <span className="shrink-0 pl-2 text-ui text-muted-foreground">
+          {relativeTime(draft.created)}
+        </span>
+      </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-40">
+        {confirming ? (
+          <>
+            <p className="px-1.5 py-1 text-ui text-muted-foreground">Are you sure?</p>
+            <div className="mt-1 flex gap-1">
+              <ContextMenuItem className="flex-1 justify-center text-ui">Cancel</ContextMenuItem>
+              <ContextMenuItem
+                variant="destructive"
+                onSelect={() => onDelete(draft.id)}
+                className="flex-1 justify-center bg-destructive/10 text-ui"
+              >
+                Delete
+              </ContextMenuItem>
+            </div>
+          </>
+        ) : (
+          <ContextMenuItem
+            variant="destructive"
+            className="text-ui"
+            onSelect={(e) => {
+              e.preventDefault();
+              setConfirming(true);
+            }}
+          >
+            <Trash2 />
+            Delete
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
