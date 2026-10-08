@@ -335,6 +335,8 @@ function splitAside(
     else kids.set(item.parentSessionId, [item]);
   }
 
+  // Whether anything in this subtree is fresh and not set aside. Asked past a
+  // set-aside child, so a grandchild still working keeps its grandparent up.
   // Seeded false before the children are asked, so a cycle in the index
   // answers rather than recursing forever.
   const memo = new Map<string, boolean>();
@@ -343,15 +345,15 @@ function splitAside(
     if (known !== undefined) return known;
     memo.set(item.sessionId, false);
     const v =
-      !item.aside &&
-      (!stale(item) || (kids.get(item.sessionId) ?? []).some(moving));
+      (!item.aside && !stale(item)) ||
+      (kids.get(item.sessionId) ?? []).some(moving);
     memo.set(item.sessionId, v);
     return v;
   };
 
   const aside: SessionIndexItem[] = [];
   const rest: SessionIndexItem[] = [];
-  for (const item of items) (moving(item) ? rest : aside).push(item);
+  for (const item of items) (!item.aside && moving(item) ? rest : aside).push(item);
   return [aside, rest];
 }
 
@@ -403,6 +405,8 @@ function splitPinned(
   const byId = new Map(items.map((i) => [i.sessionId, i]));
 
   const underPin = (item: SessionIndexItem) => {
+    // The reader's own "not now" outranks a pin it only inherits.
+    if (item.aside) return false;
     // Guarded like the walk itself: a cycle in the index has to cost a strange
     // grouping, never a hung sidebar.
     const seen = new Set<string>();
@@ -1493,61 +1497,55 @@ export default function Sidebar({
                   />
                 ))}
 
-                {group.kind !== "drafts" && group.rows.map(({ item, depth, guides, opens }) => {
-                  // The settled list draws no aside run, and fades on its own rule.
-                  const aside =
-                    !archivedShown &&
-                    ((group.kind === "project" && group.state === "aside") || item.aside);
-                  return (
-                    <SessionRow
-                      key={item.sessionId}
-                      item={item}
-                      depth={depth}
-                      guides={guides}
-                      opens={opens}
-                      status={statusBySession[item.sessionId] ?? item.status}
-                      asking={askingSessions.has(item.sessionId)}
-                      pr={prFor(item.projectPath, sessionBranch(item))}
-                      active={item.sessionId === selectedSessionId}
-                      // The settled list is a history, and the question asked of it is
-                      // "what did I finish today" — so everything older is held back
-                      // rather than filtered out. Only there: the active list is a
-                      // worklist, where an older row is still open work.
-                      // A row on a server that dropped stays listed — its agent
-                      // is still running there — and fades with its heading.
-                      faded={(archivedShown && !isToday(item.modified)) || offline(item.cwd)}
-                      aside={aside}
-                      // Nothing refreshes marks over here: the archived view asks for
-                      // no repos, so its rows draw from a cache nothing will update.
-                      // A stale glyph is the accepted trade; a stale *spinner* is not,
-                      // since it animates a claim that something is happening now.
-                      marksLive={!archivedShown}
-                      nested={isNested(item, items)}
-                      // A row drawn under Pinned below the top is there because
-                      // its parent is — `splitPinned` only carries a nest whole.
-                      // Unless it holds a pin of its own as well: that flag is
-                      // real and outlives the ancestor's, so hiding the action
-                      // there would strand it, and the row would come back pinned
-                      // for no reason the reader could see once the ancestor was
-                      // unpinned.
-                      inheritsPin={
-                        group.kind === "pinned" && depth > 0 && !item.pinned
-                      }
-                      onSelect={onSelect}
-                      onPrefetch={onPrefetch}
-                      onDragStart={
-                        !archivedShown
-                          ? (e) => startSessionDrag(e, item.sessionId, item.title, onDropSession)
-                          : undefined
-                      }
-                      onSetFlags={onSetFlags}
-                      onFork={onFork}
-                      onDelete={onDelete}
-                      onDetach={onDetach}
-                      onMarkUnread={onMarkUnread}
-                    />
-                  );
-                })}
+                {group.kind !== "drafts" && group.rows.map(({ item, depth, guides, opens }) => (
+                  <SessionRow
+                    key={item.sessionId}
+                    item={item}
+                    depth={depth}
+                    guides={guides}
+                    opens={opens}
+                    status={statusBySession[item.sessionId] ?? item.status}
+                    asking={askingSessions.has(item.sessionId)}
+                    pr={prFor(item.projectPath, sessionBranch(item))}
+                    active={item.sessionId === selectedSessionId}
+                    // The settled list is a history, and the question asked of it is
+                    // "what did I finish today" — so everything older is held back
+                    // rather than filtered out. Only there: the active list is a
+                    // worklist, where an older row is still open work.
+                    // A row on a server that dropped stays listed — its agent
+                    // is still running there — and fades with its heading.
+                    faded={(archivedShown && !isToday(item.modified)) || offline(item.cwd)}
+                    aside={group.kind === "project" && group.state === "aside"}
+                    // Nothing refreshes marks over here: the archived view asks for
+                    // no repos, so its rows draw from a cache nothing will update.
+                    // A stale glyph is the accepted trade; a stale *spinner* is not,
+                    // since it animates a claim that something is happening now.
+                    marksLive={!archivedShown}
+                    nested={isNested(item, items)}
+                    // A row drawn under Pinned below the top is there because
+                    // its parent is — `splitPinned` only carries a nest whole.
+                    // Unless it holds a pin of its own as well: that flag is
+                    // real and outlives the ancestor's, so hiding the action
+                    // there would strand it, and the row would come back pinned
+                    // for no reason the reader could see once the ancestor was
+                    // unpinned.
+                    inheritsPin={
+                      group.kind === "pinned" && depth > 0 && !item.pinned
+                    }
+                    onSelect={onSelect}
+                    onPrefetch={onPrefetch}
+                    onDragStart={
+                      !archivedShown
+                        ? (e) => startSessionDrag(e, item.sessionId, item.title, onDropSession)
+                        : undefined
+                    }
+                    onSetFlags={onSetFlags}
+                    onFork={onFork}
+                    onDelete={onDelete}
+                    onDetach={onDetach}
+                    onMarkUnread={onMarkUnread}
+                  />
+                ))}
               </Fragment>
             );
           })

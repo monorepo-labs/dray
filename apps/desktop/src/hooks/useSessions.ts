@@ -1966,8 +1966,14 @@ useEffect(() => {
                 ...prev,
                 [agentEvent.sessionId]: { tokens: 0 },
               }));
-              // Any message brings a set-aside session back — a relayed one
-              // too, which no send here saw. The backend cleared it already.
+            }
+
+            // Any message brings a set-aside session back — a relayed one too,
+            // which no send here saw. The backend cleared it at the send. Not
+            // on a queued one's delivery: that send already counted, and a
+            // set-aside made since is the reader's later word, which the index
+            // keeps too.
+            if (agentEvent.payload.type === "user_message" && !agentEvent.payload.queued) {
               const modified = new Date().toISOString();
               setSessionIndexItems((prev) =>
                 prev.map((i) =>

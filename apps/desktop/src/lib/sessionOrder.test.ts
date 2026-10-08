@@ -553,11 +553,15 @@ describe("sessionGroups by state", () => {
       item("kid", "2026-01-09T00:00:00Z", "old"),
       item("oldKid", "2026-01-01T00:00:00Z", "old"),
       item("stale", "2026-01-02T00:00:00Z"),
+      // Stale, its child set aside, but a grandchild is working: stays.
+      item("gran", "2026-01-01T00:00:00Z"),
+      { ...item("mid", "2026-01-09T00:00:00Z", "gran"), aside: true },
+      item("leaf", "2026-01-09T00:00:00Z", "mid"),
     ];
     try {
       expect(states(sessionGroups(items, [], live({ parked: "completed" })))).toEqual([
-        ["idle", ["parkedKid", "fresh", "old", "kid"]],
-        ["aside", ["parked", "stale", "oldKid"]],
+        ["idle", ["parkedKid", "leaf", "fresh", "old", "kid", "gran"]],
+        ["aside", ["parked", "mid", "stale", "oldKid"]],
       ]);
       // The settled list is a history, and draws no aside run.
       expect(sessionGroups(items, [], undefined, true).map((g) => g.kind === "project" && g.state))
