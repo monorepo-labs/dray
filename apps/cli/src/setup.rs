@@ -23,10 +23,29 @@ pub struct Setup {
 pub enum ServiceCommand {
     /// Run the server in the background, surviving logout and reboot. Linux only.
     Start,
-    /// Show whether the server is running.
+    /// Show whether the server is running, and its tunnel address.
     Status,
     /// Stop the server and remove it from the background.
     Uninstall,
+    /// Keep a public address in front of the server, through a Cloudflare
+    /// quick tunnel, or take it down. Linux only.
+    Tunnel {
+        #[arg(value_enum)]
+        state: OnOff,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, clap::ValueEnum)]
+pub enum OnOff {
+    On,
+    Off,
+}
+
+#[derive(Args)]
+pub struct Tunnel {
+    /// The port dray-serve listens on.
+    #[arg(long, default_value_t = dray_proto::SERVE_PORT)]
+    port: u16,
 }
 
 #[derive(Args)]
@@ -161,7 +180,7 @@ pub fn setup(args: Setup) -> Result<(), String> {
                 "git" => (format!("git {DIM}(Dray needs it){RESET}"), true),
                 "browser" => (format!("Browser for agents {DIM}(system libraries for dray browser){RESET}"), false),
                 "ffmpeg" => (format!("ffmpeg {DIM}(dray browser record){RESET}"), false),
-                "cloudflared" => (format!("cloudflared {DIM}(public links to dev servers){RESET}"), false),
+                "cloudflared" => (format!("cloudflared {DIM}(public links to dev servers, dray tunnel){RESET}"), false),
                 _ => (t.name.to_string(), false),
             })
             .collect();
@@ -419,8 +438,20 @@ pub fn service(command: ServiceCommand) -> Result<(), String> {
             if !systemctl(false, &["status", UNIT, "--no-pager"]) {
                 return Err("the server is not running".into());
             }
+            if systemctl(true, &["is-enabled", TUNNEL_UNIT]) {
+                match tunnel_address()? {
+                    Some(url) => println!("\n{}", connect_text(&url)?),
+                    None => println!("\nThe tunnel has no address yet. See why: journalctl --user -u dray-tunnel -n 20"),
+                }
+            }
+        }
+        ServiceCommand::Tunnel { state: OnOff::On } => tunnel_on()?,
+        ServiceCommand::Tunnel { state: OnOff::Off } => {
+            tunnel_off()?;
+            println!("The tunnel is down; the server is reachable over SSH alone.");
         }
         ServiceCommand::Uninstall => {
+            tunnel_off()?;
             // `stop`, not `disable --now`: a unit stays loaded after its file
             // moved or went, and `disable` refuses one with no file.
             let stopped = systemctl(true, &["stop", UNIT]);
@@ -449,13 +480,225 @@ pub fn service(command: ServiceCommand) -> Result<(), String> {
 }
 
 const UNIT: &str = "dray.service";
+const TUNNEL_UNIT: &str = "dray-tunnel.service";
 
 pub fn unit_path() -> Result<PathBuf, String> {
+    unit_file(UNIT)
+}
+
+fn unit_file(name: &str) -> Result<PathBuf, String> {
     let config = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::home_dir().map(|h| h.join(".config")))
         .ok_or("could not resolve your home directory")?;
-    Ok(config.join("systemd/user").join(UNIT))
+    Ok(config.join("systemd/user").join(name))
+}
+
+fn write_unit(file: &Path, unit: &str) -> Result<(), String> {
+    std::fs::create_dir_all(file.parent().unwrap_or(file))
+        .and_then(|()| std::fs::write(file, unit))
+        .map_err(|e| format!("could not write {}: {e}", file.display()))
+}
+
+/// `%` is systemd's specifier character, so a literal one is doubled.
+fn unit_escape(text: &str) -> String {
+    text.replace('%', "%%")
+}
+
+/// The `PATH` a unit runs with: `bin`'s own dir first, then every agent dir
+/// whether or not it exists yet, so one installed after the server starts is
+/// found without rewriting the unit, then the reader's own.
+fn unit_env_path(bin: &Path) -> Result<String, String> {
+    let dir = bin.parent().unwrap_or(bin).display().to_string();
+    let home = std::env::home_dir().ok_or("could not resolve your home directory")?;
+    let homes: Vec<String> = HOME_BIN_DIRS.iter().map(|d| home.join(d).display().to_string()).collect();
+    Ok(format!("{dir}:{}:{}", homes.join(":"), std::env::var("PATH").unwrap_or_default()))
+}
+
+/// Installs `dray-tunnel.service` beside the server and waits for its address.
+/// `PartOf` restarts and stops it with `dray.service`, and `WantedBy` starts it
+/// whenever the server starts, boot included. Off until asked for: a public
+/// address is the reader's call.
+fn tunnel_on() -> Result<(), String> {
+    cloudflared().ok_or(NO_CLOUDFLARED)?;
+    service_start()?;
+    let dray = std::env::current_exe().map_err(|e| format!("could not find the running dray binary: {e}"))?;
+    let unit = format!(
+        "[Unit]\nDescription=Dray tunnel\nAfter={UNIT}\nPartOf={UNIT}\n\n[Service]\nExecStart=\"{}\" tunnel\n\
+         Environment=\"PATH={}\"\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy={UNIT}\n",
+        unit_escape(&dray.display().to_string()),
+        unit_escape(&unit_env_path(&dray)?),
+    );
+    write_unit(&unit_file(TUNNEL_UNIT)?, &unit)?;
+    if !systemctl(true, &["daemon-reload"]) || !systemctl(true, &["enable", "--now", TUNNEL_UNIT]) {
+        return Err(format!("systemd would not start the tunnel. See: systemctl --user status {TUNNEL_UNIT}"));
+    }
+    // Measured at ~6s from start to a registered address.
+    for _ in 0..60 {
+        if let Some(url) = tunnel_address()? {
+            println!("{}", connect_text(&url)?);
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    Err("the tunnel has no address after 30s. See why: journalctl --user -u dray-tunnel -n 20".into())
+}
+
+/// Takes the tunnel unit away, if there is one. The tunnel removes its own
+/// address file as it stops.
+fn tunnel_off() -> Result<(), String> {
+    let file = unit_file(TUNNEL_UNIT)?;
+    let _ = systemctl(true, &["disable", "--now", TUNNEL_UNIT]);
+    if file.exists() {
+        std::fs::remove_file(&file).map_err(|e| format!("could not remove {}: {e}", file.display()))?;
+    }
+    let _ = systemctl(true, &["daemon-reload"]);
+    Ok(())
+}
+
+const NO_CLOUDFLARED: &str = "cloudflared is not installed. dray setup offers it: dray setup --install cloudflared";
+
+/// The Dray directory, `DRAY_HOME` where set, as the server reads it.
+fn dray_home() -> Result<PathBuf, String> {
+    std::env::var_os("DRAY_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::home_dir().map(|h| h.join(".dray")))
+        .ok_or_else(|| "could not resolve your home directory".into())
+}
+
+/// cloudflared where `dray setup` or a package manager put it, or where an
+/// earlier `dray share` downloaded it.
+fn cloudflared() -> Option<PathBuf> {
+    let downloaded = dray_home().ok()?.join("cloudflared").join(dray_proto::CLOUDFLARED_VERSION).join("cloudflared");
+    find("cloudflared").or_else(|| downloaded.is_file().then_some(downloaded))
+}
+
+/// The address the running tunnel wrote, if one is up.
+fn tunnel_address() -> Result<Option<String>, String> {
+    let file = dray_home()?.join(dray_proto::TUNNEL_URL_FILE);
+    Ok(std::fs::read_to_string(file).ok().map(|u| u.trim().to_string()).filter(|u| !u.is_empty()))
+}
+
+fn serve_token() -> Result<String, String> {
+    std::fs::read_to_string(dray_home()?.join("serve-token"))
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "the server has no token yet; start it first: dray service start".into())
+}
+
+/// What the reader reads off a terminal: the address, and the line Add server
+/// takes whole. The token is in that line, so it is printed to a terminal
+/// alone — under systemd stdout is the journal.
+fn connect_text(url: &str) -> Result<String, String> {
+    use std::io::IsTerminal;
+    let wss = url.replacen("https://", "wss://", 1);
+    if !std::io::stdout().is_terminal() {
+        return Ok(format!("Tunnel up: {wss}"));
+    }
+    Ok(format!(
+        "Tunnel up: {wss}\n\nIn the Dray app, Settings, Servers, Add server, Use an address and token, \
+         and paste this into Address:\n\n   {wss} {}\n\n{DIM}Anyone holding that line can use this server. \
+         The address changes when the tunnel restarts; the token does not.{RESET}",
+        serve_token()?
+    ))
+}
+
+/// `dray tunnel`: a Cloudflare quick tunnel in front of this machine's
+/// server, in the foreground. Writes the address where the app's SSH connect
+/// reads it, and removes it once the tunnel is down.
+pub fn tunnel(args: Tunnel) -> Result<(), String> {
+    use std::io::{BufRead, BufReader};
+    use std::sync::atomic::Ordering;
+
+    serve_token()?;
+    if std::net::TcpStream::connect(("127.0.0.1", args.port)).is_err() {
+        return Err(format!("no Dray server on port {}. Start it first: dray service start", args.port));
+    }
+    let exe = cloudflared().ok_or(NO_CLOUDFLARED)?;
+    let mut child = Command::new(exe)
+        .args(["tunnel", "--no-autoupdate", "--grace-period", "1s"])
+        .args(["--url", &format!("http://127.0.0.1:{}", args.port)])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not run cloudflared: {e}"))?;
+    hand_stop_signals_to(child.id());
+
+    let mut lines = BufReader::new(child.stderr.take().expect("piped")).lines();
+    let (mut url, mut registered, mut said) = (None, false, None);
+    for line in lines.by_ref() {
+        let Ok(line) = line else { break };
+        url = url.or_else(|| dray_proto::quick_tunnel_url(&line));
+        registered |= line.contains(dray_proto::TUNNEL_REGISTERED);
+        if line.contains(" ERR ") {
+            said = Some(line);
+        } else if let (true, Some(url)) = (registered, &url) {
+            wait_for_dns(url);
+            let file = dray_home()?.join(dray_proto::TUNNEL_URL_FILE);
+            let part = file.with_extension("part");
+            std::fs::write(&part, format!("{url}\n"))
+                .and_then(|()| std::fs::rename(&part, &file))
+                .map_err(|e| format!("could not write {}: {e}", file.display()))?;
+            println!("{}", connect_text(url)?);
+            // cloudflared logs for as long as it runs, and a pipe nobody
+            // drains fills and stalls it.
+            std::thread::spawn(move || lines.for_each(drop));
+            let _ = child.wait();
+            // Only an address this run wrote: a second tunnel may own it now.
+            if std::fs::read_to_string(&file).is_ok_and(|u| u.trim() == url) {
+                let _ = std::fs::remove_file(&file);
+            }
+            return if STOPPED.load(Ordering::Relaxed) { Ok(()) } else { Err("the tunnel went down".into()) };
+        }
+    }
+    let _ = child.wait();
+    let said = said.map(|l| format!(": {}", l.trim())).unwrap_or_default();
+    Err(format!("cloudflared exited without an address{said}"))
+}
+
+/// Until the tunnel's name resolves, so nobody's resolver asks early and
+/// caches the miss: see `TUNNEL_REGISTERED`. Through curl, which every server
+/// that ran the install line has; give up after 15s and hand it out anyway.
+fn wait_for_dns(url: &str) {
+    let query = format!("{}{}", dray_proto::DOH_QUERY, url.trim_start_matches("https://"));
+    for _ in 0..30 {
+        let answer = Command::new("curl")
+            .args(["-fsS", "--max-time", "3", "-H", "accept: application/dns-json", &query])
+            .stderr(Stdio::null())
+            .output();
+        match answer {
+            Ok(out) if String::from_utf8_lossy(&out.stdout).contains("\"Status\":0") => return,
+            Err(_) => return std::thread::sleep(std::time::Duration::from_secs(5)),
+            _ => std::thread::sleep(std::time::Duration::from_millis(500)),
+        }
+    }
+}
+
+static STOPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static CHILD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// Ctrl-C, `systemctl stop` or a plain `kill` reach cloudflared, which takes
+/// the tunnel down, while this process lives on to remove the address file. A
+/// handler rather than ignoring them, since an ignored signal stays ignored
+/// across `exec` — cloudflared is spawned first for that reason too.
+fn hand_stop_signals_to(pid: u32) {
+    extern "C" {
+        fn signal(sig: i32, handler: extern "C" fn(i32)) -> usize;
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    extern "C" fn pass_on(sig: i32) {
+        STOPPED.store(true, std::sync::atomic::Ordering::Relaxed);
+        // Async-signal-safe: an atomic load and kill(2).
+        unsafe { kill(CHILD.load(std::sync::atomic::Ordering::Relaxed), sig) };
+    }
+    CHILD.store(pid as i32, std::sync::atomic::Ordering::Relaxed);
+    // SIGHUP, SIGINT, SIGTERM: the same numbers on Linux and macOS.
+    for sig in [1, 2, 15] {
+        unsafe { signal(sig, pass_on) };
+    }
 }
 
 fn systemctl(quiet: bool, args: &[&str]) -> bool {
@@ -474,23 +717,13 @@ fn service_start() -> Result<String, String> {
             .into());
     }
     let serve = beside("dray-serve")?;
-    let dir = serve.parent().unwrap_or(&serve).display().to_string();
-    // Every agent dir whether or not it exists yet, so one installed after the
-    // server starts is found without rewriting the unit.
-    let home = std::env::home_dir().ok_or("could not resolve your home directory")?;
-    let homes: Vec<String> = HOME_BIN_DIRS.iter().map(|d| home.join(d).display().to_string()).collect();
-    let path = format!("{dir}:{}:{}", homes.join(":"), std::env::var("PATH").unwrap_or_default());
-    // `%` is systemd's specifier character, so a literal one is doubled.
     let unit = format!(
         "[Unit]\nDescription=Dray server\n\n[Service]\nExecStart=\"{}\"\nEnvironment=\"PATH={}\"\n\
          Restart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
-        serve.display().to_string().replace('%', "%%"),
-        path.replace('%', "%%"),
+        unit_escape(&serve.display().to_string()),
+        unit_escape(&unit_env_path(&serve)?),
     );
-    let file = unit_path()?;
-    std::fs::create_dir_all(file.parent().unwrap_or(&file))
-        .and_then(|()| std::fs::write(&file, unit))
-        .map_err(|e| format!("could not write {}: {e}", file.display()))?;
+    write_unit(&unit_path()?, &unit)?;
 
     let was_running = systemctl(true, &["is-active", UNIT]);
     if !systemctl(true, &["daemon-reload"]) || !systemctl(true, &["enable", "--now", UNIT]) {

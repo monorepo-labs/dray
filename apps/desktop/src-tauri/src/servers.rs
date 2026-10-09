@@ -219,15 +219,15 @@ pub async fn start(sink: Sink) {
     announce();
 }
 
-/// Spelled the way a reader types it — `host:port`, `http://…`, `ws://…` —
-/// and answered as the `ws://` URL the socket opens.
+/// Spelled the way a reader types it — `host:port`, `http://…`, `ws://…`, or
+/// a tunnel's `https://…`/`wss://…` — and answered as the URL the socket opens.
 fn normalize(url: &str) -> Result<String, String> {
     let url = url.trim().trim_end_matches('/');
     let url = if let Some(rest) = url.strip_prefix("http://") {
         format!("ws://{rest}")
-    } else if url.starts_with("https://") || url.starts_with("wss://") {
-        return Err("wss:// is not supported yet — reach the server over an SSH tunnel or Tailscale".into());
-    } else if url.starts_with("ws://") {
+    } else if let Some(rest) = url.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if url.starts_with("ws://") || url.starts_with("wss://") {
         url.to_string()
     } else {
         format!("ws://{url}")
@@ -239,20 +239,14 @@ fn normalize(url: &str) -> Result<String, String> {
     Ok(url)
 }
 
-type Socket = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
+type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// Connects and says hello. Answers the admitted socket, or why not.
 async fn admit(url: &str, token: &str) -> Result<Socket, String> {
-    let request = url.into_client_request().map_err(|e| e.to_string())?;
-    let host = request.uri().host().unwrap_or_default().trim_matches(['[', ']']).to_string();
-    let port = request.uri().port_u16().unwrap_or(80);
     let attempt = async {
-        let stream = tokio::net::TcpStream::connect((host.as_str(), port))
+        let (mut ws, _) = tokio_tungstenite::connect_async(url)
             .await
             .map_err(|e| format!("could not reach {url}: {e}"))?;
-        let (mut ws, _) = tokio_tungstenite::client_async(request, stream)
-            .await
-            .map_err(|e| format!("handshake with {url} failed: {e}"))?;
         ws.send(Message::text(json!({ "v": PROTOCOL, "token": token }).to_string()))
             .await
             .map_err(|e| e.to_string())?;
@@ -316,9 +310,18 @@ async fn run(id: String) {
             return;
         };
         set(&id, ServerStatus::Connecting, saved.ssh.as_ref().map(|_| ssh::Stage::Connecting), None, None);
+        let kept_token = crate::issues::credential(&credential_name(&id)).await.unwrap_or_default();
         let (url, token, tunnel) = match &saved.ssh {
             Some(target) => match ssh::open(target, |stage| set(&id, ServerStatus::Connecting, Some(stage), None, None)).await {
-                Ok(tunnel) => (format!("ws://127.0.0.1:{}", tunnel.port), tunnel.token.clone(), Some(tunnel)),
+                Ok(tunnel) => {
+                    remember_address(&id, tunnel.address.as_deref(), &tunnel.token).await;
+                    (format!("ws://127.0.0.1:{}", tunnel.port), tunnel.token.clone(), Some(tunnel))
+                }
+                // No login, but the server's tunnel address from the last one
+                // that worked, with the token it read.
+                Err(_) if !saved.url.is_empty() && admit(&saved.url, &kept_token).await.is_ok() => {
+                    (saved.url, kept_token, None)
+                }
                 Err(failure) => {
                     set(&id, ServerStatus::Disconnected, None, Some(failure.message), failure.fix);
                     if failure.permanent {
@@ -329,7 +332,7 @@ async fn run(id: String) {
                     continue;
                 }
             },
-            None => (saved.url, crate::issues::credential(&credential_name(&id)).await.unwrap_or_default(), None),
+            None => (saved.url, kept_token, None),
         };
         // Through a tunnel, a refused admit is usually ssh refusing the forward,
         // and ssh's own sentence says that better than a closed socket does.
@@ -343,11 +346,65 @@ async fn run(id: String) {
                 serve(&id, ws).await;
                 set_status(&id, ServerStatus::Disconnected, Some("connection lost".into()));
             }
+            Err(_) if tunnel.is_none() && saved.ssh.is_none() && tunnel_gone(&url).await => {
+                // Retrying an address Cloudflare has let go of fixes nothing.
+                set(
+                    &id,
+                    ServerStatus::Disconnected,
+                    None,
+                    Some("The server's tunnel has a new address. Paste it here: dray service status on the server prints it.".into()),
+                    Some(ssh::Fix::NewAddress),
+                );
+                return;
+            }
             Err(e) => set_status(&id, ServerStatus::Disconnected, Some(said(e))),
         }
         drop(tunnel);
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
+    }
+}
+
+/// Keeps an SSH server's tunnel address beside its login, with the token the
+/// login read, so the next connect can go by tunnel where SSH cannot. No
+/// tunnel up there forgets both: a stale address would only ever fail.
+async fn remember_address(id: &str, address: Option<&str>, token: &str) {
+    let url = address.and_then(|a| normalize(a).ok()).unwrap_or_default();
+    let moved = {
+        let mut list = conns();
+        let Some(conn) = list.iter_mut().find(|c| c.saved.id == id) else { return };
+        let moved = conn.saved.url != url;
+        conn.saved.url = url.clone();
+        moved
+    };
+    let stored = (!url.is_empty()).then_some(token);
+    if crate::issues::credential(&credential_name(id)).await.as_deref() != stored {
+        let _ = crate::issues::set_credential(&credential_name(id), stored).await;
+    }
+    if moved {
+        let _ = save().await;
+    }
+}
+
+/// Whether a quick tunnel's address is one Cloudflare no longer serves —
+/// rather than this Mac being offline, or the server behind a live address
+/// being down. Measured: a stopped tunnel's host answers 530 while its DNS
+/// lingers, then stops resolving at all; a live tunnel with nothing behind it
+/// answers 502.
+async fn tunnel_gone(url: &str) -> bool {
+    let Some(host) = url.strip_prefix("wss://").filter(|h| h.ends_with(".trycloudflare.com")) else {
+        return false;
+    };
+    let probe = reqwest::Client::new().get(format!("https://{host}/")).timeout(ADMIT).send().await;
+    match probe {
+        Ok(answer) => answer.status().as_u16() == 530,
+        // Unresolvable, while Cloudflare's own name resolves: the address,
+        // not the network.
+        Err(e) if e.is_connect() => {
+            tokio::net::lookup_host((host, 443)).await.is_err()
+                && tokio::net::lookup_host(("trycloudflare.com", 443)).await.is_ok()
+        }
+        Err(_) => false,
     }
 }
 
@@ -443,6 +500,30 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
     announce();
     let added = conns().iter().find(|c| c.saved.id == id).map(info);
     added.ok_or_else(|| "the server was removed while it was being added".into())
+}
+
+/// Points a server added by address at a new one, keeping its token: what a
+/// quick tunnel restarting asks of the reader. Admitted before it is saved,
+/// like an add.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn set_server_address(id: String, url: String) -> Result<(), String> {
+    let url = normalize(&url)?;
+    let token = crate::issues::credential(&credential_name(&id)).await.unwrap_or_default();
+    admit(&url, &token).await?.close(None).await.ok();
+    {
+        let mut list = conns();
+        let conn = list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?;
+        let was_default = conn.saved.name == unnamed(&conn.saved);
+        conn.saved.url = url;
+        // A name nobody picked was the old address's host; it follows.
+        if was_default {
+            conn.saved.name = unnamed(&conn.saved);
+        }
+        conn.saved.off = false;
+        conn.restart();
+    }
+    announce();
+    save().await
 }
 
 /// The name a server gets when the reader gives none.
@@ -724,7 +805,10 @@ pub async fn fetch_file(server: &str, path: &str) -> Result<(String, Vec<u8>), S
         .live
         .clone()
         .ok_or("the server is not connected")?;
-    let base = url.replacen("ws://", "http://", 1);
+    let base = match url.strip_prefix("wss://") {
+        Some(rest) => format!("https://{rest}"),
+        None => url.replacen("ws://", "http://", 1),
+    };
     let response = reqwest::Client::new()
         .get(format!("{base}/file"))
         .query(&[("path", path)])
@@ -754,7 +838,8 @@ mod tests {
         assert_eq!(normalize("127.0.0.1:7317").unwrap(), "ws://127.0.0.1:7317");
         assert_eq!(normalize("http://box:7317/").unwrap(), "ws://box:7317");
         assert_eq!(normalize(" ws://box:7317 ").unwrap(), "ws://box:7317");
-        assert!(normalize("wss://box").is_err());
+        assert_eq!(normalize("https://a-b.trycloudflare.com/").unwrap(), "wss://a-b.trycloudflare.com");
+        assert_eq!(normalize("wss://a-b.trycloudflare.com").unwrap(), "wss://a-b.trycloudflare.com");
         assert!(normalize("").is_err());
     }
 
@@ -839,6 +924,95 @@ mod tests {
         assert!(gone.as_str().unwrap().contains("no server"));
     }
 
+    /// Against a server running `dray service tunnel on`, reached over SSH
+    /// only to restart its tunnel. A server added by its tunnel address asks
+    /// for the new one once the tunnel restarts; an SSH server records the
+    /// address, connects by it when the login fails, and follows a restart.
+    ///
+    /// ```text
+    /// DRAY_TEST_SSH="ssh root@host" cargo test servers::tests::follows_the_tunnel -- --ignored --nocapture
+    /// ```
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn follows_the_tunnel() {
+        let line = std::env::var("DRAY_TEST_SSH").expect("DRAY_TEST_SSH");
+        let target = ssh::parse(&line).unwrap();
+        let on_server = |cmd: &str| {
+            let out = std::process::Command::new("ssh").args(["-o", "BatchMode=yes", "--", &target.dest, cmd]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let address = || on_server("cat ~/.dray/tunnel-url");
+        let restart_tunnel = |old: &str| {
+            on_server("systemctl --user restart dray-tunnel");
+            for _ in 0..60 {
+                let now = address();
+                if now.starts_with("https://") && now != old {
+                    return now;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            panic!("no new tunnel address");
+        };
+        let home = std::env::temp_dir().join(format!("dray-tunnel-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&home).unwrap();
+        std::env::set_var("DRAY_HOME", &home);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        start(Sink::new(move |event, payload| {
+            let _ = tx.send((event.to_string(), payload));
+        }))
+        .await;
+        let token = on_server("cat ~/.dray/serve-token");
+        let first = address();
+        assert!(first.ends_with(".trycloudflare.com"), "is the tunnel on? {first}");
+
+        // By address alone, as another Mac with no SSH would add it.
+        let t0 = std::time::Instant::now();
+        let added = add_server(first.clone(), token.clone(), Some("tunnel".into())).await.unwrap();
+        next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
+        eprintln!("admitted through the tunnel in {:?}", t0.elapsed());
+        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_ok());
+        let second = restart_tunnel(&first);
+        let asked = next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["fix"]["kind"] == "new_address").await;
+        eprintln!("asked for a new address: {}", asked[0]["error"]);
+        set_server_address(added.id.clone(), second.clone()).await.unwrap();
+        next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
+        assert_eq!(crate::issues::credential(&credential_name(&added.id)).await.as_deref(), Some(token.as_str()), "token kept");
+        remove_server(added.id).await.unwrap();
+
+        // Over SSH: the address rides the login.
+        let added = add_ssh_server(line, Some("vps".into())).await.map_err(|f| f.message).unwrap();
+        next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
+        assert_eq!(list_servers()[0].url, second.replacen("https://", "wss://", 1));
+        assert_eq!(crate::issues::credential(&credential_name(&added.id)).await.as_deref(), Some(token.as_str()));
+        assert!(!std::fs::read_to_string(home.join("servers.json")).unwrap().contains(&token));
+
+        // No login: a destination that answers nothing, and the tunnel instead.
+        eprintln!("by SSH: recorded {}", list_servers()[0].url);
+        conns()[0].saved.ssh = Some(ssh::Target { dest: "root@192.0.2.1".into(), port: None });
+        set_server_on(added.id.clone(), true).await.unwrap();
+        // ssh's own ConnectTimeout is 10s before the tunnel is tried.
+        let t0 = std::time::Instant::now();
+        while list_servers()[0].status != ServerStatus::Connected {
+            assert!(t0.elapsed() < Duration::from_secs(30), "never connected by tunnel");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        eprintln!("no login: connected by tunnel in {:?}", t0.elapsed());
+        assert!(conns()[0].live.as_ref().unwrap().0.starts_with("wss://"), "connected by tunnel");
+        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_ok());
+
+        // The login back, and a tunnel restart picked up with no question.
+        conns()[0].saved.ssh = Some(target.clone());
+        let third = restart_tunnel(&second);
+        set_server_on(added.id.clone(), true).await.unwrap();
+        let t0 = std::time::Instant::now();
+        while list_servers()[0].url != third.replacen("https://", "wss://", 1) {
+            assert!(t0.elapsed() < Duration::from_secs(30), "never followed the restart: {}", list_servers()[0].url);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        eprintln!("login back: followed the restart to {}", list_servers()[0].url);
+        remove_server(added.id).await.unwrap();
+    }
+
     /// Through a real SSH login, in a throwaway `DRAY_HOME`. Kills the `ssh`
     /// process mid-connection and waits for the loop to log in again.
     ///
@@ -862,7 +1036,9 @@ mod tests {
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
         let saved = std::fs::read_to_string(home.join("servers.json")).unwrap();
         assert!(saved.contains("\"dest\""), "{saved}");
-        assert_eq!(crate::issues::credential(&credential_name(&added.id)).await, None, "no token stored");
+        // Stored only beside a tunnel address, for connecting without a login.
+        let stored = crate::issues::credential(&credential_name(&added.id)).await;
+        assert_eq!(stored.is_some(), !list_servers()[0].url.is_empty(), "a token only beside a tunnel");
         assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_ok());
 
         let port = conns()[0].live.clone().unwrap().0.rsplit(':').next().unwrap().to_string();

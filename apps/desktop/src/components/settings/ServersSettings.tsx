@@ -117,6 +117,7 @@ export default function ServersSettings() {
             status={server.status}
             fix={server.fix}
             onTrust={(fix) => setTrusting({ server, fix })}
+            onNewAddress={(url) => invoke("set_server_address", { id: server.id, url: splitConnectLine(url).url }, LOCAL)}
             on={server.on}
             onToggle={(on) => void invoke("set_server_on", { id: server.id, on }, LOCAL).catch(console.error)}
             onRetry={
@@ -187,6 +188,7 @@ function Row({
   status,
   fix = null,
   onTrust,
+  onNewAddress,
   on,
   onToggle,
   onRetry,
@@ -203,6 +205,8 @@ function Row({
   status: ServerStatus;
   fix?: Fix | null;
   onTrust?: (fix: TrustHost) => void;
+  /// The tunnel's new address, for a row whose old one Cloudflare let go.
+  onNewAddress?: (url: string) => Promise<void>;
   /// Absent for This Mac, which is the app itself and cannot be turned off.
   on?: boolean;
   onToggle?: (on: boolean) => void;
@@ -240,6 +244,7 @@ function Row({
             Check the host key
           </Button>
         )}
+        {fix?.kind === "new_address" && onNewAddress && <NewAddressField onSave={onNewAddress} />}
       </div>
       {onRemove &&
         (confirming ? (
@@ -281,6 +286,53 @@ function Row({
           </div>
         ))}
     </div>
+  );
+}
+
+/// `dray tunnel` prints the address and the token as one line, so a paste of
+/// it fills both fields. Anything else is an address alone.
+function splitConnectLine(text: string): { url: string; token?: string } {
+  const [url, token, ...rest] = text.trim().split(/\s+/);
+  if (!rest.length && token && /^[0-9a-f]{64}$/i.test(token)) return { url, token };
+  return { url: text };
+}
+
+/// The row's own question once a tunnel restarted: the token is kept, so the
+/// new address is all it needs. A pasted connect line is taken whole.
+function NewAddressField({ onSave }: { onSave: (url: string) => Promise<void> }) {
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave(url);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={save} className="flex flex-col gap-1.5">
+      <div className="flex gap-1.5">
+        <Input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="wss://…trycloudflare.com"
+          aria-label="New address"
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+        />
+        <Button type="submit" variant="secondary" size="sm" disabled={busy || !url.trim()}>
+          {busy ? "Connecting…" : "Connect"}
+        </Button>
+      </div>
+      {error && <p className="text-ui text-destructive">{error}</p>}
+    </form>
   );
 }
 
@@ -382,7 +434,7 @@ function AddServerDialog({
           <DialogDescription>
             {viaSsh
               ? "Run sessions on a machine you can SSH into. Dray uses your existing key."
-              : "Connect straight to a running dray serve."}
+              : "Connect by the address dray tunnel prints, or any running dray serve."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="flex flex-col gap-3">
@@ -401,8 +453,21 @@ function AddServerDialog({
             </Field>
           ) : (
             <>
-              <Field label="Address">
-                <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="127.0.0.1:7317" autoFocus required />
+              <Field label="Address" hint="Paste dray tunnel's whole line and the token fills in too.">
+                <Input
+                  value={url}
+                  onChange={(e) => {
+                    const pasted = splitConnectLine(e.target.value);
+                    setUrl(pasted.url);
+                    if (pasted.token) setToken(pasted.token);
+                  }}
+                  placeholder="wss://…trycloudflare.com"
+                  autoFocus
+                  required
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                />
               </Field>
               <Field label="Token" hint="In serve-token, in the server's Dray directory.">
                 <Input type="password" value={token} onChange={(e) => setToken(e.target.value)} required />

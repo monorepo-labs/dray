@@ -23,7 +23,7 @@ const KEYSCAN: &str = "/usr/bin/ssh-keyscan";
 const KEYGEN: &str = "/usr/bin/ssh-keygen";
 
 /// Where `dray-serve` listens on the server, as `dray setup` leaves it.
-const REMOTE_PORT: u16 = 7317;
+const REMOTE_PORT: u16 = dray_proto::SERVE_PORT;
 
 /// The longest line the script is read for, and the most of `dray service
 /// start`'s output kept. A server on the far side of a network decides what
@@ -142,6 +142,9 @@ pub enum Fix {
     TrustHost { host: String, key_type: String, fingerprint: String },
     /// Dray is not on the server: the app can install it over the login.
     Install,
+    /// The server's quick tunnel restarted under a new address, which only
+    /// the reader can bring here; the token is kept.
+    NewAddress,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -171,6 +174,8 @@ pub struct Tunnel {
     _stdout: BufReader<ChildStdout>,
     pub port: u16,
     pub token: String,
+    /// The server's quick tunnel address, where `dray tunnel` is running there.
+    pub address: Option<String>,
     stderr: Arc<Mutex<String>>,
 }
 
@@ -191,6 +196,7 @@ const SCRIPT: &str = concat!(
     "if ! systemctl --user is-active --quiet dray 2>/dev/null && systemctl --user show-environment >/dev/null 2>&1; then ",
     "echo DRAY-SSH starting; if ! out=$(dray service start 2>&1); then echo DRAY-SSH failed; echo \"$out\"; exit 0; fi; fi; ",
     "[ -r \"$HOME/.dray/serve-token\" ] || { echo DRAY-SSH notoken; exit 0; }; ",
+    "[ -r \"$HOME/.dray/tunnel-url\" ] && echo \"DRAY-SSH tunnel $(cat \"$HOME/.dray/tunnel-url\")\"; ",
     "echo \"DRAY-SSH token $(cat \"$HOME/.dray/serve-token\")\"; exec cat",
 );
 
@@ -216,6 +222,7 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
     let stdin = child.stdin.take().expect("piped");
     let mut stdout = BufReader::new(child.stdout.take().expect("piped"));
 
+    let mut address = None;
     let script = async {
         let mut line = String::new();
         let mut failed: Option<String> = None;
@@ -246,6 +253,9 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
                     if let Some(token) = rest.strip_prefix("token ") {
                         return Ok(Ok(token.trim().to_string()));
                     }
+                    if let Some(url) = rest.strip_prefix("tunnel ") {
+                        address = dray_proto::quick_tunnel_url(url.trim());
+                    }
                 }
                 // Whatever a dotfile echoes on login.
                 None => {}
@@ -256,7 +266,7 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
     let host = target.host();
     match outcome {
         Ok(Ok(Ok(token))) if !token.is_empty() => {
-            Ok(Tunnel { _child: child, _stdin: stdin, _stdout: stdout, port, token, stderr })
+            Ok(Tunnel { _child: child, _stdin: stdin, _stdout: stdout, port, token, address, stderr })
         }
         Ok(Ok(Ok(_) | Err("notoken"))) => Err(Failure::new(
             format!("Dray is on {host} but its server has never run there."),

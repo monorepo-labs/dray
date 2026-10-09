@@ -73,6 +73,9 @@ enum Command {
     /// Keep the Dray server running in the background. Linux only.
     #[command(subcommand)]
     Service(setup::ServiceCommand),
+    /// Give this machine's server a public address through a Cloudflare quick
+    /// tunnel, in the foreground. `dray service tunnel on` keeps one running.
+    Tunnel(setup::Tunnel),
     /// Manage the Claude Code skill that documents this CLI.
     #[command(subcommand)]
     Skill(SkillCommand),
@@ -303,6 +306,7 @@ fn run() -> Result<(), String> {
         Command::Setup(args) => setup::setup(args),
         Command::Serve(args) => setup::serve(args),
         Command::Service(command) => setup::service(command),
+        Command::Tunnel(args) => setup::tunnel(args),
     }
 }
 

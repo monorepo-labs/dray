@@ -123,8 +123,12 @@ desktop = [
   "dep:cpal",
   "dep:rubato",
   "dep:transcribe-cpp",
-  # The client half of the serve wire, for remote servers (servers.rs).
+  # The client half of the serve wire, for remote servers (servers.rs). TLS
+  # for `wss://` through a tunnel: rustls on the system's roots, both already
+  # in the tree under `reqwest`, so no OpenSSL and no new crate.
   "dep:tokio-tungstenite",
+  "tokio-tungstenite/connect",
+  "tokio-tungstenite/rustls-tls-native-roots",
   "dep:form_urlencoded",
 ]
 cef = ["desktop", "dep:cef"]

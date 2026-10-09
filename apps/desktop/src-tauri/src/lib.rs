@@ -773,6 +773,7 @@ pub fn run() {
             servers::add_ssh_server,
             servers::set_server_on,
             servers::rename_server,
+            servers::set_server_address,
             servers::trust_host_key,
             servers::survey_server,
             servers::install_on_server,

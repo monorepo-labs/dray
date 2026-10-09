@@ -123,6 +123,7 @@ pub async fn run(port: u16) -> Result<()> {
     );
 
     let token: Arc<str> = token.into();
+    let tunnel_file: Arc<Path> = home.join(dray_proto::TUNNEL_URL_FILE).into();
     loop {
         let (stream, peer) = match listener.accept().await {
             Ok(accepted) => accepted,
@@ -131,11 +132,12 @@ pub async fn run(port: u16) -> Result<()> {
                 continue;
             }
         };
-        let (sink, events, live, token) = (sink.clone(), events.clone(), live.clone(), token.clone());
+        let (sink, events, live, token, tunnel_file) =
+            (sink.clone(), events.clone(), live.clone(), token.clone(), tunnel_file.clone());
         tokio::spawn(async move {
             let served = match request_line(&stream).await {
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
-                Some(_) => connection(stream, sink, events, live, &token).await,
+                Some(_) => connection(stream, sink, events, live, &token, &tunnel_file).await,
                 None => Ok(()),
             };
             if let Err(e) = served {
@@ -191,6 +193,17 @@ fn local_origin(origin: &str) -> bool {
         rest.split([':', '/']).next().unwrap_or_default()
     };
     matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
+/// Whether `origin` is the address `dray tunnel` last wrote. A page there can
+/// only be one this server answered, since the tunnel forwards nowhere else,
+/// and a phone's WebSocket names it as the origin it connected to. Read per
+/// handshake, as the address moves with every tunnel start.
+fn tunnel_origin(origin: &str, tunnel_file: &Path) -> bool {
+    std::fs::read_to_string(tunnel_file).is_ok_and(|url| {
+        let url = url.trim();
+        !url.is_empty() && origin.trim_end_matches('/') == url.trim_end_matches('/')
+    })
 }
 
 /// Equal-time compare, so the token cannot be read back a byte at a time off
@@ -467,11 +480,12 @@ async fn connection(
     events: broadcast::Sender<Arc<str>>,
     live: Arc<Mutex<Live>>,
     token: &str,
+    tunnel_file: &Path,
 ) -> Result<()> {
     let admitted = tokio::time::timeout(ADMIT, async {
         let ws = tokio_tungstenite::accept_hdr_async(stream, |req: &Request, resp: Response| {
             match req.headers().get("origin").map(|o| o.to_str().unwrap_or_default()) {
-                Some(origin) if !local_origin(origin) => {
+                Some(origin) if !local_origin(origin) && !tunnel_origin(origin, tunnel_file) => {
                     let mut refused = ErrorResponse::new(Some("origin not allowed".to_string()));
                     *refused.status_mut() = StatusCode::FORBIDDEN;
                     Err(refused)
@@ -788,6 +802,20 @@ mod tests {
         ] {
             assert!(!local_origin(origin), "{origin}");
         }
+    }
+
+    #[test]
+    fn the_tunnels_own_origin_and_no_other() {
+        let file = std::env::temp_dir().join(format!("dray-tunnel-url-{}", uuid::Uuid::new_v4().simple()));
+        assert!(!tunnel_origin("https://a-b-c.trycloudflare.com", &file), "no tunnel, no origin");
+        std::fs::write(&file, "https://a-b-c.trycloudflare.com\n").unwrap();
+        assert!(tunnel_origin("https://a-b-c.trycloudflare.com", &file));
+        for other in ["https://x-y-z.trycloudflare.com", "http://a-b-c.trycloudflare.com", "https://a-b-c.trycloudflare.com.evil.test", ""] {
+            assert!(!tunnel_origin(other, &file), "{other}");
+        }
+        std::fs::write(&file, "").unwrap();
+        assert!(!tunnel_origin("", &file), "an empty file names nothing");
+        std::fs::remove_file(&file).ok();
     }
 
     #[test]

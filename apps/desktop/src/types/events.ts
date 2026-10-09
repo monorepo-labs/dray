@@ -738,7 +738,7 @@ unreadable: Unreadable | null, };
 /**
  * What the reader can do about a failure, drawn beside its sentence.
  */
-export type Fix = { "kind": "copy", command: string, } | { "kind": "trust_host", host: string, keyType: string, fingerprint: string, } | { "kind": "install" };
+export type Fix = { "kind": "copy", command: string, } | { "kind": "trust_host", host: string, keyType: string, fingerprint: string, } | { "kind": "install" } | { "kind": "new_address" };
 
 /**
  * A repository the signed-in `gh` user can reach.

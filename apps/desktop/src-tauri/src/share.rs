@@ -102,16 +102,14 @@ pub async fn start(session: &str, port: u16) -> Result<String, String> {
         .spawn()
         .map_err(|e| format!("could not run cloudflared: {e}"))?;
     let mut lines = BufReader::new(child.stderr.take().expect("piped")).lines();
-    // The URL is printed a moment before the tunnel is registered, and a link
-    // opened in that gap fails — a failed DNS lookup the visitor's resolver
-    // may then cache — so it is handed out only once both have been said.
+    // Handed out only once the tunnel is registered too: see TUNNEL_REGISTERED.
     let found = tokio::time::timeout(URL_WAIT, async {
         let (mut said, mut url, mut registered) = (None, None, false);
         while let Ok(Some(line)) = lines.next_line().await {
             if url.is_none() {
-                url = tunnel_url(&line);
+                url = dray_proto::quick_tunnel_url(&line);
             }
-            registered |= line.contains("Registered tunnel connection");
+            registered |= line.contains(dray_proto::TUNNEL_REGISTERED);
             if let (true, Some(url)) = (registered, &url) {
                 return Ok(url.clone());
             }
@@ -133,6 +131,7 @@ pub async fn start(session: &str, port: u16) -> Result<String, String> {
     // cloudflared logs for as long as it runs, and a pipe nobody drains
     // fills and stalls it.
     tokio::spawn(async move { while let Ok(Some(_)) = lines.next_line().await {} });
+    wait_for_dns(&url).await;
     // Two shares racing: the first link stays, so a URL already handed out
     // keeps working, and the second child is dropped, which kills it.
     let mut tunnels = TUNNELS.lock().unwrap();
@@ -155,12 +154,21 @@ pub fn close_session(session: &str) {
     tunnels.live.retain(|(s, _), _| s != session);
 }
 
-/// The quick tunnel's address out of cloudflared's banner, which boxes it:
-/// `|  https://four-random-words.trycloudflare.com   |`.
-fn tunnel_url(line: &str) -> Option<String> {
-    let start = line.find("https://")?;
-    let url: String = line[start..].chars().take_while(|c| !c.is_whitespace() && *c != '|').collect();
-    url.ends_with(".trycloudflare.com").then_some(url)
+/// Until the link's name resolves, so a visitor's resolver never asks early
+/// and caches the miss — see `dray_proto::TUNNEL_REGISTERED`. Gives up after
+/// 15s and hands the link out anyway.
+async fn wait_for_dns(url: &str) {
+    let query = format!("{}{}", dray_proto::DOH_QUERY, url.trim_start_matches("https://"));
+    let client = reqwest::Client::new();
+    for _ in 0..30 {
+        let answer = client.get(&query).header("accept", "application/dns-json").timeout(Duration::from_secs(3)).send();
+        if let Ok(answer) = answer.await {
+            if answer.text().await.is_ok_and(|body| body.contains("\"Status\":0")) {
+                return;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 }
 
 /// Whether a share can start without downloading cloudflared first, so the
@@ -244,14 +252,5 @@ mod tests {
         let before = t.stamp("s", 5173);
         t.bump("s", None);
         assert_ne!(t.stamp("s", 5173), before, "a settle stops every port");
-    }
-
-    #[test]
-    fn reads_the_link_out_of_the_banner() {
-        let banner = "2026-10-07T05:26:15Z INF |  https://eligible-recipients-expanded-pepper.trycloudflare.com                             |";
-        assert_eq!(tunnel_url(banner).as_deref(), Some("https://eligible-recipients-expanded-pepper.trycloudflare.com"));
-        // The terms line names Cloudflare's own site, which is no link.
-        assert_eq!(tunnel_url("INF ... (https://www.cloudflare.com/website-terms/), and"), None);
-        assert_eq!(tunnel_url("INF Requesting new quick Tunnel on trycloudflare.com..."), None);
     }
 }
