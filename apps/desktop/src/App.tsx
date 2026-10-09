@@ -2686,8 +2686,10 @@ function App() {
           <SidebarToggle onToggle={toggleSidebar} />
 
           {/* Over the sidebar's right end, out of the flow so the tabs do not
-              move. It belongs to the sidebar, so it goes when the sidebar does. */}
-          {sidebarDrawn > 0 && (
+              move. It belongs to the sidebar, so it goes when the sidebar does —
+              and on a hidden session, whose way back to its parent runs
+              through this same strip. ⌘, still opens settings there. */}
+          {sidebarDrawn > 0 && !(shownSession && hiddenParent) && (
           <div
             className="absolute top-1/2 flex shrink-0 -translate-y-1/2 items-center gap-1"
             style={{ right: `calc(100% - ${sidebarDrawn}px + 0.5rem)` }}
