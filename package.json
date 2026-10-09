@@ -9,6 +9,7 @@
     "app": "pnpm --filter dray run app",
     "tauri": "pnpm --filter dray run tauri",
     "web": "pnpm --filter @dray/web run dev",
+    "docs": "pnpm --filter @dray/docs run dev",
     "build:app": "pnpm --filter dray run build",
     "build:web": "pnpm --filter @dray/web run build",
     "test": "pnpm --filter dray run test"

@@ -6,6 +6,10 @@ export const REPO = "https://github.com/monorepo-labs/dray";
 /// it alone, the beta channel being the updater's and not this page's.
 export const DOWNLOAD = "https://downloads.drayhq.com/Dray_universal.dmg";
 
+/// The server install. `public/install.sh` resolves the newest `cli-v*` tag
+/// itself, so this line never needs a version in it.
+export const INSTALL_LINE = "curl -fsSL https://www.drayhq.com/install.sh | sh";
+
 /// The person who builds it, on X — the nav's "Feedback" link and the
 /// footer's mark both. Most visitors arrive from a tweet, so this is the
 /// channel they are already on.

@@ -11,6 +11,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import React, { useState, useSyncExternalStore } from "react";
 import ReactDOM from "react-dom/client";
 
+import AttachProjectDialog from "@/components/composer/AttachProjectDialog";
 import SettingsPage from "@/components/SettingsPage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
@@ -21,7 +22,9 @@ import type {
   AgentAccounts,
   AgentAvailability,
   AuthOption,
+  CloneProgress,
   Failure,
+  GithubRepo,
   Harness,
   ProviderChoice,
   ServerInfo,
@@ -372,6 +375,23 @@ async function core(cmd: string, a: Record<string, unknown>, server: string): Pr
       return null;
     case "recheck_gh":
       return true;
+    case "github_repos":
+      await pause(STEP);
+      return REPOS;
+    case "clone_github_repo": {
+      const slug = String(a.slug);
+      const name = slug.split("/")[1];
+      for (const line of [
+        `Cloning into '/root/dray/${name}'...`,
+        "Receiving objects:  48% (1204/2508)",
+        "Receiving objects: 100% (2508/2508), 4.10 MiB | 9.80 MiB/s, done.",
+        "Resolving deltas: 100% (1610/1610), done.",
+      ]) {
+        await pause(STEP / 2);
+        void emit("server_event", { server, event: "clone_progress", payload: { slug, line } satisfies CloneProgress });
+      }
+      return [{ path: `/root/dray/${name}`, name, space: null }];
+    }
     case "get_integrations":
       return {
         linear: null,
@@ -383,6 +403,16 @@ async function core(cmd: string, a: Record<string, unknown>, server: string): Pr
       throw new Error(`demo: nothing stubbed for ${cmd}`);
   }
 }
+
+/// What `gh` on the server lists for the attach dialog. The first is already
+/// cloned there, so it draws its Cloned mark.
+const REPOS: GithubRepo[] = [
+  { slug: "octocat/storefront", description: "The shop's Next.js frontend", path: null },
+  { slug: "octocat/api", description: "Orders and payments API", path: "/root/dray/api" },
+  { slug: "octocat/mobile", description: "iOS and Android app", path: null },
+  { slug: "octocat/infra", description: "Terraform for every environment", path: null },
+  { slug: "octocat/docs", description: null, path: null },
+];
 
 /// Servers whose `gh` is signed in. The Terminal sign-in lands at once here.
 const ghSignedIn = new Set<string>();
@@ -515,9 +545,13 @@ function driver(signal: AbortSignal) {
   }
   const button = (text: string) =>
     [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === text && !b.disabled);
+  // A repo row's text runs on into its description, so it is matched on the slug at its start.
+  const repo = (slug: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].find((b) => b.textContent?.startsWith(slug));
   const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
   return {
     click: async (text: string) => (await until(() => button(text))).click(),
+    pickRepo: async (slug: string) => (await until(() => repo(slug))).click(),
     toggle: async (label: string) =>
       (await until(() => document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`))).click(),
     type: async (selector: string, value: string) => {
@@ -552,6 +586,8 @@ type Scenario = {
   tab: "servers" | "accounts";
   /// The selected session's directory; a `dray://` one picks that server on Accounts.
   cwd?: string;
+  /// The composer's Attach project dialog, open over the page on the VPS.
+  attach?: boolean;
   /// The backend's state before the page mounts.
   setup?: () => void;
   drive?: (d: Drive) => Promise<unknown>;
@@ -764,6 +800,23 @@ const GROUPS: { title: string; scenarios: Scenario[] }[] = [
     ],
   },
   {
+    title: "Attach project",
+    scenarios: [
+      { id: "attach", label: "Repos on the server", tab: "servers", attach: true, setup: setUpVps },
+      {
+        id: "attach-cloning",
+        label: "Cloning",
+        tab: "servers",
+        attach: true,
+        setup: setUpVps,
+        drive: async (d) => {
+          await d.pickRepo("octocat/storefront");
+          await d.click("Attach");
+        },
+      },
+    ],
+  },
+  {
     title: "Accounts",
     scenarios: [
       { id: "accounts-mac", label: "This Mac, a server added", tab: "accounts", setup: setUpVps },
@@ -909,6 +962,16 @@ function Demo() {
             onUpdateChannelChange={() => {}}
             cwd={picked.scenario.cwd ?? "/Users/you/code/dray"}
           />
+          {picked.scenario.attach && (
+            <AttachProjectDialog
+              key={picked.run}
+              open
+              onClose={() => {}}
+              initialServer="vps1"
+              projects={[]}
+              onAttached={() => {}}
+            />
+          )}
         </div>
       </div>
       <div className="pointer-events-auto relative z-60">

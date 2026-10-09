@@ -4,6 +4,7 @@ import { DownloadButton } from "@/components/DownloadButton";
 import { Features } from "@/components/Features";
 import { Footer } from "@/components/Footer";
 import { Harnesses } from "@/components/Harnesses";
+import { InstallLine } from "@/components/InstallLine";
 import { Nav } from "@/components/Nav";
 import { Sponsors } from "@/components/Sponsors";
 import { Testimonials } from "@/components/Testimonials";
@@ -48,6 +49,18 @@ export default function Home() {
         <div className="mt-5 flex flex-wrap items-center gap-3">
           <DownloadButton />
           <ContributeButton />
+        </div>
+
+        {/* Under the download rather than beside it: the Mac app is the
+            primary action, and the server is something it connects to. */}
+        <div className="mt-6 max-w-xl">
+          <p className="mb-2 text-sm text-muted-foreground text-pretty">
+            Or run it on a Linux server.{" "}
+            <a href="/docs/server" className="text-foreground underline underline-offset-4">
+              How it works
+            </a>
+          </p>
+          <InstallLine />
         </div>
 
         {/* Above the fold, since "does it run mine" is the first question

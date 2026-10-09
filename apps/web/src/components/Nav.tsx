@@ -13,7 +13,10 @@ export async function Nav() {
       <a href="/" aria-label="Dray home">
         <Wordmark className="h-3.5 w-auto" />
       </a>
-      <div className="flex items-center gap-4 text-xs text-muted-foreground sm:text-sm">
+      <div className="flex items-center gap-4 text-xs whitespace-nowrap text-muted-foreground sm:text-sm">
+        <a href="/docs" className="transition-colors hover:text-foreground">
+          Docs
+        </a>
         <a href="/changelog" className="transition-colors hover:text-foreground">
           {"What's new"}
         </a>
@@ -21,7 +24,9 @@ export async function Nav() {
           href={FEEDBACK}
           target="_blank"
           rel="noopener noreferrer"
-          className="transition-colors hover:text-foreground"
+          // Off on a phone, where four links wrap: the footer's X mark goes
+          // to the same place.
+          className="hidden transition-colors hover:text-foreground sm:inline"
         >
           Feedback
         </a>

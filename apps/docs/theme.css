@@ -1,0 +1,42 @@
+/* Blume's type scale jumps from 14px body to 48px titles; this evens it out. */
+.prose {
+  font-size: 1rem;
+}
+
+.prose :where(h1) {
+  font-size: 1.953125rem;
+}
+
+/* The page description Blume draws under the title. */
+.prose > h1 + p.text-lg {
+  font-size: 1rem;
+}
+
+.prose :where(h2) {
+  font-size: 1.5625rem;
+}
+
+.prose :where(pre, table, code) {
+  font-size: 0.9375rem;
+}
+
+/* The step title is the first <p>; its size comes from a variable Steps sets inline. */
+[data-blume-step] > p:first-of-type {
+  color: var(--blume-foreground);
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+[data-blume-step] > span:first-child {
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+[data-blume-toc] > p {
+  font-weight: 500;
+}
+
+/* Blume centres the copyright in a three-column grid; start it in the first. */
+[data-blume-footer] p {
+  grid-column-start: 1;
+}
