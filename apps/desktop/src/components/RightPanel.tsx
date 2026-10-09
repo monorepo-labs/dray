@@ -1,5 +1,5 @@
 import { Suspense, useState } from "react";
-import { GitCompare, GitPullRequest, GitPullRequestDraft, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 import OpenInButton from "@/components/OpenInButton";
 import TabButton from "@/components/TabButton";
@@ -16,102 +16,27 @@ import { cn } from "@/lib/utils";
 /// `App` so the toggle and the thing it toggles stay in one file, and outside
 /// [RightPanel] itself because the pane doesn't exist before a session does —
 /// the button has to outlive it. Mirrors `SidebarToggle` on the far side.
-export function PanelToggle({
-  onToggle,
-  open,
-  changes = false,
-  pr = false,
-  draft = false,
-}: {
-  onToggle: () => void;
-  open: boolean;
-  /// The last turn left the tree changed. Swaps the glyph for a git one while
-  /// the pane is closed, so one button both says there is something to see and
-  /// is the way to it — which is the whole of the quick-access rail that was
-  /// otherwise going to sit beside it. Nothing to say once the pane is open:
-  /// the changes are on screen, and the toggle goes back to being a toggle.
-  changes?: boolean;
-  /// Every one of this session's open pull requests is a draft. Draws the draft
-  /// glyph rather than the plain one — the mark still appears, because a draft
-  /// is still somewhere for the work to land, and it keeps `--accent-add` so it
-  /// still reads as content rather than as dimmed chrome. Shape carries the
-  /// distinction, colour carries the "there is something here".
-  draft?: boolean;
-  /// This session has an open pull request, which outranks `changes`. A draft
-  /// counts — GitHub reports one as `OPEN` with `isDraft` set.
-  ///
-  /// The two indicators are the same promise — "there is something here, and
-  /// this is the way to it" — so only one can be drawn, and the PR is the one
-  /// worth drawing: it is the tab that opens first, it is the state of the
-  /// work rather than of the last turn, and it is the one that survives the
-  /// next prompt landing. Green, matching the merge button it leads to.
-  pr?: boolean;
-}) {
-  const indicating = (pr || changes) && !open;
-
+export function PanelToggle({ onToggle, open }: { onToggle: () => void; open: boolean }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         {/* Held back at rest — it's chrome, not content — and brought to full
-            strength under the cursor. The indicator is content, so it skips
-            the fade rather than announcing itself at 80%. */}
+            strength under the cursor. */}
         <Button
           variant="ghost"
           size="icon-sm"
           onClick={onToggle}
-          aria-label={
-            indicating ? (pr ? "Show pull request" : "Show changes") : "Toggle panel"
-          }
-          className={cn(
-            // `shrink-0` because this is the way back out of a pane dragged
-            // wide: everything else in that header may give up width or clip,
-            // this may not.
-            "shrink-0 transition-opacity",
-            indicating ? "opacity-100" : "opacity-80 hover:opacity-100",
-          )}
+          aria-label="Toggle panel"
+          // `shrink-0` because this is the way back out of a pane dragged
+          // wide: everything else in that header may give up width or clip,
+          // this may not.
+          className="shrink-0 opacity-80 transition-opacity hover:opacity-100"
         >
-          {indicating ? (
-            // Smaller than the panel glyph so it reads the same size: these run
-            // corner to corner of their 24 box while the panel icon is 14 units
-            // tall in the same box, so matching the numbers makes them the
-            // visibly larger of the two. Stroke 1.5 to match the hand-drawn
-            // chrome around it; lucide draws at 2. The colour is on the glyph
-            // rather than the button because `ghost` sets `hover:text-
-            // foreground`, which would grey it out under the cursor.
-            pr ? (
-              // `--accent-merge` is a button *fill* — dark enough to carry white
-              // text — and at 1.5px stroke on a dark background it all but
-              // disappeared. This is `--accent-add`, which the open-PR glyph uses in the
-              // panel itself, so the mark and the thing it points at match.
-              draft ? (
-                <GitPullRequestDraft
-                  className="size-4 text-accent-add"
-                  strokeWidth={1.5}
-                />
-              ) : (
-                <GitPullRequest className="size-4 text-accent-add" strokeWidth={1.5} />
-              )
-            ) : (
-              // Plain foreground, not the command yellow it started as. Yellow
-              // is the app's "this is for you" — the colour of a session
-              // standing still behind a question — and a turn having touched
-              // files is neither a warning nor a thing to answer. It read as
-              // one, every turn, which is a lot of alarm for a fact.
-              <GitCompare className="size-4 text-foreground" strokeWidth={1.5} />
-            )
-          ) : (
-            <PanelRightIcon className="size-4.5" dim={!open} />
-          )}
+          <PanelRightIcon className="size-4.5" dim={!open} />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="left">
-        {indicating
-          ? pr
-            ? draft
-              ? "Draft pull request"
-              : "Open pull request"
-            : "Last turn's changes"
-          : "Toggle Panel"}
+        Toggle Panel
         <ShortcutKeys ids={["panel.toggle"]} />
       </TooltipContent>
     </Tooltip>
@@ -225,9 +150,6 @@ type RightPanelProps = {
   open: boolean;
   tab: PanelTab;
   onTabChange: (tab: PanelTab) => void;
-  /// Rendered beside its tab's label. Only shown above zero — a tab reading
-  /// "Subagents 0" says the same thing as the empty state one click away.
-  counts?: Partial<Record<PanelTab, number>>;
   /// The tab row, as `tabOrder` answers it.
   tabs?: readonly PanelTab[];
   /// Re-reads whatever the active tab is showing, drawn at the far end of the
@@ -267,9 +189,6 @@ type RightPanelProps = {
   /// Which side of the chat column the pane stands on — the reader's pick in
   /// Settings › Appearance. The border and the drag strip face the chat.
   side?: PanelSide;
-  /// The pane reaches the window's left edge, so its top strip has to clear the
-  /// traffic lights the way the app header does when the sidebar is collapsed.
-  clearTrafficLights?: boolean;
   /// No top strip at all: the tabs and the buttons beside them are drawn in
   /// the titlebar instead (`PanelTabs`, `PanelActions`).
   bare?: boolean;
@@ -319,7 +238,6 @@ export default function RightPanel({
   open,
   tab,
   onTabChange,
-  counts,
   tabs = BASE_TABS,
   refresh,
   cwd,
@@ -327,7 +245,6 @@ export default function RightPanel({
   heading,
   widthKey,
   side = "right",
-  clearTrafficLights = false,
   bare = false,
   children,
 }: RightPanelProps) {
@@ -365,7 +282,6 @@ export default function RightPanel({
           // at its own edge rather than draw over the transcript beside it.
           "flex h-(--titlebar-h) shrink-0 items-center gap-0.5 overflow-hidden px-2",
           !heading && "border-b border-border",
-          clearTrafficLights && "pl-(--traffic-lights-w)",
         )}
         data-tauri-drag-region="deep"
       >
@@ -398,9 +314,6 @@ export default function RightPanel({
                   onClick={() => onTabChange(value)}
                 >
                   {PANEL_LABELS[value]}
-                  {!!counts?.[value] && (
-                    <span className="ml-1 text-muted-foreground">{counts[value]}</span>
-                  )}
                 </TabButton>
               ))}
             </div>

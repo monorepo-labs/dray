@@ -11,14 +11,6 @@ describe("reconcile", () => {
     ]);
   });
 
-  it("puts the first page where the Browser stand-in was", () => {
-    expect(reconcile(["chat", "browser", "changes"], ["chat", "page:1", "changes"])).toEqual([
-      "chat",
-      "page:1",
-      "changes",
-    ]);
-  });
-
   it("puts a new tab's page where the new tab was", () => {
     expect(
       reconcile(["page:1", "blank:1", "chat"], ["chat", "page:1", "page:2"]),
@@ -30,7 +22,7 @@ describe("reconcile", () => {
   });
 
   it("never lets one kind take another's slot", () => {
-    expect(reconcile(["chat", "browser"], ["chat", "file:/a"])).toEqual(["chat", "file:/a"]);
+    expect(reconcile(["chat", "page:1"], ["chat", "file:/a"])).toEqual(["chat", "file:/a"]);
   });
 });
 

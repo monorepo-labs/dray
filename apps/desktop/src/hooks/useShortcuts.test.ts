@@ -86,6 +86,14 @@ describe("yieldMovedDefaults", () => {
     expect(out["pane.5"]).toBeNull();
   });
 
+  // ⌘5 was free before the titlebar's tabs, so a reader may hold it.
+  it("unbinds a new row whose default the reader already holds", () => {
+    const out = yieldMovedDefaults({ search: chord("5") });
+    expect(out.search).toEqual(chord("5"));
+    expect(out["tab.5"]).toBeNull();
+    expect("tab.4" in out).toBe(false);
+  });
+
   it("unbinds rather than collide where the old chord is taken too", () => {
     const out = yieldMovedDefaults({ search: chord("5", true), attach: chord("5") });
     expect(out["pane.5"]).toBeNull();

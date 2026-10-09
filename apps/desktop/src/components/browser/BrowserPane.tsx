@@ -48,6 +48,7 @@ import {
   removeCustomDevice,
   saveCustomDevice,
   setPendingTab,
+  setUrlDraft,
   activateBlankTab,
   closeBlankTab,
   useBlankTabs,
@@ -61,6 +62,7 @@ import {
   useChromium,
   useCustomDevices,
   usePendingTab,
+  useUrlDraft,
   usePicking,
   useRecording,
   useViewport,
@@ -304,10 +306,6 @@ function Chrome({
   onExpand?: () => void;
   onCollapse?: () => void;
 }) {
-  // What is typed in the URL field, per tab: each new tab keeps its own, as a
-  // browser's do. Keyed by session too, since this pane is not remounted
-  // across sessions.
-  const [drafts, setDrafts] = useState<Record<string, string | null>>({});
   const openError = useOpenError(sessionId);
   const inputRef = useRef<HTMLInputElement>(null);
   const picking = usePicking(sessionId);
@@ -318,8 +316,9 @@ function Chrome({
   const url = current?.url ?? "";
   const blanks = useBlankTabs(sessionId);
   const draftKey = `${sessionId}:${blanks.active !== null ? `blank:${blanks.active}` : `page:${current?.id}`}`;
-  const draft = drafts[draftKey] ?? null;
-  const setDraft = (value: string | null) => setDrafts((all) => ({ ...all, [draftKey]: value }));
+  // Per tab, as a browser's are: each new tab keeps what was typed into it.
+  const draft = useUrlDraft(draftKey);
+  const setDraft = (value: string | null) => setUrlDraft(draftKey, value);
   const reorder = useDragReorder(
     tabs,
     (tab) => tab.id,
@@ -335,7 +334,7 @@ function Chrome({
   const open = (raw: string, newTab: boolean) => {
     const target = normalizeUrl(raw);
     if (!target) return;
-    void openInBrowser(sessionId, target, newTab).catch(() => undefined);
+    void openInBrowser(sessionId, target, newTab, blanks.active).catch(() => undefined);
   };
 
   const newTab = () => {

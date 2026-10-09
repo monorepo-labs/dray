@@ -775,8 +775,6 @@ export function SpaceSwitcher({
   naming,
   onChange,
   onNew,
-  className,
-  style,
 }: {
   spaces: string[];
   value: string | null;
@@ -786,8 +784,6 @@ export function SpaceSwitcher({
   naming: boolean;
   onChange: (space: string | null) => void;
   onNew: () => void;
-  className?: string;
-  style?: React.CSSProperties;
 }) {
   const offersNew = spaces.length === 0;
   // Two entries with nothing to name yet — the second's label is the only thing
@@ -824,11 +820,7 @@ export function SpaceSwitcher({
           cycle();
         }
       }}
-      style={style}
-      className={cn(
-        "group/spaces relative flex cursor-pointer items-center px-1.5 select-none focus-visible:outline-none",
-        className,
-      )}
+      className="group/spaces relative flex cursor-pointer items-center px-1.5 select-none focus-visible:outline-none"
     >
       {/* Every name in one grid cell, all but the current one hidden, so the
           box is as wide as the **longest** name and never a pixel wider.

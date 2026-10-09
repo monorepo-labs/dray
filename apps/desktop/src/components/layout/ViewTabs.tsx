@@ -3,7 +3,7 @@ import {
   DocumentPlusIcon,
 } from "@heroicons/react/16/solid";
 import { Folder, Plus, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useReducer, useRef } from "react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 
 import Favicon, { hostOf } from "@/components/browser/Favicon";
 import FileIcon from "@/components/FileIcon";
@@ -36,7 +36,7 @@ import {
 } from "@/lib/browser";
 import { tabLabels } from "@/lib/fileTree";
 import { moveKey, reconcile, type TabKey } from "@/lib/tabOrder";
-import { BranchButton } from "@/components/layout/SessionHeader";
+import BranchButton from "@/components/layout/BranchButton";
 import { cn } from "@/lib/utils";
 
 /// Which view fills the main column.
@@ -49,7 +49,7 @@ export type ViewTab = (typeof VIEW_TABS)[number];
 const TIP_DELAY = 700;
 
 /// Where a fresh session's row starts.
-const DEFAULT_ORDER: TabKey[] = ["chat", "browser", "changes", "files"];
+const DEFAULT_ORDER: TabKey[] = ["chat", "changes", "files"];
 
 /// Each session's row as the reader arranged it. In memory, like the view tab
 /// itself: a restart puts every row back to the default.
@@ -76,6 +76,8 @@ const added = new Map<string, Added>();
 /// Solid marks, the way a page's favicon is a filled mark rather than a line
 /// drawing, in the muted grey every icon here takes.
 const MARK = "size-4 shrink-0 text-muted-foreground";
+// The project picker's own folder, so a folder means one thing.
+const FOLDER = <Folder className="size-3.5 shrink-0 fill-current text-muted-foreground" />;
 
 type Item = {
   key: TabKey;
@@ -87,6 +89,7 @@ type Item = {
   locked?: boolean;
   /// Sized by its own label rather than by the row.
   fixed?: boolean;
+  rename?: Rename;
 };
 
 /// The titlebar as a browser's tab strip.
@@ -108,8 +111,12 @@ export default function ViewTabs({
   branch,
   cwd,
   alignX = 0,
+  rename,
 }: {
   sessionId: string;
+  /// The session's own title and how to change it; absent where the chat
+  /// stands for a group rather than one session.
+  rename?: Rename;
   /// The session's branch and directory, drawn at the row's far end.
   branch?: string | null;
   cwd?: string;
@@ -158,6 +165,7 @@ export default function ViewTabs({
       label: title,
       active: tab === "chat",
       pick: () => onChange("chat"),
+      rename,
     },
     ...(shown.changes
       ? [
@@ -201,10 +209,7 @@ export default function ViewTabs({
       ? [
           {
             key: "files",
-            // The project picker's own folder, so a folder means one thing.
-            icon: (
-              <Folder className="size-3.5 shrink-0 fill-current text-muted-foreground" />
-            ),
+            icon: FOLDER,
             label: "Files",
             active: tab === "files",
             pick: () => onChange("files"),
@@ -342,9 +347,7 @@ export default function ViewTabs({
     !shown.files &&
       files.length === 0 && {
         key: "files",
-        icon: (
-          <Folder className="size-3.5 shrink-0 fill-current text-muted-foreground" />
-        ),
+        icon: FOLDER,
         label: "Files",
         add: () => {
           setShown("files", true);
@@ -363,22 +366,22 @@ export default function ViewTabs({
     <div
       ref={drag.list}
       role="tablist"
-      className={cn(
-        "-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden px-1 fade-in slide-in-from-left-3",
-      )}
+      className="-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden px-1 fade-in slide-in-from-left-3"
       style={align}
     >
       {drag.shown.map((item, i) => (
         <ItemTab
           // Remounted when the chat turns between a lone title and a tab, or
           // its min-width eases across the change and the switch drags.
-          key={item.key === "chat" ? `chat:${lone}` : item.key}
+          // Per session too, so a rename left open does not follow the reader.
+          key={item.key === "chat" ? `chat:${lone}:${sessionId}` : item.key}
           icon={item.icon}
           label={item.label}
           active={item.active}
           locked={item.locked}
           fixed={item.fixed}
           onPick={item.pick}
+          rename={item.rename}
           onClose={item.close && (() => closeAt(i))}
           onPointerDown={(e) => drag.start(e, i)}
           transform={drag.offset(i)}
@@ -386,9 +389,9 @@ export default function ViewTabs({
           gliding={!!drag.drag && drag.drag.from !== i}
           // The chat alone is a title, not a tab: nothing beside it to pick
           // between, so no pill to say which is picked.
-          plain={drag.shown.length === 1}
+          plain={lone}
           hint={
-            drag.shown.length > 1 && (
+            !lone && (
               <>
                 Switch tabs
                 <ShortcutKeys ids={["tab.prev", "tab.next"]} />
@@ -467,9 +470,8 @@ export function ItemTab({
   fixed = false,
   plain = false,
   hint,
-  className,
-  ...rest
-}: Omit<React.ComponentProps<"div">, "onPointerDown"> & {
+  rename,
+}: {
   icon: React.ReactNode;
   label: string;
   active: boolean;
@@ -489,22 +491,28 @@ export function ItemTab({
   hint?: React.ReactNode;
   /// Drawn as its icon and label alone, with no pill and sized to its label.
   plain?: boolean;
+  /// Double-click, or Enter on the active tab, edits this in place of the label.
+  rename?: Rename;
 }) {
   const pick = locked ? undefined : onPick;
+  const [renaming, setRenaming] = useState(false);
   const tab = (
     // A div rather than a button, since the close control sits inside it.
     <div
-      {...rest}
       role="tab"
       aria-selected={active}
       aria-label={label}
       aria-disabled={locked || undefined}
       tabIndex={locked ? -1 : 0}
       onClick={pick}
+      onDoubleClick={rename && (() => setRenaming(true))}
       onKeyDown={(e) => {
+        // Not a key meant for the close cross inside.
+        if (e.target !== e.currentTarget) return;
         if (e.key !== "Enter" && e.key !== " ") return;
         e.preventDefault();
-        pick?.();
+        if (rename && active && e.key === "Enter") setRenaming(true);
+        else pick?.();
       }}
       // Middle-click closes. `auxClick`, or a press begun on one tab and
       // released on another closes the wrong one.
@@ -519,11 +527,9 @@ export function ItemTab({
         "group flex cursor-default items-center gap-1.5 h-7 rounded-md pl-2 text-ui select-none",
         "transition-[color,background-color,min-width] duration-150 ease-out",
         onClose ? "pr-1" : "pr-2",
-        fixed
+        fixed || plain
           ? "shrink-0"
-          : plain
-            ? "shrink-0"
-            : // The chat has no icon to shrink to, so it stops at 100px.
+          : // The chat has no icon to shrink to, so it stops at 100px.
             cn(
               "basis-44",
               active ? "min-w-44" : icon ? "min-w-6" : "min-w-[100px]",
@@ -542,11 +548,13 @@ export function ItemTab({
             : "text-muted-foreground hover:text-foreground",
         held && "relative z-10",
         gliding && "transition-[color,background-color,min-width,transform]",
-        className,
       )}
     >
       {icon}
-      {/* Faded rather than ellipsed, so a cut title still reads as a word. */}
+      {renaming && rename ? (
+        <TitleInput title={rename.title} onSave={rename.save} onDone={() => setRenaming(false)} />
+      ) : (
+      /* Faded rather than ellipsed, so a cut title still reads as a word. */
       <span
         className={cn(
           "min-w-0 flex-1 overflow-hidden whitespace-nowrap @max-[40px]:hidden",
@@ -557,6 +565,7 @@ export function ItemTab({
       >
         {label}
       </span>
+      )}
       {/* No tooltip: a cross on a tab says what it does, the way it does in
           every browser. */}
       {onClose && !locked && (
@@ -586,5 +595,58 @@ export function ItemTab({
       <TooltipTrigger asChild>{tab}</TooltipTrigger>
       <TooltipContent side="bottom">{hint}</TooltipContent>
     </Tooltip>
+  );
+}
+
+type Rename = { title: string; save: (title: string) => void };
+
+/// The title being renamed. Enter or blur saves, Escape cancels, and an empty
+/// or unchanged title saves nothing.
+function TitleInput({
+  title,
+  onSave,
+  onDone,
+}: {
+  title: string;
+  onSave: (title: string) => void;
+  onDone: () => void;
+}) {
+  // Escape unmounts the field, and a blur fired on the way out would otherwise
+  // save what Escape meant to throw away.
+  const done = useRef(false);
+  const finish = (value: string | null) => {
+    if (done.current) return;
+    done.current = true;
+    const next = value?.trim();
+    if (next && next !== title) onSave(next);
+    onDone();
+  };
+  const [value, setValue] = useState(title);
+
+  return (
+    <input
+      autoFocus
+      size={Math.max(value.length, 1)}
+      value={value}
+      onChange={(e) => setValue(e.currentTarget.value)}
+      aria-label="Session title"
+      // Caret at the end rather than the whole title selected: a rename is
+      // usually an edit, and one stray key would otherwise erase the lot.
+      onFocus={(e) => e.currentTarget.setSelectionRange(title.length, title.length)}
+      onBlur={() => finish(value)}
+      // Or a press in the field starts dragging the tab.
+      onPointerDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        // Kept from the app's chords, and Escape from the window: unhandled,
+        // it takes a fullscreen window back to windowed.
+        e.stopPropagation();
+        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Escape") {
+          e.preventDefault();
+          finish(null);
+        }
+      }}
+      className="min-w-0 bg-transparent text-foreground outline-none"
+    />
   );
 }

@@ -146,14 +146,20 @@ export type ShortcutId = (typeof SHORTCUTS)[number]["id"];
 /// and only this build chose the other. See `yieldMovedDefaults`.
 ///
 /// The views and the panes traded places: ⌘ digits were the panes' and ⌘⌥
-/// digits the views'.
-export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord>> = {
+/// digits the views'. `null` is a row an older build did not have, whose new
+/// default a reader may already hold elsewhere — it yields to unbound.
+export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord | null>> = {
   // The panel's tabs gave ⌘⇧[ ] to the titlebar's.
   "panel.tab.prev": k("{", { shift: true, code: "BracketLeft" }),
   "panel.tab.next": k("}", { shift: true, code: "BracketRight" }),
   ...Object.fromEntries(
     [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`pane.${n}`, k(String(n))]),
   ),
+  // The titlebar's tabs, new with it.
+  ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`tab.${n}`, null])),
+  "tab.prev": null,
+  "tab.next": null,
+  "mode.toggle": null,
 };
 
 export const SHORTCUT_GROUPS: ShortcutGroup[] = [

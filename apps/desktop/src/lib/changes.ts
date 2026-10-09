@@ -51,17 +51,6 @@ export function changeRange(events: AgentEvent[]): ChangeRange {
   return { baseline: null, head: null };
 }
 
-/// Whether the last completed turn left the tree different from what it found.
-///
-/// Free and exact, so it needs no git call and no file list: both sides are
-/// content-addressed tree ids, so ids that differ *are* a changed tree. A turn
-/// that edited a file and put it back reads as unchanged, which is also what
-/// the panel would show. A null head is a turn still running, where nothing is
-/// settled yet.
-export function turnChangedTree({ baseline, head }: ChangeRange): boolean {
-  return !!baseline && !!head && baseline !== head;
-}
-
 /// The newest finished tool call's id, or "" where there is none.
 ///
 /// What tells a working-tree read to re-read mid-turn. Only a tool can write,

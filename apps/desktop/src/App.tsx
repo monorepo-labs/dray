@@ -43,7 +43,6 @@ import {
   useBlankTabs,
   setPickHandler,
   useBrowserTabs,
-  usePendingTab,
 } from "@/lib/browser";
 import { setLinkOpener } from "@/lib/openLink";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -1360,8 +1359,8 @@ function App() {
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
 
   const browserTabs = useBrowserTabs(selectedSessionId);
-  const pendingBrowserTab = usePendingTab(selectedSessionId ?? "");
   const blankTabs = useBlankTabs(selectedSessionId ?? "");
+  const pendingBrowserTab = blankTabs.active !== null;
   const hasBrowserTabs = browserTabs && browserTabs.length > 0;
   // The main column's Browser view is the panel's browser expanded. Arriving
   // on it closes the pane, whatever tab the pane was on: the reader came for
@@ -1862,21 +1861,6 @@ function App() {
     });
     return () => setPickHandler(null);
   }, [selectedSessionId, viewTab, setViewTab]);
-
-  // The first browser tab appearing — an agent opening a page — brings the
-  // pane up on Browser, once. Not while the full view is up, where the same
-  // page is already the whole column. Only a change within one session
-  // counts, and only from a *known* empty list: arriving at a session that
-  // already holds a tab, or its first read landing, is the reader looking,
-  // not the agent acting, and both used to pop the pane open (DRA-184).
-  const lastTabs = useRef({ id: selectedSessionId, had: hasBrowserTabs });
-  useEffect(() => {
-    const was = lastTabs.current;
-    lastTabs.current = { id: selectedSessionId, had: hasBrowserTabs };
-    if (was.id !== selectedSessionId || was.had !== false) return;
-    // Panel Browser tab hidden for now; restore with it.
-    // if (hasBrowserTabs && !fullBrowserOpen) showPanel("browser");
-  }, [selectedSessionId, hasBrowserTabs, fullBrowserOpen, showPanel]);
 
   // Every way of arriving at a session, so none of them can forget to leave the
   // issues page. The two sidebar buttons closed it and the chords beside them
@@ -2713,7 +2697,6 @@ function App() {
                 naming={settingsOpen && namingSpace}
                 onChange={changeSpace}
                 onNew={openNewSpace}
-                className="shrink-0"
               />
             )}
             {/* App-wide, so only on the new-task screen. ⌘, opens settings
@@ -2751,6 +2734,17 @@ function App() {
                     ? shownSession.title
                     : `${basename(shownSession.projectPath)} / ${shownSession.title}`
               }
+              rename={
+                mainGroup
+                  ? undefined
+                  : {
+                      title: shownSession.title,
+                      save: (title) =>
+                        void invoke("rename_session", { sessionId: shownSession.sessionId, title }).catch(
+                          (e) => console.error("rename failed", e),
+                        ),
+                    }
+              }
               tab={viewTab}
               onChange={setViewTab}
               branch={prBranch}
@@ -2759,24 +2753,8 @@ function App() {
               alignX={hiddenParent ? 0 : sidebarDrawn}
             />
           )}
-          {(issuesOpen || !shownSession) && (
-            // The page's name, over the sheet's left edge where the sidebar is
-            // open — out of the flow, so what sits before it cannot move it.
-            // Shut, the sheet starts under the traffic lights, so it follows
-            // the toggle instead.
-            // Hidden for now; the spacer keeps the far end at the far end.
-            <div className="min-w-0 flex-1">
-              {/* <span
-                className={cn(
-                  "truncate text-ui text-muted-foreground opacity-50 select-none",
-                  sidebarDrawn > 0 && "absolute top-1/2 -translate-y-1/2",
-                )}
-                style={sidebarDrawn > 0 ? { left: sidebarDrawn } : undefined}
-              >
-                {issuesOpen ? "Issues" : "New session"}
-              </span> */}
-            </div>
-          )}
+          {/* Keeps the far end at the far end on pages with no tab row. */}
+          {(issuesOpen || !shownSession) && <div className="min-w-0 flex-1" />}
 
 
           {issuesOpen
@@ -2784,7 +2762,7 @@ function App() {
               // *open* the pane — a row does that — so a toggle drawn at rest
               // would be a control with one dead state.
               pickedIssue && (
-                <PanelToggle onToggle={() => setPickedIssue(null)} open changes={false} />
+                <PanelToggle onToggle={() => setPickedIssue(null)} open />
               )
             : shownSession && (
                 // The pane's own tabs, which replace its toggle: one opens the
