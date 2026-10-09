@@ -60,8 +60,11 @@ pub mod drafts;
 pub mod projects;
 #[cfg(feature = "desktop")]
 pub mod quit;
-#[cfg(feature = "serve")]
+// The desktop app serves too, behind Remote access (remote_access.rs).
+#[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod serve;
+#[cfg(feature = "desktop")]
+pub mod remote_access;
 #[cfg(feature = "desktop")]
 pub mod servers;
 pub mod session;
@@ -722,6 +725,8 @@ pub fn run() {
             // Remote servers connect in the background; a dead one costs its
             // own row and nothing else.
             tauri::async_runtime::spawn(servers::start(Sink::from(app.handle())));
+            // Serving this Mac, where the reader left Remote access on.
+            tauri::async_runtime::spawn(remote_access::start(Sink::from(app.handle())));
 
             // Returns immediately: consent is read, and the id minted, inside
             // the task `track` spawns — so nothing on screen waits on a file
@@ -774,6 +779,9 @@ pub fn run() {
             servers::set_server_on,
             servers::rename_server,
             servers::set_server_address,
+            remote_access::get_remote_access,
+            remote_access::set_remote_access,
+            remote_access::remote_access_token,
             servers::trust_host_key,
             servers::survey_server,
             servers::install_on_server,

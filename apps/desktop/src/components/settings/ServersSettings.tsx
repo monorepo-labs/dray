@@ -1,5 +1,5 @@
-import { MoreHorizontal, Plus } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Check, Copy, Globe, GlobeOff, MoreHorizontal, Plus } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import CommandChip from "@/components/settings/CommandChip";
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
@@ -21,11 +21,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { useCopied } from "@/hooks/useCopied";
 import { useServers } from "@/lib/servers";
 import { invoke, listen, LOCAL } from "@/lib/transport";
 import { cn } from "@/lib/utils";
-import type { Failure, Fix, ServerInfo, ServerStatus, Stage } from "@/types/events";
+import type { Failure, Fix, RemoteAccess, ServerInfo, ServerStatus, Stage } from "@/types/events";
 
 type TrustHost = Extract<Fix, { kind: "trust_host" }>;
 
@@ -88,7 +90,7 @@ export default function ServersSettings() {
       </SettingsHeaderAction>
 
       <div className="flex flex-col">
-        <Row name="This Mac" detail="Where this app runs" status="connected" />
+        <ThisMacRow />
         {servers.map((server) => (
           // The row stays laid out under the field, hidden, so renaming moves
           // nothing: the row is as tall as its detail and fix make it, which a
@@ -181,6 +183,97 @@ export default function ServersSettings() {
   );
 }
 
+/// This Mac, and its remote access: on, the app serves its own sessions
+/// through a quick tunnel for another Mac's Add server. A button rather than
+/// a switch, since a switch on this row reads as turning the Mac off.
+function ThisMacRow() {
+  const [remote, setRemote] = useState<RemoteAccess>({ on: false, address: null, error: null });
+  const [copied, copy] = useCopied<"address" | "token">();
+
+  useEffect(() => {
+    let live = true;
+    let unlisten: (() => void) | undefined;
+    void listen<RemoteAccess>("remote_access_changed", ({ payload, server }) => {
+      if (server === LOCAL) setRemote(payload);
+    }).then((off) => {
+      if (!live) return off();
+      unlisten = off;
+      void invoke<RemoteAccess>("get_remote_access", {}, LOCAL).then((now) => live && setRemote(now));
+    });
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const setOn = (on: boolean) => void invoke("set_remote_access", { on }, LOCAL).catch(console.error);
+  const starting = remote.on && !remote.address && !remote.error;
+  const detail = !remote.on ? (
+    "Where this app runs"
+  ) : starting ? (
+    <span className="inline-flex items-center gap-1.5">
+      <Spinner className="size-3" />
+      Starting remote access. Takes about 20 seconds.
+    </span>
+  ) : (
+    (remote.error ?? "Other Macs can reach it while Dray is open and this Mac is awake.")
+  );
+
+  return (
+    <Row
+      name="This Mac"
+      detail={detail}
+      status="connected"
+      action={
+        remote.on ? (
+          <Button variant="secondary" size="sm" onClick={() => setOn(false)}>
+            <GlobeOff />
+            Stop remote access
+          </Button>
+        ) : (
+          <Button variant="secondary" size="sm" onClick={() => setOn(true)}>
+            <Globe />
+            Turn on remote access
+          </Button>
+        )
+      }
+    >
+      {remote.on && remote.address && (
+        // Both halves of Add server's form. The token is fetched on Copy alone
+        // and never held here.
+        <div className="flex h-8 w-full min-w-0 items-center rounded-md border border-border dark:border-input">
+          <code className="flex-1 truncate pl-3 font-mono text-code text-foreground">{remote.address}</code>
+          <CopyIcon label="Copy address" done={copied === "address"} onClick={() => void copy(remote.address!, "address")} />
+          <span aria-hidden className="h-full w-px bg-border dark:bg-input" />
+          <code className="w-28 shrink-0 truncate pl-3 font-mono text-code text-muted-foreground">••••••••••</code>
+          <CopyIcon
+            label="Copy token"
+            done={copied === "token"}
+            onClick={() =>
+              void invoke<string>("remote_access_token", {}, LOCAL)
+                .then((token) => copy(token, "token"))
+                .catch(console.error)
+            }
+          />
+        </div>
+      )}
+    </Row>
+  );
+}
+
+function CopyIcon({ label, done, onClick }: { label: string; done: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      className="mx-1 flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+    >
+      {done ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+    </button>
+  );
+}
+
 function Row({
   hidden = false,
   name,
@@ -189,6 +282,8 @@ function Row({
   fix = null,
   onTrust,
   onNewAddress,
+  children,
+  action,
   on,
   onToggle,
   onRetry,
@@ -201,12 +296,16 @@ function Row({
   /// Kept for its height while a field is drawn over it.
   hidden?: boolean;
   name: string;
-  detail: string;
+  detail: ReactNode;
   status: ServerStatus;
   fix?: Fix | null;
   onTrust?: (fix: TrustHost) => void;
   /// The tunnel's new address, for a row whose old one Cloudflare let go.
   onNewAddress?: (url: string) => Promise<void>;
+  /// Drawn under the detail.
+  children?: ReactNode;
+  /// A control of the row's own, beside the switch.
+  action?: ReactNode;
   /// Absent for This Mac, which is the app itself and cannot be turned off.
   on?: boolean;
   onToggle?: (on: boolean) => void;
@@ -230,61 +329,71 @@ function Row({
     // Opacity, not `invisible`: visibility is inherited, and `Button`'s
     // `transition-all` animates it, so the buttons lingered a beat after the
     // rest of the row was gone. `inert` keeps them out of Tab meanwhile.
-    <div className={cn("flex min-h-10 items-center gap-3 py-1.5", hidden && "opacity-0")} inert={hidden}>
-      <StatusDot status={status} />
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="truncate text-ui font-medium">{name}</span>
-        <span className="text-ui text-muted-foreground">
-          <span className="sr-only">{status}. </span>
-          {detail}
-        </span>
-        {fix?.kind === "copy" && <CommandChip command={fix.command} />}
-        {fix?.kind === "trust_host" && (
-          <Button variant="secondary" size="sm" className="self-start" onClick={() => onTrust?.(fix)}>
-            Check the host key
-          </Button>
-        )}
-        {fix?.kind === "new_address" && onNewAddress && <NewAddressField onSave={onNewAddress} />}
-      </div>
-      {onRemove &&
-        (confirming ? (
+    <div className={cn("flex flex-col gap-2 py-1.5", hidden && "opacity-0")} inert={hidden}>
+      <div className="flex min-h-7 items-center gap-3">
+        <StatusDot status={status} />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="truncate text-ui font-medium">{name}</span>
+          <span className="text-ui text-muted-foreground">
+            <span className="sr-only">{status}. </span>
+            {detail}
+          </span>
+          {fix?.kind === "copy" && <CommandChip command={fix.command} />}
+          {fix?.kind === "trust_host" && (
+            <Button variant="secondary" size="sm" className="self-start" onClick={() => onTrust?.(fix)}>
+              Check the host key
+            </Button>
+          )}
+          {fix?.kind === "new_address" && onNewAddress && <NewAddressField onSave={onNewAddress} />}
+        </div>
+        {confirming ? (
           // Asked in the row, the transcription models' own reading: a modal
           // is more than forgetting an address is worth.
           <CancelOrConfirm verb="Remove" onConfirm={onConfirm!} onCancel={onCancel!} autoFocus />
         ) : (
-          <div className="flex items-center gap-1.5">
-            {onRetry && (
-              <Button variant="ghost" size="sm" onClick={onRetry}>
-                Try again
-              </Button>
-            )}
-            {onToggle && (
-              <Switch aria-label={`Connect to ${name}`} checked={on} onCheckedChange={onToggle} />
-            )}
-            {/* The Accounts rows' ⋯: the switch is what a row is for, and the
-                two that change the row itself wait behind it. */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" aria-label={`${name} options`}>
-                  <MoreHorizontal className="size-3.5" />
+          (onToggle || onRemove || action) && (
+            <div className="flex items-center gap-1.5">
+              {onRetry && (
+                <Button variant="ghost" size="sm" onClick={onRetry}>
+                  Try again
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className="min-w-36"
-                onCloseAutoFocus={(e) => {
-                  if (movedFocus.current) e.preventDefault();
-                  movedFocus.current = false;
-                }}
-              >
-                {onRename && <DropdownMenuItem onSelect={elsewhere(onRename)}>Rename</DropdownMenuItem>}
-                <DropdownMenuItem variant="destructive" onSelect={elsewhere(onRemove)}>
-                  Remove
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        ))}
+              )}
+              {action}
+              {onToggle && (
+                <Switch aria-label={`Connect to ${name}`} checked={on} onCheckedChange={onToggle} />
+              )}
+              {/* The Accounts rows' ⋯: the switch is what a row is for, and the
+                  two that change the row itself wait behind it. */}
+              {onRemove && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="sm" aria-label={`${name} options`}>
+                      <MoreHorizontal className="size-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="end"
+                    className="min-w-36"
+                    onCloseAutoFocus={(e) => {
+                      if (movedFocus.current) e.preventDefault();
+                      movedFocus.current = false;
+                    }}
+                  >
+                    {onRename && <DropdownMenuItem onSelect={elsewhere(onRename)}>Rename</DropdownMenuItem>}
+                    <DropdownMenuItem variant="destructive" onSelect={elsewhere(onRemove)}>
+                      Remove
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </div>
+          )
+        )}
+      </div>
+      {/* Under the whole row, not the text column, so the buttons stay level
+          with the name and the strip gets the row's width. Indented past the
+          dot. */}
+      {children && <div className="pl-4.5">{children}</div>}
     </div>
   );
 }

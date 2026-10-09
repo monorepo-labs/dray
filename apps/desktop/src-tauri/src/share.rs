@@ -89,12 +89,25 @@ pub async fn start(session: &str, port: u16) -> Result<String, String> {
             "nothing in this session is serving port {port}. Only the session's own dev servers can be shared."
         ));
     }
+    // Vite and its kin refuse a Host they do not know, and the visitor's is
+    // `*.trycloudflare.com`; to the dev server it is local traffic.
+    let (child, url) = quick_tunnel(&format!("http://localhost:{port}"), &["--http-host-header", "localhost"]).await?;
+    // Two shares racing: the first link stays, so a URL already handed out
+    // keeps working, and the second child is dropped, which kills it.
+    let mut tunnels = TUNNELS.lock().unwrap();
+    if tunnels.stamp(session, port) != stamp {
+        return Err("sharing was stopped before the link was ready".into());
+    }
+    Ok(tunnels.live.entry((session.to_string(), port)).or_insert(Tunnel { child, url }).url.clone())
+}
+
+/// A quick tunnel to `origin`, answering its process and its address once the
+/// address is registered and in DNS. Dropping the child takes it down.
+pub async fn quick_tunnel(origin: &str, extra: &[&str]) -> Result<(Child, String), String> {
     let exe = binary().await.map_err(|e| format!("{e:#}"))?;
     let mut child = Command::new(exe)
-        .args(["tunnel", "--no-autoupdate", "--url", &format!("http://localhost:{port}")])
-        // Vite and its kin refuse a Host they do not know, and the visitor's
-        // is `*.trycloudflare.com`; to the dev server it is local traffic.
-        .args(["--http-host-header", "localhost"])
+        .args(["tunnel", "--no-autoupdate", "--url", origin])
+        .args(extra)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -132,13 +145,7 @@ pub async fn start(session: &str, port: u16) -> Result<String, String> {
     // fills and stalls it.
     tokio::spawn(async move { while let Ok(Some(_)) = lines.next_line().await {} });
     wait_for_dns(&url).await;
-    // Two shares racing: the first link stays, so a URL already handed out
-    // keeps working, and the second child is dropped, which kills it.
-    let mut tunnels = TUNNELS.lock().unwrap();
-    if tunnels.stamp(session, port) != stamp {
-        return Err("sharing was stopped before the link was ready".into());
-    }
-    Ok(tunnels.live.entry((session.to_string(), port)).or_insert(Tunnel { child, url }).url.clone())
+    Ok((child, url))
 }
 
 pub fn stop(session: &str, port: u16) {
@@ -239,6 +246,15 @@ async fn binary() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A name that resolves answers on the first ask, not after the cap.
+    #[tokio::test]
+    #[ignore]
+    async fn a_resolving_name_waits_for_nothing() {
+        let t0 = std::time::Instant::now();
+        wait_for_dns("https://www.cloudflare.com").await;
+        assert!(t0.elapsed() < Duration::from_secs(3), "{:?}", t0.elapsed());
+    }
 
     #[test]
     fn a_stop_during_the_wait_moves_the_stamp() {

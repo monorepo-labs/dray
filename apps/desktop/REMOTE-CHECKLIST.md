@@ -90,7 +90,7 @@ Same installer as stage 2, with dialogs on top.
 ## Stage 7: More ways to use it
 
 - [x] Reach a Linux server through a Cloudflare quick tunnel, no SSH: `dray tunnel`, `dray service tunnel on` (#452)
-- [ ] Reach a Mac through a quick tunnel: the app itself serves, behind a Remote access switch (#452)
+- [x] Reach a Mac through a quick tunnel: the app itself serves, turned on from the This Mac row (#452)
 - [ ] Our own relay: sign-in, QR code, stable address, end-to-end encryption
 - [ ] Phone
 - [ ] Linux and Windows apps

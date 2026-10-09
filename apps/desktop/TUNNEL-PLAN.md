@@ -5,8 +5,8 @@ alone ([SSH-PLAN.md](SSH-PLAN.md)), which needs a public IP and a key on the
 client. A phone cannot run `ssh` at all. This puts the quick tunnel `dray
 share` already runs for dev servers (#434) in front of `dray-serve` itself.
 
-This is the Linux half. The Mac half — the app serving, behind a Remote
-access switch — is the next PR.
+Two PRs: the Linux half, then the Mac half — the app serving, turned on from
+the This Mac row.
 
 ## What was decided
 
@@ -110,16 +110,49 @@ tunnel is down — keeps retrying as before.
   start lost the race to the server binding and `Restart=` brought it back
   5s later.
 
-## Next: the Mac serving (PR 2)
+## The Mac serving (PR 2)
 
-Nothing here assumes the server is a separate process. The app's own server
-needs `serve::run` split in two: the hub — the event broadcast and `Live`,
-which is what a connecting client snapshots — and the listener. The desktop's
-`Sink` then emits to the webview and into the hub in one closure, which is all
-`Sink` is, so no call site moves. The tunnel side is already shared: the
-banner parse, the registered line and the DNS wait sit in `dray-proto` and
-`share.rs`, and the Origin check reads `tunnel-url` from whichever process
-wrote it.
+**A button on the This Mac row in Settings, Servers**, not a switch: a
+switch on that row reads as turning the Mac off. On, the app runs the
+listener `dray-serve` runs, in this process on `127.0.0.1`, with the same
+`serve-token`, and a quick tunnel in front of it. Another Mac connects to the
+very sessions on this screen: one process, one data dir, no second writer, and
+agents keep the Mac's own browser. Quitting Dray or a sleeping Mac stops it,
+and the row says so in one line. The choice is kept in `settings.json`
+(`remoteAccess`), since Rust starts serving at launch before any webview
+exists. Until the address is up, about 20s, the row says it is starting.
+
+**`serve.rs` is split in two: a `Hub` and `listen`.** The hub is the event
+broadcast plus `Live`, what a connecting client snapshots. `dray-serve` builds
+its `Sink` on one; the desktop's `Sink` publishes into `serve::HUB` as well as
+the webview, so no call site moved. The hub notes `Live` whether or not the
+app is serving, so a client connecting later still gets the open cards, and
+builds no frame while nobody listens. Events about this Mac's own remote
+servers and about Remote access itself stay in the window. `listen` holds its
+connections in a `JoinSet`, so dropping it — the switch going off — drops
+every client with it.
+
+**The tunnel start moved out of `share.rs`** into `quick_tunnel`, which dev
+server links and Remote access both use: download, banner, registered, DNS.
+If cloudflared exits the app starts another, under a new address, backing off
+to a minute between failures.
+
+**The token never sits in the webview.** The row draws the address and a
+masked token side by side, each with its own copy button, the two fields of
+Add server. The token's copy asks Rust for it (`remote_access_token`), writes
+it to the clipboard and keeps a marker, not the text. `get_settings` carries
+none of it.
+
+**A dev build serves beside the release app**: port 7318 and
+`tunnel-url-dev`, since the two share `~/.dray` and its token.
+
+Measured: the in-process server through a real tunnel, in a throwaway
+`DRAY_HOME` (`remote_access::tests::serves_through_a_tunnel`): an address in
+~20s from this Mac, a client admitted, an event the core emitted reaching it,
+and off dropping it and removing the address file. Then the dev app itself,
+launched with the switch already on: it served at launch, and the stage 3 live
+test passed against it through the tunnel — wrong token refused, a call
+answered, the Mac-only `open_in_app` refused as unknown, reconnect.
 
 ## What was left out
 
@@ -134,5 +167,7 @@ wrote it.
   login stays up leaves the recorded one stale until the next login, and a
   login landing mid-restart, when no address file exists, forgets it until
   the next. Both heal on their own; only the no-SSH fallback is affected.
+- A Mac's address file stays behind when Dray quits; the next start removes
+  it. Until then the Origin check lets through a host nobody can reach.
 - `forward_port` and Sign in still need SSH: a server reached by tunnel alone
   has neither, and says so as before.
