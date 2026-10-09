@@ -32,6 +32,7 @@ import { useDragReorder } from "@/hooks/useDragReorder";
 import {
   activateTab,
   claimPresenter,
+  releaseAfterPaint,
   closeTab,
   downloadChromium,
   listLocalServers,
@@ -140,7 +141,7 @@ export default function BrowserPane({
   useEffect(() => {
     const stage = stageRef.current;
     if (!active || standingAside || !stage || empty) {
-      claimPresenter(key, null);
+      releaseAfterPaint(key);
       return;
     }
     const priority = mode === "full" ? 2 : 1;
@@ -163,7 +164,7 @@ export default function BrowserPane({
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", report);
-      claimPresenter(key, null);
+      releaseAfterPaint(key);
     };
   }, [sessionId, key, active, mode, standingAside, empty, viewport]);
 
