@@ -2,7 +2,8 @@ import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 
 import { invoke, listen, LOCAL, serverOfPath } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Plus } from "lucide-react";
+import { CircleDashed, Plus } from "lucide-react";
+import PrStateIcon from "@/components/PrStateIcon";
 
 import { Button } from "@/components/ui/button";
 
@@ -1588,6 +1589,27 @@ function App() {
               }
             : null;
 
+  // The PR tab names its pull request, merged too: its glyph, or the
+  // checks spinner while they run, and its number. Read off the sidebar's mark,
+  // which its own poll keeps current, so this costs no `gh` call; the panel's
+  // read polls only while its tab is open. Several live PRs keep the count.
+  const prFace =
+    markHere && !prBadgeCount(pullRequests.prs)
+      ? {
+          icon:
+            markHere.state === "OPEN" && markHere.checksState === "RUNNING" ? (
+              <CircleDashed
+                className="size-3.5 shrink-0 animate-spin text-accent-command [animation-duration:3s]"
+                strokeWidth={1.5}
+                aria-label="Checks running"
+              />
+            ) : (
+              <PrStateIcon pr={markHere} />
+            ),
+          label: `#${markHere.number}`,
+        }
+      : null;
+
   const panelCounts = {
     pr: prBadgeCount(pullRequests.prs),
     // Only above one: a tab reading "Issue 1" says what the tab already says,
@@ -2658,6 +2680,9 @@ function App() {
             // the sheet is what gives this row its colour.
             "relative flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-3",
             !fullscreen && "pl-(--traffic-lights-w)",
+            // What sits before the tab row: this padding, the 28px sidebar
+            // toggle and one gap. `ViewTabs` lines a lone title up from it.
+            fullscreen ? "[--tabs-lead:3rem]" : "[--tabs-lead:calc(var(--traffic-lights-w)+2.25rem)]",
           )}
           // `deep`, not bare: bare drags only on direct hits, so every label
           // inside this row was a dead strip in a titlebar that looks uniform.
@@ -2730,6 +2755,8 @@ function App() {
               onChange={setViewTab}
               branch={prBranch}
               cwd={shownSession.cwd}
+              // Not past a parent's breadcrumb, whose width the lead leaves out.
+              alignX={hiddenParent ? 0 : sidebarDrawn}
             />
           )}
           {(issuesOpen || !shownSession) && (
@@ -2776,6 +2803,7 @@ function App() {
                     tab={activeTab}
                     open={panelShown}
                     counts={panelCounts}
+                    faces={prFace ? { pr: prFace } : undefined}
                     onPick={(value) =>
                       panelShown && activeTab === value ? setPanelOpen(false) : showPanel(value)
                     }

@@ -506,21 +506,28 @@ export function PanelTabs({
   tab,
   open,
   counts,
+  faces,
   onPick,
 }: {
   tabs: readonly PanelTab[];
   tab: PanelTab;
   open: boolean;
   counts?: Partial<Record<PanelTab, number>>;
+  /// A tab drawn as something other than its name, the way the PR tab names
+  /// its one open pull request.
+  faces?: Partial<Record<PanelTab, { icon: React.ReactNode; label: string }>>;
   onPick: (tab: PanelTab) => void;
 }) {
   return (
-    <div className="-mx-1 flex shrink-0 items-center gap-0.5 self-stretch overflow-hidden px-1 animate-in duration-300 ease-out fade-in slide-in-from-right-3">
+    <div className="-mx-1 flex shrink-0 items-center gap-0.5 self-stretch overflow-hidden px-1 transition-none animate-in duration-300 ease-out fade-in slide-in-from-right-3 [animation-delay:150ms] [animation-fill-mode:backwards]">
       {tabs.map((value) => (
         <ItemTab
           key={value}
-          icon={null}
-          label={counts?.[value] ? `${PANEL_LABELS[value]} ${counts[value]}` : PANEL_LABELS[value]}
+          icon={faces?.[value]?.icon ?? null}
+          label={
+            faces?.[value]?.label ??
+            (counts?.[value] ? `${PANEL_LABELS[value]} ${counts[value]}` : PANEL_LABELS[value])
+          }
           active={open && tab === value}
           onPick={() => onPick(value)}
           fixed

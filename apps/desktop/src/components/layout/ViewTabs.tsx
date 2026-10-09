@@ -107,12 +107,15 @@ export default function ViewTabs({
   onChange,
   branch,
   cwd,
+  alignX = 0,
 }: {
   sessionId: string;
-  /// The session's branch and directory, drawn beside the chat while it is the
-  /// row's only tab — the header's old worktree line, back where there is room.
+  /// The session's branch and directory, drawn at the row's far end.
   branch?: string | null;
   cwd?: string;
+  /// Where the sheet starts, from the header's left. A lone chat title lines
+  /// up with it; a row of tabs starts where it falls.
+  alignX?: number;
   /// The chat's tab, which stands for the session: `project / title`.
   title: string;
   tab: ViewTab;
@@ -244,6 +247,24 @@ export default function ViewTabs({
     "x",
   );
 
+  // A lone chat title is pushed right to start where the sheet does. Worked
+  // out in CSS from what sits before the row — the header names that as
+  // `--tabs-lead` — rather than measured: a layout read on every render forced
+  // a full layout each time, and switching sessions renders many times over.
+  // The row's `px-1` puts the tab 4px in from its edge; `-mx-1` is the floor.
+  const lone = drag.shown.length === 1;
+  const align = {
+    marginLeft:
+      lone && alignX > 0
+        ? `max(-0.25rem, calc(${alignX}px - 0.25rem - var(--tabs-lead)))`
+        : "-0.25rem",
+    transition: "margin-left 125ms cubic-bezier(0.2, 0, 0, 1)",
+    // A blur across the slide out to several tabs; the lone title arrives
+    // without one. Named beside the entrance so neither overrides the other,
+    // and `enter` keeps its slot, so it never replays.
+    animation: `enter 300ms ease-out 150ms backwards${lone ? "" : ", slide-blur 125ms ease-out"}`,
+  };
+
   // The browser view with nothing in the row lit for it — its tab shut by ⌘W
   // or by the agent, leaving only new tabs nobody is on, or nothing at all —
   // moves to the tab that sat beside it, as a browser does. A layout effect,
@@ -344,11 +365,19 @@ export default function ViewTabs({
     <div
       ref={drag.list}
       role="tablist"
-      className="-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden px-1 animate-in duration-300 ease-out fade-in slide-in-from-left-3"
+      className={cn(
+        "-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden px-1 fade-in",
+        // A lone title starts out at the sheet's edge, far from where a slide
+        // would start it, so it only fades.
+        !lone && "slide-in-from-left-3",
+      )}
+      style={align}
     >
       {drag.shown.map((item, i) => (
         <ItemTab
-          key={item.key}
+          // Remounted when the chat turns between a lone title and a tab, or
+          // its min-width eases across the change and the switch drags.
+          key={item.key === "chat" ? `chat:${lone}` : item.key}
           icon={item.icon}
           label={item.label}
           active={item.active}

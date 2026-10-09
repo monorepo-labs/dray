@@ -9,7 +9,7 @@
       // default one. Kept in sync with src/lib/theme.ts by hand — it can't import.
       try {
         var t = localStorage.getItem("ade.theme") || "default";
-        var m = localStorage.getItem("ade.mode") || "light";
+        var m = localStorage.getItem("ade.mode") || "system";
         // The stored mode is the reader's; a dark-only theme draws dark over
         // it. Mirrors `darkOnly` in theme.ts, and theme.test.ts holds the two
         // lists together.
