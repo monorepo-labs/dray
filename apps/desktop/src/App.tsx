@@ -77,7 +77,7 @@ import Sidebar, {
   sortSessions,
 } from "@/components/Sidebar";
 import { useChord } from "@/hooks/useShortcuts";
-import { formatChords } from "@/lib/shortcuts";
+import { type Chord, formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
@@ -161,10 +161,6 @@ import { buildTranscript, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 
 const PANE_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
-/// ⌘⇧↑/↓ presses closer than this are one run. Quick taps land 150–250ms
-/// apart, so 150 caught key repeat alone and every tap still opened its row.
-const STEP_RUN_MS = 300;
-
 /// One empty set, so clearing the rail's open rows twice is one state change.
 const NO_ROWS: ReadonlySet<string> = new Set();
 
@@ -237,6 +233,7 @@ function App() {
     removeWorktree,
     ensureLoaded,
     setNeighbours,
+    dropNeighbours,
     setOnScreen,
     setCrewSeen,
     paneState,
@@ -1696,54 +1693,21 @@ function App() {
   // Where ⌘⇧↑/↓ last landed. Neighbours are warmed only while the selection is
   // still there, so a click elsewhere lets them go and a mouse open warms none.
   const [steppedTo, setSteppedTo] = useState<string | null>(null);
-  // A press landing within `STEP_RUN_MS` of the last one moves only the
-  // sidebar's highlight, and the run opens where it stops. Opening every row a
-  // held chord passes was a read each, and marked each finished one as read
-  // unseen. A lone press still opens at once, and a collapsed sidebar opens on
-  // every press, having nothing else to show where the walk is.
-  const [pendingStep, setPendingStep] = useState<string | null>(null);
-  const stepRun = useRef<{ last: number; timer?: number }>({ last: 0 });
-  const commitStep = (id: string) => {
-    setPendingStep(null);
-    setSteppedTo(id);
-    if (id !== selectedSessionId) void handleSelectSessionIndexItem(id);
-  };
-  // The timer fires renders later, so it must reach this render's selection.
-  const commitStepRef = useRef(commitStep);
-  commitStepRef.current = commitStep;
-  // The walk steps whichever view the sidebar shows. A draft opens at once and
-  // ends any run, having no read to save.
+  // Set while the step modifiers warmed rows and no arrow has followed yet.
+  const armedRef = useRef(false);
+  // The walk steps whichever view the sidebar shows.
   const stepRow = (delta: number) => {
     const rows = draftsShown
       ? draftRows.map((d) => ({ id: d.id, draft: true }))
       : ordered.map((i) => ({ id: i.sessionId, draft: false }));
     if (rows.length === 0) return;
-    const from = rows.findIndex((r) => r.id === (pendingStep ?? openDraftId ?? selectedSessionId));
+    const from = rows.findIndex((r) => r.id === (openDraftId ?? selectedSessionId));
     const target =
       rows[from === -1 ? 0 : delta > 0 ? (from + 1) % rows.length : Math.max(from - 1, 0)];
     if (target.draft) return openDraft(target.id);
-    const id = target.id;
-    const run = stepRun.current;
-    const now = Date.now();
-    const fast = !collapsed && now - run.last < STEP_RUN_MS;
-    run.last = now;
-    clearTimeout(run.timer);
-    if (!fast) return commitStep(id);
-    setPendingStep(id);
-    run.timer = window.setTimeout(() => commitStepRef.current(id), STEP_RUN_MS);
-  };
-  // Any other move — a click, a notice, ⌘N — abandons a run in flight.
-  const cancelStep = () => {
-    clearTimeout(stepRun.current.timer);
-    setPendingStep(null);
-  };
-  useEffect(cancelStep, [selectedSessionId]);
-  // `goToSession`'s half, which also forgets the last press: a click on the
-  // open session moves no selection, and a press just after any move is a lone
-  // one that opens at once.
-  const endStepRun = () => {
-    stepRun.current.last = 0;
-    cancelStep();
+    armedRef.current = false;
+    setSteppedTo(target.id);
+    if (target.id !== selectedSessionId) void handleSelectSessionIndexItem(target.id);
   };
   // After a pause, so a held chord does not read every row it passes. Two
   // presses either way, wrap and top hold included.
@@ -1765,6 +1729,67 @@ function App() {
     // `setNeighbours` is rebuilt every render; these are what move the set.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [steppedTo, selectedSessionId, ordered]);
+  // Holding the step chords' modifiers is the reader about to walk, so the
+  // rows one press away are warmed before the first arrow. Any other key under
+  // them was not a walk and drops what was warmed; letting go with no arrow
+  // pressed hands them back to the sweep. Skipped mid-walk, where the
+  // two-either-way set above already covers it.
+  const prevChord = useChord("session.prev");
+  const nextChord = useChord("session.next");
+  const stepKeysRef = useRef({ arm: () => {}, drop: () => {}, release: () => {} });
+  stepKeysRef.current = {
+    arm: () => {
+      if (draftsShown || ordered.length === 0) return;
+      if (steppedTo && steppedTo === selectedSessionId) return;
+      const at = ordered.findIndex((i) => i.sessionId === selectedSessionId);
+      armedRef.current = true;
+      setNeighbours(
+        at === -1
+          ? [ordered[0].sessionId]
+          : [ordered[(at + 1) % ordered.length], ordered[Math.max(at - 1, 0)]]
+              .map((i) => i.sessionId)
+              .filter((id) => id !== selectedSessionId),
+      );
+    },
+    drop: () => {
+      armedRef.current = false;
+      setSteppedTo(null);
+      dropNeighbours();
+    },
+    release: () => {
+      if (!armedRef.current) return;
+      armedRef.current = false;
+      setNeighbours([]);
+    },
+  };
+  useEffect(() => {
+    const chords = [prevChord, nextChord].filter(
+      (c): c is Chord => !!c && (c.meta || c.shift || c.alt),
+    );
+    if (chords.length === 0) return;
+    const modifier = (e: KeyboardEvent) => ["Meta", "Control", "Shift", "Alt"].includes(e.key);
+    const holds = (e: KeyboardEvent, c: Chord) =>
+      (e.metaKey || e.ctrlKey) === c.meta && e.shiftKey === c.shift && e.altKey === c.alt;
+    // `useHotkey`'s own match, so a step it fires is never read as another key.
+    const steps = (e: KeyboardEvent, c: Chord) =>
+      e.key.toLowerCase() === c.key.toLowerCase()
+      || (c.alt && c.key.length === 1 && e.code === `Key${c.key.toUpperCase()}`)
+      || (c.code !== undefined && e.code === c.code);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat || !chords.some((c) => holds(e, c))) return;
+      if (modifier(e)) return stepKeysRef.current.arm();
+      if (!chords.some((c) => steps(e, c))) stepKeysRef.current.drop();
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (modifier(e)) stepKeysRef.current.release();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keyup", onKeyUp);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keyup", onKeyUp);
+    };
+  }, [prevChord, nextChord]);
   // Headings, not split groups: with no grid on screen the chord used to be
   // ⌘⇧ under another name, stepping one row at a time and never reaching the
   // next project the way its own label promised.
@@ -1885,11 +1910,10 @@ function App() {
   // back. The page itself is left as it was — its filters and its scroll come
   // back with it — so this is a navigation, not a dismissal. Settings cover the
   // whole window, so they close too.
-  const goToSession = (go: () => void, stepping = false) => {
+  const goToSession = (go: () => void) => {
     setIssuesOpen(false);
     closeSettings();
     setOpenDraftId(null);
-    if (!stepping) endStepRun();
     go();
   };
 
@@ -2301,8 +2325,8 @@ function App() {
 
   // ⌘⇧ rather than plain ⌘: the composer is focused most of the time, where
   // ⌘↑/↓ is the webview's own jump-to-start/end of the input.
-  useHotkey("session.prev", () => goToSession(() => stepRow(-1), true));
-  useHotkey("session.next", () => goToSession(() => stepRow(1), true));
+  useHotkey("session.prev", () => goToSession(() => stepRow(-1)));
+  useHotkey("session.next", () => goToSession(() => stepRow(1)));
   useHotkey("group.prev", () => goToSession(() => stepGroup(-1)));
   useHotkey("group.next", () => goToSession(() => stepGroup(1)));
   // ⌘⌥ digits, the bare ⌘ digits being the view tabs' below. Not ⌘⇧, which
@@ -2642,7 +2666,7 @@ function App() {
           // Cleared while the page is up. The column is showing issues, so a
           // lit row would name a session that is nowhere on screen — and the
           // selection itself is kept, which is what makes coming back free.
-          selectedSessionId={issuesOpen ? null : (pendingStep ?? selectedSessionId)}
+          selectedSessionId={issuesOpen ? null : selectedSessionId}
           collapsed={collapsed}
           onToggleCollapsed={toggleSidebar}
           onOpenSettings={() => setSettingsOpen(true)}

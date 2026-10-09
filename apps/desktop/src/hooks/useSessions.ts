@@ -2400,6 +2400,12 @@ const setNeighbours = (ids: string[]) => {
     if (statusBySessionRef.current[id] !== "in_progress") void ensureLoaded(id, false);
   }
 };
+/// Lets the warmed neighbours go now rather than at the next sweep. One the
+/// reader viewed recently stays, since the sweep's own clock still holds it.
+const dropNeighbours = () => {
+  neighboursRef.current = new Set();
+  evictSessionsRef.current();
+};
 
 /// The turns before what a transcript holds, prepended in log order — never
 /// sorted by `seq`, which a Claude Code subagent numbers from 0. Dropped where
@@ -2921,6 +2927,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
 
 }
