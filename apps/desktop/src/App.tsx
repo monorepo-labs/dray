@@ -2681,7 +2681,7 @@ function App() {
             "relative flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-3",
             !fullscreen && "pl-(--traffic-lights-w)",
             // What sits before the tab row: this padding, the 28px sidebar
-            // toggle and one gap. `ViewTabs` lines a lone title up from it.
+            // toggle and one gap. `ViewTabs` lines its row up from it.
             fullscreen ? "[--tabs-lead:3rem]" : "[--tabs-lead:calc(var(--traffic-lights-w)+2.25rem)]",
           )}
           // `deep`, not bare: bare drags only on direct hits, so every label

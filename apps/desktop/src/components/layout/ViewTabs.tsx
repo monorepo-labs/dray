@@ -113,8 +113,7 @@ export default function ViewTabs({
   /// The session's branch and directory, drawn at the row's far end.
   branch?: string | null;
   cwd?: string;
-  /// Where the sheet starts, from the header's left. A lone chat title lines
-  /// up with it; a row of tabs starts where it falls.
+  /// Where the sheet starts, from the header's left. The row lines up with it.
   alignX?: number;
   /// The chat's tab, which stands for the session: `project / title`.
   title: string;
@@ -247,22 +246,21 @@ export default function ViewTabs({
     "x",
   );
 
-  // A lone chat title is pushed right to start where the sheet does. Worked
+  // The row is pushed right to start where the sheet does. Worked
   // out in CSS from what sits before the row — the header names that as
   // `--tabs-lead` — rather than measured: a layout read on every render forced
   // a full layout each time, and switching sessions renders many times over.
   // The row's `px-1` puts the tab 4px in from its edge; `-mx-1` is the floor.
+  // Every row, not a lone title alone: aligned only when alone, the row slid
+  // across on every switch between one tab and several.
   const lone = drag.shown.length === 1;
   const align = {
     marginLeft:
-      lone && alignX > 0
-        ? `max(-0.25rem, calc(${alignX}px - 0.25rem - var(--tabs-lead)))`
-        : "-0.25rem",
+      alignX > 0 ? `max(-0.25rem, calc(${alignX}px - 0.25rem - var(--tabs-lead)))` : "-0.25rem",
     transition: "margin-left 125ms cubic-bezier(0.2, 0, 0, 1)",
-    // A blur across the slide out to several tabs; the lone title arrives
-    // without one. Named beside the entrance so neither overrides the other,
-    // and `enter` keeps its slot, so it never replays.
-    animation: `enter 300ms ease-out 150ms backwards${lone ? "" : ", slide-blur 125ms ease-out"}`,
+    // Here rather than as classes so `duration-300` does not also ease the
+    // margin at entrance speed.
+    animation: "enter 300ms ease-out 150ms backwards",
   };
 
   // The browser view with nothing in the row lit for it — its tab shut by ⌘W
@@ -366,10 +364,7 @@ export default function ViewTabs({
       ref={drag.list}
       role="tablist"
       className={cn(
-        "-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden px-1 fade-in",
-        // A lone title starts out at the sheet's edge, far from where a slide
-        // would start it, so it only fades.
-        !lone && "slide-in-from-left-3",
+        "-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden px-1 fade-in slide-in-from-left-3",
       )}
       style={align}
     >

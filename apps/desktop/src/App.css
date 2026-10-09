@@ -1427,11 +1427,3 @@ body.session-drag,
 body.session-drag * {
   cursor: grabbing !important;
 }
-
-/* The view tabs' slide. Outside `@theme`, which drops keyframes no
-   `--animate-*` names. */
-@keyframes slide-blur {
-  40% {
-    filter: blur(1.5px);
-  }
-}
