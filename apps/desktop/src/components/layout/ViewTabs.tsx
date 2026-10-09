@@ -496,6 +496,10 @@ export function ItemTab({
 }) {
   const pick = locked ? undefined : onPick;
   const [renaming, setRenaming] = useState(false);
+  const lastClick = useRef(-Infinity);
+  // Closed by the tab going inactive, not only by blur: the drag hook cancels
+  // the press on another tab, so focus never leaves the field.
+  if (renaming && !active) setRenaming(false);
   const tab = (
     // A div rather than a button, since the close control sits inside it.
     <div
@@ -504,8 +508,15 @@ export function ItemTab({
       aria-label={label}
       aria-disabled={locked || undefined}
       tabIndex={locked ? -1 : 0}
-      onClick={pick}
-      onDoubleClick={rename && (() => setRenaming(true))}
+      onClick={(e) => {
+        pick?.();
+        // Counted here rather than on `dblclick`, which WebKit never fires
+        // once the drag hook has cancelled the press's pointerdown.
+        // Only presses on a tab already active count, so a double-click
+        // that picks a tab does not also start renaming it.
+        if (rename && active && e.timeStamp - lastClick.current < 400) setRenaming(true);
+        lastClick.current = active ? e.timeStamp : -Infinity;
+      }}
       onKeyDown={(e) => {
         // Not a key meant for the close cross inside.
         if (e.target !== e.currentTarget) return;
@@ -623,10 +634,18 @@ function TitleInput({
   };
   const [value, setValue] = useState(title);
 
+  // Sized by an invisible copy of its own text in the same grid cell, so it
+  // opens exactly as wide as the title it replaces. `size` alone counts
+  // average glyphs and leaves a gap that pushes the row along.
   return (
+    <span className="inline-grid min-w-0 grid-cols-[minmax(0,max-content)]">
+      <span aria-hidden className="invisible col-start-1 row-start-1 overflow-hidden whitespace-pre pr-0.5">
+        {value}
+      </span>
     <input
       autoFocus
-      size={Math.max(value.length, 1)}
+      // Or its default 20-character width props the track open.
+      size={1}
       value={value}
       onChange={(e) => setValue(e.currentTarget.value)}
       aria-label="Session title"
@@ -637,16 +656,18 @@ function TitleInput({
       // Or a press in the field starts dragging the tab.
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
-        // Kept from the app's chords, and Escape from the window: unhandled,
-        // it takes a fullscreen window back to windowed.
-        e.stopPropagation();
+        // Typing is kept from the app's bare chords, and Escape from the
+        // window: unhandled, it takes a fullscreen window back to windowed.
+        // ⌘ chords pass, so ⌘T still opens a tab.
+        if (!e.metaKey) e.stopPropagation();
         if (e.key === "Enter") e.currentTarget.blur();
         if (e.key === "Escape") {
           e.preventDefault();
           finish(null);
         }
       }}
-      className="min-w-0 bg-transparent text-foreground outline-none"
+      className="col-start-1 row-start-1 w-full min-w-0 bg-transparent text-foreground outline-none"
     />
+    </span>
   );
 }
