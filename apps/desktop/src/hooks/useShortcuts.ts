@@ -50,7 +50,7 @@ export function yieldMovedDefaults(held: Overrides): Overrides {
   let out = held;
   for (const { id } of SHORTCUTS) {
     const previous = PREVIOUS_DEFAULTS[id];
-    if (!previous || id in held) continue;
+    if (previous === undefined || id in held) continue;
     // Against every other row as it now resolves, defaults included, so the
     // chord handed back cannot land on a row that was never rebound.
     const clashes = (chord: Chord) =>
@@ -59,7 +59,7 @@ export function yieldMovedDefaults(held: Overrides): Overrides {
         return other !== id && !!c && sameChord(c, chord);
       });
     if (!clashes(defaultChord(id))) continue;
-    out = { ...out, [id]: clashes(previous) ? null : previous };
+    out = { ...out, [id]: previous && !clashes(previous) ? previous : null };
   }
   return out;
 }

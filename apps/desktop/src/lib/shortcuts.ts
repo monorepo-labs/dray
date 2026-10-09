@@ -86,17 +86,28 @@ export const SHORTCUTS = [
   // the titlebar for a thing most conversations never have. ⌘⇧C is free of ⌘C,
   // which `sameChord` compares Shift for, so copy is untouched.
   { id: "crew.toggle", label: "Toggle crew", group: "Panels and views", chord: k("c", { shift: true }) },
-  { id: "panel.tab.prev", label: "Previous panel tab", group: "Panels and views", chord: k("{", { shift: true, code: "BracketLeft" }) },
-  { id: "panel.tab.next", label: "Next panel tab", group: "Panels and views", chord: k("}", { shift: true, code: "BracketRight" }) },
+  // ⌥, not ⇧: ⌘⇧[ and ⌘⇧] step the titlebar's tabs, every browser's chord.
+  { id: "panel.tab.prev", label: "Previous panel tab", group: "Panels and views", chord: k("[", { alt: true, code: "BracketLeft" }) },
+  { id: "panel.tab.next", label: "Next panel tab", group: "Panels and views", chord: k("]", { alt: true, code: "BracketRight" }) },
   { id: "panel.refresh", label: "Refresh panel or reload page", group: "Panels and views", chord: k("r") },
   { id: "browser.newTab", label: "New browser tab", group: "Panels and views", chord: k("t") },
   { id: "doc.save", label: "Save doc", group: "Panels and views", chord: k("s") },
   { id: "subtab.prev", label: "Previous tab in the view or panel", group: "Panels and views", chord: k("ArrowLeft", { shift: true }) },
   { id: "subtab.next", label: "Next tab in the view or panel", group: "Panels and views", chord: k("ArrowRight", { shift: true }) },
-  { id: "view.chat", label: "Chat view", group: "Panels and views", chord: k("1") },
-  { id: "view.browser", label: "Browser view", group: "Panels and views", chord: k("2") },
-  { id: "view.changes", label: "Changes view", group: "Panels and views", chord: k("3") },
-  { id: "view.files", label: "Files view", group: "Panels and views", chord: k("4") },
+  // By position in the titlebar's row, the way a browser numbers its tabs:
+  // the reader arranges the row, so a fixed key per view would point at
+  // wherever that view had been dragged to. ⌘9 is the last tab, not the ninth.
+  { id: "tab.1", label: "Tab 1", group: "Panels and views", chord: k("1") },
+  { id: "tab.2", label: "Tab 2", group: "Panels and views", chord: k("2") },
+  { id: "tab.3", label: "Tab 3", group: "Panels and views", chord: k("3") },
+  { id: "tab.4", label: "Tab 4", group: "Panels and views", chord: k("4") },
+  { id: "tab.5", label: "Tab 5", group: "Panels and views", chord: k("5") },
+  { id: "tab.6", label: "Tab 6", group: "Panels and views", chord: k("6") },
+  { id: "tab.7", label: "Tab 7", group: "Panels and views", chord: k("7") },
+  { id: "tab.8", label: "Tab 8", group: "Panels and views", chord: k("8") },
+  { id: "tab.9", label: "Last tab", group: "Panels and views", chord: k("9") },
+  { id: "tab.prev", label: "Previous tab", group: "Panels and views", chord: k("{", { shift: true, code: "BracketLeft" }) },
+  { id: "tab.next", label: "Next tab", group: "Panels and views", chord: k("}", { shift: true, code: "BracketRight" }) },
   { id: "chat.bottom", label: "Scroll chat to bottom", group: "Panels and views", chord: k("ArrowDown") },
   { id: "issues.open", label: "Open issues", group: "Panels and views", chord: k("i") },
   { id: "issues.search", label: "Search issues", group: "Panels and views", chord: k("f", { shift: true }) },
@@ -117,6 +128,7 @@ export const SHORTCUTS = [
 
   { id: "settings", label: "Settings", group: "General", chord: k(",") },
   { id: "theme.next", label: "Next theme", group: "General", chord: k("t", { alt: true }) },
+  { id: "mode.toggle", label: "Toggle light and dark", group: "General", chord: k("l", { alt: true }) },
   { id: "zoom.in", label: "Zoom in", group: "General", chord: k("=") },
   { id: "zoom.out", label: "Zoom out", group: "General", chord: k("-") },
   { id: "zoom.reset", label: "Actual size", group: "General", chord: k("0") },
@@ -134,15 +146,20 @@ export type ShortcutId = (typeof SHORTCUTS)[number]["id"];
 /// and only this build chose the other. See `yieldMovedDefaults`.
 ///
 /// The views and the panes traded places: ⌘ digits were the panes' and ⌘⌥
-/// digits the views'.
-export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord>> = {
+/// digits the views'. `null` is a row an older build did not have, whose new
+/// default a reader may already hold elsewhere — it yields to unbound.
+export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord | null>> = {
+  // The panel's tabs gave ⌘⇧[ ] to the titlebar's.
+  "panel.tab.prev": k("{", { shift: true, code: "BracketLeft" }),
+  "panel.tab.next": k("}", { shift: true, code: "BracketRight" }),
   ...Object.fromEntries(
     [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`pane.${n}`, k(String(n))]),
   ),
-  "view.chat": k("1", { alt: true, code: "Digit1" }),
-  "view.browser": k("2", { alt: true, code: "Digit2" }),
-  "view.changes": k("3", { alt: true, code: "Digit3" }),
-  "view.files": k("4", { alt: true, code: "Digit4" }),
+  // The titlebar's tabs, new with it.
+  ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`tab.${n}`, null])),
+  "tab.prev": null,
+  "tab.next": null,
+  "mode.toggle": null,
 };
 
 export const SHORTCUT_GROUPS: ShortcutGroup[] = [

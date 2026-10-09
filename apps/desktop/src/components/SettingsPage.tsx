@@ -39,7 +39,6 @@ import { useAppSettings } from "@/hooks/useAppSettings";
 import type { useIntegrations } from "@/hooks/useIntegrations";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { chordFor, useShortcutOverrides } from "@/hooks/useShortcuts";
-import { useFullscreen } from "@/hooks/useFullscreen";
 import { useTheme } from "@/hooks/useTheme";
 import { type ManualCheck, updateFailure } from "@/hooks/useUpdater";
 import { downloadChromium, removeChromium, useChromium } from "@/lib/browser";
@@ -52,6 +51,7 @@ import {
   pickFileOpener,
 } from "@/lib/openWith";
 import AccountsSettings from "@/components/settings/AccountsSettings";
+import AppShell from "@/components/layout/AppShell";
 import { SettingsHeaderSlot } from "@/components/settings/headerAction";
 import ServersSettings from "@/components/settings/ServersSettings";
 import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
@@ -108,8 +108,6 @@ export default function SettingsPage({
   onRemoveSpace,
   onMoveSpace,
   onMoveProject,
-  autoHideSidebar,
-  onAutoHideSidebarChange,
   autoHidePanel,
   onAutoHidePanelChange,
   panelSide,
@@ -147,8 +145,6 @@ export default function SettingsPage({
   /// Owned by `App` for the reason the update channel is: the effect that acts
   /// on this lives there, and a second `useLocalStorage` copy here would write
   /// a value that effect never sees.
-  autoHideSidebar: boolean;
-  onAutoHideSidebarChange: (next: boolean) => void;
   autoHidePanel: boolean;
   onAutoHidePanelChange: (next: boolean) => void;
   panelSide: PanelSide;
@@ -190,11 +186,6 @@ export default function SettingsPage({
               <ZoomRow />
             </Section>
             <Section>
-              <AutoHideRow
-                label="Auto-hide sidebar in Browser View"
-                checked={autoHideSidebar}
-                onChange={onAutoHideSidebarChange}
-              />
               <AutoHideRow
                 label="Auto-hide side panel outside Chat"
                 checked={autoHidePanel}
@@ -1106,7 +1097,6 @@ function SettingsTabs({
   children: (goTo: (tab: SettingsTab) => void) => Record<SettingsTab, ReactNode>;
 }) {
   const id = useId();
-  const fullscreen = useFullscreen();
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   // A route in from outside — the What's new card's View all, the mic's
   // missing model — can land while the page is already open.
@@ -1139,41 +1129,39 @@ function SettingsTabs({
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // The main window's own shell, so the list sits on the frame where the
+  // sidebar does and the page is the raised sheet beside it.
   return (
-    <div className="flex h-full w-full overflow-hidden">
-      {/* The sidebar's own width, border and titlebar strip, so the page
-          reads as the sidebar changing what it lists rather than as a second
-          window. */}
-      <aside className="flex w-60 shrink-0 flex-col border-r border-sidebar-border">
-        {/* The way back sits where the gear that opened this sits: the
-            strip's inner end, clearing the traffic lights, and the free left
-            edge in fullscreen where they are gone. */}
-        <div
-          className={cn(
-            "flex h-(--titlebar-h) shrink-0 items-center px-2",
-            fullscreen ? "justify-start" : "justify-end",
-          )}
-          data-tauri-drag-region="deep"
-        >
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Back"
-                onClick={onClose}
-                className="opacity-80 transition-opacity hover:opacity-100"
-              >
-                <ArrowLeft className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              Back
-              <Kbd>Esc</Kbd>
-            </TooltipContent>
-          </Tooltip>
-        </div>
-        <div className="px-2">
+    <AppShell
+      // Up to the window's top: with no tab row there is nothing for the
+      // header to hold over the sheet.
+      tall
+      header={
+        <header className="relative h-(--titlebar-h)" data-tauri-drag-region="deep">
+          {/* Where the gear that opened this sits: the sidebar's right end. */}
+          <div className="absolute top-1/2 right-[calc(100%-15rem+0.5rem)] -translate-y-1/2">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Back"
+                  onClick={onClose}
+                  className="opacity-80 transition-opacity hover:opacity-100"
+                >
+                  <ArrowLeft className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">
+                Back
+                <Kbd>Esc</Kbd>
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </header>
+      }
+      sidebar={
+        <aside className="flex w-60 shrink-0 flex-col px-2">
           <div
             role="tablist"
             aria-label="Settings"
@@ -1201,52 +1189,43 @@ function SettingsTabs({
               </TabButton>
             ))}
           </div>
-        </div>
-      </aside>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* The app header's height and muted stand-in word, but the content's own
-            `px-8`, so "Settings" and the tab title start on one edge. */}
-        <header
-          className="flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-8"
-          data-tauri-drag-region="deep"
-        >
-          <span className="text-ui text-muted-foreground">Settings</span>
-        </header>
-        {/* The scroll box spans the column so the bar sits at the window's
-            edge; the text inside is capped, since a row stretched across a
-            wide window leaves its label and its switch a screen apart.
-            `shrink-0` on the sections, since a column flex item shrinks toward
-            its content before the container agrees to scroll. */}
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="flex w-full max-w-160 flex-col gap-7 px-8 pt-4 pb-16 [&>*]:shrink-0">
-            {/* A tab hangs a header action here through a portal. The slot is
-                `contents`, so what lands in it lays out in this row — an action
-                takes `ml-auto` to the far end, a back arrow `-order-1` to lead
-                the title. */}
-            {/* One block with its subtitle, so the line reads as the title's
-                rather than taking the column's gap like a section of its own. */}
-            <div className="flex flex-col gap-1">
-              <div className="flex h-7 items-center gap-2">
-                <h1 className="text-base font-medium">{SETTINGS_TABS[index].label}</h1>
-                <div ref={setSlot} className="contents" />
-              </div>
-              {TAB_SUBTITLES[tab] && (
-                <p className="text-ui text-muted-foreground">{TAB_SUBTITLES[tab]}</p>
-              )}
+        </aside>
+      }
+      footer={null}
+    >
+      {/* The scroll box spans the sheet so the bar sits at its edge; the text
+          inside is capped, since a row stretched across a wide window leaves
+          its label and its switch a screen apart. `shrink-0` on the sections,
+          since a column flex item shrinks toward its content before the
+          container agrees to scroll. */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="flex w-full max-w-160 flex-col gap-7 px-8 pt-2 pb-16 [&>*]:shrink-0">
+          {/* A tab hangs a header action here through a portal. The slot is
+              `contents`, so what lands in it lays out in this row — an action
+              takes `ml-auto` to the far end, a back arrow `-order-1` to lead
+              the title. */}
+          {/* One block with its subtitle, so the line reads as the title's
+              rather than taking the column's gap like a section of its own. */}
+          <div className="flex flex-col gap-1">
+            <div className="flex h-7 items-center gap-2">
+              <h1 className="text-base font-medium">{SETTINGS_TABS[index].label}</h1>
+              <div ref={setSlot} className="contents" />
             </div>
-            <div
-              role="tabpanel"
-              id={`${id}-panel`}
-              aria-labelledby={`${id}-${tab}`}
-              className="flex flex-col gap-7 [&>*]:shrink-0"
-            >
-              <SettingsHeaderSlot.Provider value={slot}>{children(setTab)[tab]}</SettingsHeaderSlot.Provider>
-            </div>
+            {TAB_SUBTITLES[tab] && (
+              <p className="text-ui text-muted-foreground">{TAB_SUBTITLES[tab]}</p>
+            )}
+          </div>
+          <div
+            role="tabpanel"
+            id={`${id}-panel`}
+            aria-labelledby={`${id}-${tab}`}
+            className="flex flex-col gap-7 [&>*]:shrink-0"
+          >
+            <SettingsHeaderSlot.Provider value={slot}>{children(setTab)[tab]}</SettingsHeaderSlot.Provider>
           </div>
         </div>
       </div>
-    </div>
+    </AppShell>
   );
 }
 

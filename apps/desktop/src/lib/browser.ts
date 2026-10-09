@@ -26,6 +26,9 @@ export type BrowserTab = {
   canGoForward: boolean;
   /// The main frame's last load failure, from Chromium's own words.
   error: string | null;
+  /// The colour at the top of the page, `rgb(r, g, b)`. Absent from the
+  /// headless server and until the first page finishes loading.
+  background?: string | null;
 };
 
 const EMPTY: BrowserTab[] = [];
@@ -39,10 +42,22 @@ function start() {
   started = true;
   void listen<{ sessionId: string; tabs: BrowserTab[] }>("browser_tabs", (e) => {
     const { sessionId, tabs } = e.payload;
-    // A tab arriving is what the pending new tab was waiting for, whoever
-    // opened it — the URL bar, a link in the chat, a popup.
+    // A tab arriving is what the new tab on screen was waiting for, whoever
+    // opened it — the URL bar, a link in the chat, a popup. It becomes that
+    // page; the other blank tabs stay where they are.
     if (tabs.length > (tabsBySession.get(sessionId)?.length ?? 0)) {
-      pending.delete(sessionId);
+      // The blank that asked for it, where one did: the reader may have moved
+      // to another blank while Chromium was making the page.
+      const b = blanks.get(sessionId);
+      const from = submitted.get(sessionId) ?? b?.active ?? null;
+      submitted.delete(sessionId);
+      if (b && from !== null && b.ids.includes(from)) {
+        drafts.delete(`${sessionId}:blank:${from}`);
+        blanks.set(sessionId, {
+          ids: b.ids.filter((id) => id !== from),
+          active: b.active === from ? null : b.active,
+        });
+      }
       openErrors.delete(sessionId);
     }
     tabsBySession.set(sessionId, tabs);
@@ -197,10 +212,14 @@ export function clearOpenError(sessionId: string) {
   notify();
 }
 
-export function openInBrowser(sessionId: string, url: string, newTab = false) {
+/// `fromBlank` is the blank tab the URL was typed into, which the page
+/// replaces when it arrives.
+export function openInBrowser(sessionId: string, url: string, newTab = false, fromBlank?: number | null) {
   openErrors.delete(sessionId);
+  if (fromBlank != null) submitted.set(sessionId, fromBlank);
   notify();
   return invoke("browser_open", { sessionId, url, newTab }).catch((e: unknown) => {
+    if (submitted.get(sessionId) === fromBlank) submitted.delete(sessionId);
     openErrors.set(sessionId, String(e));
     notify();
     throw e;
@@ -310,21 +329,65 @@ export function describePick(el: PickedElement): string {
 
 /// A new tab is nothing until it has a URL: no Chromium browser is made for
 /// it, so the pane can draw its own empty state where the page would be
-/// (the page is a native view the DOM cannot draw over). One per session,
-/// and it turns into a real tab the moment one arrives.
-const pending = new Set<string>();
+/// (the page is a native view the DOM cannot draw over). As many per session
+/// as the reader opens, kept until closed, as a browser keeps them; the one on
+/// screen turns into a real tab the moment one arrives.
+export type BlankTabs = { ids: number[]; active: number | null };
+const NO_BLANKS: BlankTabs = { ids: [], active: null };
+const blanks = new Map<string, BlankTabs>();
+let nextBlank = 1;
+/// The blank whose URL is on its way to being a page, per session.
+const submitted = new Map<string, number>();
 
-export function usePendingTab(sessionId: string): boolean {
-  return useSyncExternalStore(subscribe, () => pending.has(sessionId));
+/// What is typed into each tab's URL field, keyed `<session>:blank:<id>` or
+/// `<session>:page:<id>`. Here rather than in the pane, since the panel and the
+/// full view each draw a field and the reader moves between them.
+const drafts = new Map<string, string>();
+
+export function useUrlDraft(key: string): string | null {
+  return useSyncExternalStore(subscribe, () => drafts.get(key) ?? null);
 }
 
-export function setPendingTab(sessionId: string, on: boolean) {
-  if (on) pending.add(sessionId);
-  else {
-    pending.delete(sessionId);
-    openErrors.delete(sessionId);
-  }
+export function setUrlDraft(key: string, value: string | null) {
+  if (value === null) drafts.delete(key);
+  else drafts.set(key, value);
   notify();
+}
+
+function putBlanks(sessionId: string, next: BlankTabs) {
+  blanks.set(sessionId, next);
+  notify();
+}
+
+export function useBlankTabs(sessionId: string): BlankTabs {
+  return useSyncExternalStore(subscribe, () => blanks.get(sessionId) ?? NO_BLANKS);
+}
+
+/// Whether a blank tab is the one on screen.
+export function usePendingTab(sessionId: string): boolean {
+  return useSyncExternalStore(subscribe, () => (blanks.get(sessionId)?.active ?? null) !== null);
+}
+
+/// On opens another blank tab and shows it; off leaves the blank tabs where
+/// they are, for a page to be shown instead.
+export function setPendingTab(sessionId: string, on: boolean) {
+  const b = blanks.get(sessionId) ?? NO_BLANKS;
+  if (on) return putBlanks(sessionId, { ids: [...b.ids, nextBlank], active: nextBlank++ });
+  openErrors.delete(sessionId);
+  putBlanks(sessionId, { ...b, active: null });
+}
+
+export function activateBlankTab(sessionId: string, id: number) {
+  const b = blanks.get(sessionId) ?? NO_BLANKS;
+  openErrors.delete(sessionId);
+  putBlanks(sessionId, { ...b, active: id });
+}
+
+export function closeBlankTab(sessionId: string, id: number) {
+  const b = blanks.get(sessionId) ?? NO_BLANKS;
+  drafts.delete(`${sessionId}:blank:${id}`);
+  if (b.active === id) openErrors.delete(sessionId);
+  putBlanks(sessionId, { ids: b.ids.filter((i) => i !== id), active: b.active === id ? null : b.active });
 }
 
 // --- Chromium itself ---------------------------------------------------------

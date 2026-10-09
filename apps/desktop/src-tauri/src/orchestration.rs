@@ -322,7 +322,8 @@ mod server_list {
                  terminal to trust it, then add it again."
             ),
             Some(Fix::Install) => format!("{message} Add it from the app's Settings → Servers, which can install it."),
-            None => message,
+            // A reconnect's fix, never an add's; the sentence already says it.
+            Some(Fix::NewAddress) | None => message,
         }
     }
 

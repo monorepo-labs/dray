@@ -19,7 +19,7 @@ export default function PlanPanel({ sessionId }: { sessionId: string | null }) {
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-4 text-chat">
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-4 text-chat">
       <Markdown>{plan}</Markdown>
     </div>
   );
