@@ -667,7 +667,7 @@ pub fn tunnel(args: Tunnel) -> Result<(), String> {
                 Err(e) => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    let _ = std::fs::remove_file(&file);
+                    remove_if_ours(&file, url);
                     return Err(e);
                 }
             }
@@ -675,16 +675,21 @@ pub fn tunnel(args: Tunnel) -> Result<(), String> {
             // drains fills and stalls it.
             std::thread::spawn(move || lines.for_each(drop));
             let _ = child.wait();
-            // Only an address this run wrote: a second tunnel may own it now.
-            if std::fs::read_to_string(&file).is_ok_and(|u| u.trim() == url) {
-                let _ = std::fs::remove_file(&file);
-            }
+            remove_if_ours(&file, url);
             return if STOPPED.load(Ordering::Relaxed) { Ok(()) } else { Err("the tunnel went down".into()) };
         }
     }
     let _ = child.wait();
     let said = said.map(|l| format!(": {}", l.trim())).unwrap_or_default();
     Err(format!("cloudflared exited without an address{said}"))
+}
+
+/// Removes the address file only while it holds `url`: another tunnel may own
+/// it, and taking its address hides it from SSH and the Origin check.
+fn remove_if_ours(file: &Path, url: &str) {
+    if std::fs::read_to_string(file).is_ok_and(|u| u.trim() == url) {
+        let _ = std::fs::remove_file(file);
+    }
 }
 
 /// Until the tunnel's name resolves, so nobody's resolver asks early and
