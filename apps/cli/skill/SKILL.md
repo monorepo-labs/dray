@@ -359,6 +359,27 @@ without publishing anything. The link shows on that server's row in the app,
 where the user can stop it, and it goes when the session is settled or deleted.
 The URL is random each time and Cloudflare promises no uptime for it.
 
+## The app's servers
+
+```bash
+dray server add vps root@203.0.113.7                   # or ssh -p 2222 …, or an ~/.ssh/config alias
+dray server add --token-file t vps ws://127.0.0.1:7317  # a token from stdin works too
+dray server ls                                          # name, address, connected or not; --json
+dray server rename vps box                              # '' puts back the host
+dray server off vps                                     # stays listed; the app stops connecting
+dray server on vps                                      # or reconnect: tries now, says if it worked
+dray server rm vps
+```
+
+The same list as Settings → Servers on the user's Mac, and it moves there as
+you run these. Reach for it after you have set a machine up and the user wants
+it in the app. `add` connects before it saves, so a refusal is the app telling
+you what is wrong — an unknown host key, a password login, no Dray on the
+server — and its fix is the user's to make, never yours: do not accept a host
+key on their behalf. A token never goes on the command line. Remove only
+servers the user named. On a Linux server, `dray server` is refused: the list
+lives in the Mac app.
+
 ## Reporting back to the user
 
 Say briefly what is now running, in terms of the work — "three sessions, one per

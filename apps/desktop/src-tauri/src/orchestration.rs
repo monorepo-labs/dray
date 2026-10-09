@@ -263,6 +263,113 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::RemoveDraft(draft) => remove_draft(&draft.id, app).await,
         Request::StartDraft(start) => start_draft(start, app).await,
         Request::Share(share) => share_port(share).await,
+        #[cfg(feature = "desktop")]
+        Request::AddServer(add) => server_list::add(add).await,
+        #[cfg(feature = "desktop")]
+        Request::ListServers => Ok(Response::Servers {
+            servers: crate::servers::list_servers().into_iter().map(server_list::summarize).collect(),
+        }),
+        #[cfg(feature = "desktop")]
+        Request::RemoveServer(server) => server_list::remove(&server.name).await,
+        #[cfg(feature = "desktop")]
+        Request::RenameServer(rename) => server_list::rename(rename).await,
+        #[cfg(feature = "desktop")]
+        Request::SetServerOn(set) => server_list::set_on(set).await,
+        #[cfg(not(feature = "desktop"))]
+        Request::AddServer(_)
+        | Request::ListServers
+        | Request::RemoveServer(_)
+        | Request::RenameServer(_)
+        | Request::SetServerOn(_) => {
+            bail!("this Dray is a server, and the server list lives in the Mac app — run `dray server` there")
+        }
+    }
+}
+
+/// `dray server`, through Settings → Servers' own commands, so the CLI is
+/// refused exactly where the Add dialog would be and the page hears the same
+/// `servers_changed`.
+#[cfg(feature = "desktop")]
+mod server_list {
+    use crate::servers::{self, ServerInfo, ServerStatus};
+    use crate::ssh::{Failure, Fix};
+    use anyhow::{bail, Context, Result};
+    use dray_proto::{AddServer, Response, ServerSummary};
+
+    pub async fn add(add: AddServer) -> Result<Response> {
+        let name = Some(add.name);
+        let added = match add.token {
+            Some(token) => servers::add_server(add.address, token, name).await.map_err(anyhow::Error::msg)?,
+            None => servers::add_ssh_server(add.address, name).await.map_err(|f| anyhow::anyhow!(ssh_failure(f)))?,
+        };
+        Ok(Response::Server { server: summarize(added) })
+    }
+
+    /// The Add dialog draws a failure's fix as a control; a terminal gets it as
+    /// words. Trusting a host key stays a person's decision, made in their own
+    /// `ssh`, never on an agent's say-so.
+    fn ssh_failure(failure: Failure) -> String {
+        let message = failure.message;
+        match failure.fix {
+            Some(Fix::Copy { command }) => format!("{message}\n  {command}"),
+            Some(Fix::TrustHost { host, key_type, fingerprint }) => format!(
+                "{message} Its {key_type} key is {fingerprint}. If that is right, log in to {host} once with ssh \
+                 in a terminal to trust it, then add it again."
+            ),
+            Some(Fix::Install) => format!("{message} Add it from the app's Settings → Servers, which can install it."),
+            None => message,
+        }
+    }
+
+    /// By name, or by id where two servers share one.
+    fn find(name: &str) -> Result<ServerInfo> {
+        let mut matches: Vec<_> = servers::list_servers().into_iter().filter(|s| s.id == name || s.name == name).collect();
+        match matches.len() {
+            0 => bail!("no server named {name}"),
+            1 => Ok(matches.remove(0)),
+            n => bail!(
+                "{n} servers are named {name} — name one by id: {}",
+                matches.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", ")
+            ),
+        }
+    }
+
+    fn current(id: &str) -> Result<ServerInfo> {
+        servers::list_servers().into_iter().find(|s| s.id == id).context("the server was removed meanwhile")
+    }
+
+    /// Takes the token with it.
+    pub async fn remove(name: &str) -> Result<Response> {
+        let server = find(name)?;
+        servers::remove_server(server.id.clone()).await.map_err(anyhow::Error::msg)?;
+        Ok(Response::Server { server: summarize(server) })
+    }
+
+    pub async fn rename(rename: dray_proto::RenameServer) -> Result<Response> {
+        let id = find(&rename.name)?.id;
+        servers::rename_server(id.clone(), rename.new_name).await.map_err(anyhow::Error::msg)?;
+        Ok(Response::Server { server: summarize(current(&id)?) })
+    }
+
+    /// On waits for the attempt to settle, so `dray server on` answers
+    /// whether it connected rather than "connecting". A whole SSH connect is
+    /// capped at 45s; past that the answer is the row as it stands.
+    pub async fn set_on(set: dray_proto::SetServerOn) -> Result<Response> {
+        let id = find(&set.name)?.id;
+        servers::set_server_on(id.clone(), set.on).await.map_err(anyhow::Error::msg)?;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(50);
+        while set.on && current(&id)?.status == ServerStatus::Connecting && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        Ok(Response::Server { server: summarize(current(&id)?) })
+    }
+
+    pub fn summarize(server: ServerInfo) -> ServerSummary {
+        let status = match server.on {
+            true => serde_json::to_value(server.status).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
+            false => "off".to_string(),
+        };
+        ServerSummary { id: server.id, name: server.name, address: server.ssh.unwrap_or(server.url), status, error: server.error }
     }
 }
 
