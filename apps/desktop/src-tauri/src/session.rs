@@ -482,6 +482,19 @@ impl SessionManager {
         false
     }
 
+    /// Ends every live child the way a settle does, all at once, for a server
+    /// on its way out. Unbounded on its own — a stuck send holds its slot —
+    /// so the caller bounds it.
+    pub async fn stop_all(&self) {
+        let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
+        futures_util::future::join_all(slots.into_iter().map(|slot| async move {
+            if let Some(session) = slot.lock().await.take() {
+                let _ = session.kill().await;
+            }
+        }))
+        .await;
+    }
+
     /// Whether any session has a turn running, which is what a server restart
     /// waits out. A slot locked by a send or a respawn counts as running.
     async fn any_turn_in_flight(&self) -> bool {

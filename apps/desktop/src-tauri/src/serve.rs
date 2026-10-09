@@ -170,12 +170,24 @@ async fn restart_when_idle() {
 
 /// Ends the server and everything under it: cloudflared, which would go on
 /// answering at an address nobody shows, and every session's tree, which a dev
-/// server or watcher would otherwise outlive. Walked off the process table
-/// rather than the session map, whose locks a stuck send could hold forever.
+/// server or watcher would otherwise outlive.
+///
+/// Agents get 3s to exit the way a settle ends them, since pi and fx release
+/// locks on a clean exit and a killed one stalls the next start. Then
+/// whatever is left is killed off the process table, walked *before* the
+/// agents went, so their reparented children are still named — and never off
+/// the session map alone, whose locks a stuck send can hold forever.
 #[cfg(feature = "desktop")]
 async fn shut_down() -> ! {
     crate::remote_access::stop_on_exit();
-    crate::local_servers::kill_descendants(std::process::id()).await;
+    let me = std::process::id();
+    let tree = tokio::task::spawn_blocking(move || crate::local_servers::descendants(me)).await.unwrap_or_default();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), crate::session::manager().stop_all()).await;
+    // ponytail: a pid that exited in those 3s could be reused; a process
+    // group per agent would make this one signal.
+    for pid in tree.into_iter().filter(|&p| p != me) {
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    }
     std::process::exit(0)
 }
 
