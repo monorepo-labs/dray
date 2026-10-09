@@ -77,7 +77,7 @@ import Sidebar, {
   sortSessions,
 } from "@/components/Sidebar";
 import { useChord } from "@/hooks/useShortcuts";
-import { formatChords } from "@/lib/shortcuts";
+import { type Chord, formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
@@ -1693,6 +1693,8 @@ function App() {
   // Where ⌘⇧↑/↓ last landed. Neighbours are warmed only while the selection is
   // still there, so a click elsewhere lets them go and a mouse open warms none.
   const [steppedTo, setSteppedTo] = useState<string | null>(null);
+  // Set while the step modifiers warmed rows and no arrow has followed yet.
+  const armedRef = useRef(false);
   // The walk steps whichever view the sidebar shows.
   const stepRow = (delta: number) => {
     const rows = draftsShown
@@ -1703,6 +1705,7 @@ function App() {
     const target =
       rows[from === -1 ? 0 : delta > 0 ? (from + 1) % rows.length : Math.max(from - 1, 0)];
     if (target.draft) return openDraft(target.id);
+    armedRef.current = false;
     setSteppedTo(target.id);
     if (target.id !== selectedSessionId) void handleSelectSessionIndexItem(target.id);
   };
@@ -1726,42 +1729,67 @@ function App() {
     // `setNeighbours` is rebuilt every render; these are what move the set.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [steppedTo, selectedSessionId, ordered]);
-  // Holding the step chord's modifiers is the reader about to walk, so the
+  // Holding the step chords' modifiers is the reader about to walk, so the
   // rows one press away are warmed before the first arrow. Any other key under
-  // them was not a walk, and lets what was warmed go. Skipped mid-walk, where
-  // the two-either-way set above already covers it.
+  // them was not a walk and drops what was warmed; letting go with no arrow
+  // pressed hands them back to the sweep. Skipped mid-walk, where the
+  // two-either-way set above already covers it.
   const prevChord = useChord("session.prev");
   const nextChord = useChord("session.next");
-  const armStepRef = useRef(() => {});
-  armStepRef.current = () => {
-    if (draftsShown || ordered.length === 0) return;
-    if (steppedTo && steppedTo === selectedSessionId) return;
-    const at = ordered.findIndex((i) => i.sessionId === selectedSessionId);
-    const ids =
-      at === -1
-        ? [ordered[0].sessionId]
-        : [ordered[(at + 1) % ordered.length], ordered[Math.max(at - 1, 0)]]
-            .map((i) => i.sessionId)
-            .filter((id) => id !== selectedSessionId);
-    setNeighbours(ids);
+  const stepKeysRef = useRef({ arm: () => {}, drop: () => {}, release: () => {} });
+  stepKeysRef.current = {
+    arm: () => {
+      if (draftsShown || ordered.length === 0) return;
+      if (steppedTo && steppedTo === selectedSessionId) return;
+      const at = ordered.findIndex((i) => i.sessionId === selectedSessionId);
+      armedRef.current = true;
+      setNeighbours(
+        at === -1
+          ? [ordered[0].sessionId]
+          : [ordered[(at + 1) % ordered.length], ordered[Math.max(at - 1, 0)]]
+              .map((i) => i.sessionId)
+              .filter((id) => id !== selectedSessionId),
+      );
+    },
+    drop: () => {
+      armedRef.current = false;
+      setSteppedTo(null);
+      dropNeighbours();
+    },
+    release: () => {
+      if (!armedRef.current) return;
+      armedRef.current = false;
+      setNeighbours([]);
+    },
   };
-  const dropNeighboursRef = useRef(dropNeighbours);
-  dropNeighboursRef.current = dropNeighbours;
   useEffect(() => {
-    if (!nextChord || !(nextChord.meta || nextChord.shift || nextChord.alt)) return;
+    const chords = [prevChord, nextChord].filter(
+      (c): c is Chord => !!c && (c.meta || c.shift || c.alt),
+    );
+    if (chords.length === 0) return;
+    const modifier = (e: KeyboardEvent) => ["Meta", "Control", "Shift", "Alt"].includes(e.key);
+    const holds = (e: KeyboardEvent, c: Chord) =>
+      (e.metaKey || e.ctrlKey) === c.meta && e.shiftKey === c.shift && e.altKey === c.alt;
+    // `useHotkey`'s own match, so a step it fires is never read as another key.
+    const steps = (e: KeyboardEvent, c: Chord) =>
+      e.key.toLowerCase() === c.key.toLowerCase()
+      || (c.alt && c.key.length === 1 && e.code === `Key${c.key.toUpperCase()}`)
+      || (c.code !== undefined && e.code === c.code);
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.repeat) return;
-      const held =
-        (e.metaKey || e.ctrlKey) === nextChord.meta
-        && e.shiftKey === nextChord.shift
-        && e.altKey === nextChord.alt;
-      if (!held) return;
-      if (["Meta", "Control", "Shift", "Alt"].includes(e.key)) return armStepRef.current();
-      if (e.key !== nextChord.key && e.key !== prevChord?.key) dropNeighboursRef.current();
+      if (e.repeat || !chords.some((c) => holds(e, c))) return;
+      if (modifier(e)) return stepKeysRef.current.arm();
+      if (!chords.some((c) => steps(e, c))) stepKeysRef.current.drop();
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (modifier(e)) stepKeysRef.current.release();
     };
     document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [nextChord, prevChord]);
+    document.addEventListener("keyup", onKeyUp);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keyup", onKeyUp);
+    };
+  }, [prevChord, nextChord]);
   // Headings, not split groups: with no grid on screen the chord used to be
   // ⌘⇧ under another name, stepping one row at a time and never reaching the
   // next project the way its own label promised.
