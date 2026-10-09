@@ -8,9 +8,9 @@ use tauri::{AppHandle, Emitter, Manager};
 /// `NSUserNotificationCenter`, which current macOS does not deliver for an app
 /// at all — see the notifications section of CLAUDE.md for what was measured.
 ///
-/// Waiting on the handle blocks until the reader acts or the banner ages out,
-/// hence `spawn_blocking`: one parked thread per banner on screen, bounded by
-/// how many the OS will stack.
+/// Waiting on the handle blocks until the reader acts or the banner times out,
+/// hence `spawn_blocking`: one parked thread per banner, and the timeout is the
+/// only thing bounding it — without one the wait polls forever (#458, CLAUDE.md).
 #[tauri::command]
 pub async fn notify_session(
     app: AppHandle,
@@ -41,7 +41,14 @@ pub async fn notify_session(
         request_auth_once();
 
         let mut notification = notify_rust::Notification::new();
-        notification.summary(&title).body(&body).auto_icon();
+        // A banner is there to be clicked now; after a minute it is taken out of
+        // Notification Center and the wait ends — the in-app notice and the rail
+        // carry the signal from there.
+        notification
+            .summary(&title)
+            .body(&body)
+            .auto_icon()
+            .timeout(notify_rust::Timeout::Milliseconds(60_000));
 
         #[cfg(target_os = "macos")]
         notification.sound_name(sound_for(&kind));
@@ -55,10 +62,10 @@ pub async fn notify_session(
 
         #[cfg(target_os = "macos")]
         handle.wait_for_action(|action| {
-            // A tap on the banner body is `"default"`; a dismissal or an expiry
-            // is `"__closed"`, which is the reader declining to look — raising
-            // the window on that would be the opposite of what was asked.
-            if action != "__closed" {
+            // Only a tap on the body asks to look. A dismissal is `"__closed"`
+            // but the timeout's expiry is `""`, so `!= "__closed"` would raise
+            // the window on every banner that timed out.
+            if action == "default" {
                 activate(&app, &session_id);
             }
         });
