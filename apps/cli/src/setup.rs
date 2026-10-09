@@ -530,6 +530,11 @@ fn tunnel_on() -> Result<(), String> {
         unit_escape(&unit_env_path(&dray)?),
     );
     write_unit(&unit_file(TUNNEL_UNIT)?, &unit)?;
+    // A tunnel that died hard leaves its address behind, which the wait below
+    // would hand out before the new one is up.
+    if !systemctl(true, &["is-active", "--quiet", TUNNEL_UNIT]) {
+        let _ = std::fs::remove_file(dray_home()?.join(dray_proto::TUNNEL_URL_FILE));
+    }
     if !systemctl(true, &["daemon-reload"]) || !systemctl(true, &["enable", "--now", TUNNEL_UNIT]) {
         return Err(format!("systemd would not start the tunnel. See: systemctl --user status {TUNNEL_UNIT}"));
     }
@@ -548,7 +553,14 @@ fn tunnel_on() -> Result<(), String> {
 /// address file as it stops.
 fn tunnel_off() -> Result<(), String> {
     let file = unit_file(TUNNEL_UNIT)?;
-    let _ = systemctl(true, &["disable", "--now", TUNNEL_UNIT]);
+    // Separately, and judged by what is left running: `disable --now` can
+    // refuse a unit whose file is already gone and still be running it. An
+    // absent unit fails both and is not running, which is the answer wanted.
+    let _ = systemctl(true, &["disable", TUNNEL_UNIT]);
+    let _ = systemctl(true, &["stop", TUNNEL_UNIT]);
+    if systemctl(true, &["is-active", "--quiet", TUNNEL_UNIT]) {
+        return Err(format!("the tunnel is still running. See: systemctl --user status {TUNNEL_UNIT}"));
+    }
     if file.exists() {
         std::fs::remove_file(&file).map_err(|e| format!("could not remove {}: {e}", file.display()))?;
     }
@@ -637,12 +649,28 @@ pub fn tunnel(args: Tunnel) -> Result<(), String> {
             said = Some(line);
         } else if let (true, Some(url)) = (registered, &url) {
             wait_for_dns(url);
+            if STOPPED.load(Ordering::Relaxed) {
+                // Stopped while waiting: the address is already dead.
+                let _ = child.wait();
+                return Ok(());
+            }
             let file = dray_home()?.join(dray_proto::TUNNEL_URL_FILE);
-            let part = file.with_extension("part");
-            std::fs::write(&part, format!("{url}\n"))
-                .and_then(|()| std::fs::rename(&part, &file))
-                .map_err(|e| format!("could not write {}: {e}", file.display()))?;
-            println!("{}", connect_text(url)?);
+            let published = (|| {
+                let part = file.with_extension("part");
+                std::fs::write(&part, format!("{url}\n"))
+                    .and_then(|()| std::fs::rename(&part, &file))
+                    .map_err(|e| format!("could not write {}: {e}", file.display()))?;
+                connect_text(url)
+            })();
+            match published {
+                Ok(text) => println!("{text}"),
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = std::fs::remove_file(&file);
+                    return Err(e);
+                }
+            }
             // cloudflared logs for as long as it runs, and a pipe nobody
             // drains fills and stalls it.
             std::thread::spawn(move || lines.for_each(drop));
@@ -664,7 +692,10 @@ pub fn tunnel(args: Tunnel) -> Result<(), String> {
 /// that ran the install line has; give up after 15s and hand it out anyway.
 fn wait_for_dns(url: &str) {
     let query = format!("{}{}", dray_proto::DOH_QUERY, url.trim_start_matches("https://"));
-    for _ in 0..30 {
+    // A deadline, not a count: with 1.1.1.1 unreachable each ask takes its
+    // whole timeout. And a stop ends the wait, the tunnel already going down.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::time::Instant::now() < deadline && !STOPPED.load(std::sync::atomic::Ordering::Relaxed) {
         let answer = Command::new("curl")
             .args(["-fsS", "--max-time", "3", "-H", "accept: application/dns-json", &query])
             .stderr(Stdio::null())

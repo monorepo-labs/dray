@@ -933,6 +933,7 @@ pub fn run() {
             // kill still gets past this — see `Known issues`.
             if matches!(event, tauri::RunEvent::Exit) {
                 transcription::audio::restore_other_audio();
+                remote_access::stop_on_exit();
                 // Tao ends the process with `process::exit`, which runs the C
                 // atexit chain — and ggml-metal's global device registry frees
                 // its Metal residency sets there, after the Metal runtime is

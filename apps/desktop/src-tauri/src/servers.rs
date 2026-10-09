@@ -311,33 +311,42 @@ async fn run(id: String) {
         };
         set(&id, ServerStatus::Connecting, saved.ssh.as_ref().map(|_| ssh::Stage::Connecting), None, None);
         let kept_token = crate::issues::credential(&credential_name(&id)).await.unwrap_or_default();
-        let (url, token, tunnel) = match &saved.ssh {
+        // `admitted` is a socket the SSH fallback already opened, kept rather
+        // than thrown away and opened a second time.
+        let (url, token, tunnel, admitted) = match &saved.ssh {
             Some(target) => match ssh::open(target, |stage| set(&id, ServerStatus::Connecting, Some(stage), None, None)).await {
                 Ok(tunnel) => {
                     remember_address(&id, tunnel.address.as_deref(), &tunnel.token).await;
-                    (format!("ws://127.0.0.1:{}", tunnel.port), tunnel.token.clone(), Some(tunnel))
-                }
-                // No login, but the server's tunnel address from the last one
-                // that worked, with the token it read.
-                Err(_) if !saved.url.is_empty() && admit(&saved.url, &kept_token).await.is_ok() => {
-                    (saved.url, kept_token, None)
+                    (format!("ws://127.0.0.1:{}", tunnel.port), tunnel.token.clone(), Some(tunnel), None)
                 }
                 Err(failure) => {
-                    set(&id, ServerStatus::Disconnected, None, Some(failure.message), failure.fix);
-                    if failure.permanent {
-                        return;
+                    // No login, but the server's tunnel address from the last
+                    // one that worked, with the token it read.
+                    let fallback =
+                        if saved.url.is_empty() { None } else { admit(&saved.url, &kept_token).await.ok() };
+                    if let Some(ws) = fallback {
+                        (saved.url, kept_token, None, Some(ws))
+                    } else {
+                        set(&id, ServerStatus::Disconnected, None, Some(failure.message), failure.fix);
+                        if failure.permanent {
+                            return;
+                        }
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                        continue;
                     }
-                    tokio::time::sleep(backoff).await;
-                    backoff = (backoff * 2).min(MAX_BACKOFF);
-                    continue;
                 }
             },
-            None => (saved.url, kept_token, None),
+            None => (saved.url, kept_token, None, None),
         };
         // Through a tunnel, a refused admit is usually ssh refusing the forward,
         // and ssh's own sentence says that better than a closed socket does.
         let said = |fallback: String| tunnel.as_ref().and_then(ssh::Tunnel::said).unwrap_or(fallback);
-        match admit(&url, &token).await {
+        let admitted = match admitted {
+            Some(ws) => Ok(ws),
+            None => admit(&url, &token).await,
+        };
+        match admitted {
             Ok(ws) => {
                 backoff = Duration::from_secs(1);
                 if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
@@ -392,7 +401,9 @@ async fn remember_address(id: &str, address: Option<&str>, token: &str) {
 /// lingers, then stops resolving at all; a live tunnel with nothing behind it
 /// answers 502.
 async fn tunnel_gone(url: &str) -> bool {
-    let Some(host) = url.strip_prefix("wss://").filter(|h| h.ends_with(".trycloudflare.com")) else {
+    // The host alone, or a port or a trailing slash fails the suffix check.
+    let host = reqwest::Url::parse(url).ok().filter(|u| u.scheme() == "wss").and_then(|u| u.host_str().map(str::to_owned));
+    let Some(host) = host.filter(|h| h.ends_with(".trycloudflare.com")) else {
         return false;
     };
     let probe = reqwest::Client::new().get(format!("https://{host}/")).timeout(ADMIT).send().await;
@@ -401,7 +412,7 @@ async fn tunnel_gone(url: &str) -> bool {
         // Unresolvable, while Cloudflare's own name resolves: the address,
         // not the network.
         Err(e) if e.is_connect() => {
-            tokio::net::lookup_host((host, 443)).await.is_err()
+            tokio::net::lookup_host((host.as_str(), 443)).await.is_err()
                 && tokio::net::lookup_host(("trycloudflare.com", 443)).await.is_ok()
         }
         Err(_) => false,

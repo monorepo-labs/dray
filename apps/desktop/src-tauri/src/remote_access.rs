@@ -43,10 +43,31 @@ async fn tunnel_file() -> anyhow::Result<PathBuf> {
     Ok(store::get_home_app_dir().await?.join(name))
 }
 
+/// Held across a whole change, the saved setting included. Two presses racing
+/// otherwise interleave across `switch`'s awaits, and an "on" finishing after
+/// an "off" starts serving while the row says it is off.
+static SWITCHING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The running cloudflared and the address file it backs, for [`stop_on_exit`].
+static TUNNEL: Mutex<Option<(u32, PathBuf)>> = Mutex::new(None);
+
 /// Serves at launch if the switch was left on.
 pub async fn start(sink: Sink) {
+    let _held = SWITCHING.lock().await;
     if crate::settings::read().await.remote_access {
         switch(&sink, true).await;
+    }
+}
+
+/// Takes the tunnel down on quit. The app leaves through `_exit`, which runs
+/// no destructor, so `kill_on_drop` never fires and cloudflared would outlive
+/// it, still answering at an address nobody shows.
+pub fn stop_on_exit() {
+    if let Some((pid, file)) = TUNNEL.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        // SIGKILL: on SIGTERM cloudflared drains for its 30s grace period,
+        // serving the address all the while.
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        let _ = std::fs::remove_file(file);
     }
 }
 
@@ -59,6 +80,7 @@ pub fn get_remote_access() -> RemoteAccess {
 /// whenever it opens.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_remote_access(sink: Sink, on: bool) -> Result<RemoteAccess, String> {
+    let _held = SWITCHING.lock().await;
     crate::settings::update(|s| s.remote_access = on).await.map_err(|e| format!("{e:#}"))?;
     switch(&sink, on).await;
     Ok(get_remote_access())
@@ -74,7 +96,7 @@ pub async fn remote_access_token() -> Result<String, String> {
 
 /// Stops whatever is serving and, if `on`, starts afresh: a new listener and
 /// a new tunnel. Dropping the task drops the listener, every connection it
-/// holds and cloudflared with it.
+/// holds and cloudflared with it. Callers hold [`SWITCHING`].
 async fn switch(sink: &Sink, on: bool) {
     let old = {
         let mut state = state();
@@ -83,7 +105,10 @@ async fn switch(sink: &Sink, on: bool) {
     };
     if let Some(task) = old {
         task.abort();
+        // Until it is dropped, so the port is free before the next bind.
+        let _ = task.await;
     }
+    TUNNEL.lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Ok(file) = tunnel_file().await {
         let _ = tokio::fs::remove_file(file).await;
     }
@@ -127,10 +152,15 @@ async fn serve_and_tunnel(sink: Sink) {
         loop {
             match share::quick_tunnel(&format!("http://127.0.0.1:{port}"), &[]).await {
                 Ok((mut child, url)) => {
+                    if let Some(pid) = child.id() {
+                        *TUNNEL.lock().unwrap_or_else(|e| e.into_inner()) = Some((pid, file.clone()));
+                    }
                     let _ = tokio::fs::write(&file, format!("{url}\n")).await;
                     set(&sink, Some(url.replacen("https://", "wss://", 1)), None);
                     backoff = Duration::from_secs(2);
                     let _ = child.wait().await;
+                    // Its pid may be anybody's now.
+                    TUNNEL.lock().unwrap_or_else(|e| e.into_inner()).take();
                     let _ = tokio::fs::remove_file(&file).await;
                     set(&sink, None, Some("The tunnel dropped. Starting a new one, under a new address.".into()));
                 }
@@ -207,6 +237,16 @@ mod tests {
                 break;
             }
         }
+
+        // Quit's path: cloudflared killed and the address gone, by hand.
+        let (pid, file) = TUNNEL.lock().unwrap().clone().expect("a tunnel is recorded");
+        stop_on_exit();
+        assert!(!file.exists(), "quit removes the address");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Gone, or a zombie this process has not reaped yet.
+        let stat = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().unwrap();
+        let stat = String::from_utf8_lossy(&stat.stdout);
+        assert!(stat.trim().is_empty() || stat.starts_with('Z'), "quit kills cloudflared: {stat}");
 
         switch(&sink, false).await;
         let closed = tokio::time::timeout(Duration::from_secs(10), async { while let Some(Ok(_)) = ws.next().await {} }).await;

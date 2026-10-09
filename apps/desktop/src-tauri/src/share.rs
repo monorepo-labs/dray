@@ -167,7 +167,10 @@ pub fn close_session(session: &str) {
 async fn wait_for_dns(url: &str) {
     let query = format!("{}{}", dray_proto::DOH_QUERY, url.trim_start_matches("https://"));
     let client = reqwest::Client::new();
-    for _ in 0..30 {
+    // A deadline, not a count: with 1.1.1.1 unreachable each ask takes its
+    // whole timeout, and thirty of them were a minute and a half.
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
         let answer = client.get(&query).header("accept", "application/dns-json").timeout(Duration::from_secs(3)).send();
         if let Ok(answer) = answer.await {
             if answer.text().await.is_ok_and(|body| body.contains("\"Status\":0")) {

@@ -135,7 +135,10 @@ every client with it.
 **The tunnel start moved out of `share.rs`** into `quick_tunnel`, which dev
 server links and Remote access both use: download, banner, registered, DNS.
 If cloudflared exits the app starts another, under a new address, backing off
-to a minute between failures.
+to a minute between failures. Quitting kills cloudflared and removes the
+address file by hand: the app leaves through `_exit`, which runs no
+destructor, so `kill_on_drop` alone left the tunnel up. Presses on the row are
+serialized, setting included, so an "on" cannot finish after an "off".
 
 **The token never sits in the webview.** The row draws the address and a
 masked token side by side, each with its own copy button, the two fields of
@@ -167,7 +170,5 @@ answered, the Mac-only `open_in_app` refused as unknown, reconnect.
   login stays up leaves the recorded one stale until the next login, and a
   login landing mid-restart, when no address file exists, forgets it until
   the next. Both heal on their own; only the no-SSH fallback is affected.
-- A Mac's address file stays behind when Dray quits; the next start removes
-  it. Until then the Origin check lets through a host nobody can reach.
 - `forward_port` and Sign in still need SSH: a server reached by tunnel alone
   has neither, and says so as before.
