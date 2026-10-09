@@ -168,13 +168,14 @@ async fn restart_when_idle() {
     });
 }
 
-/// Ends the server and what it started: every session's tree, which a dev
-/// server or watcher would otherwise outlive, and cloudflared, which would go
-/// on answering at an address nobody shows.
+/// Ends the server and everything under it: cloudflared, which would go on
+/// answering at an address nobody shows, and every session's tree, which a dev
+/// server or watcher would otherwise outlive. Walked off the process table
+/// rather than the session map, whose locks a stuck send could hold forever.
 #[cfg(feature = "desktop")]
 async fn shut_down() -> ! {
-    crate::session::manager().kill_all().await;
     crate::remote_access::stop_on_exit();
+    crate::local_servers::kill_descendants(std::process::id()).await;
     std::process::exit(0)
 }
 

@@ -482,17 +482,6 @@ impl SessionManager {
         false
     }
 
-    /// Kills every session's child and everything it started, for a server
-    /// on its way out: dev servers and watchers outlive their agent otherwise.
-    pub async fn kill_all(&self) {
-        let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
-        for slot in slots {
-            if let Some(session) = slot.lock().await.take() {
-                let _ = session.kill_tree().await;
-            }
-        }
-    }
-
     /// Whether any session has a turn running, which is what a server restart
     /// waits out. A slot locked by a send or a respawn counts as running.
     async fn any_turn_in_flight(&self) -> bool {
