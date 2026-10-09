@@ -300,7 +300,12 @@ mod server_list {
         let name = Some(add.name);
         let added = match add.token {
             Some(token) => servers::add_server(add.address, token, name).await.map_err(anyhow::Error::msg)?,
-            None => servers::add_ssh_server(add.address, name).await.map_err(|f| anyhow::anyhow!(ssh_failure(f)))?,
+            None => {
+                // The whole login, port and user included: `[box]:2222` is the
+                // key the add needs trusted, not `box`'s.
+                let login = crate::ssh::parse(&add.address).map(|t| t.line()).unwrap_or_else(|_| add.address.clone());
+                servers::add_ssh_server(add.address, name).await.map_err(|f| anyhow::anyhow!(ssh_failure(f, &login)))?
+            }
         };
         Ok(Response::Server { server: summarize(added) })
     }
@@ -308,22 +313,27 @@ mod server_list {
     /// The Add dialog draws a failure's fix as a control; a terminal gets it as
     /// words. Trusting a host key stays a person's decision, made in their own
     /// `ssh`, never on an agent's say-so.
-    fn ssh_failure(failure: Failure) -> String {
+    fn ssh_failure(failure: Failure, login: &str) -> String {
         let message = failure.message;
         match failure.fix {
             Some(Fix::Copy { command }) => format!("{message}\n  {command}"),
-            Some(Fix::TrustHost { host, key_type, fingerprint }) => format!(
-                "{message} Its {key_type} key is {fingerprint}. If that is right, log in to {host} once with ssh \
-                 in a terminal to trust it, then add it again."
+            Some(Fix::TrustHost { key_type, fingerprint, .. }) => format!(
+                "{message} Its {key_type} key is {fingerprint}. If that is right, run `{login}` once in a \
+                 terminal to trust it, then add it again."
             ),
             Some(Fix::Install) => format!("{message} Add it from the app's Settings → Servers, which can install it."),
             None => message,
         }
     }
 
-    /// By name, or by id where two servers share one.
+    /// By name, or by id where two servers share one. An id wins outright, or
+    /// a server renamed to another's id would make the cure ambiguous too.
     fn find(name: &str) -> Result<ServerInfo> {
-        let mut matches: Vec<_> = servers::list_servers().into_iter().filter(|s| s.id == name || s.name == name).collect();
+        let list = servers::list_servers();
+        if let Some(server) = list.iter().find(|s| s.id == name) {
+            return Ok(server.clone());
+        }
+        let mut matches: Vec<_> = list.into_iter().filter(|s| s.name == name).collect();
         match matches.len() {
             0 => bail!("no server named {name}"),
             1 => Ok(matches.remove(0)),
@@ -370,6 +380,13 @@ mod server_list {
             false => "off".to_string(),
         };
         ServerSummary { id: server.id, name: server.name, address: server.ssh.unwrap_or(server.url), status, error: server.error }
+    }
+
+    #[test]
+    fn trust_advice_names_the_whole_login() {
+        let fix = Fix::TrustHost { host: "box".into(), key_type: "ED25519".into(), fingerprint: "SHA256:x".into() };
+        let said = ssh_failure(Failure { message: "Never met box.".into(), fix: Some(fix), permanent: true }, "ssh -p 2222 me@box");
+        assert!(said.contains("run `ssh -p 2222 me@box` once"), "{said}");
     }
 }
 

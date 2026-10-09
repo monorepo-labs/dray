@@ -159,3 +159,42 @@ fn line(server: &ServerSummary) -> String {
     }
     line
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Cli, Command};
+    use clap::Parser;
+
+    fn server(args: &[&str]) -> ServerCommand {
+        let argv = ["dray", "server"].iter().chain(args);
+        match Cli::try_parse_from(argv).map(|cli| cli.command) {
+            Ok(Command::Server(command)) => command,
+            Ok(_) => panic!("not a server command"),
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    /// The SSH line takes every word after the name, `-p` included, so a
+    /// pasted login parses unquoted; `--token-file` has to come first.
+    #[test]
+    fn add_takes_the_line_whole() {
+        let ServerCommand::Add(add) = server(&["add", "vps", "ssh", "-p", "2222", "root@box"]) else { panic!() };
+        assert_eq!((add.name.as_str(), add.address.join(" ")), ("vps", "ssh -p 2222 root@box".into()));
+        assert!(add.token_file.is_none());
+
+        let ServerCommand::Add(add) = server(&["add", "--token-file", "t", "vps", "ws://box:7317"]) else { panic!() };
+        assert_eq!(add.token_file, Some(PathBuf::from("t")));
+        assert_eq!(add.address, ["ws://box:7317"]);
+
+        assert!(Cli::try_parse_from(["dray", "server", "add", "vps"]).is_err(), "no address");
+    }
+
+    #[test]
+    fn rename_on_and_reconnect_parse() {
+        let ServerCommand::Rename(rename) = server(&["rename", "vps", ""]) else { panic!() };
+        assert_eq!((rename.name.as_str(), rename.new_name.as_str()), ("vps", ""));
+        assert!(matches!(server(&["reconnect", "vps"]), ServerCommand::On(Named { name }) if name == "vps"));
+        assert!(matches!(server(&["off", "vps"]), ServerCommand::Off(_)));
+    }
+}
