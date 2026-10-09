@@ -1,0 +1,16 @@
+{
+  "name": "@dray/docs",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "dev": "blume dev",
+    "build": "blume build"
+  },
+  "dependencies": {
+    "blume": "2.2.1"
+  }
+}

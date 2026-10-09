@@ -20,6 +20,7 @@ Want to sponsor Dray? [patreon.com/yogesharc](https://patreon.com/yogesharc)
 | ------------------- | ------------------------------------------------------ |
 | `apps/desktop`      | The Tauri app. React 19 + Vite frontend, Rust backend. |
 | `apps/web`          | Marketing site. Next.js, deployed to Vercel.           |
+| `apps/docs`         | Docs at drayhq.com/docs. Blume, deployed to Vercel.    |
 | `apps/cli`          | The `dray` CLI agents use to fan work out.             |
 | `crates/dray-proto` | Wire types shared by the CLI and the app.              |
 
@@ -52,6 +53,8 @@ an agent in one session can create, list and message others.
 ```bash
 curl -fsSL https://www.drayhq.com/install.sh | sh
 ```
+
+On Linux the same line makes the machine a Dray server: [drayhq.com/docs/server](https://www.drayhq.com/docs/server).
 
 ## Releasing
 
