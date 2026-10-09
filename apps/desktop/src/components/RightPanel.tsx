@@ -5,6 +5,8 @@ import OpenInButton from "@/components/OpenInButton";
 import TabButton from "@/components/TabButton";
 import PanelRightIcon from "@/components/icons/PanelRightIcon";
 import { Button } from "@/components/ui/button";
+import { ItemTab } from "@/components/layout/ViewTabs";
+import { FILE_OPENER } from "@/lib/openWith";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useResizable } from "@/components/ResizeHandle";
@@ -130,7 +132,7 @@ export const PANEL_TABS = [
 
 export type PanelTab = (typeof PANEL_TABS)[number];
 
-const LABELS: Record<PanelTab, string> = {
+export const PANEL_LABELS: Record<PanelTab, string> = {
   changes: "Changes",
   // The session's browser lives here. Always drawn, unlike PR or Docs: its
   // empty state is a URL bar, which is a place to start rather than a
@@ -178,6 +180,7 @@ export function tabOrder({
   issue,
   more,
   plan,
+  browser,
 }: {
   pr: boolean;
   /// At least one markdown file is open in the pane — see
@@ -191,8 +194,12 @@ export function tabOrder({
   /// The agent has put a plan up in this session — see [plan](../lib/plan.ts).
   /// Absent otherwise, for the PR tab's reason: most sessions never plan.
   plan?: boolean;
+  /// The session has at least one page open. With none, the titlebar's own
+  /// Browser tab is the way in, so the pane draws no empty one.
+  browser?: boolean;
 }): readonly PanelTab[] {
-  const tabs: PanelTab[] = pr ? ["pr", "changes", "browser"] : ["changes", "browser"];
+  const tabs: PanelTab[] = pr ? ["pr", "changes"] : ["changes"];
+  if (browser) tabs.push("browser");
   // After Changes, which is what keeps Issue immediately before More.
   if (docs) tabs.push("docs");
   // Immediately before More wherever it is drawn, so the row's order is the
@@ -263,6 +270,9 @@ type RightPanelProps = {
   /// The pane reaches the window's left edge, so its top strip has to clear the
   /// traffic lights the way the app header does when the sidebar is collapsed.
   clearTrafficLights?: boolean;
+  /// No top strip at all: the tabs and the buttons beside them are drawn in
+  /// the titlebar instead (`PanelTabs`, `PanelActions`).
+  bare?: boolean;
   children: React.ReactNode;
 };
 
@@ -318,6 +328,7 @@ export default function RightPanel({
   widthKey,
   side = "right",
   clearTrafficLights = false,
+  bare = false,
   children,
 }: RightPanelProps) {
   // 32rem, the width this pane opened at before it could be dragged.
@@ -339,15 +350,15 @@ export default function RightPanel({
     <aside
       style={style}
       className={cn(
-        "relative shrink-0 flex-col border-border bg-sidebar",
-        side === "left" ? "border-r" : "border-l",
+        // No border of its own: it sits in a card, whose ring is the edge.
+        "relative shrink-0 flex-col bg-sidebar",
         // Conditional `flex` rather than `flex` plus `hidden`: both set
         // `display`, so stacking them leaves the winner to stylesheet order.
         open ? "flex" : "hidden",
       )}
     >
       {handle}
-      <div
+      {!bare && <div
         className={cn(
           // `overflow-hidden` for the reason the app header carries it: this
           // pane can be dragged narrow, and what runs out of room has to clip
@@ -386,7 +397,7 @@ export default function RightPanel({
                   active={tab === value}
                   onClick={() => onTabChange(value)}
                 >
-                  {LABELS[value]}
+                  {PANEL_LABELS[value]}
                   {!!counts?.[value] && (
                     <span className="ml-1 text-muted-foreground">{counts[value]}</span>
                   )}
@@ -423,48 +434,107 @@ export default function RightPanel({
           </div>
         )}
 
-        {/* The far end of the row, and one group rather than two `ml-auto`s:
-            Refresh is gone on Subagents and the Open button is gone off a
-            session, so whichever survives has to hold the same edge. */}
         <div className="ml-auto flex shrink-0 items-center gap-1">
-          {actions}
-
-          {/* Ahead of Refresh, and outside the tab row's own logic: it acts on
-              the session rather than on whatever tab is open, so unlike Refresh
-              it does not change meaning from one tab to the next. */}
-          {cwd && <OpenInButton path={cwd} />}
-
-          {/* Gone entirely on Subagents, which has nothing to re-read. It
-              reserved its width back when the keycaps sat to its right and
-              would have slid on that one tab; with them anchored to the tabs
-              there is nothing left to hold still, and an empty box on the far
-              edge is a slot for a button the reader is not waiting for. */}
-          {refresh && (
-            // A real tooltip rather than the `title` this used to carry: the
-            // chord has to be shown somewhere, and the app puts shortcuts in
-            // tooltips everywhere else.
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="-mr-0.5 text-muted-foreground/60 hover:text-muted-foreground"
-                  onClick={refresh.onRefresh}
-                  aria-label="Refresh"
-                >
-                  <RefreshCw className={cn("size-3", refresh.loading && "animate-spin")} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="left">
-                Refresh
-                <ShortcutKeys ids={["panel.refresh"]} />
-              </TooltipContent>
-            </Tooltip>
-          )}
+          <PanelActions actions={actions} cwd={cwd} refresh={refresh} />
         </div>
-      </div>
+      </div>}
 
       {children}
     </aside>
+  );
+}
+
+/// The buttons at the pane's far end — the reader's own action, Open, Refresh.
+/// Shared by the pane's own strip and the titlebar, which draws them when the
+/// pane has none.
+export function PanelActions({
+  actions,
+  cwd,
+  refresh,
+  file,
+}: Pick<RightPanelProps, "actions" | "cwd" | "refresh"> & {
+  /// A file to open in place of `cwd`, through the file opener's own pick.
+  file?: { path: string; line?: number };
+}) {
+  return (
+    <>
+    {actions}
+
+    {/* Gone entirely on Subagents, which has nothing to re-read. It
+        reserved its width back when the keycaps sat to its right and
+        would have slid on that one tab; with them anchored to the tabs
+        there is nothing left to hold still, and an empty box on the far
+        edge is a slot for a button the reader is not waiting for. */}
+    {refresh && (
+      // A real tooltip rather than the `title` this used to carry: the
+      // chord has to be shown somewhere, and the app puts shortcuts in
+      // tooltips everywhere else.
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-muted-foreground/60 hover:text-muted-foreground"
+            onClick={refresh.onRefresh}
+            aria-label="Refresh"
+          >
+            <RefreshCw className={cn("size-3", refresh.loading && "animate-spin")} />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="left">
+          Refresh
+          <ShortcutKeys ids={["panel.refresh"]} />
+        </TooltipContent>
+      </Tooltip>
+    )}
+
+    {/* After Refresh, and outside the tab row's own logic: it acts on the
+        session rather than on whatever tab is open. */}
+    {file ? (
+      <OpenInButton path={file.path} opener={FILE_OPENER} line={file.line} />
+    ) : (
+      cwd && <OpenInButton path={cwd} />
+    )}
+    </>
+  );
+}
+
+/// The pane's tabs, drawn in the titlebar's right end and shaped like the
+/// tabs at its left. A tab opens the pane on itself; the lit one shuts it.
+export function PanelTabs({
+  tabs,
+  tab,
+  open,
+  counts,
+  onPick,
+}: {
+  tabs: readonly PanelTab[];
+  tab: PanelTab;
+  open: boolean;
+  counts?: Partial<Record<PanelTab, number>>;
+  onPick: (tab: PanelTab) => void;
+}) {
+  return (
+    <div className="-mx-1 flex shrink-0 items-center gap-0.5 self-stretch overflow-hidden px-1">
+      {tabs.map((value) => (
+        <ItemTab
+          key={value}
+          icon={null}
+          label={counts?.[value] ? `${PANEL_LABELS[value]} ${counts[value]}` : PANEL_LABELS[value]}
+          active={open && tab === value}
+          onPick={() => onPick(value)}
+          fixed
+          hint={
+            <>
+              Toggle panel
+              <ShortcutKeys ids={["panel.toggle"]} />
+              <span className="text-muted-foreground">·</span>
+              Switch
+              <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} />
+            </>
+          }
+        />
+      ))}
+    </div>
   );
 }

@@ -264,6 +264,9 @@
      spread — a shadow with an offset in x reads as a light source the rest of
      the app doesn't have. */
   --shadow-button: 0 1px 4px oklch(0 0 0 / 45%);
+  /* The panes' sheet under the titlebar: the button's shadow turned upward,
+     since the strip is what sits behind it. */
+  --shadow-sheet: 0 0 0 1px var(--hairline);
 
   /* A surface floating at the window's edge — the composer, and whatever else
      comes to want one. `none` in dark on purpose: depth there is carried by the
@@ -460,6 +463,7 @@
   /* Far lighter than dark's 45%. A shadow that reads as depth against near-black
      reads as dirt against near-white. */
   --shadow-button: 0 1px 3px oklch(0 0 0 / 12%);
+  --shadow-sheet: 0 0 0 1px var(--hairline), 0 -1px 3px oklch(0 0 0 / 5%);
 
   /* GitHub's green, one rung up. The pair in `:root` is GitHub's *dark* button
      and it is the one thing there that is neither the theme's nor the mode's —
@@ -1367,7 +1371,12 @@
      `--muted`, never `--color-muted`: the alias resolves at `:root`, where
      `--muted` is the palette's opaque fill, while the glass override lives on
      `body` — so through the alias the flares came out opaque beside a
-     translucent tab and drew as two solid squares in windowed mode. */
+     translucent tab and drew as two solid squares in windowed mode.
+
+     `--tab-edge` is the tab's outline, carried round the curve. Each square
+     is 9px and laps 1px into the tab, so a stroke at radius 8–9 lands on the
+     side border's own column; the fill is a layer under it, so the stroke
+     reads as the side border does — a wash over the tab's colour. */
   .browser-tab-active {
     position: relative;
   }
@@ -1377,19 +1386,23 @@
     content: "";
     position: absolute;
     bottom: 0;
-    width: 8px;
+    width: 9px;
     height: 8px;
     pointer-events: none;
   }
 
   .browser-tab-active::before {
     left: -8px;
-    background: radial-gradient(circle at 0 0, transparent 8px, var(--card) 8.5px);
+    background:
+      radial-gradient(circle at 0 0, transparent 7.75px, var(--tab-edge, transparent) 8.25px 8.75px, transparent 9.25px),
+      radial-gradient(circle at 0 0, transparent 7.75px, var(--card) 8.25px);
   }
 
   .browser-tab-active::after {
     right: -8px;
-    background: radial-gradient(circle at 100% 0, transparent 8px, var(--card) 8.5px);
+    background:
+      radial-gradient(circle at 100% 0, transparent 7.75px, var(--tab-edge, transparent) 8.25px 8.75px, transparent 9.25px),
+      radial-gradient(circle at 100% 0, transparent 7.75px, var(--card) 8.25px);
   }
 }
 

@@ -877,8 +877,6 @@ function Demo() {
             onRemoveSpace={() => {}}
             onMoveSpace={() => {}}
             onMoveProject={() => {}}
-            autoHideSidebar={false}
-            onAutoHideSidebarChange={() => {}}
             autoHidePanel={false}
             onAutoHidePanelChange={() => {}}
             panelSide="right"

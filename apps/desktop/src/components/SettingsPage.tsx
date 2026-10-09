@@ -108,8 +108,6 @@ export default function SettingsPage({
   onRemoveSpace,
   onMoveSpace,
   onMoveProject,
-  autoHideSidebar,
-  onAutoHideSidebarChange,
   autoHidePanel,
   onAutoHidePanelChange,
   panelSide,
@@ -147,8 +145,6 @@ export default function SettingsPage({
   /// Owned by `App` for the reason the update channel is: the effect that acts
   /// on this lives there, and a second `useLocalStorage` copy here would write
   /// a value that effect never sees.
-  autoHideSidebar: boolean;
-  onAutoHideSidebarChange: (next: boolean) => void;
   autoHidePanel: boolean;
   onAutoHidePanelChange: (next: boolean) => void;
   panelSide: PanelSide;
@@ -190,11 +186,6 @@ export default function SettingsPage({
               <ZoomRow />
             </Section>
             <Section>
-              <AutoHideRow
-                label="Auto-hide sidebar in Browser View"
-                checked={autoHideSidebar}
-                onChange={onAutoHideSidebarChange}
-              />
               <AutoHideRow
                 label="Auto-hide side panel outside Chat"
                 checked={autoHidePanel}

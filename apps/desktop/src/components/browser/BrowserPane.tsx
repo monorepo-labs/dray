@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
+import Favicon, { hostOf } from "@/components/browser/Favicon";
 import RecordingNotice from "@/components/browser/RecordingNotice";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import Spinner from "@/components/ui/spinner";
@@ -47,6 +48,9 @@ import {
   removeCustomDevice,
   saveCustomDevice,
   setPendingTab,
+  activateBlankTab,
+  closeBlankTab,
+  useBlankTabs,
   setResponsive,
   useOpenError,
   useResponsive,
@@ -214,7 +218,9 @@ export default function BrowserPane({
       <div
         ref={stageRef}
         className={cn(
-          "relative min-h-0 flex-1 bg-background",
+          "relative min-h-0 flex-1",
+          // Bare while empty, so the empty state sits on the window like any view.
+          !empty && "bg-background",
           viewport && !empty && "flex items-start justify-center overflow-hidden bg-surface-raised p-3",
         )}
       >
@@ -297,7 +303,10 @@ function Chrome({
   onExpand?: () => void;
   onCollapse?: () => void;
 }) {
-  const [draft, setDraft] = useState<string | null>(null);
+  // What is typed in the URL field, per tab: each new tab keeps its own, as a
+  // browser's do. Keyed by session too, since this pane is not remounted
+  // across sessions.
+  const [drafts, setDrafts] = useState<Record<string, string | null>>({});
   const openError = useOpenError(sessionId);
   const inputRef = useRef<HTMLInputElement>(null);
   const picking = usePicking(sessionId);
@@ -306,6 +315,10 @@ function Chrome({
   // The agent's own tab verbs stay open, since a flow may cross tabs.
   const recording = useRecording(sessionId);
   const url = current?.url ?? "";
+  const blanks = useBlankTabs(sessionId);
+  const draftKey = `${sessionId}:${blanks.active !== null ? `blank:${blanks.active}` : `page:${current?.id}`}`;
+  const draft = drafts[draftKey] ?? null;
+  const setDraft = (value: string | null) => setDrafts((all) => ({ ...all, [draftKey]: value }));
   const reorder = useDragReorder(
     tabs,
     (tab) => tab.id,
@@ -326,19 +339,19 @@ function Chrome({
 
   const newTab = () => {
     setPendingTab(sessionId, true);
-    setDraft("");
   };
 
   const swap = mode === "panel" ? onExpand : onCollapse;
 
   return (
-    <div className="shrink-0 border-b border-border">
-      {(tabs.length > 0 || pending) && (
+    <div className="shrink-0">
+      {/* The full view's tabs are the titlebar's own row (`ViewTabs`). */}
+      {mode === "panel" && (tabs.length > 0 || blanks.ids.length > 0) && (
         // Scrolls, but draws no bar: a strip of tabs is read by its tabs, and
         // a bar under them takes the height the tabs' own bottom edge needs.
         <div
           ref={reorder.list}
-          className="flex h-8 items-end gap-1 overflow-x-auto bg-sidebar px-2.5 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className="flex h-7.5 items-end gap-1 overflow-x-auto bg-sidebar px-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           {reorder.shown.map((tab, i) => (
             <TabButton
@@ -349,6 +362,8 @@ function Chrome({
               held={reorder.drag?.from === i}
               gliding={!!reorder.drag && reorder.drag.from !== i}
               active={tab.active && !pending}
+              // The active tab joins the URL row, so it wears the same colour.
+              paint={tab.active && !pending && tab.background ? tint(tab.background) : undefined}
               title={tab.error ? `${tab.error} — ${tab.url}` : tab.url}
               icon={<Favicon tab={tab} />}
               label={tab.error ? "Can't reach page" : tab.title || hostOf(tab.url)}
@@ -360,16 +375,22 @@ function Chrome({
               onClose={() => void closeTab(sessionId, tab.id)}
             />
           ))}
-          {pending && (
+          {blanks.ids.map((id) => (
             <TabButton
-              active
+              key={`blank:${id}`}
+              active={blanks.active === id}
+              // No page under it, so no fill: the URL row it joins is bare too.
+              paint={{ ["--card" as string]: "transparent" }}
               title="New tab"
               icon={<Globe className="size-3.5 shrink-0 opacity-60" />}
               label="New tab"
-              onPick={() => inputRef.current?.focus()}
-              onClose={() => setPendingTab(sessionId, false)}
+              locked={recording}
+              onPick={() =>
+                blanks.active === id ? inputRef.current?.focus() : activateBlankTab(sessionId, id)
+              }
+              onClose={() => closeBlankTab(sessionId, id)}
             />
-          )}
+          ))}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -377,7 +398,7 @@ function Chrome({
                 size="icon-sm"
                 className="mb-0.5 shrink-0"
                 aria-label="New tab"
-                disabled={pending || recording}
+                disabled={recording}
                 onClick={newTab}
               >
                 <Plus className="size-3.5" />
@@ -390,7 +411,19 @@ function Chrome({
           </Tooltip>
         </div>
       )}
-      <div className="flex h-9 items-center gap-0.5 bg-card px-1.5">
+      {/* The page's own colour where it has reported one, the way a browser
+          tints its toolbar; bare with no page at all. */}
+      <div
+        className={cn(
+          // Ink at low opacity rather than `border-border`, which some themes
+          // draw close to the background; under `tint` it flips with the page.
+          // `text-foreground` re-resolves the ink here: inherited, `color` is
+          // already computed from the page's tokens and `tint` cannot reach it.
+          "flex h-9 items-center gap-0.5 border-b border-foreground/10 px-1.5 text-foreground",
+          current && !current.background && "bg-card",
+        )}
+        style={current?.background ? tint(current.background) : undefined}
+      >
         <Button
           variant="ghost"
           size="icon-sm"
@@ -411,35 +444,21 @@ function Chrome({
         >
           <ArrowRight className="size-3.5" />
         </Button>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className={TOOL_BTN}
-              aria-label={current?.loading ? "Stop" : "Reload"}
-              disabled={!current}
-              onClick={(e) =>
-                void navigate(
-                  sessionId,
-                  current?.loading ? "stop" : e.shiftKey ? "hard_reload" : "reload",
-                )
-              }
-            >
-              {current?.loading ? <X className="size-3.5" /> : <RotateCw className="size-3.5" />}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side={TIP_SIDE}>
-            {current?.loading ? (
-              "Stop"
-            ) : (
-              <>
-                Reload · ⇧ for hard reload
-                <ShortcutKeys ids={["panel.refresh"]} />
-              </>
-            )}
-          </TooltipContent>
-        </Tooltip>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={TOOL_BTN}
+          aria-label={current?.loading ? "Stop" : "Reload"}
+          disabled={!current}
+          onClick={(e) =>
+            void navigate(
+              sessionId,
+              current?.loading ? "stop" : e.shiftKey ? "hard_reload" : "reload",
+            )
+          }
+        >
+          {current?.loading ? <X className="size-3.5" /> : <RotateCw className="size-3.5" />}
+        </Button>
         <form
           className="relative min-w-0 flex-1"
           onSubmit={(e) => {
@@ -458,8 +477,20 @@ function Chrome({
             autoCorrect="off"
             onChange={(e) => setDraft(e.target.value)}
             onFocus={(e) => e.target.select()}
-            onBlur={() => setDraft(null)}
-            className="h-7 w-full rounded-md bg-surface-raised px-2.5 font-mono dark:bg-background text-ui outline-none focus:ring-1 focus:ring-ring"
+            // A page's field goes back to its address; a new tab keeps what
+            // was typed into it until it is closed or opened.
+            onBlur={() => current && setDraft(null)}
+            className={cn(
+              "h-7 w-full rounded-md px-2.5 font-mono text-ui outline-none transition-colors",
+              // Bare over a page, so the row reads as the page's own; a wash of
+              // the foreground on focus, which `tint` flips to white over a dark
+              // page and black over a light one. No hover wash: leaving the
+              // field downward lands on the native page view, so the webview
+              // never hears the pointer go and `:hover` sticks.
+              current
+                ? "bg-transparent focus:bg-foreground/10"
+                : "bg-surface-raised dark:bg-background",
+            )}
           />
         </form>
         {PICKER && (
@@ -540,7 +571,7 @@ function Chrome({
         )}
       </div>
       {openError && (
-        <p className="bg-card px-3 pb-1.5 text-ui text-destructive">{openError}</p>
+        <p className={cn("px-3 pb-1.5 text-ui text-destructive", current && "bg-card")}>{openError}</p>
       )}
     </div>
   );
@@ -558,6 +589,7 @@ function TabButton({
   transform,
   held = false,
   gliding = false,
+  paint,
 }: {
   active: boolean;
   title: string;
@@ -574,6 +606,8 @@ function TabButton({
   held?: boolean;
   /// A tab sliding aside for the one in hand.
   gliding?: boolean;
+  /// The page's colour, from `tint`, on the tab joined to the URL row.
+  paint?: React.CSSProperties;
 }) {
   const pick = locked ? undefined : onPick;
   return (
@@ -586,22 +620,30 @@ function TabButton({
       onClick={pick}
       onKeyDown={(e) => e.key === "Enter" && pick?.()}
       onPointerDown={onPointerDown}
-      style={{ transform }}
+      style={{ ...paint, transform }}
       className={cn(
         "group/tab flex h-7 w-40 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-t-md px-2 text-ui",
         active
-          ? "browser-tab-active bg-card text-foreground"
+          ? "browser-tab-active bg-card text-foreground [--tab-edge:color-mix(in_oklab,var(--foreground)_10%,transparent)]"
           : locked
             ? "text-muted-foreground opacity-50"
             : held
               ? "bg-card/50 text-foreground"
-              : "text-muted-foreground hover:bg-card/50 hover:text-foreground",
+              : "text-muted-foreground hover:text-foreground",
         // The one in hand tracks the pointer and draws over the tabs it
         // passes; only those making room glide.
         held && "relative z-10",
         gliding && "transition-transform duration-150 ease-out",
       )}
     >
+      {/* The outline, stopping where the foot's curve takes over: the flares
+          carry it round into the toolbar, as Chrome's tab does. */}
+      {active && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 bottom-2 rounded-t-md border-x border-t border-(--tab-edge)"
+        />
+      )}
       {icon}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {!locked && <button
@@ -616,23 +658,6 @@ function TabButton({
         <X className="size-3" />
       </button>}
     </div>
-  );
-}
-
-/// The page's icon, or a globe until one arrives or where the site has none.
-function Favicon({ tab }: { tab: BrowserTab }) {
-  const [broken, setBroken] = useState(false);
-  useEffect(() => setBroken(false), [tab.favicon]);
-  if (!tab.favicon || broken || tab.error) {
-    return <Globe className="size-3.5 shrink-0 opacity-60" />;
-  }
-  return (
-    <img
-      src={tab.favicon}
-      alt=""
-      className="size-3.5 shrink-0 rounded-[2px]"
-      onError={() => setBroken(true)}
-    />
   );
 }
 
@@ -699,6 +724,19 @@ function DeviceMenu({ sessionId, disabled }: { sessionId: string; disabled: bool
       <TooltipContent side={TIP_SIDE}>Device size</TooltipContent>
     </Tooltip>
   );
+}
+
+/// The URL row painted in the page's colour, with the ink tokens flipped to
+/// suit it — a black page in light mode would otherwise draw grey on black.
+function tint(background: string): React.CSSProperties {
+  const [r, g, b] = background.match(/\d+/g)?.map(Number) ?? [255, 255, 255];
+  const dark = 0.2126 * r + 0.7152 * g + 0.0722 * b < 140;
+  return {
+    background,
+    ["--card" as string]: background,
+    ["--foreground" as string]: dark ? "white" : "black",
+    ["--muted-foreground" as string]: dark ? "rgb(255 255 255 / 0.6)" : "rgb(0 0 0 / 0.55)",
+  };
 }
 
 const BAR = "flex h-8 shrink-0 items-center gap-1.5 border-b border-border bg-card px-2 text-ui";
@@ -1115,12 +1153,4 @@ function SharedLink({
       </Tooltip>
     </div>
   );
-}
-
-function hostOf(url: string) {
-  try {
-    return new URL(url).host || url;
-  } catch {
-    return url || "New tab";
-  }
 }

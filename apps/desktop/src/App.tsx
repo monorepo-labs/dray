@@ -38,6 +38,8 @@ import {
   navigate,
   openInBrowser,
   setPendingTab,
+  closeBlankTab,
+  useBlankTabs,
   setPickHandler,
   useBrowserTabs,
   usePendingTab,
@@ -55,6 +57,8 @@ import { prTabVisible, usePullRequest } from "@/hooks/usePullRequest";
 import RightPanel, {
   MountOnce,
   PANEL_MIN,
+  PanelActions,
+  PanelTabs,
   PanelToggle,
   TabBody,
   tabOrder,
@@ -70,7 +74,9 @@ import {
 import Sidebar, {
   SIDEBAR_MIN,
   SEARCH_INPUT_ID,
+  SettingsButton,
   SidebarToggle,
+  SpaceSwitcher,
   filterSessions,
   placeDrafts,
   sessionGroups,
@@ -98,13 +104,12 @@ import {
 import ComposerToolbar from "@/components/composer/ComposerToolbar";
 import DictateControl from "@/components/composer/DictateControl";
 import AppShell from "@/components/layout/AppShell";
-import SessionHeader from "@/components/layout/SessionHeader";
 import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { nextEffort } from "@/components/composer/ModelSelector";
 import { nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
-import ViewTabs, { type ViewTab } from "@/components/layout/ViewTabs";
+import ViewTabs, { closeActiveTab, type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
@@ -139,12 +144,12 @@ import { loadOlder } from "@/lib/olderPages";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
 import { focusComposer, focusComposerEnd } from "@/lib/composerFocus";
-import { changeRange, lastToolResult, turnChangedTree } from "@/lib/changes";
+import { changeRange, lastToolResult } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { crewAnchor, crewRows, crewSeen, inSidebar, withHiddenAsks } from "@/lib/crew";
-import { panelMove, sidebarMove } from "@/lib/sidebarAuto";
+import { panelMove } from "@/lib/sidebarAuto";
 import { playCelebration } from "@/lib/sound";
 import {
   activeSpace,
@@ -410,17 +415,10 @@ function App() {
       : null;
 
   const [collapsed, setCollapsed] = useLocalStorage("ade.sidebarCollapsed", false);
-  // The Browser view takes the sidebar with it and gives it back on the way
-  // out. On by default, since a page is the one view whose content is somebody
-  // else's and wants every pixel. Owned here rather than in the settings row
-  // that draws it: `useLocalStorage` is per component, so a second copy there
-  // would write a value this effect never reads.
-  const [autoHideSidebar, setAutoHideSidebar] = useLocalStorage(
-    "ade.autoHideSidebarInBrowser",
-    true,
-  );
-  // The right pane's half of the same bargain, its own switch since a reader
-  // may want the pane beside a page where the sidebar is only in the way.
+  // The Browser view takes the right pane with it and gives it back on the way
+  // out, since a page is somebody else's content and wants the width. The
+  // sidebar is never taken: pages are tabs of the titlebar now, flipped as
+  // often as any other, and a sidebar that came and went with them jumped.
   const [autoHidePanel, setAutoHidePanel] = useLocalStorage("ade.autoHidePanelInBrowser", true);
   // Owned here for the same reason: `RightPanel`, the shell and the settings
   // row all read it.
@@ -892,6 +890,8 @@ function App() {
   // That case still starts shown — it fits, it is only drawn somewhere else.
   const crewPanelOpen = !!(crewAnchorId && panelOpens[crewAnchorId]) && !issuesOpen;
   const sidebarW = Math.max(SIDEBAR_MIN, usePaneWidth("sidebar"));
+  // What the sidebar is drawn at, 0 while shut: where the sheet starts.
+  const sidebarDrawn = usePaneWidth("sidebar");
   const viewportW = useViewportWidth();
   const crewFits =
     viewportW >=
@@ -1272,9 +1272,6 @@ function App() {
   // draft is still the point at which the work stops being about this turn.
   const openPrsHere = pullRequests.prs.filter((pr) => pr.state === "OPEN");
   const hasOpenPr = openPrsHere.length > 0;
-  // Only where *every* open one is a draft. A session carrying a draft beside a
-  // real PR has something asking to land, and the mark should say so.
-  const allDrafts = hasOpenPr && openPrsHere.every((pr) => pr.isDraft);
   // The sidebar already knows whether this branch has a pull request, and the
   // panel's own read takes the better part of a second to agree — during which
   // `prs` is empty, the tab is not in the row, and a pane opened onto the PR tab
@@ -1311,7 +1308,7 @@ function App() {
   // The counter brings the view forward; the active path is what ⌘W closes.
   // Which files are open past that is the view's own business, where a doc's
   // tab row has to exist in the panel before the panel is drawn.
-  const { opened: filesOpened, active: activeFile } = useOpenFiles(selectedSessionId);
+  const { opened: filesOpened, active: activeFile, open: openFiles } = useOpenFiles(selectedSessionId);
   const hasDocsTab = docs.length > 0;
   // Read here for the PR tab's reason too: the row has to know the tab exists
   // before the panel draws it, and the card's "View plan" button opens it.
@@ -1363,6 +1360,7 @@ function App() {
 
   const browserTabs = useBrowserTabs(selectedSessionId);
   const pendingBrowserTab = usePendingTab(selectedSessionId ?? "");
+  const blankTabs = useBlankTabs(selectedSessionId ?? "");
   const hasBrowserTabs = browserTabs && browserTabs.length > 0;
   // The main column's Browser view is the panel's browser expanded. Arriving
   // on it closes the pane, whatever tab the pane was on: the reader came for
@@ -1370,11 +1368,6 @@ function App() {
   // a pane the arrival took — the sidebar's rule, under its own switch.
   const fullBrowserOpen = !issuesOpen && viewTab === "browser";
   const lastViewTab = useRef(viewTab);
-  // Set only where arriving on the browser is what collapsed the sidebar, so
-  // leaving never reopens one the reader had closed themselves. `toggleSidebar`
-  // drops the claim for the same reason: a sidebar they closed by hand while
-  // reading a page is theirs, not ours to give back.
-  const hidForBrowser = useRef(false);
   // The pane's claims, one per pane key, since the pane is per session — see
   // [panelMove](./lib/sidebarAuto.ts) for why one claim was not enough.
   const panelHidForBrowser = useRef(new Set<string>());
@@ -1398,39 +1391,12 @@ function App() {
       else if (move === "restore") panelHidForBrowser.current.delete(panelKey);
       if (move) setPanelOpen(move === "restore");
     }
-
-    // The sidebar's own rule is [sidebarMove](./lib/sidebarAuto.ts), which is
-    // pure and tested: `collapsed` is a dep this effect only *reads*, so the
-    // rule runs again on the frame it collapses the sidebar, and getting that
-    // re-entry wrong handed the sidebar straight back.
-    const move = sidebarMove({
-      from: was,
-      to: viewTab,
-      enabled: autoHideSidebar,
-      collapsed,
-      claimed: hidForBrowser.current,
-    });
-    if (move === "hide") {
-      hidForBrowser.current = true;
-      setCollapsed(true);
-    } else if (move === "restore") {
-      hidForBrowser.current = false;
-      setCollapsed(false);
-    }
-  }, [
-    viewTab,
-    setPanelOpen,
-    panelOpen,
-    panelKey,
-    autoHidePanel,
-    collapsed,
-    setCollapsed,
-    autoHideSidebar,
-  ]);
+  }, [viewTab, setPanelOpen, panelOpen, panelKey, autoHidePanel]);
   const expandBrowser = () => setViewTab("browser");
+  // Into the pane only where it has a Browser tab to land on.
   const collapseBrowser = () => {
     setViewTab("chat");
-    showPanel("browser");
+    if (hasBrowserTabs) showPanel("browser");
   };
 
   // A live background task counts even where no run is built for it yet, and a
@@ -1448,6 +1414,7 @@ function App() {
     issue: hasIssueTab,
     more: hasMoreTab,
     plan: hasPlanTab,
+    browser: !!hasBrowserTabs,
   });
 
   // One rule, read rather than written back: an explicit pick wins wherever it
@@ -1478,7 +1445,9 @@ function App() {
   // With the pane shut, the Browser view's strip is the only row of tabs on
   // screen, so ⌘⇧[ ] means that one rather than nothing.
   const stepTab = (delta: number) => {
-    if (!panelShown) return fullBrowserOpen ? stepBrowserTab(delta) : undefined;
+    // A shut pane opens on its first tab, so the chord alone gets the reader
+    // moving; ⌘E is what shuts it again.
+    if (!panelShown) return issuesOpen || !shownSession ? undefined : showPanel(tabs[0]);
     const from = tabs.indexOf(activeTab);
     setPanelTab(tabs[(from + delta + tabs.length) % tabs.length]);
   };
@@ -1578,28 +1547,6 @@ function App() {
   // it was wanted.
   const sessionHasPr = markHere?.state === "OPEN";
 
-  // Read off the two tree ids rather than off the panel's file list: the panel
-  // pauses its reads while hidden, which is exactly when the indicator has to
-  // be right.
-  const lastTurnChanged = turnChangedTree({ baseline, head });
-
-  // The click lands on whatever the glyph was drawing — a git icon that opened
-  // the subagents tab would be a lie. That is all this does now: which tab the
-  // pane *defaults* to is `activeTab`'s rule and needs no help here, and ⌘E
-  // stays a plain toggle because it draws nothing and so promises nothing.
-  const handleTogglePanel = () => {
-    // On the issues page the chord only ever *closes*. There is nothing for it
-    // to reopen — a row is what picks an issue — so a toggle that could open
-    // would have to guess which one, and the last pick is rarely the one wanted
-    // on the way back. Closing is the half that has an unambiguous meaning.
-    if (issuesOpen) return setPickedIssue(null);
-    if (!panelOpen) {
-      if (hasOpenPr && hasPrTab) setPanelTab("pr");
-      else if (lastTurnChanged) setPanelTab("changes");
-    }
-    togglePanel();
-  };
-
   // What tells the git-backed views to re-read — cache keys, not counts. The
   // tree, the commit logs and the file list move at a turn's end, since what an
   // agent commits or creates mid-turn can wait for it; a working-tree diff also
@@ -1640,6 +1587,15 @@ function App() {
                 loading: activeDoc?.body.status === "loading",
               }
             : null;
+
+  const panelCounts = {
+    pr: prBadgeCount(pullRequests.prs),
+    // Only above one: a tab reading "Issue 1" says what the tab already says,
+    // and the count is news exactly when there is more than one thing behind it.
+    issue: sessionIssues.length > 1 ? sessionIssues.length : 0,
+    // Same rule, and beside it so the rule reads once.
+    docs: docs.length > 1 ? docs.length : 0,
+  };
 
   // Same order the sidebar draws, so the walk matches the list even when the
   // sidebar is collapsed and there is nothing on screen to follow — project
@@ -1896,7 +1852,8 @@ function App() {
     const was = lastTabs.current;
     lastTabs.current = { id: selectedSessionId, had: hasBrowserTabs };
     if (was.id !== selectedSessionId || was.had !== false) return;
-    if (hasBrowserTabs && !fullBrowserOpen) showPanel("browser");
+    // Panel Browser tab hidden for now; restore with it.
+    // if (hasBrowserTabs && !fullBrowserOpen) showPanel("browser");
   }, [selectedSessionId, hasBrowserTabs, fullBrowserOpen, showPanel]);
 
   // Every way of arriving at a session, so none of them can forget to leave the
@@ -2267,7 +2224,6 @@ function App() {
   };
 
   const toggleSidebar = () => {
-    hidForBrowser.current = false;
     setCollapsed((prev) => !prev);
   };
   useHotkey("sidebar.toggle", toggleSidebar);
@@ -2354,9 +2310,9 @@ function App() {
   // browser beside it in the panel and no grid to close a pane out of.
   const closeBrowserTab = () => {
     if (!selectedSessionId || isRecording(selectedSessionId)) return;
-    // The pending tab has no browser behind it, so it is dropped rather than
+    // A blank tab has no browser behind it, so it is dropped rather than
     // closed — and it is what the reader is looking at while it is up.
-    if (pendingBrowserTab) return setPendingTab(selectedSessionId, false);
+    if (blankTabs.active !== null) return closeBlankTab(selectedSessionId, blankTabs.active);
     const open = browserTabs?.find((tab) => tab.active);
     if (open) void closeTab(selectedSessionId, open.id);
   };
@@ -2367,8 +2323,13 @@ function App() {
   // `gridShown` both hold `!issuesOpen`, and `panelShown` is the pane the
   // page hides.
   const fileShown = !issuesOpen && viewTab === "files" && !!activeFile;
+  const rowTabOnScreen =
+    !issuesOpen && !!selectedSessionId && (viewTab === "files" || viewTab === "changes" || fullBrowserOpen);
   const closeTabOrPane = () => {
     if (!selectedSessionId) return;
+    // The row's own close, so the chord lands where the cross would — and
+    // reaches the Files and Diff tabs themselves once nothing is open in them.
+    if (rowTabOnScreen && closeActiveTab()) return;
     if (fileShown && activeFile) return closeFile(selectedSessionId, activeFile);
     if (fullBrowserOpen) return closeBrowserTab();
     if (gridShown) return closeSessionPane(selectedSessionId);
@@ -2378,6 +2339,7 @@ function App() {
   // it matches, and a ⌘W that eats the key and does nothing is worse than one
   // the app never had.
   const hasCloseTarget =
+    rowTabOnScreen ||
     fileShown ||
     ((fullBrowserOpen || (panelShown && activeTab === "browser")) &&
       (pendingBrowserTab || !!hasBrowserTabs)) ||
@@ -2453,13 +2415,7 @@ function App() {
   const browserStep = { enabled: browserShown && viewTab !== "changes" && !fileShown, skipInTextField: true };
   useHotkey("subtab.prev", () => stepBrowserTab(-1), browserStep);
   useHotkey("subtab.next", () => stepBrowserTab(1), browserStep);
-  // ⌘T, the chord every browser gives a new tab. Bound only while the browser
-  // is on screen, so it stays free everywhere else.
-  useHotkey("browser.newTab", () => {
-    if (selectedSessionId && !isRecording(selectedSessionId)) setPendingTab(selectedSessionId, true);
-  }, {
-    enabled: browserShown && !!selectedSessionId,
-  });
+  // ⌘T lives in `ViewTabs`: a new tab from anywhere the row is drawn.
   // ⌘S writes the doc on screen. Unregistered rather than a no-op off that tab:
   // `useHotkey` claims every chord it matches, and ⌘S is the browser's own save
   // — left bound everywhere it would eat the key from nothing at all.
@@ -2471,17 +2427,8 @@ function App() {
   useHotkey("composer.draft", () => void saveAsDraft(), {
     enabled: !selectedSessionId && !issuesOpen && !(panelShown && activeTab === "docs"),
   });
-  // By position in the tab row, so a third view needs only a third line here.
-  // No-ops without a session, where there is no row to switch — and on the
-  // issues page, where the row is not drawn: switching an invisible tab looks
-  // like nothing happening and then shows up as the wrong view on the way back.
-  //
-  // The bare ⌘ digits, the way every browser and editor numbers its tabs; the
-  // split view's panes take ⌘⌥ above.
-  useHotkey("view.chat", () => !issuesOpen && setViewTab("chat"));
-  useHotkey("view.changes", () => !issuesOpen && setViewTab("changes"));
-  useHotkey("view.browser", () => !issuesOpen && setViewTab("browser"));
-  useHotkey("view.files", () => !issuesOpen && setViewTab("files"));
+  // ⌘1–⌘9 live in `ViewTabs`, which is drawn only where there is a row to
+  // switch, so the issues page and a new task need no guard of their own.
   // ⌘, — every macOS app's preferences chord, and the only way into settings
   // while the sidebar is collapsed and its gear gone with it. Safe to take for
   // `useHotkey`'s usual pair of reasons: it claims the chord, and the app's
@@ -2582,15 +2529,6 @@ function App() {
   const shownSession =
     selectedSession ?? sessionIndexItems.find((i) => i.sessionId === selectedSessionId) ?? null;
 
-  // A left panel with the sidebar collapsed takes the window's left edge, and
-  // with it the traffic lights the header would otherwise clear. Fullscreen has
-  // none to clear.
-  const panelAtLeftEdge =
-    panelSide === "left" &&
-    collapsed &&
-    !fullscreen &&
-    (issuesOpen ? !!pickedIssue : !!shownSession && panelShown);
-
   // What every transcript on screen reports back through: the main column, a
   // split pane and a crew strip alike.
   const paneChat: PaneChat = {
@@ -2611,10 +2549,12 @@ function App() {
         the browser's native view down, its pane measuring zero. */}
     <div className={cn("h-full w-full", settingsOpen && "hidden")}>
     <AppShell
+      sidebarOpen={!collapsed}
       // The issues page fills the column, so the centred empty-composer state
       // is wrong there even with no session selected.
       centered={!shownSession && !issuesOpen}
       panelLeft={panelSide === "left"}
+      panelOpen={issuesOpen ? !!pickedIssue : !!shownSession && panelShown}
       overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
       // Chat's alone, and not a `TabBody` — the other views answer questions
       // about a repository rather than about a conversation, and a split is
@@ -2648,13 +2588,7 @@ function App() {
           searchOpen={searchOpen}
           onSearchOpenChange={setSearchOpen}
           projects={spaceProjects}
-          spaces={spaces}
           space={space}
-          onSpaceChange={changeSpace}
-          onNewSpace={openNewSpace}
-          // Only while the dialog is actually up: it is cleared on close, so a
-          // cancelled naming puts the switcher back on All Spaces by itself.
-          namingSpace={settingsOpen && namingSpace}
           projectFilter={projectFilter}
           onProjectFilterChange={changeProjectFilter}
           statusBySession={statusBySession}
@@ -2665,8 +2599,6 @@ function App() {
           // selection itself is kept, which is what makes coming back free.
           selectedSessionId={issuesOpen ? null : (pendingStep ?? selectedSessionId)}
           collapsed={collapsed}
-          onToggleCollapsed={toggleSidebar}
-          onOpenSettings={() => setSettingsOpen(true)}
           // The sidebar is the reader leaving the crew, and it has to say so
           // outright rather than lean on the selection moving. A row already
           // selected — the crew member they are reading — moves nothing, so
@@ -2711,51 +2643,104 @@ function App() {
           // here must clip at the column's edge, never spill over the pane
           // beside it. Every child below decides how it gives up width; this
           // decides that it has to.
-          className="flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-3"
+          //
+          // It spans the window, sidebar and panes below it, so it is the row
+          // that clears the traffic lights — fullscreen has none. A step darker
+          // than the window, so the active tab can stand out of it the way a
+          // browser's does.
+          className={cn(
+            "relative flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden bg-surface-well px-3",
+            !fullscreen && "pl-(--traffic-lights-w)",
+          )}
           // `deep`, not bare: bare drags only on direct hits, so every label
           // inside this row was a dead strip in a titlebar that looks uniform.
           // Buttons still block on their own — Tauri stops walking up at any
           // clickable element that carries no attribute of its own.
           data-tauri-drag-region="deep"
         >
-          {/* Only when collapsed — expanded, the sidebar owns the toggle. This
-              header reaches the window edge in that state, so it has to clear
-              the traffic lights, which fullscreen removes. */}
-          {collapsed && (
-            <div
-              className={cn(
-                "flex items-center",
-                // Fullscreen has no traffic lights, so the toggle pulls back past
-                // the header's own padding to sit flush at the window edge.
-                fullscreen ? "-ml-1" : !panelAtLeftEdge && "pl-(--traffic-lights-w)",
-              )}
+          {/* Always here, open or shut: the sidebar sits under this row now,
+              so the toggle no longer has a strip of its own to live in. */}
+          <SidebarToggle onToggle={toggleSidebar} collapsed={collapsed} />
+
+          {/* Only once a space exists: before that the switcher has nothing to
+              switch, and New space lives in Settings. Over the sidebar's right
+              end where it is open, out of the flow so the tabs do not move;
+              shut, it follows the toggle. */}
+          {spaces.length > 0 && (
+            <SpaceSwitcher
+              spaces={spaces}
+              value={space}
+              // Only while the dialog is actually up: it is cleared on close,
+              // so a cancelled naming puts the switcher back on All Spaces.
+              naming={settingsOpen && namingSpace}
+              onChange={changeSpace}
+              onNew={openNewSpace}
+              className={cn("shrink-0", sidebarDrawn > 0 && "absolute top-1/2 -translate-y-1/2")}
+              style={sidebarDrawn > 0 ? { right: `calc(100% - ${sidebarDrawn}px + 0.5rem)` } : undefined}
+            />
+          )}
+
+
+          {/* With a session up, the session is the strip's first tab and the
+              header has nothing left to say; it stays for the pages that are
+              not a session — the issues page, a new task. */}
+          {/* A hidden session has no sidebar row, so this is the way back to
+              the crew it sits in. */}
+          {!issuesOpen && shownSession && hiddenParent && (
+            <button
+              type="button"
+              onClick={() =>
+                goToSession(() => void handleSelectSessionIndexItem(hiddenParent.sessionId))
+              }
+              className="max-w-40 shrink-0 cursor-pointer truncate text-ui text-muted-foreground transition-colors hover:text-foreground"
             >
-              {/* No dev badge beside it: the badge lives at the sidebar's
-                  bottom edge now and shows nothing while the sidebar is
-                  collapsed, the same bargain `UpdateRow` makes — neither is
-                  urgent enough to earn a second home in this header. */}
-              <SidebarToggle onToggle={toggleSidebar} collapsed />
+              {hiddenParent.title} /
+            </button>
+          )}
+          {!issuesOpen && shownSession ? (
+            <ViewTabs
+              sessionId={shownSession.sessionId}
+              // The group's name over a grid, for the reason the header gave:
+              // each pane already names its own session. The project is left
+              // off where the sidebar is already filtered down to it.
+              title={
+                mainGroup
+                  ? groupName(mainGroup)
+                  : projectFilter
+                    ? shownSession.title
+                    : `${basename(shownSession.projectPath)} / ${shownSession.title}`
+              }
+              tab={viewTab}
+              onChange={setViewTab}
+            />
+          ) : (
+            // The page's name, over the sheet's left edge where the sidebar is
+            // open — out of the flow, so what sits before it cannot move it.
+            // Shut, the sheet starts under the traffic lights, so it follows
+            // the toggle instead.
+            <div className="min-w-0 flex-1">
+              <span
+                className={cn(
+                  "truncate text-ui text-muted-foreground opacity-50 select-none",
+                  sidebarDrawn > 0 && "absolute top-1/2 -translate-y-1/2",
+                )}
+                style={sidebarDrawn > 0 ? { left: sidebarDrawn } : undefined}
+              >
+                {issuesOpen ? "Issues" : "New session"}
+              </span>
             </div>
           )}
 
-          <SessionHeader
-            session={selectedSession}
-            branch={prBranch}
-            // The group's name over a grid: each pane's header already names
-            // its session, and the focused one's repeated up here read as a
-            // second line of the same row.
-            standIn={issuesOpen ? "Issues" : mainGroup ? groupName(mainGroup) : null}
-            parent={
-              hiddenParent && {
-                title: hiddenParent.title,
-                onSelect: () =>
-                  goToSession(() => void handleSelectSessionIndexItem(hiddenParent.sessionId)),
-              }
-            }
-            className="flex-1"
-          />
+          {/* App-wide, so only on the new-task screen, where the row has no
+              session's tabs to make room for. ⌘, still opens settings from
+              anywhere. */}
 
-          {!issuesOpen && shownSession && <ViewTabs tab={viewTab} onChange={setViewTab} />}
+
+          {/* App-wide, so only on the new-task screen, where the row has no
+              session's tabs to make room for. ⌘, opens settings from anywhere. */}
+          {!shownSession && !issuesOpen && (
+            <SettingsButton onOpen={() => setSettingsOpen(true)} />
+          )}
 
           {issuesOpen
             ? // Only once something is open to close. Nothing on this page can
@@ -2765,13 +2750,27 @@ function App() {
                 <PanelToggle onToggle={() => setPickedIssue(null)} open changes={false} />
               )
             : shownSession && (
-                <PanelToggle
-                  onToggle={handleTogglePanel}
-                  open={panelOpen}
-                  changes={lastTurnChanged}
-                  pr={hasOpenPr && hasPrTab}
-                  draft={allDrafts}
-                />
+                // The pane's own tabs, which replace its toggle: one opens the
+                // pane on itself, the lit one shuts it. Its buttons come up
+                // with them, since the pane keeps no strip of its own now.
+                <>
+                  <PanelActions
+                    refresh={panelShown ? panelRefresh : null}
+                    // In the Files view alone: the file on screen, or the
+                    // session's directory where no file is open.
+                    cwd={viewTab === "files" ? shownSession.cwd : null}
+                    file={fileShown ? openFiles.find((f) => f.path === activeFile) : undefined}
+                  />
+                  <PanelTabs
+                    tabs={tabs}
+                    tab={activeTab}
+                    open={panelShown}
+                    counts={panelCounts}
+                    onPick={(value) =>
+                      panelShown && activeTab === value ? setPanelOpen(false) : showPanel(value)
+                    }
+                  />
+                </>
               )}
         </header>
       }
@@ -2783,7 +2782,6 @@ function App() {
         issuesOpen ? (
           <RightPanel
             side={panelSide}
-            clearTrafficLights={panelAtLeftEdge}
             open={!!pickedIssue}
             // A word rather than a tab row: there is one thing in this pane
             // and nothing to switch to. "Details" and not "Issue", which would
@@ -2830,24 +2828,12 @@ function App() {
         shownSession ? (
           <RightPanel
             side={panelSide}
-            clearTrafficLights={panelAtLeftEdge}
             open={panelShown}
             tab={activeTab}
             onTabChange={setPanelTab}
-            counts={{
-              pr: prBadgeCount(pullRequests.prs),
-              // Only above one: a tab reading "Issue 1" says what the tab
-              // already says, and the count is news exactly when there is more
-              // than one thing behind it.
-              issue: sessionIssues.length > 1 ? sessionIssues.length : 0,
-              // Same rule, and beside it so the rule reads once: the count is
-              // news exactly when there is more than one file behind the tab.
-              docs: docs.length > 1 ? docs.length : 0,
-            }}
             tabs={tabs}
-            refresh={panelRefresh}
-            cwd={shownSession.cwd}
             widthKey={shownSession.sessionId}
+            bare
           >
             <TabBody active={activeTab === "changes"}>
               <MountOnce when={panelShown && activeTab === "changes"}>
@@ -3261,8 +3247,6 @@ function App() {
       onRemoveSpace={removeSpace}
       onMoveSpace={moveSpaceBy}
       onMoveProject={moveProject}
-      autoHideSidebar={autoHideSidebar}
-      onAutoHideSidebarChange={setAutoHideSidebar}
       autoHidePanel={autoHidePanel}
       onAutoHidePanelChange={setAutoHidePanel}
       panelSide={panelSide}

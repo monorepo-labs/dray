@@ -2,7 +2,6 @@ import { memo, useState } from "react";
 import { ChevronRight, GitCompare } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
-import ShortcutKeys from "@/components/ShortcutKeys";
 import Counts from "@/components/changes/Counts";
 import Note, { unreadableText } from "@/components/changes/Note";
 import DiffView from "@/components/chat/DiffView";
@@ -102,7 +101,6 @@ function NoChanges({ onOpenRepo }: { onOpenRepo: () => void }) {
           <Button variant="outline" size="sm" onClick={onOpenRepo}>
             Open Diff view
           </Button>
-          <ShortcutKeys ids={["view.changes"]} />
         </div>
       </div>
     </div>

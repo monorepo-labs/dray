@@ -166,7 +166,12 @@ function AttachmentGrid({ media, sessionId }: { media: SessionMedia[]; sessionId
               type="button"
               onClick={() => setOpenSrc(item.src)}
               aria-label={item.video ? `Play ${item.name}` : `Open ${item.name}`}
-              className={cn(cell, "cursor-zoom-in overflow-hidden transition-opacity hover:opacity-90")}
+              // A wash laid over the picture rather than a fill behind it,
+              // which the picture would cover.
+              className={cn(
+                cell,
+                "relative cursor-default overflow-hidden after:absolute after:inset-0 after:transition-colors hover:after:bg-foreground/10",
+              )}
             >
               <Thumb item={item} className="size-full" />
             </button>

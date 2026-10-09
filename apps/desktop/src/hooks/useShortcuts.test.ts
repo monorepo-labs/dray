@@ -78,15 +78,12 @@ describe("yieldMovedDefaults", () => {
   });
 
   // ⌘⌥5 was free before the views and panes swapped, so a reader may hold it.
-  it("puts a pane back on its old chord where the reader holds the new one", () => {
+  // The pane's old ⌘5 is tab 5's now, so it yields to nothing rather than
+  // collide with it.
+  it("unbinds a pane whose old chord is a tab's now", () => {
     const out = yieldMovedDefaults({ search: chord("5", true) });
     expect(out.search).toEqual(chord("5", true));
-    expect(out["pane.5"]).toEqual(chord("5"));
-  });
-
-  it("puts a view back on its old chord where the reader holds the new one", () => {
-    const out = yieldMovedDefaults({ "pane.1": chord("j"), search: chord("1") });
-    expect(out["view.chat"]).toMatchObject(chord("1", true));
+    expect(out["pane.5"]).toBeNull();
   });
 
   it("unbinds rather than collide where the old chord is taken too", () => {
@@ -98,8 +95,8 @@ describe("yieldMovedDefaults", () => {
     held.set("ade.shortcuts", JSON.stringify({ search: chord("5", true) }));
     vi.resetModules();
     const fresh = await import("@/hooks/useShortcuts");
-    expect(fresh.chordFor("pane.5")).toEqual(chord("5"));
+    expect(fresh.chordFor("pane.5")).toBeNull();
     expect(fresh.chordFor("search")).toEqual(chord("5", true));
-    expect(JSON.parse(held.get("ade.shortcuts")!)["pane.5"]).toEqual(chord("5"));
+    expect(JSON.parse(held.get("ade.shortcuts")!)["pane.5"]).toBeNull();
   });
 });
