@@ -759,13 +759,7 @@ export function isNested(item: SessionIndexItem, items: SessionIndexItem[]): boo
 /// Sidebar toggle. Lives outside `Sidebar` because a collapsed sidebar renders
 /// nothing at all — the button has to survive its own pane disappearing, so the
 /// app header owns it and its y position never moves.
-export function SidebarToggle({
-  onToggle,
-  collapsed = false,
-}: {
-  onToggle: () => void;
-  collapsed?: boolean;
-}) {
+export function SidebarToggle({ onToggle }: { onToggle: () => void }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -776,9 +770,11 @@ export function SidebarToggle({
           size="icon-sm"
           onClick={onToggle}
           aria-label="Toggle sidebar"
-          className="opacity-80 transition-opacity hover:opacity-100"
+          // The chat tab's mark colour, open or shut: the pane itself says
+          // which, and a strength flip read backwards on a sidebar kept open.
+          className="text-muted-foreground transition-colors hover:text-foreground"
         >
-          <PanelLeftIcon className="size-4.5" dim={collapsed} />
+          <PanelLeftIcon className="size-4.5" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="right">
@@ -802,7 +798,7 @@ export function SettingsButton({ onOpen }: { onOpen: () => void }) {
           size="icon-sm"
           onClick={onOpen}
           aria-label="Settings"
-          className="opacity-80 transition-opacity hover:opacity-100"
+          className="text-muted-foreground transition-colors hover:text-foreground"
         >
           <Cog6ToothIcon className="size-4" />
         </Button>
@@ -1317,7 +1313,7 @@ export default function Sidebar({
               goes, so it swaps to `Undo2` while the drafts are what is shown.
               A dashed circle, Linear's backlog shape in lucide's stroke: not yet on
               anybody's list is what a draft is. */}
-          <Tooltip>
+          <Tooltip delayDuration={700}>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
@@ -1338,7 +1334,7 @@ export default function Sidebar({
               (the row control's single `Check`, doubled — every settled one) goes
               to the settled list, `Undo2` comes back. A pressed state on one icon
               can't say that on its own, so the glyph swaps instead. */}
-          <Tooltip>
+          <Tooltip delayDuration={700}>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"

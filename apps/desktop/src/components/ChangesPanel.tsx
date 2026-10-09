@@ -50,7 +50,7 @@ export default function ChangesPanel({
 
   return (
     <>
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-ui">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 pt-3 pb-2 text-ui">
         <span className="text-sidebar-foreground">Last turn</span>
         <span className="text-muted-foreground">
           {changes.files.length} file{changes.files.length > 1 ? "s" : ""}

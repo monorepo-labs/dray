@@ -66,7 +66,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
     // `pt-4` on every one of them rather than a gap on the container: the
     // heading carries the break above it, so a section arriving or going takes
     // its own spacing with it.
-    <div className="shrink-0 px-3 pt-4 pb-2 text-ui text-muted-foreground">{children}</div>
+    <div className="shrink-0 px-3 pt-4 pb-2 text-ui text-muted-foreground first:pt-3">{children}</div>
   );
 }
 

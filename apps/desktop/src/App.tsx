@@ -58,7 +58,6 @@ import RightPanel, {
   MountOnce,
   PANEL_MIN,
   PanelActions,
-  PanelTabs,
   PanelToggle,
   TabBody,
   tabOrder,
@@ -108,7 +107,8 @@ import { lockedMidTurn } from "@/lib/liveControls";
 import { nextEffort } from "@/components/composer/ModelSelector";
 import { nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
-import ViewTabs, { closeActiveTab, type ViewTab } from "@/components/layout/ViewTabs";
+import ViewTabs, { closeActiveTab, ItemTab, type ViewTab } from "@/components/layout/ViewTabs";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { clearAttachments, pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
@@ -1608,15 +1608,6 @@ function App() {
         }
       : null;
 
-  const panelCounts = {
-    pr: prBadgeCount(pullRequests.prs),
-    // Only above one: a tab reading "Issue 1" says what the tab already says,
-    // and the count is news exactly when there is more than one thing behind it.
-    issue: sessionIssues.length > 1 ? sessionIssues.length : 0,
-    // Same rule, and beside it so the rule reads once.
-    docs: docs.length > 1 ? docs.length : 0,
-  };
-
   // Same order the sidebar draws, so the walk matches the list even when the
   // sidebar is collapsed and there is nothing on screen to follow — project
   // list included, since that is what orders the groups it steps through.
@@ -2692,18 +2683,17 @@ function App() {
         >
           {/* Always here, open or shut: the sidebar sits under this row now,
               so the toggle no longer has a strip of its own to live in. */}
-          <SidebarToggle onToggle={toggleSidebar} collapsed={collapsed} />
+          <SidebarToggle onToggle={toggleSidebar} />
 
           {/* Over the sidebar's right end, out of the flow so the tabs do not
               move. It belongs to the sidebar, so it goes when the sidebar does. */}
-          {!shownSession && !issuesOpen && sidebarDrawn > 0 && (
+          {sidebarDrawn > 0 && (
           <div
             className="absolute top-1/2 flex shrink-0 -translate-y-1/2 items-center gap-1"
             style={{ right: `calc(100% - ${sidebarDrawn}px + 0.5rem)` }}
           >
             {/* Only once a space exists — before that the switcher has nothing
-                to switch, and New space lives in Settings — and only on the
-                new-task screen, beside settings. */}
+                to switch, and New space lives in Settings. */}
             {spaces.length > 0 && (
               <SpaceSwitcher
                 spaces={spaces}
@@ -2715,8 +2705,6 @@ function App() {
                 onNew={openNewSpace}
               />
             )}
-            {/* App-wide, so only on the new-task screen. ⌘, opens settings
-                from anywhere. */}
             <SettingsButton onOpen={() => setSettingsOpen(true)} />
           </div>
           )}
@@ -2778,30 +2766,38 @@ function App() {
               // *open* the pane — a row does that — so a toggle drawn at rest
               // would be a control with one dead state.
               pickedIssue && (
-                <PanelToggle onToggle={() => setPickedIssue(null)} open />
+                <PanelToggle onToggle={() => setPickedIssue(null)} />
               )
             : shownSession && (
-                // The pane's own tabs, which replace its toggle: one opens the
-                // pane on itself, the lit one shuts it. Its buttons come up
-                // with them, since the pane keeps no strip of its own now.
                 <>
                   <PanelActions
-                    refresh={panelShown ? panelRefresh : null}
                     // In the Files view alone: the file on screen, or the
                     // session's directory where no file is open.
                     cwd={viewTab === "files" ? shownSession.cwd : null}
                     file={fileShown ? openFiles.find((f) => f.path === activeFile) : undefined}
                   />
-                  <PanelTabs
-                    tabs={tabs}
-                    tab={activeTab}
-                    open={panelShown}
-                    counts={panelCounts}
-                    faces={prFace ? { pr: prFace } : undefined}
-                    onPick={(value) =>
-                      panelShown && activeTab === value ? setPanelOpen(false) : showPanel(value)
-                    }
-                  />
+                  {/* A pull request, open or merged, stands in for the toggle and opens
+                      the pane on itself; the pane's own tabs are inside it. */}
+                  {prFace ? (
+                    <ItemTab
+                      icon={prFace.icon}
+                      label={prFace.label}
+                      active={panelShown}
+                      onPick={() => {
+                        if (!panelShown) setPanelTab("pr");
+                        togglePanel();
+                      }}
+                      fixed
+                      hint={
+                        <>
+                          Toggle panel
+                          <ShortcutKeys ids={["panel.toggle"]} />
+                        </>
+                      }
+                    />
+                  ) : (
+                    <PanelToggle onToggle={togglePanel} />
+                  )}
                 </>
               )}
         </header>
@@ -2865,7 +2861,8 @@ function App() {
             onTabChange={setPanelTab}
             tabs={tabs}
             widthKey={shownSession.sessionId}
-            bare
+            refresh={panelRefresh}
+            cwd={shownSession.cwd}
           >
             <TabBody active={activeTab === "changes"}>
               <MountOnce when={panelShown && activeTab === "changes"}>

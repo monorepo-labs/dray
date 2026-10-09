@@ -316,7 +316,14 @@ export default function ViewTabs({
   const closeAt = (i: number) => {
     const item = drag.shown[i];
     const last = item.key.startsWith("file:") && files.length === 1;
-    if (item.active && !last) (drag.shown[i - 1] ?? drag.shown[i + 1])?.pick();
+    // A neighbour, but never a page a recording holds: moving the active page
+    // would send the agent's next verb somewhere else. The chat is never
+    // locked, so the scan always lands.
+    if (item.active && !last) {
+      [drag.shown[i - 1], drag.shown[i + 1], ...drag.shown]
+        .find((t) => t && t !== item && !t.locked)
+        ?.pick();
+    }
     item.close?.();
   };
 

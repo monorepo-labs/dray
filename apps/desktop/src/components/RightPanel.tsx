@@ -5,7 +5,6 @@ import OpenInButton from "@/components/OpenInButton";
 import TabButton from "@/components/TabButton";
 import PanelRightIcon from "@/components/icons/PanelRightIcon";
 import { Button } from "@/components/ui/button";
-import { ItemTab } from "@/components/layout/ViewTabs";
 import { FILE_OPENER } from "@/lib/openWith";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -16,7 +15,7 @@ import { cn } from "@/lib/utils";
 /// `App` so the toggle and the thing it toggles stay in one file, and outside
 /// [RightPanel] itself because the pane doesn't exist before a session does —
 /// the button has to outlive it. Mirrors `SidebarToggle` on the far side.
-export function PanelToggle({ onToggle, open }: { onToggle: () => void; open: boolean }) {
+export function PanelToggle({ onToggle }: { onToggle: () => void }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -30,9 +29,9 @@ export function PanelToggle({ onToggle, open }: { onToggle: () => void; open: bo
           // `shrink-0` because this is the way back out of a pane dragged
           // wide: everything else in that header may give up width or clip,
           // this may not.
-          className="shrink-0 opacity-80 transition-opacity hover:opacity-100"
+          className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
         >
-          <PanelRightIcon className="size-4.5" dim={!open} />
+          <PanelRightIcon className="size-4.5" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="left">
@@ -181,17 +180,10 @@ type RightPanelProps = {
   /// name a chord that would step between one place and itself — but an empty
   /// strip is worse than either, since it reads as chrome that failed to load.
   /// So the row keeps its height, loses its controls, and says what the pane is.
-  ///
-  /// It also loses its bottom rule. That line separates a row of *controls* from
-  /// what they act on; over a heading belonging to the thing underneath it, it
-  /// cuts a title off its own body.
   heading?: string;
   /// Which side of the chat column the pane stands on — the reader's pick in
   /// Settings › Appearance. The border and the drag strip face the chat.
   side?: PanelSide;
-  /// No top strip at all: the tabs and the buttons beside them are drawn in
-  /// the titlebar instead (`PanelTabs`, `PanelActions`).
-  bare?: boolean;
   children: React.ReactNode;
 };
 
@@ -245,7 +237,6 @@ export default function RightPanel({
   heading,
   widthKey,
   side = "right",
-  bare = false,
   children,
 }: RightPanelProps) {
   // 32rem, the width this pane opened at before it could be dragged.
@@ -275,14 +266,11 @@ export default function RightPanel({
       )}
     >
       {handle}
-      {!bare && <div
-        className={cn(
-          // `overflow-hidden` for the reason the app header carries it: this
-          // pane can be dragged narrow, and what runs out of room has to clip
-          // at its own edge rather than draw over the transcript beside it.
-          "flex h-(--titlebar-h) shrink-0 items-center gap-0.5 overflow-hidden px-2",
-          !heading && "border-b border-border",
-        )}
+      <div
+        // `overflow-hidden` for the reason the app header carries it: this
+        // pane can be dragged narrow, and what runs out of room has to clip
+        // at its own edge rather than draw over the transcript beside it.
+        className="flex h-[34px] shrink-0 items-center gap-0.5 overflow-hidden px-2 pt-1.5"
         data-tauri-drag-region="deep"
       >
         {heading ? (
@@ -350,7 +338,7 @@ export default function RightPanel({
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <PanelActions actions={actions} cwd={cwd} refresh={refresh} />
         </div>
-      </div>}
+      </div>
 
       {children}
     </aside>
@@ -409,52 +397,5 @@ export function PanelActions({
       cwd && <OpenInButton path={cwd} />
     )}
     </>
-  );
-}
-
-/// The pane's tabs, drawn in the titlebar's right end and shaped like the
-/// tabs at its left. A tab opens the pane on itself; the lit one shuts it.
-export function PanelTabs({
-  tabs,
-  tab,
-  open,
-  counts,
-  faces,
-  onPick,
-}: {
-  tabs: readonly PanelTab[];
-  tab: PanelTab;
-  open: boolean;
-  counts?: Partial<Record<PanelTab, number>>;
-  /// A tab drawn as something other than its name, the way the PR tab names
-  /// its one open pull request.
-  faces?: Partial<Record<PanelTab, { icon: React.ReactNode; label: string }>>;
-  onPick: (tab: PanelTab) => void;
-}) {
-  return (
-    <div className="-mx-1 flex shrink-0 items-center gap-0.5 self-stretch overflow-hidden px-1 transition-none animate-in duration-300 ease-out fade-in slide-in-from-right-3 [animation-delay:150ms] [animation-fill-mode:backwards]">
-      {tabs.map((value) => (
-        <ItemTab
-          key={value}
-          icon={faces?.[value]?.icon ?? null}
-          label={
-            faces?.[value]?.label ??
-            (counts?.[value] ? `${PANEL_LABELS[value]} ${counts[value]}` : PANEL_LABELS[value])
-          }
-          active={open && tab === value}
-          onPick={() => onPick(value)}
-          fixed
-          hint={
-            <>
-              Toggle panel
-              <ShortcutKeys ids={["panel.toggle"]} />
-              <span className="text-muted-foreground">·</span>
-              Switch
-              <ShortcutKeys ids={["panel.tab.prev", "panel.tab.next"]} />
-            </>
-          }
-        />
-      ))}
-    </div>
   );
 }

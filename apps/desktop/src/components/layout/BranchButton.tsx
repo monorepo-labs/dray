@@ -2,7 +2,7 @@ import { displayPath } from "@/lib/transport";
 import { Check, FolderGit2 } from "lucide-react";
 
 import GitBranchIcon from "@/components/icons/GitBranchIcon";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopied } from "@/hooks/useCopied";
 
 /// The branch the session's work lands on, with the git mark; a click copies
@@ -19,6 +19,10 @@ export default function BranchButton({ branch, cwd: rawCwd }: { branch: string; 
   const worktree = rawCwd.includes("/.claude/worktrees/");
   const Mark = worktree ? FolderGit2 : GitBranchIcon;
   return (
+    // Delayed: it sits beside the panel toggle, and a tip opening on the way
+    // there covers it. Its own provider, or the app's skips the delay for a
+    // while after any other tip closes — which in this header is always.
+    <TooltipProvider delayDuration={500} skipDelayDuration={0}>
     <Tooltip>
       <TooltipTrigger asChild>
         <button
@@ -48,5 +52,6 @@ export default function BranchButton({ branch, cwd: rawCwd }: { branch: string; 
           : `${worktree ? "Worktree" : "Branch"} · click to copy the working directory`}
       </TooltipContent>
     </Tooltip>
+    </TooltipProvider>
   );
 }
