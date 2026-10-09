@@ -430,6 +430,11 @@ static SENDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::n
 static CLOSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 use std::sync::atomic::Ordering::SeqCst;
 
+/// Holds every send from now on, for a server that is exiting regardless.
+pub fn hold_sends() {
+    CLOSING.store(true, SeqCst);
+}
+
 /// One send counted for its whole length, waiting first while a restart is
 /// closing the server — which ends the wait by exiting, or by finding work
 /// and reopening.

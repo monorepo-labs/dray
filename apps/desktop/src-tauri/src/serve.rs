@@ -179,10 +179,14 @@ async fn restart_when_idle() {
 /// the session map alone, whose locks a stuck send can hold forever.
 #[cfg(feature = "desktop")]
 async fn shut_down() -> ! {
+    crate::session::hold_sends();
     crate::remote_access::stop_on_exit();
     let me = std::process::id();
-    let tree = tokio::task::spawn_blocking(move || crate::local_servers::descendants(me)).await.unwrap_or_default();
+    let walk = move || tokio::task::spawn_blocking(move || crate::local_servers::descendants(me));
+    let mut tree = walk().await.unwrap_or_default();
     let _ = tokio::time::timeout(std::time::Duration::from_secs(3), crate::session::manager().stop_all()).await;
+    // Again, for whatever a send already under way started meanwhile.
+    tree.extend(walk().await.unwrap_or_default());
     // ponytail: a pid that exited in those 3s could be reused; a process
     // group per agent would make this one signal.
     for pid in tree.into_iter().filter(|&p| p != me) {
