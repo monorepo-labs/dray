@@ -400,7 +400,12 @@ linearAccount: TrackerAccount | null,
  * ask the frontend for is a value that can be missing when a keypress
  * needs it.
  */
-transcription: TranscriptionSettings, };
+transcription: TranscriptionSettings, 
+/**
+ * Whether this Mac serves itself through a quick tunnel. Here because
+ * Rust starts it at launch, before any webview exists to ask.
+ */
+remoteAccess: boolean, };
 
 /**
  * Permission stance a session *runs under*, in roughly increasing order of
@@ -738,7 +743,7 @@ unreadable: Unreadable | null, };
 /**
  * What the reader can do about a failure, drawn beside its sentence.
  */
-export type Fix = { "kind": "copy", command: string, } | { "kind": "trust_host", host: string, keyType: string, fingerprint: string, } | { "kind": "install" };
+export type Fix = { "kind": "copy", command: string, } | { "kind": "trust_host", host: string, keyType: string, fingerprint: string, } | { "kind": "install" } | { "kind": "new_address" };
 
 /**
  * A repository the signed-in `gh` user can reach.
@@ -1538,6 +1543,20 @@ from: MessageSender | null,
  * flush.
  */
 issues: Array<IssueRef>, };
+
+/**
+ * What the This Mac row draws. No token: it is asked for on Copy, and never
+ * stored in the webview.
+ */
+export type RemoteAccess = { on: boolean, 
+/**
+ * `wss://…`, once the tunnel is registered and in DNS.
+ */
+address: string | null, 
+/**
+ * Why this Mac is not answering, while on.
+ */
+error: string | null, };
 
 /**
  * What a save did. `Stale` is not an error: the file moved under the reader,

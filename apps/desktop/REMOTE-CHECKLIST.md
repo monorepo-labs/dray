@@ -7,8 +7,9 @@ Issues: #413 (stage 1), #415 (stages 2 and 4, draft), #414 (stage 3). Stage 2's 
 ## How clients connect (settled)
 
 - **Now: SSH**, desktop app to VPS. Direct, free, nothing for us to run. The app runs the Mac's own `ssh`; Dray never sees the key.
-- **Later: our own relay** on Cloudflare, with sign-in and a QR code, for the phone and the browser. Those cannot use SSH. Encrypt end to end.
-- **Never required:** Tailscale, or free tunnel links that change on restart.
+- **Also: a Cloudflare quick tunnel** (#452), no SSH and no account. The address changes when the tunnel restarts; the token does not. Plan in [TUNNEL-PLAN.md](TUNNEL-PLAN.md).
+- **Later: our own relay** on Cloudflare, with sign-in and a QR code, for the phone, which cannot use SSH. Encrypt end to end.
+- **Never required:** Tailscale.
 - The server speaks the same WebSocket whatever carries it, so the relay is a pipe added later, not a rebuild.
 
 ## Stage 1: Dray runs without the Mac app
@@ -88,14 +89,15 @@ Same installer as stage 2, with dialogs on top.
 
 ## Stage 7: More ways to use it
 
-- [ ] Browser version of the UI, served by the server
+- [x] Reach a Linux server through a Cloudflare quick tunnel, no SSH: `dray tunnel`, `dray service tunnel on` (#452)
+- [x] Reach a Mac through a quick tunnel: the app itself serves, turned on from the This Mac row (#452)
 - [ ] Our own relay: sign-in, QR code, stable address, end-to-end encryption
 - [ ] Phone
 - [ ] Linux and Windows apps
-- [ ] A Mac as a server. Design open: the app itself serving, or `dray-serve` plus a launchd agent beside it (two processes on one data dir is the two-writers problem).
 
 ## Dropped
 
 - A TUI.
+- A browser version of the UI. Dray is an app; the clients are the Mac app, later a phone app and Linux/Windows apps.
 - Reading transcripts from the CLI. Using Dray needs a GUI.
 - Connecting from the CLI on another machine.

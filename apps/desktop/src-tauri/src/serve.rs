@@ -85,20 +85,10 @@ pub async fn run(port: u16) -> Result<()> {
         eprintln!("[worktree backfill err] {e}");
     }
 
-    let (events, _) = broadcast::channel::<Arc<str>>(EVENT_BACKLOG);
-    let live = Arc::new(Mutex::new(Live::default()));
+    let hub = Hub::default();
     let sink = {
-        let (events, live) = (events.clone(), live.clone());
-        Sink::new(move |event, payload| {
-            // Noted and sent under one lock, which is what lets a connecting
-            // client take a snapshot and subscribe with nothing falling
-            // between the two or landing in both.
-            let mut live = live.lock().unwrap_or_else(|e| e.into_inner());
-            live.note(event, &payload);
-            let frame = json!({ "event": event, "payload": payload }).to_string();
-            // No receivers is ordinary: nobody connected yet.
-            let _ = events.send(frame.into());
-        })
+        let hub = hub.clone();
+        Sink::new(move |event, payload| hub.publish(event, &payload))
     };
 
     // Agents this server spawns reach it through `dray`, so it serves the
@@ -122,20 +112,67 @@ pub async fn run(port: u16) -> Result<()> {
         token_path.display()
     );
 
-    let token: Arc<str> = token.into();
+    listen(listener, hub, sink, token.into(), home.join(dray_proto::TUNNEL_URL_FILE).into()).await
+}
+
+/// What every client of this process hears: each event the core emits, and
+/// [`Live`] beside it for a client that connects later. `dray-serve` builds
+/// its `Sink` on one; the desktop app's `Sink` publishes into [`HUB`] as well
+/// as its webview, so the app can serve the same stream.
+#[derive(Clone)]
+pub struct Hub {
+    events: broadcast::Sender<Arc<str>>,
+    live: Arc<Mutex<Live>>,
+}
+
+impl Default for Hub {
+    fn default() -> Self {
+        Self { events: broadcast::channel(EVENT_BACKLOG).0, live: Default::default() }
+    }
+}
+
+impl Hub {
+    pub fn publish(&self, event: &str, payload: &Value) {
+        // Noted and sent under one lock, which is what lets a connecting
+        // client take a snapshot and subscribe with nothing falling between
+        // the two or landing in both.
+        let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        live.note(event, payload);
+        // No receivers is ordinary — nobody connected, or the app not
+        // serving — and the frame would be built for nobody.
+        if self.events.receiver_count() > 0 {
+            let _ = self.events.send(json!({ "event": event, "payload": payload }).to_string().into());
+        }
+    }
+}
+
+/// The desktop app's hub, fed by its `Sink` whether or not Remote access is
+/// on, so a client connecting later still gets the open cards.
+#[cfg(feature = "desktop")]
+pub static HUB: std::sync::LazyLock<Hub> = std::sync::LazyLock::new(Hub::default);
+
+/// Serves `listener` until the future is dropped, which also drops every
+/// connection it accepted — how the desktop app turns serving off.
+/// `tunnel_file` holds the address whose origin is let through.
+pub async fn listen(listener: TcpListener, hub: Hub, sink: Sink, token: Arc<str>, tunnel_file: Arc<Path>) -> Result<()> {
+    let mut connections = tokio::task::JoinSet::new();
     loop {
-        let (stream, peer) = match listener.accept().await {
-            Ok(accepted) => accepted,
-            Err(e) => {
-                eprintln!("[serve accept err] {e}");
-                continue;
-            }
+        let (stream, peer) = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok(accepted) => accepted,
+                Err(e) => {
+                    eprintln!("[serve accept err] {e}");
+                    continue;
+                }
+            },
+            // Reaps finished connections, so the set holds live ones alone.
+            Some(_) = connections.join_next() => continue,
         };
-        let (sink, events, live, token) = (sink.clone(), events.clone(), live.clone(), token.clone());
-        tokio::spawn(async move {
+        let (sink, hub, token, tunnel_file) = (sink.clone(), hub.clone(), token.clone(), tunnel_file.clone());
+        connections.spawn(async move {
             let served = match request_line(&stream).await {
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
-                Some(_) => connection(stream, sink, events, live, &token).await,
+                Some(_) => connection(stream, sink, hub, &token, &tunnel_file).await,
                 None => Ok(()),
             };
             if let Err(e) = served {
@@ -150,7 +187,7 @@ pub async fn run(port: u16) -> Result<()> {
 /// Localhost is not a boundary the way `dray.sock` is: the socket sits in a
 /// `0700` directory, but a TCP port on `127.0.0.1` is open to every account on
 /// the machine, and a VPS is often shared. The file is `0600` from its create.
-async fn mint_token() -> Result<(String, PathBuf)> {
+pub async fn mint_token() -> Result<(String, PathBuf)> {
     let path = store::get_home_app_dir().await?.join("serve-token");
     let token = token_at(&path)?;
     Ok((token, path))
@@ -191,6 +228,17 @@ fn local_origin(origin: &str) -> bool {
         rest.split([':', '/']).next().unwrap_or_default()
     };
     matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
+/// Whether `origin` is the address `dray tunnel` last wrote. A page there can
+/// only be one this server answered, since the tunnel forwards nowhere else,
+/// and a phone's WebSocket names it as the origin it connected to. Read per
+/// handshake, as the address moves with every tunnel start.
+fn tunnel_origin(origin: &str, tunnel_file: &Path) -> bool {
+    std::fs::read_to_string(tunnel_file).is_ok_and(|url| {
+        let url = url.trim();
+        !url.is_empty() && origin.trim_end_matches('/') == url.trim_end_matches('/')
+    })
 }
 
 /// Equal-time compare, so the token cannot be read back a byte at a time off
@@ -464,14 +512,14 @@ fn content_type(path: &std::path::Path) -> &'static str {
 async fn connection(
     stream: TcpStream,
     sink: Sink,
-    events: broadcast::Sender<Arc<str>>,
-    live: Arc<Mutex<Live>>,
+    hub: Hub,
     token: &str,
+    tunnel_file: &Path,
 ) -> Result<()> {
     let admitted = tokio::time::timeout(ADMIT, async {
         let ws = tokio_tungstenite::accept_hdr_async(stream, |req: &Request, resp: Response| {
             match req.headers().get("origin").map(|o| o.to_str().unwrap_or_default()) {
-                Some(origin) if !local_origin(origin) => {
+                Some(origin) if !local_origin(origin) && !tunnel_origin(origin, tunnel_file) => {
                     let mut refused = ErrorResponse::new(Some("origin not allowed".to_string()));
                     *refused.status_mut() = StatusCode::FORBIDDEN;
                     Err(refused)
@@ -507,8 +555,8 @@ async fn connection(
     // has not let in — and under the lock the sink notes events with, so the
     // snapshot and the stream meet exactly.
     let (mut events, snapshot) = {
-        let live = live.lock().unwrap_or_else(|e| e.into_inner());
-        (events.subscribe(), live.snapshot())
+        let live = hub.live.lock().unwrap_or_else(|e| e.into_inner());
+        (hub.events.subscribe(), live.snapshot())
     };
     write
         .send(Message::text(json!({ "v": PROTOCOL }).to_string()))
@@ -788,6 +836,20 @@ mod tests {
         ] {
             assert!(!local_origin(origin), "{origin}");
         }
+    }
+
+    #[test]
+    fn the_tunnels_own_origin_and_no_other() {
+        let file = std::env::temp_dir().join(format!("dray-tunnel-url-{}", uuid::Uuid::new_v4().simple()));
+        assert!(!tunnel_origin("https://a-b-c.trycloudflare.com", &file), "no tunnel, no origin");
+        std::fs::write(&file, "https://a-b-c.trycloudflare.com\n").unwrap();
+        assert!(tunnel_origin("https://a-b-c.trycloudflare.com", &file));
+        for other in ["https://x-y-z.trycloudflare.com", "http://a-b-c.trycloudflare.com", "https://a-b-c.trycloudflare.com.evil.test", ""] {
+            assert!(!tunnel_origin(other, &file), "{other}");
+        }
+        std::fs::write(&file, "").unwrap();
+        assert!(!tunnel_origin("", &file), "an empty file names nothing");
+        std::fs::remove_file(&file).ok();
     }
 
     #[test]

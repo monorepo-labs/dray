@@ -61,6 +61,10 @@ pub struct AppSettings {
     /// needs it.
     #[serde(default)]
     pub transcription: TranscriptionSettings,
+    /// Whether this Mac serves itself through a quick tunnel. Here because
+    /// Rust starts it at launch, before any webview exists to ask.
+    #[serde(default)]
+    pub remote_access: bool,
 }
 
 /// The transcription picks. Model and device mean "not chosen" when absent.
@@ -107,6 +111,7 @@ impl Default for AppSettings {
             install_id: None,
             linear_account: None,
             transcription: TranscriptionSettings::default(),
+            remote_access: false,
         }
     }
 }
@@ -353,6 +358,7 @@ mod tests {
             install_id: Some("2f1c…".into()),
             linear_account: None,
             transcription: TranscriptionSettings::default(),
+            remote_access: true,
         };
 
         write_to(&dir, &off).await.unwrap();
