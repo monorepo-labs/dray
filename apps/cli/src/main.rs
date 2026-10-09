@@ -11,6 +11,7 @@
 use clap::{Args, Parser, Subcommand};
 
 mod draft;
+mod server;
 mod setup;
 use draft::DraftCommand;
 use dray_proto::{
@@ -64,6 +65,10 @@ enum Command {
     /// Publish one of this session's dev servers as a public link, list the
     /// live ones, or stop one.
     Share(ShareCommand),
+    /// Manage the servers the app connects to: add, list, rename, turn off and
+    /// on, remove.
+    #[command(subcommand)]
+    Server(server::ServerCommand),
     /// Upgrade this binary to the newest release.
     Update(Update),
     /// Install what this machine is missing to run Dray, then start the server.
@@ -73,6 +78,9 @@ enum Command {
     /// Keep the Dray server running in the background. Linux only.
     #[command(subcommand)]
     Service(setup::ServiceCommand),
+    /// Give this machine's server a public address through a Cloudflare quick
+    /// tunnel, in the foreground. `dray service tunnel on` keeps one running.
+    Tunnel(setup::Tunnel),
     /// Manage the Claude Code skill that documents this CLI.
     #[command(subcommand)]
     Skill(SkillCommand),
@@ -298,11 +306,13 @@ fn run() -> Result<(), String> {
         Command::Draft(command) => draft::run(command),
         Command::Browser(args) => browser(args),
         Command::Share(args) => share(args),
+        Command::Server(command) => server::run(command),
         Command::Update(args) => update(args),
         Command::Skill(SkillCommand::Install) => install_skill(),
         Command::Setup(args) => setup::setup(args),
         Command::Serve(args) => setup::serve(args),
         Command::Service(command) => setup::service(command),
+        Command::Tunnel(args) => setup::tunnel(args),
     }
 }
 

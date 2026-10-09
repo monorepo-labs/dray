@@ -1,9 +1,9 @@
 import { XGlyph } from "@/components/XGlyph";
 import { COMPANY, FEEDBACK } from "@/lib/links";
 
-/// Who makes it, and where to find the person who does. One link only: the
-/// nav carries the repo, and the licence sits under the download button where
-/// it answers "what am I installing".
+/// Who makes it, where to find the person who does, and the docs. The nav
+/// carries the repo, and the licence sits under the download button where it
+/// answers "what am I installing".
 ///
 /// It pointed at the product's own account and points at the maker's instead —
 /// the same one the nav's "Feedback" link opens. A second copy of one address
@@ -23,15 +23,20 @@ export function Footer({ className }: { className?: string }) {
       <span>
         © {new Date().getFullYear()} {COMPANY}
       </span>
-      <a
-        href={FEEDBACK}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Yogesh on X"
-        className="transition-colors hover:text-foreground"
-      >
-        <XGlyph className="size-3" />
-      </a>
+      <div className="flex items-center gap-4">
+        <a href="/docs" className="transition-colors hover:text-foreground">
+          Docs
+        </a>
+        <a
+          href={FEEDBACK}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Yogesh on X"
+          className="transition-colors hover:text-foreground"
+        >
+          <XGlyph className="size-3" />
+        </a>
+      </div>
     </footer>
   );
 }

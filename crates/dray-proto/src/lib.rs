@@ -34,8 +34,8 @@ use std::path::PathBuf;
 /// runs the cure that applies rather than the one that doesn't.
 /// v7 added the draft requests, which an older app fails to parse — refused by
 /// version instead, so the answer names which half to update. v8 added
-/// `share`, for the same reason.
-pub const PROTOCOL_VERSION: u32 = 8;
+/// `share`, for the same reason, and v9 the server requests.
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// The oldest envelope the app still answers. Rises only when a shape is
 /// *renamed*, never for an addition: v4 renamed `LinkIssues.identifiers` to
@@ -98,6 +98,11 @@ impl Request {
             | Request::RemoveDraft(_)
             | Request::StartDraft(_) => 7,
             Request::Share(_) => 8,
+            Request::AddServer(_)
+            | Request::ListServers
+            | Request::RemoveServer(_)
+            | Request::RenameServer(_)
+            | Request::SetServerOn(_) => 9,
         }
     }
 }
@@ -115,6 +120,64 @@ pub enum Request {
     RemoveDraft(DraftId),
     StartDraft(StartDraft),
     Share(ShareRequest),
+    AddServer(AddServer),
+    ListServers,
+    RemoveServer(ServerRef),
+    RenameServer(RenameServer),
+    SetServerOn(SetServerOn),
+}
+
+/// An empty `new_name` puts back the default, its host.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameServer {
+    pub name: String,
+    pub new_name: String,
+}
+
+/// Off keeps the row and its token; the app stops connecting. On, for a
+/// server already on, is Try again, and answers once the attempt settles.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetServerOn {
+    pub name: String,
+    pub on: bool,
+}
+
+/// A server for the app's list, the same record Settings → Servers writes.
+///
+/// `token` is what tells the two kinds apart: present, `address` is a URL and
+/// the token admits it; absent, `address` is the line the reader logs in with
+/// and the token is read over that login, so none crosses this socket.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddServer {
+    pub name: String,
+    pub address: String,
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+/// A server by its name, or by its id where two share a name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerRef {
+    pub name: String,
+}
+
+/// What the CLI is told about a server. No token, ever.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerSummary {
+    pub id: String,
+    pub name: String,
+    /// `ssh user@host` or the URL.
+    pub address: String,
+    /// `connected`, `connecting`, `disconnected` or `off`.
+    pub status: String,
+    /// Why the last connect failed.
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// A public link to one of a session's dev servers, made where the server
@@ -556,6 +619,10 @@ pub enum Response {
     Browser { output: String, data: serde_json::Value },
     /// The session's live links after the change, whichever verb asked.
     Shared { shares: Vec<SharedPort> },
+    /// The server a verb acted on, as it stands after — or as it stood, for
+    /// one taken off the list.
+    Server { server: ServerSummary },
+    Servers { servers: Vec<ServerSummary> },
     Error { message: String },
 }
 
@@ -747,6 +814,34 @@ impl CloudflaredBuild {
     }
 }
 
+/// The port `dray-serve` listens on unless told otherwise, and so the one
+/// `dray tunnel` points cloudflared at.
+pub const SERVE_PORT: u16 = 7317;
+
+/// The file in the Dray directory holding the server's current tunnel
+/// address, written by `dray tunnel` on every start and removed on exit.
+pub const TUNNEL_URL_FILE: &str = "tunnel-url";
+
+/// A quick tunnel's address out of cloudflared's banner, which boxes it:
+/// `|  https://four-random-words.trycloudflare.com   |`.
+pub fn quick_tunnel_url(line: &str) -> Option<String> {
+    let start = line.find("https://")?;
+    let url: String = line[start..].chars().take_while(|c| !c.is_whitespace() && *c != '|').collect();
+    url.ends_with(".trycloudflare.com").then_some(url)
+}
+
+/// cloudflared prints the address a moment before the tunnel is registered,
+/// and is said before the name exists in DNS too: measured, 1.6–2.6s after
+/// this line, and a resolver asked in that gap caches the miss for the zone's
+/// 60s. So an address is handed out only once this line has been said and
+/// [`DOH_QUERY`] answers for the name.
+pub const TUNNEL_REGISTERED: &str = "Registered tunnel connection";
+
+/// Cloudflare's DNS-over-HTTPS; append the host. Polled every 0.5s through
+/// the gap, it answered as soon as the name existed rather than caching the
+/// miss. JSON, where `"Status":0` means the name resolves.
+pub const DOH_QUERY: &str = "https://1.1.1.1/dns-query?type=A&name=";
+
 /// How each package manager installs git, the first one found winning. The
 /// app shows the same line to copy where `dray setup` would print it, so the
 /// two are one table.
@@ -762,6 +857,18 @@ pub const GIT_INSTALLS: [(&str, &str); 6] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_address_out_of_the_banner() {
+        let banner = "2026-10-07T05:26:15Z INF |  https://eligible-recipients-expanded-pepper.trycloudflare.com                             |";
+        assert_eq!(
+            quick_tunnel_url(banner).as_deref(),
+            Some("https://eligible-recipients-expanded-pepper.trycloudflare.com")
+        );
+        // The terms line names Cloudflare's own site, which is no address.
+        assert_eq!(quick_tunnel_url("INF ... (https://www.cloudflare.com/website-terms/), and"), None);
+        assert_eq!(quick_tunnel_url("INF Requesting new quick Tunnel on trycloudflare.com..."), None);
+    }
 
     /// Deliberately a v1 line, and that is half the point: an envelope from a
     /// version we no longer speak still has to *parse*, or the app answers
@@ -816,9 +923,29 @@ mod tests {
         }
         let share = Request::Share(ShareRequest { session_id: "s".into(), action: ShareAction::List });
         assert_eq!(Envelope::new(share.clone()).v, 8);
-        let newest = old.iter().chain(&drafts).chain([&share]).map(Request::version).max();
+        let servers = [
+            Request::AddServer(Default::default()),
+            Request::ListServers,
+            Request::RemoveServer(Default::default()),
+            Request::RenameServer(Default::default()),
+            Request::SetServerOn(Default::default()),
+        ];
+        for request in &servers {
+            assert_eq!(Envelope::new(request.clone()).v, 9, "{request:?}");
+        }
+        let newest = old.iter().chain(&drafts).chain([&share]).chain(&servers).map(Request::version).max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));
         assert!(OLDEST_SPOKEN <= PROTOCOL_VERSION);
+    }
+
+    /// A unit variant inside a flattened, internally tagged enum: the one shape
+    /// no other request exercises.
+    #[test]
+    fn list_servers_round_trips() {
+        let line = encode_line(&Envelope::new(Request::ListServers)).unwrap();
+        assert_eq!(line.trim(), r#"{"v":9,"cmd":"list_servers"}"#);
+        let back: Envelope = serde_json::from_str(&line).unwrap();
+        assert!(matches!(back.request, Request::ListServers));
     }
 
     #[test]

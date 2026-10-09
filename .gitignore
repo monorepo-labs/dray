@@ -22,7 +22,8 @@ dist-ssr
 *.sln
 *.sw?
 
-docs
+# The root's private runbooks only; apps/docs is the public docs site.
+/docs
 # Staged from vscode-material-icons on every Vite start — see vite.config.ts
 apps/desktop/public/file-icons
 

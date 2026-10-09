@@ -1,6 +1,6 @@
 //! `dray-serve [--port N]`: Dray's core with no window. See SERVE-PLAN.md.
 
-const DEFAULT_PORT: u16 = 7317;
+const DEFAULT_PORT: u16 = dray_proto::SERVE_PORT;
 
 #[tokio::main]
 async fn main() {

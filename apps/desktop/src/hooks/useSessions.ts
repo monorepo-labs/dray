@@ -861,6 +861,7 @@ const handleSendMsg = async (
       archived: false,
       pinned: false,
       hidden: false,
+      aside: false,
     };
     upsertSession(shell);
   } else {
@@ -948,7 +949,7 @@ const handleSendMsg = async (
       setSessionIndexItems((prev) =>
         prev.map((i) =>
           i.sessionId === sessionId
-            ? { ...i, model: modelId, effort, permissionMode, fast, modified: new Date().toISOString() }
+            ? { ...i, model: modelId, effort, permissionMode, fast, aside: false, modified: new Date().toISOString() }
             : i,
         ),
       );
@@ -1364,7 +1365,7 @@ const detachSession = async (sessionId: string) => {
 /// settle that did not happen — describes a move the index never made.
 const setSessionFlags = async (
   sessionId: string,
-  flags: { archived?: boolean; pinned?: boolean; hidden?: boolean },
+  flags: { archived?: boolean; pinned?: boolean; hidden?: boolean; aside?: boolean },
 ): Promise<boolean> => {
   const fail = failUnlessLeft();
   try {
@@ -1373,6 +1374,7 @@ const setSessionFlags = async (
       archived: flags.archived ?? null,
       pinned: flags.pinned ?? null,
       hidden: flags.hidden ?? null,
+      aside: flags.aside ?? null,
     });
     // Null is the backend finding no such session, which is a write that did
     // not happen like any other.
@@ -1966,6 +1968,18 @@ useEffect(() => {
               }));
             }
 
+            // Any message brings a set-aside session back — a relayed one too,
+            // which no send here saw. The backend clears the index at the send
+            // and again at a queued one's delivery, so the two agree.
+            if (agentEvent.payload.type === "user_message") {
+              const modified = new Date().toISOString();
+              setSessionIndexItems((prev) =>
+                prev.map((i) =>
+                  i.sessionId === agentEvent.sessionId ? { ...i, aside: false, modified } : i,
+                ),
+              );
+            }
+
             // A thinking block reports its size on `usage_update` and nowhere
             // else. Only a non-null reading counts: the same payload carries
             // every other usage field, so a turn-level update would otherwise
@@ -2385,6 +2399,12 @@ const setNeighbours = (ids: string[]) => {
   for (const id of ids) {
     if (statusBySessionRef.current[id] !== "in_progress") void ensureLoaded(id, false);
   }
+};
+/// Lets the warmed neighbours go now rather than at the next sweep. One the
+/// reader viewed recently stays, since the sweep's own clock still holds it.
+const dropNeighbours = () => {
+  neighboursRef.current = new Set();
+  evictSessionsRef.current();
 };
 
 /// The turns before what a transcript holds, prepended in log order — never
@@ -2907,6 +2927,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
 
 }

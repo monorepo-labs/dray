@@ -1,6 +1,8 @@
 import { Cog6ToothIcon } from "@heroicons/react/16/solid";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Archive,
+  ArchiveRestore,
   Check,
   CheckCheck,
   ChevronDown,
@@ -119,14 +121,19 @@ type SidebarProps = {
   /// deliberately leaves alone.
   issuesOpen: boolean;
   /// Saved tasks not yet started, scoped by the caller like `items`. Drawn in
-  /// the active list only, as the first run under their project.
+  /// the drafts view alone, grouped under their projects.
   drafts: Draft[];
+  /// The list shows drafts in place of sessions — a view of its own, like
+  /// settled, rather than rows mixed into the live list.
+  draftsShown: boolean;
+  onToggleDrafts: () => void;
   /// The draft the new-task composer is showing, lit like a selected row.
   openDraftId: string | null;
   onOpenDraft: (id: string) => void;
+  onDeleteDraft: (id: string) => void;
   onSetFlags: (
     sessionId: string,
-    flags: { archived?: boolean; pinned?: boolean },
+    flags: { archived?: boolean; pinned?: boolean; aside?: boolean },
   ) => Promise<void>;
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
@@ -287,10 +294,60 @@ type SessionGroup =
 /// saying so on its own row — the working indicator sits where the timestamp
 /// would be — and a run of its own moved a row twice for one piece of work,
 /// out on send and back on the turn ending.
-type SessionState = "asking" | "completed" | "idle";
+/// `aside` is the reader's own "not now", and it sits under everything else.
+type SessionState = "asking" | "completed" | "idle" | "aside";
 
 /// Strongest first, which is also the order the runs are drawn in.
-const SESSION_STATES: SessionState[] = ["asking", "completed", "idle"];
+const SESSION_STATES: SessionState[] = ["asking", "completed", "idle", "aside"];
+
+/// Three untouched days set a session aside without being asked.
+const ASIDE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
+
+/// Untouched long enough to count as set aside. Unsetting restamps
+/// `modified`, which is what lets an old one come back.
+// ponytail: read against the clock at render, so a row crosses the line on
+// the next re-render rather than on the minute; a timer if that ever shows.
+const stale = (item: SessionIndexItem) =>
+  Date.now() - Date.parse(item.modified) > ASIDE_AFTER_MS;
+
+/// The rows drawn in their project's aside run, and everything else.
+///
+/// Judged per row, so a child can go on its own. A row the reader set aside
+/// goes whatever its children are doing — the settle rule, where a parent
+/// leaves and its children stay. A stale row stays while anything below it is
+/// still moving, since that work hangs off it.
+function splitAside(
+  items: SessionIndexItem[],
+): [aside: SessionIndexItem[], rest: SessionIndexItem[]] {
+  const kids = new Map<string, SessionIndexItem[]>();
+  for (const item of items) {
+    if (!item.parentSessionId) continue;
+    const held = kids.get(item.parentSessionId);
+    if (held) held.push(item);
+    else kids.set(item.parentSessionId, [item]);
+  }
+
+  // Whether anything in this subtree is fresh and not set aside. Asked past a
+  // set-aside child, so a grandchild still working keeps its grandparent up.
+  // Seeded false before the children are asked, so a cycle in the index
+  // answers rather than recursing forever.
+  const memo = new Map<string, boolean>();
+  const moving = (item: SessionIndexItem): boolean => {
+    const known = memo.get(item.sessionId);
+    if (known !== undefined) return known;
+    memo.set(item.sessionId, false);
+    const v =
+      (!item.aside && !stale(item)) ||
+      (kids.get(item.sessionId) ?? []).some(moving);
+    memo.set(item.sessionId, v);
+    return v;
+  };
+
+  const aside: SessionIndexItem[] = [];
+  const rest: SessionIndexItem[] = [];
+  for (const item of items) (!item.aside && moving(item) ? rest : aside).push(item);
+  return [aside, rest];
+}
 
 /// How many rows a project needs before it is split at all.
 const STATE_SPLIT_MIN = 3;
@@ -340,6 +397,8 @@ function splitPinned(
   const byId = new Map(items.map((i) => [i.sessionId, i]));
 
   const underPin = (item: SessionIndexItem) => {
+    // The reader's own "not now" outranks a pin it only inherits.
+    if (item.aside) return false;
     // Guarded like the walk itself: a cycle in the index has to cost a strange
     // grouping, never a hung sidebar.
     const seen = new Set<string>();
@@ -427,13 +486,21 @@ export function sessionGroups(
   // under their own projects like any other row.
   const [pinned, rest] = settled ? [[], ungrouped] : splitPinned(ungrouped);
 
+  // The settled list is a history, so nothing in it is set aside. Split
+  // before the walk, so an aside child whose parent stayed is drawn as a root
+  // in its own run rather than reaching for a rail that isn't there.
+  const [asideItems, activeItems] = live ? splitAside(rest) : [[], rest];
+
   // Every subtree the walk emits opens with its own root, so a depth-0 row is
   // where one nest ends and the next begins.
-  const nests: SessionListRow[][] = [];
-  for (const row of sessionRows(rest)) {
-    if (row.depth === 0 || nests.length === 0) nests.push([]);
-    nests[nests.length - 1].push(row);
-  }
+  const nestsOf = (list: SessionIndexItem[]) => {
+    const nests: SessionListRow[][] = [];
+    for (const row of sessionRows(list)) {
+      if (row.depth === 0 || nests.length === 0) nests.push([]);
+      nests[nests.length - 1].push(row);
+    }
+    return nests;
+  };
 
   // A nest takes the strongest state anything in it holds, so a child blocked on
   // a question carries its parent up with it. Ranking on the root alone would
@@ -447,18 +514,27 @@ export function sessionGroups(
     ];
 
   // First appearance, which is what an unattached project is placed by.
-  const byPath = new Map<string, SessionListRow[][]>();
-  for (const nest of nests) {
-    const path = nest[0].item.projectPath;
-    const held = byPath.get(path);
-    if (held) held.push(nest);
-    else byPath.set(path, [nest]);
-  }
+  const byPath = new Map<string, { held: SessionListRow[][]; aside: SessionListRow[][] }>();
+  const file = (nests: SessionListRow[][], side: "held" | "aside") => {
+    for (const nest of nests) {
+      const path = nest[0].item.projectPath;
+      let runs = byPath.get(path);
+      if (!runs) byPath.set(path, (runs = { held: [], aside: [] }));
+      runs[side].push(nest);
+    }
+  };
+  file(nestsOf(activeItems), "held");
+  file(nestsOf(asideItems), "aside");
 
   type ProjectGroup = Extract<SessionGroup, { kind: "project" }>;
   const groups: ProjectGroup[] = [];
 
-  for (const [projectPath, held] of byPath) {
+  for (const [projectPath, { held, aside }] of byPath) {
+    // Its own run whatever the project's size, so it always sits at the end.
+    if (aside.length) {
+      groups.push({ kind: "project", projectPath, state: "aside", rows: aside.flat() });
+    }
+    if (!held.length) continue;
     const rows = held.reduce((n, nest) => n + nest.length, 0);
 
     // A short project draws as one run. The split earns its break by making a
@@ -938,6 +1014,9 @@ export default function Sidebar({
   drafts,
   openDraftId,
   onOpenDraft,
+  onDeleteDraft,
+  draftsShown,
+  onToggleDrafts,
 }: SidebarProps) {
   // `SIDEBAR_MIN` is `w-60`, the width this opened at before it could be dragged — and
   // its floor as well as its default: narrower, the rows' timestamps and marks
@@ -1033,10 +1112,9 @@ export default function Sidebar({
     return out;
   }, [groups, archivedShown, settledLimit, rowCount]);
   const more = archivedShown && rowCount > settledLimit;
-  // The settled list is a history, and a draft has not started.
   const runs = useMemo(
-    () => (archivedShown ? drawn : placeDrafts(drawn, drafts, projects)),
-    [archivedShown, drawn, drafts, projects],
+    () => (draftsShown ? placeDrafts([], drafts, projects) : drawn),
+    [draftsShown, drawn, drafts, projects],
   );
 
   // A window the list does not overflow fires no scroll event, so scrolling
@@ -1095,7 +1173,15 @@ export default function Sidebar({
   // and saying "No tasks yet" over a filter reads as data loss. The query leads
   // where there is one: it is the filter the reader is holding in their hands,
   // where the project and the settled split were already on screen.
-  const emptyText = search.trim()
+  const emptyText = draftsShown
+    ? search.trim()
+      ? `No drafts matching "${search.trim()}".`
+      : projectFilter
+        ? "No drafts in this project."
+        : space
+          ? `No drafts in ${space}.`
+          : "No drafts yet."
+    : search.trim()
     ? `No tasks matching "${search.trim()}".`
     : projectFilter
       ? archivedShown
@@ -1227,6 +1313,27 @@ export default function Sidebar({
         />
 
         <div className="flex items-center gap-0.5">
+          {/* Same bargain as settled beside it: the glyph names where the press
+              goes, so it swaps to `Undo2` while the drafts are what is shown.
+              A dashed circle, Linear's backlog shape in lucide's stroke: not yet on
+              anybody's list is what a draft is. */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={draftsShown ? "Show active" : "Show drafts"}
+                onClick={onToggleDrafts}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                {draftsShown ? <Undo2 /> : <CircleDashed />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {draftsShown ? "Show active" : "Show drafts"}
+            </TooltipContent>
+          </Tooltip>
+
           {/* The icon names the destination, not the current view: `CheckCheck`
               (the row control's single `Check`, doubled — every settled one) goes
               to the settled list, `Undo2` comes back. A pressed state on one icon
@@ -1344,6 +1451,7 @@ export default function Sidebar({
                     draft={draft}
                     active={draft.id === openDraftId}
                     onOpen={onOpenDraft}
+                    onDelete={onDeleteDraft}
                   />
                 ))}
 
@@ -1365,6 +1473,12 @@ export default function Sidebar({
                     // A row on a server that dropped stays listed — its agent
                     // is still running there — and fades with its heading.
                     faded={(archivedShown && !isToday(item.modified)) || offline(item.cwd)}
+                    // The flag too, for a row drawn in a split group or under a
+                    // pinned ancestor, where no aside run holds it.
+                    aside={
+                      !archivedShown &&
+                      ((group.kind === "project" && group.state === "aside") || item.aside)
+                    }
                     // Nothing refreshes marks over here: the archived view asks for
                     // no repos, so its rows draw from a cache nothing will update.
                     // A stale glyph is the accepted trade; a stale *spinner* is not,
@@ -1405,7 +1519,7 @@ export default function Sidebar({
             Pinning it to the sidebar's bottom edge would keep it on screen
             forever, which is a permanent line of chrome for a one-time hint.
             Hidden with only one row: there's nothing to jump or switch to. */}
-        {rowCount > 1 && !more && (
+        {!draftsShown && rowCount > 1 && !more && (
           <ShortcutHint
             selected={selectedSessionId !== null}
             grouped={!archivedShown && splits.length > 0}
@@ -1863,9 +1977,12 @@ const FORKS = [
 function RowMenu({
   onFork,
   forkDisabled,
+  aside,
+  onSetAside,
   onDelete,
   onDetach,
   onMarkUnread,
+  pin,
   children,
 }: {
   onFork: (worktree: boolean) => void;
@@ -1884,6 +2001,11 @@ function RowMenu({
   /// row with no Completed run to rejoin, and one already unread or mid-turn
   /// has nothing to take back.
   onMarkUnread?: () => void;
+  pin?: { pinned: boolean; toggle: () => void };
+  /// Whether the row reads as set aside, and so which way the item turns.
+  /// Absent where the item would move nothing.
+  aside?: boolean;
+  onSetAside: (aside: boolean) => void;
   children: React.ReactNode;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -1987,6 +2109,20 @@ function RowMenu({
               </ContextMenuSubContent>
             </ContextMenuSub>
 
+            {pin && (
+              <ContextMenuItem className="text-ui" onSelect={pin.toggle}>
+                <Pin />
+                {pin.pinned ? "Unpin" : "Pin"}
+              </ContextMenuItem>
+            )}
+
+            {aside !== undefined && (
+              <ContextMenuItem className="text-ui" onSelect={() => onSetAside(!aside)}>
+                {aside ? <ArchiveRestore /> : <Archive />}
+                {aside ? "Bring back" : "Set aside"}
+              </ContextMenuItem>
+            )}
+
             {onMarkUnread && (
               <ContextMenuItem className="text-ui" onSelect={onMarkUnread}>
                 <Circle />
@@ -2032,50 +2168,86 @@ const ELBOW = 10;
 /// the click. Long enough that sweeping down the list reads nothing.
 const PREFETCH_HOVER_MS = 100;
 
-/// A saved task, drawn as a session row with its created time. No label says
-/// "draft": the run's own break sets it apart, and its title is the reader's
-/// raw text where a session's is a generated one. No rail and no hover
-/// controls, since nothing has run. No delete either: clearing its text and
-/// leaving is how a draft goes.
+/// A saved task, drawn as a session row with its created time. No mark says
+/// "draft": the drafts view is the only place one is drawn. No rail and no
+/// hover controls, since nothing has run. Delete sits on right-click, asking
+/// first the way a session row's does, since the text is the reader's own.
 function DraftRow({
   draft,
   active,
   onOpen,
+  onDelete,
 }: {
   draft: Draft;
   active: boolean;
   onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (active) ref.current?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
   return (
-    <div
-      ref={ref}
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpen(draft.id)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen(draft.id);
-        }
-      }}
-      className={cn(
-        "relative flex min-h-7 w-full cursor-pointer items-center rounded-md pr-0.5 pl-2 transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-        active
-          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
-      )}
-    >
-      <span className="min-w-0 flex-1 truncate text-ui">{draftTitle(draft)}</span>
-      <span className="shrink-0 pl-2 text-ui text-muted-foreground">
-        {relativeTime(draft.created)}
-      </span>
-    </div>
+    <ContextMenu onOpenChange={(open) => open && setConfirming(false)}>
+      <ContextMenuTrigger asChild>
+      <div
+        ref={ref}
+        role="button"
+        tabIndex={0}
+        onClick={() => onOpen(draft.id)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen(draft.id);
+          }
+        }}
+        className={cn(
+          "relative flex min-h-7 w-full cursor-pointer items-center rounded-md pr-0.5 pl-2 transition-colors select-none",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+          "data-[state=open]:bg-sidebar-accent/50",
+          active
+            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+            : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate text-ui">{draftTitle(draft)}</span>
+        <span className="shrink-0 pl-2 text-ui text-muted-foreground">
+          {relativeTime(draft.created)}
+        </span>
+      </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-40">
+        {confirming ? (
+          <>
+            <p className="px-1.5 py-1 text-ui text-muted-foreground">Are you sure?</p>
+            <div className="mt-1 flex gap-1">
+              <ContextMenuItem className="flex-1 justify-center text-ui">Cancel</ContextMenuItem>
+              <ContextMenuItem
+                variant="destructive"
+                onSelect={() => onDelete(draft.id)}
+                className="flex-1 justify-center bg-destructive/10 text-ui"
+              >
+                Delete
+              </ContextMenuItem>
+            </div>
+          </>
+        ) : (
+          <ContextMenuItem
+            variant="destructive"
+            className="text-ui"
+            onSelect={(e) => {
+              e.preventDefault();
+              setConfirming(true);
+            }}
+          >
+            <Trash2 />
+            Delete
+          </ContextMenuItem>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -2089,6 +2261,7 @@ function SessionRow({
   pr,
   active,
   faded = false,
+  aside = false,
   marksLive = true,
   onSelect,
   onPrefetch,
@@ -2115,6 +2288,9 @@ function SessionRow({
   pr?: PrMark;
   active: boolean;
   faded?: boolean;
+  /// Drawn in its project's set-aside run, or flagged aside itself. Faded
+  /// further than `faded`, since the reader asked for it out of the way.
+  aside?: boolean;
   /// Something is still refreshing this row's mark. False in the archived view,
   /// which asks for no repos — see the call site.
   marksLive?: boolean;
@@ -2137,7 +2313,7 @@ function SessionRow({
   inheritsPin?: boolean;
   onSetFlags: (
     sessionId: string,
-    flags: { archived?: boolean; pinned?: boolean },
+    flags: { archived?: boolean; pinned?: boolean; aside?: boolean },
   ) => Promise<void>;
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
@@ -2167,6 +2343,12 @@ function SessionRow({
       forkDisabled={status === "in_progress"}
       onDelete={() => void onDelete(item.sessionId)}
       onDetach={nested ? () => void onDetach(item.sessionId) : undefined}
+      // Never on a settled row, whose list draws no aside run.
+      aside={item.archived ? undefined : aside}
+      onSetAside={(v) =>
+        // Setting aside unpins, or the row would stay up in Pinned.
+        void onSetFlags(item.sessionId, v ? { aside: true, pinned: false } : { aside: false })
+      }
       // Only a read, finished session can take the mark back: a settled one
       // has left the live list the Completed run lives in, and anything but
       // `idle` is either already unread or still working.
@@ -2183,6 +2365,22 @@ function SessionRow({
         status === "idle" && !item.archived && !item.forkFrom
           ? () => onMarkUnread(item.sessionId)
           : undefined
+      }
+      // Absent on a row that follows a pinned ancestor: it sits in Pinned
+      // whichever way its own flag reads, so the verb would move nothing and
+      // leave a flag behind. Absent on a settled row too, where the list draws
+      // no Pinned group.
+      pin={
+        inheritsPin || item.archived
+          ? undefined
+          : {
+              pinned: !!item.pinned,
+              toggle: () =>
+                onSetFlags(
+                  item.sessionId,
+                  item.aside && !item.pinned ? { pinned: true, aside: false } : { pinned: !item.pinned },
+                ),
+            }
       }
     >
       {/* A button can't nest a button, so the row is a div with a click handler
@@ -2224,9 +2422,10 @@ function SessionRow({
           // moment the row is reached for — the fade sorts the list at a glance
           // and must not make an old row harder to read once it's the one being
           // used.
-          faded &&
+          (faded || aside) &&
             !active &&
-            "opacity-50 hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100",
+            "hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100",
+          !active && (aside ? "opacity-30" : faded && "opacity-50"),
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
           // `data-state` is the trigger's, set on this element by
           // `ContextMenuTrigger asChild` — an open menu holds the row lit, since
@@ -2367,30 +2566,23 @@ function SessionRow({
 
         <span className="min-w-0 flex-1 truncate text-ui">{item.title}</span>
 
-        {/* One slot for both, sized by the buttons and always holding that width
-            — so a long title truncates against it either way and nothing reflows
-            on hover. The two children stack via `absolute` on the date and
+        {/* One grid cell holding both the timestamp and the hover button, so
+            the slot is as wide as the wider of the two and nothing reflows on
+            hover — a long title truncates against it either way. The two
             crossfade on `opacity` over the same duration, so they never both
             read at once; `visibility` would flip instantly while the button's
-            inherited `transition-all` still crossfades, which is what read as an
+            inherited `transition-all` still crossfades, which read as an
             overlap. */}
-        {/* The min-width is what the *date* needs, not the orb: the slot is
-            otherwise sized by the buttons, and a row drawing one button — or
-            none, which a row that inherits its pin while mid-turn does — leaves
-            the absolutely-drawn date shrink-to-fit inside 20-odd pixels, where
-            "Aug 18" wraps onto two lines. In `em` so it follows the interface
-            font size the reader picks, and wide enough for a month-and-day. */}
-        <div className="relative flex min-w-[4em] shrink-0 items-center justify-end self-stretch pl-2 text-ui">
+        <div className="grid shrink-0 items-center justify-items-end self-stretch pl-2 text-ui">
           {/* `pointer-events-none` unconditionally: it's never a target, and a
-              faded-but-present element still hit-tests — stacked on `right-0` it
-              would otherwise swallow the cursor over the last button, which reads
-              as that one button being dead while its neighbour works. */}
+              faded-but-present element still hit-tests — stacked over the button
+              it would otherwise swallow the cursor, which reads as a dead
+              button. */}
           <span
             className={cn(
-              "pointer-events-none absolute right-0 flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150",
+              "pointer-events-none col-start-1 row-start-1 flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150",
               // Only the timestamp gives way to the buttons. Something in
-              // flight is still in flight under the cursor, and on a mid-turn
-              // row with an inherited pin there are no buttons to give way to.
+              // flight is still in flight under the cursor.
               !live && "group-hover:opacity-0 group-data-[state=open]:opacity-0",
             )}
           >
@@ -2436,32 +2628,11 @@ function SessionRow({
               `pointer-events-none` keeps the invisible buttons unclickable. */}
           <div
             className={cn(
-              "pointer-events-none relative flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-data-[state=open]:pointer-events-auto group-data-[state=open]:opacity-100",
+              "pointer-events-none col-start-1 row-start-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-data-[state=open]:pointer-events-auto group-data-[state=open]:opacity-100",
               // Beside the orb's 20px box rather than over it.
               live && "mr-6",
             )}
           >
-            {/* Absent on a row that follows a pinned ancestor rather than
-                carrying the pin itself, the way 'Detach from parent' is absent
-                where there is no parent drawn: the row sits in the Pinned group
-                whichever way its own flag reads, so both verbs would move
-                nothing — and Pin would quietly leave a flag behind to surprise
-                the reader once the ancestor is unpinned.
-
-                Absent on a settled row for the same reason the settled list
-                draws no Pinned group: the verb moves nothing there. Unsettle
-                is next to it, and a pin the reader wants back is one press
-                away after that. */}
-            {!inheritsPin && !item.archived && (
-              <RowAction
-                label={item.pinned ? "Unpin" : "Pin"}
-                active={item.pinned}
-                onClick={() => onSetFlags(item.sessionId, { pinned: !item.pinned })}
-              >
-                <Pin />
-              </RowAction>
-            )}
-
             {/* No Settle while a turn is in flight: settling kills the child,
                 so the turn would die mid-work with nothing saying so. Unsettle
                 stays, since a settled row has no turn. */}
