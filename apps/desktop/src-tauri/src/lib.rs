@@ -32,8 +32,9 @@ pub mod cef;
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 pub mod chromium;
 // `dray browser` on a server: a headless Chromium under the same verbs the
-// Mac's CEF answers. See HEADLESS-PLAN.md.
-#[cfg(all(feature = "serve", not(feature = "cef")))]
+// Mac's CEF answers. In the desktop build too, since that binary is also the
+// Mac's background server. See HEADLESS-PLAN.md.
+#[cfg(any(feature = "serve", feature = "desktop"))]
 #[path = "headless/headless.rs"]
 pub mod headless;
 // Without a browser too, for the same reason: its tests need no Chromium.
@@ -60,6 +61,8 @@ pub mod drafts;
 pub mod projects;
 #[cfg(feature = "desktop")]
 pub mod quit;
+#[cfg(feature = "desktop")]
+pub mod launchd;
 // The desktop app serves too, behind Remote access (remote_access.rs).
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod serve;
@@ -90,6 +93,15 @@ pub fn is_dev() -> bool {
     #[cfg(not(feature = "desktop"))]
     let dev = false;
     dev
+}
+
+pub(crate) static SERVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether this process is a server — `dray-serve`, or the app's binary run
+/// as the Mac's background server — rather than the app with a window. One
+/// binary is both on a Mac, so this is a reading at runtime, not a feature.
+pub fn is_server() -> bool {
+    SERVER.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Spawns onto the async runtime from anywhere, including a thread that is
@@ -691,42 +703,25 @@ pub fn run() {
             // window already exists here for it to parent a view into.
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::init(app.handle());
-            // A persisted `in_progress` can't be true anymore — no child
-            // survived the restart. Spawned, not awaited: the reset needs no
-            // window, and the frontend's first fetch lands well after it.
-            tauri::async_runtime::spawn(async {
-                if let Err(e) = store::reset_in_progress_sessions().await {
-                    eprintln!("[status reset err] {e}");
-                }
-                // Sessions whose worktree was deleted before the index had a
-                // field for it, which is what their PR tab reads to know its
-                // branch outranks the shared checkout's HEAD.
-                if let Err(e) = store::backfill_removed_worktrees().await {
-                    eprintln!("[worktree backfill err] {e}");
-                }
-                // Dictations kept past a failure. Pruning on write alone left
-                // the last one on disk forever, since nothing else sweeps them
-                // and a reader who gives up after one failure writes no more.
-                transcription::recordings::prune().await;
-            });
+            // Dictations kept past a failure. Pruning on write alone left the
+            // last one on disk forever, since nothing else sweeps them and a
+            // reader who gives up after one failure writes no more.
+            tauri::async_runtime::spawn(transcription::recordings::prune());
 
             tauri::async_runtime::spawn(updater::sync_cli());
 
-            // Orchestration is a side channel: a socket that won't bind must
-            // cost the feature, never the app. Logged and dropped for that
-            // reason — there is nothing the reader could act on either.
-            let handle = Sink::from(app.handle());
+            // Sessions live in the background server launchd runs from this
+            // binary, which owns the data, the orchestration socket and
+            // Remote access. The app is its client, through the same
+            // connections remote servers use — a dead one costs its own row.
+            // See MAC-SERVER-PLAN.md.
+            let sink = Sink::from(app.handle());
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = orchestration::serve(handle).await {
-                    eprintln!("[orchestration err] {e:#}");
+                if let Err(e) = launchd::ensure().await {
+                    eprintln!("[launchd err] {e:#}");
                 }
+                servers::start(sink).await;
             });
-
-            // Remote servers connect in the background; a dead one costs its
-            // own row and nothing else.
-            tauri::async_runtime::spawn(servers::start(Sink::from(app.handle())));
-            // Serving this Mac, where the reader left Remote access on.
-            tauri::async_runtime::spawn(remote_access::start(Sink::from(app.handle())));
 
             // Returns immediately: consent is read, and the id minted, inside
             // the task `track` spawns — so nothing on screen waits on a file
@@ -769,7 +764,13 @@ pub fn run() {
             });
         })
         .invoke_handler(tauri::generate_handler![
+            // The app's own commands alone: what needs this Mac's screen, and
+            // the connections to servers. Every core command goes to the
+            // background server through `server_invoke`; `transport.ts`
+            // lists these names again to tell the two apart, and a test holds
+            // the two lists together.
             servers::list_servers,
+            servers::local_server,
             servers::add_server,
             servers::remove_server,
             servers::reconnect_servers,
@@ -779,21 +780,15 @@ pub fn run() {
             servers::set_server_on,
             servers::rename_server,
             servers::set_server_address,
-            remote_access::get_remote_access,
-            remote_access::set_remote_access,
-            remote_access::remote_access_token,
             servers::trust_host_key,
             servers::survey_server,
             servers::install_on_server,
             servers::run_server_login,
             servers::run_gh_login,
-            send_msg,
-            attachments::read_attachments,
             attachments::paste_attachments,
-            list_models,
-            refresh_models,
-            set_fx_provider,
-            agent_availability,
+            // Here and not on the server: a video plays through this
+            // webview's asset protocol, which only this process can widen.
+            files::read_file,
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_open,
             #[cfg(all(feature = "cef", target_os = "macos"))]
@@ -822,92 +817,15 @@ pub fn run() {
             chromium::chromium_download,
             #[cfg(all(feature = "cef", target_os = "macos"))]
             chromium::chromium_remove,
-            local_servers::list_local_servers,
-            share::share_port,
-            share::stop_share,
-            share::share_ready,
-            settings::get_settings,
-            set_analytics_enabled,
-            analytics::analytics_identity,
-            track_feature,
-            analytics::track_active_day,
-            list_slash_commands,
-            files::warm_file_index,
-            files::search_files,
-            files::list_dir,
-            files::read_file,
-            store::list_session_index_items,
-            store::get_session_by_id,
-            store::get_session_page,
-            drafts::list_drafts,
-            drafts::save_draft,
-            drafts::delete_draft,
-            projects::list_projects,
-            projects::add_project,
-            projects::github_repos,
-            projects::clone_github_repo,
-            projects::remove_project,
-            projects::set_last_selected_project,
-            projects::move_project,
-            projects::set_project_space,
-            projects::retag_space,
-            git::list_branches,
-            git::checkout_branch,
-            git::changes_since,
-            git::file_change,
-            head_tree,
-            git::log_commits,
-            git::log_branch_commits,
-            work_status,
-            set_session_flags,
-            rename_session,
-            store::detach_session,
-            delete_session,
-            fork_session,
-            worktree_disposition,
-            session_index_item,
-            remove_session_worktree,
-            mark_session_read,
-            interrupt_session,
-            stop_task,
-            cancel_queued,
-            respond_permission,
-            answer_questions,
             notifications::notify_session,
             updater::check_update,
             updater::install_update,
-            issues::get_integrations,
-            issues::connect_linear,
-            issues::disconnect_linear,
-            issues::list_issues,
-            issues::get_issue,
-            issues::fetch_issue_asset,
-            issues::list_issue_filters,
-            issues::github_repo,
-            issues::unlink_issue,
-            issues::update_issue,
-            github::prs_for_branch,
-            github::pr_marks,
-            github::merge_pr,
-            github::delete_branch,
-            github::reopen_pr,
-            github::mark_pr_ready,
-            github::recheck_gh,
             quit::confirm_quit,
             quit::dismiss_quit,
-            docs::read_doc,
-            docs::save_doc,
-            docs::watch_docs,
             apps::list_open_apps,
             apps::open_in_app,
             apps::open_login_terminal,
-            accounts::agent_accounts,
-            accounts::agent_auth_options,
-            accounts::add_agent_account,
-            accounts::sign_out_agent,
             accounts::run_agent_login,
-            agent_updates::check_agent_updates,
-            agent_updates::update_agent,
             agent_updates::update_agent_in_terminal,
             transcription::transcription_status,
             transcription::download_transcription_model,
@@ -933,7 +851,6 @@ pub fn run() {
             // kill still gets past this — see `Known issues`.
             if matches!(event, tauri::RunEvent::Exit) {
                 transcription::audio::restore_other_audio();
-                remote_access::stop_on_exit();
                 // Tao ends the process with `process::exit`, which runs the C
                 // atexit chain — and ggml-metal's global device registry frees
                 // its Metal residency sets there, after the Metal runtime is

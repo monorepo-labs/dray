@@ -178,16 +178,43 @@ fn info(conn: &Conn) -> ServerInfo {
     }
 }
 
+/// "This Mac": the background server launchd runs from this app's own
+/// binary, held here like any remote one so the frontend reaches both the
+/// same way. Never saved and never on the Servers page's list. Its id is
+/// `transport.ts`'s `LOCAL`. See MAC-SERVER-PLAN.md.
+pub const LOCAL: &str = "local";
+
+/// The remote servers, in `servers.json` order.
 fn snapshot() -> Vec<ServerInfo> {
-    conns().iter().map(info).collect()
+    conns().iter().filter(|c| c.saved.id != LOCAL).map(info).collect()
 }
 
 /// Every change — status, add, remove — goes out as the whole list, so the
-/// frontend replaces rather than reconciles.
+/// frontend replaces rather than reconciles. This Mac rides its own event.
 fn announce() {
     if let Some(sink) = SINK.get() {
         let _ = sink.emit("servers_changed", snapshot());
+        let _ = sink.emit("local_server_changed", local_server());
     }
+}
+
+/// This Mac's server, as the remote ones are drawn.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn local_server() -> Option<ServerInfo> {
+    conns().iter().find(|c| c.saved.id == LOCAL).map(info)
+}
+
+/// Where this Mac's server is listening and its token, both read again each
+/// connect since a restart may pick a new port — and whether it runs a binary
+/// older than this one's, per the stamp it wrote under the port.
+async fn local_address() -> Result<(String, String, bool), String> {
+    let home = store::get_home_app_dir().await.map_err(|e| e.to_string())?;
+    let port_file = tokio::fs::read_to_string(home.join(crate::serve::PORT_FILE)).await.unwrap_or_default();
+    let mut lines = port_file.lines();
+    let port: u16 = lines.next().and_then(|p| p.trim().parse().ok()).ok_or("The server on this Mac is starting.")?;
+    let stale = crate::serve::exe_stamp().is_some_and(|now| lines.next().map(str::trim) != Some(now.as_str()));
+    let token = tokio::fs::read_to_string(home.join("serve-token")).await.map_err(|_| "The server on this Mac is starting.")?;
+    Ok((format!("ws://127.0.0.1:{port}"), token.trim().to_string(), stale))
 }
 
 async fn servers_path() -> anyhow::Result<std::path::PathBuf> {
@@ -196,7 +223,7 @@ async fn servers_path() -> anyhow::Result<std::path::PathBuf> {
 
 async fn save() -> Result<(), String> {
     let _guard = SAVE.lock().await;
-    let list: Vec<Saved> = conns().iter().map(|c| c.saved.clone()).collect();
+    let list: Vec<Saved> = conns().iter().filter(|c| c.saved.id != LOCAL).map(|c| c.saved.clone()).collect();
     let path = servers_path().await.map_err(|e| e.to_string())?;
     let body = serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?;
     store::write_atomic(&path, body).await.map_err(|e| format!("{e:#}"))
@@ -214,6 +241,15 @@ pub async fn start(sink: Sink) {
     };
     {
         let mut list = conns();
+        let this_mac = Saved {
+            id: LOCAL.into(),
+            name: "This Mac".into(),
+            url: String::new(),
+            ssh: None,
+            off: false,
+            unknown: Default::default(),
+        };
+        list.push(Conn::new(this_mac));
         list.extend(saved.into_iter().map(Conn::new));
     }
     announce();
@@ -243,11 +279,22 @@ type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStre
 
 /// Connects and says hello. Answers the admitted socket, or why not.
 async fn admit(url: &str, token: &str) -> Result<Socket, String> {
+    admit_with(url, json!({ "v": PROTOCOL, "token": token })).await
+}
+
+/// This Mac's own server, which may call back into the app: browser steps go
+/// to the app's Chromium where this build has one.
+async fn admit_as_host(url: &str, token: &str) -> Result<Socket, String> {
+    let browser = cfg!(all(feature = "cef", target_os = "macos"));
+    admit_with(url, json!({ "v": PROTOCOL, "token": token, "host": { "browser": browser } })).await
+}
+
+async fn admit_with(url: &str, hello: Value) -> Result<Socket, String> {
     let attempt = async {
         let (mut ws, _) = tokio_tungstenite::connect_async(url)
             .await
             .map_err(|e| format!("could not reach {url}: {e}"))?;
-        ws.send(Message::text(json!({ "v": PROTOCOL, "token": token }).to_string()))
+        ws.send(Message::text(hello.to_string()))
             .await
             .map_err(|e| e.to_string())?;
         loop {
@@ -310,6 +357,32 @@ async fn run(id: String) {
             return;
         };
         set(&id, ServerStatus::Connecting, saved.ssh.as_ref().map(|_| ssh::Stage::Connecting), None, None);
+        if id == LOCAL {
+            match local_address().await {
+                Ok((url, token, stale)) => match admit_as_host(&url, &token).await {
+                    Ok(mut ws) => {
+                        if stale {
+                            // The reply has no waiter and is dropped.
+                            let restart = json!({ "id": 0, "cmd": "restart_when_idle", "args": {} });
+                            let _ = ws.send(Message::text(restart.to_string())).await;
+                        }
+                        if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
+                            conn.live = Some((url, token));
+                        }
+                        serve(&id, ws).await;
+                        set_status(&id, ServerStatus::Disconnected, Some("The server on this Mac restarted.".into()));
+                    }
+                    Err(e) => set_status(&id, ServerStatus::Disconnected, Some(e)),
+                },
+                Err(e) => set_status(&id, ServerStatus::Disconnected, Some(e)),
+            }
+            // launchd brings it back within seconds; a dev build has to ask.
+            if crate::is_dev() {
+                let _ = crate::launchd::ensure().await;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            continue;
+        }
         let kept_token = crate::issues::credential(&credential_name(&id)).await.unwrap_or_default();
         // `admitted` is a socket the SSH fallback already opened, kept rather
         // than thrown away and opened a second time.
@@ -452,7 +525,20 @@ async fn serve(id: &str, ws: Socket) {
         let Ok(frame) = serde_json::from_str::<Value>(&text) else {
             continue;
         };
-        if let Some(call) = frame.get("id").and_then(Value::as_u64) {
+        // The server calling back into the app, which only its own may.
+        if let (Some(call), true) = (frame.get("call").and_then(Value::as_u64), id == LOCAL) {
+            let outgoing = conns().iter().find(|c| c.saved.id == id).and_then(|c| c.outgoing.clone());
+            let (cmd, args) = (frame["cmd"].as_str().unwrap_or_default().to_string(), frame["args"].clone());
+            tokio::spawn(async move {
+                let reply = match crate::orchestration::answer_host(&cmd, args).await {
+                    Ok(ok) => json!({ "reply": call, "ok": ok }),
+                    Err(err) => json!({ "reply": call, "err": err }),
+                };
+                if let Some(outgoing) = outgoing {
+                    let _ = outgoing.send(reply.to_string());
+                }
+            });
+        } else if let Some(call) = frame.get("id").and_then(Value::as_u64) {
             let reply = match frame.get("err") {
                 Some(err) => Err(err.clone()),
                 None => Ok(frame.get("ok").cloned().unwrap_or(Value::Null)),
@@ -727,18 +813,42 @@ async fn run_on_server(server: &str, command: &str) -> Result<(), String> {
 /// frontend calls this once its listeners exist: connections opened at setup
 /// sent theirs to a webview that was not listening yet, and open cards ride
 /// that frame alone.
+///
+/// This Mac's server is asked for the frame instead: the webview's first
+/// reads are already waiting on that connection, and dropping it would fail
+/// every one of them.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn reconnect_servers() {
-    for conn in conns().iter_mut() {
+    for conn in conns().iter_mut().filter(|c| c.saved.id != LOCAL) {
         conn.restart();
     }
     announce();
+    tokio::spawn(async {
+        let Ok(state) = server_invoke(LOCAL.into(), "live_state".into(), Value::Null).await else {
+            return;
+        };
+        if let Some(sink) = SINK.get() {
+            let _ = sink.emit("server_event", json!({ "server": LOCAL, "event": "live_state", "payload": state }));
+        }
+    });
 }
 
 /// `invoke` on a remote server: the same command, the same arguments, and the
 /// answer or rejection as the server gave it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<Value, Value> {
+    // This Mac's server is down only while it starts or restarts — seconds —
+    // and every screen reads it at launch, so a call waits for it rather
+    // than failing into an error the reader sees for nothing.
+    // ponytail: polled; a Notify on connect if the 100ms ever shows.
+    if server == LOCAL {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while !conns().iter().any(|c| c.saved.id == LOCAL && c.outgoing.is_some())
+            && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
     let call = NEXT_CALL.fetch_add(1, Ordering::Relaxed);
     let (reply, answer) = oneshot::channel();
     {

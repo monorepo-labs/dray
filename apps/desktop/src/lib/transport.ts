@@ -133,6 +133,68 @@ function unwrapArgs(args: Rec): { args: Rec; server: ServerId | null } {
 /// banners — and so never follow the session to its server.
 const onThisMac = (cmd: string): boolean => cmd.startsWith("browser_") || cmd === "notify_session";
 
+/// What the app answers itself: the browser, dictation, banners, the updater,
+/// the server list, opening apps and terminals. Every other local command goes
+/// to this Mac's background server, which owns the sessions. `lib.rs`'s
+/// `generate_handler!` is the same list, and a test holds the two together —
+/// a name missing here is sent to a server that answers `unknown command`.
+export const APP_COMMANDS = new Set([
+  "list_servers",
+  "local_server",
+  "add_server",
+  "remove_server",
+  "reconnect_servers",
+  "server_invoke",
+  "forward_port",
+  "add_ssh_server",
+  "set_server_on",
+  "rename_server",
+  "set_server_address",
+  "trust_host_key",
+  "survey_server",
+  "install_on_server",
+  "run_server_login",
+  "run_gh_login",
+  "paste_attachments",
+  "read_file",
+  "browser_open",
+  "browser_tabs",
+  "browser_activate",
+  "browser_close",
+  "browser_move",
+  "browser_nav",
+  "browser_layout",
+  "browser_shutter_ready",
+  "browser_devtools",
+  "browser_pick",
+  "browser_snapshot",
+  "chromium_status",
+  "chromium_download",
+  "chromium_remove",
+  "notify_session",
+  "check_update",
+  "install_update",
+  "confirm_quit",
+  "dismiss_quit",
+  "list_open_apps",
+  "open_in_app",
+  "open_login_terminal",
+  "run_agent_login",
+  "update_agent_in_terminal",
+  "transcription_status",
+  "download_transcription_model",
+  "cancel_transcription_download",
+  "delete_transcription_model",
+  "select_transcription_model",
+  "select_transcription_device",
+  "set_transcription_mute",
+  "start_transcription",
+  "transcription_level",
+  "stop_transcription",
+  "retry_transcription",
+  "cancel_transcription",
+]);
+
 /// `invoke`, routed: to `server` where given, else to the server a qualified
 /// argument names, else to the session's, else local.
 export async function invoke<T>(cmd: string, args?: Rec, server?: ServerId): Promise<T> {
@@ -142,7 +204,10 @@ export async function invoke<T>(cmd: string, args?: Rec, server?: ServerId): Pro
   // A new session's first send routes by its cwd; this is where its id learns
   // its server.
   if (sessionId && unwrapped.server) noteSession(sessionId, unwrapped.server);
-  if (target === LOCAL) return browser ? remoteInvoke<T>(browser, cmd, unwrapped.args) : tauriInvoke<T>(cmd, unwrapped.args);
+  if (target === LOCAL) {
+    if (browser) return remoteInvoke<T>(browser, cmd, unwrapped.args);
+    if (APP_COMMANDS.has(cmd)) return tauriInvoke<T>(cmd, unwrapped.args);
+  }
   const answer = await tauriInvoke<unknown>("server_invoke", { server: target, cmd, args: unwrapped.args });
   return (QUALIFIED.has(cmd) ? qualifyRecord(answer, target) : answer) as T;
 }

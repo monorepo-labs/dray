@@ -1797,9 +1797,10 @@ useEffect(() => {
     .catch((e) => setError(String(e)));
 }, [])
 
-/// One server's projects and sessions, read again. A remote server is read
-/// each time it connects — its `live_state` says so — and a server that drops
-/// keeps its last answer, which the sidebar draws dimmed.
+/// One server's projects and sessions, read again. Every server is read each
+/// time it connects — its `live_state` says so — This Mac's included, since
+/// its background server can restart under the app. A server that drops keeps
+/// its last answer, which the sidebar draws dimmed.
 const readServer = (server: ServerId) => {
   const archived = showArchivedRef.current;
   invoke<SessionIndexItem[]>("list_session_index_items", { archived }, server)
@@ -1814,9 +1815,13 @@ const readServer = (server: ServerId) => {
     .catch((e) => {
       if (server === LOCAL) setError(String(e));
     });
-  if (server === LOCAL) return;
   invoke<Project[]>("list_projects", {}, server)
-    .then((list) => !removed(server) && setProjects((prev) => mergeFrom(prev, server, list, pathOfProject)))
+    .then((list) => {
+      if (removed(server)) return;
+      setProjects((prev) => mergeFrom(prev, server, list, pathOfProject));
+      // A launch whose first read beat the server to it picked nothing.
+      if (server === LOCAL) setProjectPath((path) => path ?? lastSelected(list)?.path ?? null);
+    })
     .catch(() => {});
 };
 

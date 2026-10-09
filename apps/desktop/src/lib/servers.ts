@@ -7,14 +7,25 @@ import type { ServerInfo } from "@/types/events";
 /// The remote servers this app holds a connection to, as Rust last said. A
 /// module store: the sidebar, the picker, the header and Settings all read it,
 /// and a second copy could draw one server connected in one place and not in
-/// another. This Mac is not on it — it is the process itself.
+/// another. This Mac is not on it; its server is `local`, below.
 let servers: ServerInfo[] = [];
+/// This Mac's background server. Read by its Settings row alone: calls to it
+/// wait out a restart rather than failing, so nothing else dims for one.
+let local: ServerInfo | null = null;
 let started = false;
 const changed = channel<void>();
 
 function start() {
   if (started) return;
   started = true;
+  void listen<ServerInfo | null>("local_server_changed", ({ payload, server }) => {
+    if (server !== LOCAL) return;
+    local = payload;
+    changed.emit();
+  }).then(() => invoke<ServerInfo | null>("local_server", {}, LOCAL).then((now) => {
+    local ??= now;
+    changed.emit();
+  }).catch(() => {}));
   // Listen first, so a change landing during the read is not lost under it —
   // and once one has landed, the read's older answer is not wanted at all.
   let heard = false;
@@ -53,6 +64,12 @@ export function useServers(): ServerInfo[] {
   return useSyncExternalStore(subscribeServers, remoteServers, remoteServers);
 }
 
+const localServer = (): ServerInfo | null => local;
+
+export function useLocalServer(): ServerInfo | null {
+  return useSyncExternalStore(subscribeServers, localServer, localServer);
+}
+
 /// What the reader calls a server: its name, or "This Mac" — the machine the app runs on.
 export function serverName(id: ServerId): string {
   if (id === LOCAL) return "This Mac";
@@ -66,7 +83,8 @@ export function projectLabel(project: { path: string; name: string }): string {
   return server === LOCAL ? project.name : `${project.name}-${serverName(server)}`;
 }
 
-/// Whether `id` can be asked anything right now. Local always can.
+/// Whether `id` can be asked anything right now. Local always can: a call to
+/// it waits for its server to come back.
 export function serverConnected(id: ServerId): boolean {
   return id === LOCAL || servers.some((s) => s.id === id && s.status === "connected");
 }

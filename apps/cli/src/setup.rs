@@ -680,6 +680,9 @@ pub fn tunnel(args: Tunnel) -> Result<(), String> {
         }
     }
     let _ = child.wait();
+    if STOPPED.load(Ordering::Relaxed) {
+        return Ok(());
+    }
     let said = said.map(|l| format!(": {}", l.trim())).unwrap_or_default();
     Err(format!("cloudflared exited without an address{said}"))
 }

@@ -147,9 +147,16 @@ pub fn request<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// The answer to the confirmation dialog. Nothing else may call `exit` — every
-/// other route out is intercepted so that this one is the only one.
+/// other route out is intercepted so that this one is the only one. Sessions
+/// run in the background server and outlive the app unless `stop_sessions`
+/// stops it too; it comes back at the next launch or login.
 #[tauri::command]
-pub fn confirm_quit<R: Runtime>(app: AppHandle<R>) {
+pub async fn confirm_quit<R: Runtime>(app: AppHandle<R>, stop_sessions: bool) {
+    if stop_sessions {
+        if let Err(e) = crate::launchd::stop().await {
+            eprintln!("[quit] could not stop the server: {e:#}");
+        }
+    }
     app.exit(0);
 }
 

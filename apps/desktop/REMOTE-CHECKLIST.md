@@ -91,6 +91,8 @@ Same installer as stage 2, with dialogs on top.
 
 - [x] Reach a Linux server through a Cloudflare quick tunnel, no SSH: `dray tunnel`, `dray service tunnel on` (#452)
 - [x] Reach a Mac through a quick tunnel: the app itself serves, turned on from the This Mac row (#452)
+- [x] The Mac's sessions run in a background server and keep running when Dray quits (#456, [MAC-SERVER-PLAN.md](MAC-SERVER-PLAN.md))
+- [ ] Check on a signed beta: the release agent reads `~/Documents` with no second prompt, and an update restarts the server
 - [ ] Our own relay: sign-in, QR code, stable address, end-to-end encryption
 - [ ] Phone
 - [ ] Linux and Windows apps

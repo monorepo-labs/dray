@@ -24,7 +24,7 @@ import { Input } from "@/components/ui/input";
 import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { useCopied } from "@/hooks/useCopied";
-import { useServers } from "@/lib/servers";
+import { useLocalServer, useServers } from "@/lib/servers";
 import { invoke, listen, LOCAL } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { Failure, Fix, RemoteAccess, ServerInfo, ServerStatus, Stage } from "@/types/events";
@@ -183,10 +183,12 @@ export default function ServersSettings() {
   );
 }
 
-/// This Mac, and its remote access: on, the app serves its own sessions
-/// through a quick tunnel for another Mac's Add server. A button rather than
-/// a switch, since a switch on this row reads as turning the Mac off.
+/// This Mac's background server, and its remote access: on, the server
+/// serves this Mac's sessions through a quick tunnel for another Mac's Add
+/// server. A button rather than a switch, since a switch on this row reads as
+/// turning the Mac off.
 function ThisMacRow() {
+  const server = useLocalServer();
   const [remote, setRemote] = useState<RemoteAccess>({ on: false, address: null, error: null });
   const [copied, copy] = useCopied<"address" | "token">();
 
@@ -208,22 +210,25 @@ function ThisMacRow() {
 
   const setOn = (on: boolean) => void invoke("set_remote_access", { on }, LOCAL).catch(console.error);
   const starting = remote.on && !remote.address && !remote.error;
-  const detail = !remote.on ? (
-    "Where this app runs"
+  const down = server?.status === "disconnected";
+  const detail = down ? (
+    (server.error ?? "The server on this Mac is not running.")
+  ) : !remote.on ? (
+    "Runs your sessions, with Dray open or closed"
   ) : starting ? (
     <span className="inline-flex items-center gap-1.5">
       <Spinner className="size-3" />
       Starting remote access. Takes about 20 seconds.
     </span>
   ) : (
-    (remote.error ?? "Other Macs can reach it while Dray is open and this Mac is awake.")
+    (remote.error ?? "Other Macs can reach it while this Mac is awake, with Dray open or closed.")
   );
 
   return (
     <Row
       name="This Mac"
       detail={detail}
-      status="connected"
+      status={server?.status ?? "connected"}
       action={
         remote.on ? (
           <Button variant="secondary" size="sm" onClick={() => setOn(false)}>

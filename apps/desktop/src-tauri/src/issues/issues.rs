@@ -548,6 +548,7 @@ pub(crate) async fn credential(name: &str) -> Option<String> {
 /// Stores `value` under `name`, or removes the entry for `None`.
 pub(crate) async fn set_credential(name: &str, value: Option<&str>) -> Result<(), String> {
     let _guard = CREDENTIALS_LOCK.lock().await;
+    let _across = crate::store::lock_across_processes("credentials.json").await;
 
     let mut next = read_credentials().await;
     let changed = match value {

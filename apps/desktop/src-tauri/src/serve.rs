@@ -9,6 +9,14 @@
 //! ← {"id":1,"ok":…}  or  {"id":1,"err":…}       err as a rejected `invoke` carries it
 //! ← {"event":"agent_event","payload":{…}}       every event, to every client
 //! ```
+//!
+//! The Mac app connects to its own server with `"host":{"browser":…}` in the
+//! hello, which lets the server call back into it — see [`host_call`]:
+//!
+//! ```text
+//! ← {"call":1,"cmd":"request","args":{…}}       the server asking the app
+//! → {"reply":1,"ok":…}  or  {"reply":1,"err":"…"}
+//! ```
 
 use crate::{
     files, git,
@@ -60,8 +68,113 @@ const ADMIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// path; nothing a real client sends comes near this.
 const FILE_HEAD_LIMIT: u64 = 16 * 1024;
 
+/// Where the Mac's background server writes the port it listens on for the
+/// app, then its [`exe_stamp`], then its pid. The port is picked by the OS
+/// each start, so a `dray-serve` on 7317 never collides.
+pub const PORT_FILE: &str = "serve-port";
+
+/// Where launchd writes the Mac server's stdout and stderr.
+pub const SERVER_LOG: &str = "server.log";
+
 /// Runs the server until the process ends.
 pub async fn run(port: u16) -> Result<()> {
+    let hub = Hub::default();
+    let sink = {
+        let hub = hub.clone();
+        Sink::new(move |event, payload| hub.publish(event, &payload))
+    };
+    let home = start_core(sink.clone()).await?;
+
+    let (token, token_path) = mint_token().await?;
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let listener = TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("could not bind {addr}"))?;
+
+    eprintln!(
+        "dray-serve listening on ws://{}, token in {}",
+        listener.local_addr()?,
+        token_path.display()
+    );
+
+    listen(listener, hub, sink, token.into(), home.join(dray_proto::TUNNEL_URL_FILE).into(), false).await
+}
+
+/// The Mac's background server: the app's own binary, run by launchd with
+/// `--serve`. It is [`run`] on a port the OS picks, written to [`PORT_FILE`]
+/// for the app, with Remote access served from the setting as the app used to.
+/// See MAC-SERVER-PLAN.md.
+#[cfg(feature = "desktop")]
+pub async fn run_mac() -> Result<()> {
+    let started_from = exe_stamp().unwrap_or_default();
+    let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
+    let home = start_core(sink.clone()).await?;
+    // launchd appends stdout and stderr here for the life of the login, so
+    // past 10MB it starts over. The fd launchd opened is `O_APPEND`, so the
+    // next line lands at the start of the emptied file.
+    let log = home.join(SERVER_LOG);
+    if std::fs::metadata(&log).is_ok_and(|m| m.len() > 10 << 20) {
+        let _ = std::fs::OpenOptions::new().write(true).open(&log).and_then(|f| f.set_len(0));
+    }
+
+    let (token, _) = mint_token().await?;
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.context("could not bind a local port")?;
+    let port = listener.local_addr()?.port();
+    store::write_atomic(&home.join(PORT_FILE), format!("{port}\n{started_from}\n{}\n", std::process::id())).await?;
+    tokio::spawn(crate::remote_access::start(sink.clone()));
+
+    // launchd stops the server with SIGTERM. cloudflared would otherwise
+    // outlive it, still answering at an address nobody shows.
+    tokio::spawn(async {
+        use tokio::signal::unix::{signal, SignalKind};
+        let (Ok(mut term), Ok(mut int)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) else {
+            return;
+        };
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = int.recv() => {}
+        }
+        crate::remote_access::stop_on_exit();
+        std::process::exit(0);
+    });
+
+    eprintln!("dray --serve listening on 127.0.0.1:{port}, home {}", home.display());
+    listen(listener, HUB.clone(), sink, token.into(), home.join(dray_proto::TUNNEL_URL_FILE).into(), true).await
+}
+
+/// The executable's modified time, which moves when an update lands or cargo
+/// rebuilds. The server writes the one it started from under its port; the
+/// app compares it with the file now to tell a server running old code.
+#[cfg(feature = "desktop")]
+pub fn exe_stamp() -> Option<String> {
+    let modified = std::fs::metadata(std::env::current_exe().ok()?).ok()?.modified().ok()?;
+    let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(format!("{}.{:09}", since.as_secs(), since.subsec_nanos()))
+}
+
+/// Exits once no turn is running, for launchd to start the binary now on
+/// disk. Asked by the app when the server it met is older than itself, and by
+/// an update. Twice is once.
+#[cfg(feature = "desktop")]
+async fn restart_when_idle() {
+    static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if ASKED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    tokio::spawn(async {
+        while crate::session::manager().any_turn_in_flight().await {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        eprintln!("[serve] restarting onto the binary now on disk");
+        crate::remote_access::stop_on_exit();
+        std::process::exit(0);
+    });
+}
+
+/// What every server does before it listens: refuse a home another Dray
+/// holds, reset what no child survived, and serve the orchestration socket.
+async fn start_core(sink: Sink) -> Result<PathBuf> {
+    crate::SERVER.store(true, std::sync::atomic::Ordering::Relaxed);
     // Two processes on one home reset each other's sessions at start, take
     // each other's socket and rewrite one index whole, each over the other.
     // A socket that answers is a Dray already living here.
@@ -85,34 +198,14 @@ pub async fn run(port: u16) -> Result<()> {
         eprintln!("[worktree backfill err] {e}");
     }
 
-    let hub = Hub::default();
-    let sink = {
-        let hub = hub.clone();
-        Sink::new(move |event, payload| hub.publish(event, &payload))
-    };
-
     // Agents this server spawns reach it through `dray`, so it serves the
     // socket the desktop app does — under `DRAY_HOME` where that is set.
-    let orchestration = sink.clone();
     tokio::spawn(async move {
-        if let Err(e) = crate::orchestration::serve(orchestration).await {
+        if let Err(e) = crate::orchestration::serve(sink).await {
             eprintln!("[orchestration err] {e:#}");
         }
     });
-
-    let (token, token_path) = mint_token().await?;
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let listener = TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("could not bind {addr}"))?;
-
-    eprintln!(
-        "dray-serve listening on ws://{}, token in {}",
-        listener.local_addr()?,
-        token_path.display()
-    );
-
-    listen(listener, hub, sink, token.into(), home.join(dray_proto::TUNNEL_URL_FILE).into()).await
+    Ok(home)
 }
 
 /// What every client of this process hears: each event the core emits, and
@@ -146,15 +239,25 @@ impl Hub {
     }
 }
 
-/// The desktop app's hub, fed by its `Sink` whether or not Remote access is
-/// on, so a client connecting later still gets the open cards.
+/// The Mac server's hub, a static because Remote access serves it from a
+/// second listener that comes and goes with the setting.
 #[cfg(feature = "desktop")]
 pub static HUB: std::sync::LazyLock<Hub> = std::sync::LazyLock::new(Hub::default);
 
 /// Serves `listener` until the future is dropped, which also drops every
 /// connection it accepted — how the desktop app turns serving off.
-/// `tunnel_file` holds the address whose origin is let through.
-pub async fn listen(listener: TcpListener, hub: Hub, sink: Sink, token: Arc<str>, tunnel_file: Arc<Path>) -> Result<()> {
+/// `tunnel_file` holds the address whose origin is let through. `hosts` lets a
+/// client offer itself as [`host_call`]'s answerer: the Mac server's own
+/// listener alone, so a Mac reaching it through the tunnel is never handed
+/// this Mac's browser.
+pub async fn listen(
+    listener: TcpListener,
+    hub: Hub,
+    sink: Sink,
+    token: Arc<str>,
+    tunnel_file: Arc<Path>,
+    hosts: bool,
+) -> Result<()> {
     let mut connections = tokio::task::JoinSet::new();
     loop {
         let (stream, peer) = tokio::select! {
@@ -172,7 +275,7 @@ pub async fn listen(listener: TcpListener, hub: Hub, sink: Sink, token: Arc<str>
         connections.spawn(async move {
             let served = match request_line(&stream).await {
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
-                Some(_) => connection(stream, sink, hub, &token, &tunnel_file).await,
+                Some(_) => connection(stream, sink, hub, &token, &tunnel_file, hosts).await,
                 None => Ok(()),
             };
             if let Err(e) = served {
@@ -257,6 +360,51 @@ struct Hello {
     v: u32,
     #[serde(default)]
     token: String,
+    #[serde(default)]
+    host: Option<HostOffer>,
+}
+
+/// What the app can answer when it connects as the host.
+#[derive(Deserialize)]
+struct HostOffer {
+    #[serde(default)]
+    browser: bool,
+}
+
+/// The app connected to its own server, and the calls waiting on it. One at a
+/// time: a second app on one home replaces the first.
+struct Host {
+    connection: u64,
+    browser: bool,
+    frames: mpsc::UnboundedSender<String>,
+    waiting: HashMap<u64, tokio::sync::oneshot::Sender<Result<Value, Value>>>,
+}
+
+static HOST: Mutex<Option<Host>> = Mutex::new(None);
+static NEXT_CALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn host() -> std::sync::MutexGuard<'static, Option<Host>> {
+    HOST.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Whether the connected app runs browser steps itself.
+pub fn host_browser() -> bool {
+    host().as_ref().is_some_and(|h| h.browser)
+}
+
+/// Asks the app connected as host. `None` where no app is connected; an app
+/// that leaves mid-call answers an error, since the step may have half run.
+pub async fn host_call(cmd: &str, args: Value) -> Option<Result<Value, Value>> {
+    let answer = {
+        let mut host = host();
+        let host = host.as_mut()?;
+        let call = NEXT_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        host.waiting.insert(call, tx);
+        host.frames.send(json!({ "call": call, "cmd": cmd, "args": args }).to_string()).ok()?;
+        rx
+    };
+    Some(answer.await.unwrap_or_else(|_| Err(json!("The Dray app closed before it answered."))))
 }
 
 /// The first frame's verdict: `None` admits the client. A version mismatch
@@ -348,8 +496,12 @@ impl Live {
     }
 
     fn snapshot(&self) -> String {
+        json!({ "event": "live_state", "payload": self.payload() }).to_string()
+    }
+
+    fn payload(&self) -> Value {
         let tasks: Vec<&Value> = self.tasks.values().collect();
-        json!({ "event": "live_state", "payload": { "asks": self.asks, "tasks": tasks } }).to_string()
+        json!({ "asks": self.asks, "tasks": tasks })
     }
 }
 
@@ -515,6 +667,7 @@ async fn connection(
     hub: Hub,
     token: &str,
     tunnel_file: &Path,
+    hosts: bool,
 ) -> Result<()> {
     let admitted = tokio::time::timeout(ADMIT, async {
         let ws = tokio_tungstenite::accept_hdr_async(stream, |req: &Request, resp: Response| {
@@ -588,13 +741,31 @@ async fn connection(
         write.close().await.ok();
     });
 
+    let connection = NEXT_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let offer = serde_json::from_str::<Hello>(&hello).ok().and_then(|h| h.host).filter(|_| hosts);
+    if let Some(offer) = offer {
+        *host() = Some(Host { connection, browser: offer.browser, frames: replies.clone(), waiting: HashMap::new() });
+    }
+
+    // Not `?`: a reset must still reach the cleanup below, or a call
+    // waiting on this host waits forever.
+    let mut failed = None;
     while let Some(frame) = read.next().await {
-        let text = match frame? {
-            Message::Text(text) => text,
-            Message::Close(_) => break,
-            _ => continue,
+        let text = match frame {
+            Ok(Message::Text(text)) => text,
+            Ok(Message::Close(_)) => break,
+            Ok(_) => continue,
+            Err(e) => {
+                failed = Some(e);
+                break;
+            }
         };
-        let call: Call = match serde_json::from_str(&text) {
+        let frame: Value = serde_json::from_str(&text).unwrap_or_default();
+        if frame.get("reply").is_some() {
+            answered(connection, frame);
+            continue;
+        }
+        let call: Call = match serde_json::from_value(frame) {
             Ok(call) => call,
             Err(e) => {
                 eprintln!("[serve] unreadable frame: {e}");
@@ -613,9 +784,29 @@ async fn connection(
         });
     }
 
+    // Dropping its waiters answers every call still out on it.
+    let mut host = host();
+    if host.as_ref().is_some_and(|h| h.connection == connection) {
+        *host = None;
+    }
+    drop(host);
     drop(replies);
     writer.abort();
-    Ok(())
+    failed.map_or(Ok(()), |e| Err(e.into()))
+}
+
+/// A reply from the host, handed to the call waiting on it.
+fn answered(connection: u64, frame: Value) {
+    let reply = match frame.get("err") {
+        Some(err) => Err(err.clone()),
+        None => Ok(frame.get("ok").cloned().unwrap_or(Value::Null)),
+    };
+    let waiter = frame["reply"].as_u64().and_then(|call| {
+        host().as_mut().filter(|h| h.connection == connection).and_then(|h| h.waiting.remove(&call))
+    });
+    if let Some(waiter) = waiter {
+        let _ = waiter.send(reply);
+    }
 }
 
 /// A command's answer as the wire carries it: the value, or the error as
@@ -661,10 +852,29 @@ macro_rules! table {
     };
 }
 
+/// What the Mac's server answers beyond the core: Remote access, which moved
+/// into it from the app, and the restart an update asks for.
+#[cfg(feature = "desktop")]
+async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
+    table! { cmd, args;
+        get_remote_access() => ok(crate::remote_access::get_remote_access());
+        set_remote_access(on: bool) => crate::remote_access::set_remote_access(sink, on).await;
+        remote_access_token() => crate::remote_access::remote_access_token().await;
+        restart_when_idle() => ok(restart_when_idle().await);
+        // What a connect opens with, asked again by an app whose webview
+        // was not yet listening when it connected.
+        live_state() => ok(HUB.live.lock().unwrap_or_else(|e| e.into_inner()).payload());
+    }
+}
+
 /// Every core command the desktop exposes, minus the ones that act on the
 /// server's own desktop: opening apps and terminals, and the pasteboard.
 /// Mac-only modules are not compiled here.
 async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
+    #[cfg(feature = "desktop")]
+    if matches!(cmd, "get_remote_access" | "set_remote_access" | "remote_access_token" | "restart_when_idle" | "live_state") {
+        return dispatch_mac(cmd, args, sink).await;
+    }
     table! { cmd, args;
         // Sessions.
         send_msg(

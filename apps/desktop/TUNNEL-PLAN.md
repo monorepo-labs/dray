@@ -112,6 +112,13 @@ tunnel is down — keeps retrying as before.
 
 ## The Mac serving (PR 2)
 
+**Since #456 the Mac's background server does this, not the app.** The
+listener, the tunnel and the setting moved into `dray --serve` whole, so
+quitting Dray no longer stops them; a sleeping Mac still does, and Quit and
+stop sessions. The row calls the server through `local` as any other screen
+does, and `serve::listen` is now the server's own second listener. What
+follows is the app-hosted version as it was built. See MAC-SERVER-PLAN.md.
+
 **A button on the This Mac row in Settings, Servers**, not a switch: a
 switch on that row reads as turning the Mac off. On, the app runs the
 listener `dray-serve` runs, in this process on `127.0.0.1`, with the same

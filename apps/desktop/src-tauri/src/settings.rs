@@ -203,6 +203,7 @@ async fn read_from(dir: &Path) -> Result<AppSettings> {
 /// the write away is what stops the next one.
 pub async fn update(edit: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> {
     let _guard = SETTINGS_LOCK.lock().await;
+    let _across = crate::store::lock_across_processes("settings.json").await;
     let dir = get_home_app_dir().await?;
 
     // **Only a malformed file recovers**, and the distinction is the whole of
@@ -250,6 +251,7 @@ pub async fn update(edit: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> 
 /// person. No events beats a fabricated population.
 pub async fn ensure_install_id() -> Option<String> {
     let _guard = SETTINGS_LOCK.lock().await;
+    let _across = crate::store::lock_across_processes("settings.json").await;
 
     let dir = match get_home_app_dir().await {
         Ok(dir) => dir,

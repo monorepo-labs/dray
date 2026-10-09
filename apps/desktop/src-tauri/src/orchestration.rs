@@ -257,12 +257,67 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::ListSessions(list) => list_sessions(list).await,
         Request::SendMessage(send) => send_message(send, app).await,
         Request::LinkIssues(link) => link_issues(link, app).await,
-        Request::Browser(browser) => browse(browser).await,
         Request::CreateDraft(create) => create_draft(create, app).await,
         Request::ListDrafts(list) => list_drafts(list).await,
         Request::RemoveDraft(draft) => remove_draft(&draft.id, app).await,
         Request::StartDraft(start) => start_draft(start, app).await,
         Request::Share(share) => share_port(share).await,
+        on_screen => {
+            #[cfg(feature = "desktop")]
+            if crate::is_server() {
+                return ask_app(on_screen).await;
+            }
+            answer_on_screen(on_screen).await
+        }
+    }
+}
+
+/// The Mac's server hands the app what lives in it: browser steps while the
+/// app runs Chromium, the server list always. See MAC-SERVER-PLAN.md.
+#[cfg(feature = "desktop")]
+async fn ask_app(request: Request) -> Result<Response> {
+    let browser = match &request {
+        Request::Browser(browser) => Some(browser.clone()),
+        _ => None,
+    };
+    if let Some(browser) = browser.clone().filter(|_| !crate::serve::host_browser()) {
+        return browse(browser).await;
+    }
+    match crate::serve::host_call("request", serde_json::to_value(&request)?).await {
+        Some(Ok(answer)) => Ok(serde_json::from_value(answer)?),
+        Some(Err(err)) => Ok(Response::error(err.as_str().map(str::to_string).unwrap_or_else(|| err.to_string()))),
+        // No app, or it left between the two questions.
+        None => match browser {
+            Some(browser) => browse(browser).await,
+            None => bail!("The server list lives in the Dray app. Open it and run this again."),
+        },
+    }
+}
+
+/// What the Mac's server asks of the app it hosts, answered in the app.
+#[cfg(feature = "desktop")]
+pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
+    match cmd {
+        "request" => {
+            let request: Request = serde_json::from_value(args).map_err(|e| e.to_string())?;
+            let response = answer_on_screen(request).await.unwrap_or_else(|e| Response::error(format!("{e:#}")));
+            serde_json::to_value(response).map_err(|e| e.to_string())
+        }
+        "close_session" => {
+            #[cfg(all(feature = "cef", target_os = "macos"))]
+            if let Some(id) = args["sessionId"].as_str() {
+                crate::cef::close_session(id);
+            }
+            Ok(serde_json::Value::Null)
+        }
+        _ => Err(format!("the app does not answer {cmd}")),
+    }
+}
+
+/// Requests answered where the screen is: the browser and the server list.
+async fn answer_on_screen(request: Request) -> Result<Response> {
+    match request {
+        Request::Browser(browser) => browse(browser).await,
         #[cfg(feature = "desktop")]
         Request::AddServer(add) => server_list::add(add).await,
         #[cfg(feature = "desktop")]
@@ -283,6 +338,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         | Request::SetServerOn(_) => {
             bail!("this Dray is a server, and the server list lives in the Mac app — run `dray server` there")
         }
+        other => bail!("{other:?} is not answered here"),
     }
 }
 
@@ -322,7 +378,9 @@ mod server_list {
                  terminal to trust it, then add it again."
             ),
             Some(Fix::Install) => format!("{message} Add it from the app's Settings → Servers, which can install it."),
-            None => message,
+            // A tunnel's address moving is a server added by address; an SSH
+            // add never meets it, and the message already says what to do.
+            Some(Fix::NewAddress) | None => message,
         }
     }
 
@@ -407,25 +465,17 @@ async fn share_port(request: dray_proto::ShareRequest) -> Result<Response> {
 }
 
 /// One `dray browser` step: CEF's tabs in the Mac app, a headless Chromium
-/// on a server. A build with neither says so rather than reading as a broken
-/// CLI.
+/// in a server or an app built without CEF.
 async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
+    let answered = |answer: Result<_, String>| match answer {
+        Ok((output, data)) => Response::Browser { output, data },
+        Err(message) => Response::error(message),
+    };
     #[cfg(all(feature = "cef", target_os = "macos"))]
-    let answer = crate::cef::automation::run(&request.session_id, request.action).await;
-    #[cfg(all(feature = "serve", not(feature = "cef")))]
-    let answer = crate::headless::automation::run(&request.session_id, request.action).await;
-    #[cfg(any(all(feature = "cef", target_os = "macos"), all(feature = "serve", not(feature = "cef"))))]
-    {
-        Ok(match answer {
-            Ok((output, data)) => Response::Browser { output, data },
-            Err(message) => Response::error(message),
-        })
+    if !crate::is_server() {
+        return Ok(answered(crate::cef::automation::run(&request.session_id, request.action).await));
     }
-    #[cfg(not(any(all(feature = "cef", target_os = "macos"), all(feature = "serve", not(feature = "cef")))))]
-    {
-        let _ = request;
-        Ok(Response::error("this build of Dray has no browser"))
-    }
+    Ok(answered(crate::headless::automation::run(&request.session_id, request.action).await))
 }
 
 /// Tags a session that already exists, or untags it.

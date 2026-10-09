@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const calls: { cmd: string; args: unknown }[] = [];
@@ -14,7 +16,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 
-const { displayPath, fileSrc, invoke, qualify, serverOfSession, splitPath } = await import("./transport");
+const { APP_COMMANDS, displayPath, fileSrc, invoke, qualify, serverOfSession, splitPath } = await import("./transport");
 
 beforeEach(() => {
   calls.length = 0;
@@ -35,9 +37,20 @@ describe("paths", () => {
 });
 
 describe("invoke", () => {
-  it("sends a local call to Tauri untouched", async () => {
+  it("sends a local core call to this Mac's server, and an app call to Tauri", async () => {
     await invoke("work_status", { cwd: "/Users/me/app" });
-    expect(calls).toEqual([{ cmd: "work_status", args: { cwd: "/Users/me/app" } }]);
+    expect(calls).toEqual([
+      { cmd: "server_invoke", args: { server: "local", cmd: "work_status", args: { cwd: "/Users/me/app" } } },
+    ]);
+    await invoke("check_update", {});
+    expect(calls[1]).toEqual({ cmd: "check_update", args: {} });
+  });
+
+  it("lists exactly the commands the app registers", () => {
+    const lib = readFileSync(new URL("../../src-tauri/src/lib.rs", import.meta.url), "utf8");
+    const block = lib.slice(lib.indexOf("generate_handler!["), lib.indexOf("])", lib.indexOf("generate_handler![")));
+    const registered = [...block.matchAll(/^\s+(?:[a-z_]+::)*([a-z_]+),$/gm)].map((m) => m[1]);
+    expect(new Set(registered)).toEqual(APP_COMMANDS);
   });
 
   it("routes by a qualified argument and unwraps it", async () => {

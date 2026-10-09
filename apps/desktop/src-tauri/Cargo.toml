@@ -130,6 +130,11 @@ desktop = [
   "tokio-tungstenite/connect",
   "tokio-tungstenite/rustls-tls-native-roots",
   "dep:form_urlencoded",
+  # The app's binary is also the Mac's background server (`dray --serve`),
+  # which falls back to headless Chromium while the app is closed. See
+  # MAC-SERVER-PLAN.md.
+  "dep:zip",
+  "dep:flate2",
 ]
 cef = ["desktop", "dep:cef"]
 serve = ["dep:tokio-tungstenite", "dep:form_urlencoded", "dep:zip", "dep:flate2"]

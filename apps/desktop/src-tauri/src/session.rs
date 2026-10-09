@@ -438,6 +438,22 @@ impl SessionManager {
         self.sessions.lock().await.get(id).cloned()
     }
 
+    /// Whether any session has a turn running, which is what a server restart
+    /// waits out. A slot locked by a send or a respawn counts as running.
+    pub async fn any_turn_in_flight(&self) -> bool {
+        let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
+        for slot in slots {
+            let Ok(guard) = slot.try_lock() else { return true };
+            if let Some(session) = guard.as_ref() {
+                let Ok(tracker) = session.status.try_lock() else { return true };
+                if tracker.turn_in_flight() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Takes the live child out, leaving the slot empty for the next send.
     async fn take(&self, id: &str) -> Option<Session> {
         self.existing(id).await?.lock().await.take()
@@ -1482,8 +1498,16 @@ impl SessionManager {
             None => Ok(()),
         };
         #[cfg(all(feature = "cef", target_os = "macos"))]
-        crate::cef::close_session(session_id);
-        #[cfg(all(feature = "serve", not(feature = "cef")))]
+        if !crate::is_server() {
+            crate::cef::close_session(session_id);
+        }
+        // The Mac's server: the tabs are the app's, if it is open.
+        #[cfg(feature = "desktop")]
+        if crate::is_server() {
+            let args = serde_json::json!({ "sessionId": session_id });
+            tokio::spawn(async move { crate::serve::host_call("close_session", args).await });
+        }
+        #[cfg(any(feature = "serve", feature = "desktop"))]
         crate::headless::close_session(session_id);
         crate::share::close_session(session_id);
         killed
@@ -1531,9 +1555,11 @@ impl SessionManager {
         if let Err(e) = attachments::delete_session_attachments(session_id).await {
             eprintln!("could not delete attachments for {session_id}: {e}");
         }
+        // Files on this disk whichever browser made them, so both are swept
+        // whether or not the app that filmed one is open.
         #[cfg(all(feature = "cef", target_os = "macos"))]
         crate::cef::automation::delete_recordings(session_id);
-        #[cfg(all(feature = "serve", not(feature = "cef")))]
+        #[cfg(any(feature = "serve", feature = "desktop"))]
         crate::headless::automation::delete_recordings(session_id);
 
         // pi keeps its own transcript beside Dray's, because the *file* is its

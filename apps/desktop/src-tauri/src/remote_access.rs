@@ -4,7 +4,7 @@
 //! on this screen — one process, one data dir, no second writer. See
 //! TUNNEL-PLAN.md.
 
-use std::{path::PathBuf, sync::LazyLock, time::Duration};
+use std::{future::Future, path::PathBuf, sync::LazyLock, time::Duration};
 
 use serde::Serialize;
 use std::sync::Mutex;
@@ -71,24 +71,26 @@ pub fn stop_on_exit() {
     }
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_remote_access() -> RemoteAccess {
     state().0.clone()
 }
 
-/// The switch on the This Mac row. Remembered, so the app serves again
-/// whenever it opens.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn set_remote_access(sink: Sink, on: bool) -> Result<RemoteAccess, String> {
-    let _held = SWITCHING.lock().await;
-    crate::settings::update(|s| s.remote_access = on).await.map_err(|e| format!("{e:#}"))?;
-    switch(&sink, on).await;
-    Ok(get_remote_access())
+/// The switch on the This Mac row. Remembered, so the server serves again
+/// whenever it starts.
+///
+/// Boxed behind a named type: it starts a listener whose connections
+/// dispatch back here, and an `async fn` would be a future containing itself.
+pub fn set_remote_access(sink: Sink, on: bool) -> std::pin::Pin<Box<dyn Future<Output = Result<RemoteAccess, String>> + Send>> {
+    Box::pin(async move {
+        let _held = SWITCHING.lock().await;
+        crate::settings::update(|s| s.remote_access = on).await.map_err(|e| format!("{e:#}"))?;
+        switch(&sink, on).await;
+        Ok(get_remote_access())
+    })
 }
 
 /// The token another Mac's Add server asks for. Asked for on Copy alone, so
 /// it sits in no state the webview keeps.
-#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remote_access_token() -> Result<String, String> {
     let (token, _) = serve::mint_token().await.map_err(|e| format!("{e:#}"))?;
     Ok(token)
@@ -146,7 +148,7 @@ async fn serve_and_tunnel(sink: Sink) {
         Ok(ready) => ready,
         Err(e) => return set(&sink, None, Some(e)),
     };
-    let listening = serve::listen(listener, serve::HUB.clone(), sink.clone(), token.into(), file.clone().into());
+    let listening = serve::listen(listener, serve::HUB.clone(), sink.clone(), token.into(), file.clone().into(), false);
     let tunnel = async {
         let mut backoff = Duration::from_secs(2);
         loop {

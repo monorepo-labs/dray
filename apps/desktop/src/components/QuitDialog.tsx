@@ -22,7 +22,8 @@ import {
 ///
 /// It asks regardless of what is running. A quit is cheap to confirm and
 /// expensive to get wrong, and a dialog that appears only sometimes is one
-/// nobody builds a habit around.
+/// nobody builds a habit around. Sessions live in the background server, so
+/// Quit leaves them running and the second button stops that server too.
 export default function QuitDialog() {
   const [open, setOpen] = useState(false);
 
@@ -45,16 +46,17 @@ export default function QuitDialog() {
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Quit Dray?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Running tasks will stop. They pick up where they left off next time.
-          </AlertDialogDescription>
+          <AlertDialogDescription>Sessions keep running in the background.</AlertDialogDescription>
         </AlertDialogHeader>
         {/* Cancel first, so the confirm lands on the right edge where the eye
             finishes. The footer is a plain `justify-end` row on desktop, so
             source order is the order on screen. */}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction destructive onClick={() => void invoke("confirm_quit")}>
+          <AlertDialogAction destructive onClick={() => void invoke("confirm_quit", { stopSessions: true })}>
+            Quit and stop sessions
+          </AlertDialogAction>
+          <AlertDialogAction onClick={() => void invoke("confirm_quit", { stopSessions: false })}>
             Quit
           </AlertDialogAction>
         </AlertDialogFooter>

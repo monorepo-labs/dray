@@ -35,15 +35,6 @@ impl<R: tauri::Runtime> From<&tauri::AppHandle<R>> for Sink {
         use tauri::Emitter;
         let app = app.clone();
         Self::new(move |event, payload| {
-            // Into the hub too, for Remote access's clients — except this
-            // Mac's own servers and Remote access itself, which are news to
-            // this window alone.
-            if !matches!(
-                event,
-                "servers_changed" | "server_event" | "server_adding" | "server_installing" | "remote_access_changed"
-            ) {
-                crate::serve::HUB.publish(event, &payload);
-            }
             if let Err(e) = app.emit(event, payload) {
                 eprintln!("[emit err] {event}: {e}");
             }

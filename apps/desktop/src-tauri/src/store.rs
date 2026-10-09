@@ -223,10 +223,15 @@ pub async fn get_home_app_dir() -> Result<PathBuf> {
 /// rewritten whole under a per-*process* lock, so two processes sharing one
 /// directory lose each other's writes — which is a `dray-serve` started on a
 /// Mac whose app is running. This is what lets the two sit side by side.
+///
+/// A dev build answers `~/.dray-dev` where `DRAY_HOME` is unset: its app and
+/// its background server are one binary, so both read this and agree with
+/// nothing passed between them, and neither touches the real sessions.
 pub fn home_override() -> Option<PathBuf> {
     std::env::var_os("DRAY_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
+        .or_else(|| crate::is_dev().then(|| std::env::home_dir().unwrap_or_default().join(".dray-dev")))
 }
 
 async fn make_home_app_dir() -> Result<PathBuf> {
@@ -435,6 +440,23 @@ pub async fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) ->
     }
 
     serde_json::from_str(&contents).with_context(|| format!("could not parse {}", path.display()))
+}
+
+/// An exclusive `flock` on `<home>/<name>.lock`, held until the file is
+/// dropped. On a Mac the app and its background server both rewrite
+/// `settings.json` and `credentials.json` whole, and a process-local mutex
+/// orders neither against the other. `None` where the lock cannot be had,
+/// which is the old risk of a lost write rather than a refused one.
+pub async fn lock_across_processes(name: &str) -> Option<std::fs::File> {
+    let path = get_home_app_dir().await.ok()?.join(format!("{name}.lock"));
+    tokio::task::spawn_blocking(move || {
+        let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path).ok()?;
+        let locked = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) } == 0;
+        locked.then_some(file)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// [`write_atomic`] for a file holding a credential: the temp file is created
