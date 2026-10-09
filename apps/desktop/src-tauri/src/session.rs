@@ -424,6 +424,36 @@ fn live<'a>(slot: &'a mut Option<Session>, id: &str) -> Result<&'a mut Session> 
     slot.as_mut().with_context(|| format!("no running session {id}"))
 }
 
+/// Sends under way, and whether the server has committed to exiting. See
+/// [`SessionManager::close_if_idle`].
+static SENDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static CLOSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+use std::sync::atomic::Ordering::SeqCst;
+
+/// One send counted for its whole length, waiting first while a restart is
+/// closing the server — which ends the wait by exiting, or by finding work
+/// and reopening.
+struct Sending;
+
+impl Sending {
+    async fn enter() -> Self {
+        loop {
+            SENDS.fetch_add(1, SeqCst);
+            if !CLOSING.load(SeqCst) {
+                return Sending;
+            }
+            SENDS.fetch_sub(1, SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+}
+
+impl Drop for Sending {
+    fn drop(&mut self) {
+        SENDS.fetch_sub(1, SeqCst);
+    }
+}
+
 impl SessionManager {
     /// This session's slot, made on first use. Slots are never removed: one is
     /// a few words, and removing it under a send still holding it would strand
@@ -438,9 +468,34 @@ impl SessionManager {
         self.sessions.lock().await.get(id).cloned()
     }
 
+    /// Commits the server to exiting if nothing is running, and holds every
+    /// send from then on — the process is about to end under it. Counted from
+    /// a send's start, since a new session joins the map only once its prompt
+    /// is out. `SENDS` goes up before `CLOSING` is read and the reverse here,
+    /// so one of the two always sees the other.
+    pub async fn close_if_idle(&self) -> bool {
+        CLOSING.store(true, SeqCst);
+        if SENDS.load(SeqCst) == 0 && !self.any_turn_in_flight().await {
+            return true;
+        }
+        CLOSING.store(false, SeqCst);
+        false
+    }
+
+    /// Kills every session's child and everything it started, for a server
+    /// on its way out: dev servers and watchers outlive their agent otherwise.
+    pub async fn kill_all(&self) {
+        let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
+        for slot in slots {
+            if let Some(session) = slot.lock().await.take() {
+                let _ = session.kill_tree().await;
+            }
+        }
+    }
+
     /// Whether any session has a turn running, which is what a server restart
     /// waits out. A slot locked by a send or a respawn counts as running.
-    pub async fn any_turn_in_flight(&self) -> bool {
+    async fn any_turn_in_flight(&self) -> bool {
         let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
         for slot in slots {
             let Ok(guard) = slot.try_lock() else { return true };
@@ -508,6 +563,7 @@ impl SessionManager {
         from: Option<MessageSender>,
         app: &Sink,
     ) -> Result<SendOutcome> {
+        let _counted = Sending::enter().await;
         // Resolved against whichever table can name it. The two single-vendor
         // harnesses have one written here; pi's list is answered by the machine,
         // so its models are looked up in what the probe last reported.

@@ -30,8 +30,17 @@ fn escape(text: &str) -> String {
 /// `Interactive` because the server is the app's own backend: agents run
 /// builds under it, and the default applies the light throttling launchd
 /// gives background jobs.
-fn plist(exe: &str, log: &str) -> String {
+/// `home` is `DRAY_HOME` where the app was given one: launchd starts the
+/// server with its own environment, which would put it under the default home
+/// while the app looks for its port elsewhere.
+fn plist(exe: &str, log: &str, home: Option<&str>) -> String {
     let (label, exe, log) = (label(), escape(exe), escape(log));
+    let env = home.map_or(String::new(), |home| {
+        format!(
+            "\n  <key>EnvironmentVariables</key><dict><key>DRAY_HOME</key><string>{}</string></dict>",
+            escape(home)
+        )
+    });
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -43,7 +52,7 @@ fn plist(exe: &str, log: &str) -> String {
   <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Interactive</string>
   <key>StandardOutPath</key><string>{log}</string>
-  <key>StandardErrorPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>{env}
 </dict>
 </plist>
 "#
@@ -64,7 +73,8 @@ pub async fn ensure() -> Result<()> {
     if crate::is_dev() {
         return spawn_dev(&exe, &log);
     }
-    let wanted = plist(&exe.to_string_lossy(), &log.to_string_lossy());
+    let home = crate::store::home_override();
+    let wanted = plist(&exe.to_string_lossy(), &log.to_string_lossy(), home.as_deref().and_then(|h| h.to_str()));
     let path = plist_path()?;
     let loaded = launchctl(&["print", &target()]).await?.status.success();
     if loaded && tokio::fs::read_to_string(&path).await.is_ok_and(|on_disk| on_disk == wanted) {
@@ -142,9 +152,12 @@ mod tests {
 
     #[test]
     fn the_plist_runs_this_binary_as_the_server() {
-        let text = plist("/Applications/A & B.app/Contents/MacOS/dray", "/Users/me/.dray/server.log");
+        let text = plist("/Applications/A & B.app/Contents/MacOS/dray", "/Users/me/.dray/server.log", None);
         assert!(text.contains("<string>/Applications/A &amp; B.app/Contents/MacOS/dray</string><string>--serve</string>"));
         assert!(text.contains("<key>KeepAlive</key><true/>"));
         assert!(text.contains(label()));
+        assert!(!text.contains("DRAY_HOME"));
+        let homed = plist("/x/dray", "/h/server.log", Some("/h"));
+        assert!(homed.contains("<key>DRAY_HOME</key><string>/h</string>"));
     }
 }

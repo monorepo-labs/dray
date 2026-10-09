@@ -123,8 +123,7 @@ pub async fn run_mac() -> Result<()> {
     store::write_atomic(&home.join(PORT_FILE), format!("{port}\n{started_from}\n{}\n", std::process::id())).await?;
     tokio::spawn(crate::remote_access::start(sink.clone()));
 
-    // launchd stops the server with SIGTERM. cloudflared would otherwise
-    // outlive it, still answering at an address nobody shows.
+    // launchd, and Quit and stop sessions in dev, stop the server with SIGTERM.
     tokio::spawn(async {
         use tokio::signal::unix::{signal, SignalKind};
         let (Ok(mut term), Ok(mut int)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) else {
@@ -134,8 +133,7 @@ pub async fn run_mac() -> Result<()> {
             _ = term.recv() => {}
             _ = int.recv() => {}
         }
-        crate::remote_access::stop_on_exit();
-        std::process::exit(0);
+        shut_down().await;
     });
 
     eprintln!("dray --serve listening on 127.0.0.1:{port}, home {}", home.display());
@@ -162,13 +160,22 @@ async fn restart_when_idle() {
         return;
     }
     tokio::spawn(async {
-        while crate::session::manager().any_turn_in_flight().await {
+        while !crate::session::manager().close_if_idle().await {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
         eprintln!("[serve] restarting onto the binary now on disk");
-        crate::remote_access::stop_on_exit();
-        std::process::exit(0);
+        shut_down().await;
     });
+}
+
+/// Ends the server and what it started: every session's tree, which a dev
+/// server or watcher would otherwise outlive, and cloudflared, which would go
+/// on answering at an address nobody shows.
+#[cfg(feature = "desktop")]
+async fn shut_down() -> ! {
+    crate::session::manager().kill_all().await;
+    crate::remote_access::stop_on_exit();
+    std::process::exit(0)
 }
 
 /// What every server does before it listens: refuse a home another Dray
