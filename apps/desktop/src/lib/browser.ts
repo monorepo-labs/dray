@@ -625,6 +625,22 @@ export function snapshotPainted(of: Snapshot) {
   requestAnimationFrame(() => requestAnimationFrame(present));
 }
 
+/// Withdraws a pane's claim once the frame replacing it has painted. The view
+/// is native, so hiding it is instant while the DOM taking its place can take
+/// a few hundred milliseconds to lay out — a long transcript coming back from
+/// `display: none` — and the page area sat blank under the URL row meanwhile.
+/// A claim made again in between (the same pane re-running its effect) is
+/// newer than the one held here, and is left alone.
+export function releaseAfterPaint(key: string) {
+  const held = claims.get(key);
+  if (!held) return;
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      if (claims.get(key) === held) claimPresenter(key, null);
+    }),
+  );
+}
+
 /// A pane says "I am showing this session's browser here". `null` withdraws.
 export function claimPresenter(key: string, claim: Claim | null) {
   if (claim) claims.set(key, claim);
