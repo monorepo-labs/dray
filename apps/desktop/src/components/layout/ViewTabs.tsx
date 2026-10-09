@@ -36,6 +36,7 @@ import {
 } from "@/lib/browser";
 import { tabLabels } from "@/lib/fileTree";
 import { moveKey, reconcile, type TabKey } from "@/lib/tabOrder";
+import { BranchButton } from "@/components/layout/SessionHeader";
 import { cn } from "@/lib/utils";
 
 /// Which view fills the main column.
@@ -104,8 +105,14 @@ export default function ViewTabs({
   title,
   tab,
   onChange,
+  branch,
+  cwd,
 }: {
   sessionId: string;
+  /// The session's branch and directory, drawn beside the chat while it is the
+  /// row's only tab — the header's old worktree line, back where there is room.
+  branch?: string | null;
+  cwd?: string;
   /// The chat's tab, which stands for the session: `project / title`.
   title: string;
   tab: ViewTab;
@@ -337,7 +344,7 @@ export default function ViewTabs({
     <div
       ref={drag.list}
       role="tablist"
-      className="-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden px-1"
+      className="-mx-1 flex min-w-0 flex-1 items-center gap-0.5 self-stretch overflow-hidden px-1 animate-in duration-300 ease-out fade-in slide-in-from-left-3"
     >
       {drag.shown.map((item, i) => (
         <ItemTab
@@ -353,11 +360,16 @@ export default function ViewTabs({
           transform={drag.offset(i)}
           held={drag.drag?.from === i}
           gliding={!!drag.drag && drag.drag.from !== i}
+          // The chat alone is a title, not a tab: nothing beside it to pick
+          // between, so no pill to say which is picked.
+          plain={drag.shown.length === 1}
           hint={
-            <>
-              Switch tabs
-              <ShortcutKeys ids={["tab.prev", "tab.next"]} />
-            </>
+            drag.shown.length > 1 && (
+              <>
+                Switch tabs
+                <ShortcutKeys ids={["tab.prev", "tab.next"]} />
+              </>
+            )
           }
         />
       ))}
@@ -403,6 +415,12 @@ export default function ViewTabs({
           </TooltipContent>
         </Tooltip>
       )}
+      {/* At the row's far end, where it gives way before any tab does. */}
+      {branch && cwd && (
+        <span className="ml-auto flex min-w-6.5 shrink-[999] pl-2 text-ui animate-in fade-in duration-200">
+          <BranchButton branch={branch} cwd={cwd} />
+        </span>
+      )}
     </div>
   );
 }
@@ -423,6 +441,7 @@ export function ItemTab({
   held = false,
   gliding = false,
   fixed = false,
+  plain = false,
   hint,
   className,
   ...rest
@@ -444,6 +463,8 @@ export function ItemTab({
   /// A delayed tooltip naming the chords that move through this tab's row —
   /// the only place the header says they exist.
   hint?: React.ReactNode;
+  /// Drawn as its icon and label alone, with no pill and sized to its label.
+  plain?: boolean;
 }) {
   const pick = locked ? undefined : onPick;
   const tab = (
@@ -471,12 +492,14 @@ export function ItemTab({
       onPointerDown={onPointerDown}
       style={{ transform }}
       className={cn(
-        "group flex cursor-default items-center gap-1.5 h-7 rounded-md pl-2 text-ui",
+        "group flex cursor-default items-center gap-1.5 h-7 rounded-md pl-2 text-ui select-none",
         "transition-[color,background-color,min-width] duration-150 ease-out",
         onClose ? "pr-1" : "pr-2",
         fixed
           ? "shrink-0"
-          : // The chat has no icon to shrink to, so it stops at 100px.
+          : plain
+            ? "shrink-0"
+            : // The chat has no icon to shrink to, so it stops at 100px.
             cn(
               "basis-44",
               active ? "min-w-44" : icon ? "min-w-6" : "min-w-[100px]",
@@ -486,7 +509,9 @@ export function ItemTab({
         onClose && !fixed && "@container",
         // Raised out of the darker strip, the way a browser's active tab is:
         // the segmented control's thumb, which is that same picture small.
-        active || held
+        plain
+          ? "text-foreground"
+          : active || held
           ? "bg-surface-thumb text-foreground shadow-(--shadow-button) ring-1 ring-hairline dark:shadow-none"
           : locked
             ? "text-muted-foreground opacity-50"
@@ -502,7 +527,7 @@ export function ItemTab({
         className={cn(
           "min-w-0 flex-1 overflow-hidden whitespace-nowrap @max-[40px]:hidden",
           // Only where the row can cut it: a fixed label is never short of room.
-          !fixed &&
+          !fixed && !plain &&
             "mask-[linear-gradient(to_right,black_calc(100%-1.25rem),transparent)]",
         )}
       >

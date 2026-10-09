@@ -128,6 +128,7 @@ export const SHORTCUTS = [
 
   { id: "settings", label: "Settings", group: "General", chord: k(",") },
   { id: "theme.next", label: "Next theme", group: "General", chord: k("t", { alt: true }) },
+  { id: "mode.toggle", label: "Toggle light and dark", group: "General", chord: k("l", { alt: true }) },
   { id: "zoom.in", label: "Zoom in", group: "General", chord: k("=") },
   { id: "zoom.out", label: "Zoom out", group: "General", chord: k("-") },
   { id: "zoom.reset", label: "Actual size", group: "General", chord: k("0") },

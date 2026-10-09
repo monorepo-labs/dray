@@ -116,6 +116,12 @@ export function keepsGlassInFullscreen(name: ThemeName, mode: ResolvedMode): boo
   return !theme(name)?.flatInFullscreen;
 }
 
+/// Whether a windowed app drops its glass too. Dray dark alone, on trial: its
+/// page is near black, and the desktop through it read as a grey wash.
+export function flatWhenWindowed(name: ThemeName, mode: ResolvedMode): boolean {
+  return name === "default" && mode === "dark";
+}
+
 /// Whether this theme has a light palette to switch to.
 export function hasLightMode(name: ThemeName): boolean {
   return !theme(name)?.darkOnly;

@@ -35,8 +35,11 @@ const buttonVariants = cva(
         // move about the same distance.
         default:
           "bg-button-primary text-button-primary-foreground shadow-(--shadow-button) hover:bg-button-primary/90",
+        // `bg-card`, not `bg-background`: the page colour is a solid slab over
+        // glass, a near-white box on a sheet that is see-through. A card is the
+        // white veil there and the solid card colour in fullscreen.
         outline:
-          "bg-clip-padding border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+          "bg-clip-padding border-border bg-card hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         // `--shadow-surface`, not the `default` variant's `--shadow-button`: this
         // fill is a few percent off the page it sits on, so what it needs is the
         // edge a floating surface draws rather than the lift under a solid one.

@@ -515,7 +515,7 @@ export function PanelTabs({
   onPick: (tab: PanelTab) => void;
 }) {
   return (
-    <div className="-mx-1 flex shrink-0 items-center gap-0.5 self-stretch overflow-hidden px-1">
+    <div className="-mx-1 flex shrink-0 items-center gap-0.5 self-stretch overflow-hidden px-1 animate-in duration-300 ease-out fade-in slide-in-from-right-3">
       {tabs.map((value) => (
         <ItemTab
           key={value}

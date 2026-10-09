@@ -1,6 +1,6 @@
 import { displayPath, invoke, LOCAL, serverOfPath } from "@/lib/transport";
 import { serverName } from "@/lib/servers";
-import { Check } from "lucide-react";
+import { Check, FolderGit2 } from "lucide-react";
 import { useRef, useState } from "react";
 
 import GitBranchIcon from "@/components/icons/GitBranchIcon";
@@ -47,7 +47,6 @@ export default function SessionHeader({
   // directory was copied when it was the last one's. Holding the path instead
   // makes the check say something that stays true — including for a write that
   // resolves after the reader has moved on.
-  const [copiedPath, copy] = useCopied();
   // The session being renamed rather than a flag, for `copiedPath`'s reason:
   // this header is reused, and a flag would open the next session in edit.
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -70,12 +69,7 @@ export default function SessionHeader({
   // project on two machines is never mistaken for one.
   const server = serverOfPath(session.cwd);
 
-  // The branch is what's drawn, the directory is what gets copied — a name is
-  // a thing to read, a path is a thing to paste into a terminal, and a
-  // worktree session's two differ.
-  const cwd = displayPath(session.cwd);
   const title = saved?.sessionId === session.sessionId ? saved.title : session.title;
-  const copied = copiedPath === cwd;
 
   return (
     <div className={cn("flex min-w-0 items-center gap-3 text-ui", className)}>
@@ -149,33 +143,54 @@ export default function SessionHeader({
         )}
       </span>
 
-      {branch && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={() => void copy(cwd)}
-              aria-label={`Copy the working directory, ${cwd}`}
-              // Shrinkable, not `shrink-0`: a worktree branch name is long and
-              // unbounded, so a fixed one overflowed the row and drew itself
-              // over the view tabs rather than giving up width.
-              className="flex min-w-0 cursor-pointer items-center gap-1 rounded-md text-muted-foreground outline-none transition-colors select-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
-            >
-              {copied ? (
-                <Check className="size-3.5 shrink-0" />
-              ) : (
-                <GitBranchIcon className="size-3.5 shrink-0" />
-              )}
-              <span className="truncate">{branch}</span>
-            </button>
-          </TooltipTrigger>
-          {/* What the click does, not the path itself: a branch name says
-              nothing about being a button, and a long path drawn on every
-              hover buries that. The path is on the clipboard a click later. */}
-          <TooltipContent>{copied ? "Copied" : "Click to copy the working directory"}</TooltipContent>
-        </Tooltip>
-      )}
+      {branch && <BranchButton branch={branch} cwd={session.cwd} />}
     </div>
+  );
+}
+
+/// The branch the session's work lands on, with the git mark; a click copies
+/// the working directory. Shared by the header and the titlebar's lone chat.
+export function BranchButton({ branch, cwd: rawCwd }: { branch: string; cwd: string }) {
+  const [copiedPath, copy] = useCopied();
+  // The branch is what's drawn, the directory is what gets copied — a name is
+  // a thing to read, a path is a thing to paste into a terminal, and a
+  // worktree session's two differ.
+  const cwd = displayPath(rawCwd);
+  const copied = copiedPath === cwd;
+  // Read off the directory rather than the branch name, which a reader can
+  // rename to anything; Dray's trees always live under this segment.
+  const worktree = rawCwd.includes("/.claude/worktrees/");
+  const Mark = worktree ? FolderGit2 : GitBranchIcon;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={() => void copy(cwd)}
+          aria-label={`Copy the working directory, ${cwd}`}
+          // Shrinkable, not `shrink-0`: a worktree branch name is long and
+          // unbounded, so a fixed one overflowed the row and drew itself
+          // over the view tabs rather than giving up width.
+          className="flex min-w-0 cursor-pointer items-center gap-1 rounded-md text-muted-foreground outline-none transition-colors select-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          {copied ? (
+            <Check className="size-3.5 shrink-0" />
+          ) : (
+            <Mark className="size-3.5 shrink-0" />
+          )}
+          {/* A Dray worktree's branch is `worktree-<name>`; the mark already
+              says worktree and the name is the part worth the room. */}
+          <span className="truncate">{branch.replace(/^worktree-/, "")}</span>
+        </button>
+      </TooltipTrigger>
+      {/* What it is and what the click does, not the path itself: a long path
+          drawn on every hover buries both. It is on the clipboard a click later. */}
+      <TooltipContent>
+        {copied
+          ? "Copied"
+          : `${worktree ? "Worktree" : "Branch"} · click to copy the working directory`}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

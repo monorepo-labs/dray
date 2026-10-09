@@ -9,6 +9,10 @@ type AppShellProps = {
   /// The sidebar is drawn. Shut, a strip of the frame still holds the sheet
   /// off the window's left edge.
   sidebarOpen?: boolean;
+  /// The sheet reaches up behind the header rather than starting under it —
+  /// for pages with no tabs to sit in the strip. The header floats over the
+  /// sheet's top, and the sheet's contents keep their place below it.
+  tall?: boolean;
   header?: ReactNode;
   footer: ReactNode;
   /// Right-hand inspector, when open. Sits outside the chat column so the
@@ -46,6 +50,7 @@ type AppShellProps = {
 export default function AppShell({
   sidebar,
   sidebarOpen = true,
+  tall = false,
   header,
   footer,
   panel,
@@ -59,11 +64,11 @@ export default function AppShell({
 }: AppShellProps) {
   // A card of its own beside the sheet, with the frame showing between. Kept
   // mounted while shut, since the pane hides rather than unmounts.
-  const gap = <div className="w-1.5 shrink-0 bg-surface-well" />;
+  const gap = <div className="w-1.5 shrink-0 bg-surface-frame" />;
   const panelCard = panel && (
     <div className={cn("flex shrink-0", !panelOpen && "hidden")}>
       {!panelLeft && gap}
-      <Sheet>{panel}</Sheet>
+      <Sheet tall={tall}>{panel}</Sheet>
       {panelLeft && gap}
     </div>
   );
@@ -71,22 +76,44 @@ export default function AppShell({
     // The header spans the window and everything else sits under it, the way a
     // browser's tab strip sits over its pages.
     <div className="relative flex h-full w-full flex-col overflow-hidden">
-      {header}
+      {/* Always floating, so the sheet's top can glide between under the
+          header and behind it; the strip above the sheet is the header's fill. */}
+      <div className="absolute inset-x-0 top-0 z-30">{header}</div>
       {/* Not `overflow-hidden`: the sheet's ring and shadow sit just outside it,
           and the top edge would be cut away. The window clips already. */}
       <div className="flex min-h-0 flex-1">
         {/* On the titlebar's own fill, so header and sidebar are one frame
             and the sheet beside them is the only thing raised. */}
-        <div className={cn("flex shrink-0 bg-surface-well", !sidebarOpen && "w-2")}>
+        <div
+          className={cn(
+            "flex shrink-0 bg-surface-frame",
+            !sidebarOpen && "w-2",
+            // The header floats over its top, so it starts below the header.
+            "pt-(--titlebar-h)",
+            // Light rows sat on the bare page and now sit on the frame's
+            // darker fill, so the same veil read as half the mark it was.
+            "not-dark:[--sidebar-accent:color-mix(in_oklab,var(--foreground)_15%,transparent)]",
+            // Keycaps too: their muted veil was tuned against the bare page.
+            "not-dark:[&_[data-slot=kbd]]:bg-foreground/13",
+          )}
+        >
           {sidebar}
         </div>
         {/* The frame runs on round the sheet's foot and right side too, as
             strips of the same fill: the sheet is glass, so a fill behind it
             would darken it as well. */}
         <div className="flex min-w-0 flex-1 flex-col">
+          <div
+            className={cn(
+              "shrink-0 bg-surface-frame transition-[height]",
+              // The timing is the destination's: rising to a page quickly,
+              // settling into a task a little slower.
+              tall ? "h-2 duration-125 ease-in" : "h-(--titlebar-h) duration-200 ease-out",
+            )}
+          />
           <div className="flex min-h-0 min-w-0 flex-1">
             {panelLeft && panelCard}
-            <Sheet className="flex-1">
+            <Sheet className="flex-1" tall={tall}>
         {/* `min-w-0` is load-bearing: without it a wide code block in the transcript
           sets the flex item's floor and pushes the sidebar off-screen. */}
         <div className="flex min-w-0 flex-1 flex-col">
@@ -131,9 +158,9 @@ export default function AppShell({
             </Sheet>
             {!panelLeft && panelCard}
           </div>
-          <div className="h-2 shrink-0 bg-surface-well" />
+          <div className="h-2 shrink-0 bg-surface-frame" />
         </div>
-        <div className="w-2 shrink-0 bg-surface-well" />
+        <div className="w-2 shrink-0 bg-surface-frame" />
       </div>
     </div>
   );
@@ -147,7 +174,16 @@ export default function AppShell({
 /// scrim alone, since 7% of black over a dark row is nothing. The scrim is what
 /// paints the corner's outside: the clip leaves bare glass there, lighter than
 /// the frame around it, and nothing can make glass darker but a fill.
-function Sheet({ className, children }: { className?: string; children: ReactNode }) {
+function Sheet({
+  className,
+  tall = false,
+  children,
+}: {
+  className?: string;
+  /// Reaching up behind the header: its contents start below it all the same.
+  tall?: boolean;
+  children: ReactNode;
+}) {
   const corner = "pointer-events-none absolute z-20 size-2";
   return (
     <div className={cn("relative flex min-h-0 min-w-0", className)}>
@@ -157,11 +193,19 @@ function Sheet({ className, children }: { className?: string; children: ReactNod
         aria-hidden
         className="pointer-events-none absolute inset-0 z-20 rounded-[8px] shadow-(--shadow-sheet)"
       />
-      <span aria-hidden className={cn(corner, "top-0 left-0 bg-[radial-gradient(circle_at_100%_100%,transparent_8px,var(--surface-well)_8.5px)]")} />
-      <span aria-hidden className={cn(corner, "top-0 right-0 bg-[radial-gradient(circle_at_0%_100%,transparent_8px,var(--surface-well)_8.5px)]")} />
-      <span aria-hidden className={cn(corner, "bottom-0 left-0 bg-[radial-gradient(circle_at_100%_0%,transparent_8px,var(--surface-well)_8.5px)]")} />
-      <span aria-hidden className={cn(corner, "right-0 bottom-0 bg-[radial-gradient(circle_at_0%_0%,transparent_8px,var(--surface-well)_8.5px)]")} />
-      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-[8px]">{children}</div>
+      <span aria-hidden className={cn(corner, "top-0 left-0 bg-[radial-gradient(circle_at_100%_100%,transparent_8px,var(--surface-frame)_8.5px)]")} />
+      <span aria-hidden className={cn(corner, "top-0 right-0 bg-[radial-gradient(circle_at_0%_100%,transparent_8px,var(--surface-frame)_8.5px)]")} />
+      <span aria-hidden className={cn(corner, "bottom-0 left-0 bg-[radial-gradient(circle_at_100%_0%,transparent_8px,var(--surface-frame)_8.5px)]")} />
+      <span aria-hidden className={cn(corner, "right-0 bottom-0 bg-[radial-gradient(circle_at_0%_0%,transparent_8px,var(--surface-frame)_8.5px)]")} />
+      <div
+        className={cn(
+          // Grows by what the sheet rose, so the contents hold still.
+          "flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-[8px] bg-(--surface-sheet) transition-[padding]",
+          tall ? "pt-[calc(var(--titlebar-h)-0.5rem)] duration-125 ease-in" : "duration-200 ease-out",
+        )}
+      >
+        {children}
+      </div>
     </div>
   );
 }

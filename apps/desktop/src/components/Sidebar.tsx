@@ -1,3 +1,4 @@
+import { Cog6ToothIcon } from "@heroicons/react/16/solid";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
@@ -11,7 +12,6 @@ import {
   Pin,
   Plus,
   Search,
-  Settings,
   Trash2,
   Undo2,
 } from "lucide-react";
@@ -728,7 +728,7 @@ export function SettingsButton({ onOpen }: { onOpen: () => void }) {
           aria-label="Settings"
           className="opacity-80 transition-opacity hover:opacity-100"
         >
-          <Settings className="size-4" />
+          <Cog6ToothIcon className="size-4" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="right">
@@ -2166,6 +2166,8 @@ function SessionRow({
   // one it opens for its own children.
   const ownRail = RAIL_X + (depth - 1) * STEP;
   const parentCarriesOn = guides[depth - 1] ?? false;
+  // The trailing slot is drawing a spinner or an orb rather than a timestamp.
+  const live = (marksLive && pr?.checksState === "RUNNING") || status === "in_progress";
 
   return (
     <RowMenu
@@ -2391,7 +2393,15 @@ function SessionRow({
               faded-but-present element still hit-tests — stacked on `right-0` it
               would otherwise swallow the cursor over the last button, which reads
               as that one button being dead while its neighbour works. */}
-          <span className="pointer-events-none absolute right-0 flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-data-[state=open]:opacity-0">
+          <span
+            className={cn(
+              "pointer-events-none absolute right-0 flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150",
+              // Only the timestamp gives way to the buttons. Something in
+              // flight is still in flight under the cursor, and on a mid-turn
+              // row with an inherited pin there are no buttons to give way to.
+              !live && "group-hover:opacity-0 group-data-[state=open]:opacity-0",
+            )}
+          >
             {/* The orb takes the timestamp's place rather than a slot of its
                 own: a row that's working right now is the one row whose "last
                 activity" reads as stale, and one indicator per row is what keeps
@@ -2432,7 +2442,13 @@ function SessionRow({
               `inline-flex`, and Tailwind emits that after `hidden` at equal
               specificity, so a `display` utility here silently loses.
               `pointer-events-none` keeps the invisible buttons unclickable. */}
-          <div className="pointer-events-none relative flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-data-[state=open]:pointer-events-auto group-data-[state=open]:opacity-100">
+          <div
+            className={cn(
+              "pointer-events-none relative flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-data-[state=open]:pointer-events-auto group-data-[state=open]:opacity-100",
+              // Beside the orb's 20px box rather than over it.
+              live && "mr-6",
+            )}
+          >
             {/* Absent on a row that follows a pinned ancestor rather than
                 carrying the pin itself, the way 'Detach from parent' is absent
                 where there is no parent drawn: the row sits in the Pinned group

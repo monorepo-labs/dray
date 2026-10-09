@@ -120,7 +120,7 @@ import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
 import { setHotkeysSuspended, useHotkey } from "@/hooks/useHotkey";
 import { stepZoom } from "@/lib/zoom";
-import { cycleTheme } from "@/hooks/useTheme";
+import { cycleTheme, toggleMode } from "@/hooks/useTheme";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
 import { checkChangelog, markChangelogSeen, type Release } from "@/lib/changelog";
@@ -2436,6 +2436,7 @@ function App() {
   useHotkey("settings", () => setSettingsOpen(true));
   // No notice on landing: the whole window changing is the answer.
   useHotkey("theme.next", cycleTheme);
+  useHotkey("mode.toggle", toggleMode);
   useHotkey("zoom.in", () => stepZoom(1));
   useHotkey("zoom.out", () => stepZoom(-1));
   useHotkey("zoom.reset", () => stepZoom(0));
@@ -2541,6 +2542,9 @@ function App() {
     onSendNow: handleInterrupt,
   };
 
+  // Pages with no tabs for the strip: the sheet reaches up behind the header.
+  const tallSheet = issuesOpen || !shownSession;
+
   return (
     <TooltipProvider>
     <DiffWorkerPool pair={codeThemePair}>
@@ -2550,6 +2554,7 @@ function App() {
     <div className={cn("h-full w-full", settingsOpen && "hidden")}>
     <AppShell
       sidebarOpen={!collapsed}
+      tall={tallSheet}
       // The issues page fills the column, so the centred empty-composer state
       // is wrong there even with no session selected.
       centered={!shownSession && !issuesOpen}
@@ -2649,7 +2654,9 @@ function App() {
           // than the window, so the active tab can stand out of it the way a
           // browser's does.
           className={cn(
-            "relative flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden bg-surface-well px-3",
+            // No fill of its own: it floats over the frame, whose strip above
+            // the sheet is what gives this row its colour.
+            "relative flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-3",
             !fullscreen && "pl-(--traffic-lights-w)",
           )}
           // `deep`, not bare: bare drags only on direct hits, so every label
@@ -2662,24 +2669,33 @@ function App() {
               so the toggle no longer has a strip of its own to live in. */}
           <SidebarToggle onToggle={toggleSidebar} collapsed={collapsed} />
 
-          {/* Only once a space exists: before that the switcher has nothing to
-              switch, and New space lives in Settings. Over the sidebar's right
-              end where it is open, out of the flow so the tabs do not move;
-              shut, it follows the toggle. */}
-          {spaces.length > 0 && (
-            <SpaceSwitcher
-              spaces={spaces}
-              value={space}
-              // Only while the dialog is actually up: it is cleared on close,
-              // so a cancelled naming puts the switcher back on All Spaces.
-              naming={settingsOpen && namingSpace}
-              onChange={changeSpace}
-              onNew={openNewSpace}
-              className={cn("shrink-0", sidebarDrawn > 0 && "absolute top-1/2 -translate-y-1/2")}
-              style={sidebarDrawn > 0 ? { right: `calc(100% - ${sidebarDrawn}px + 0.5rem)` } : undefined}
-            />
+          {/* Over the sidebar's right end, out of the flow so the tabs do not
+              move. It belongs to the sidebar, so it goes when the sidebar does. */}
+          {!shownSession && !issuesOpen && sidebarDrawn > 0 && (
+          <div
+            className="absolute top-1/2 flex shrink-0 -translate-y-1/2 items-center gap-1"
+            style={{ right: `calc(100% - ${sidebarDrawn}px + 0.5rem)` }}
+          >
+            {/* Only once a space exists — before that the switcher has nothing
+                to switch, and New space lives in Settings — and only on the
+                new-task screen, beside settings. */}
+            {spaces.length > 0 && (
+              <SpaceSwitcher
+                spaces={spaces}
+                value={space}
+                // Only while the dialog is actually up: it is cleared on close,
+                // so a cancelled naming puts the switcher back on All Spaces.
+                naming={settingsOpen && namingSpace}
+                onChange={changeSpace}
+                onNew={openNewSpace}
+                className="shrink-0"
+              />
+            )}
+            {/* App-wide, so only on the new-task screen. ⌘, opens settings
+                from anywhere. */}
+            <SettingsButton onOpen={() => setSettingsOpen(true)} />
+          </div>
           )}
-
 
           {/* With a session up, the session is the strip's first tab and the
               header has nothing left to say; it stays for the pages that are
@@ -2697,7 +2713,7 @@ function App() {
               {hiddenParent.title} /
             </button>
           )}
-          {!issuesOpen && shownSession ? (
+          {!issuesOpen && shownSession && (
             <ViewTabs
               sessionId={shownSession.sessionId}
               // The group's name over a grid, for the reason the header gave:
@@ -2712,14 +2728,18 @@ function App() {
               }
               tab={viewTab}
               onChange={setViewTab}
+              branch={prBranch}
+              cwd={shownSession.cwd}
             />
-          ) : (
+          )}
+          {(issuesOpen || !shownSession) && (
             // The page's name, over the sheet's left edge where the sidebar is
             // open — out of the flow, so what sits before it cannot move it.
             // Shut, the sheet starts under the traffic lights, so it follows
             // the toggle instead.
+            // Hidden for now; the spacer keeps the far end at the far end.
             <div className="min-w-0 flex-1">
-              <span
+              {/* <span
                 className={cn(
                   "truncate text-ui text-muted-foreground opacity-50 select-none",
                   sidebarDrawn > 0 && "absolute top-1/2 -translate-y-1/2",
@@ -2727,20 +2747,10 @@ function App() {
                 style={sidebarDrawn > 0 ? { left: sidebarDrawn } : undefined}
               >
                 {issuesOpen ? "Issues" : "New session"}
-              </span>
+              </span> */}
             </div>
           )}
 
-          {/* App-wide, so only on the new-task screen, where the row has no
-              session's tabs to make room for. ⌘, still opens settings from
-              anywhere. */}
-
-
-          {/* App-wide, so only on the new-task screen, where the row has no
-              session's tabs to make room for. ⌘, opens settings from anywhere. */}
-          {!shownSession && !issuesOpen && (
-            <SettingsButton onOpen={() => setSettingsOpen(true)} />
-          )}
 
           {issuesOpen
             ? // Only once something is open to close. Nothing on this page can

@@ -218,9 +218,10 @@ export default function BrowserPane({
       <div
         ref={stageRef}
         className={cn(
+          // Bare, so the frame between the page hiding and the next view
+          // showing is the sheet the next view sits on, not a flash of the
+          // page colour under it.
           "relative min-h-0 flex-1",
-          // Bare while empty, so the empty state sits on the window like any view.
-          !empty && "bg-background",
           viewport && !empty && "flex items-start justify-center overflow-hidden bg-surface-raised p-3",
         )}
       >
