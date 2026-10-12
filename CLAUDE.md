@@ -752,7 +752,7 @@ Order is load-bearing at both ends: unlock before remove because the lock refuse
 - **The pane holds the shutter for the whole recording and draws `RecordingNotice` over the still**, since the page is laid out at the recording's size, not the pane's. The reader cannot change tabs meanwhile, because the agent's next verb goes to whichever tab is active. The agent's own tab verbs stay open, since a flow may cross tabs.
 - Files land in `~/.dray/browser{,-dev}/recordings/<session>/`, deleted with the session, and the asset scope covers them. A recording path in the agent's reply renders as an inline `VideoPlayer`.
 
-**A link in the transcript opens in Dray's browser; ⌘-click leaves for the system one.** Both the assistant's markdown links and a URL in the user's own bubble go through `openLink`. [LinkDialog](apps/desktop/src/components/chat/LinkDialog.tsx) — the question it used to ask first — stays mounted with nothing raising it; `askLink` is its way back in. URLs in user text are a `url` segment from `highlightSegments`, `http(s)://` only, with the sentence's trailing punctuation left outside.
+**A link in the transcript opens in Dray's browser, flipping the main column to the Browser view rather than opening the side panel; ⌘-click leaves for the system one.** Both the assistant's markdown links and a URL in the user's own bubble go through `openLink`. [LinkDialog](apps/desktop/src/components/chat/LinkDialog.tsx) — the question it used to ask first — stays mounted with nothing raising it; `askLink` is its way back in. URLs in user text are a `url` segment from `highlightSegments`, `http(s)://` only, with the sentence's trailing punctuation left outside.
 
 ## Forking a session
 

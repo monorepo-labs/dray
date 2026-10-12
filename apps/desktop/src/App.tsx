@@ -1361,6 +1361,17 @@ function App() {
   const blankTabs = useBlankTabs(selectedSessionId ?? "");
   const pendingBrowserTab = blankTabs.active !== null;
   const hasBrowserTabs = browserTabs && browserTabs.length > 0;
+  // A link's tab is answered for before the strip lists it, and the Browser
+  // view with no lit tab hands itself back to Chat — so the flip waits for an
+  // active tab to be there.
+  const [browserWanted, setBrowserWanted] = useState<string | null>(null);
+  useEffect(() => {
+    if (!browserWanted) return;
+    if (browserWanted !== selectedSessionId) return setBrowserWanted(null);
+    if (!browserTabs?.some((tab) => tab.active)) return;
+    setViewTabs((prev) => ({ ...prev, [browserWanted]: "browser" }));
+    setBrowserWanted(null);
+  }, [browserWanted, browserTabs, selectedSessionId]);
   // The main column's Browser view is the panel's browser expanded. Arriving
   // on it closes the pane, whatever tab the pane was on: the reader came for
   // the full width. ⌘E brings it back beside the page, and leaving gives back
@@ -1817,8 +1828,8 @@ function App() {
   }, []);
 
   // A link in the transcript opens as a new tab in the session's browser and
-  // brings the pane up on it, unless the full view already has it. ⌘-click,
-  // or no session to hold one, goes to the system browser.
+  // flips the main column to the Browser view, leaving the side panel alone.
+  // ⌘-click, or no session to hold one, goes to the system browser.
   useEffect(() => {
     setLinkOpener((url, { external }) => {
       // The browser is this Mac's, so a remote session's links leave the app.
@@ -1829,11 +1840,7 @@ function App() {
       // The session is named outright: the read lands after an await, and by
       // then the reader may be on another session whose pane must stay put.
       void openInBrowser(selectedSessionId, url, true)
-        .then(() => {
-          if (fullBrowserOpen) return;
-          setPanelTab("browser", selectedSessionId);
-          setPanelOpen(true, selectedSessionId);
-        })
+        .then(() => setBrowserWanted(selectedSessionId))
         .catch(() => {
           // Answered by the system browser, so the pane has nothing to say.
           clearOpenError(selectedSessionId);
@@ -1841,7 +1848,7 @@ function App() {
         });
     });
     return () => setLinkOpener(null);
-  }, [selectedSessionId, fullBrowserOpen, setPanelTab, setPanelOpen, activeServer]);
+  }, [selectedSessionId, activeServer]);
 
   // An element picked in the page lands in that session's draft, and the
   // composer is brought on screen to show it — off the full view and onto
