@@ -837,11 +837,17 @@ pub fn installed_restart() -> Option<String> {
 /// loaded and so would miss a plist `dray service start` rewrote since.
 fn restart_command() -> String {
     if MAC {
-        let plist = agent_plist_path().map(|p| p.display().to_string()).unwrap_or_default();
+        let plist = agent_plist_path().map(|p| sh_quote(&p.display().to_string())).unwrap_or_default();
         format!("launchctl bootout {} && launchctl bootstrap {} {plist}", agent_target(), agent_domain())
     } else {
         "systemctl --user restart dray".into()
     }
+}
+
+/// One shell word, for a path printed for the reader to paste: a home may
+/// hold a space.
+fn sh_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
 }
 
 /// A Mac's background server: a LaunchAgent under a label of its own, so it
@@ -1116,6 +1122,16 @@ mod tests {
         let install = installed.lines().last().unwrap();
         assert!(install.starts_with("install -y fontconfig"), "{install}");
         assert!(install.contains(" libatk1.0-0 ") && install.contains(" libasound2t64"), "{install}");
+    }
+
+    #[test]
+    fn a_quoted_path_reaches_sh_as_one_word() {
+        let path = "/Users/a b'c/x.plist";
+        let out = std::process::Command::new("sh")
+            .args(["-c", &format!("printf '[%s]' {}", super::sh_quote(path))])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), format!("[{path}]"));
     }
 
     #[test]
