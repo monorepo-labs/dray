@@ -17,8 +17,8 @@ paste into the app.
 for both Linux arches. The Linux legs also build `dray-serve` from
 `apps/desktop/src-tauri` (`--no-default-features --features serve`) and pack it
 into the same `dray-<target>.tar.gz`. One download, one checksum, so the two
-binaries can only ever arrive at one version. The macOS archives are unchanged,
-so `dray update` from the Mac app downloads what it does today.
+binaries can only ever arrive at one version. The macOS legs build it too
+(#470), for a Mac with no app; on a Mac with the app it sits unused.
 
 **Linux legs move to `ubuntu-22.04` / `ubuntu-22.04-arm`.** A binary needs the
 glibc it was linked against or newer; `ubuntu-latest` is 24.04 (glibc 2.39), so
@@ -31,8 +31,8 @@ tag-matches-crate check.
 
 ## install.sh
 
-After the binaries land, on Linux and not under `dray update`, it runs
-`dray setup`. Whatever is in the archive is installed, so the script stays one
+After the binaries land, not under `dray update` and not on a Mac with the Dray
+app, it runs `dray setup`. Whatever is in the archive is installed, so the script stays one
 code path for both platforms.
 
 `dray update` sets `DRAY_UPDATING=1` so the installer neither runs setup nor
@@ -77,9 +77,51 @@ so no protocol bump.
 ## Not here
 
 Stage 4's side: the app reading `serve-token` over SSH, port forwarding, starting
-a stopped server. A Mac as a server is a stage 7 item with its design open. On
-macOS `dray setup` still offers missing agents, `git` and `gh`, and neither
-offers nor claims a background server.
+a stopped server.
+
+## A Mac with no app (#470)
+
+`dray setup`, `dray serve` and `dray service` run on a Mac too, gated on the
+app being absent rather than on the OS: its login agent
+(`com.yogesh.dray.server.plist`) or `Dray.app` in either Applications folder
+means "the Dray app runs this Mac's server", and all three refuse. Setup still
+offers the tools there and stops. A `DRAY_HOME` of its own lets them through,
+the same way round `serve.lock` names. `dray service uninstall` is never
+refused, since it is how a server set up before the app arrived hands over.
+
+- **`dray service`** is a LaunchAgent, `com.yogesh.dray-serve` in the `gui`
+  domain, modelled on the app's launchd.rs: `KeepAlive` on a failed exit
+  (systemd's `Restart=on-failure`), `PATH` and `DRAY_HOME` in the plist, log in
+  `<home>/server.log`. Restart is `bootout` then `bootstrap`, never
+  `kickstart -k`, which reruns the job as loaded and misses a rewritten plist.
+  `service tunnel` is Linux only; `dray tunnel` runs in the foreground.
+- **`dray-serve` writes `serve-port`**, so an app installed later connects to
+  it as This Mac, and answers `live_state`, which the app re-asks This Mac on
+  startup. Remote access stays the app's server's alone. It answers the app's
+  `restart_when_idle` with "unknown command" and stays up, and the app's own
+  agent fails on `serve.lock` and retries every 10s until `dray service
+  uninstall` lets it take over.
+
+Tested on a Mac logged in at the GUI, with the app installed and a scratch
+`DRAY_HOME`: start, status, a Claude Code turn, launchd restarting a killed
+server, a second start leaving it running, uninstall, and a client admitted the
+way the app's This Mac is, off `serve-port`. Not tested, beyond the app itself
+meeting a `dray-serve`:
+
+1. **No GUI login, by design.** A `gui` domain job runs only while its user
+   is logged in at the Mac: it stops at logout and starts again at login. A
+   server while nobody is logged in is deliberately out of scope, so no
+   LaunchDaemon. Over SSH with nobody logged in, bootstrap fails and setup
+   says to log in or turn on automatic login.
+2. **Keychain.** Claude Code's login, in the Keychain, worked from the job here
+   because the login keychain was unlocked by the GUI login. Expect auth to
+   fail from a job with the keychain locked, which points at automatic login
+   as the answer to 1 too.
+3. **TCC.** `ls ~/Documents` from an agent under the job answered with no
+   prompt on this Mac, which may hold grants a fresh one does not. On a fresh
+   Mac keep repos out of `~/Documents`, `~/Desktop` and `~/Downloads`. The
+   binaries are ad-hoc signed, so each `dray update` is a new TCC identity
+   until they carry the Developer ID.
 
 ## What testing found
 

@@ -3,7 +3,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -25,9 +25,11 @@ pub enum ServerCommand {
     /// Install what this machine is missing to run Dray, then start the
     /// server in the background.
     Install(Install),
-    /// Run the server in the background, surviving logout and reboot. Linux only.
+    /// Run the server in the background, surviving logout and reboot. On a
+    /// Mac, only where the Dray app is not installed.
     Start,
-    /// Run the server in this terminal. Linux only.
+    /// Run the server in this terminal. On a Mac, only where the Dray app is
+    /// not installed.
     Run(Run),
     /// Stop the server and remove it from the background.
     Stop,
@@ -54,7 +56,7 @@ pub fn server(command: ServerCommand) -> Result<(), String> {
 
 #[derive(Subcommand)]
 pub enum ServiceCommand {
-    /// Run the server in the background, surviving logout and reboot. Linux only.
+    /// Run the server in the background, surviving logout and reboot.
     Start,
     /// Show whether the server is running, and its tunnel address.
     Status,
@@ -89,6 +91,31 @@ pub struct Run {
 }
 
 const LINUX: bool = cfg!(target_os = "linux");
+const MAC: bool = cfg!(target_os = "macos");
+
+/// Whether this machine may run a server of its own: Linux always, a Mac only
+/// where no Dray app runs one on the same home. A `DRAY_HOME` of its own is
+/// the way round that `serve.lock`'s refusal already names.
+fn may_serve() -> Result<(), String> {
+    let own_home = std::env::var_os("DRAY_HOME").is_some_and(|v| !v.is_empty());
+    if MAC && !own_home && app_on_this_mac() {
+        return Err("the Dray app runs this Mac's server".into());
+    }
+    Ok(())
+}
+
+/// The app's login agent, which every launch installs, or its bundle, for one
+/// installed and never opened. install.sh asks the same three paths.
+fn app_on_this_mac() -> bool {
+    let home = std::env::home_dir().unwrap_or_default();
+    [
+        home.join("Library/LaunchAgents/com.yogesh.dray.server.plist"),
+        PathBuf::from("/Applications/Dray.app"),
+        home.join("Applications/Dray.app"),
+    ]
+    .iter()
+    .any(|p| p.exists())
+}
 
 const BAR: &str = "\x1b[90m│\x1b[0m";
 const DIM: &str = "\x1b[2m";
@@ -247,8 +274,8 @@ pub fn setup(args: Install) -> Result<(), String> {
         done("Sign in where you have not yet", &logins.join(&format!("\n{BAR}  ")));
     }
 
-    if !LINUX {
-        println!("\x1b[90m└\x1b[0m  Done.");
+    if may_serve().is_err() {
+        println!("\x1b[90m└\x1b[0m  Done. The Dray app runs this Mac's server.");
         return Ok(());
     }
     match service_start() {
@@ -261,6 +288,10 @@ pub fn setup(args: Install) -> Result<(), String> {
         }
     }
     println!("\x1b[90m└\x1b[0m  In the Dray app, Add server and paste:\n\n   {}\n{}", ssh_line(), private_note());
+    // The app reaches a server over SSH, which a Mac ships switched off.
+    if MAC && std::env::var_os("SSH_CONNECTION").is_none() {
+        println!("   {DIM}Turn on Remote Login in System Settings, General, Sharing, for the app to reach this Mac.{RESET}\n");
+    }
     Ok(())
 }
 
@@ -436,9 +467,7 @@ fn output(cmd: &str, args: &[&str]) -> Option<String> {
 }
 
 pub fn serve(args: Run) -> Result<(), String> {
-    if !LINUX {
-        return Err("dray server run runs on Linux for now. On a Mac, the Dray app runs the server.".into());
-    }
+    may_serve()?;
     let bin = beside("dray-serve")?;
     let err = Command::new(&bin).args(args.args).exec();
     Err(format!("could not run {}: {err}", bin.display()))
@@ -459,8 +488,8 @@ fn beside(name: &str) -> Result<PathBuf, String> {
 }
 
 pub fn service(command: ServiceCommand) -> Result<(), String> {
-    if !LINUX {
-        return Err("dray server runs on Linux for now. On a Mac, the Dray app runs the server.".into());
+    if MAC {
+        return agent_service(command);
     }
     match command {
         ServiceCommand::Start => {
@@ -515,7 +544,7 @@ pub fn service(command: ServiceCommand) -> Result<(), String> {
 const UNIT: &str = "dray.service";
 const TUNNEL_UNIT: &str = "dray-tunnel.service";
 
-pub fn unit_path() -> Result<PathBuf, String> {
+fn unit_path() -> Result<PathBuf, String> {
     unit_file(UNIT)
 }
 
@@ -784,6 +813,9 @@ fn systemctl(quiet: bool, args: &[&str]) -> bool {
 /// the unit every time, so `PATH` follows wherever the reader last ran this
 /// from, and never restarts a running server — that would kill its agents.
 fn service_start() -> Result<String, String> {
+    if MAC {
+        return agent_start();
+    }
     if !systemctl(true, &["show-environment"]) {
         return Err("No systemd user session here, so nothing can keep the server running. \
                     Start it yourself under tmux or nohup: dray server run"
@@ -817,12 +849,191 @@ fn service_start() -> Result<String, String> {
         );
     }
     if was_running {
-        note += &format!(
-            "\n{BAR}  It was already running. A newer dray-serve takes over on restart, \
-             which stops running agents: systemctl --user restart dray"
-        );
+        note += &already_running();
     }
     Ok(note)
+}
+
+fn already_running() -> String {
+    format!(
+        "\n{BAR}  It was already running. A newer dray-serve takes over on restart, \
+         which stops running agents: {}",
+        restart_command()
+    )
+}
+
+/// How the reader restarts the background server onto the `dray-serve` now on
+/// disk, if one is installed.
+pub fn installed_restart() -> Option<String> {
+    let installed = if MAC { agent_plist_path() } else { unit_path() }.is_ok_and(|p| p.exists());
+    installed.then(restart_command)
+}
+
+/// On a Mac, a reload rather than `kickstart -k`, which restarts the job as
+/// loaded and so would miss a plist `dray server start` rewrote since.
+fn restart_command() -> String {
+    if MAC {
+        let plist = agent_plist_path().map(|p| sh_quote(&p.display().to_string())).unwrap_or_default();
+        format!("launchctl bootout {} && launchctl bootstrap {} {plist}", agent_target(), agent_domain())
+    } else {
+        "systemctl --user restart dray".into()
+    }
+}
+
+/// One shell word, for a path printed for the reader to paste: a home may
+/// hold a space.
+fn sh_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
+}
+
+/// A Mac's background server: a LaunchAgent under a label of its own, so it
+/// never touches the app's `com.yogesh.dray.server`. Modelled on the app's
+/// launchd.rs.
+const AGENT_LABEL: &str = "com.yogesh.dray-serve";
+
+fn agent_plist_path() -> Result<PathBuf, String> {
+    let home = std::env::home_dir().ok_or("could not resolve your home directory")?;
+    Ok(home.join("Library/LaunchAgents").join(format!("{AGENT_LABEL}.plist")))
+}
+
+fn agent_domain() -> String {
+    format!("gui/{}", output("id", &["-u"]).unwrap_or_default())
+}
+
+fn agent_target() -> String {
+    format!("{}/{AGENT_LABEL}", agent_domain())
+}
+
+/// Status and output; a launchctl that cannot run reads as a failure.
+fn launchctl(args: &[&str]) -> (bool, String) {
+    match Command::new("/bin/launchctl").args(args).stdin(Stdio::null()).output() {
+        Ok(out) => {
+            let said = if out.status.success() { &out.stdout } else { &out.stderr };
+            (out.status.success(), String::from_utf8_lossy(said).trim().to_string())
+        }
+        Err(e) => (false, e.to_string()),
+    }
+}
+
+/// The job's pid, off `launchctl print`: `None` when it is not loaded, or is
+/// loaded and not running.
+fn agent_pid() -> Option<String> {
+    let (ok, text) = launchctl(&["print", &agent_target()]);
+    ok.then_some(())?;
+    text.lines().find_map(|l| l.trim().strip_prefix("pid = ").map(str::to_string))
+}
+
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// `KeepAlive` on a failed exit alone, systemd's `Restart=on-failure`.
+/// `Interactive` for the app's reason: agents run builds under it. launchd
+/// starts it with an environment of its own, so `PATH` and `DRAY_HOME` ride
+/// along.
+fn agent_plist(serve: &Path, log: &Path, env: &[(&str, String)]) -> String {
+    let pairs: String = env.iter().map(|(k, v)| format!("<key>{k}</key><string>{}</string>", xml_escape(v))).collect();
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{AGENT_LABEL}</string>
+  <key>ProgramArguments</key><array><string>{serve}</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+  <key>EnvironmentVariables</key><dict>{pairs}</dict>
+</dict>
+</plist>
+"#,
+        serve = xml_escape(&serve.display().to_string()),
+        log = xml_escape(&log.display().to_string()),
+    )
+}
+
+/// Writes the plist every time, so `PATH` follows wherever the reader last
+/// ran this from, and never restarts a running server. A `gui` domain job runs
+/// only while its user is logged in at the Mac, so a headless one wants
+/// automatic login.
+fn agent_start() -> Result<String, String> {
+    may_serve()?;
+    let serve = beside("dray-serve")?;
+    // Absolute, since launchd resolves the job's paths from `/`, not from here.
+    let home = std::path::absolute(dray_home()?).map_err(|e| format!("could not resolve DRAY_HOME: {e}"))?;
+    // 0700, which the server's orchestration socket insists on. launchd opens
+    // the log in it before the server could make it.
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&home)
+        .map_err(|e| format!("could not create {}: {e}", home.display()))?;
+    let log = home.join("server.log");
+    let mut env = vec![("PATH", unit_env_path(&serve)?)];
+    if std::env::var_os("DRAY_HOME").is_some_and(|v| !v.is_empty()) {
+        env.push(("DRAY_HOME", home.display().to_string()));
+    }
+    let path = agent_plist_path()?;
+    write_unit(&path, &agent_plist(&serve, &log, &env))?;
+
+    let was_running = agent_pid().is_some();
+    if !launchctl(&["print", &agent_target()]).0 {
+        let (ok, said) = launchctl(&["bootstrap", &agent_domain(), &path.display().to_string()]);
+        if !ok {
+            return Err(format!(
+                "launchd would not start the server: {said}\n{BAR}  It runs only while you are logged in at \
+                 this Mac. Log in there or turn on automatic login, or run it yourself under tmux: dray server run"
+            ));
+        }
+    }
+    // A server that cannot bind exits at once, after bootstrap answered.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    if agent_pid().is_none() {
+        return Err(format!("The server did not stay up. See why: tail -n 20 {}", log.display()));
+    }
+    let mut note = String::from("dray server status");
+    if was_running {
+        note += &already_running();
+    }
+    Ok(note)
+}
+
+/// `dray server` on a Mac. Uninstall is let through with the app present:
+/// it is how a server set up before the app arrived hands over to it.
+fn agent_service(command: ServiceCommand) -> Result<(), String> {
+    match command {
+        ServiceCommand::Start => {
+            let note = agent_start()?;
+            println!("The server is running in the background.\n{note}");
+        }
+        ServiceCommand::Status => {
+            may_serve()?;
+            let pid = agent_pid().ok_or("the server is not running")?;
+            println!("The server is running, pid {pid}. Log: {}", dray_home()?.join("server.log").display());
+            if let Some(url) = tunnel_address()? {
+                println!("\n{}", connect_text(&url)?);
+            }
+        }
+        ServiceCommand::Tunnel { .. } => {
+            return Err("dray server tunnel runs on Linux for now. On a Mac, run dray tunnel under tmux.".into());
+        }
+        ServiceCommand::Uninstall => {
+            let path = agent_plist_path()?;
+            let loaded = launchctl(&["print", &agent_target()]).0;
+            if loaded && !launchctl(&["bootout", &agent_target()]).0 {
+                return Err("launchd would not stop the server; it is still installed".into());
+            }
+            if !path.exists() {
+                println!("{}", if loaded { "Stopped the background server." } else { "No background server is installed." });
+                return Ok(());
+            }
+            std::fs::remove_file(&path).map_err(|e| format!("could not remove {}: {e}", path.display()))?;
+            println!("Removed the background server.");
+        }
+    }
+    Ok(())
 }
 
 /// Without linger, systemd stops a user's services at their last logout and
@@ -947,6 +1158,16 @@ mod tests {
         let install = installed.lines().last().unwrap();
         assert!(install.starts_with("install -y fontconfig"), "{install}");
         assert!(install.contains(" libatk1.0-0 ") && install.contains(" libasound2t64"), "{install}");
+    }
+
+    #[test]
+    fn a_quoted_path_reaches_sh_as_one_word() {
+        let path = "/Users/a b'c/x.plist";
+        let out = std::process::Command::new("sh")
+            .args(["-c", &format!("printf '[%s]' {}", super::sh_quote(path))])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), format!("[{path}]"));
     }
 
     #[test]

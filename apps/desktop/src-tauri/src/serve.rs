@@ -68,9 +68,9 @@ const ADMIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// path; nothing a real client sends comes near this.
 const FILE_HEAD_LIMIT: u64 = 16 * 1024;
 
-/// Where the Mac's background server writes the port it listens on for the
-/// app, then its [`exe_stamp`], then its pid. The port is picked by the OS
-/// each start, so a `dray-serve` on 7317 never collides.
+/// Where a server writes the port it listens on for the app, then its
+/// [`exe_stamp`], then its pid. The Mac's background server lets the OS pick
+/// its port each start, so it never collides with a `dray-serve` on 7317.
 pub const PORT_FILE: &str = "serve-port";
 
 /// Where launchd writes the Mac server's stdout and stderr.
@@ -78,11 +78,7 @@ pub const SERVER_LOG: &str = "server.log";
 
 /// Runs the server until the process ends.
 pub async fn run(port: u16) -> Result<()> {
-    let hub = Hub::default();
-    let sink = {
-        let hub = hub.clone();
-        Sink::new(move |event, payload| hub.publish(event, &payload))
-    };
+    let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
     let home = start_core(sink.clone()).await?;
 
     let (token, token_path) = mint_token().await?;
@@ -90,6 +86,7 @@ pub async fn run(port: u16) -> Result<()> {
     let listener = TcpListener::bind(addr)
         .await
         .with_context(|| format!("could not bind {addr}"))?;
+    write_port_file(&home, listener.local_addr()?.port()).await?;
 
     eprintln!(
         "dray-serve listening on ws://{}, token in {}",
@@ -97,7 +94,7 @@ pub async fn run(port: u16) -> Result<()> {
         token_path.display()
     );
 
-    listen(listener, hub, sink, token.into(), home.join(dray_proto::TUNNEL_URL_FILE).into(), false).await
+    listen(listener, HUB.clone(), sink, token.into(), home.join(dray_proto::TUNNEL_URL_FILE).into(), false).await
 }
 
 /// The Mac's background server: the app's own binary, run by launchd with
@@ -106,7 +103,6 @@ pub async fn run(port: u16) -> Result<()> {
 /// See MAC-SERVER-PLAN.md.
 #[cfg(feature = "desktop")]
 pub async fn run_mac() -> Result<()> {
-    let started_from = exe_stamp().unwrap_or_default();
     let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
     let home = start_core(sink.clone()).await?;
     // launchd appends stdout and stderr here for the life of the login, so
@@ -120,7 +116,7 @@ pub async fn run_mac() -> Result<()> {
     let (token, _) = mint_token().await?;
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.context("could not bind a local port")?;
     let port = listener.local_addr()?.port();
-    store::write_atomic(&home.join(PORT_FILE), format!("{port}\n{started_from}\n{}\n", std::process::id())).await?;
+    write_port_file(&home, port).await?;
     tokio::spawn(crate::remote_access::start(sink.clone()));
 
     // launchd, and Quit and stop sessions in dev, stop the server with SIGTERM.
@@ -140,10 +136,16 @@ pub async fn run_mac() -> Result<()> {
     listen(listener, HUB.clone(), sink, token.into(), home.join(dray_proto::TUNNEL_URL_FILE).into(), true).await
 }
 
+/// Written by `dray-serve` too, so a Dray app installed later on a Mac
+/// already serving finds this server rather than starting one of its own.
+async fn write_port_file(home: &Path, port: u16) -> Result<()> {
+    let stamp = exe_stamp().unwrap_or_default();
+    store::write_atomic(&home.join(PORT_FILE), format!("{port}\n{stamp}\n{}\n", std::process::id())).await
+}
+
 /// The executable's modified time, which moves when an update lands or cargo
 /// rebuilds. The server writes the one it started from under its port; the
 /// app compares it with the file now to tell a server running old code.
-#[cfg(feature = "desktop")]
 pub fn exe_stamp() -> Option<String> {
     let modified = std::fs::metadata(std::env::current_exe().ok()?).ok()?.modified().ok()?;
     let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
@@ -275,9 +277,9 @@ impl Hub {
     }
 }
 
-/// The Mac server's hub, a static because Remote access serves it from a
-/// second listener that comes and goes with the setting.
-#[cfg(feature = "desktop")]
+/// Every server's hub, a static because Remote access serves it from a
+/// second listener that comes and goes with the setting, and `live_state`
+/// reads it from the command table.
 pub static HUB: std::sync::LazyLock<Hub> = std::sync::LazyLock::new(Hub::default);
 
 /// Serves `listener` until the future is dropped, which also drops every
@@ -897,9 +899,6 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
         set_remote_access(on: bool) => crate::remote_access::set_remote_access(sink, on).await;
         remote_access_token() => crate::remote_access::remote_access_token().await;
         restart_when_idle() => ok(restart_when_idle().await);
-        // What a connect opens with, asked again by an app whose webview
-        // was not yet listening when it connected.
-        live_state() => ok(HUB.live.lock().unwrap_or_else(|e| e.into_inner()).payload());
     }
 }
 
@@ -908,10 +907,14 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
 /// Mac-only modules are not compiled here.
 async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     #[cfg(feature = "desktop")]
-    if matches!(cmd, "get_remote_access" | "set_remote_access" | "remote_access_token" | "restart_when_idle" | "live_state") {
+    if matches!(cmd, "get_remote_access" | "set_remote_access" | "remote_access_token" | "restart_when_idle") {
         return dispatch_mac(cmd, args, sink).await;
     }
     table! { cmd, args;
+        // What a connect opens with, asked again by an app whose webview was
+        // not yet listening when it connected — `dray-serve` included, which
+        // an app installed after it meets as This Mac.
+        live_state() => ok(HUB.live.lock().unwrap_or_else(|e| e.into_inner()).payload());
         // Sessions.
         send_msg(
             session_id: String, prompt: String, attachment_paths: Vec<String>,

@@ -400,8 +400,8 @@ it in the app. `add` connects before it saves, so a refusal is the app telling
 you what is wrong — an unknown host key, a password login, no Dray on the
 server — and its fix is the user's to make, never yours: do not accept a host
 key on their behalf. A token never goes on the command line. Remove only
-machines the user named. On a Linux server, `dray machine` is refused: the list
-lives in the Mac app.
+machines the user named. On a server with no app — Linux, or a headless Mac —
+`dray machine` is refused: the list lives in the Mac app.
 
 ## This machine's server
 
@@ -414,8 +414,8 @@ dray server tunnel on    # a public address in front of it; off takes it down
 dray server stop         # stop it and remove it from the background
 ```
 
-What makes a Linux box a Dray server. On a Mac the Dray app runs the server,
-and these are refused there.
+What makes a machine with no Dray app — Linux, or a headless Mac — a Dray
+server. On a Mac with the app, the app runs the server and these are refused.
 
 ## Reporting back to the user
 

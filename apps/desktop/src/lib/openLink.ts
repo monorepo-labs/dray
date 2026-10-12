@@ -29,15 +29,16 @@ export function usePendingLink(): string | null {
   return useSyncExternalStore(changed.subscribe, () => pending);
 }
 
-/// A click on a link asks first — in Dray or outside — since the two mean
-/// different things and a click cannot say which. ⌘-click (Ctrl elsewhere)
-/// skips the question and leaves the app, the way it means "not here" in
-/// every browser's own tab strip.
+/// A click opens the link in Dray's browser; ⌘-click (Ctrl elsewhere) leaves
+/// for the system one, the way it means "not here" in every browser's own tab
+/// strip. `LinkDialog` is left mounted but nothing raises it: `askLink` is its
+/// way back in.
 export function openLink(url: string, event?: { metaKey: boolean; ctrlKey: boolean }) {
-  if (event?.metaKey || event?.ctrlKey) {
-    opener(url, { external: true });
-    return;
-  }
+  opener(url, { external: !!(event?.metaKey || event?.ctrlKey) });
+}
+
+/// Puts the question to the reader instead — in Dray or outside.
+export function askLink(url: string) {
   set(url);
 }
 

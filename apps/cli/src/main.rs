@@ -958,10 +958,10 @@ fn update(args: Update) -> Result<(), String> {
         Ok(status) if status.success() => {
             // Not restarted for the reader: that stops every agent running on
             // it, and the usual caller here is one of those agents.
-            if setup::unit_path().is_ok_and(|p| p.exists()) {
+            if let Some(restart) = setup::installed_restart() {
                 eprintln!(
                     "The background server runs the old version until restarted, which \
-                     stops running agents: systemctl --user restart dray"
+                     stops running agents: {restart}"
                 );
             }
             Ok(())
