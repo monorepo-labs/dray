@@ -833,9 +833,12 @@ pub fn installed_restart() -> Option<String> {
     installed.then(restart_command)
 }
 
+/// On a Mac, a reload rather than `kickstart -k`, which restarts the job as
+/// loaded and so would miss a plist `dray service start` rewrote since.
 fn restart_command() -> String {
     if MAC {
-        format!("launchctl kickstart -k {}", agent_target())
+        let plist = agent_plist_path().map(|p| p.display().to_string()).unwrap_or_default();
+        format!("launchctl bootout {} && launchctl bootstrap {} {plist}", agent_target(), agent_domain())
     } else {
         "systemctl --user restart dray".into()
     }
@@ -916,7 +919,8 @@ fn agent_plist(serve: &Path, log: &Path, env: &[(&str, String)]) -> String {
 fn agent_start() -> Result<String, String> {
     may_serve()?;
     let serve = beside("dray-serve")?;
-    let home = dray_home()?;
+    // Absolute, since launchd resolves the job's paths from `/`, not from here.
+    let home = std::path::absolute(dray_home()?).map_err(|e| format!("could not resolve DRAY_HOME: {e}"))?;
     // 0700, which the server's orchestration socket insists on. launchd opens
     // the log in it before the server could make it.
     std::fs::DirBuilder::new()
@@ -926,8 +930,8 @@ fn agent_start() -> Result<String, String> {
         .map_err(|e| format!("could not create {}: {e}", home.display()))?;
     let log = home.join("server.log");
     let mut env = vec![("PATH", unit_env_path(&serve)?)];
-    if let Some(v) = std::env::var("DRAY_HOME").ok().filter(|v| !v.is_empty()) {
-        env.push(("DRAY_HOME", v));
+    if std::env::var_os("DRAY_HOME").is_some_and(|v| !v.is_empty()) {
+        env.push(("DRAY_HOME", home.display().to_string()));
     }
     let path = agent_plist_path()?;
     write_unit(&path, &agent_plist(&serve, &log, &env))?;

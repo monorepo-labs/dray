@@ -78,11 +78,7 @@ pub const SERVER_LOG: &str = "server.log";
 
 /// Runs the server until the process ends.
 pub async fn run(port: u16) -> Result<()> {
-    let hub = Hub::default();
-    let sink = {
-        let hub = hub.clone();
-        Sink::new(move |event, payload| hub.publish(event, &payload))
-    };
+    let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
     let home = start_core(sink.clone()).await?;
 
     let (token, token_path) = mint_token().await?;
@@ -98,7 +94,7 @@ pub async fn run(port: u16) -> Result<()> {
         token_path.display()
     );
 
-    listen(listener, hub, sink, token.into(), home.join(dray_proto::TUNNEL_URL_FILE).into(), false).await
+    listen(listener, HUB.clone(), sink, token.into(), home.join(dray_proto::TUNNEL_URL_FILE).into(), false).await
 }
 
 /// The Mac's background server: the app's own binary, run by launchd with
@@ -281,9 +277,9 @@ impl Hub {
     }
 }
 
-/// The Mac server's hub, a static because Remote access serves it from a
-/// second listener that comes and goes with the setting.
-#[cfg(feature = "desktop")]
+/// Every server's hub, a static because Remote access serves it from a
+/// second listener that comes and goes with the setting, and `live_state`
+/// reads it from the command table.
 pub static HUB: std::sync::LazyLock<Hub> = std::sync::LazyLock::new(Hub::default);
 
 /// Serves `listener` until the future is dropped, which also drops every
@@ -903,9 +899,6 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
         set_remote_access(on: bool) => crate::remote_access::set_remote_access(sink, on).await;
         remote_access_token() => crate::remote_access::remote_access_token().await;
         restart_when_idle() => ok(restart_when_idle().await);
-        // What a connect opens with, asked again by an app whose webview
-        // was not yet listening when it connected.
-        live_state() => ok(HUB.live.lock().unwrap_or_else(|e| e.into_inner()).payload());
     }
 }
 
@@ -914,10 +907,14 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
 /// Mac-only modules are not compiled here.
 async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     #[cfg(feature = "desktop")]
-    if matches!(cmd, "get_remote_access" | "set_remote_access" | "remote_access_token" | "restart_when_idle" | "live_state") {
+    if matches!(cmd, "get_remote_access" | "set_remote_access" | "remote_access_token" | "restart_when_idle") {
         return dispatch_mac(cmd, args, sink).await;
     }
     table! { cmd, args;
+        // What a connect opens with, asked again by an app whose webview was
+        // not yet listening when it connected — `dray-serve` included, which
+        // an app installed after it meets as This Mac.
+        live_state() => ok(HUB.live.lock().unwrap_or_else(|e| e.into_inner()).payload());
         // Sessions.
         send_msg(
             session_id: String, prompt: String, attachment_paths: Vec<String>,

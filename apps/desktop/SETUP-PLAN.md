@@ -92,12 +92,15 @@ refused, since it is how a server set up before the app arrived hands over.
 - **`dray service`** is a LaunchAgent, `com.yogesh.dray-serve` in the `gui`
   domain, modelled on the app's launchd.rs: `KeepAlive` on a failed exit
   (systemd's `Restart=on-failure`), `PATH` and `DRAY_HOME` in the plist, log in
-  `<home>/server.log`. Restart is `launchctl kickstart -k`. `service tunnel` is
-  Linux only; `dray tunnel` runs in the foreground.
+  `<home>/server.log`. Restart is `bootout` then `bootstrap`, never
+  `kickstart -k`, which reruns the job as loaded and misses a rewritten plist.
+  `service tunnel` is Linux only; `dray tunnel` runs in the foreground.
 - **`dray-serve` writes `serve-port`**, so an app installed later connects to
-  it as This Mac. It answers the app's `restart_when_idle` with "unknown
-  command" and stays up, and the app's own agent fails on `serve.lock` and
-  retries every 10s until `dray service uninstall` lets it take over.
+  it as This Mac, and answers `live_state`, which the app re-asks This Mac on
+  startup. Remote access stays the app's server's alone. It answers the app's
+  `restart_when_idle` with "unknown command" and stays up, and the app's own
+  agent fails on `serve.lock` and retries every 10s until `dray service
+  uninstall` lets it take over.
 
 Tested on a Mac logged in at the GUI, with the app installed and a scratch
 `DRAY_HOME`: start, status, a Claude Code turn, launchd restarting a killed
@@ -105,10 +108,11 @@ server, a second start leaving it running, uninstall, and a client admitted the
 way the app's This Mac is, off `serve-port`. Not tested, beyond the app itself
 meeting a `dray-serve`:
 
-1. **No GUI login.** A `gui` domain job runs only while its user is logged in
-   at the Mac; over SSH with nobody logged in, bootstrap fails and setup says
-   to log in or turn on automatic login. Automatic login is refused under
-   FileVault. A `user` domain or LaunchDaemon job is the other route.
+1. **No GUI login, by design.** A `gui` domain job runs only while its user
+   is logged in at the Mac: it stops at logout and starts again at login. A
+   server while nobody is logged in is deliberately out of scope, so no
+   LaunchDaemon. Over SSH with nobody logged in, bootstrap fails and setup
+   says to log in or turn on automatic login.
 2. **Keychain.** Claude Code's login, in the Keychain, worked from the job here
    because the login keychain was unlocked by the GUI login. Expect auth to
    fail from a job with the keychain locked, which points at automatic login
