@@ -64,18 +64,21 @@ async fn launchctl(args: &[&str]) -> Result<std::process::Output> {
     Command::new("/bin/launchctl").args(args).output().await.context("could not run launchctl")
 }
 
-/// Installs the agent, or points it at this binary where it names another —
-/// Dray.app moved, or a second copy opened. Loading a changed plist means
-/// unloading the old one, which stops that server and every turn under it, so
-/// an unchanged plist is left alone.
+/// Set where the plist on disk is newer than the job launchd has loaded.
+static RELOAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Installs the agent, or points it at this binary and environment where it
+/// names others — Dray.app moved, a second copy opened, `DRAY_NO_ANALYTICS`
+/// changed. Loading a changed plist means unloading the old one, which stops
+/// that server and every turn under it, so a running server keeps its job:
+/// the new plist is written, and [`reload_if_pending`] loads it once the
+/// app's `restart_when_idle` has let that server go.
 pub async fn ensure() -> Result<()> {
     let exe = std::env::current_exe().context("no path to this binary")?;
     let log = crate::store::get_home_app_dir().await?.join(crate::serve::SERVER_LOG);
     if crate::is_dev() {
         return spawn_dev(&exe, &log);
     }
-    // A changed value rewrites the plist below, which restarts a running
-    // server onto it.
     let env: Vec<(&str, String)> = ["DRAY_HOME", "DRAY_NO_ANALYTICS"]
         .into_iter()
         .filter_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()).map(|v| (k, v)))
@@ -91,8 +94,29 @@ pub async fn ensure() -> Result<()> {
     }
     tokio::fs::write(&path, wanted).await.with_context(|| format!("could not write {}", path.display()))?;
     if loaded {
-        let _ = launchctl(&["bootout", &target()]).await;
+        RELOAD.store(true, std::sync::atomic::Ordering::Relaxed);
+        return Ok(());
     }
+    bootstrap(&path).await
+}
+
+/// Whether the server running now was started from an older plist.
+pub fn reload_pending() -> bool {
+    RELOAD.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Loads the plist [`ensure`] wrote, once the old server has exited. launchd
+/// may have started it again from the old job by then; that one is fresh and
+/// idle, and goes with the job.
+pub async fn reload_if_pending() -> Result<()> {
+    if !RELOAD.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        return Ok(());
+    }
+    let _ = launchctl(&["bootout", &target()]).await;
+    bootstrap(&plist_path()?).await
+}
+
+async fn bootstrap(path: &std::path::Path) -> Result<()> {
     let domain = format!("gui/{}", unsafe { libc::getuid() });
     let out = launchctl(&["bootstrap", &domain, &path.to_string_lossy()]).await?;
     if !out.status.success() {

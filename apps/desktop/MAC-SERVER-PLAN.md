@@ -148,8 +148,12 @@ across read, edit and rename. A process-local mutex stays in front of it.
 **The app installs the agent on every launch**:
 `~/Library/LaunchAgents/com.yogesh.dray.server.plist`, `ProgramArguments`
 naming the app's own executable with `--serve`, `RunAtLoad`, `KeepAlive`,
-stdout and stderr to `<home>/server.log`. Rewritten and re-bootstrapped where
-it differs from what is on disk, so moving Dray.app heals at the next open.
+stdout and stderr to `<home>/server.log`, and `DRAY_HOME` and
+`DRAY_NO_ANALYTICS` where the app has them, since launchd starts the server
+with its own environment. Where it differs from what is on disk it is
+rewritten, but a loaded job is reloaded only once its server has exited on
+`restart_when_idle` — unloading stops every turn under it — so moving
+Dray.app heals at the next open without cutting anything off.
 macOS shows its own "Background item added" notice once; nothing of ours.
 
 **A plain plist, not `SMAppService`.** That API wants the plist inside the

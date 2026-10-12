@@ -361,7 +361,7 @@ async fn run(id: String) {
             match local_address().await {
                 Ok((url, token, stale)) => match admit_as_host(&url, &token).await {
                     Ok(mut ws) => {
-                        if stale {
+                        if stale || crate::launchd::reload_pending() {
                             // The reply has no waiter and is dropped.
                             let restart = json!({ "id": 0, "cmd": "restart_when_idle", "args": {} });
                             let _ = ws.send(Message::text(restart.to_string())).await;
@@ -371,6 +371,9 @@ async fn run(id: String) {
                         }
                         serve(&id, ws).await;
                         set_status(&id, ServerStatus::Disconnected, Some("The server on this Mac restarted.".into()));
+                        if let Err(e) = crate::launchd::reload_if_pending().await {
+                            eprintln!("[launchd] could not load the new agent: {e:#}");
+                        }
                     }
                     Err(e) => set_status(&id, ServerStatus::Disconnected, Some(e)),
                 },
