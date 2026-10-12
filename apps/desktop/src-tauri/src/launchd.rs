@@ -94,7 +94,7 @@ pub async fn ensure() -> Result<()> {
     if loaded && on_disk.as_deref() == Some(wanted.as_str()) {
         return Ok(());
     }
-    if loaded && on_disk.as_deref().map(home_of) == Some(home_of(&wanted)) {
+    if loaded && on_disk.as_deref().map(home_dir) == Some(home_dir(&wanted)) {
         *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some(wanted);
         return Ok(());
     }
@@ -105,6 +105,16 @@ pub async fn ensure() -> Result<()> {
 fn home_of(plist: &str) -> Option<&str> {
     let (_, rest) = plist.split_once("<key>DRAY_HOME</key><string>")?;
     rest.split_once("</string>").map(|(home, _)| home)
+}
+
+/// The directory a plist's server uses, resolved: no `DRAY_HOME` and one
+/// naming `~/.dray` are one home, and moving between them must not restart.
+fn home_dir(plist: &str) -> Option<PathBuf> {
+    let home = match home_of(plist) {
+        Some(home) => PathBuf::from(home),
+        None => std::env::home_dir()?.join(".dray"),
+    };
+    Some(std::fs::canonicalize(&home).unwrap_or(home))
 }
 
 /// Whether the server running now was started from an older plist.
