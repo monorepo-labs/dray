@@ -144,6 +144,15 @@ describe("highlightSegments", () => {
   // parenthesised id of its own closes the tag early. The run paints short and
   // the real id stays plain text beside it — cosmetic, since the text is sent
   // untouched and the agent reads both.
+  it("writes no id of the title's own, so the tag opens its own session", () => {
+    const tag = highlightSegments(sessionTag(`Investigate (${OTHER}) failure`, ID)).find(
+      (s) => s.kind === "session",
+    )!;
+
+    expect(tag.sessionId).toBe(ID);
+    expect(tag.inner).toBe("&Investigate failure");
+  });
+
   it("closes early on a title that carries an id of its own", () => {
     const tag = highlightSegments(`&Investigate (${ID}) failure (${OTHER})`).find(
       (s) => s.kind === "session",

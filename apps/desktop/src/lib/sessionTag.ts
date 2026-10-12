@@ -49,9 +49,9 @@ const ID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA
 ///
 /// What it costs is the opposite case: a *title* that itself carries a
 /// parenthesised id, which a session titled after a prompt holding a tag can
-/// have. There the tag paints short and the real id is left beside it as plain
-/// text. Cosmetic only — the text is sent untouched, so the agent still reads
-/// both ids — where the greedy read loses a tag outright. Both pinned by test.
+/// have. `sessionTag` strips those on the way out, since the transcript opens
+/// the tag's id on click and the first id there would be the wrong session. A
+/// tag written before that still paints short. Both pinned by test.
 const TAG = new RegExp(`^&(.+?) \\((${ID})\\)`);
 
 /// The tag being typed, or `null` when the caret isn't in one.
@@ -86,8 +86,10 @@ export function sessionSpan(text: string, caret: number): SessionSpan | null {
 /// picker's overlay and the transcript both dim the parenthesised half for that
 /// reason, the way `splitMention` dims a path's directory.
 export function sessionTag(title: string, id: string): string {
-  return `&${title} (${id})`;
+  return `&${title.replace(INNER_ID, "")} (${id})`;
 }
+
+const INNER_ID = new RegExp(` \\(${ID}\\)`, "g");
 
 /// A placed tag at `text[i]`, or `null` where one does not start there.
 ///

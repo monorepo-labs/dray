@@ -286,7 +286,7 @@ export default function ChatInput({
     const observer = new ResizeObserver(check);
     observer.observe(box);
     return () => observer.disconnect();
-  }, [message, stacked]);
+  }, [message, stacked, sessionId]);
   // Read by the session-switch effect below, which must stay keyed on the
   // session alone: the draft it wants is the one that arrived *with* that
   // switch, and depending on `message` would rerun it on every keystroke and
