@@ -591,8 +591,13 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
     let placed = {
         let mut list = conns();
         // Again under the lock: the admit above awaits, and another add may
-        // have taken the name meanwhile.
-        refuse_taken(&list, &name, Some(&id)).map(|()| {
+        // have taken the name, or saved this address, meanwhile.
+        let raced = existing.is_none() && list.iter().any(|c| c.saved.url == url);
+        let free = match raced {
+            true => Err(format!("{url} was added while this was connecting")),
+            false => refuse_taken(&list, &name, Some(&id)),
+        };
+        free.map(|()| {
             if let Some(conn) = list.iter_mut().find(|c| c.saved.id == id) {
                 conn.saved.name = name;
                 conn.restart();
