@@ -586,6 +586,11 @@ impl SessionManager {
         // are the user's own, and a `user_message` with a sender is drawn
         // differently.
         from: Option<MessageSender>,
+        // Set by the auto-continue timer alone: the schedule it fires for. It
+        // is claimed under this session's lock below, the lock a user's send
+        // holds while it drops the schedule, so whichever goes first wins and
+        // a prompt of theirs is never followed by a stale `continue`.
+        claim_continue: Option<&str>,
         app: &Sink,
     ) -> Result<SendOutcome> {
         let _counted = Sending::enter().await;
@@ -923,6 +928,16 @@ impl SessionManager {
         // session's Stop and send carry on.
         let slot = self.slot(session_id).await;
         let mut slot_guard = slot.lock().await;
+
+        if let Some(at) = claim_continue {
+            let Some((item, send)) = crate::store::take_continue_at(session_id, at).await? else {
+                return Ok(SendOutcome::default());
+            };
+            app.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
+            if !send {
+                return Ok(SendOutcome::default());
+            }
+        }
 
         // Decided here rather than by the caller: the frontend's own `busy` is
         // optimistic, and this is the only reading taken on the same lock the
@@ -2763,12 +2778,13 @@ async fn deliver_prompt(
     // Nothing tracks turns yet; Claude Code opens one per `init`.
     let agent_event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
 
-    // The frontend clears it on the event below, so the index has to agree —
+    // The frontend clears aside and any scheduled continue on the event below,
+    // so the index has to agree —
     // and first, so a Set aside the reader makes after seeing the event lands
     // after this and wins. Best effort: a sidebar flag is not worth failing a
     // delivery over.
     if queued {
-        if let Err(e) = crate::store::clear_aside(session_id).await {
+        if let Err(e) = crate::store::clear_on_delivery(session_id).await {
             eprintln!("[clear aside err] {e:#}");
         }
     }

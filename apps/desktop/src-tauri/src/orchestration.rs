@@ -736,6 +736,7 @@ async fn create_session(create: CreateSession, app: &Sink) -> Result<Response> {
             // already draws by nesting the row. Its opening prompt is the brief,
             // not a message relayed into a conversation already under way.
             None,
+            None,
             app,
         )
         .await?;
@@ -885,6 +886,7 @@ async fn start_session(
             true,
             parent,
             false,
+            None,
             None,
             None,
             app,
@@ -1143,6 +1145,7 @@ async fn send_message(send: SendMessage, app: &Sink) -> Result<Response> {
             false,
             None,
             from,
+            None,
             app,
         )
         .await?;

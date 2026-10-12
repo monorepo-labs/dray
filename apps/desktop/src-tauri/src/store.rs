@@ -1008,12 +1008,15 @@ pub async fn touch_session_index_item(
 
 /// Brings a set-aside session back, for a queued prompt reaching the child:
 /// its send cleared the flag already, but the reader may have set the session
-/// aside again while it waited, and delivery is a message like any other.
-pub async fn clear_aside(session_id: &str) -> Result<()> {
+/// aside again while it waited, and delivery is a message like any other. It
+/// also stands in for a `continue` scheduled while it waited.
+pub async fn clear_on_delivery(session_id: &str) -> Result<()> {
     edit_item(session_id, |item| {
-        let was = item.aside;
+        let changed = item.aside || item.continue_at.is_some();
         item.aside = false;
-        ((), was)
+        item.continue_at = None;
+        item.continue_off = false;
+        ((), changed)
     })
     .await?;
     Ok(())

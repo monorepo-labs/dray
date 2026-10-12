@@ -69,10 +69,11 @@ pub async fn rearm(sink: &Sink) {
     }
 }
 
-/// Sleeps until `at`, then clears the schedule and sends — if it still names
-/// `at` and the reader has not cancelled it. Nothing stops the sleep itself,
-/// which is cheaper than holding a handle per session: a send or a newer
-/// schedule moves the field and this wakes to find it gone.
+/// Sleeps until `at`, then sends — `send_msg` claims the schedule under the
+/// session's lock and sends only if it still names `at` and the reader has not
+/// cancelled it. Nothing stops the sleep itself, which is cheaper than holding
+/// a handle per session: a send or a newer schedule moves the field and this
+/// wakes to find it gone.
 fn arm(session_id: String, at: String, sink: Sink) {
     tokio::spawn(async move {
         let Ok(when) = DateTime::parse_from_rfc3339(&at) else {
@@ -81,14 +82,8 @@ fn arm(session_id: String, at: String, sink: Sink) {
         if let Ok(wait) = (when.with_timezone(&Utc) - Utc::now()).to_std() {
             tokio::time::sleep(wait).await;
         }
-        let item = match store::take_continue_at(&session_id, &at).await {
-            Ok(Some((item, send))) => {
-                sink.emit(SESSION_CHANGED, &item).ok();
-                if !send {
-                    return;
-                }
-                item
-            }
+        let item = match store::get_session_index_item(&session_id).await {
+            Ok(Some(item)) => item,
             Ok(None) => return,
             Err(e) => return eprintln!("[auto-continue] {session_id}: {e:#}"),
         };
@@ -98,7 +93,7 @@ fn arm(session_id: String, at: String, sink: Sink) {
             .send_msg(
                 &item.session_id, PROMPT, &[], &[], item.harness, item.model, item.effort,
                 item.permission_mode, item.fast, &item.cwd, None, false, None, None, false,
-                None, false, None, None, &sink,
+                None, false, None, None, Some(&at), &sink,
             )
             .await;
         if let Err(e) = sent {
