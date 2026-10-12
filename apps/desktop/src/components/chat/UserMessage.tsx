@@ -264,15 +264,33 @@ export default function UserMessage({
               // The title alone — the `&` goes with the id, since neither is
               // something the reader needs to read back. The sigil is what the
               // *picker* is reached by, and by the time a prompt is sent the
-              // colour has already said which kind of thing this is. Inert, like
-              // an unresolved issue tag: the session it names is a click away in
-              // the sidebar, and a button here would be a second way to do one
-              // thing.
+              // colour has already said which kind of thing this is. Opens the
+              // session like a relayed sender's name does, with the same mark; a
+              // session since deleted rolls back and says so in the composer.
               if (segment.kind === "session" && segment.inner) {
+                const title = segment.inner.slice(1);
+                const sessionId = segment.sessionId;
+                if (!sessionId || !onOpenSession) {
+                  return (
+                    <span key={i} className={SEGMENT_COLOR.session}>
+                      {title}
+                    </span>
+                  );
+                }
                 return (
-                  <span key={i} className={SEGMENT_COLOR.session}>
-                    {segment.inner.slice(1)}
-                  </span>
+                  <button
+                    key={i}
+                    type="button"
+                    className={cn(SEGMENT_COLOR.session, "cursor-pointer hover:underline")}
+                    onClick={() => onOpenSession(sessionId)}
+                  >
+                    <SessionAvatar
+                      sessionId={sessionId}
+                      name={title}
+                      className="mr-0.5 inline-block size-4 align-text-bottom"
+                    />
+                    {title}
+                  </button>
                 );
               }
 

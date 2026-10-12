@@ -263,7 +263,19 @@ export default function RichInput({
       // told what they are — a single reconciliation here would take the caret
       // and the undo stack with it.
       data-placeholder={placeholder}
-      onInput={read}
+      onInput={(event) => {
+        // WebKit keeps a line's old breaks after a deletion, so a long word
+        // that wrapped stays on its own line once shortened. Measured in
+        // WebKit on every `white-space` value; a width change is what makes it
+        // break the lines again, and it leaves the caret alone.
+        const el = ref.current;
+        if (el && (event.nativeEvent as InputEvent).inputType?.startsWith("delete")) {
+          el.style.width = "calc(100% - 1px)";
+          void el.offsetHeight;
+          el.style.width = "";
+        }
+        read();
+      }}
       onFocus={() => {
         focused.current = true;
         // A caret asked for while the box was blurred was never placed, and a
@@ -347,7 +359,11 @@ export default function RichInput({
         // Drawn only where there is nothing to draw over. `:empty` is no good —
         // the browser leaves a `<br>` behind after the last character is deleted,
         // so the box is empty to the reader and not to the selector.
-        "before:pointer-events-none before:absolute before:text-muted-foreground before:content-[attr(data-placeholder)]",
+        // One line, cut with an ellipsis: unclipped, it wrapped past the box's
+        // own height on a narrow column and drew over the toolbar. No inset —
+        // left at its static position is what keeps it under the caret, since
+        // `left-0` ignores the box's padding.
+        "before:pointer-events-none before:absolute before:truncate before:text-muted-foreground before:content-[attr(data-placeholder)]",
         value !== "" && "before:content-none",
         className,
       )}

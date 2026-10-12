@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -257,6 +258,35 @@ export default function ChatInput({
 }: ChatInputProps) {
   const [message, setMessage] = useDraft(sessionId);
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const controlsRef = useRef<HTMLDivElement | null>(null);
+  // Past one line the text takes the card's whole width and the controls drop
+  // under it; one line keeps them beside it, so the resting height is unchanged.
+  const [stacked, setStacked] = useState(false);
+  useLayoutEffect(() => {
+    const box = editorRef.current;
+    const controlsBox = controlsRef.current;
+    if (!box || !controlsBox) return;
+    const check = () => {
+      if (!message) return setStacked(false);
+      const range = document.createRange();
+      range.selectNodeContents(box);
+      const rect = range.getBoundingClientRect();
+      const line = range.getClientRects()[0]?.height ?? rect.height;
+      const oneLine = !message.includes("\n") && rect.height < line * 1.5;
+      // Two thresholds, or the swap oscillates: text that wraps beside the
+      // controls fits on one line without them. Back only once it would fit
+      // beside them again — their width, the gap and the box's own padding.
+      const room = box.clientWidth - controlsBox.offsetWidth - 16;
+      setStacked((was) => (was ? !(oneLine && rect.width <= room) : !oneLine));
+    };
+    // Layout, not an ordinary effect: measured before paint, so a keystroke
+    // crossing the line boundary moves the controls in the same frame. The
+    // first try measured a frame late and every wrap flickered.
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [message, stacked]);
   // Read by the session-switch effect below, which must stay keyed on the
   // session alone: the draft it wants is the one that arrived *with* that
   // switch, and depending on `message` would rerun it on every keystroke and
@@ -637,7 +667,7 @@ export default function ChatInput({
   /// copies of a submit button is two things to keep in step, and the one that
   /// is wrong is the one nobody is looking at.
   const controls = (
-    <div className="flex shrink-0 items-center gap-1">
+    <div ref={controlsRef} className="ml-auto flex shrink-0 items-center gap-1">
       {dictation}
 
       {/* One button, two jobs, and what is typed decides which. Stopping is what
@@ -937,15 +967,16 @@ export default function ChatInput({
               </div>
             )}
 
-            {/* Controls ride the text's own row, always. Measuring the box and
-                dropping them to a second row once the text wrapped was tried
-                and reverted: the measurement lands a frame after the keystroke,
-                so the row appeared and vanished as the text crossed a line
-                boundary, and every wrap flickered. `items-end` is what makes
-                one row read correctly at both heights — at one line the buttons
-                sit beside the text, and past it they stay at the bottom. */}
-            <div className={cn("flex items-end gap-1 py-3", isNewTask ? "px-0" : "px-3")}>
-              <div className="relative min-w-0 flex-1">
+            {/* Controls ride the text's row at one line and wrap under it past
+                that — see `stacked`. */}
+            <div
+              className={cn(
+                "flex items-end gap-1 py-3",
+                stacked && "flex-wrap",
+                isNewTask ? "px-0" : "px-3",
+              )}
+            >
+              <div className={cn("relative min-w-0 flex-1", stacked && "basis-full")}>
                 <RichInput
                   // **One editor per session, because the undo stack lives in
                   // the editor.** Kept across a session switch, ⌘Z in the
@@ -981,9 +1012,10 @@ export default function ChatInput({
                   // session is what the index, the CLI and this file call the
                   // same thing.
                   placeholder={
-                    isNewTask
-                      ? [
-                          "Describe a task.",
+                    !isNewTask && target
+                      ? target
+                      : [
+                          isNewTask ? "Describe a task." : "Follow-up.",
                           "@files.",
                           "/skills.",
                           canMentionSession && "&tasks.",
@@ -991,9 +1023,6 @@ export default function ChatInput({
                         ]
                           .filter(Boolean)
                           .join(" ")
-                      : target
-                        ? target
-                        : "Send follow-up"
                   }
                   onKeyDown={(e) => {
                     // Enter is the composer's on its own and with Shift, and
