@@ -127,7 +127,7 @@ export default function IssuePanel({
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
+    <div className="min-h-0 flex-1 overflow-y-auto pt-0.5">
       {/* Under the rows it failed to update rather than over them: a refresh
           that failed against issues already on screen must not hide them. */}
       {unavailable && <p className="px-3 py-2 text-ui text-destructive">{errorText(unavailable)}</p>}

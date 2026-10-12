@@ -1,10 +1,11 @@
 import { Suspense, useState } from "react";
-import { GitCompare, GitPullRequest, GitPullRequestDraft, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 import OpenInButton from "@/components/OpenInButton";
 import TabButton from "@/components/TabButton";
 import PanelRightIcon from "@/components/icons/PanelRightIcon";
 import { Button } from "@/components/ui/button";
+import { FILE_OPENER } from "@/lib/openWith";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useResizable } from "@/components/ResizeHandle";
@@ -14,102 +15,27 @@ import { cn } from "@/lib/utils";
 /// `App` so the toggle and the thing it toggles stay in one file, and outside
 /// [RightPanel] itself because the pane doesn't exist before a session does —
 /// the button has to outlive it. Mirrors `SidebarToggle` on the far side.
-export function PanelToggle({
-  onToggle,
-  open,
-  changes = false,
-  pr = false,
-  draft = false,
-}: {
-  onToggle: () => void;
-  open: boolean;
-  /// The last turn left the tree changed. Swaps the glyph for a git one while
-  /// the pane is closed, so one button both says there is something to see and
-  /// is the way to it — which is the whole of the quick-access rail that was
-  /// otherwise going to sit beside it. Nothing to say once the pane is open:
-  /// the changes are on screen, and the toggle goes back to being a toggle.
-  changes?: boolean;
-  /// Every one of this session's open pull requests is a draft. Draws the draft
-  /// glyph rather than the plain one — the mark still appears, because a draft
-  /// is still somewhere for the work to land, and it keeps `--accent-add` so it
-  /// still reads as content rather than as dimmed chrome. Shape carries the
-  /// distinction, colour carries the "there is something here".
-  draft?: boolean;
-  /// This session has an open pull request, which outranks `changes`. A draft
-  /// counts — GitHub reports one as `OPEN` with `isDraft` set.
-  ///
-  /// The two indicators are the same promise — "there is something here, and
-  /// this is the way to it" — so only one can be drawn, and the PR is the one
-  /// worth drawing: it is the tab that opens first, it is the state of the
-  /// work rather than of the last turn, and it is the one that survives the
-  /// next prompt landing. Green, matching the merge button it leads to.
-  pr?: boolean;
-}) {
-  const indicating = (pr || changes) && !open;
-
+export function PanelToggle({ onToggle }: { onToggle: () => void }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         {/* Held back at rest — it's chrome, not content — and brought to full
-            strength under the cursor. The indicator is content, so it skips
-            the fade rather than announcing itself at 80%. */}
+            strength under the cursor. */}
         <Button
           variant="ghost"
           size="icon-sm"
           onClick={onToggle}
-          aria-label={
-            indicating ? (pr ? "Show pull request" : "Show changes") : "Toggle panel"
-          }
-          className={cn(
-            // `shrink-0` because this is the way back out of a pane dragged
-            // wide: everything else in that header may give up width or clip,
-            // this may not.
-            "shrink-0 transition-opacity",
-            indicating ? "opacity-100" : "opacity-80 hover:opacity-100",
-          )}
+          aria-label="Toggle panel"
+          // `shrink-0` because this is the way back out of a pane dragged
+          // wide: everything else in that header may give up width or clip,
+          // this may not.
+          className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
         >
-          {indicating ? (
-            // Smaller than the panel glyph so it reads the same size: these run
-            // corner to corner of their 24 box while the panel icon is 14 units
-            // tall in the same box, so matching the numbers makes them the
-            // visibly larger of the two. Stroke 1.5 to match the hand-drawn
-            // chrome around it; lucide draws at 2. The colour is on the glyph
-            // rather than the button because `ghost` sets `hover:text-
-            // foreground`, which would grey it out under the cursor.
-            pr ? (
-              // `--accent-merge` is a button *fill* — dark enough to carry white
-              // text — and at 1.5px stroke on a dark background it all but
-              // disappeared. This is `--accent-add`, which the open-PR glyph uses in the
-              // panel itself, so the mark and the thing it points at match.
-              draft ? (
-                <GitPullRequestDraft
-                  className="size-4 text-accent-add"
-                  strokeWidth={1.5}
-                />
-              ) : (
-                <GitPullRequest className="size-4 text-accent-add" strokeWidth={1.5} />
-              )
-            ) : (
-              // Plain foreground, not the command yellow it started as. Yellow
-              // is the app's "this is for you" — the colour of a session
-              // standing still behind a question — and a turn having touched
-              // files is neither a warning nor a thing to answer. It read as
-              // one, every turn, which is a lot of alarm for a fact.
-              <GitCompare className="size-4 text-foreground" strokeWidth={1.5} />
-            )
-          ) : (
-            <PanelRightIcon className="size-4.5" dim={!open} />
-          )}
+          <PanelRightIcon className="size-4.5" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="left">
-        {indicating
-          ? pr
-            ? draft
-              ? "Draft pull request"
-              : "Open pull request"
-            : "Last turn's changes"
-          : "Toggle Panel"}
+        Toggle Panel
         <ShortcutKeys ids={["panel.toggle"]} />
       </TooltipContent>
     </Tooltip>
@@ -130,7 +56,7 @@ export const PANEL_TABS = [
 
 export type PanelTab = (typeof PANEL_TABS)[number];
 
-const LABELS: Record<PanelTab, string> = {
+export const PANEL_LABELS: Record<PanelTab, string> = {
   changes: "Changes",
   // The session's browser lives here. Always drawn, unlike PR or Docs: its
   // empty state is a URL bar, which is a place to start rather than a
@@ -178,6 +104,7 @@ export function tabOrder({
   issue,
   more,
   plan,
+  browser,
 }: {
   pr: boolean;
   /// At least one markdown file is open in the pane — see
@@ -191,8 +118,12 @@ export function tabOrder({
   /// The agent has put a plan up in this session — see [plan](../lib/plan.ts).
   /// Absent otherwise, for the PR tab's reason: most sessions never plan.
   plan?: boolean;
+  /// The session has at least one page open. With none, the titlebar's own
+  /// Browser tab is the way in, so the pane draws no empty one.
+  browser?: boolean;
 }): readonly PanelTab[] {
-  const tabs: PanelTab[] = pr ? ["pr", "changes", "browser"] : ["changes", "browser"];
+  const tabs: PanelTab[] = pr ? ["pr", "changes"] : ["changes"];
+  if (browser) tabs.push("browser");
   // After Changes, which is what keeps Issue immediately before More.
   if (docs) tabs.push("docs");
   // Immediately before More wherever it is drawn, so the row's order is the
@@ -218,9 +149,6 @@ type RightPanelProps = {
   open: boolean;
   tab: PanelTab;
   onTabChange: (tab: PanelTab) => void;
-  /// Rendered beside its tab's label. Only shown above zero — a tab reading
-  /// "Subagents 0" says the same thing as the empty state one click away.
-  counts?: Partial<Record<PanelTab, number>>;
   /// The tab row, as `tabOrder` answers it.
   tabs?: readonly PanelTab[];
   /// Re-reads whatever the active tab is showing, drawn at the far end of the
@@ -252,17 +180,10 @@ type RightPanelProps = {
   /// name a chord that would step between one place and itself — but an empty
   /// strip is worse than either, since it reads as chrome that failed to load.
   /// So the row keeps its height, loses its controls, and says what the pane is.
-  ///
-  /// It also loses its bottom rule. That line separates a row of *controls* from
-  /// what they act on; over a heading belonging to the thing underneath it, it
-  /// cuts a title off its own body.
   heading?: string;
   /// Which side of the chat column the pane stands on — the reader's pick in
   /// Settings › Appearance. The border and the drag strip face the chat.
   side?: PanelSide;
-  /// The pane reaches the window's left edge, so its top strip has to clear the
-  /// traffic lights the way the app header does when the sidebar is collapsed.
-  clearTrafficLights?: boolean;
   children: React.ReactNode;
 };
 
@@ -309,7 +230,6 @@ export default function RightPanel({
   open,
   tab,
   onTabChange,
-  counts,
   tabs = BASE_TABS,
   refresh,
   cwd,
@@ -317,7 +237,6 @@ export default function RightPanel({
   heading,
   widthKey,
   side = "right",
-  clearTrafficLights = false,
   children,
 }: RightPanelProps) {
   // 32rem, the width this pane opened at before it could be dragged.
@@ -339,8 +258,8 @@ export default function RightPanel({
     <aside
       style={style}
       className={cn(
-        "relative shrink-0 flex-col border-border bg-sidebar",
-        side === "left" ? "border-r" : "border-l",
+        // No border of its own: it sits in a card, whose ring is the edge.
+        "relative shrink-0 flex-col bg-sidebar",
         // Conditional `flex` rather than `flex` plus `hidden`: both set
         // `display`, so stacking them leaves the winner to stylesheet order.
         open ? "flex" : "hidden",
@@ -348,14 +267,10 @@ export default function RightPanel({
     >
       {handle}
       <div
-        className={cn(
-          // `overflow-hidden` for the reason the app header carries it: this
-          // pane can be dragged narrow, and what runs out of room has to clip
-          // at its own edge rather than draw over the transcript beside it.
-          "flex h-(--titlebar-h) shrink-0 items-center gap-0.5 overflow-hidden px-2",
-          !heading && "border-b border-border",
-          clearTrafficLights && "pl-(--traffic-lights-w)",
-        )}
+        // `overflow-hidden` for the reason the app header carries it: this
+        // pane can be dragged narrow, and what runs out of room has to clip
+        // at its own edge rather than draw over the transcript beside it.
+        className="flex h-[34px] shrink-0 items-center gap-0.5 overflow-hidden px-2 pt-1.5"
         data-tauri-drag-region="deep"
       >
         {heading ? (
@@ -386,10 +301,7 @@ export default function RightPanel({
                   active={tab === value}
                   onClick={() => onTabChange(value)}
                 >
-                  {LABELS[value]}
-                  {!!counts?.[value] && (
-                    <span className="ml-1 text-muted-foreground">{counts[value]}</span>
-                  )}
+                  {PANEL_LABELS[value]}
                 </TabButton>
               ))}
             </div>
@@ -423,48 +335,67 @@ export default function RightPanel({
           </div>
         )}
 
-        {/* The far end of the row, and one group rather than two `ml-auto`s:
-            Refresh is gone on Subagents and the Open button is gone off a
-            session, so whichever survives has to hold the same edge. */}
         <div className="ml-auto flex shrink-0 items-center gap-1">
-          {actions}
-
-          {/* Ahead of Refresh, and outside the tab row's own logic: it acts on
-              the session rather than on whatever tab is open, so unlike Refresh
-              it does not change meaning from one tab to the next. */}
-          {cwd && <OpenInButton path={cwd} />}
-
-          {/* Gone entirely on Subagents, which has nothing to re-read. It
-              reserved its width back when the keycaps sat to its right and
-              would have slid on that one tab; with them anchored to the tabs
-              there is nothing left to hold still, and an empty box on the far
-              edge is a slot for a button the reader is not waiting for. */}
-          {refresh && (
-            // A real tooltip rather than the `title` this used to carry: the
-            // chord has to be shown somewhere, and the app puts shortcuts in
-            // tooltips everywhere else.
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="-mr-0.5 text-muted-foreground/60 hover:text-muted-foreground"
-                  onClick={refresh.onRefresh}
-                  aria-label="Refresh"
-                >
-                  <RefreshCw className={cn("size-3", refresh.loading && "animate-spin")} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="left">
-                Refresh
-                <ShortcutKeys ids={["panel.refresh"]} />
-              </TooltipContent>
-            </Tooltip>
-          )}
+          <PanelActions actions={actions} cwd={cwd} refresh={refresh} />
         </div>
       </div>
 
       {children}
     </aside>
+  );
+}
+
+/// The buttons at the pane's far end — the reader's own action, Open, Refresh.
+/// Shared by the pane's own strip and the titlebar, which draws them when the
+/// pane has none.
+export function PanelActions({
+  actions,
+  cwd,
+  refresh,
+  file,
+}: Pick<RightPanelProps, "actions" | "cwd" | "refresh"> & {
+  /// A file to open in place of `cwd`, through the file opener's own pick.
+  file?: { path: string; line?: number };
+}) {
+  return (
+    <>
+    {actions}
+
+    {/* Gone entirely on Subagents, which has nothing to re-read. It
+        reserved its width back when the keycaps sat to its right and
+        would have slid on that one tab; with them anchored to the tabs
+        there is nothing left to hold still, and an empty box on the far
+        edge is a slot for a button the reader is not waiting for. */}
+    {refresh && (
+      // A real tooltip rather than the `title` this used to carry: the
+      // chord has to be shown somewhere, and the app puts shortcuts in
+      // tooltips everywhere else.
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-muted-foreground/60 hover:text-muted-foreground"
+            onClick={refresh.onRefresh}
+            aria-label="Refresh"
+          >
+            <RefreshCw className={cn("size-3", refresh.loading && "animate-spin")} />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="left">
+          Refresh
+          <ShortcutKeys ids={["panel.refresh"]} />
+        </TooltipContent>
+      </Tooltip>
+    )}
+
+    {/* After Refresh, and outside the tab row's own logic: it acts on the
+        session rather than on whatever tab is open. */}
+    {file ? (
+      <OpenInButton path={file.path} opener={FILE_OPENER} line={file.line} />
+    ) : (
+      cwd && <OpenInButton path={cwd} />
+    )}
+    </>
   );
 }

@@ -1,3 +1,4 @@
+import { Cog6ToothIcon } from "@heroicons/react/16/solid";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
@@ -13,7 +14,6 @@ import {
   Pin,
   Plus,
   Search,
-  Settings,
   Trash2,
   Undo2,
 } from "lucide-react";
@@ -47,7 +47,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { draftTitle, type Draft } from "@/hooks/useDrafts";
-import { useFullscreen } from "@/hooks/useFullscreen";
 import { burstConfetti } from "@/lib/confetti";
 import type { ManualCheck } from "@/hooks/useUpdater";
 import { startSessionDrag, type DropTarget } from "@/lib/dragSession";
@@ -101,8 +100,6 @@ type SidebarProps = {
   prFor: (repoPath: string, branch: string | null) => PrMark | undefined;
   selectedSessionId: string | null;
   collapsed: boolean;
-  onToggleCollapsed: () => void;
-  onOpenSettings: () => void;
   onSelect: (sessionId: string) => void;
   /// See `SessionRow`'s own.
   onPrefetch?: (sessionId: string) => void;
@@ -164,18 +161,8 @@ type SidebarProps = {
   /// everything below reads one list and the filter, the headings and the rows
   /// cannot disagree about which projects exist.
   projects: Project[];
-  /// Every space there is, empty until the reader makes one.
-  spaces: string[];
   /// `null` is every project, whatever space it is filed under.
   space: string | null;
-  onSpaceChange: (space: string | null) => void;
-  /// Opens Settings on the Spaces tab with its field up. The switcher is the
-  /// only place the reader is thinking about spaces, so it is where making one
-  /// has to be offered — it just isn't where the making happens.
-  onNewSpace: () => void;
-  /// Whether that field is up, which is what the switcher's New space entry is
-  /// lit by while no space exists.
-  namingSpace: boolean;
   // `null` is every project, and it is the entry the filter opens on.
   projectFilter: string | null;
   onProjectFilterChange: (path: string | null) => void;
@@ -772,13 +759,7 @@ export function isNested(item: SessionIndexItem, items: SessionIndexItem[]): boo
 /// Sidebar toggle. Lives outside `Sidebar` because a collapsed sidebar renders
 /// nothing at all — the button has to survive its own pane disappearing, so the
 /// app header owns it and its y position never moves.
-export function SidebarToggle({
-  onToggle,
-  collapsed = false,
-}: {
-  onToggle: () => void;
-  collapsed?: boolean;
-}) {
+export function SidebarToggle({ onToggle }: { onToggle: () => void }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -789,9 +770,11 @@ export function SidebarToggle({
           size="icon-sm"
           onClick={onToggle}
           aria-label="Toggle sidebar"
-          className="opacity-80 transition-opacity hover:opacity-100"
+          // The chat tab's mark colour, open or shut: the pane itself says
+          // which, and a strength flip read backwards on a sidebar kept open.
+          className="text-muted-foreground transition-colors hover:text-foreground"
         >
-          <PanelLeftIcon className="size-4.5" dim={collapsed} />
+          <PanelLeftIcon className="size-4.5" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="right">
@@ -804,13 +787,9 @@ export function SidebarToggle({
 
 /// Opens the settings page.
 ///
-/// Shares the titlebar strip with the sidebar toggle rather than sitting in the
-/// filter row below it: settings are app-wide, and every control in that row
-/// scopes the list under it.
-///
-/// Gone with a collapsed sidebar, since the sidebar is. ⌘, is the route that
-/// survives that, which is why the tooltip names it.
-function SettingsButton({ onOpen }: { onOpen: () => void }) {
+/// In the titlebar beside the space switcher: settings are app-wide, and every
+/// control in the sidebar scopes the list under it.
+export function SettingsButton({ onOpen }: { onOpen: () => void }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -819,9 +798,9 @@ function SettingsButton({ onOpen }: { onOpen: () => void }) {
           size="icon-sm"
           onClick={onOpen}
           aria-label="Settings"
-          className="opacity-80 transition-opacity hover:opacity-100"
+          className="text-muted-foreground transition-colors hover:text-foreground"
         >
-          <Settings className="size-4" />
+          <Cog6ToothIcon className="size-4" />
         </Button>
       </TooltipTrigger>
       <TooltipContent side="right">
@@ -862,7 +841,7 @@ function spaceEntries(spaces: string[]): (string | null)[] {
 /// who may never want a space, where an entry is only ever met by a reader who
 /// stepped onto it. It drops out the moment a space exists, so ordinary
 /// switching can never land on it.
-function SpaceSwitcher({
+export function SpaceSwitcher({
   spaces,
   value,
   naming,
@@ -940,10 +919,8 @@ function SpaceSwitcher({
           </span>
         ))}
       </span>
-      {/* Out of flow, and that is the whole of why: this sits in the titlebar
-          strip beside the session header, so a column with the dots in it left
-          the name riding high of the words next to it — by half a dot at rest
-          and by nothing the reader could account for. */}
+      {/* Out of flow, so the name lines up with what sits beside it; the
+          dots hang under it, shown on hover. */}
       <div className="pointer-events-none absolute top-full left-1/2 -translate-x-1/2">
         <DotTrack
           count={entries.length}
@@ -1005,7 +982,6 @@ export default function Sidebar({
   prFor,
   selectedSessionId,
   collapsed,
-  onToggleCollapsed,
   onSelect,
   onPrefetch,
   groups: splits,
@@ -1022,11 +998,7 @@ export default function Sidebar({
   archivedRequested,
   onToggleArchived,
   projects,
-  spaces,
   space,
-  onSpaceChange,
-  onNewSpace,
-  namingSpace,
   projectFilter,
   onDetach,
   onProjectFilterChange,
@@ -1035,7 +1007,6 @@ export default function Sidebar({
   updateBlocked,
   updateManual,
   onInstallUpdate,
-  onOpenSettings,
   drafts,
   openDraftId,
   onOpenDraft,
@@ -1043,7 +1014,6 @@ export default function Sidebar({
   draftsShown,
   onToggleDrafts,
 }: SidebarProps) {
-  const fullscreen = useFullscreen();
   // `SIDEBAR_MIN` is `w-60`, the width this opened at before it could be dragged — and
   // its floor as well as its default: narrower, the rows' timestamps and marks
   // start eating the title they sit beside, so this only ever widens.
@@ -1227,63 +1197,10 @@ export default function Sidebar({
 
   return (
     <aside
-      className="relative flex shrink-0 flex-col border-r border-sidebar-border"
+      className="relative flex shrink-0 flex-col"
       style={style}
     >
       {handle}
-      {/* The toggle shares this strip with the traffic lights, so it sits at the
-          right to clear them — except in fullscreen, where they're gone and the
-          left edge is free. */}
-      <div
-        className={cn(
-          "flex h-(--titlebar-h) shrink-0 items-center px-2",
-          // Left-aligned, the toggle's larger icon would sit 2px inside the
-          // buttons below it; nudge it out so every icon shares one edge.
-          fullscreen ? "justify-start pl-2" : "justify-end",
-        )}
-        data-tauri-drag-region="deep"
-      >
-        {/* The toggle holds the strip's outer edge in both layouts and settings
-            sit inboard of it, so the one control also drawn in the app header
-            never changes which end of the row it is at. */}
-        {/* The switcher is innermost in both layouts, so the two icon buttons
-            keep the edge they have always had and the one control carrying a
-            word sits where there is room for it. Drawn whether or not a space
-            exists: it is the one place in the app that says spaces are a thing,
-            and a control that only appears once you have found the setting can
-            only be found by someone who did not need it. */}
-        {fullscreen ? (
-          <>
-            <SidebarToggle onToggle={onToggleCollapsed} />
-            <SettingsButton onOpen={onOpenSettings} />
-            {/* The icons take the free left edge in fullscreen; the switcher
-                keeps the right one, so it is in the same corner of the sidebar
-                in both layouts rather than moving with the traffic lights. */}
-            <div className="ml-auto">
-              <SpaceSwitcher
-                spaces={spaces}
-                value={space}
-                naming={namingSpace}
-                onChange={onSpaceChange}
-                onNew={onNewSpace}
-              />
-            </div>
-          </>
-        ) : (
-          <>
-            <SpaceSwitcher
-              spaces={spaces}
-              value={space}
-              naming={namingSpace}
-              onChange={onSpaceChange}
-              onNew={onNewSpace}
-            />
-            <SettingsButton onOpen={onOpenSettings} />
-            <SidebarToggle onToggle={onToggleCollapsed} />
-          </>
-        )}
-      </div>
-
       {/* `px-1.5` on the buttons rather than `size="sm"`'s `px-2.5`, so their
           icons land on the same 12px inset as the toggle above.
 
@@ -1296,7 +1213,7 @@ export default function Sidebar({
           brightened where a row's does not. The dark hover is named too, since
           `dark:hover:bg-muted/50` on the variant out-specifies an unprefixed
           `hover:` and `tailwind-merge` cannot fold the two together. */}
-      <div className="flex flex-col gap-px px-2">
+      <div className="flex flex-col gap-px px-2 pt-3">
         <Button
           variant="ghost"
           size="sm"
@@ -1396,7 +1313,7 @@ export default function Sidebar({
               goes, so it swaps to `Undo2` while the drafts are what is shown.
               A dashed circle, Linear's backlog shape in lucide's stroke: not yet on
               anybody's list is what a draft is. */}
-          <Tooltip>
+          <Tooltip delayDuration={700}>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
@@ -1417,7 +1334,7 @@ export default function Sidebar({
               (the row control's single `Check`, doubled — every settled one) goes
               to the settled list, `Undo2` comes back. A pressed state on one icon
               can't say that on its own, so the glyph swaps instead. */}
-          <Tooltip>
+          <Tooltip delayDuration={700}>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
@@ -2413,6 +2330,8 @@ function SessionRow({
   // one it opens for its own children.
   const ownRail = RAIL_X + (depth - 1) * STEP;
   const parentCarriesOn = guides[depth - 1] ?? false;
+  // The trailing slot is drawing a spinner or an orb rather than a timestamp.
+  const live = (marksLive && pr?.checksState === "RUNNING") || status === "in_progress";
 
   return (
     <RowMenu
@@ -2655,7 +2574,14 @@ function SessionRow({
               faded-but-present element still hit-tests — stacked over the button
               it would otherwise swallow the cursor, which reads as a dead
               button. */}
-          <span className="pointer-events-none col-start-1 row-start-1 flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150 group-hover:opacity-0 group-data-[state=open]:opacity-0">
+          <span
+            className={cn(
+              "pointer-events-none col-start-1 row-start-1 flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150",
+              // Only the timestamp gives way to the buttons. Something in
+              // flight is still in flight under the cursor.
+              !live && "group-hover:opacity-0 group-data-[state=open]:opacity-0",
+            )}
+          >
             {/* The orb takes the timestamp's place rather than a slot of its
                 own: a row that's working right now is the one row whose "last
                 activity" reads as stale, and one indicator per row is what keeps
@@ -2696,7 +2622,13 @@ function SessionRow({
               `inline-flex`, and Tailwind emits that after `hidden` at equal
               specificity, so a `display` utility here silently loses.
               `pointer-events-none` keeps the invisible buttons unclickable. */}
-          <div className="pointer-events-none col-start-1 row-start-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-data-[state=open]:pointer-events-auto group-data-[state=open]:opacity-100">
+          <div
+            className={cn(
+              "pointer-events-none col-start-1 row-start-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-data-[state=open]:pointer-events-auto group-data-[state=open]:opacity-100",
+              // Beside the orb's 20px box rather than over it.
+              live && "mr-6",
+            )}
+          >
             {/* No Settle while a turn is in flight: settling kills the child,
                 so the turn would die mid-work with nothing saying so. Unsettle
                 stays, since a settled row has no turn. */}

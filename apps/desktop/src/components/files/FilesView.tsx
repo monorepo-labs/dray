@@ -10,20 +10,15 @@ import {
 } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
-import OpenInButton from "@/components/OpenInButton";
-import FileTabs from "@/components/files/FileTabs";
 import FileTree from "@/components/files/FileTree";
 import FileViewer from "@/components/files/FileViewer";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useHotkey } from "@/hooks/useHotkey";
-import { FILE_OPENER } from "@/lib/openWith";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useResizable } from "@/components/ResizeHandle";
 import {
   activateFile,
-  closeFile,
-  moveFile,
   openInFiles,
   refreshOpenFiles,
   useOpenFiles,
@@ -230,29 +225,12 @@ export default function FilesView({
   );
 
   return (
-    // The top border is what parts this from the titlebar, the same rule the
-    // Diff view states: without it the tab strip floats directly under the
-    // window's own controls and reads as part of them.
-    <div className={cn("flex min-h-0 flex-1 border-t border-border", side === "right" && "flex-row-reverse")}>
+    // No top border: the sheet's ring under the titlebar already parts the
+    // two. The open files' tabs are the titlebar's own row (`ViewTabs`).
+    <div className={cn("flex min-h-0 flex-1", side === "right" && "flex-row-reverse")}>
       {list}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {open.length > 0 && (
-          <FileTabs
-            files={open}
-            active={activePath}
-            onSelect={(path) => activateFile(sessionId, path)}
-            onClose={(path) => closeFile(sessionId, path)}
-            onMove={(path, delta) => moveFile(sessionId, path, delta)}
-            // The same split button the right panel hands a *directory* to,
-            // wearing the file opener. On the tab row rather than over a header
-            // of its own: it acts on the file being read, which the strip
-            // beside it already names.
-            actions={
-              file && <OpenInButton path={file.path} opener={FILE_OPENER} line={file.line} />
-            }
-          />
-        )}
         <FileViewer file={file} />
       </div>
     </div>

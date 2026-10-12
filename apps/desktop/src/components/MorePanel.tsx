@@ -66,7 +66,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
     // `pt-4` on every one of them rather than a gap on the container: the
     // heading carries the break above it, so a section arriving or going takes
     // its own spacing with it.
-    <div className="shrink-0 px-3 pt-4 pb-2 text-ui text-muted-foreground">{children}</div>
+    <div className="shrink-0 px-3 pt-4 pb-2 text-ui text-muted-foreground first:pt-3">{children}</div>
   );
 }
 
@@ -166,7 +166,12 @@ function AttachmentGrid({ media, sessionId }: { media: SessionMedia[]; sessionId
               type="button"
               onClick={() => setOpenSrc(item.src)}
               aria-label={item.video ? `Play ${item.name}` : `Open ${item.name}`}
-              className={cn(cell, "cursor-zoom-in overflow-hidden transition-opacity hover:opacity-90")}
+              // A wash laid over the picture rather than a fill behind it,
+              // which the picture would cover.
+              className={cn(
+                cell,
+                "relative cursor-default overflow-hidden after:absolute after:inset-0 after:transition-colors hover:after:bg-foreground/10",
+              )}
             >
               <Thumb item={item} className="size-full" />
             </button>

@@ -2,7 +2,6 @@ import { memo, useState } from "react";
 import { ChevronRight, GitCompare } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
-import ShortcutKeys from "@/components/ShortcutKeys";
 import Counts from "@/components/changes/Counts";
 import Note, { unreadableText } from "@/components/changes/Note";
 import DiffView from "@/components/chat/DiffView";
@@ -51,7 +50,7 @@ export default function ChangesPanel({
 
   return (
     <>
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-ui">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 pt-3 pb-2 text-ui">
         <span className="text-sidebar-foreground">Last turn</span>
         <span className="text-muted-foreground">
           {changes.files.length} file{changes.files.length > 1 ? "s" : ""}
@@ -102,7 +101,6 @@ function NoChanges({ onOpenRepo }: { onOpenRepo: () => void }) {
           <Button variant="outline" size="sm" onClick={onOpenRepo}>
             Open Diff view
           </Button>
-          <ShortcutKeys ids={["view.changes"]} />
         </div>
       </div>
     </div>

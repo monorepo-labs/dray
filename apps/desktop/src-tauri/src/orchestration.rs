@@ -378,8 +378,7 @@ mod server_list {
                  terminal to trust it, then add it again."
             ),
             Some(Fix::Install) => format!("{message} Add it from the app's Settings → Servers, which can install it."),
-            // A tunnel's address moving is a server added by address; an SSH
-            // add never meets it, and the message already says what to do.
+            // A reconnect's fix, never an add's; the sentence already says it.
             Some(Fix::NewAddress) | None => message,
         }
     }

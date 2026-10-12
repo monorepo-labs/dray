@@ -26,7 +26,7 @@ use objc2::{msg_send, sel};
 use objc2_app_kit::{NSApplication, NSEvent, NSView};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
@@ -59,6 +59,14 @@ static NEXT_TAB: AtomicI32 = AtomicI32::new(1);
 const DISCARD_AFTER: Duration = Duration::from_secs(30 * 60);
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
 
+/// The tabs shown most recently, newest first. Their views are parked
+/// off-screen rather than hidden, because a hidden view drops its painted
+/// frame and draws white until Chromium paints again — the flash on every tab
+/// switch. Parked, the frame is still there and coming back is a move.
+/// Capped, since a parked tab keeps running as if on screen.
+static WARM: Mutex<VecDeque<i32>> = Mutex::new(VecDeque::new());
+const WARM_TABS: usize = 4;
+
 struct Tab {
     id: i32,
     session: String,
@@ -71,6 +79,9 @@ struct Tab {
     url: String,
     title: String,
     favicon: String,
+    /// The colour at the top of the page, as `rgb(r, g, b)`, so the URL row
+    /// can wear it. Kept across a navigation until the next page reports.
+    background: Option<String>,
     loading: bool,
     can_go_back: bool,
     can_go_forward: bool,
@@ -117,6 +128,7 @@ pub struct TabInfo {
     pub can_go_forward: bool,
     pub error: Option<String>,
     pub discarded: bool,
+    pub background: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -563,6 +575,7 @@ fn tabs_of(session: &str) -> Vec<TabInfo> {
             can_go_forward: t.can_go_forward,
             error: t.error.clone(),
             discarded: t.discarded,
+            background: t.background.clone(),
         })
         .collect()
 }
@@ -685,6 +698,16 @@ fn apply_layout() {
         .filter(|t| t.view != 0)
         .filter_map(|t| Some((t.id, t.view, t.browser.clone()?)))
         .collect();
+    let warm: Vec<i32> = {
+        let mut warm = WARM.lock().unwrap();
+        warm.retain(|w| views.iter().any(|(id, ..)| id == w));
+        if let Some(id) = shown {
+            warm.retain(|&w| w != id);
+            warm.push_front(id);
+            warm.truncate(WARM_TABS);
+        }
+        warm.iter().copied().collect()
+    };
     for (id, view, browser) in views {
         let view: &NSView = unsafe { &*(view as *const NSView) };
         let show = shown == Some(id);
@@ -697,6 +720,7 @@ fn apply_layout() {
                 );
                 view.setFrame(frame);
             }
+            round_foot(view);
             if let Some(host) = browser.host() {
                 host.notify_move_or_resize_started();
             }
@@ -708,9 +732,34 @@ fn apply_layout() {
         if let Some((w, h)) = parked {
             view.setFrame(NSRect::new(NSPoint::new(-20000.0, 0.0), NSSize::new(w as f64, h as f64)));
             view.setHidden(false);
+        } else if !show && warm.contains(&id) {
+            // At its own size, so coming back is a move and never a relayout.
+            let size = view.frame().size;
+            view.setFrame(NSRect::new(NSPoint::new(-20000.0, 0.0), size));
+            view.setHidden(false);
         } else {
             view.setHidden(!show);
         }
+    }
+}
+
+/// The page sits at the foot of a rounded sheet, and being a native view it
+/// draws over the DOM's own corners, which no CSS clip reaches. Its layer
+/// takes the sheet's radius on the two bottom corners; the top sits under the
+/// URL row and stays square.
+fn round_foot(view: &NSView) {
+    /// `kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner`: the bottom two,
+    /// since an `NSView`'s layer has its origin at the bottom.
+    const BOTTOM: usize = 1 | 2;
+    view.setWantsLayer(true);
+    unsafe {
+        let layer: *mut AnyObject = msg_send![view, layer];
+        if layer.is_null() {
+            return;
+        }
+        let _: () = msg_send![layer, setCornerRadius: 8.0f64];
+        let _: () = msg_send![layer, setMaskedCorners: BOTTOM];
+        let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
     }
 }
 
@@ -946,6 +995,7 @@ wrap_life_span_handler! {
                         url,
                         title: String::new(),
                         favicon: String::new(),
+                        background: None,
                         loading: true,
                         can_go_back: false,
                         can_go_forward: false,
@@ -1167,6 +1217,14 @@ wrap_display_handler! {
             _line: ::std::os::raw::c_int,
         ) -> ::std::os::raw::c_int {
             let text = message.map(CefString::to_string).unwrap_or_default();
+            // Any page can log this too, and all it can do is colour its own
+            // tab's URL row: three bytes, rebuilt here, never its own string.
+            if let Some(rest) = text.strip_prefix(BG_PREFIX) {
+                if let Ok([r, g, b]) = serde_json::from_str::<[u8; 3]>(rest) {
+                    update_tab(self.tab, |t| t.background = Some(format!("rgb({r}, {g}, {b})")));
+                }
+                return 1;
+            }
             let Some(rest) = text.strip_prefix(PICK_PREFIX) else {
                 let error = sys::cef_log_severity_t::from(level) == sys::cef_log_severity_t::LOGSEVERITY_ERROR;
                 automation::log(self.tab, error, text);
@@ -1193,6 +1251,56 @@ wrap_display_handler! {
 }
 
 const PICK_PREFIX: &str = "__dray_pick__";
+
+const BG_PREFIX: &str = "__dray_bg__";
+
+/// Reports the colour under the top edge of the page: the first opaque
+/// background walking up from the element there, else the canvas default.
+/// A 1px canvas normalises whatever CSS colour syntax the page used to rgb.
+///
+/// Installed once per document and re-read whenever the page could have
+/// changed it: the system scheme flipping (a site following the app's light
+/// or dark) or a class or style landing on `<html>`/`<body>` (a site's own
+/// theme toggle). Only a changed answer is logged.
+const BG_JS: &str = r#"(() => {
+  if (window.__drayBg) return window.__drayBg();
+  const c = document.createElement("canvas");
+  c.width = c.height = 1;
+  const x = c.getContext("2d", { willReadFrequently: true });
+  const rgb = (v) => {
+    x.clearRect(0, 0, 1, 1);
+    x.fillStyle = "rgba(0,0,0,0)";
+    x.fillStyle = v;
+    x.fillRect(0, 0, 1, 1);
+    const d = x.getImageData(0, 0, 1, 1).data;
+    return d[3] > 200 ? [d[0], d[1], d[2]] : null;
+  };
+  const scheme = matchMedia("(prefers-color-scheme: dark)");
+  let last = "";
+  const report = () => {
+    let found = null;
+    for (let el = document.elementFromPoint(innerWidth / 2, 1); el && !found; el = el.parentElement)
+      found = rgb(getComputedStyle(el).backgroundColor);
+    const dark = scheme.matches && /dark/.test(getComputedStyle(document.documentElement).colorScheme);
+    const next = JSON.stringify(found || (dark ? [18, 18, 18] : [255, 255, 255]));
+    if (next === last) return;
+    last = next;
+    console.log("__dray_bg__" + next);
+  };
+  // Pages restyle a beat after the signal, and often through a transition.
+  let timer = 0;
+  const soon = () => {
+    clearTimeout(timer);
+    timer = setTimeout(report, 300);
+  };
+  scheme.addEventListener("change", soon);
+  const watch = new MutationObserver(soon);
+  const opts = { attributes: true, attributeFilter: ["class", "style", "data-theme", "data-mode"] };
+  watch.observe(document.documentElement, opts);
+  if (document.body) watch.observe(document.body, opts);
+  window.__drayBg = report;
+  report();
+})();"#;
 
 /// Tabs whose picker is running. An entry is spent by the first pick line,
 /// and dropped by a navigation or a close, since the script that would
@@ -1348,6 +1456,11 @@ wrap_load_handler! {
         /// with it. Judged here and not on the loading state, which reports
         /// the whole browser: an iframe loading would disarm a picker whose
         /// document is still there.
+        fn on_load_end(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _http_status_code: ::std::os::raw::c_int) {
+            let Some(frame) = frame.filter(|f| f.is_main() != 0) else { return };
+            frame.execute_java_script(Some(&CefString::from(BG_JS)), None, 0);
+        }
+
         fn on_load_start(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
             if !frame.map(|f| f.is_main() != 0).unwrap_or(false) {
                 return;

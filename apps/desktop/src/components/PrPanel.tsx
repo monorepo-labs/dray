@@ -138,7 +138,7 @@ export default function PrPanel({
   // pull requests was the only thing left on it.
   return (
     <>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto pt-0.5">
         {error && (
           <p className="px-3 py-2 text-ui text-destructive">
             {UNAVAILABLE[error.kind] || errorText(error)}

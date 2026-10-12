@@ -158,7 +158,7 @@ function LocalOpenInButton({
         {/* Aligned to the end because the button sits at the panel's right
             edge, where a start-aligned menu opens off the window — the same
             reason the PR panel's merge menu carries it. */}
-        <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuContent align="end" className="min-w-44" onCloseAutoFocus={(e) => e.preventDefault()}>
           {apps.map((app, i) => (
             <Fragment key={app.path}>
               {/* An inset dotted rule between runs of a kind, `PickerMenu`'s

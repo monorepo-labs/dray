@@ -221,6 +221,13 @@
      out lighter than the menu around it and the recess read as a raised strip.
      Nothing above a floating surface can be described by adding light to it. */
   --surface-well: oklch(0 0 0 / 22%);
+  /* The frame the sheets sit in. The well's scrim to start with, kept apart so
+     a palette whose page is already near black can deepen it without deepening
+     every segmented control's track too. */
+  --surface-frame: oklch(0 0 0 / 22%);
+  /* A veil the sheets lay over the page. None by default: the page itself is
+     the sheet, and the frame is what is drawn around it. */
+  --surface-sheet: transparent;
   /* What rides in a well: the thumb of a segmented control. Mixed off
      `--surface-card` rather than named, so a ported palette gets one without
      declaring it — and light rather than equal, because a thumb at the menu's
@@ -264,6 +271,9 @@
      spread — a shadow with an offset in x reads as a light source the rest of
      the app doesn't have. */
   --shadow-button: 0 1px 4px oklch(0 0 0 / 45%);
+  /* The panes' sheet under the titlebar: the button's shadow turned upward,
+     since the strip is what sits behind it. */
+  --shadow-sheet: 0 0 0 1px var(--hairline);
 
   /* A surface floating at the window's edge — the composer, and whatever else
      comes to want one. `none` in dark on purpose: depth there is carried by the
@@ -406,6 +416,8 @@
   /* Far shallower than dark's 22%: the same scrim over a near-white surface
      reads as a hole rather than a recess. */
   --surface-well: oklch(0 0 0 / 7%);
+  --surface-frame: oklch(0 0 0 / 7%);
+  --surface-sheet: transparent;
   /* The card colour itself. It is already near-white, so lightening it further
      has nowhere to go — here the scrim under the thumb is what separates the
      two, which is the same trick read from the other end. */
@@ -460,6 +472,7 @@
   /* Far lighter than dark's 45%. A shadow that reads as depth against near-black
      reads as dirt against near-white. */
   --shadow-button: 0 1px 3px oklch(0 0 0 / 12%);
+  --shadow-sheet: 0 0 0 1px var(--hairline), 0 -1px 3px oklch(0 0 0 / 5%);
 
   /* GitHub's green, one rung up. The pair in `:root` is GitHub's *dark* button
      and it is the one thing there that is neither the theme's nor the mode's —
@@ -544,7 +557,27 @@
      page depends on the page, so one number for all five is a number tuned for
      none of them. The ramp's 80% stays as what a *ported* palette falls through
      to, and every shipping palette names a value here instead. */
-  --vibrancy-alpha: 70%;
+  --vibrancy-alpha: 80%;
+  /* The page is near black with no hue, so the ramp's 22% moved it by a shade
+     nobody could see and the sheet read as the frame. */
+  --surface-frame: oklch(0 0 0 / 45%);
+  /* Darkening alone runs out of room this near black, so the sheet rises too. */
+  --surface-sheet: oklch(1 0 0 / 6%);
+  /* The opaque ladder rises with it, for fullscreen where there is no glass:
+     the ramp's card is the page plus a 5.5% veil, which is the sheet's own
+     colour now, so the bubble and composer sank into it. Glass needs nothing,
+     since its veils stack on the sheet's. */
+  --surface-card: oklch(0.3 0 0);
+  --surface-raised: oklch(0.25 0 0);
+  /* Keycaps and inline code ride on cards, so this stays a step above them. */
+  --muted: oklch(0.36 0 0);
+}
+
+/* On glass the frame's scrim already reads against the desktop showing through,
+   and a white veil on the sheet only greys the glass. Three attributes, so it
+   outweighs the palette block above. */
+[data-theme="default"][data-mode="dark"][data-transparency] {
+  --surface-sheet: transparent;
 }
 
 [data-theme="default"][data-mode="light"] {
@@ -581,7 +614,7 @@
   --accent-mention: oklch(0.55 0.16 245);
   --accent-thinking: oklch(0.55 0.05 264);
   --surface-selected: oklch(0.9 0.012 250);
-  --vibrancy-alpha: 50%;
+  --vibrancy-alpha: 60%;
   /* Matched to `--surface-card` above, and clipped the same way before it: this
      is what the card *becomes* under transparency, so the two have to composite
      to one colour or a card changes hue when the window goes fullscreen. */
@@ -601,24 +634,6 @@
 
   [aria-label="Settings"] [role="tab"][aria-selected="true"] {
     background-color: color-mix(in oklab, var(--sidebar-accent) 80%, transparent);
-  }
-
-  /* The outline button, by the attribute that names it. It was `.bg-clip-padding`,
-     which is a Tailwind utility about padding-box clipping and means nothing about
-     a background — it only happens to sit on this one variant today, so the rule
-     would follow that class anywhere it went next and stop working the moment the
-     variant stopped carrying it. */
-  [data-variant="outline"] {
-    background-color: transparent;
-  }
-
-  /* Outline alone. `[data-variant="ghost"]:hover` was here too and had to go: it
-     is unlayered, so it beat every `hover:bg-*` utility in the app, and the three
-     sidebar buttons are ghosts that now have to hover as the session rows beneath
-     them do. Cost, stated: a ghost button elsewhere in Lab hovers `bg-muted` like
-     it does in every other theme rather than taking the page colour. */
-  [data-variant="outline"]:hover {
-    background-color: color-mix(in oklab, var(--background) 80%, transparent);
   }
 
   .bg-secondary:hover {
@@ -707,7 +722,7 @@
   --accent-command: #f9e2af; /* yellow */
   --accent-mention: #89b4fa; /* blue */
   --accent-thinking: #9399b2; /* overlay2 */
-  --vibrancy-alpha: 70%;
+  --vibrancy-alpha: 80%;
 }
 
 /* Latte's ladder runs the other way — `base` is its *lightest* token and
@@ -732,7 +747,7 @@
   --accent-command: #df8e1d; /* yellow */
   --accent-mention: #1e66f5; /* blue */
   --accent-thinking: #8c8fa1; /* overlay1 */
-  --vibrancy-alpha: 50%;
+  --vibrancy-alpha: 60%;
 
 }
 
@@ -762,7 +777,7 @@
   --accent-command: #fabd2f; /* bright yellow */
   --accent-mention: #83a598; /* bright blue */
   --accent-thinking: #928374; /* gray */
-  --vibrancy-alpha: 70%;
+  --vibrancy-alpha: 80%;
 }
 
 /* The same three background tokens as the dark side, re-dealt: `bg0_h` is
@@ -783,7 +798,7 @@
   --accent-command: #b57614; /* faded yellow */
   --accent-mention: #076678; /* faded blue */
   --accent-thinking: #928374; /* gray */
-  --vibrancy-alpha: 50%;
+  --vibrancy-alpha: 60%;
 }
 
 /* One Dark Pro — https://github.com/Binaryify/OneDark-Pro, MIT. Atom's One Dark by
@@ -870,7 +885,7 @@
   --accent-command: #ffc600; /* yellow, and the colour the theme is known by */
   --accent-mention: #9effff; /* light blue */
   --accent-thinking: #0088ff; /* comment */
-  --vibrancy-alpha: 65%;
+  --vibrancy-alpha: 80%;
 }
 
 @theme inline {
@@ -911,6 +926,7 @@
 
   --color-surface-raised: var(--surface-raised);
   --color-surface-well: var(--surface-well);
+  --color-surface-frame: var(--surface-frame);
   --color-surface-thumb: var(--surface-thumb);
   --color-accent-add: var(--accent-add);
   --color-accent-merged: var(--accent-merged);
@@ -1097,7 +1113,10 @@
     /* Traffic lights float over our own header under `titleBarStyle: Overlay`,
        so the header reserves this much lead space on macOS. Tall enough to clear
        a 28px control with breathing room — at exactly 28px the toggle butts
-       against the window edge. */
+       against the window edge. `trafficLightPosition.y` in tauri.conf.json (and the
+       dev conf, whose window list replaces it whole) is
+       half of this plus 2 (the lights are 14pt, laid 9pt up from the inset's
+       floor), so the two move together or the lights leave the row's centre. */
     --titlebar-h: 40px;
     /* Horizontal clearance for those same lights, needed only when a pane
        reaches the window's left edge — i.e. with the sidebar collapsed. */
@@ -1367,7 +1386,12 @@
      `--muted`, never `--color-muted`: the alias resolves at `:root`, where
      `--muted` is the palette's opaque fill, while the glass override lives on
      `body` — so through the alias the flares came out opaque beside a
-     translucent tab and drew as two solid squares in windowed mode. */
+     translucent tab and drew as two solid squares in windowed mode.
+
+     `--tab-edge` is the tab's outline, carried round the curve. Each square
+     is 9px and laps 1px into the tab, so a stroke at radius 8–9 lands on the
+     side border's own column; the fill is a layer under it, so the stroke
+     reads as the side border does — a wash over the tab's colour. */
   .browser-tab-active {
     position: relative;
   }
@@ -1377,19 +1401,23 @@
     content: "";
     position: absolute;
     bottom: 0;
-    width: 8px;
+    width: 9px;
     height: 8px;
     pointer-events: none;
   }
 
   .browser-tab-active::before {
     left: -8px;
-    background: radial-gradient(circle at 0 0, transparent 8px, var(--card) 8.5px);
+    background:
+      radial-gradient(circle at 0 0, transparent 7.75px, var(--tab-edge, transparent) 8.25px 8.75px, transparent 9.25px),
+      radial-gradient(circle at 0 0, transparent 7.75px, var(--card) 8.25px);
   }
 
   .browser-tab-active::after {
     right: -8px;
-    background: radial-gradient(circle at 100% 0, transparent 8px, var(--card) 8.5px);
+    background:
+      radial-gradient(circle at 100% 0, transparent 7.75px, var(--tab-edge, transparent) 8.25px 8.75px, transparent 9.25px),
+      radial-gradient(circle at 100% 0, transparent 7.75px, var(--card) 8.25px);
   }
 }
 

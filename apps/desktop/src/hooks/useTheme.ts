@@ -3,6 +3,7 @@ import { useCallback, useSyncExternalStore } from "react";
 import { channel } from "@/lib/channel";
 import {
   applyTheme,
+  hasLightMode,
   THEMES,
   readStoredTheme,
   watchSystemMode,
@@ -92,6 +93,15 @@ export function setMode(mode: ThemeMode) {
 export function cycleTheme() {
   const i = THEMES.findIndex((t) => t.id === store().name);
   set({ name: THEMES[(i + 1) % THEMES.length].id });
+}
+
+/// Flips to the opposite of what is on screen, so System resolves first. A
+/// dark-only palette has nothing to flip to, and moving the stored mode there
+/// would change nothing visible now and surprise the reader on the next theme.
+export function toggleMode() {
+  const { name, resolvedMode } = store();
+  if (!hasLightMode(name)) return;
+  set({ mode: resolvedMode === "dark" ? "light" : "dark" });
 }
 
 /// The palette, the mode as chosen, and the mode as rendered.

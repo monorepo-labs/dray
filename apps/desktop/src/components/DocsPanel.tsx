@@ -109,7 +109,7 @@ export default function DocsPanel({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* One row, not two. With a single file open, a strip of chips and a
           separate filename header say the same thing twice. */}
-      <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2">
+      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 pt-3 pb-2">
         <div className="scrollbar-none flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {docs.map((doc) => (
             <Chip

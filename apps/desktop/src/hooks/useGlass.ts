@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useTheme } from "@/hooks/useTheme";
-import { keepsGlassInFullscreen, modeFor } from "@/lib/theme";
+import { flatWhenWindowed, keepsGlassInFullscreen, modeFor } from "@/lib/theme";
 
 /// Whether the document opened as glass at all — read once, at import, because
 /// index.html stamps it before first paint and nothing else ever adds it. A
@@ -39,14 +39,15 @@ export function useGlass(fullscreen: boolean) {
     // takes it away — in fullscreen, for light mode or a flat-in-fullscreen
     // theme. One frame of glass is the cost of not being able to ask the OS
     // about fullscreen before the first paint.
-    if (!fullscreen || keepsGlassInFullscreen(theme, resolvedMode)) {
+    const flat = !fullscreen && flatWhenWindowed(theme, resolvedMode);
+    if (!flat && (!fullscreen || keepsGlassInFullscreen(theme, resolvedMode))) {
       el.dataset.transparency = "";
     } else {
       delete el.dataset.transparency;
     }
 
     if (!VIBRANT) return;
-    if (fullscreen) delete el.dataset.vibrancy;
+    if (fullscreen || flat) delete el.dataset.vibrancy;
     else el.dataset.vibrancy = "";
   }, [fullscreen, theme, resolvedMode]);
 

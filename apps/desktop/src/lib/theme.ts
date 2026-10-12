@@ -93,7 +93,7 @@ export const THEMES: Theme[] = [
 ];
 
 export const DEFAULT_THEME: ThemeName = "default";
-const DEFAULT_MODE: ThemeMode = "light";
+const DEFAULT_MODE: ThemeMode = "system";
 
 function theme(name: ThemeName): Theme | undefined {
   return THEMES.find((t) => t.id === name);
@@ -114,6 +114,12 @@ function theme(name: ThemeName): Theme | undefined {
 export function keepsGlassInFullscreen(name: ThemeName, mode: ResolvedMode): boolean {
   if (mode === "light") return false;
   return !theme(name)?.flatInFullscreen;
+}
+
+/// Whether a windowed app drops its glass too. Dray dark alone, on trial: its
+/// page is near black, and the desktop through it read as a grey wash.
+export function flatWhenWindowed(name: ThemeName, mode: ResolvedMode): boolean {
+  return name === "default" && mode === "dark";
 }
 
 /// Whether this theme has a light palette to switch to.
