@@ -45,6 +45,11 @@ use tokio::{
 /// point.
 pub const SESSION_CREATED: &str = "session_created";
 
+/// A session's index entry changed from here — settled, unsettled, set aside —
+/// carrying the entry as it now stands. The sidebar's own buttons need none:
+/// the frontend made those writes and merges what they answered.
+pub const SESSION_CHANGED: &str = "session_changed";
+
 /// Emitted when `dray issue link` or `dray issue unlink` changes what a session
 /// is tagged with, so the panel's Issue tab appears, redraws or goes away
 /// without a reselect.
@@ -262,6 +267,21 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::RemoveDraft(draft) => remove_draft(&draft.id, app).await,
         Request::StartDraft(start) => start_draft(start, app).await,
         Request::Share(share) => share_port(share).await,
+        Request::ListShares(list) => list_shares(list).await,
+        Request::RenameSession(rename) => {
+            crate::rename_session(rename.session_id.clone(), rename.title, app.clone()).await?;
+            answer_session(&rename.session_id).await
+        }
+        Request::StopSession(stop) => {
+            crate::interrupt_session(&stop.session_id, app.clone()).await?;
+            answer_session(&stop.session_id).await
+        }
+        Request::SettleSession(settle) => settle_session(settle, app).await,
+        Request::SetAside(aside) => {
+            crate::set_session_flags(&aside.session_id, None, None, None, Some(aside.aside)).await?;
+            announce_change(&[aside.session_id.clone()], app).await;
+            answer_session(&aside.session_id).await
+        }
         on_screen => {
             #[cfg(feature = "desktop")]
             if crate::is_server() {
@@ -336,13 +356,13 @@ async fn answer_on_screen(request: Request) -> Result<Response> {
         | Request::RemoveServer(_)
         | Request::RenameServer(_)
         | Request::SetServerOn(_) => {
-            bail!("this Dray is a server, and the server list lives in the Mac app — run `dray server` there")
+            bail!("this Dray is a server, and the server list lives in the Mac app — run `dray machine` there")
         }
         other => bail!("{other:?} is not answered here"),
     }
 }
 
-/// `dray server`, through Settings → Servers' own commands, so the CLI is
+/// `dray machine`, through Settings → Servers' own commands, so the CLI is
 /// refused exactly where the Add dialog would be and the page hears the same
 /// `servers_changed`.
 #[cfg(feature = "desktop")]
@@ -418,7 +438,7 @@ mod server_list {
         Ok(Response::Server { server: summarize(current(&id)?) })
     }
 
-    /// On waits for the attempt to settle, so `dray server on` answers
+    /// On waits for the attempt to settle, so `dray machine connect` answers
     /// whether it connected rather than "connecting". A whole SSH connect is
     /// capped at 45s; past that the answer is the row as it stands.
     pub async fn set_on(set: dray_proto::SetServerOn) -> Result<Response> {
@@ -458,9 +478,60 @@ async fn share_port(request: dray_proto::ShareRequest) -> Result<Response> {
         ShareAction::List => Ok(()),
     };
     Ok(match done {
-        Ok(()) => Response::Shared { shares: crate::share::list(&session) },
+        Ok(()) => Response::Shared { shares: crate::share::list(Some(&session)) },
         Err(message) => Response::error(message),
     })
+}
+
+/// `dray share ls`: links in the caller's project, or every one with `--all`.
+async fn list_shares(list: ListSessions) -> Result<Response> {
+    let scope = scope_of(&list).await?;
+    let items = store::list_session_index_items(false).await?;
+    let shares = crate::share::list(None)
+        .into_iter()
+        .filter(|s| {
+            scope.as_deref().is_none_or(|p| {
+                items.iter().any(|i| i.session_id == s.session_id && i.project_path == p)
+            })
+        })
+        .collect();
+    Ok(Response::Shared { shares })
+}
+
+/// Settles or unsettles through the sidebar's own command, which also stops
+/// a settled session's processes and carries its hidden children along.
+async fn settle_session(settle: dray_proto::SettleSession, app: &Sink) -> Result<Response> {
+    let id = settle.session_id.as_str();
+    let item = store::get_session_index_item(id).await?.with_context(|| format!("no session {id}"))?;
+    if settle.settled && manager().turn_in_flight(id).await {
+        bail!("session {id} is mid-turn — settle it once the turn finishes, or stop it first");
+    }
+    if settle.settled && settle.delete_worktree && item.worktree_name.is_none() {
+        bail!("session {id} has no worktree of its own to delete");
+    }
+    crate::set_session_flags(id, Some(settle.settled), None, None, None).await?;
+    let mut changed = vec![id.to_string()];
+    changed.extend(store::hidden_children(id).await?.into_iter().map(|c| c.session_id));
+    if settle.settled && settle.delete_worktree {
+        manager().remove_worktree(id).await?;
+    }
+    announce_change(&changed, app).await;
+    answer_session(id).await
+}
+
+/// Index entries changed from here, re-read and handed to the sidebar, which
+/// otherwise only learns of a change it made itself.
+async fn announce_change(ids: &[String], app: &Sink) {
+    for id in ids {
+        if let Ok(Some(item)) = store::get_session_index_item(id).await {
+            app.emit(SESSION_CHANGED, &item).ok();
+        }
+    }
+}
+
+async fn answer_session(id: &str) -> Result<Response> {
+    let item = store::get_session_index_item(id).await?.with_context(|| format!("no session {id}"))?;
+    Ok(Response::Session { session: summarize(item) })
 }
 
 /// One `dray browser` step: CEF's tabs in the Mac app, a headless Chromium
@@ -620,10 +691,10 @@ async fn create_session(create: CreateSession, app: &Sink) -> Result<Response> {
         .unwrap_or_else(ApprovalPolicy::default);
     let fast = resolve_fast(create.fast, parent.as_ref(), harness);
 
-    // Resolved before anything is written, so a `--from` naming a session or a
+    // Resolved before anything is written, so a `--base` naming a session or a
     // ref that cannot be found costs an error rather than a session sitting in
     // the sidebar on the wrong base.
-    let base_ref = match create.from.as_deref() {
+    let base_ref = match create.base.as_deref() {
         Some(from) => Some(resolve_base(from, &project_path).await?),
         None => None,
     };
@@ -656,6 +727,7 @@ async fn create_session(create: CreateSession, app: &Sink) -> Result<Response> {
             true,
             create.parent_session_id.as_deref(),
             create.hidden,
+            create.title.as_deref(),
             // The creating session is this one's *parent*, which the sidebar
             // already draws by nesting the row. Its opening prompt is the brief,
             // not a message relayed into a conversation already under way.
@@ -689,6 +761,11 @@ async fn create_draft(create: CreateDraft, app: &Sink) -> Result<Response> {
     let project_path = project_from(create.project_path.as_deref(), parent.as_ref())
         .context("no project — run this inside a git repo or pass --project")?;
     let harness = resolve_harness(create.harness.as_deref(), parent.as_ref())?;
+    // Checked now so a typo fails here rather than when the reader starts it;
+    // stored as written, and resolved again at the start.
+    if let Some(base) = create.base.as_deref() {
+        resolve_base(base, &project_path).await?;
+    }
     let draft = StoredDraft {
         id: uuid::Uuid::now_v7().to_string(),
         prompt: create.prompt,
@@ -699,6 +776,7 @@ async fn create_draft(create: CreateDraft, app: &Sink) -> Result<Response> {
         permission_mode: parent.as_ref().map(|p| p.permission_mode).unwrap_or_default(),
         fast: resolve_fast(create.fast, parent.as_ref(), harness),
         use_worktree: true,
+        base: create.base,
         created: crate::events::now_rfc3339(),
     };
     drafts::save_draft(serde_json::to_value(&draft)?).await?;
@@ -708,12 +786,7 @@ async fn create_draft(create: CreateDraft, app: &Sink) -> Result<Response> {
 
 /// Drafts in the caller's project, or every one with `--all`, newest first.
 async fn list_drafts(list: ListSessions) -> Result<Response> {
-    let scope = if list.all {
-        None
-    } else {
-        let parent = parent_of(list.parent_session_id.as_deref()).await?;
-        project_from(list.project_path.as_deref(), parent.as_ref())
-    };
+    let scope = scope_of(&list).await?;
     let mut drafts: Vec<_> = drafts::stored()
         .await?
         .into_iter()
@@ -721,6 +794,15 @@ async fn list_drafts(list: ListSessions) -> Result<Response> {
         .collect();
     drafts.sort_by(|a, b| b.created.cmp(&a.created));
     Ok(Response::Drafts { drafts: drafts.into_iter().map(summarize_draft).collect() })
+}
+
+/// The project a listing is narrowed to, or `None` for `--all`.
+async fn scope_of(list: &ListSessions) -> Result<Option<String>> {
+    if list.all {
+        return Ok(None);
+    }
+    let parent = parent_of(list.parent_session_id.as_deref()).await?;
+    Ok(project_from(list.project_path.as_deref(), parent.as_ref()))
 }
 
 /// Read before it is taken, so a draft this build cannot spell is refused
@@ -773,7 +855,12 @@ async fn start_session(
     parent: Option<&str>,
     app: &Sink,
 ) -> Result<Response> {
-
+    // Read again at the start rather than trusted from the save: the branch a
+    // session id names, or the ref itself, may have moved or gone since.
+    let base_ref = match draft.base.as_deref() {
+        Some(base) => Some(resolve_base(base, &draft.project_path).await?),
+        None => None,
+    };
     let session_id = uuid::Uuid::now_v7().to_string();
     let outcome = manager()
         .send_msg(
@@ -790,10 +877,11 @@ async fn start_session(
             None,
             draft.use_worktree,
             None,
-            None,
+            base_ref.as_deref(),
             true,
             parent,
             false,
+            None,
             None,
             app,
         )
@@ -804,7 +892,7 @@ async fn start_session(
         .context("the session was created but returned no index entry")?;
 
     app.emit(SESSION_CREATED, &item).ok();
-    Ok(Response::Created { session: summarize(item), base_ref: None })
+    Ok(Response::Created { session: summarize(item), base_ref })
 }
 
 /// What `--from` starts the new worktree at: a session id, a branch, or any
@@ -1049,6 +1137,7 @@ async fn send_message(send: SendMessage, app: &Sink) -> Result<Response> {
             false,
             None,
             false,
+            None,
             from,
             app,
         )

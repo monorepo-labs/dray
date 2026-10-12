@@ -563,6 +563,9 @@ impl SessionManager {
         // Kept out of the sidebar, drawn in the parent's crew alone. Only the
         // orchestration socket sets it, and only with a parent.
         hidden: bool,
+        // A title the caller already knows, set and locked now so none is
+        // generated. Only `dray session new --title` names one.
+        title: Option<&str>,
         // The session that relayed this prompt, for a message arriving over the
         // orchestration socket. `None` everywhere else: the composer's prompts
         // are the user's own, and a `user_message` with a sender is drawn
@@ -763,6 +766,11 @@ impl SessionManager {
             // later would be one more thing moving while the first turn starts.
             item.issues = linked_issues.clone();
             item.hidden = hidden;
+            let title = title.map(str::trim).filter(|t| !t.is_empty());
+            if let Some(title) = title {
+                item.title = title.to_string();
+                item.title_locked = true;
+            }
 
             // The one failure that has to undo the tree, and the row that just
             // failed to be written is exactly why: removal is offered from a
@@ -816,7 +824,9 @@ impl SessionManager {
             // until the CLI creates it, and `current_dir` on a missing path
             // fails the spawn outright. Nothing waits on this, so that took
             // every worktree session's title with it in silence.
-            crate::title::spawn_title_generation(session_id, harness, prompt, cwd, app);
+            if title.is_none() {
+                crate::title::spawn_title_generation(session_id, harness, prompt, cwd, app);
+            }
 
             // Taken before the child exists, so nothing it does can end up
             // inside its own baseline. A worktree the CLI has yet to create has
@@ -1297,12 +1307,8 @@ impl SessionManager {
             );
         }
 
-        if let Some(slot) = self.existing(session_id).await {
-            if let Some(s) = slot.lock().await.as_ref() {
-                if s.status.lock().await.turn_in_flight() {
-                    bail!("wait for the turn to finish before forking it");
-                }
-            }
+        if self.turn_in_flight(session_id).await {
+            bail!("wait for the turn to finish before forking it");
         }
 
         // **grok addresses a conversation by session id *and directory*, so
@@ -1552,6 +1558,17 @@ impl SessionManager {
     /// come through here — settling is the reader saying the work is done,
     /// and a child left running behind a settled row was a dev server and a
     /// page nobody could see.
+    /// Whether a turn is running in this session now. Fork and the CLI's
+    /// settle refuse on it, the same question the sidebar asks of `in_progress`.
+    pub async fn turn_in_flight(&self, session_id: &str) -> bool {
+        let Some(slot) = self.existing(session_id).await else { return false };
+        let guard = slot.lock().await;
+        match guard.as_ref() {
+            Some(s) => s.status.lock().await.turn_in_flight(),
+            None => false,
+        }
+    }
+
     pub async fn settle(&self, session_id: &str) -> Result<()> {
         let running = self.take(session_id).await;
         // The tabs close whatever the kill answered: the session is already

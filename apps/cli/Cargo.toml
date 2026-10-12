@@ -3,7 +3,7 @@ name = "dray"
 version = "0.10.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Create and list Dray sessions from the command line."
+description = "Run and manage Dray sessions from the command line."
 repository = "https://github.com/monorepo-labs/dray"
 
 [[bin]]
@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 dray-proto = { path = "../../crates/dray-proto" }
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 serde_json = "1"
 
 [profile.release]

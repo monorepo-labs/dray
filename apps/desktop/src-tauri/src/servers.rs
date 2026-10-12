@@ -577,15 +577,16 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
     if token.is_empty() {
         return Err("a token is required — it is in the server's serve-token file".into());
     }
-    admit(&url, &token).await?.close(None).await.ok();
-
     let existing = conns().iter().find(|c| c.saved.url == url).map(|c| c.saved.id.clone());
-    let id = existing.clone().unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
-    crate::issues::set_credential(&credential_name(&id), Some(&token)).await?;
     let name = name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| default_name(&url));
+    refuse_taken(&conns(), &name, existing.as_deref())?;
+    admit(&url, &token).await?.close(None).await.ok();
+
+    let id = existing.clone().unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
+    crate::issues::set_credential(&credential_name(&id), Some(&token)).await?;
 
     {
         let mut list = conns();
@@ -624,6 +625,16 @@ pub async fn set_server_address(id: String, url: String) -> Result<(), String> {
     }
     announce();
     save().await
+}
+
+/// A name is how `dray --machine <name>` picks one server, so two may not
+/// share it. `except` is the server being renamed or re-added, which may keep
+/// its own.
+fn refuse_taken(list: &[Conn], name: &str, except: Option<&str>) -> Result<(), String> {
+    match list.iter().any(|c| c.saved.id != LOCAL && Some(c.saved.id.as_str()) != except && c.saved.name == name) {
+        true => Err(format!("another server is already named {name} — pick another name")),
+        false => Ok(()),
+    }
 }
 
 /// The name a server gets when the reader gives none.
@@ -671,6 +682,12 @@ pub async fn remove_server(id: String) -> Result<(), String> {
 pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<ServerInfo, ssh::Failure> {
     let failed = |message: String| ssh::Failure { message, fix: None, permanent: true };
     let target = ssh::parse(&line).map_err(failed)?;
+    let name = name
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| target.host().to_string());
+    let existing = conns().iter().find(|c| c.saved.ssh.as_ref() == Some(&target)).map(|c| c.saved.id.clone());
+    refuse_taken(&conns(), &name, existing.as_deref()).map_err(failed)?;
     let tunnel = ssh::open(&target, |stage| {
         if let Some(sink) = SINK.get() {
             let _ = sink.emit("server_adding", stage);
@@ -684,10 +701,6 @@ pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<Server
     }
     drop(tunnel);
 
-    let name = name
-        .map(|n| n.trim().to_string())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| target.host().to_string());
     let id = {
         let mut list = conns();
         if let Some(conn) = list.iter_mut().find(|c| c.saved.ssh.as_ref() == Some(&target)) {
@@ -734,8 +747,10 @@ pub async fn install_on_server(line: String, picks: Vec<String>) -> Result<(), s
 pub async fn rename_server(id: String, name: String) -> Result<(), String> {
     {
         let mut list = conns();
-        let saved = &mut list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?.saved;
-        saved.name = Some(name.trim()).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| unnamed(saved));
+        let saved = &list.iter().find(|c| c.saved.id == id).ok_or("no such server")?.saved;
+        let name = Some(name.trim()).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| unnamed(saved));
+        refuse_taken(&list, &name, Some(&id))?;
+        list.iter_mut().find(|c| c.saved.id == id).expect("found above").saved.name = name;
     }
     save().await?;
     announce();
@@ -965,6 +980,19 @@ mod tests {
         assert_eq!(normalize("https://a-b.trycloudflare.com/").unwrap(), "wss://a-b.trycloudflare.com");
         assert_eq!(normalize("wss://a-b.trycloudflare.com").unwrap(), "wss://a-b.trycloudflare.com");
         assert!(normalize("").is_err());
+    }
+
+    /// A name picks one server for `--machine`, so a second one may not take
+    /// it — but the server already holding it may, which is a rename to itself
+    /// or a re-add after rotating a token. This Mac's row is no name to route to.
+    #[test]
+    fn a_name_belongs_to_one_server() {
+        let saved = |id: &str, name: &str| Saved { id: id.into(), name: name.into(), url: String::new(), ssh: None, off: true, unknown: Default::default() };
+        let list = vec![Conn::new(saved("a", "vps")), Conn::new(saved(LOCAL, "This Mac"))];
+        assert!(refuse_taken(&list, "vps", None).is_err());
+        assert!(refuse_taken(&list, "vps", Some("b")).is_err());
+        assert!(refuse_taken(&list, "vps", Some("a")).is_ok());
+        assert!(refuse_taken(&list, "This Mac", None).is_ok());
     }
 
     /// Turning a server off must answer the calls already sent to it: no run

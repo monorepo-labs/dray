@@ -29,7 +29,7 @@ browser this session already has open in the app — see *Driving the browser*.
 ## Creating a session
 
 ```bash
-dray new "Fix the login redirect loop described in ENG-412"
+dray session new "Fix the login redirect loop described in ENG-412"
 ```
 
 Prints the new session's id. It returns immediately — the session starts working
@@ -48,7 +48,8 @@ Options:
 | `--model <alias>` | `opus`, `sonnet`, `fable`, `haiku` on Claude Code; a `provider/model` id on pi. Defaults to the current session's model — see *Model and effort*. |
 | `--effort <level>` | `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. Defaults to the current session's — see *Model and effort*. |
 | `--harness <name>` | `claude_code`, `codex`, `pi`, `fx` or `grok`. Defaults to the current session's. |
-| `--from <session\|ref>` | Start the worktree on existing work instead of `origin/<default>`. |
+| `--base <session\|ref>` | Start the worktree on existing work instead of `origin/<default>`. |
+| `--title <title>` | The session's title. Without it one is generated from the prompt; pass one when you already know the right name, like the issue's title. |
 | `--issue <ID>` | The issue this work is against, like `DRA-53`. Repeat for several. |
 | `--fast` | Run at the agent's faster tier, which spends more usage. Inherits this session's when the harness is the same — see *Fast mode*. |
 | `--hidden` | Keep the session out of the sidebar — see *Hidden sessions*. |
@@ -112,12 +113,12 @@ when you start one for work that writes.
 ### Tagging a session with its issue
 
 ```bash
-dray new --issue DRA-53 "Add the issue panel described in DRA-53"
+dray session new --issue DRA-53 "Add the issue panel described in DRA-53"
 dray issue link DRA-53 --title "Add the issue panel" --url https://linear.app/acme/issue/DRA-53
 dray issue link DRA-53 DRA-54
 dray issue unlink DRA-54
 
-dray issue link <session-id> DRA-53 --title "Add the issue panel"
+dray issue link DRA-53 --session <session-id> --title "Add the issue panel"
 
 dray issue link owner/repo#12 --title "Paste images into the composer" --url https://github.com/owner/repo/issues/12
 ```
@@ -130,8 +131,8 @@ apart, since nothing here asks one which issue this is.
 `link` and `unlink` tag **your own session** when you do not name one, so you
 never have to write `$DRAY_SESSION_ID` — and you must not, because Claude Code
 refuses a command naming an environment variable inside a worktree, which is
-where every session `dray new` creates runs. Name a session to tag one you
-spawned.
+where every session `dray session new` creates runs. Pass `--session` to tag
+one you spawned.
 
 A tagged session shows an **Issue** tab in the user's panel, and its prompt gains
 one line per issue: the identifier and the title, nothing else.
@@ -156,7 +157,7 @@ servers are reachable.
 is looked up. If they have not, the tag stays plain text, the session still runs,
 and nothing fails. Report it rather than working around it.
 
-You can also write `#DRA-53` straight into a prompt — `dray new`, `dray send`, or
+You can also write `#DRA-53` straight into a prompt — `dray session new`, `dray session send`, or
 the user's own composer. Dray resolves the tag and links it exactly as `--issue`
 does.
 
@@ -173,16 +174,16 @@ another session's.
 ### Basing a session on existing work
 
 ```bash
-dray new --from <session-id> "Review the work on this branch and report what you find"
-dray new --from feature/login "Write tests for the login flow on this branch"
+dray session new --base <session-id> "Review the work on this branch and report what you find"
+dray session new --base feature/login "Write tests for the login flow on this branch"
 ```
 
-`--from` takes a **session id** — the same id `dray ls` prints and `dray send`
-takes — or a branch, tag or commit. Naming a session is the usual case: you have
+`--base` takes a **session id** — the same id `dray session ls` prints and
+`dray session send` takes — or a branch, tag or commit. Naming a session is the usual case: you have
 its id already, and you do not have to know how Dray names its branches.
 
 This is what makes review possible. Spawn a session with a different model or a
-different harness, point it at yours with `--from`, and it gets its own checkout
+different harness, point it at yours with `--base`, and it gets its own checkout
 of the same commits — so it collides with nobody while it reads.
 
 A session spawned to review this one's work must be told to send its findings
@@ -200,17 +201,17 @@ Three things to know:
   `worktree-<name>` branch starting at that commit. It never checks out the
   branch you named, so it cannot commit onto your work or move it.
 - **Not a shared checkout.** There is no way to run two sessions in one
-  directory, and `--from` is not it. Two agents writing to one checkout overwrite
+  directory, and `--base` is not it. Two agents writing to one checkout overwrite
   each other, and the changes panel cannot tell them apart.
 
-The line `dray new` prints says what it resolved: `Started "…" in worktree
+The line `dray session new` prints says what it resolved: `Started "…" in worktree
 calm-owl, based on worktree-brisk-jade`. Worth reading back when you passed a
 session id, since the branch that id resolved to is something only the app knew.
 
 ### Hidden sessions
 
 ```bash
-dray new --hidden --from <session-id> "Review the work on this branch and send your findings back to <session-id>"
+dray session new --hidden --base <session-id> "Review the work on this branch and send your findings back to <session-id>"
 ```
 
 `--hidden` keeps the session out of the sidebar; it shows only in the crew
@@ -228,21 +229,21 @@ unless the user asks.
 ## Listing sessions
 
 ```bash
-dray ls              # this project, human-readable
-dray ls --json       # machine-readable
-dray ls --all        # every project
+dray session ls              # this project, human-readable
+dray session ls --json       # machine-readable
+dray session ls --all        # every project
 ```
 
 Each row carries the session id, title, status (`idle`, `in_progress`,
 `completed`), and branch. A session created by another one also says which —
 `spawned by <id>` in the table, `parentSessionId` in the JSON. This is how you
 check on sessions you started — nothing reports back on its own, so poll
-`dray ls` if you need to know when one finishes.
+`dray session ls` if you need to know when one finishes.
 
 ## Messaging a session
 
 ```bash
-dray send <session-id> "Code review is done. Two findings, both fixed."
+dray session send <session-id> "Code review is done. Two findings, both fixed."
 ```
 
 Works in both directions and between any two sessions:
@@ -256,7 +257,7 @@ queued and picked up at the next boundary — that is reported, and is not a
 failure.
 
 The receiving agent is told which session the message came from, and is given its
-id — so it can answer with `dray send <that-id>` without looking anything up.
+id — so it can answer with `dray session send <that-id>` without looking anything up.
 Write it as a message to a colleague, not as a note to yourself.
 
 Send when there is something the other session genuinely needs. A message costs
@@ -265,6 +266,27 @@ it a whole turn, so "done" on its own is rarely worth one.
 A prompt can name a session as `&Title (id)`, picked from the composer's `&`
 menu. The id in the parentheses is the address — use it as written rather than
 looking the session up again.
+
+## Managing a session
+
+```bash
+dray session rename <id> "Add retry to the upload client"
+dray session stop <id>                      # stop the running turn, like its Stop button
+dray session settle <id>                    # it stops and leaves the active list; worktree kept
+dray session settle <id> --delete-worktree  # and the worktree and branch go too
+dray session unsettle <id>
+dray session set-aside <id>                 # sink it in the sidebar: started, not wanted now
+dray session unset-aside <id>
+```
+
+These are the user's sidebar buttons, so act on sessions the user named, or
+ones you started yourself. A rename sticks: no generated title replaces it.
+Settling is refused while a turn runs — stop it first, or wait.
+
+**`--delete-worktree` deletes whatever the worktree holds**, uncommitted and
+unpushed work included, and nothing asks. Before passing it, check the tree
+yourself — `git -C <cwd> status --short` and `git -C <cwd> log @{u}..` or
+against `origin/<default>` — and ask the user, naming what would be lost.
 
 ## Saving work for later
 
@@ -281,11 +303,11 @@ can open it, edit it and send it themselves.
 
 Reach for it when the user asks you to note work down rather than begin it —
 "park this", "save that for later", "queue up a task". Write the prompt for
-someone who has not read your conversation, the same as for `dray new`.
+someone who has not read your conversation, the same as for `dray session new`.
 
-`draft new` takes `--project`, `--model`, `--effort`, `--harness` and `--fast`,
-inheriting from your session exactly as `dray new` does. `draft start` starts
-it as a session spawned by yours, so the depth limit and `dray ls`'s
+`draft new` takes `--project`, `--model`, `--effort`, `--harness`, `--fast` and
+`--base`, inheriting from your session exactly as `dray session new` does. `draft start` starts
+it as a session spawned by yours, so the depth limit and `dray session ls`'s
 `spawned by` apply as usual. A draft the user saved with the worktree off
 starts in the project checkout, and the line `start` prints says so.
 
@@ -346,8 +368,8 @@ first, then open it. `--json` on any verb answers as JSON for scripting.
 ## Sharing a dev server
 
 ```bash
-dray share 5173          # prints a public https://….trycloudflare.com link
-dray share               # this session's live links
+dray share start 5173    # prints a public https://….trycloudflare.com link
+dray share ls            # this project's live links; --all, --json
 dray share stop 5173
 ```
 
@@ -359,26 +381,41 @@ without publishing anything. The link shows on that server's row in the app,
 where the user can stop it, and it goes when the session is settled or deleted.
 The URL is random each time and Cloudflare promises no uptime for it.
 
-## The app's servers
+## The app's machines
 
 ```bash
-dray server add vps root@203.0.113.7                   # or ssh -p 2222 …, or an ~/.ssh/config alias
-dray server add --token-file t vps ws://127.0.0.1:7317  # a token from stdin works too
-dray server ls                                          # name, address, connected or not; --json
-dray server rename vps box                              # '' puts back the host
-dray server off vps                                     # stays listed; the app stops connecting
-dray server on vps                                      # or reconnect: tries now, says if it worked
-dray server rm vps
+dray machine add vps root@203.0.113.7                   # or ssh -p 2222 …, or an ~/.ssh/config alias
+dray machine add --token-file t vps ws://127.0.0.1:7317  # a token from stdin works too
+dray machine ls                                          # name, address, connected or not; --json
+dray machine rename vps box                              # '' puts back the host
+dray machine disconnect vps                              # stays listed; the app stops connecting
+dray machine connect vps                                 # tries now, says if it worked
+dray machine rm vps
 ```
 
 The same list as Settings → Servers on the user's Mac, and it moves there as
-you run these. Reach for it after you have set a machine up and the user wants
+you run these. A name belongs to one machine: `add` and `rename` refuse one
+another machine already has. Reach for it after you have set a machine up and the user wants
 it in the app. `add` connects before it saves, so a refusal is the app telling
 you what is wrong — an unknown host key, a password login, no Dray on the
 server — and its fix is the user's to make, never yours: do not accept a host
 key on their behalf. A token never goes on the command line. Remove only
-servers the user named. On a Linux server, `dray server` is refused: the list
+machines the user named. On a Linux server, `dray machine` is refused: the list
 lives in the Mac app.
+
+## This machine's server
+
+```bash
+dray server install      # install what is missing, then start the server; --tools git,gh,… to skip asking
+dray server start        # in the background, surviving reboot
+dray server run          # in this terminal instead
+dray server status       # running or not, and its tunnel address
+dray server tunnel on    # a public address in front of it; off takes it down
+dray server stop         # stop it and remove it from the background
+```
+
+What makes a Linux box a Dray server. On a Mac the Dray app runs the server,
+and these are refused there.
 
 ## Reporting back to the user
 

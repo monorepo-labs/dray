@@ -40,7 +40,7 @@ pub async fn list_local_servers(
     let mut servers = tokio::task::spawn_blocking(move || discover(root, cwd.as_deref()))
         .await
         .map_err(|e| e.to_string())?;
-    let shares = crate::share::list(&session_id);
+    let shares = crate::share::list(Some(&session_id));
     for server in &mut servers {
         server.share = shares.iter().find(|s| s.port == server.port).map(|s| s.url.clone());
     }

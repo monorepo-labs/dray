@@ -1,4 +1,4 @@
-//! `dray` — create and list Dray sessions from outside the app.
+//! `dray` — run and manage Dray sessions from outside the app.
 //!
 //! Deliberately standalone. It links neither the app nor tokio: one connect,
 //! one write, one read, exit. That keeps startup instant, which matters because
@@ -8,16 +8,16 @@
 //! Everything about *where* to connect lives in [`dray_proto::endpoint`], so
 //! moving the app to a server changes one function and nothing here.
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 
 mod draft;
-mod server;
+mod machine;
 mod setup;
 use draft::DraftCommand;
 use dray_proto::{
     encode_line, BrowserAction, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
-    LinkIssues, ListSessions, Locator, Request, Response, SendMessage, SessionSummary, ShareAction,
-    ShareRequest,
+    LinkIssues, ListSessions, Locator, RenameSession, Request, Response, SendMessage, SessionRef,
+    SessionSummary, SetAside, SettleSession, ShareAction, ShareRequest,
 };
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
@@ -35,8 +35,8 @@ const INSTALLER_URL: &str = "https://www.drayhq.com/install.sh";
 #[command(
     name = "dray",
     version,
-    about = "Create and list Dray sessions.",
-    long_about = "Create and list Dray sessions.\n\nDray runs coding agents in parallel, one \
+    about = "Run and manage Dray sessions.",
+    long_about = "Run and manage Dray sessions.\n\nDray runs coding agents in parallel, one \
                   session per piece of work. This creates those sessions from the command line, \
                   so an agent in one session can fan work out into several.\n\nRequires the Dray \
                   app to be running."
@@ -48,42 +48,99 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Start, list and message sessions, and settle or rename them.
+    #[command(subcommand, arg_required_else_help = true)]
+    Session(SessionCommand),
+    /// Tag a session with the issue its work is against.
+    #[command(subcommand, arg_required_else_help = true)]
+    Issue(IssueCommand),
+    /// Save tasks for later, list them, and start or remove them.
+    #[command(subcommand, arg_required_else_help = true)]
+    Draft(DraftCommand),
+    /// Drive this session's browser: open pages, read them, click and type.
+    Browser(BrowserCommand),
+    /// Publish one of this session's dev servers as a public link, list the
+    /// live ones, or stop one.
+    #[command(arg_required_else_help = true, args_conflicts_with_subcommands = true)]
+    Share(ShareArgs),
+    /// The machines the app connects to: add, list, rename, connect, remove.
+    #[command(subcommand, arg_required_else_help = true)]
+    Machine(machine::MachineCommand),
+    /// This machine's Dray server: install, start, stop, run in the foreground.
+    #[command(subcommand, arg_required_else_help = true)]
+    Server(setup::ServerCommand),
+    /// Upgrade this binary to the newest release.
+    Update(Update),
+    /// Manage the skill that documents this CLI.
+    #[command(subcommand, arg_required_else_help = true)]
+    Skill(SkillCommand),
+    /// Print a completion script for a shell: bash, zsh, fish, elvish or
+    /// powershell.
+    Completion { shell: clap_complete::Shell },
+
+    // The spellings before `session` and `server`, kept so what already calls
+    // them still runs: agents holding an older skill, and remote servers —
+    // the app's SSH connect runs `dray service start` there, and a tunnel's
+    // systemd unit runs `dray tunnel`, against whichever CLI that box has.
+    #[command(hide = true)]
+    New(New),
+    #[command(hide = true)]
+    Ls(Ls),
+    #[command(hide = true)]
+    Send(Send),
+    #[command(hide = true)]
+    Setup(setup::Install),
+    #[command(hide = true)]
+    Serve(setup::Run),
+    #[command(subcommand, hide = true)]
+    Service(setup::ServiceCommand),
+    #[command(hide = true)]
+    Tunnel(setup::Tunnel),
+}
+
+#[derive(Subcommand)]
+enum SessionCommand {
     /// Start a new session working on a prompt.
     New(New),
     /// List sessions.
     Ls(Ls),
     /// Send a message into a session that already exists.
     Send(Send),
-    /// Tag a session with the issue its work is against.
-    #[command(subcommand)]
-    Issue(IssueCommand),
-    /// Save tasks for later, list them, and start or remove them.
-    #[command(subcommand)]
-    Draft(DraftCommand),
-    /// Drive this session's browser: open pages, read them, click and type.
-    Browser(BrowserCommand),
-    /// Publish one of this session's dev servers as a public link, list the
-    /// live ones, or stop one.
-    Share(ShareCommand),
-    /// Manage the servers the app connects to: add, list, rename, turn off and
-    /// on, remove.
-    #[command(subcommand)]
-    Server(server::ServerCommand),
-    /// Upgrade this binary to the newest release.
-    Update(Update),
-    /// Install what this machine is missing to run Dray, then start the server.
-    Setup(setup::Setup),
-    /// Run the Dray server in the foreground. Linux only.
-    Serve(setup::Serve),
-    /// Keep the Dray server running in the background. Linux only.
-    #[command(subcommand)]
-    Service(setup::ServiceCommand),
-    /// Give this machine's server a public address through a Cloudflare quick
-    /// tunnel, in the foreground. `dray service tunnel on` keeps one running.
-    Tunnel(setup::Tunnel),
-    /// Manage the Claude Code skill that documents this CLI.
-    #[command(subcommand)]
-    Skill(SkillCommand),
+    /// Rename a session. Its title stays yours: no generated one replaces it.
+    Rename(Rename),
+    /// Stop the turn a session is running, like its Stop button.
+    Stop(SessionArg),
+    /// Settle a finished session: it stops, and leaves the active list.
+    Settle(Settle),
+    /// Bring a settled session back to the active list.
+    Unsettle(SessionArg),
+    /// Sink a session to the bottom of the sidebar: started, not wanted now.
+    SetAside(SessionArg),
+    /// Take a session out of set-aside.
+    UnsetAside(SessionArg),
+}
+
+#[derive(Args)]
+struct SessionArg {
+    /// The session, as printed by `dray session ls`.
+    session_id: String,
+}
+
+#[derive(Args)]
+struct Rename {
+    /// The session, as printed by `dray session ls`.
+    session_id: String,
+    title: String,
+}
+
+#[derive(Args)]
+struct Settle {
+    /// The session, as printed by `dray session ls`.
+    session_id: String,
+    /// Delete its worktree and branch too, whatever they hold — uncommitted
+    /// and unpushed work included. Without it the worktree stays.
+    #[arg(long)]
+    delete_worktree: bool,
 }
 
 #[derive(Args)]
@@ -114,8 +171,12 @@ struct New {
     /// Base the new session's worktree on existing work: a session id, a
     /// branch, or any git ref. Committed work only. Defaults to
     /// origin/<default>.
-    #[arg(long, value_name = "SESSION|REF")]
-    from: Option<String>,
+    #[arg(long, alias = "from", value_name = "SESSION|REF")]
+    base: Option<String>,
+
+    /// The session's title. Without it one is generated from the prompt.
+    #[arg(long)]
+    title: Option<String>,
 
     /// The issue this work is against, like DRA-53. Repeat for several.
     #[arg(long = "issue", value_name = "ISSUE")]
@@ -143,7 +204,7 @@ struct Update {
 
 #[derive(Args)]
 struct Send {
-    /// The session to send to, as printed by `dray ls`.
+    /// The session to send to, as printed by `dray session ls`.
     session_id: String,
 
     /// The message. Write it for someone who cannot see your conversation.
@@ -176,11 +237,14 @@ enum IssueCommand {
 
 #[derive(Args)]
 struct IssueLinkArgs {
-    /// Issue identifiers, like DRA-53, optionally preceded by the session they
-    /// belong to as printed by `dray ls`. Inside a Dray session the session is
-    /// read from the environment, so the identifiers alone are enough.
-    #[arg(required = true, value_name = "SESSION | ISSUE")]
+    /// Issue identifiers, like DRA-53 or owner/repo#12.
+    #[arg(required = true, value_name = "ISSUE")]
     session_and_issues: Vec<String>,
+
+    /// The session to tag, as printed by `dray session ls`. Defaults to the
+    /// session running this command.
+    #[arg(long)]
+    session: Option<String>,
 
     /// The issue's title, so the tag reads as more than an identifier.
     #[arg(long, value_name = "TITLE")]
@@ -264,19 +328,29 @@ struct BrowserCommand {
 }
 
 #[derive(Args)]
-#[command(after_help = "dray share <port>        public link to that dev server, printed
-dray share               the session's live links
-dray share stop <port>   take one down
-Anyone with a link can open it. Only the session's own dev servers can be shared.")]
-struct ShareCommand {
-    /// A port, `stop <port>`, or nothing to list.
-    #[arg(value_name = "PORT | stop PORT")]
-    words: Vec<String>,
+#[command(after_help = "Anyone with a link can open it. Only the session's own dev servers can be shared.")]
+struct ShareArgs {
+    #[command(subcommand)]
+    command: Option<ShareCommand>,
 
-    /// The session whose dev server to share. Defaults to the session running
-    /// this command.
-    #[arg(long)]
+    /// `dray share <port>`, the spelling before `share start`.
+    #[arg(hide = true)]
+    port: Option<u16>,
+
+    /// The session whose dev servers these are. Defaults to the session
+    /// running this command.
+    #[arg(long, global = true)]
     session: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum ShareCommand {
+    /// Publish a dev server and print its public link.
+    Start { port: u16 },
+    /// Take a link down.
+    Stop { port: u16 },
+    /// List live links: this project's, or every one with --all.
+    Ls(Ls),
 }
 
 #[derive(Subcommand)]
@@ -298,21 +372,66 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     match Cli::parse().command {
-        Command::New(args) => new(args),
-        Command::Ls(args) => ls(args),
-        Command::Send(args) => send_message(args),
+        Command::Session(command) => session(command),
         Command::Issue(IssueCommand::Link(args)) => link_issues(args, false),
         Command::Issue(IssueCommand::Unlink(args)) => link_issues(args, true),
         Command::Draft(command) => draft::run(command),
         Command::Browser(args) => browser(args),
         Command::Share(args) => share(args),
-        Command::Server(command) => server::run(command),
+        Command::Machine(command) => machine::run(command),
+        Command::Server(command) => setup::server(command),
         Command::Update(args) => update(args),
         Command::Skill(SkillCommand::Install) => install_skill(),
+        Command::Completion { shell } => {
+            clap_complete::generate(shell, &mut Cli::command(), "dray", &mut std::io::stdout());
+            Ok(())
+        }
+        Command::New(args) => new(args),
+        Command::Ls(args) => ls(args),
+        Command::Send(args) => send_message(args),
         Command::Setup(args) => setup::setup(args),
         Command::Serve(args) => setup::serve(args),
         Command::Service(command) => setup::service(command),
         Command::Tunnel(args) => setup::tunnel(args),
+    }
+}
+
+fn session(command: SessionCommand) -> Result<(), String> {
+    let (request, said) = match command {
+        SessionCommand::New(args) => return new(args),
+        SessionCommand::Ls(args) => return ls(args),
+        SessionCommand::Send(args) => return send_message(args),
+        SessionCommand::Rename(args) => (
+            Request::RenameSession(RenameSession { session_id: args.session_id, title: args.title }),
+            "Renamed it",
+        ),
+        SessionCommand::Stop(args) => (Request::StopSession(SessionRef { session_id: args.session_id }), "Stopped"),
+        SessionCommand::Settle(args) => (
+            Request::SettleSession(SettleSession {
+                session_id: args.session_id,
+                settled: true,
+                delete_worktree: args.delete_worktree,
+            }),
+            if args.delete_worktree { "Settled, worktree deleted:" } else { "Settled" },
+        ),
+        SessionCommand::Unsettle(args) => (
+            Request::SettleSession(SettleSession { session_id: args.session_id, settled: false, delete_worktree: false }),
+            "Unsettled",
+        ),
+        SessionCommand::SetAside(args) => {
+            (Request::SetAside(SetAside { session_id: args.session_id, aside: true }), "Set aside")
+        }
+        SessionCommand::UnsetAside(args) => {
+            (Request::SetAside(SetAside { session_id: args.session_id, aside: false }), "Brought back")
+        }
+    };
+    match send(request)? {
+        Response::Session { session } => {
+            eprintln!("{said} \"{}\".", session.title);
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
     }
 }
 
@@ -324,7 +443,8 @@ fn new(args: New) -> Result<(), String> {
         effort: args.effort,
         harness: args.harness,
         parent_session_id: parent_session_id(),
-        from: args.from,
+        base: args.base,
+        title: args.title,
         issues: args.issues,
         // Absent rather than `false`, so leaving the flag off inherits the
         // parent's rather than turning fast mode *off* for a session spawned by
@@ -335,7 +455,7 @@ fn new(args: New) -> Result<(), String> {
 
     match send(request)? {
         Response::Created { session, base_ref } => {
-            // The id alone on stdout, so `$(dray new …)` captures something
+            // The id alone on stdout, so `$(dray session new …)` captures something
             // usable; everything a human wants goes to stderr beside it.
             println!("{}", session.session_id);
             eprintln!(
@@ -345,7 +465,7 @@ fn new(args: New) -> Result<(), String> {
                     Some(name) => format!(" in worktree {name}"),
                     None => String::new(),
                 },
-                // `--from <session-id>` names a session, so the branch it
+                // `--base <session-id>` names a session, so the branch it
                 // resolved to is news: the caller asked with an id and only the
                 // app could say what that session's work is on.
                 match &base_ref {
@@ -374,8 +494,15 @@ fn new(args: New) -> Result<(), String> {
 /// answers with — and a caller that tagged three issues wants to see three,
 /// not to reconcile a diff against what it believed.
 fn link_issues(args: IssueLinkArgs, unlink: bool) -> Result<(), String> {
-    let (session_id, identifiers) =
-        split_session_and_issues(args.session_and_issues, parent_session_id())?;
+    // Named twice is named ambiguously, and either reading is a wrong link
+    // that looks right.
+    if args.session.is_some() && args.session_and_issues.first().is_some_and(|f| is_session_id(f)) {
+        return Err("name the session once: --session, or before the issues".into());
+    }
+    let (session_id, identifiers) = split_session_and_issues(
+        args.session_and_issues,
+        args.session.or_else(parent_session_id),
+    )?;
 
     // One title belongs to one issue. Refused rather than applied to all of
     // them or silently to the first: both are a wrong link that reads exactly
@@ -448,7 +575,7 @@ fn browser(args: BrowserCommand) -> Result<(), String> {
     let session_id = args.session.clone().or_else(parent_session_id).ok_or(
         "which session's browser? Pass --session <id>, or run this from inside a Dray session.",
     )?;
-    let action = browser_action(&args)?;
+    let action = browser_action(&args).unwrap_or_else(|e| usage(&e));
     match send(Request::Browser(BrowserRequest { session_id, action }))? {
         Response::Browser { output, data } => {
             if args.json {
@@ -463,28 +590,52 @@ fn browser(args: BrowserCommand) -> Result<(), String> {
     }
 }
 
-fn share(args: ShareCommand) -> Result<(), String> {
+fn share(args: ShareArgs) -> Result<(), String> {
+    let action = match (args.command, args.port) {
+        (Some(ShareCommand::Ls(list)), _) => return list_shares(list),
+        (Some(ShareCommand::Start { port }), _) | (None, Some(port)) => ShareAction::Start { port },
+        (Some(ShareCommand::Stop { port }), _) => ShareAction::Stop { port },
+        (None, None) => usage("name a verb: start, stop or ls"),
+    };
     let session_id = args
         .session
         .or_else(parent_session_id)
         .ok_or("which session? Pass --session <id>, or run this from inside a Dray session.")?;
-    let action = share_action(&args.words)?;
-    let asked = match action {
+    let started = match action {
         ShareAction::Start { port } => Some(port),
         _ => None,
     };
     match send(Request::Share(ShareRequest { session_id, action }))? {
         Response::Shared { shares } => {
-            match asked {
-                Some(port) => {
-                    let link = shares.iter().find(|s| s.port == port).ok_or("the app shared nothing")?;
-                    println!("{}", link.url);
-                }
-                None if shares.is_empty() => eprintln!("Nothing shared."),
-                None => {
-                    for s in &shares {
-                        println!("{}  {}", s.port, s.url);
-                    }
+            if let Some(port) = started {
+                let link = shares.iter().find(|s| s.port == port).ok_or("the app shared nothing")?;
+                println!("{}", link.url);
+            }
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
+    }
+}
+
+/// `dray share ls`: the project's live links, each with the session it
+/// belongs to, which is `--session`-free on purpose — a link is reached by
+/// project, the way `session ls` reaches sessions.
+fn list_shares(args: Ls) -> Result<(), String> {
+    let request = Request::ListShares(ListSessions {
+        all: args.all,
+        project_path: resolve_project(args.project),
+        parent_session_id: parent_session_id(),
+    });
+    match send(request)? {
+        Response::Shared { shares } => {
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&shares).map_err(|e| e.to_string())?);
+            } else if shares.is_empty() {
+                eprintln!("Nothing shared.");
+            } else {
+                for s in &shares {
+                    println!("{}  {}  {}", s.session_id, s.port, s.url);
                 }
             }
             Ok(())
@@ -494,14 +645,10 @@ fn share(args: ShareCommand) -> Result<(), String> {
     }
 }
 
-fn share_action(words: &[String]) -> Result<ShareAction, String> {
-    let port = |w: &str| w.parse::<u16>().map_err(|_| format!("{w} is not a port"));
-    match words {
-        [] => Ok(ShareAction::List),
-        [stop, p] if stop == "stop" => Ok(ShareAction::Stop { port: port(p)? }),
-        [p] => Ok(ShareAction::Start { port: port(p)? }),
-        _ => Err("dray share <port> | dray share stop <port> | dray share".into()),
-    }
+/// A line the caller wrote wrong, as clap reports its own: usage beneath it
+/// and exit 2, so a script can tell a bad command from a failed one.
+fn usage(message: &str) -> ! {
+    Cli::command().error(clap::error::ErrorKind::InvalidValue, message).exit()
 }
 
 fn target(t: String) -> Locator {
@@ -949,7 +1096,7 @@ fn split_session_and_issues(
     } else {
         from_environment.ok_or(
             "no session named, and DRAY_SESSION_ID is not set: name the session, \
-             as printed by `dray ls`",
+             as printed by `dray session ls`",
         )?
     };
 
@@ -1254,6 +1401,46 @@ mod tests {
         // checkout is never the right answer — the flag is gone rather than
         // defaulted.
         assert!(Cli::try_parse_from(["dray", "new", "x", "--no-worktree"]).is_err());
+    }
+
+    /// The old spellings still parse — agents with an older skill, and remote
+    /// servers the app runs `dray service start` and `dray tunnel` on — and a
+    /// bare group prints its help rather than acting.
+    #[test]
+    fn new_tree_and_old_spellings_parse() {
+        let parses = |argv: &[&str]| Cli::try_parse_from(argv).map(|_| ()).map_err(|e| e.kind());
+        for argv in [
+            &["dray", "session", "new", "x", "--base", "main", "--title", "T"][..],
+            &["dray", "session", "settle", SESSION, "--delete-worktree"],
+            &["dray", "session", "set-aside", SESSION],
+            &["dray", "session", "rename", SESSION, "New name"],
+            &["dray", "share", "start", "5173"],
+            &["dray", "share", "ls", "--all", "--json"],
+            &["dray", "server", "install", "--tools", "git,gh"],
+            &["dray", "server", "tunnel", "on"],
+            &["dray", "issue", "link", "DRA-53", "--session", SESSION],
+            &["dray", "completion", "zsh"],
+            &["dray", "new", "x", "--from", "main"],
+            &["dray", "ls"],
+            &["dray", "send", SESSION, "hi"],
+            &["dray", "share", "5173"],
+            &["dray", "setup", "--install", "git"],
+            &["dray", "serve", "--port", "7317"],
+            &["dray", "service", "start"],
+            &["dray", "tunnel"],
+        ] {
+            assert_eq!(parses(argv), Ok(()), "{argv:?}");
+        }
+        let help = Err(clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand);
+        for group in ["session", "server", "machine", "share", "draft"] {
+            assert_eq!(parses(&["dray", group]), help, "{group}");
+        }
+        let Ok(Cli { command: Command::Session(SessionCommand::New(new)) }) =
+            Cli::try_parse_from(["dray", "session", "new", "x", "--from", "main"])
+        else {
+            panic!("not a create");
+        };
+        assert_eq!(new.base.as_deref(), Some("main"));
     }
 
     #[test]

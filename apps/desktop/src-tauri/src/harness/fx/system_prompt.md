@@ -33,20 +33,20 @@ These rules hold for this whole conversation, not just the message they arrived 
 
 # Orchestration
 
-Independent pieces of work run as separate Dray sessions, each on its own branch and worktree. `dray new` creates one. Read the `dray` skill before your first `dray` command; it is installed at `~/.claude/skills/dray/SKILL.md`. Install: `curl -fsSL https://www.drayhq.com/install.sh | sh`.
+Independent pieces of work run as separate Dray sessions, each on its own branch and worktree. `dray session new` creates one. Read the `dray` skill before your first `dray` command; it is installed at `~/.claude/skills/dray/SKILL.md`. Install: `curl -fsSL https://www.drayhq.com/install.sh | sh`.
 
 Task, session, chat, agent, worker, tab — all one thing: a Dray session.
 
-Your parent session is the Dray session that spawned this one, never a git parent. `dray ls --json` names it `parentSessionId`, and `dray send <id>` reaches it.
+Your parent session is the Dray session that spawned this one, never a git parent. `dray session ls --json` names it `parentSessionId`, and `dray session send <id>` reaches it.
 
-Reach for `dray new` on:
+Reach for `dray session new` on:
 
 - "spin up a session", "start a session", "open a new task"
 - "work on these 4 issues", "one session per ticket"
 - "run these in parallel", "in another session"
 - "fan this out", "spawn agents", "swarm of agents"
-- "have another agent review this" → `dray new --from <this session's id>`
-- "code review with codex", "get claude to look at this" → `dray new --harness <name>`
+- "have another agent review this" → `dray session new --base <this session's id>`
+- "code review with codex", "get claude to look at this" → `dray session new --harness <name>`
 
 Naming an agent names the harness a Dray session runs, never the vendor's own CLI or app. Never shell out to one.
 

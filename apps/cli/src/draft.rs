@@ -37,6 +37,10 @@ pub struct NewDraft {
     /// Run at the agent's faster tier once started.
     #[arg(long)]
     fast: bool,
+    /// Base its worktree on existing work once started: a session id, a
+    /// branch, or any git ref. Committed work only.
+    #[arg(long, value_name = "SESSION|REF")]
+    base: Option<String>,
 }
 
 #[derive(Args)]
@@ -69,6 +73,7 @@ pub fn run(command: DraftCommand) -> Result<(), String> {
                 harness: args.harness,
                 parent_session_id: parent_session_id(),
                 fast: args.fast.then_some(true),
+                base: args.base,
             });
             match send(request)? {
                 Response::Draft { draft } => {
@@ -117,15 +122,16 @@ pub fn run(command: DraftCommand) -> Result<(), String> {
                 parent_session_id: parent_session_id(),
             });
             match send(request)? {
-                Response::Created { session, .. } => {
+                Response::Created { session, base_ref } => {
                     println!("{}", session.session_id);
                     eprintln!(
-                        "Started \"{}\"{}",
+                        "Started \"{}\"{}{}",
                         session.title,
                         match &session.worktree_name {
                             Some(name) => format!(" in worktree {name}"),
                             None => " in the project checkout".to_string(),
-                        }
+                        },
+                        base_ref.map(|b| format!(", based on {b}")).unwrap_or_default()
                     );
                     Ok(())
                 }

@@ -312,12 +312,13 @@ function App() {
     const id = openDraftRef.current;
     if (!id || selectedSessionId) return void handleSendMsg(message, attachments);
     const prompt = getDraft(id)?.prompt ?? message;
+    const base = getDraft(id)?.base ?? null;
     openDraftRef.current = null;
     // A send is not leaving: an attachment-only prompt has no text, and the
     // empty-draft sweep would delete a draft whose send may yet fail.
     leftDraft.current = null;
     setOpenDraftId(null);
-    const sending = handleSendMsg(message, attachments);
+    const sending = handleSendMsg(message, attachments, base);
     // Taken after the send's own bump, so only a move the reader makes while
     // it is out counts as leaving.
     const nav = navGen.current;

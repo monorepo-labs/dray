@@ -180,6 +180,9 @@ async fn send_msg(
     branch: Option<&str>,
     use_worktree: bool,
     worktree_name: Option<&str>,
+    // A draft `dray draft new --base` saved, opened and sent from the
+    // composer. `None` for everything else the composer sends.
+    base_ref: Option<&str>,
     is_new_session: bool,
     sink: Sink,
 ) -> Result<SendOutcome, Fail> {
@@ -218,15 +221,17 @@ async fn send_msg(
             branch,
             use_worktree,
             worktree_name,
-            // The composer offers no base ref: a worktree session created there
-            // is one the reader is starting fresh, and the picker already hides
-            // the branch list in worktree mode because `-w` would not honour it.
-            None,
+            // The composer offers no base ref of its own: a worktree session
+            // created there is one the reader is starting fresh, and the picker
+            // hides the branch list in worktree mode because `-w` would not
+            // honour it. Only a draft carrying one hands it through.
+            base_ref,
             is_new_session,
             // The composer never has a parent, and its prompts are the user's
             // own; only the orchestration socket sets either — or hides one.
             None,
             false,
+            None,
             None,
             &sink,
         )

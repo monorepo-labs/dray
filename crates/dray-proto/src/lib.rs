@@ -34,8 +34,11 @@ use std::path::PathBuf;
 /// runs the cure that applies rather than the one that doesn't.
 /// v7 added the draft requests, which an older app fails to parse — refused by
 /// version instead, so the answer names which half to update. v8 added
-/// `share`, for the same reason, and v9 the server requests.
-pub const PROTOCOL_VERSION: u32 = 9;
+/// `share`, for the same reason, and v9 the server requests. v10 added the
+/// session verbs, listing shares across sessions, and `base` — a create or a
+/// draft naming one goes out as v10, since an older app ignores the field and
+/// starts the worktree at `origin/<default>` as if it had been honoured.
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// The oldest envelope the app still answers. Rises only when a shape is
 /// *renamed*, never for an addition: v4 renamed `LinkIssues.identifiers` to
@@ -88,6 +91,8 @@ impl Request {
     /// as the half to update. No wildcard arm: a new variant has to say which.
     pub fn version(&self) -> u32 {
         match self {
+            Request::CreateSession(create) if create.base.is_some() => 10,
+            Request::CreateDraft(draft) if draft.base.is_some() => 10,
             Request::CreateSession(_)
             | Request::ListSessions(_)
             | Request::SendMessage(_)
@@ -103,6 +108,11 @@ impl Request {
             | Request::RemoveServer(_)
             | Request::RenameServer(_)
             | Request::SetServerOn(_) => 9,
+            Request::RenameSession(_)
+            | Request::StopSession(_)
+            | Request::SettleSession(_)
+            | Request::SetAside(_)
+            | Request::ListShares(_) => 10,
         }
     }
 }
@@ -125,6 +135,45 @@ pub enum Request {
     RemoveServer(ServerRef),
     RenameServer(RenameServer),
     SetServerOn(SetServerOn),
+    RenameSession(RenameSession),
+    StopSession(SessionRef),
+    SettleSession(SettleSession),
+    SetAside(SetAside),
+    ListShares(ListSessions),
+}
+
+/// The reader's own name for a session, locked against generated titles the
+/// way a rename in the sidebar is.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameSession {
+    pub session_id: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRef {
+    pub session_id: String,
+}
+
+/// Settle or unsettle, the sidebar's own button. Settling is refused while a
+/// turn runs; `delete_worktree` takes the tree too, whatever it holds — the
+/// caller has asked first, since nothing on this side can.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettleSession {
+    pub session_id: String,
+    pub settled: bool,
+    #[serde(default)]
+    pub delete_worktree: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAside {
+    pub session_id: String,
+    pub aside: bool,
 }
 
 /// An empty `new_name` puts back the default, its host.
@@ -203,6 +252,10 @@ pub enum ShareAction {
 pub struct SharedPort {
     pub port: u16,
     pub url: String,
+    /// Whose dev server it is, for a listing across sessions. Empty from an
+    /// app older than v10, which only ever listed one session's.
+    #[serde(default)]
+    pub session_id: String,
 }
 
 /// A task saved for later, the same thing ⌘S makes in the composer: a prompt
@@ -227,6 +280,10 @@ pub struct CreateDraft {
     pub parent_session_id: Option<String>,
     #[serde(default)]
     pub fast: Option<bool>,
+    /// Where the worktree will start, as [`CreateSession::base`] reads it,
+    /// resolved when the draft starts rather than now.
+    #[serde(default)]
+    pub base: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -479,8 +536,14 @@ pub struct CreateSession {
     /// A session id is resolved to the branch that session's work lands on, and
     /// that resolution is the app's — the CLI has no index to read and no
     /// business learning how a session's branch is named.
+    ///
+    /// `from` is its name before v10, still read from an older CLI.
+    #[serde(default, alias = "from")]
+    pub base: Option<String>,
+    /// The session's title, set and locked at creation, so none is generated.
+    /// An older app ignores it and generates one, which the caller can see.
     #[serde(default)]
-    pub from: Option<String>,
+    pub title: Option<String>,
     /// Issue identifiers (`DRA-53`) the new session's work is against.
     ///
     /// Resolved by the app, not here: the CLI holds no key and has no business
@@ -619,6 +682,8 @@ pub enum Response {
     Browser { output: String, data: serde_json::Value },
     /// The session's live links after the change, whichever verb asked.
     Shared { shares: Vec<SharedPort> },
+    /// The session a verb acted on, as it stands after.
+    Session { session: SessionSummary },
     /// The server a verb acted on, as it stands after — or as it stood, for
     /// one taken off the list.
     Server { server: ServerSummary },
@@ -888,7 +953,18 @@ mod tests {
         assert_eq!(create.model, None);
         assert_eq!(create.effort, None);
         assert_eq!(create.harness, None);
-        assert_eq!(create.from, None);
+        assert_eq!(create.base, None);
+        assert_eq!(create.title, None);
+    }
+
+    /// A v9 CLI still names the base `from`, and an app that read it as
+    /// nothing would start that session at `origin/<default>` unremarked.
+    #[test]
+    fn from_still_reads_as_base() {
+        let envelope: Envelope =
+            serde_json::from_str(r#"{"v":6,"cmd":"create_session","prompt":"hi","from":"main"}"#).unwrap();
+        let Request::CreateSession(create) = envelope.request else { panic!("wrong variant") };
+        assert_eq!(create.base.as_deref(), Some("main"));
     }
 
     /// Everything an app 0.26.0 (v6) could parse goes out as v6, so a stable
@@ -933,7 +1009,21 @@ mod tests {
         for request in &servers {
             assert_eq!(Envelope::new(request.clone()).v, 9, "{request:?}");
         }
-        let newest = old.iter().chain(&drafts).chain([&share]).chain(&servers).map(Request::version).max();
+        let based = [
+            Request::CreateSession(CreateSession { base: Some("main".into()), ..Default::default() }),
+            Request::CreateDraft(CreateDraft { base: Some("main".into()), ..Default::default() }),
+        ];
+        let sessions = [
+            Request::RenameSession(Default::default()),
+            Request::StopSession(Default::default()),
+            Request::SettleSession(Default::default()),
+            Request::SetAside(Default::default()),
+            Request::ListShares(Default::default()),
+        ];
+        for request in based.iter().chain(&sessions) {
+            assert_eq!(Envelope::new(request.clone()).v, 10, "{request:?}");
+        }
+        let newest = old.iter().chain(&drafts).chain([&share]).chain(&servers).chain(&sessions).map(Request::version).max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));
         assert!(OLDEST_SPOKEN <= PROTOCOL_VERSION);
     }

@@ -918,11 +918,11 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             harness: Harness, model: ModelId, effort: Option<Effort>,
             permission_mode: ApprovalPolicy, fast: bool, cwd: String,
             branch: Option<String>, use_worktree: bool, worktree_name: Option<String>,
-            is_new_session: bool,
+            base_ref: Option<String>, is_new_session: bool,
         ) => crate::send_msg(
             &session_id, &prompt, attachment_paths, harness, model, effort,
             permission_mode, fast, &cwd, branch.as_deref(), use_worktree,
-            worktree_name.as_deref(), is_new_session, sink,
+            worktree_name.as_deref(), base_ref.as_deref(), is_new_session, sink,
         ).await;
         interrupt_session(session_id: String) => crate::interrupt_session(&session_id, sink).await;
         stop_task(session_id: String, task_id: String) => crate::stop_task(&session_id, &task_id).await;

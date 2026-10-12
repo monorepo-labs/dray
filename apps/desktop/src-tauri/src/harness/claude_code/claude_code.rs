@@ -366,7 +366,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
 
-        assert!(prose.contains("`dray new --harness <name>`"));
+        assert!(prose.contains("`dray session new --harness <name>`"));
         assert!(prose.contains("never the vendor's own CLI or app"));
     }
 }

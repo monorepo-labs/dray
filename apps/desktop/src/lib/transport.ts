@@ -101,6 +101,7 @@ const QUALIFIED = new Set([
 /// Events whose payload names paths, and how to qualify it.
 const QUALIFIED_EVENTS: Record<string, (payload: unknown, server: ServerId) => unknown> = {
   session_created: qualifyRecord,
+  session_changed: qualifyRecord,
   doc_changed: (payload, server) => (typeof payload === "string" ? qualify(payload, server) : payload),
 };
 

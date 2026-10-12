@@ -763,6 +763,9 @@ const handleSendMsg = async (
   // that draws it is handed these rather than describing its paths a second
   // time. The wire still takes paths alone.
   attachments: Attachment[] = [],
+  // Where a new session's worktree starts, from a draft `dray draft new
+  // --base` saved. Nothing in the composer sets one.
+  baseRef: string | null = null,
 ): Promise<boolean> => {
   const attachmentPaths = attachments.map((a) => a.path);
 
@@ -914,6 +917,7 @@ const handleSendMsg = async (
       branch: isNewSession && !useWorktree ? branch : null,
       useWorktree: isNewSession && useWorktree,
       worktreeName: null,
+      baseRef: isNewSession && useWorktree ? baseRef : null,
       isNewSession,
     });
 
@@ -1358,6 +1362,49 @@ const detachSession = async (sessionId: string) => {
   }
 };
 
+/// Puts a session's index entry, as the store now holds it, into both copies.
+/// Shared by the sidebar's own writes and by `session_changed`, which carries
+/// the ones `dray session settle` and friends make.
+const applyIndexItem = (updated: SessionIndexItem) => {
+  const { sessionId } = updated;
+  setSessionIndexItems((prev) => {
+    // The ref, not the closure: this runs after the write, and the reader can
+    // toggle the split while one is in flight. Judged against the captured
+    // value it would sort the row into whichever view was open when the
+    // button was pressed — dropping it from the list now on screen, or
+    // inserting a settled row into the active one.
+    const belongsHere = updated.archived === showArchivedRef.current;
+    // The row can be written from a view it was never drawn in: the settled
+    // split keeps the selection across a toggle, so the composer's unsettle
+    // bar is reachable while the sidebar is showing the active list. Left to
+    // the map below that write lands nowhere — the row is in neither list,
+    // and the session the reader just took back has no row at all until
+    // something else refetches.
+    if (belongsHere && !prev.some((i) => i.sessionId === sessionId)) {
+      return [...prev, updated];
+    }
+
+    return prev.flatMap((i) => {
+      if (i.sessionId !== sessionId) return [i];
+      // Archiving from the active list — or unarchiving from the archived one —
+      // moves the row to the other view, so it leaves this one rather than
+      // sitting there contradicting the filter that produced the list.
+      return belongsHere ? [updated] : [];
+    });
+  });
+  // The open transcript keeps its own copy of the index fields, and it's what
+  // the composer reads `archived` from — left alone, settling the session on
+  // screen would swap in the unsettle bar only after a reselect.
+  setSessions((prev) =>
+    prev.map((s) =>
+      s.sessionId === sessionId
+        ? { ...s, archived: updated.archived, pinned: updated.pinned, hidden: updated.hidden }
+        : s,
+    ),
+  );
+  if (updated.archived) evictSessions({ sessionId });
+};
+
 /// Writes a session's settled or pinned flag, and answers whether it landed.
 ///
 /// The answer is what callers navigate on. A failed write leaves the row where
@@ -1379,42 +1426,7 @@ const setSessionFlags = async (
     // Null is the backend finding no such session, which is a write that did
     // not happen like any other.
     if (!updated) return false;
-    setSessionIndexItems((prev) => {
-      // The ref, not the closure: this runs after the write, and the reader can
-      // toggle the split while one is in flight. Judged against the captured
-      // value it would sort the row into whichever view was open when the
-      // button was pressed — dropping it from the list now on screen, or
-      // inserting a settled row into the active one.
-      const belongsHere = updated.archived === showArchivedRef.current;
-      // The row can be written from a view it was never drawn in: the settled
-      // split keeps the selection across a toggle, so the composer's unsettle
-      // bar is reachable while the sidebar is showing the active list. Left to
-      // the map below that write lands nowhere — the row is in neither list,
-      // and the session the reader just took back has no row at all until
-      // something else refetches.
-      if (belongsHere && !prev.some((i) => i.sessionId === sessionId)) {
-        return [...prev, updated];
-      }
-
-      return prev.flatMap((i) => {
-        if (i.sessionId !== sessionId) return [i];
-        // Archiving from the active list — or unarchiving from the archived one —
-        // moves the row to the other view, so it leaves this one rather than
-        // sitting there contradicting the filter that produced the list.
-        return belongsHere ? [updated] : [];
-      });
-    });
-    // The open transcript keeps its own copy of the index fields, and it's what
-    // the composer reads `archived` from — left alone, settling the session on
-    // screen would swap in the unsettle bar only after a reselect.
-    setSessions((prev) =>
-      prev.map((s) =>
-        s.sessionId === sessionId
-          ? { ...s, archived: updated.archived, pinned: updated.pinned, hidden: updated.hidden }
-          : s,
-      ),
-    );
-    if (updated.archived) evictSessions({ sessionId });
+    applyIndexItem(updated);
     // A hidden child is drawn in this session's crew alone, so it goes where
     // the parent goes. Awaited, so a caller that refetches the other side
     // afterwards reads the children already moved.
@@ -2743,6 +2755,20 @@ useEffect(() => {
         ? prev.map((i) => (i.sessionId === item.sessionId ? item : i))
         : [...prev, item],
     );
+  });
+
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
+// `dray session settle`, `unsettle`, `set-aside` and their undoing, which reach
+// Rust over the orchestration socket, so the sidebar hears of them only here.
+const applyIndexItemRef = useRef(applyIndexItem);
+applyIndexItemRef.current = applyIndexItem;
+useEffect(() => {
+  const listenerPromise = listen<SessionIndexItem>("session_changed", (event) => {
+    applyIndexItemRef.current(event.payload);
   });
 
   return () => {

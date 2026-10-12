@@ -63,23 +63,24 @@ pub fn stop_share(session_id: String, port: u16) {
     stop(&session_id, port);
 }
 
-/// The session's live links, by port. A tunnel whose cloudflared exited is
-/// dropped here, so a link Cloudflare closed stops being offered.
-pub fn list(session: &str) -> Vec<SharedPort> {
+/// One session's live links by port, or every session's. A tunnel whose
+/// cloudflared exited is dropped here, so a link Cloudflare closed stops being
+/// offered.
+pub fn list(session: Option<&str>) -> Vec<SharedPort> {
     let mut tunnels = TUNNELS.lock().unwrap();
     tunnels.live.retain(|_, t| matches!(t.child.try_wait(), Ok(None)));
     let mut shares: Vec<SharedPort> = tunnels
         .live
         .iter()
-        .filter(|((s, _), _)| s == session)
-        .map(|((_, port), t)| SharedPort { port: *port, url: t.url.clone() })
+        .filter(|((s, _), _)| session.is_none_or(|session| s == session))
+        .map(|((s, port), t)| SharedPort { port: *port, url: t.url.clone(), session_id: s.clone() })
         .collect();
-    shares.sort_by_key(|s| s.port);
+    shares.sort_by(|a, b| (&a.session_id, a.port).cmp(&(&b.session_id, b.port)));
     shares
 }
 
 pub async fn start(session: &str, port: u16) -> Result<String, String> {
-    if let Some(live) = list(session).into_iter().find(|s| s.port == port) {
+    if let Some(live) = list(Some(session)).into_iter().find(|s| s.port == port) {
         return Ok(live.url);
     }
     let stamp = TUNNELS.lock().unwrap().stamp(session, port);
