@@ -22,7 +22,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 2. Run the `ponytail:ponytail-review` skill on the diff and apply what holds up. Changed anything? Test again — a cut that looked redundant is the easiest way to break what step 1 proved.
 3. Commit, push, open the PR **ready**. Greptile review it on its own.
 4. **Always run `/greploop` right after opening the PR**, unasked. It waits for Greptile's review and fixes what is real. Never post `@greptile review` — Greptile reviews every push on its own, so skip the loop's trigger step.
-5. **Once the PR is open, push nothing until Yogesh has tested it** in the dev app — every push is another Greptile run. That includes greploop's own fixes: commit them locally and push when he says push; "it works" is not that.
+5. **Inside greploop, push each round's fixes yourself and keep looping** — fix, test, commit, push, wait for the next review — until 5/5 or the loop's cap. That push is pre-approved and needs no ask. Stop and wait instead when a fix changes something Yogesh has to try in the dev app, or when he says not to push.
 
 **One repo, `monorepo-labs/dray`. Assign every issue to `yogesharc`.** `gh issue create --repo monorepo-labs/dray --assignee yogesharc`.
 
@@ -30,7 +30,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 `gh` missing or logged out → say so, then carry on with the work. Tell reader at the end which issue still want creating.
 
-**Don't commit unprompted.** Stage + describe change, then wait — even when finished and passing. Asked = approval for that commit only, not ones after. Same for `git push`, branches, anything rewriting history.
+**Don't commit unprompted.** Stage + describe change, then wait — even when finished and passing. Asked = approval for that commit only, not ones after. Same for `git push`, branches, anything rewriting history. One exception: greploop's own commit-and-push, step 5 below.
 
 **Always write commit message with `caveman-commit` skill.** Invoke it, don't imitate — skill carry format and it can change under you. Every commit here, amend included.
 
