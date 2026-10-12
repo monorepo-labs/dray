@@ -588,17 +588,25 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
     let id = existing.clone().unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
     crate::issues::set_credential(&credential_name(&id), Some(&token)).await?;
 
-    {
+    let placed = {
         let mut list = conns();
         // Again under the lock: the admit above awaits, and another add may
         // have taken the name meanwhile.
-        refuse_taken(&list, &name, Some(&id))?;
-        if let Some(conn) = list.iter_mut().find(|c| c.saved.id == id) {
-            conn.saved.name = name;
-            conn.restart();
-        } else {
-            list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, unknown: Default::default() }));
+        refuse_taken(&list, &name, Some(&id)).map(|()| {
+            if let Some(conn) = list.iter_mut().find(|c| c.saved.id == id) {
+                conn.saved.name = name;
+                conn.restart();
+            } else {
+                list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, unknown: Default::default() }));
+            }
+        })
+    };
+    if let Err(e) = placed {
+        // A new machine's token has no row to be removed from, so it goes now.
+        if existing.is_none() {
+            crate::issues::set_credential(&credential_name(&id), None).await.ok();
         }
+        return Err(e);
     }
     save().await?;
     announce();
