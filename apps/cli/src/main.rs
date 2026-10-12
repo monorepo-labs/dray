@@ -73,9 +73,11 @@ enum Command {
     Update(Update),
     /// Install what this machine is missing to run Dray, then start the server.
     Setup(setup::Setup),
-    /// Run the Dray server in the foreground. Linux only.
+    /// Run the Dray server in the foreground. On a Mac, only where the Dray
+    /// app is not installed.
     Serve(setup::Serve),
-    /// Keep the Dray server running in the background. Linux only.
+    /// Keep the Dray server running in the background. On a Mac, only where
+    /// the Dray app is not installed.
     #[command(subcommand)]
     Service(setup::ServiceCommand),
     /// Give this machine's server a public address through a Cloudflare quick
@@ -811,10 +813,10 @@ fn update(args: Update) -> Result<(), String> {
         Ok(status) if status.success() => {
             // Not restarted for the reader: that stops every agent running on
             // it, and the usual caller here is one of those agents.
-            if setup::unit_path().is_ok_and(|p| p.exists()) {
+            if let Some(restart) = setup::installed_restart() {
                 eprintln!(
                     "The background server runs the old version until restarted, which \
-                     stops running agents: systemctl --user restart dray"
+                     stops running agents: {restart}"
                 );
             }
             Ok(())

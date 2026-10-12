@@ -68,9 +68,9 @@ const ADMIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// path; nothing a real client sends comes near this.
 const FILE_HEAD_LIMIT: u64 = 16 * 1024;
 
-/// Where the Mac's background server writes the port it listens on for the
-/// app, then its [`exe_stamp`], then its pid. The port is picked by the OS
-/// each start, so a `dray-serve` on 7317 never collides.
+/// Where a server writes the port it listens on for the app, then its
+/// [`exe_stamp`], then its pid. The Mac's background server lets the OS pick
+/// its port each start, so it never collides with a `dray-serve` on 7317.
 pub const PORT_FILE: &str = "serve-port";
 
 /// Where launchd writes the Mac server's stdout and stderr.
@@ -90,6 +90,7 @@ pub async fn run(port: u16) -> Result<()> {
     let listener = TcpListener::bind(addr)
         .await
         .with_context(|| format!("could not bind {addr}"))?;
+    write_port_file(&home, listener.local_addr()?.port()).await?;
 
     eprintln!(
         "dray-serve listening on ws://{}, token in {}",
@@ -106,7 +107,6 @@ pub async fn run(port: u16) -> Result<()> {
 /// See MAC-SERVER-PLAN.md.
 #[cfg(feature = "desktop")]
 pub async fn run_mac() -> Result<()> {
-    let started_from = exe_stamp().unwrap_or_default();
     let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
     let home = start_core(sink.clone()).await?;
     // launchd appends stdout and stderr here for the life of the login, so
@@ -120,7 +120,7 @@ pub async fn run_mac() -> Result<()> {
     let (token, _) = mint_token().await?;
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.context("could not bind a local port")?;
     let port = listener.local_addr()?.port();
-    store::write_atomic(&home.join(PORT_FILE), format!("{port}\n{started_from}\n{}\n", std::process::id())).await?;
+    write_port_file(&home, port).await?;
     tokio::spawn(crate::remote_access::start(sink.clone()));
 
     // launchd, and Quit and stop sessions in dev, stop the server with SIGTERM.
@@ -140,10 +140,16 @@ pub async fn run_mac() -> Result<()> {
     listen(listener, HUB.clone(), sink, token.into(), home.join(dray_proto::TUNNEL_URL_FILE).into(), true).await
 }
 
+/// Written by `dray-serve` too, so a Dray app installed later on a Mac
+/// already serving finds this server rather than starting one of its own.
+async fn write_port_file(home: &Path, port: u16) -> Result<()> {
+    let stamp = exe_stamp().unwrap_or_default();
+    store::write_atomic(&home.join(PORT_FILE), format!("{port}\n{stamp}\n{}\n", std::process::id())).await
+}
+
 /// The executable's modified time, which moves when an update lands or cargo
 /// rebuilds. The server writes the one it started from under its port; the
 /// app compares it with the file now to tell a server running old code.
-#[cfg(feature = "desktop")]
 pub fn exe_stamp() -> Option<String> {
     let modified = std::fs::metadata(std::env::current_exe().ok()?).ok()?.modified().ok()?;
     let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;

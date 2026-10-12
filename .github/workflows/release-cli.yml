@@ -76,14 +76,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Every target ships `dray-serve`, the server `dray setup` installs: a
+        # Mac with no Dray app can be a server too.
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
+            serve: true
           - target: x86_64-apple-darwin
             os: macos-latest
+            serve: true
           # 22.04, not latest: a binary needs the glibc it linked against or
           # newer, so this is what lets Ubuntu 22.04 and Debian 12 run it.
-          # Linux also ships `dray-serve`, the server `dray setup` installs.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
             serve: true
@@ -115,6 +118,10 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       # From the same commit as the CLI, so one tag is one version of both.
+      # macOS's `strip` keeps the linker's ad-hoc signature, which arm64 needs
+      # to run the binary at all.
+      # ponytail: ad-hoc signed, so every `dray update` is a new TCC identity;
+      # sign with the Developer ID once headless Macs are a real target.
       - name: Build dray-serve
         if: matrix.serve
         working-directory: apps/desktop/src-tauri

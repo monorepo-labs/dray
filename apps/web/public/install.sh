@@ -1,7 +1,7 @@
 #!/bin/sh
-# Installs the `dray` CLI and its Claude Code skill. On Linux the archive also
-# carries `dray-serve`, and a first install ends in `dray setup`, which makes the
-# machine a Dray server.
+# Installs the `dray` CLI and its Claude Code skill. The archive also carries
+# `dray-serve`, and a first install ends in `dray setup`, which makes the
+# machine a Dray server — except on a Mac with the Dray app, which is its server.
 #
 # Deliberately POSIX sh, not bash: this is piped into whatever /bin/sh is, and
 # on a minimal linux image that is dash rather than bash.
@@ -223,7 +223,7 @@ mkdir -p "$INSTALL_DIR"
 # `dray` just installed.
 SERVER=
 [ -f "$TMP/dray-serve" ] && SERVER=1
-# Whatever the archive holds: `dray` everywhere, `dray-serve` beside it on Linux.
+# Whatever the archive holds: `dray`, and `dray-serve` beside it.
 for bin in dray dray-serve; do
   [ -f "$TMP/$bin" ] || continue
   chmod +x "$TMP/$bin"
@@ -250,10 +250,18 @@ add_to_path || case ":$PATH:" in
     ;;
 esac
 
-# On a Linux box `dray` is only useful as a server, so a first install goes on
-# to set one up. stdin is the rest of this script under `curl | sh`, so setup
-# gets none and asks its questions on /dev/tty.
-if [ -n "$SERVER" ] && [ -z "${DRAY_UPDATING:-}" ]; then
+# The Dray app's login agent, or its bundle: the same three paths as
+# `app_on_this_mac` in apps/cli/src/setup.rs.
+app_on_this_mac() {
+  [ "$(uname -s)" = Darwin ] || return 1
+  [ -e "$HOME/Library/LaunchAgents/com.yogesh.dray.server.plist" ] \
+    || [ -e /Applications/Dray.app ] || [ -e "$HOME/Applications/Dray.app" ]
+}
+
+# Away from the app `dray` is only useful as a server, so a first install goes
+# on to set one up. stdin is the rest of this script under `curl | sh`, so
+# setup gets none and asks its questions on /dev/tty.
+if [ -n "$SERVER" ] && [ -z "${DRAY_UPDATING:-}" ] && ! app_on_this_mac; then
   say ""
   "$INSTALL_DIR/dray" setup </dev/null
   exit
