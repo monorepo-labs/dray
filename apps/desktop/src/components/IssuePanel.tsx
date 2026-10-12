@@ -172,12 +172,12 @@ function IssueRow({
   const open = !collapsible || !collapsed;
   const toggle = () => setCollapsed((prev) => !prev);
 
-  /// ⌘-click leaves for the tracker, the same bargain [LinkDialog] makes with
+  /// ⌘-click leaves for the tracker, the same bargain [openLink] makes with
   /// a link in the transcript — the modifier is how this app spells "not here,
   /// out there". Bound whether or not the row collapses, since it is a
   /// shortcut rather than the affordance: the row's own button is that.
   ///
-  /// [LinkDialog]: ./chat/LinkDialog.tsx
+  /// [openLink]: ../lib/openLink.ts
   const activate = (e: React.MouseEvent) => {
     if (e.metaKey || e.ctrlKey) {
       void openUrl(issue.url);

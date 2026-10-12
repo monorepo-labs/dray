@@ -73,8 +73,7 @@ function codePlugin(pair: CodeThemePair, streaming: boolean) {
 // tabbed to either.
 const CONTROLS = { table: false, code: { copy: true, download: false } };
 
-// A link asks where to open — Dray's browser or the system one — through
-// the app-wide `LinkDialog`. ⌘-click skips the question and leaves the app.
+// A link opens in Dray's browser; ⌘-click leaves for the system one.
 // Passing `a` replaces Streamdown's renderer and its classes with it, so the
 // look is restated here — the same classes `FileLink` copies for a file link.
 function Anchor({ href, children, className, ...rest }: React.ComponentProps<"a">) {
