@@ -590,6 +590,9 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
 
     {
         let mut list = conns();
+        // Again under the lock: the admit above awaits, and another add may
+        // have taken the name meanwhile.
+        refuse_taken(&list, &name, Some(&id))?;
         if let Some(conn) = list.iter_mut().find(|c| c.saved.id == id) {
             conn.saved.name = name;
             conn.restart();
@@ -703,6 +706,9 @@ pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<Server
 
     let id = {
         let mut list = conns();
+        // Again under the lock, for the token form's reason.
+        let existing = list.iter().find(|c| c.saved.ssh.as_ref() == Some(&target)).map(|c| c.saved.id.clone());
+        refuse_taken(&list, &name, existing.as_deref()).map_err(failed)?;
         if let Some(conn) = list.iter_mut().find(|c| c.saved.ssh.as_ref() == Some(&target)) {
             conn.saved.name = name;
             conn.saved.off = false;

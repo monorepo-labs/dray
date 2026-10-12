@@ -511,11 +511,15 @@ async fn settle_session(settle: dray_proto::SettleSession, app: &Sink) -> Result
     }
     crate::set_session_flags(id, Some(settle.settled), None, None, None).await?;
     let mut changed = vec![id.to_string()];
-    changed.extend(store::hidden_children(id).await?.into_iter().map(|c| c.session_id));
-    if settle.settled && settle.delete_worktree {
-        manager().remove_worktree(id).await?;
-    }
+    changed.extend(store::hidden_descendants(id).await?);
+    let removed = match settle.settled && settle.delete_worktree {
+        true => manager().remove_worktree(id).await.map(drop),
+        false => Ok(()),
+    };
+    // The settle has landed whatever the removal answered, so the sidebar
+    // hears of it before a failed removal is reported.
     announce_change(&changed, app).await;
+    removed.context("settled, but the worktree was not deleted")?;
     answer_session(id).await
 }
 
@@ -913,7 +917,7 @@ async fn start_session(
 /// their editor. Usually right for a review, and said plainly in the skill,
 /// because the failure is an agent reporting confidently on a tree that is
 /// missing the very change the user is looking at.
-async fn resolve_base(from: &str, project_path: &str) -> Result<String> {
+pub(crate) async fn resolve_base(from: &str, project_path: &str) -> Result<String> {
     if let Some(item) = store::get_session_index_item(from).await? {
         // Read where the session actually runs, which is its worktree for a
         // worktree session — `session_branch` outranks it for a relocated one,

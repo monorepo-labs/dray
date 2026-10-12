@@ -1394,11 +1394,22 @@ const applyIndexItem = (updated: SessionIndexItem) => {
   });
   // The open transcript keeps its own copy of the index fields, and it's what
   // the composer reads `archived` from — left alone, settling the session on
-  // screen would swap in the unsettle bar only after a reselect.
+  // screen would swap in the unsettle bar only after a reselect. The location
+  // rides along for `dray session settle --delete-worktree`, which moves `cwd`
+  // out of the deleted tree.
   setSessions((prev) =>
     prev.map((s) =>
       s.sessionId === sessionId
-        ? { ...s, archived: updated.archived, pinned: updated.pinned, hidden: updated.hidden }
+        ? {
+            ...s,
+            archived: updated.archived,
+            pinned: updated.pinned,
+            hidden: updated.hidden,
+            cwd: updated.cwd,
+            worktreeName: updated.worktreeName,
+            worktreeRemoved: updated.worktreeRemoved,
+            branch: updated.branch,
+          }
         : s,
     ),
   );

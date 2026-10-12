@@ -1037,14 +1037,21 @@ pub async fn hidden_children(parent_id: &str) -> Result<Vec<SessionIndexItem>> {
 /// ids. Written without [`set_session_flags`]' reporting: one press settles a
 /// parent, however many hidden children follow it.
 pub async fn archive_hidden_descendants(parent_id: &str, archived: bool) -> Result<Vec<String>> {
+    let ids = hidden_descendants(parent_id).await?;
+    for id in &ids {
+        update_item(id, |item| item.archived = archived).await?;
+    }
+    Ok(ids)
+}
+
+/// Every hidden session below `parent_id`, at any depth: the set that settles
+/// and unsettles with it.
+pub async fn hidden_descendants(parent_id: &str) -> Result<Vec<String>> {
     let mut ids: Vec<String> = Vec::new();
     let mut i = 0;
     let mut parent = parent_id.to_string();
     loop {
-        for child in hidden_children(&parent).await? {
-            update_item(&child.session_id, |item| item.archived = archived).await?;
-            ids.push(child.session_id);
-        }
+        ids.extend(hidden_children(&parent).await?.into_iter().map(|c| c.session_id));
         let Some(next) = ids.get(i) else { break };
         parent = next.clone();
         i += 1;
