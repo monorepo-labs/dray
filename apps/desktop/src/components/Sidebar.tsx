@@ -9,6 +9,7 @@ import {
   Circle,
   CircleDashed,
   CircleDot,
+  Ellipsis,
   GitBranchPlus,
   Unlink,
   Pin,
@@ -1927,7 +1928,9 @@ function RowAction({
   children: React.ReactNode;
 }) {
   return (
-    <Tooltip>
+    // Delayed, unlike the app's default: the row is swept past on the way to
+    // other rows, and a tooltip on every pass reads as noise.
+    <Tooltip delayDuration={600}>
       <TooltipTrigger asChild>
         <Button
           variant="ghost"
@@ -1969,7 +1972,8 @@ const FORKS = [
 ///
 /// A context menu can't be opened programmatically, so `ContextMenu` takes no
 /// `open` — the trigger's own `data-state` is what the row styles off, and there
-/// is no second copy of the flag to fall out of step with it.
+/// is no second copy of the flag to fall out of step with it. The row's ⋯
+/// button reaches it by dispatching a `contextmenu` event instead.
 function RowMenu({
   onFork,
   forkDisabled,
@@ -2560,23 +2564,28 @@ function SessionRow({
           </span>
         )}
 
-        <span className="min-w-0 flex-1 truncate text-ui">{item.title}</span>
+        {/* The hover buttons float over this title's tail, and a mask fades
+            the text out under them. A mask rather than a filled backdrop: the
+            sidebar is glass, so no fill matches what is behind it. A live row's
+            buttons sit left of the orb and cover more. */}
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate text-ui",
+            live
+              ? "group-hover:[mask-image:linear-gradient(to_left,transparent_48px,black_64px)] group-data-[state=open]:[mask-image:linear-gradient(to_left,transparent_48px,black_64px)]"
+              : "group-hover:[mask-image:linear-gradient(to_left,transparent_24px,black_40px)] group-data-[state=open]:[mask-image:linear-gradient(to_left,transparent_24px,black_40px)]",
+          )}
+        >
+          {item.title}
+        </span>
 
-        {/* One grid cell holding both the timestamp and the hover button, so
-            the slot is as wide as the wider of the two and nothing reflows on
-            hover — a long title truncates against it either way. The two
-            crossfade on `opacity` over the same duration, so they never both
-            read at once; `visibility` would flip instantly while the button's
-            inherited `transition-all` still crossfades, which read as an
-            overlap. */}
-        <div className="grid shrink-0 items-center justify-items-end self-stretch pl-2 text-ui">
-          {/* `pointer-events-none` unconditionally: it's never a target, and a
-              faded-but-present element still hit-tests — stacked over the button
-              it would otherwise swallow the cursor, which reads as a dead
-              button. */}
+        {/* The slot is the timestamp's alone; the hover buttons float over it
+            and the title's tail. Sharing a cell sized it to the buttons on
+            every row, cutting each title for controls only one row shows. */}
+        <div className="flex shrink-0 items-center self-stretch pl-2 text-ui">
           <span
             className={cn(
-              "pointer-events-none col-start-1 row-start-1 flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150",
+              "pointer-events-none flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150",
               // Only the timestamp gives way to the buttons. Something in
               // flight is still in flight under the cursor.
               !live && "group-hover:opacity-0 group-data-[state=open]:opacity-0",
@@ -2618,17 +2627,38 @@ function SessionRow({
             )}
           </span>
 
-          {/* `opacity-0` rather than `hidden`: shadcn's button base sets
-              `inline-flex`, and Tailwind emits that after `hidden` at equal
-              specificity, so a `display` utility here silently loses.
-              `pointer-events-none` keeps the invisible buttons unclickable. */}
+          {/* `pointer-events-none` keeps the invisible buttons unclickable. */}
           <div
             className={cn(
-              "pointer-events-none col-start-1 row-start-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-data-[state=open]:pointer-events-auto group-data-[state=open]:opacity-100",
+              "pointer-events-none absolute inset-y-0 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-data-[state=open]:pointer-events-auto group-data-[state=open]:opacity-100",
               // Beside the orb's 20px box rather than over it.
-              live && "mr-6",
+              live ? "right-6.5" : "right-0.5",
             )}
           >
+            {/* Opens the right-click menu under the button: a synthetic
+                `contextmenu` bubbles to the row's trigger, which anchors the
+                menu at the event's point. One menu, two ways in. */}
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="More"
+              className="text-muted-foreground"
+              onClick={(e) => {
+                e.stopPropagation();
+                const r = e.currentTarget.getBoundingClientRect();
+                e.currentTarget.dispatchEvent(
+                  new MouseEvent("contextmenu", {
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: r.left,
+                    clientY: r.bottom + 4,
+                  }),
+                );
+              }}
+            >
+              <Ellipsis />
+            </Button>
+
             {/* No Settle while a turn is in flight: settling kills the child,
                 so the turn would die mid-work with nothing saying so. Unsettle
                 stays, since a settled row has no turn. */}
