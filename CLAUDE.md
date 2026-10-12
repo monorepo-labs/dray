@@ -16,13 +16,13 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **PR nobody need review carry `no-review` label, put on before the push so Greptile skip it.** Copy tweak, doc, prompt wording, config. Anything touching behaviour = no label, reviewed.
 
-**Default road = work → test → ponytail review → ready PR → Greptile.** No Codex reviewer sessions: that road only ran while Greptile credits were gone.
+**Default road = work → test → ponytail review → ready PR → `/greploop`.** No Codex reviewer sessions: that road only ran while Greptile credits were gone.
 
 1. Do the work, then test it for real — run it, not just compile it.
 2. Run the `ponytail:ponytail-review` skill on the diff and apply what holds up. Changed anything? Test again — a cut that looked redundant is the easiest way to break what step 1 proved.
 3. Commit, push, open the PR **ready**. Greptile review it on its own.
-4. Fix what Greptile raise and is real.
-5. **Once the PR is open, push nothing until Yogesh has tested it** in the dev app — every push is another Greptile run. Leave follow-ups uncommitted and push when he says push; "it works" is not that.
+4. **Always run `/greploop` right after opening the PR**, unasked. It waits for Greptile's review and fixes what is real. Never post `@greptile review` — Greptile reviews every push on its own, so skip the loop's trigger step.
+5. **Once the PR is open, push nothing until Yogesh has tested it** in the dev app — every push is another Greptile run. That includes greploop's own fixes: commit them locally and push when he says push; "it works" is not that.
 
 **One repo, `monorepo-labs/dray`. Assign every issue to `yogesharc`.** `gh issue create --repo monorepo-labs/dray --assignee yogesharc`.
 
