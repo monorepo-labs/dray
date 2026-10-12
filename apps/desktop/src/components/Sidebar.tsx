@@ -2397,6 +2397,9 @@ function SessionRow({
         onPointerLeave={() => clearTimeout(hover.current)}
         onPointerDown={onDragStart}
         onKeyDown={(e) => {
+          // Keys bubbling up from the hover buttons are theirs: taking Enter
+          // here would cancel the button's own click and select the row.
+          if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             void onSelect(item.sessionId);
@@ -2572,8 +2575,8 @@ function SessionRow({
           className={cn(
             "min-w-0 flex-1 truncate text-ui",
             live
-              ? "group-hover:[mask-image:linear-gradient(to_left,transparent_48px,black_64px)] group-data-[state=open]:[mask-image:linear-gradient(to_left,transparent_48px,black_64px)]"
-              : "group-hover:[mask-image:linear-gradient(to_left,transparent_24px,black_40px)] group-data-[state=open]:[mask-image:linear-gradient(to_left,transparent_24px,black_40px)]",
+              ? "row-reached:[mask-image:linear-gradient(to_left,transparent_48px,black_64px)]"
+              : "row-reached:[mask-image:linear-gradient(to_left,transparent_24px,black_40px)]",
           )}
         >
           {item.title}
@@ -2588,7 +2591,7 @@ function SessionRow({
               "pointer-events-none flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150",
               // Only the timestamp gives way to the buttons. Something in
               // flight is still in flight under the cursor.
-              !live && "group-hover:opacity-0 group-data-[state=open]:opacity-0",
+              !live && "row-reached:opacity-0",
             )}
           >
             {/* The orb takes the timestamp's place rather than a slot of its
@@ -2630,7 +2633,7 @@ function SessionRow({
           {/* `pointer-events-none` keeps the invisible buttons unclickable. */}
           <div
             className={cn(
-              "pointer-events-none absolute inset-y-0 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-data-[state=open]:pointer-events-auto group-data-[state=open]:opacity-100",
+              "pointer-events-none absolute inset-y-0 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 row-reached:pointer-events-auto row-reached:opacity-100",
               // Beside the orb's 20px box rather than over it.
               live ? "right-6.5" : "right-0.5",
             )}

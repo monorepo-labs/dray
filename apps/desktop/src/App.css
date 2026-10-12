@@ -10,6 +10,11 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* A sidebar row being reached for — hovered, its menu open, or keyboard focus
+   on one of its buttons — which is when its hover controls show. `:has` rather
+   than `focus-within`, so a row focused by a click doesn't hold them up. */
+@custom-variant row-reached (&:is(:where(.group):hover *, :where(.group)[data-state=open] *, :where(.group):has(:focus-visible) *));
+
 /* Colour is three layers, and which layer a token belongs to is the whole filing
    system here.
 
