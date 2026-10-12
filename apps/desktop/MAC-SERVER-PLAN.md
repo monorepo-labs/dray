@@ -150,10 +150,12 @@ across read, edit and rename. A process-local mutex stays in front of it.
 naming the app's own executable with `--serve`, `RunAtLoad`, `KeepAlive`,
 stdout and stderr to `<home>/server.log`, and `DRAY_HOME` and
 `DRAY_NO_ANALYTICS` where the app has them, since launchd starts the server
-with its own environment. Where it differs from what is on disk it is
-rewritten, but a loaded job is reloaded only once its server has exited on
-`restart_when_idle` — unloading stops every turn under it — so moving
-Dray.app heals at the next open without cutting anything off.
+with its own environment. A loaded job that differs is replaced only once
+its server has exited on `restart_when_idle` — unloading stops every turn
+under it — and the new plist is held in memory until then, so the file always
+names the loaded job and a quit in between loses nothing. A changed
+`DRAY_HOME` moves at once: that server's port is in the other home, where
+the app cannot reach it to ask.
 macOS shows its own "Background item added" notice once; nothing of ours.
 
 **A plain plist, not `SMAppService`.** That API wants the plist inside the

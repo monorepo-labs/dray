@@ -64,15 +64,19 @@ async fn launchctl(args: &[&str]) -> Result<std::process::Output> {
     Command::new("/bin/launchctl").args(args).output().await.context("could not run launchctl")
 }
 
-/// Set where the plist on disk is newer than the job launchd has loaded.
-static RELOAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// A plist newer than the job launchd has loaded, held back until that job's
+/// server has gone idle. Kept out of the file meanwhile, so the file always
+/// names the loaded job and a quit before the reload loses nothing: the next
+/// launch finds the same difference.
+static PENDING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// Installs the agent, or points it at this binary and environment where it
 /// names others — Dray.app moved, a second copy opened, `DRAY_NO_ANALYTICS`
-/// changed. Loading a changed plist means unloading the old one, which stops
-/// that server and every turn under it, so a running server keeps its job:
-/// the new plist is written, and [`reload_if_pending`] loads it once the
-/// app's `restart_when_idle` has let that server go.
+/// changed. Unloading a job stops every turn under it, so a running server
+/// keeps its job until the app's `restart_when_idle` lets it go, and
+/// [`reload_if_pending`] loads the new one then. A changed `DRAY_HOME` is the
+/// exception and moves at once: that server keeps its port in the other home,
+/// so the app could never reach it to ask.
 pub async fn ensure() -> Result<()> {
     let exe = std::env::current_exe().context("no path to this binary")?;
     let log = crate::store::get_home_app_dir().await?.join(crate::serve::SERVER_LOG);
@@ -86,34 +90,47 @@ pub async fn ensure() -> Result<()> {
     let wanted = plist(&exe.to_string_lossy(), &log.to_string_lossy(), &env);
     let path = plist_path()?;
     let loaded = launchctl(&["print", &target()]).await?.status.success();
-    if loaded && tokio::fs::read_to_string(&path).await.is_ok_and(|on_disk| on_disk == wanted) {
+    let on_disk = tokio::fs::read_to_string(&path).await.ok();
+    if loaded && on_disk.as_deref() == Some(wanted.as_str()) {
         return Ok(());
     }
-    if let Some(dir) = path.parent() {
-        tokio::fs::create_dir_all(dir).await?;
-    }
-    tokio::fs::write(&path, wanted).await.with_context(|| format!("could not write {}", path.display()))?;
-    if loaded {
-        RELOAD.store(true, std::sync::atomic::Ordering::Relaxed);
+    if loaded && on_disk.as_deref().map(home_of) == Some(home_of(&wanted)) {
+        *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some(wanted);
         return Ok(());
     }
-    bootstrap(&path).await
+    install(&path, &wanted, loaded).await
+}
+
+/// The `DRAY_HOME` a plist [`plist`] wrote names, if any.
+fn home_of(plist: &str) -> Option<&str> {
+    let (_, rest) = plist.split_once("<key>DRAY_HOME</key><string>")?;
+    rest.split_once("</string>").map(|(home, _)| home)
 }
 
 /// Whether the server running now was started from an older plist.
 pub fn reload_pending() -> bool {
-    RELOAD.load(std::sync::atomic::Ordering::Relaxed)
+    PENDING.lock().unwrap_or_else(|e| e.into_inner()).is_some()
 }
 
-/// Loads the plist [`ensure`] wrote, once the old server has exited. launchd
-/// may have started it again from the old job by then; that one is fresh and
-/// idle, and goes with the job.
+/// Loads the plist [`ensure`] held back, once the old server has exited.
+/// launchd may have started it again from the old job by then; that one is
+/// fresh and idle, and goes with the job.
 pub async fn reload_if_pending() -> Result<()> {
-    if !RELOAD.swap(false, std::sync::atomic::Ordering::Relaxed) {
+    let Some(wanted) = PENDING.lock().unwrap_or_else(|e| e.into_inner()).take() else {
         return Ok(());
+    };
+    install(&plist_path()?, &wanted, true).await
+}
+
+async fn install(path: &std::path::Path, wanted: &str, loaded: bool) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir).await?;
     }
-    let _ = launchctl(&["bootout", &target()]).await;
-    bootstrap(&plist_path()?).await
+    tokio::fs::write(path, wanted).await.with_context(|| format!("could not write {}", path.display()))?;
+    if loaded {
+        let _ = launchctl(&["bootout", &target()]).await;
+    }
+    bootstrap(path).await
 }
 
 async fn bootstrap(path: &std::path::Path) -> Result<()> {
@@ -189,5 +206,7 @@ mod tests {
         assert!(!text.contains("DRAY_HOME"));
         let homed = plist("/x/dray", "/h/server.log", &[("DRAY_HOME", "/h".into()), ("DRAY_NO_ANALYTICS", "1".into())]);
         assert!(homed.contains("<dict><key>DRAY_HOME</key><string>/h</string><key>DRAY_NO_ANALYTICS</key><string>1</string></dict>"));
+        assert_eq!(home_of(&homed), Some("/h"));
+        assert_eq!(home_of(&text), None);
     }
 }
