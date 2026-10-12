@@ -1,3 +1,5 @@
+import { TimerReset } from "lucide-react";
+
 import Orb from "@/components/Orb";
 import { Button } from "@/components/ui/button";
 import { resetTime } from "@/lib/format";
@@ -25,9 +27,10 @@ export default function AutoContinueNotice({
   if (off) {
     return (
       <div className="mb-7 flex items-center px-3">
-        {/* Pulled left by the button's own inset, so its label starts where
+        {/* Pulled left by the button's own inset, so its glyph starts where
             the composer's text does. */}
         <Button variant="ghost" size="sm" className="-ml-2.5" onClick={() => onToggle(true)}>
+          <TimerReset />
           Continue when limit resets
         </Button>
       </div>
