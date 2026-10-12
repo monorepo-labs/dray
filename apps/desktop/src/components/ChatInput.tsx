@@ -132,6 +132,9 @@ type ChatInputProps = {
   /// failed, this reports that nothing can be attempted yet. Only the second
   /// kind has a cure to offer, which is why it is a node and not a string.
   notice?: ReactNode;
+  /// Drawn where `notice` is, but never blocks sending: something already
+  /// arranged that a send would cancel, like an auto-continue.
+  pending?: ReactNode;
   /// Drawn under the new-task composer, below the send hint. Informational
   /// only, unlike `notice`: it never blocks sending.
   agentUpdate?: ReactNode;
@@ -241,6 +244,7 @@ export default function ChatInput({
   dictation,
   dictating = false,
   notice,
+  pending,
   agentUpdate,
   draftHint,
   held = null,
@@ -821,7 +825,7 @@ export default function ChatInput({
           />
         )}
 
-        {notice}
+        {notice ?? pending}
 
         {/* Above the toolbar in both states, so the failure reads before the
             controls rather than after them. `whitespace-pre-wrap` because these

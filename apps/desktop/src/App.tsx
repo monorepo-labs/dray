@@ -132,6 +132,7 @@ import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
 import { useAgentUpdates } from "@/hooks/useAgentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
+import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
 import type { Attachment, IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
@@ -2537,6 +2538,8 @@ function App() {
   // empty pane until it lands rather than a different screen.
   const shownSession =
     selectedSession ?? sessionIndexItems.find((i) => i.sessionId === selectedSessionId) ?? null;
+  // Off the index, never the snapshot: `session_changed` writes only there.
+  const selectedItem = sessionIndexItems.find((i) => i.sessionId === selectedSessionId);
 
   // What every transcript on screen reports back through: the main column, a
   // split pane and a crew strip alike.
@@ -3041,6 +3044,19 @@ function App() {
                 onHandled={() => setLoginHandled(authTurn)}
               />
             ) : null
+          }
+          pending={
+            selectedItem?.continueAt && (
+              <AutoContinueNotice
+                at={selectedItem.continueAt}
+                off={selectedItem.continueOff}
+                onToggle={(on) =>
+                  void invoke("set_auto_continue", { sessionId: selectedItem.sessionId, on }).catch(
+                    setError,
+                  )
+                }
+              />
+            )
           }
           held={sendHeld}
           draftHint={

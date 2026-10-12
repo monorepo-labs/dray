@@ -865,6 +865,7 @@ const handleSendMsg = async (
       pinned: false,
       hidden: false,
       aside: false,
+      continueOff: false,
     };
     upsertSession(shell);
   } else {
@@ -2003,7 +2004,9 @@ useEffect(() => {
               const modified = new Date().toISOString();
               setSessionIndexItems((prev) =>
                 prev.map((i) =>
-                  i.sessionId === agentEvent.sessionId ? { ...i, aside: false, modified } : i,
+                  i.sessionId === agentEvent.sessionId
+                    ? { ...i, aside: false, continueAt: undefined, continueOff: false, modified }
+                    : i,
                 ),
               );
             }

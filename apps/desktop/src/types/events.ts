@@ -1745,7 +1745,19 @@ hidden: boolean,
  * Set aside by the reader: started, not wanted now. The sidebar sinks it
  * to the end of its project and fades it. Any send clears it.
  */
-aside: boolean, };
+aside: boolean, 
+/**
+ * When the server sends this session `continue`, RFC3339 — set when a
+ * turn dies on the usage limit, cleared by any send or once it fires. On
+ * the index rather than in memory so a server restart re-arms it
+ * ([`crate::auto_continue::rearm`]).
+ */
+continueAt?: string, 
+/**
+ * The reader cancelled the continue above. Kept beside it rather than
+ * clearing it, so they can turn it back on until the time passes.
+ */
+continueOff: boolean, };
 
 /**
  * Session-level facts, known at startup.
@@ -1890,7 +1902,19 @@ hidden: boolean,
  * Set aside by the reader: started, not wanted now. The sidebar sinks it
  * to the end of its project and fades it. Any send clears it.
  */
-aside: boolean, };
+aside: boolean, 
+/**
+ * When the server sends this session `continue`, RFC3339 — set when a
+ * turn dies on the usage limit, cleared by any send or once it fires. On
+ * the index rather than in memory so a server restart re-arms it
+ * ([`crate::auto_continue::rearm`]).
+ */
+continueAt?: string, 
+/**
+ * The reader cancelled the continue above. Kept beside it rather than
+ * clearing it, so they can turn it back on until the time passes.
+ */
+continueOff: boolean, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`

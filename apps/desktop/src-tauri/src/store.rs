@@ -166,6 +166,17 @@ pub struct SessionIndexItem {
     /// to the end of its project and fades it. Any send clears it.
     #[serde(default)]
     pub aside: bool,
+    /// When the server sends this session `continue`, RFC3339 — set when a
+    /// turn dies on the usage limit, cleared by any send or once it fires. On
+    /// the index rather than in memory so a server restart re-arms it
+    /// ([`crate::auto_continue::rearm`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub continue_at: Option<String>,
+    /// The reader cancelled the continue above. Kept beside it rather than
+    /// clearing it, so they can turn it back on until the time passes.
+    #[serde(default)]
+    pub continue_off: bool,
     /// Every key this build does not know, carried through untouched.
     ///
     /// The index is rewritten **whole**, and `INDEX_LOCK` is an in-process
@@ -647,6 +658,8 @@ impl SessionIndexItem {
             pinned: false,
             hidden: false,
             aside: false,
+            continue_at: None,
+            continue_off: false,
             unknown: Default::default(),
         }
     }
@@ -738,6 +751,8 @@ impl SessionIndexItem {
             pinned: false,
             hidden: false,
             aside: false,
+            continue_at: None,
+            continue_off: false,
             unknown: Default::default(),
         }
     }
@@ -970,13 +985,17 @@ pub async fn touch_session_index_item(
         // the real model and make a later resume omit `--model` and run the new
         // provider's default. Only a real pick overwrites.
         let model = if model.is_unset() { item.model.clone() } else { model };
-        // A message brings a set-aside session back, whoever sent it.
+        // A message brings a set-aside session back, whoever sent it, and
+        // stands in for the `continue` a usage limit scheduled.
         let changed = item.model != model
             || item.effort != effort
             || item.permission_mode != permission_mode
             || item.fast != fast
-            || item.aside;
+            || item.aside
+            || item.continue_at.is_some();
         item.aside = false;
+        item.continue_at = None;
+        item.continue_off = false;
         item.model = model;
         item.effort = effort;
         item.permission_mode = permission_mode;
@@ -998,6 +1017,51 @@ pub async fn clear_aside(session_id: &str) -> Result<()> {
     })
     .await?;
     Ok(())
+}
+
+/// Schedules a session's auto-continue, on. The entry as written where it
+/// changed, so the caller announces only a real change.
+pub async fn set_continue_at(session_id: &str, at: &str) -> Result<Option<SessionIndexItem>> {
+    let written = edit_item(session_id, |item| {
+        let changed = item.continue_at.as_deref() != Some(at) || item.continue_off;
+        item.continue_at = Some(at.to_string());
+        item.continue_off = false;
+        (changed.then(|| item.clone()), changed)
+    })
+    .await?;
+    Ok(written.flatten())
+}
+
+/// The reader's Cancel, or turning it back on. Only where a continue is
+/// scheduled; the entry as written where it changed.
+pub async fn set_continue_off(session_id: &str, off: bool) -> Result<Option<SessionIndexItem>> {
+    let written = edit_item(session_id, |item| {
+        let changed = item.continue_at.is_some() && item.continue_off != off;
+        if changed {
+            item.continue_off = off;
+        }
+        (changed.then(|| item.clone()), changed)
+    })
+    .await?;
+    Ok(written.flatten())
+}
+
+/// Claims a due continue for its timer: clears it only where it still names
+/// `at`, so a send or a newer schedule landing first wins. Answers the entry
+/// as written and whether to send — not where the reader cancelled it or
+/// settled the session.
+pub async fn take_continue_at(session_id: &str, at: &str) -> Result<Option<(SessionIndexItem, bool)>> {
+    let written = edit_item(session_id, |item| {
+        let ours = item.continue_at.as_deref() == Some(at);
+        let send = ours && !item.continue_off && !item.archived;
+        if ours {
+            item.continue_at = None;
+            item.continue_off = false;
+        }
+        (ours.then(|| (item.clone(), send)), ours)
+    })
+    .await?;
+    Ok(written.flatten())
 }
 
 /// Cuts a session loose from the parent that spawned it, so the sidebar draws
@@ -2068,6 +2132,8 @@ mod tests {
             "pinned": true,
             "hidden": true,
             "aside": true,
+            "continueAt": "2026-08-30T14:01:00Z",
+            "continueOff": true,
             "somethingWeHaveNotShippedYet": {"keep": [1, 2]},
         });
 

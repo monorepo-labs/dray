@@ -177,6 +177,9 @@ pub struct StatusTracker {
     open_tool_calls: usize,
     /// The newest turn died for want of a login.
     auth_failed: bool,
+    /// When the usage limit that refused this turn resets. Read off the turn's
+    /// end by [`Self::take_limit_reset`], which schedules the auto-continue.
+    limit_reset: Option<String>,
 }
 
 impl StatusTracker {
@@ -196,7 +199,14 @@ impl StatusTracker {
             // must be able to go straight back to in-progress here.
             AgentEventPayload::TurnStarted(_) => {
                 self.model_call_open = true;
+                self.limit_reset = None;
                 self.set(SessionStatus::InProgress)
+            }
+            // Overage in use means the turn carried on, billed; only a limit
+            // with nothing to fall back on stops it.
+            AgentEventPayload::RateLimited { using_overage: false, resets_at: Some(at), .. } => {
+                self.limit_reset = Some(at.clone());
+                None
             }
             // A `result` ends the turn whatever tasks are outstanding. Holding
             // the session open on them was built for a subagent that reports
@@ -248,6 +258,11 @@ impl StatusTracker {
     /// whole wait.
     pub fn turn_in_flight(&self) -> bool {
         self.model_call_open
+    }
+
+    /// When the usage limit that stopped the turn just completed resets, once.
+    pub fn take_limit_reset(&mut self) -> Option<String> {
+        self.limit_reset.take()
     }
 
     /// Whether the newest turn failed on authentication.
@@ -2922,13 +2937,16 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink) {
     //
     // Order is status→queued, matching every other holder of both, so no
     // deadlock: nothing holds `queued` while awaiting `status`.
-    let (next_status, reserved) = {
+    let (next_status, reserved, limit_reset) = {
         let mut tracker = ctx.status.lock().await;
         let before = tracker.status();
         if agent_event.subagent.is_none() {
             tracker.note_tool_call(&agent_event.payload);
         }
         tracker.on_event(&agent_event.payload);
+        let limit_reset = matches!(agent_event.payload, AgentEventPayload::TurnCompleted { .. })
+            .then(|| tracker.take_limit_reset())
+            .flatten();
         let reserve = ctx.flush_transport.one_prompt_per_turn()
             && matches!(agent_event.payload, AgentEventPayload::TurnCompleted { .. })
             && !ctx.queued.lock().await.is_empty();
@@ -2936,10 +2954,13 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink) {
             tracker.on_send();
         }
         let after = tracker.status();
-        ((after != before).then_some(after), reserve)
+        ((after != before).then_some(after), reserve, limit_reset)
     };
     if let Some(next) = next_status {
         publish_status(ctx.session_id, next, app).await;
+    }
+    if let Some(at) = limit_reset {
+        crate::auto_continue::schedule(ctx.session_id, &at, app).await;
     }
 
     // Live-view only, never retained. Deltas are superseded by the
@@ -3775,6 +3796,30 @@ mod tests {
 
     fn turn_completed() -> AgentEventPayload {
         turn_completed_auth(false)
+    }
+
+    /// A limit with nothing to fall back on schedules the auto-continue, once;
+    /// overage in use carried the turn on and schedules nothing.
+    #[test]
+    fn only_a_blocking_limit_schedules_a_continue() {
+        let limited = |using_overage| AgentEventPayload::RateLimited {
+            status: Some("rejected".into()),
+            resets_at: Some("2026-10-12T20:00:00.000Z".into()),
+            limit_type: Some("five_hour".into()),
+            overage_status: None,
+            using_overage,
+            overage_disabled_reason: None,
+        };
+        let mut tracker = StatusTracker::default();
+
+        tracker.on_event(&limited(true));
+        tracker.on_event(&turn_completed());
+        assert_eq!(tracker.take_limit_reset(), None, "overage kept the turn going");
+
+        tracker.on_event(&limited(false));
+        tracker.on_event(&turn_completed());
+        assert_eq!(tracker.take_limit_reset().as_deref(), Some("2026-10-12T20:00:00.000Z"));
+        assert_eq!(tracker.take_limit_reset(), None, "taken once");
     }
 
     fn turn_completed_auth(auth_failed: bool) -> AgentEventPayload {

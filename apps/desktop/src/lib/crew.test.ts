@@ -32,6 +32,7 @@ const item = (
   pinned: false,
   hidden: false,
   aside: false,
+  continueOff: false,
   ...extra,
 });
 
