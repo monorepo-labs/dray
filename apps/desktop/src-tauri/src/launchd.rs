@@ -30,17 +30,18 @@ fn escape(text: &str) -> String {
 /// `Interactive` because the server is the app's own backend: agents run
 /// builds under it, and the default applies the light throttling launchd
 /// gives background jobs.
-/// `home` is `DRAY_HOME` where the app was given one: launchd starts the
-/// server with its own environment, which would put it under the default home
-/// while the app looks for its port elsewhere.
-fn plist(exe: &str, log: &str, home: Option<&str>) -> String {
+///
+/// `env` is what the app was started with that the server must share:
+/// launchd starts it with its own environment, so `DRAY_HOME` would put it
+/// under another home and `DRAY_NO_ANALYTICS` would be lost.
+fn plist(exe: &str, log: &str, env: &[(&str, String)]) -> String {
     let (label, exe, log) = (label(), escape(exe), escape(log));
-    let env = home.map_or(String::new(), |home| {
-        format!(
-            "\n  <key>EnvironmentVariables</key><dict><key>DRAY_HOME</key><string>{}</string></dict>",
-            escape(home)
-        )
-    });
+    let pairs: String = env.iter().map(|(k, v)| format!("<key>{k}</key><string>{}</string>", escape(v))).collect();
+    let env = if pairs.is_empty() {
+        String::new()
+    } else {
+        format!("\n  <key>EnvironmentVariables</key><dict>{pairs}</dict>")
+    };
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -73,8 +74,13 @@ pub async fn ensure() -> Result<()> {
     if crate::is_dev() {
         return spawn_dev(&exe, &log);
     }
-    let home = crate::store::home_override();
-    let wanted = plist(&exe.to_string_lossy(), &log.to_string_lossy(), home.as_deref().and_then(|h| h.to_str()));
+    // A changed value rewrites the plist below, which restarts a running
+    // server onto it.
+    let env: Vec<(&str, String)> = ["DRAY_HOME", "DRAY_NO_ANALYTICS"]
+        .into_iter()
+        .filter_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()).map(|v| (k, v)))
+        .collect();
+    let wanted = plist(&exe.to_string_lossy(), &log.to_string_lossy(), &env);
     let path = plist_path()?;
     let loaded = launchctl(&["print", &target()]).await?.status.success();
     if loaded && tokio::fs::read_to_string(&path).await.is_ok_and(|on_disk| on_disk == wanted) {
@@ -152,12 +158,12 @@ mod tests {
 
     #[test]
     fn the_plist_runs_this_binary_as_the_server() {
-        let text = plist("/Applications/A & B.app/Contents/MacOS/dray", "/Users/me/.dray/server.log", None);
+        let text = plist("/Applications/A & B.app/Contents/MacOS/dray", "/Users/me/.dray/server.log", &[]);
         assert!(text.contains("<string>/Applications/A &amp; B.app/Contents/MacOS/dray</string><string>--serve</string>"));
         assert!(text.contains("<key>KeepAlive</key><true/>"));
         assert!(text.contains(label()));
         assert!(!text.contains("DRAY_HOME"));
-        let homed = plist("/x/dray", "/h/server.log", Some("/h"));
-        assert!(homed.contains("<key>DRAY_HOME</key><string>/h</string>"));
+        let homed = plist("/x/dray", "/h/server.log", &[("DRAY_HOME", "/h".into()), ("DRAY_NO_ANALYTICS", "1".into())]);
+        assert!(homed.contains("<dict><key>DRAY_HOME</key><string>/h</string><key>DRAY_NO_ANALYTICS</key><string>1</string></dict>"));
     }
 }

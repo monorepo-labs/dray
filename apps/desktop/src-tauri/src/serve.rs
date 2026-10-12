@@ -203,6 +203,18 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     // each other's socket and rewrite one index whole, each over the other.
     // A socket that answers is a Dray already living here.
     let home = store::get_home_app_dir().await?;
+    // Held for the life of the process. The socket check below alone lets
+    // two servers starting at once both pass it, since neither has bound yet.
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(home.join("serve.lock"))
+        .context("could not open serve.lock")?;
+    if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&held), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        anyhow::bail!("a Dray server is already running on {}", home.display());
+    }
+    std::mem::forget(held);
     for name in [dray_proto::SOCKET_NAME, dray_proto::SOCKET_NAME_DEV] {
         let socket = home.join(name);
         if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
