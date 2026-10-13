@@ -14,9 +14,10 @@ type Range = {
 };
 
 type ChangeRange = Range & {
-  /// The newest finished turn before this one that changed something. Set only
-  /// while this one is still running: its live diff may yet be empty, and the
-  /// panel shows this in its place rather than going blank on send.
+  /// The newest finished turn before this one that changed something. The
+  /// panel shows it while this one's diff is still empty: all along a running
+  /// turn that hasn't written yet, and at a turn's end until the frozen read
+  /// replaces a live preview taken before the write.
   previous: Range | null;
 };
 
@@ -51,7 +52,7 @@ export function changeRange(events: AgentEvent[]): ChangeRange {
   // The newest turn whatever it did, for when none changed anything: the panel
   // then says so, rather than claiming there is no snapshot at all.
   let newest: Range | null = null;
-  let running: Range | null = null;
+  let shown: Range | null = null;
   for (let i = events.length - 1; i >= 0; i--) {
     const payload = events[i].payload;
     // The newest head seen walking back to a prompt is that turn's end, which
@@ -65,14 +66,13 @@ export function changeRange(events: AgentEvent[]): ChangeRange {
     head = null;
     newest ??= range;
     if (range.head === range.baseline) continue;
-    if (range.head) {
-      return running ? { ...running, previous: range } : { ...range, previous: null };
-    }
     // Only the newest turn can still be running. An older one left open never
     // closed, and diffing it against "now" is what the frozen head avoids.
-    if (range === newest) running = range;
+    if (!range.head && range !== newest) continue;
+    if (shown) return { ...shown, previous: range };
+    shown = range;
   }
-  return { ...(running ?? newest ?? { baseline: null, head: null }), previous: null };
+  return { ...(shown ?? newest ?? { baseline: null, head: null }), previous: null };
 }
 
 /// The newest finished tool call's id, or "" where there is none.

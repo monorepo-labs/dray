@@ -95,6 +95,24 @@ describe("changeRange", () => {
     expect(changeRange(events).previous).toEqual({ baseline: "aaa", head: "h1" });
   });
 
+  it("keeps the previous turn beside a finished one", () => {
+    // Its first paint is a live preview that may predate the write, so the
+    // panel needs something to stand in until the frozen read lands.
+    const events = [prompt("aaa"), turnEnd("h1"), prompt("bbb"), turnEnd("h2")];
+
+    expect(changeRange(events)).toEqual({
+      baseline: "bbb",
+      head: "h2",
+      previous: { baseline: "aaa", head: "h1" },
+    });
+  });
+
+  it("never offers a turn left open as the previous one", () => {
+    const events = [prompt("aaa"), turnEnd("h1"), prompt("bbb"), prompt("ccc"), turnEnd("h3")];
+
+    expect(changeRange(events).previous).toEqual({ baseline: "aaa", head: "h1" });
+  });
+
   it("keeps the newest turn when none changed anything", () => {
     // Otherwise the panel would claim there is no snapshot at all.
     const events = [prompt("aaa"), turnEnd("aaa"), prompt("bbb"), turnEnd("bbb")];
