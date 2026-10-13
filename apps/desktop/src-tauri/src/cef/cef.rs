@@ -53,6 +53,8 @@ static CONTEXTS: Mutex<Option<HashMap<String, RequestContext>>> = Mutex::new(Non
 /// Sessions settled or deleted while their browsers were still closing, so
 /// the last close removes the profile again (`purge_later`).
 static PURGING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+/// Sessions whose `purge_later` has not fired yet.
+static PURGE_DUE: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 /// Long enough for Chromium's closing writes to land.
 const PURGE_AFTER: Duration = Duration::from_secs(5);
 /// Which session is on screen and where. `None` shows nothing.
@@ -630,6 +632,7 @@ fn context_for(session: &str) -> Option<RequestContext> {
         ..Default::default()
     };
     let ctx = request_context_create_context(Some(&settings), None)?;
+    PURGE_DUE.lock().unwrap().remove(session);
     map.insert(session.to_string(), ctx.clone());
     Some(ctx)
 }
@@ -1161,13 +1164,14 @@ fn settle(session: &str) {
 /// gone. The server removes it at the settle, but Chromium writes into the
 /// profile as its tabs close — measured: `Preferences`, `Cache` and the
 /// network state came back at the old path — so a directory reappears with
-/// the old site settings in it. Unless the session opened a tab again
-/// meanwhile, which makes the directory its new profile.
+/// the old site settings in it. Unless the session made a profile again
+/// meanwhile (`context_for` takes it out of `PURGE_DUE`), which makes the
+/// directory its new one — whether or not a tab of it is still open.
 fn purge_later(session: String) {
+    PURGE_DUE.lock().unwrap().insert(session.clone());
     let _ = std::thread::Builder::new().name("cef-purge".into()).spawn(move || {
         std::thread::sleep(PURGE_AFTER);
-        let reopened = CONTEXTS.lock().unwrap().as_ref().is_some_and(|m| m.contains_key(&session));
-        if !reopened {
+        if PURGE_DUE.lock().unwrap().remove(&session) {
             automation::delete_profile(&session);
         }
     });

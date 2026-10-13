@@ -261,7 +261,9 @@ const DISCARDED: &str = ".discarded-";
 /// removal to hold the caller on.
 fn discard(dir: std::path::PathBuf) {
     let Some(name) = dir.file_name().map(|n| n.to_string_lossy().into_owned()) else { return };
-    let gone = dir.with_file_name(format!("{DISCARDED}{name}"));
+    // Unique, or a second discard of one session collides with a first still
+    // being removed, and the rename fails with nothing to say so.
+    let gone = dir.with_file_name(format!("{DISCARDED}{name}-{}", uuid::Uuid::new_v4()));
     if std::fs::rename(&dir, &gone).is_ok() {
         std::thread::spawn(move || {
             let _ = std::fs::remove_dir_all(gone);
