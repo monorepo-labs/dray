@@ -21,6 +21,7 @@ import {
 import { useEffect, useId, useRef, useState } from "react";
 
 import Favicon, { hostOf } from "@/components/browser/Favicon";
+import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
 import RecordingNotice from "@/components/browser/RecordingNotice";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import Spinner from "@/components/ui/spinner";
@@ -419,7 +420,7 @@ function Chrome({
               // No page under it, so no fill: the URL row it joins is bare too.
               paint={{ ["--card" as string]: "transparent" }}
               title="New tab"
-              icon={<Globe className="size-3.5 shrink-0 opacity-60" />}
+              icon={<GlobeFilledIcon className="size-4 shrink-0 text-muted-foreground" />}
               label="New tab"
               locked={recording}
               onPick={() =>
