@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 
 import { readLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
+import type { BrowserVisit } from "@/lib/history";
 import type { ChromiumStatus } from "@/types/events";
 import { zoomLevel } from "@/lib/zoom";
 
@@ -588,8 +589,25 @@ let shot = 0;
 /// still, the paint callback and the layout call must all agree about it —
 /// they each asked `occluded` separately before, which left a shot drawing
 /// a still nothing would hide behind.
+/// The URL bar's suggestion list is open. It drops over the page, and no
+/// Radix modal lock is behind it to judge by — the field has to keep taking
+/// keys — so it hides the view outright, behind the same picture a menu gets.
+let suggesting = false;
+
+export function setSuggesting(on: boolean) {
+  if (on === suggesting) return;
+  suggesting = on;
+  present();
+}
+
+/// The pages a session's browser visited, newest first; empty where the
+/// read fails or this build has no browser.
+export function browserHistory(sessionId: string): Promise<BrowserVisit[]> {
+  return invoke<BrowserVisit[]>("browser_history", { sessionId }).catch(() => []);
+}
+
 function hiding(): boolean {
-  if (occluded) return true;
+  if (occluded || suggesting) return true;
   const winner = presenter();
   return !!winner && shooting.has(winner.sessionId);
 }

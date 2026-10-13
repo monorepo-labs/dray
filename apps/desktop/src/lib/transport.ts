@@ -160,6 +160,7 @@ export const APP_COMMANDS = new Set([
   "read_file",
   "browser_open",
   "browser_tabs",
+  "browser_history",
   "browser_activate",
   "browser_close",
   "browser_move",

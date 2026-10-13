@@ -104,7 +104,6 @@ export function tabOrder({
   issue,
   more,
   plan,
-  browser,
 }: {
   pr: boolean;
   /// At least one markdown file is open in the pane — see
@@ -118,12 +117,10 @@ export function tabOrder({
   /// The agent has put a plan up in this session — see [plan](../lib/plan.ts).
   /// Absent otherwise, for the PR tab's reason: most sessions never plan.
   plan?: boolean;
-  /// The session has at least one page open. With none, the titlebar's own
-  /// Browser tab is the way in, so the pane draws no empty one.
-  browser?: boolean;
 }): readonly PanelTab[] {
-  const tabs: PanelTab[] = pr ? ["pr", "changes"] : ["changes"];
-  if (browser) tabs.push("browser");
+  // Browser always: with no page open its empty state is a URL bar, the
+  // session's recent pages and its local servers — a place to start.
+  const tabs: PanelTab[] = pr ? ["pr", "changes", "browser"] : ["changes", "browser"];
   // After Changes, which is what keeps Issue immediately before More.
   if (docs) tabs.push("docs");
   // Immediately before More wherever it is drawn, so the row's order is the

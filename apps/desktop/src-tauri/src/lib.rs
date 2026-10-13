@@ -808,6 +808,8 @@ pub fn run() {
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_tabs,
             #[cfg(all(feature = "cef", target_os = "macos"))]
+            cef::browser_history,
+            #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_activate,
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::browser_close,

@@ -197,6 +197,30 @@ async fn shut_down() -> ! {
     std::process::exit(0)
 }
 
+/// Removes the browser profiles of deleted and settled sessions, the backlog
+/// from before settle removed them itself. Temporary: drop it once releases
+/// that settle without cleaning up are gone (#482).
+///
+/// An empty index sweeps nothing, since a missing file reads as no sessions
+/// and would take every profile. The CEF root ignores `DRAY_HOME`, so a
+/// server on a home of its own leaves it alone: that index is not the one
+/// those profiles belong to.
+async fn sweep_browser_profiles() {
+    let Ok(index) = store::read_index().await else { return };
+    if index.is_empty() {
+        return;
+    }
+    let live: std::collections::HashSet<String> =
+        index.into_iter().filter(|item| !item.archived).map(|item| item.session_id).collect();
+    tokio::task::spawn_blocking(move || {
+        #[cfg(all(feature = "cef", target_os = "macos"))]
+        if std::env::var_os("DRAY_HOME").is_none() {
+            crate::cef::automation::sweep_profiles(&live);
+        }
+        crate::headless::automation::sweep_profiles(&live);
+    });
+}
+
 /// What every server does before it listens: refuse a home another Dray
 /// holds, reset what no child survived, and serve the orchestration socket.
 async fn start_core(sink: Sink) -> Result<PathBuf> {
@@ -235,6 +259,7 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     if let Err(e) = store::backfill_removed_worktrees().await {
         eprintln!("[worktree backfill err] {e}");
     }
+    sweep_browser_profiles().await;
     crate::auto_continue::rearm(&sink).await;
 
     // Agents this server spawns reach it through `dray`, so it serves the

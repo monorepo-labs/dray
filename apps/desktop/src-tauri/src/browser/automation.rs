@@ -251,6 +251,29 @@ pub fn delete_recordings(session: &str) {
     }
 }
 
+/// Removes a session's browser profile — cookies, cache, history — for settle
+/// and delete. Best effort. Chromium may still hold files open while the
+/// tabs close; unlinking them is fine on macOS and Linux, and a write landing
+/// after finds no directory to recreate.
+pub fn delete_profile(session: &str) {
+    if uuid::Uuid::parse_str(session).is_ok() {
+        let _ = std::fs::remove_dir_all(browser_dir().join(session));
+    }
+}
+
+/// Removes the profile of every session not in `live`, for the launch sweep.
+/// Only uuid-named directories are judged, so `default`, `shots` and
+/// `recordings` are never touched.
+pub fn sweep_profiles(live: &std::collections::HashSet<String>) {
+    let Ok(entries) = std::fs::read_dir(browser_dir()) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if uuid::Uuid::parse_str(&name).is_ok() && !live.contains(&name) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 /// Called from `on_console_message` for every line a page logs.
 pub(super) fn log(tab: i32, error: bool, text: String) {
     let mut guard = CONSOLE.lock().unwrap();

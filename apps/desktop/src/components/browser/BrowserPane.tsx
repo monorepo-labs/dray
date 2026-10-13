@@ -58,6 +58,8 @@ import {
   useResponsive,
   setViewport,
   snapshotPainted,
+  browserHistory,
+  setSuggesting,
   useBrowserSnapshot,
   useBrowserTabs,
   useChromium,
@@ -75,6 +77,7 @@ import {
   type Viewport,
 } from "@/lib/browser";
 import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
+import { bareUrl, matchHistory, type BrowserVisit } from "@/lib/history";
 import { useWindowFocused } from "@/lib/focus";
 import { serverName, useServers } from "@/lib/servers";
 import { LOCAL, serverOfSession } from "@/lib/transport";
@@ -95,6 +98,24 @@ const TOOL_BTN = "hover:bg-foreground/10 aria-expanded:bg-foreground/10";
 /// view nothing in the DOM can draw over, so a tooltip dropped there is a
 /// tooltip nobody sees.
 const TIP_SIDE = "top" as const;
+
+/// How many of the session's visited pages the empty state lists.
+const RECENT = 8;
+
+/// The session's visited pages, read each time `when` turns true. Keyed on
+/// the session, so a switch never shows the last session's list for a frame.
+function useHistory(sessionId: string, when: boolean): BrowserVisit[] {
+  const [read, setRead] = useState<{ sessionId: string; visits: BrowserVisit[] } | null>(null);
+  useEffect(() => {
+    if (!when) return;
+    let live = true;
+    void browserHistory(sessionId).then((visits) => live && setRead({ sessionId, visits }));
+    return () => {
+      live = false;
+    };
+  }, [sessionId, when]);
+  return read?.sessionId === sessionId ? read.visits : [];
+}
 
 /// The session's browser: tab strip, URL bar, navigation, and the page.
 ///
@@ -332,6 +353,21 @@ function Chrome({
     if (pending) inputRef.current?.focus();
   }, [pending]);
 
+  // The pages this session visited, matched against what is typed. Read on
+  // focus, so a page opened since is in the list next time.
+  const [focused, setFocused] = useState(false);
+  const [highlight, setHighlight] = useState(-1);
+  const [dismissed, setDismissed] = useState(false);
+  const history = useHistory(sessionId, focused);
+  const matches = draft === null ? [] : matchHistory(history, draft);
+  const suggesting = focused && !dismissed && matches.length > 0;
+  const picked = suggesting && highlight >= 0 ? matches[highlight] : undefined;
+  const listId = useId();
+  useEffect(() => {
+    setSuggesting(suggesting);
+    return () => setSuggesting(false);
+  }, [suggesting]);
+
   const open = (raw: string, newTab: boolean) => {
     const target = normalizeUrl(raw);
     if (!target) return;
@@ -464,7 +500,7 @@ function Chrome({
           className="relative min-w-0 flex-1"
           onSubmit={(e) => {
             e.preventDefault();
-            open(draft ?? url, !current);
+            open(picked?.url ?? draft ?? url, !current);
             setDraft(null);
             inputRef.current?.blur();
           }}
@@ -476,11 +512,37 @@ function Chrome({
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
-            onChange={(e) => setDraft(e.target.value)}
-            onFocus={(e) => e.target.select()}
+            role="combobox"
+            aria-expanded={suggesting}
+            aria-controls={listId}
+            aria-autocomplete="list"
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setHighlight(-1);
+              setDismissed(false);
+            }}
+            onKeyDown={(e) => {
+              if (!suggesting) return;
+              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                const step = e.key === "ArrowDown" ? 1 : -1;
+                setHighlight((h) => Math.max(-1, Math.min(matches.length - 1, h + step)));
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setDismissed(true);
+              }
+            }}
+            onFocus={(e) => {
+              e.target.select();
+              setFocused(true);
+            }}
             // A page's field goes back to its address; a new tab keeps what
             // was typed into it until it is closed or opened.
-            onBlur={() => current && setDraft(null)}
+            onBlur={() => {
+              setFocused(false);
+              setHighlight(-1);
+              if (current) setDraft(null);
+            }}
             className={cn(
               "h-7 w-full rounded-md px-2.5 font-mono text-ui outline-none transition-colors",
               // Bare over a page, so the row reads as the page's own; a wash of
@@ -493,6 +555,38 @@ function Chrome({
                 : "bg-surface-raised dark:bg-background",
             )}
           />
+          {suggesting && (
+            <ul
+              id={listId}
+              role="listbox"
+              className="absolute inset-x-0 top-full z-50 mt-1 overflow-hidden rounded-lg bg-popover p-1 text-ui text-popover-foreground shadow-md ring-1 ring-foreground/10 backdrop-blur-xl"
+            >
+              {matches.map((visit, i) => (
+                <li
+                  key={visit.url}
+                  role="option"
+                  aria-selected={i === highlight}
+                  // Down, not click: a click lands after the field's blur has
+                  // already put the address back and closed the list.
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    open(visit.url, !current);
+                    setDraft(null);
+                    inputRef.current?.blur();
+                  }}
+                  onMouseEnter={() => setHighlight(i)}
+                  className={cn(
+                    "flex cursor-default items-center gap-2 rounded-md px-2 py-1",
+                    i === highlight && "bg-accent text-accent-foreground",
+                  )}
+                >
+                  <Favicon tab={visit} />
+                  <span className="shrink-0 truncate font-mono">{bareUrl(visit.url)}</span>
+                  {visit.title && <span className="min-w-0 truncate text-muted-foreground">{visit.title}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
         </form>
         {PICKER && (
           <Tooltip>
@@ -981,6 +1075,7 @@ function ChromiumState({ status }: { status: ChromiumStatus }) {
 
 function Servers({ sessionId, active }: { sessionId: string; active: boolean }) {
   const [servers, setServers] = useState<LocalServer[]>([]);
+  const recent = useHistory(sessionId, active).slice(0, RECENT);
   // Each read is a `ps` and two `lsof`s, and both mounts of this pane stay
   // mounted while hidden — so it reads only while on screen and frontmost,
   // and once more on coming back.
@@ -1098,6 +1193,25 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
                   />
                 )}
               </div>
+            ))}
+          </section>
+        )}
+        {recent.length > 0 && (
+          <section className="flex flex-col gap-0.5">
+            <h3 className="px-2 pb-1 text-muted-foreground">Recently visited</h3>
+            {recent.map((visit) => (
+              <button
+                key={visit.url}
+                type="button"
+                onClick={() => void openInBrowser(sessionId, visit.url, true).catch(() => undefined)}
+                className="flex min-h-7 min-w-0 items-center gap-2 rounded-md px-2 text-left hover:bg-foreground/5"
+              >
+                <Favicon tab={visit} />
+                <span className="min-w-0 truncate">{visit.title || hostOf(visit.url)}</span>
+                <span className="ml-auto min-w-0 max-w-1/2 shrink-0 truncate font-mono text-muted-foreground">
+                  {bareUrl(visit.url)}
+                </span>
+              </button>
             ))}
           </section>
         )}

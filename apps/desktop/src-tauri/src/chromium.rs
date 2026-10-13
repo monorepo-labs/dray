@@ -22,8 +22,8 @@ use ts_rs::TS;
 /// The CEF version the `cef` crate in Cargo.toml binds. Framework and
 /// bindings have to agree, so bumping the crate means re-pinning [`ARM64`]
 /// and [`X64`] below from `cef-builds.spotifycdn.com/index.json` as well.
-pub const VERSION: &str = "154.0.32";
-const BUILD: &str = "154.0.32+g682c378+chromium-154.0.8037.58";
+pub const VERSION: &str = "154.0.34";
+const BUILD: &str = "154.0.34+g14c5a08+chromium-154.0.8037.98";
 const CDN: &str = "https://cef-builds.spotifycdn.com";
 pub const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
 const LIBRARY: &str = "Chromium Embedded Framework";
@@ -38,14 +38,14 @@ struct Tarball {
 
 const ARM64: Tarball = Tarball {
     platform: "macosarm64",
-    size: 132_224_904,
-    sha256: "0adf18dc3c4dadf0fecdb3ce2b9d558989fa264743cdcd46e89b1b3b118dd85f",
+    size: 132_210_884,
+    sha256: "b7efb24bcce34b94e836a9f545005aea210e08abdf4ee1483ea03b8daf93f080",
 };
 
 const X64: Tarball = Tarball {
     platform: "macosx64",
-    size: 138_660_944,
-    sha256: "e7e17e6c899ffe6c4cb16065d6dcaf16f9735d9cd0861099558f578d40714552",
+    size: 138_623_289,
+    sha256: "ebcb691252c9ccde63488a913e2381bce4e275acbbb96ce4763b318b7f0b781a",
 };
 
 fn tarball() -> Option<&'static Tarball> {
@@ -356,13 +356,13 @@ mod tests {
     fn tarball_names_match_the_cdn_index() {
         assert_eq!(
             ARM64.name(),
-            "cef_binary_154.0.32+g682c378+chromium-154.0.8037.58_macosarm64_minimal.tar.bz2"
+            "cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_macosarm64_minimal.tar.bz2"
         );
         assert_eq!(
             X64.name(),
-            "cef_binary_154.0.32+g682c378+chromium-154.0.8037.58_macosx64_minimal.tar.bz2"
+            "cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_macosx64_minimal.tar.bz2"
         );
-        assert!(ARM64.url().starts_with("https://cef-builds.spotifycdn.com/cef_binary_154.0.32%2B"));
+        assert!(ARM64.url().starts_with("https://cef-builds.spotifycdn.com/cef_binary_154.0.34%2B"));
         assert!(!ARM64.url().contains('+'));
     }
 

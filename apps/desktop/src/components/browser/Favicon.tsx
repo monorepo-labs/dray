@@ -1,10 +1,9 @@
 import { Globe } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import type { BrowserTab } from "@/lib/browser";
-
 /// The page's icon, or a globe until one arrives or where the site has none.
-export default function Favicon({ tab }: { tab: BrowserTab }) {
+/// A tab or a history entry, which carries no error.
+export default function Favicon({ tab }: { tab: { favicon: string; error?: string | null } }) {
   const [broken, setBroken] = useState(false);
   useEffect(() => setBroken(false), [tab.favicon]);
   if (!tab.favicon || broken || tab.error) {

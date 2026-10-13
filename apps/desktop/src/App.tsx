@@ -1405,10 +1405,9 @@ function App() {
     }
   }, [viewTab, setPanelOpen, panelOpen, panelKey, autoHidePanel]);
   const expandBrowser = () => setViewTab("browser");
-  // Into the pane only where it has a Browser tab to land on.
   const collapseBrowser = () => {
     setViewTab("chat");
-    if (hasBrowserTabs) showPanel("browser");
+    showPanel("browser");
   };
 
   // A live background task counts even where no run is built for it yet, and a
@@ -1426,7 +1425,6 @@ function App() {
     issue: hasIssueTab,
     more: hasMoreTab,
     plan: hasPlanTab,
-    browser: !!hasBrowserTabs,
   });
 
   // One rule, read rather than written back: an explicit pick wins wherever it

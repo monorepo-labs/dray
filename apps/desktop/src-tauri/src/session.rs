@@ -1620,6 +1620,12 @@ impl SessionManager {
         #[cfg(any(feature = "serve", feature = "desktop"))]
         crate::headless::close_session(session_id);
         crate::share::close_session(session_id);
+        // Settled is done with, so the profile goes too: an unsettled session's
+        // browser starts signed out. Both, whichever browser made one.
+        #[cfg(all(feature = "cef", target_os = "macos"))]
+        crate::cef::automation::delete_profile(session_id);
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        crate::headless::automation::delete_profile(session_id);
         killed
     }
 
