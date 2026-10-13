@@ -212,13 +212,17 @@ async fn sweep_browser_profiles() {
     }
     let live: std::collections::HashSet<String> =
         index.into_iter().filter(|item| !item.archived).map(|item| item.session_id).collect();
-    tokio::task::spawn_blocking(move || {
+    // Awaited, so nothing is served while the sweep judges against `live`: a
+    // session made or unsettled meanwhile would lose a profile it just opened.
+    // Only the renames are waited on; the removals run on.
+    let _ = tokio::task::spawn_blocking(move || {
         #[cfg(all(feature = "cef", target_os = "macos"))]
         if std::env::var_os("DRAY_HOME").is_none() {
             crate::cef::automation::sweep_profiles(&live);
         }
         crate::headless::automation::sweep_profiles(&live);
-    });
+    })
+    .await;
 }
 
 /// What every server does before it listens: refuse a home another Dray

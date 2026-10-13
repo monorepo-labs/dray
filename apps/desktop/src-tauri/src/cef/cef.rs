@@ -26,7 +26,7 @@ use objc2::{msg_send, sel};
 use objc2_app_kit::{NSApplication, NSEvent, NSView};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
@@ -50,6 +50,11 @@ static TABS: Mutex<Vec<Tab>> = Mutex::new(Vec::new());
 /// Session → its active tab id.
 static ACTIVE: Mutex<Option<HashMap<String, i32>>> = Mutex::new(None);
 static CONTEXTS: Mutex<Option<HashMap<String, RequestContext>>> = Mutex::new(None);
+/// Sessions settled or deleted while their browsers were still closing, so
+/// the last close removes the profile again (`purge_later`).
+static PURGING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+/// Long enough for Chromium's closing writes to land.
+const PURGE_AFTER: Duration = Duration::from_secs(5);
 /// Which session is on screen and where. `None` shows nothing.
 static LAYOUT: Mutex<Option<(String, Layout)>> = Mutex::new(None);
 /// Tab ids. Not CEF's `identifier()`, which a woken tab would come back
@@ -597,9 +602,11 @@ fn session_of(id: i32) -> Option<String> {
     TABS.lock().unwrap().iter().find(|t| t.id == id).map(|t| t.session.clone())
 }
 
-/// The tab's session and the address it is on, for the history record.
-fn session_and_url(id: i32) -> Option<(String, String)> {
-    TABS.lock().unwrap().iter().find(|t| t.id == id).map(|t| (t.session.clone(), t.url.clone()))
+/// The tab's session and the address it is on, for the history record. None
+/// for a closing tab: its session's history was just forgotten, and a late
+/// callback writing to it would load the old list straight back.
+fn history_target(id: i32) -> Option<(String, String)> {
+    TABS.lock().unwrap().iter().find(|t| t.id == id && !t.closing).map(|t| (t.session.clone(), t.url.clone()))
 }
 
 /// A handle to call CEF on, with the lock already released. None for a tab
@@ -1142,9 +1149,28 @@ fn settle(session: &str) {
         if let Some(map) = CONTEXTS.lock().unwrap().as_mut() {
             map.remove(session);
         }
+        if PURGING.lock().unwrap().remove(session) {
+            purge_later(session.to_string());
+        }
     }
     apply_layout();
     publish(session);
+}
+
+/// Removes a settled session's profile a second time, once its browsers are
+/// gone. The server removes it at the settle, but Chromium writes into the
+/// profile as its tabs close — measured: `Preferences`, `Cache` and the
+/// network state came back at the old path — so a directory reappears with
+/// the old site settings in it. Unless the session opened a tab again
+/// meanwhile, which makes the directory its new profile.
+fn purge_later(session: String) {
+    let _ = std::thread::Builder::new().name("cef-purge".into()).spawn(move || {
+        std::thread::sleep(PURGE_AFTER);
+        let reopened = CONTEXTS.lock().unwrap().as_ref().is_some_and(|m| m.contains_key(&session));
+        if !reopened {
+            automation::delete_profile(&session);
+        }
+    });
 }
 
 fn update_tab(id: i32, f: impl FnOnce(&mut Tab)) {
@@ -1200,14 +1226,14 @@ wrap_display_handler! {
                 return;
             }
             let url = url.map(CefString::to_string).unwrap_or_default();
-            if let Some(session) = session_of(self.tab) {
+            if let Some((session, _)) = history_target(self.tab) {
                 history::visit(&session, &url);
             }
             update_tab(self.tab, |t| t.url = url);
         }
         fn on_title_change(&self, _browser: Option<&mut Browser>, title: Option<&CefString>) {
             let title = title.map(CefString::to_string).unwrap_or_default();
-            if let Some((session, url)) = session_and_url(self.tab) {
+            if let Some((session, url)) = history_target(self.tab) {
                 history::describe(&session, &url, Some(&title), None);
             }
             update_tab(self.tab, |t| t.title = title);
@@ -1215,7 +1241,7 @@ wrap_display_handler! {
 
         fn on_favicon_urlchange(&self, _browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
             let first = icon_urls.and_then(first_string).unwrap_or_default();
-            if let Some((session, url)) = session_and_url(self.tab) {
+            if let Some((session, url)) = history_target(self.tab) {
                 history::describe(&session, &url, None, Some(&first));
             }
             update_tab(self.tab, |t| t.favicon = first);
@@ -2068,6 +2094,8 @@ pub fn close_session(session_id: &str) {
         if browsers.is_empty() {
             set_active(&session_id, None);
             publish(&session_id);
+        } else {
+            PURGING.lock().unwrap().insert(session_id.clone());
         }
         for host in browsers.iter().filter_map(|b| b.host()) {
             host.close_browser(1);

@@ -8,10 +8,10 @@
 //! it would cost a new dependency and a file copy per read.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{mpsc, Mutex, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const FILE: &str = "dray-history.json";
 const CAP: usize = 200;
@@ -30,25 +30,57 @@ pub struct Visit {
 }
 
 static HISTORY: Mutex<Option<HashMap<String, Vec<Visit>>>> = Mutex::new(None);
+/// Sessions whose list changed since the writer last ran.
+static DIRTY: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+static WRITER: OnceLock<mpsc::Sender<()>> = OnceLock::new();
+/// How long the writer gathers changes before it writes, so a page cycling
+/// its title costs one write a second rather than one per title.
+const WRITE_AFTER: Duration = Duration::from_secs(1);
 
 fn path(session: &str) -> PathBuf {
     super::browser_dir().join(session).join(FILE)
 }
 
+fn read(session: &str) -> Vec<Visit> {
+    std::fs::read(path(session)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
 fn with<R>(session: &str, f: impl FnOnce(&mut Vec<Visit>) -> R) -> R {
     let mut guard = HISTORY.lock().unwrap();
-    let list = guard.get_or_insert_with(HashMap::new).entry(session.to_string()).or_insert_with(|| {
-        std::fs::read(path(session)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-    });
+    let list = guard.get_or_insert_with(HashMap::new).entry(session.to_string()).or_insert_with(|| read(session));
     f(list)
+}
+
+/// Marks the list for the writer, which is a thread of its own: these are
+/// called from CEF's display handlers on the main thread, where a disk
+/// write is a pause in the whole window. Changes in the last second before
+/// a quit are lost, which history can afford.
+fn save(session: &str) {
+    DIRTY.lock().unwrap().insert(session.to_string());
+    let tx = WRITER.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<()>();
+        let _ = std::thread::Builder::new().name("browser-history".into()).spawn(move || {
+            while rx.recv().is_ok() {
+                std::thread::sleep(WRITE_AFTER);
+                while rx.try_recv().is_ok() {}
+                flush();
+            }
+        });
+        tx
+    });
+    let _ = tx.send(());
 }
 
 /// No `create_dir_all`: Chromium makes the profile before any page commits,
 /// so a missing directory is a profile settle just removed, and writing
-/// would bring it back.
-fn save(session: &str, list: &[Visit]) {
-    if let Ok(bytes) = serde_json::to_vec(list) {
-        let _ = std::fs::write(path(session), bytes);
+/// would bring it back. A forgotten session has no list here to write.
+fn flush() {
+    let dirty = std::mem::take(&mut *DIRTY.lock().unwrap());
+    for session in dirty {
+        let list = HISTORY.lock().unwrap().as_ref().and_then(|m| m.get(&session).cloned());
+        if let Some(bytes) = list.and_then(|l| serde_json::to_vec(&l).ok()) {
+            let _ = std::fs::write(path(&session), bytes);
+        }
     }
 }
 
@@ -61,7 +93,7 @@ pub fn visit(session: &str, url: &str) {
     let last = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     with(session, |list| {
         record(list, url, last);
-        save(session, list);
+        save(session);
     });
 }
 
@@ -94,18 +126,24 @@ pub fn describe(session: &str, url: &str, title: Option<&str>, favicon: Option<&
             moved = true;
         }
         if moved {
-            save(session, list);
+            save(session);
         }
     });
 }
 
+/// Read from memory where the session has a list there, else from disk
+/// without keeping it: a read landing between `forget` and the profile's
+/// removal would otherwise hold the old list for the session's next life.
 pub fn list(session: &str) -> Vec<Visit> {
-    with(session, |list| list.clone())
+    let cached = HISTORY.lock().unwrap().as_ref().and_then(|m| m.get(session).cloned());
+    cached.unwrap_or_else(|| read(session))
 }
 
-/// Drops the in-memory copy, for a session whose profile is being removed,
-/// or an unsettled session would be handed the history it was settled with.
+/// Drops the in-memory copy and any write pending for it, for a session
+/// whose profile is being removed, or an unsettled session would be handed
+/// the history it was settled with.
 pub fn forget(session: &str) {
+    DIRTY.lock().unwrap().remove(session);
     if let Some(map) = HISTORY.lock().unwrap().as_mut() {
         map.remove(session);
     }
