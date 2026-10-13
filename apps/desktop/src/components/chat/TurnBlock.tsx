@@ -1,4 +1,4 @@
-import { Fragment, memo, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 
 import AssistantMessage from "@/components/chat/AssistantMessage";
@@ -7,7 +7,7 @@ import MediaRow from "@/components/chat/MediaRow";
 import SubagentRow from "@/components/chat/SubagentRow";
 import ToolGroupRow from "@/components/chat/ToolGroupRow";
 import UserMessage from "@/components/chat/UserMessage";
-import { drawsSameTurn, GROUP_MIN, isToolGroup, segmentMedia, segmentWork, type SubagentRun, type Turn, type TurnSegment, type WorkItem } from "@/lib/transcript";
+import { drawsSameTurn, GROUP_MIN, isToolGroup, rendersRow, segmentMedia, segmentWork, type SubagentRun, type Turn, type TurnSegment, type WorkItem } from "@/lib/transcript";
 import type { FileEdit, ToolResult } from "@/types/events";
 import { cn } from "@/lib/utils";
 
@@ -56,7 +56,7 @@ function plural(n: number, word: string) {
 /// The same vocabulary as the turn-level summary, per stretch. "step" is the
 /// floor for a segment whose rows are all things the parts don't name
 /// (reasoning, edits) — a summary line that says nothing offers nothing.
-function segmentLabel(seg: TurnSegment) {
+function segmentLabel(seg: Pick<TurnSegment, "toolCalls" | "messages" | "rows">) {
   const parts: string[] = [];
   if (seg.toolCalls) parts.push(plural(seg.toolCalls, "tool call"));
   if (seg.messages) parts.push(plural(seg.messages, "message"));
@@ -76,8 +76,8 @@ export default memo(function TurnBlock({
 }: TurnBlockProps) {
   // Per segment, not per turn: a stretch of work between queued prompts opens
   // and closes on its own, so peeking at one leaves the others collapsed. Keyed
-  // by index, which is stable here — only a running turn's work still grows,
-  // and a running turn is never collapsible. A turn without queued prompts is
+  // by index, which is stable here — a running turn only ever appends to its
+  // last segment or opens a new one after it. A turn without queued prompts is
   // one segment, so this is the old whole-turn toggle in that case.
   const [openSegments, setOpenSegments] = useState<Record<number, boolean>>({});
 
@@ -92,7 +92,10 @@ export default memo(function TurnBlock({
   // empty toggle. See `COLLAPSE_MIN` for why the threshold is what it is.
   const collapsible = !running && turn.rows >= COLLAPSE_MIN;
 
-  const segments = collapsible ? segmentWork(turn) : [];
+  // A running turn is cut the same way, so the stretches before a queued prompt
+  // already sit in the shape they will finish in and only the stretch being
+  // worked on is live.
+  const segments = collapsible || running ? segmentWork(turn) : [];
   // The last message lives in the last segment, so opening that segment is what
   // puts it on screen twice if `finalText` keeps rendering.
   const lastOpen = collapsible && !!openSegments[segments.length - 1];
@@ -139,30 +142,24 @@ export default memo(function TurnBlock({
           behind its own summary line — hiding the rows between the prompts
           would bunch them all together at the end, and *when* the reader said
           something is part of what they said. */}
-      {!collapsible
+      {segments.length === 0
         ? turn.work.map(renderItem)
         : segments.map((seg, i) => {
             const open = !!openSegments[i];
+            const toggle = () => setOpenSegments((prev) => ({ ...prev, [i]: !prev[i] }));
+            // Same index as the finished turn's last segment, so a fold the
+            // reader opened mid-turn is still open when the turn lands.
+            if (running && i === segments.length - 1) {
+              return (
+                <LiveWork key={i} items={seg.items} open={open} onToggle={toggle} renderItem={renderItem} />
+              );
+            }
             // Open, every row draws its own pictures; closed, they would be
             // behind the click, so they are lifted out under the summary.
             const media = open ? null : segmentMedia(seg.items, turn.finalText);
             return (
               <Fragment key={i}>
-                {seg.rows > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setOpenSegments((prev) => ({ ...prev, [i]: !prev[i] }))}
-                    className="group/turn flex items-center gap-2 text-left text-chat text-muted-foreground"
-                  >
-                    <span>{segmentLabel(seg)}</span>
-                    <ChevronRight
-                      className={cn(
-                        "size-3 shrink-0 transition-all",
-                        open ? "rotate-90 opacity-100" : "opacity-0 group-hover/turn:opacity-100",
-                      )}
-                    />
-                  </button>
-                )}
+                {seg.rows > 0 && <SummaryToggle label={segmentLabel(seg)} open={open} onToggle={toggle} />}
                 {media && media.length > 0 && <MediaRow media={media} />}
                 {open && seg.items.map(renderItem)}
                 {seg.prompt && renderItem(seg.prompt)}
@@ -187,6 +184,119 @@ export default memo(function TurnBlock({
     </div>
   );
 }, drawsTheSame);
+
+function SummaryToggle({
+  label,
+  open,
+  onToggle,
+}: {
+  label: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="group/turn flex items-center gap-2 text-left text-chat text-muted-foreground"
+    >
+      <span className="tabular-nums">{label}</span>
+      <ChevronRight
+        className={cn(
+          "size-3 shrink-0 transition-all",
+          open ? "rotate-90 opacity-100" : "opacity-0 group-hover/turn:opacity-100",
+        )}
+      />
+    </button>
+  );
+}
+
+/// How many of a running turn's newest rows stay on screen. Older ones fold
+/// behind the summary line the finished turn draws, so a long turn stops
+/// growing down the screen and lands already in its finished shape.
+const LIVE_ROWS = 5;
+
+/// The stretch of a running turn being worked on. Until it holds more than
+/// `LIVE_ROWS` rows it draws them as they come. Past that the window over them
+/// slides rather than snapping, so a row leaving it scrolls up under the
+/// summary line and fades out. Rows vary in height, so the window is measured:
+/// its top is the oldest row still shown, its height everything below that.
+function LiveWork({
+  items,
+  open,
+  onToggle,
+  renderItem,
+}: {
+  items: WorkItem[];
+  open: boolean;
+  onToggle: () => void;
+  renderItem: (item: WorkItem) => ReactNode;
+}) {
+  const [view, setView] = useState<{ offset: number; height: number } | null>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  const rows = items.filter(rendersRow);
+  const hidden = rows.slice(0, Math.max(0, rows.length - LIVE_ROWS));
+
+  const measure = useCallback(() => {
+    const inner = innerRef.current;
+    if (!inner) return;
+    const first = inner.children[Math.max(0, inner.children.length - LIVE_ROWS)] as HTMLElement | undefined;
+    const offset = first?.offsetTop ?? 0;
+    const height = inner.offsetHeight - offset;
+    setView((v) => (v && v.offset === offset && v.height === height ? v : { offset, height }));
+  }, []);
+
+  useLayoutEffect(measure);
+  // A row growing on its own — expanded, or a message wrapping as the pane
+  // narrows — moves the window too, and no render of this one says so.
+  useEffect(() => {
+    const observer = new ResizeObserver(measure);
+    if (innerRef.current) observer.observe(innerRef.current);
+    return () => observer.disconnect();
+  }, [measure]);
+
+  const windowed = !open && hidden.length > 0 && view !== null;
+  let toolCalls = 0;
+  let messages = 0;
+  for (const item of hidden) {
+    if (isToolGroup(item)) toolCalls += item.calls.length;
+    else if (item.payload.type === "tool_call_started") toolCalls += 1;
+    else if (item.payload.type === "assistant_text") messages += 1;
+  }
+
+  return (
+    <>
+      {hidden.length > 0 && (
+        <SummaryToggle
+          label={segmentLabel({ toolCalls, messages, rows: hidden.length })}
+          open={open}
+          onToggle={onToggle}
+        />
+      )}
+      <div
+        className={cn(
+          "overflow-hidden transition-[height] duration-300 ease-out",
+          windowed && "[mask-image:linear-gradient(to_bottom,transparent,black_3rem)]",
+        )}
+        style={windowed ? { height: view.height } : undefined}
+      >
+        <div
+          ref={innerRef}
+          className="relative flex flex-col gap-3 transition-transform duration-300 ease-out"
+          style={windowed ? { transform: `translateY(${-view.offset}px)` } : undefined}
+        >
+          {rows.map((item, i) => (
+            // A row above the window is clipped, not gone: `inert` keeps focus
+            // out of it, or tabbing in would scroll this box under the transform.
+            <div key={isToolGroup(item) ? item.key : item.id} inert={windowed && i < hidden.length}>
+              {renderItem(item)}
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
 
 /// Whether a turn would draw what it drew last time — its callbacks and footer
 /// by identity, its data by [`drawsSameTurn`].
