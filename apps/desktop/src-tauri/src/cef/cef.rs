@@ -26,7 +26,7 @@ use objc2::{msg_send, sel};
 use objc2_app_kit::{NSApplication, NSEvent, NSView};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use serde::Serialize;
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
@@ -53,8 +53,10 @@ static CONTEXTS: Mutex<Option<HashMap<String, RequestContext>>> = Mutex::new(Non
 /// Sessions settled or deleted while their browsers were still closing, so
 /// the last close removes the profile again (`purge_later`).
 static PURGING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
-/// Sessions whose `purge_later` has not fired yet.
-static PURGE_DUE: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+/// Sessions whose `purge_later` has not fired yet, by the token of the
+/// newest one, so an older timer cannot spend a newer purge's turn early.
+static PURGE_DUE: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
+static PURGE_TOKEN: AtomicU64 = AtomicU64::new(0);
 /// Long enough for Chromium's closing writes to land.
 const PURGE_AFTER: Duration = Duration::from_secs(5);
 /// Which session is on screen and where. `None` shows nothing.
@@ -1168,10 +1170,14 @@ fn settle(session: &str) {
 /// meanwhile (`context_for` takes it out of `PURGE_DUE`), which makes the
 /// directory its new one — whether or not a tab of it is still open.
 fn purge_later(session: String) {
-    PURGE_DUE.lock().unwrap().insert(session.clone());
+    let token = PURGE_TOKEN.fetch_add(1, Ordering::Relaxed);
+    PURGE_DUE.lock().unwrap().insert(session.clone(), token);
     let _ = std::thread::Builder::new().name("cef-purge".into()).spawn(move || {
         std::thread::sleep(PURGE_AFTER);
-        if PURGE_DUE.lock().unwrap().remove(&session) {
+        let mut due = PURGE_DUE.lock().unwrap();
+        if due.get(&session) == Some(&token) {
+            due.remove(&session);
+            drop(due);
             automation::delete_profile(&session);
         }
     });
