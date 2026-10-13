@@ -1504,7 +1504,7 @@ function App() {
   const modelTakesImages =
     models.find((m) => m.id === modelId)?.acceptsImages ?? true;
 
-  const { baseline, head } = useMemo(
+  const { baseline, head, previous } = useMemo(
     () => changeRange(selectedSession?.events ?? []),
     [selectedSession?.events],
   );
@@ -1583,6 +1583,19 @@ function App() {
     panelShown && activeTab === "changes",
     busy,
   );
+  // A running turn that has written nothing yet shows the last turn that did,
+  // so sending a question doesn't blank the diff it is asking about. Frozen,
+  // so this reads once and is cached.
+  const previousData = useChanges(
+    selectedSession?.cwd ?? "",
+    previous?.baseline ?? null,
+    previous?.head ?? null,
+    turnRevision,
+    panelShown && activeTab === "changes",
+    false,
+  );
+  const shownChanges =
+    previousData.changes && !changesData.changes?.files.length ? previousData : changesData;
 
   // One button, so the tab decides what it re-reads. Subagents has nothing to
   // fetch, so it gets none rather than a button that does nothing.
@@ -2883,7 +2896,7 @@ function App() {
                 cwd={shownSession.cwd}
                 baseline={baseline}
                 onOpenRepo={() => setViewTab("changes")}
-                {...changesData}
+                {...shownChanges}
               />
               </MountOnce>
             </TabBody>

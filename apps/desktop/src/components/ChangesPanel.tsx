@@ -22,7 +22,7 @@ type ChangesPanelProps = ReturnType<typeof useChanges> & {
   onOpenRepo: () => void;
 };
 
-/// What the agent changed since the last prompt, file by file.
+/// What the newest turn that wrote anything changed, file by file.
 ///
 /// Every row starts collapsed. The list is the answer to "what did this turn
 /// touch", and opening one file by position puts an arbitrary diff above that
@@ -51,7 +51,9 @@ export default function ChangesPanel({
   return (
     <>
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 pt-3 pb-2 text-ui">
-        <span className="text-sidebar-foreground">Last turn</span>
+        {/* Not "Last turn": a turn that wrote nothing leaves the one before it
+            on screen. */}
+        <span className="text-sidebar-foreground">Latest changes</span>
         <span className="text-muted-foreground">
           {changes.files.length} file{changes.files.length > 1 ? "s" : ""}
         </span>
