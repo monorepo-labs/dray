@@ -285,7 +285,10 @@ function LiveWork({
       >
         <div
           ref={innerRef}
-          className="relative flex flex-col gap-3 transition-transform duration-300 ease-out"
+          // The slide runs only while windowed: opening the fold drops the clip
+          // at once, and rows still sliding back down would spill over the
+          // summary above for the length of it.
+          className={cn("relative flex flex-col gap-3", windowed && "transition-transform duration-300 ease-out")}
           style={windowed ? { transform: `translateY(${-view.offset}px)` } : undefined}
         >
           {rows.map((item, i) => (
