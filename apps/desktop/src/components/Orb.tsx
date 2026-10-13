@@ -15,6 +15,15 @@ import { cn } from "@/lib/utils";
 /// set at animation rate, which on WebKit fed a leak of retired backing stores at
 /// ~1GB per hour of use (DRA-159). On its own layer a frame repaints the orb and
 /// nothing else.
+///
+/// `shrink-0` because the library sizes the svg by `width` alone, and every site
+/// puts it in a flex row beside text that truncates — a long command squeezed
+/// it to a sliver.
 export default function Orb({ className, ...props }: ComponentProps<typeof ThinkingOrb>) {
-  return <ThinkingOrb className={cn("text-foreground will-change-transform", className)} {...props} />;
+  return (
+    <ThinkingOrb
+      className={cn("shrink-0 text-foreground will-change-transform", className)}
+      {...props}
+    />
+  );
 }
