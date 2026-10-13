@@ -100,14 +100,16 @@ function AlertDialogDescription({
 function AlertDialogAction({
   className,
   destructive = false,
+  variant,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Action> & {
   destructive?: boolean
+  variant?: "default" | "ghost"
 }) {
   return (
     <AlertDialogPrimitive.Action
       className={cn(
-        buttonVariants({ size: "sm" }),
+        buttonVariants({ variant, size: "sm" }),
         "text-ui",
         destructive &&
           "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/40",
