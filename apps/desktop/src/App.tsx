@@ -1594,8 +1594,11 @@ function App() {
     panelShown && activeTab === "changes",
     false,
   );
+  // A failed read keeps its own range, so the error isn't hidden behind an older diff.
   const shownChanges =
-    previousData.changes && !changesData.changes?.files.length ? previousData : changesData;
+    previousData.changes && !changesData.error && !changesData.changes?.files.length
+      ? previousData
+      : changesData;
 
   // One button, so the tab decides what it re-reads. Subagents has nothing to
   // fetch, so it gets none rather than a button that does nothing.

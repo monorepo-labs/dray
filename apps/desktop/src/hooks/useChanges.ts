@@ -121,10 +121,13 @@ export function useChanges(
   // (cwd, baseline, head) triple can collide with another. The escape, never a
   // literal NUL byte — a raw NUL makes git call the whole file binary.
   const key = baseline ? `${cwd}\0${baseline}\0${head ?? "live"}` : null;
+  // A frozen range not read yet is seeded with the last live reading of the
+  // same baseline — what the panel showed while that turn ran. Without it a
+  // prompt sent the moment a turn ends finds neither range cached and blanks.
+  const seed = () =>
+    (key && (changeSets.get(key) ?? changeSets.get(`${cwd}\0${baseline}\0live`))) || null;
 
-  const [changes, setChanges] = useState<ChangeSet | null>(
-    () => (key && changeSets.get(key)) || null,
-  );
+  const [changes, setChanges] = useState<ChangeSet | null>(seed);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -138,10 +141,7 @@ export function useChanges(
     // (live → finished), not a new turn — the rows on screen are the right
     // rows, so they stand as the seed while the frozen read lands. Blanking
     // here made every turn's end flash "Reading the working tree…".
-    setChanges((prev) => {
-      const cached = key ? changeSets.get(key) : null;
-      return cached ?? (baseline && prev && prev.base === baseline ? prev : null);
-    });
+    setChanges((prev) => seed() ?? (baseline && prev && prev.base === baseline ? prev : null));
     setError(null);
     // A read still running belongs to the old range and will be discarded by
     // the counter, so its spinner has to go with it.
