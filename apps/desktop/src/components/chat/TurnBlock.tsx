@@ -273,10 +273,13 @@ function LiveWork({
           onToggle={onToggle}
         />
       )}
+      {/* Clipped only while a window is up: a row's own overflow — a table's
+          copy menu hangs below its box — must reach past the edge otherwise.
+          The fade is the design: the oldest row shown is the next to leave. */}
       <div
         className={cn(
-          "overflow-hidden transition-[height] duration-300 ease-out",
-          windowed && "[mask-image:linear-gradient(to_bottom,transparent,black_3rem)]",
+          "transition-[height] duration-300 ease-out",
+          windowed && "overflow-hidden [mask-image:linear-gradient(to_bottom,transparent,black_3rem)]",
         )}
         style={windowed ? { height: view.height } : undefined}
       >

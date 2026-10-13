@@ -518,6 +518,29 @@ describe("a tool call that came back with pictures", () => {
       turns[0].work.filter((item) => "kind" in item && item.kind === "tool_group"),
     ).toHaveLength(1);
   });
+
+  /// `Reasoning` draws nothing for an empty or encrypted block, so neither may
+  /// break the run it lands inside.
+  it("stays grouped across reasoning that draws nothing", () => {
+    const reasoning = (seq: number, text: string, encrypted: boolean) =>
+      event(seq, { type: "reasoning", block: null, text, encrypted });
+    const { turns } = buildTranscript(
+      [
+        prompt(0, "look", false),
+        readStarted(1, "c1", "/src/a.ts"),
+        reasoning(2, "", false),
+        readStarted(3, "c2", "/src/b.ts"),
+        reasoning(4, "opaque", true),
+        readStarted(5, "c3", "/src/c.ts"),
+        completed(6, "done"),
+      ],
+      false,
+    );
+
+    const groups = turns[0].work.filter(isToolGroup);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].calls).toHaveLength(3);
+  });
 });
 
 describe("a call whose background task the child still holds", () => {
