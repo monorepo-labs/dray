@@ -1,10 +1,10 @@
 import { useSyncExternalStore } from "react";
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
-import { holderOf } from "@/hooks/useShortcuts";
+import { chordFor } from "@/hooks/useShortcuts";
 import { channel } from "@/lib/channel";
 import { IS_MAC } from "@/lib/platform";
-import type { ShortcutGroup, ShortcutId } from "@/lib/shortcuts";
+import { type ShortcutGroup, type ShortcutId, SHORTCUTS } from "@/lib/shortcuts";
 
 /// A modifier set, bound once over a run of digits.
 ///
@@ -77,10 +77,24 @@ export function resetAllMods() {
 /// accelerator alone can say that — the registry spells nothing else under a
 /// digit, and its `meta` taking ⌃ on a Mac is an alias nobody presses, so a
 /// digit row on ⌃ claims those keys outright.
+///
+/// Matched on `code` as well as `key`, `useHotkey`'s own rule: a shifted digit
+/// is recorded as `!` with `code: "Digit1"`.
 export function registryHolder(m: Mods, slot: number): ShortcutId | null {
   const accel = IS_MAC ? m.meta && !m.ctrl : m.ctrl && !m.meta;
   if (!accel) return null;
-  return holderOf({ key: String((slot + 1) % 10), meta: true, shift: m.shift, alt: m.alt });
+  const digit = String((slot + 1) % 10);
+  const hit = SHORTCUTS.find(({ id }) => {
+    const c = chordFor(id);
+    return (
+      !!c &&
+      c.meta &&
+      c.shift === m.shift &&
+      c.alt === m.alt &&
+      (c.key === digit || c.code === `Digit${digit}`)
+    );
+  });
+  return hit?.id ?? null;
 }
 
 type ModEvent = {

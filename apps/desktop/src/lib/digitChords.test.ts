@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { resetAllChords, setChord } from "@/hooks/useShortcuts";
+
 import { IS_MAC } from "./platform";
 import {
   digitSlot,
@@ -83,6 +85,14 @@ describe("registryHolder", () => {
     expect(registryHolder(mods(IS_MAC ? { meta: true } : { ctrl: true }), 9)).toBe("zoom.reset");
     expect(registryHolder(mods(IS_MAC ? { ctrl: true } : { meta: true }), 9)).toBeNull();
     expect(registryHolder(mods({ alt: true }), 9)).toBeNull();
+  });
+
+  // ⌘⇧1 records as `!`; only its `code` still says which digit it is.
+  it("finds a shifted digit by its physical key", () => {
+    setChord("search", { key: "!", meta: true, shift: true, alt: false, code: "Digit1" });
+    const accel = IS_MAC ? { meta: true } : { ctrl: true };
+    expect(registryHolder(mods({ ...accel, shift: true }), 0)).toBe("search");
+    resetAllChords();
   });
 });
 
