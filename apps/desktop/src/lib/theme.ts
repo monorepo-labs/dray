@@ -202,7 +202,10 @@ export function applyTheme(name: ThemeName, mode: ThemeMode): ResolvedMode {
 export function readStoredTheme(): { name: ThemeName; mode: ThemeMode } {
   try {
     const stored = localStorage.getItem(MODE_KEY);
-    const name = coerceTheme(localStorage.getItem(THEME_KEY));
+    // Nothing stored in a dev build means Catppuccin, matching index.html.
+    const name = coerceTheme(
+      localStorage.getItem(THEME_KEY) ?? (import.meta.env.DEV ? "catppuccin" : null),
+    );
     const mode =
       stored === "light" || stored === "dark" || stored === "system"
         ? stored

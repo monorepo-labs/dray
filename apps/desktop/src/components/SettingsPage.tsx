@@ -483,6 +483,7 @@ const MODES: { id: ThemeMode; label: string }[] = [
 /// what is rendering.
 function ModeRow() {
   const id = useId();
+  useShortcutOverrides();
   const { theme, mode: chosen, setMode } = useTheme();
   const available = hasLightMode(theme);
   // What is drawn: a dark-only theme shows Dark selected, while the reader's own
@@ -494,6 +495,15 @@ function ModeRow() {
       id={id}
       asGroup
       label="Mode"
+      // Hidden where the chord does nothing: a dark-only theme has no light to flip to.
+      trailing={
+        available &&
+        chordFor("mode.toggle") && (
+          <span className="flex items-center gap-1.5 text-ui text-muted-foreground">
+            Toggle <ShortcutKeys ids={["mode.toggle"]} />
+          </span>
+        )
+      }
       // On a dark-only theme the control gives way to the one fact, rather than
       // three disabled segments under a sentence explaining them. The row stays,
       // so the reader still learns why there is no light here.
