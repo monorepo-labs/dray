@@ -310,6 +310,20 @@ function App() {
   /// and that clear would otherwise be saved as the draft's prompt. It goes
   /// once a session exists, and comes back open if none was made.
   const sendFromComposer = async (message: string, attachments: Attachment[]) => {
+    // A new task in a project other than the filtered one would land outside
+    // the list it was started from, so the filter follows it. All Projects
+    // already shows it and stays.
+    if (
+      !selectedSessionId &&
+      projectFilter &&
+      projectPath &&
+      projectPath !== projectFilter &&
+      spaceProjects.some((p) => p.path === projectPath)
+    ) {
+      filterSelection.current[projectFilter] = null;
+      filterGen.current++;
+      setProjectFilter(projectPath);
+    }
     const id = openDraftRef.current;
     if (!id || selectedSessionId) return void handleSendMsg(message, attachments);
     const prompt = getDraft(id)?.prompt ?? message;
