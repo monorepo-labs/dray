@@ -42,7 +42,7 @@ import {
   normalizeUrl,
   openDevTools,
   openInBrowser,
-  openRemoteServer,
+  openServer,
   shareReady,
   shareServer,
   stopShare,
@@ -1121,15 +1121,10 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
       .catch(() => undefined)
       .finally(() => setReread((n) => n + 1));
 
-  // A remote session's list is its server's, and the browser is this Mac's,
-  // so a row there is reached through a forwarded port.
+  // A remote session's list is its server's.
   const server = serverOfSession(sessionId);
   useServers();
-  const open = (port: number) =>
-    void (server === LOCAL
-      ? openInBrowser(sessionId, `http://localhost:${port}`, true)
-      : openRemoteServer(sessionId, server, port)
-    ).catch(() => undefined);
+  const open = (port: number) => void openServer(sessionId, port).catch(() => undefined);
 
   // One column, one left edge: the heading, the rows and the hint all start
   // at the same x, and the column as a whole sits in the middle.

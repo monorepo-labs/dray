@@ -1,4 +1,4 @@
-import { invoke, listen, LOCAL, serverOfSession, type ServerId } from "@/lib/transport";
+import { invoke, listen, LOCAL, serverOfSession } from "@/lib/transport";
 import { useSyncExternalStore } from "react";
 
 import { readLocalStorage } from "@/hooks/useLocalStorage";
@@ -447,14 +447,34 @@ export function stopShare(sessionId: string, port: number) {
   return invoke("stop_share", { sessionId, port });
 }
 
-/// A remote session's dev server, opened in this Mac's browser through a port
-/// forwarded over that server's SSH login. A failed forward reports where a
-/// failed open does.
-export function openRemoteServer(sessionId: string, server: ServerId, port: number) {
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]"]);
+
+/// `url` as this Mac can reach it. The browser is this Mac's, so a remote
+/// session's loopback URL names a port on its server, reached through one
+/// forwarded over that server's SSH login; anything else is returned as is.
+export async function reachableUrl(sessionId: string, url: string): Promise<string> {
+  const server = serverOfSession(sessionId);
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return url;
+  }
+  if (server === LOCAL || !LOOPBACK.has(u.hostname) || !/^https?:$/.test(u.protocol)) return url;
+  const port = Number(u.port) || (u.protocol === "https:" ? 443 : 80);
+  const local = await invoke<number>("forward_port", { server, port }, LOCAL);
+  u.hostname = "localhost";
+  u.port = String(local);
+  return u.toString();
+}
+
+/// One of the session's dev servers, opened in this Mac's browser. A failed
+/// forward reports where a failed open does.
+export function openServer(sessionId: string, port: number) {
   openErrors.delete(sessionId);
   notify();
-  return invoke<number>("forward_port", { server, port }, LOCAL).then(
-    (local) => openInBrowser(sessionId, `http://localhost:${local}`, true),
+  return reachableUrl(sessionId, `http://localhost:${port}`).then(
+    (url) => openInBrowser(sessionId, url, true),
     (e: unknown) => {
       openErrors.set(sessionId, String(e));
       notify();

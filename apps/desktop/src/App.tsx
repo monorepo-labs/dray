@@ -38,6 +38,7 @@ import {
   isRecording,
   navigate,
   openInBrowser,
+  reachableUrl,
   setPendingTab,
   closeBlankTab,
   useBlankTabs,
@@ -1932,23 +1933,34 @@ function App() {
   // ⌘-click, or no session to hold one, goes to the system browser.
   useEffect(() => {
     setLinkOpener((url, { external }) => {
-      // The browser is this Mac's, so a remote session's links leave the app.
-      if (external || !selectedSessionId || activeServer !== LOCAL) {
+      if (!selectedSessionId) {
         void openUrl(url).catch(console.error);
         return;
       }
       // The session is named outright: the read lands after an await, and by
       // then the reader may be on another session whose pane must stay put.
-      void openInBrowser(selectedSessionId, url, true)
-        .then(() => setBrowserWanted(selectedSessionId))
-        .catch(() => {
-          // Answered by the system browser, so the pane has nothing to say.
-          clearOpenError(selectedSessionId);
-          void openUrl(url).catch(console.error);
-        });
+      const sessionId = selectedSessionId;
+      const gen = navGen.current;
+      void reachableUrl(sessionId, url).then(
+        (reached) => {
+          if (external) return void openUrl(reached).catch(console.error);
+          void openInBrowser(sessionId, reached, true)
+            .then(() => setBrowserWanted(sessionId))
+            .catch(() => {
+              // Answered by the system browser, so the pane has nothing to say.
+              clearOpenError(sessionId);
+              void openUrl(reached).catch(console.error);
+            });
+        },
+        // A failed forward has no tab to report in, and the raw URL would
+        // open this Mac's port instead, so the reason goes to the composer.
+        (e: unknown) => {
+          if (gen === navGen.current) setError(String(e));
+        },
+      );
     });
     return () => setLinkOpener(null);
-  }, [selectedSessionId, activeServer]);
+  }, [selectedSessionId, navGen, setError]);
 
   // An element picked in the page lands in that session's draft, and the
   // composer is brought on screen to show it — off the full view and onto
