@@ -110,11 +110,13 @@ function start() {
   });
   void listen<{ run: number; tab: number | null; verb: string | null }>("browser_driven", (e) => {
     const { run, tab, verb } = e.payload;
-    const mark = (id: number, runs: Set<number>, doing: string) => {
+    // Worded after the newest verb still running, so one ending under
+    // another hands the tooltip back to the one still going.
+    const mark = (id: number, runs: Map<number, string>) => {
       clearTimeout(driven.get(id)?.timer);
       driven.set(id, {
         runs,
-        doing,
+        doing: [...runs.values()].at(-1) ?? "Agent is using this tab",
         // A running verb is held until its closing send; the cap is only for
         // one that never arrives, which would otherwise leave the orb forever.
         timer: setTimeout(
@@ -126,14 +128,13 @@ function start() {
         ),
       });
     };
-    const idle = "Agent is using this tab";
     if (verb && tab !== null) {
-      mark(tab, new Set(driven.get(tab)?.runs).add(run), `Agent is ${DOING[verb] ?? "using this tab"}`);
+      mark(tab, new Map(driven.get(tab)?.runs).set(run, `Agent is ${DOING[verb] ?? "using this tab"}`));
     } else {
       // Ends this run's marks wherever they are — a tab it opened that the
       // reader then left included — and nothing another run still holds.
-      for (const [id, m] of driven) if (m.runs.delete(run) && !m.runs.size) mark(id, m.runs, idle);
-      if (tab !== null && !driven.get(tab)?.runs.size) mark(tab, new Set(), idle);
+      for (const [id, m] of driven) if (m.runs.delete(run)) mark(id, m.runs);
+      if (tab !== null && !driven.get(tab)?.runs.size) mark(tab, new Map());
     }
     notify();
   });
@@ -329,10 +330,10 @@ export function useRecording(sessionId: string): boolean {
 /// which is unique across sessions. Held past the verb because the agent
 /// thinks between verbs, and a mark that blinks off meanwhile tells the
 /// reader the tab is theirs again a moment before the next click lands.
-/// `runs` are the verbs still running on the tab, by `run` id.
+/// `runs` are the verbs still running on the tab — `run` id to its sentence.
 const driven = new Map<
   number,
-  { runs: Set<number>; timer: ReturnType<typeof setTimeout>; doing: string }
+  { runs: Map<number, string>; timer: ReturnType<typeof setTimeout>; doing: string }
 >();
 const DRIVEN_HOLD = 8000;
 /// Past the longest a verb runs: `wait` sleeps 30s at most, a navigation 20s.
