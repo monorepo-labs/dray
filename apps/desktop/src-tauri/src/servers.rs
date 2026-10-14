@@ -220,17 +220,18 @@ async fn local_address() -> Result<(String, String, bool), String> {
 /// Whether a server's stamp says it runs code older than this binary. Every
 /// dev build shares one home, so a dev app leaves alone a server another
 /// worktree's binary started: two apps each restarting the other's dropped
-/// both off This Mac in a loop (#495). A stamp with no path predates the path
-/// being written, and is judged as before.
+/// both off This Mac in a loop (#495). Otherwise the time alone decides, as
+/// before the path was written: two release copies built alike share one.
 fn is_stale(written: Option<&str>, now: &str, dev: bool) -> bool {
-    fn path(stamp: &str) -> Option<&str> {
-        stamp.split_once(' ').map(|(_, path)| path)
+    fn split(stamp: &str) -> (&str, Option<&str>) {
+        stamp.split_once(' ').map_or((stamp, None), |(time, path)| (time, Some(path)))
     }
-    match written {
-        Some(theirs) if theirs == now => false,
-        Some(theirs) if dev && path(theirs).is_some() && path(theirs) != path(now) => false,
-        _ => true,
+    let Some(written) = written else { return true };
+    let ((their_time, their_path), (time, path)) = (split(written), split(now));
+    if dev && their_path.is_some() && their_path != path {
+        return false;
     }
+    their_time != time
 }
 
 async fn servers_path() -> anyhow::Result<std::path::PathBuf> {
@@ -1026,7 +1027,8 @@ mod tests {
         assert!(is_stale(Some(mine), rebuilt, true));
         assert!(!is_stale(Some(other), mine, true));
         assert!(is_stale(Some(other), mine, false));
-        assert!(is_stale(Some("1.000000001"), mine, true));
+        assert!(!is_stale(Some("1.000000001 /Applications/Dray.app"), "1.000000001 /Users/me/Dray.app", false));
+        assert!(is_stale(Some("0.000000001"), mine, true));
         assert!(is_stale(None, mine, true));
     }
 
