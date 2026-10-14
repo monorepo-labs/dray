@@ -49,6 +49,21 @@ export function moveSpace(names: string[], name: string, delta: number): string[
   return next;
 }
 
+/// Where the reader's project order is stored.
+export const PROJECT_ORDER_KEY = "ade.projectOrder";
+
+/// Projects in the order the reader dragged them into.
+///
+/// Each server's `projects.json` holds only its own share and the merge puts
+/// local first, so no server can say where a remote project sits among local
+/// ones — that order is this device's. A path it does not name keeps its merged
+/// place after the ones it does, which is where a newly attached project lands.
+export function orderProjects(projects: Project[], order: string[]): Project[] {
+  const rank = new Map(order.map((path, i) => [path, i]));
+  const at = (p: Project) => rank.get(p.path) ?? order.length;
+  return [...projects].sort((a, b) => at(a) - at(b));
+}
+
 /// The space actually in force. A stored name that has since been removed falls
 /// back to every project — the same answer the project filter gives for a
 /// project that was detached, and the only honest one, since the alternative is

@@ -6,6 +6,7 @@ import {
   displayPath,
   inSpace,
   moveSpace,
+  orderProjects,
   sessionInSpace,
   spaceNames,
 } from "@/lib/space";
@@ -88,5 +89,30 @@ describe("spaces", () => {
   it("drops the leading slash and nothing else", () => {
     expect(displayPath("/Users/y/proj")).toBe("Users/y/proj");
     expect(displayPath("C:/proj")).toBe("C:/proj");
+  });
+});
+
+describe("orderProjects", () => {
+  const vps = project("dray://vps/root/app", null);
+  const merged = [...projects, vps];
+  const paths = (list: Project[]) => list.map((p) => p.path);
+
+  it("keeps the merged order when nothing is stored", () => {
+    expect(paths(orderProjects(merged, []))).toEqual(paths(merged));
+  });
+
+  it("puts a remote project where the reader dropped it", () => {
+    const order = [vps.path, ...paths(projects)];
+    expect(paths(orderProjects(merged, order))).toEqual(order);
+  });
+
+  it("puts a project the order never named last", () => {
+    expect(paths(orderProjects(merged, [vps.path, "/work/api"]))).toEqual([
+      vps.path,
+      "/work/api",
+      "/work/web",
+      "/me/blog",
+      "/me/scratch",
+    ]);
   });
 });

@@ -7,7 +7,7 @@ import { appendStreamingText, peekStreamingBlock, retireStreamingBlock, startStr
 import { useComposerPrefs, type EffortByModel } from "@/hooks/useComposerPrefs";
 import { forgetDocs } from "@/hooks/useDocs";
 import { useDockBadge } from "@/hooks/useDockBadge";
-import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
+import { readLocalStorage, useLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { forgetOpenFiles } from "@/hooks/useOpenFiles";
 import {
   ANSWERED_BY_OPENING,
@@ -28,7 +28,7 @@ import { isProvisional, nextMainSeq, provisionalId, retireOldestProvisional } fr
 import { questionDrafts } from "@/lib/questionDrafts";
 import { mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
 import { playNotification } from "@/lib/sound";
-import { activeSpace, allowedInSpace, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
+import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KEY, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { FIRST_MOUNT } from "@/lib/turnWindow";
 import type { Draft } from "./useDrafts";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
@@ -293,6 +293,8 @@ export function useSessions() {
     // is what settles what actually goes out.
     const [fastState, setFastState] = useState(() => prefs.fast);
     const [projects, setProjects] = useState<Project[]>([]);
+    const [projectOrder, setProjectOrder] = useLocalStorage<string[]>(PROJECT_ORDER_KEY, []);
+    const orderedProjects = useMemo(() => orderProjects(projects, projectOrder), [projects, projectOrder]);
     const [projectPath, setProjectPath] = useState<string | null>(null);
     // Derived from the selected project, not a preference — refetched on switch
     // and never persisted.
@@ -532,12 +534,23 @@ const setProjectSpace = async (path: string, space: string | null) => {
   }
 };
 
-// Steps a project one place in the order the composer and the sidebar filter
-// both draw. Settings is the only caller.
+// Moves a project `delta` places in the order the composer and the sidebar
+// filter both draw. Settings is the only caller.
+//
+// The order is kept on this device, since it may interleave servers. The
+// project's own server still takes the move within its share, so its
+// `projects.json` keeps the same relative order for any other client.
 const moveProject = async (path: string, delta: number) => {
+  const before = orderedProjects.map(pathOfProject);
+  const after = moveSpace(before, path, delta);
+  setProjectOrder(after);
+  const server = serverOfPath(path);
+  const share = (paths: string[]) => paths.filter((p) => serverOfPath(p) === server);
+  const step = share(after).indexOf(path) - share(before).indexOf(path);
+  if (!step) return;
   try {
-    const list = await invoke<Project[]>("move_project", { path, delta });
-    setProjects((prev) => mergeFrom(prev, serverOfPath(path), list, pathOfProject));
+    const list = await invoke<Project[]>("move_project", { path, delta: step });
+    setProjects((prev) => mergeFrom(prev, server, list, pathOfProject));
   } catch (e) {
     setError(String(e));
   }
@@ -2972,6 +2985,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
 
 }
