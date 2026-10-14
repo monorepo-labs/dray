@@ -112,10 +112,15 @@ function start() {
     const { tab, verb } = e.payload;
     clearTimeout(driven.get(tab)?.timer);
     driven.set(tab, {
-      timer: setTimeout(() => {
-        driven.delete(tab);
-        notify();
-      }, DRIVEN_HOLD),
+      // A running verb is held until its closing send; the cap is only for
+      // one that never arrives, which would otherwise leave the orb forever.
+      timer: setTimeout(
+        () => {
+          driven.delete(tab);
+          notify();
+        },
+        verb ? RUNNING_CAP : DRIVEN_HOLD,
+      ),
       doing: `Agent is ${(verb && DOING[verb]) || "using this tab"}`,
     });
     notify();
@@ -314,6 +319,8 @@ export function useRecording(sessionId: string): boolean {
 /// reader the tab is theirs again a moment before the next click lands.
 const driven = new Map<number, { timer: ReturnType<typeof setTimeout>; doing: string }>();
 const DRIVEN_HOLD = 8000;
+/// Past the longest a verb runs: `wait` sleeps 30s at most, a navigation 20s.
+const RUNNING_CAP = 60_000;
 
 /// What the agent is doing, by `dray browser` verb. A verb missing here, and
 /// the gap between verbs, read as "using this tab".

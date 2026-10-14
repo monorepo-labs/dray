@@ -584,7 +584,6 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
     let tab = active_id(session);
     // The verb's wire name — `click`, `screenshot` — which the pane words.
     let verb = serde_json::to_value(&action).ok().and_then(|v| Some(v["action"].as_str()?.to_string()));
-    emit_driven(session, tab, verb.as_deref());
     // Every verb counts as the tab being seen. All but these act on the
     // active tab, so a discarded one is woken first.
     let wakes = !matches!(
@@ -604,22 +603,32 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
     if let (true, Some(tab)) = (input, tab) {
         reveal_for_input(tab).await?;
     }
+    // Opened here, past the early returns above, so every opening send meets
+    // its closing one below — the pane holds a running mark until it does.
+    emit_driven(session, tab, verb.as_deref());
     let answer = perform(session, action).await;
     if input {
         let _ = relayout();
     }
-    if let Some(tab) = active_id(session) {
+    // Closed on the tab it opened on as well as whichever is active now, since
+    // a verb can move the active tab, and a mark left running there would
+    // stand for a minute over a tab nothing is touching.
+    let after = active_id(session);
+    if tab != after {
+        emit_driven(session, tab, None);
+    }
+    if let Some(tab) = after {
         touch(tab);
         emit_driven(session, Some(tab), None);
     }
     answer
 }
 
-/// Tells the pane the agent just acted on `tab`, so the strip can mark it and
-/// the reader knows to keep their hands off. Sent as a verb starts and again
-/// as it ends; the pane holds the mark a few seconds past the last one, since
-/// the agent thinks between verbs and a mark per verb would only flicker.
-/// `verb` is the one now running, absent on the closing send.
+/// Tells the pane the agent is acting on `tab`, so the strip can mark it and
+/// the reader knows to keep their hands off. `verb` names the one running,
+/// and the pane holds the mark while it runs; the closing send (`None`)
+/// starts a few seconds' hold, since the agent thinks between verbs and a
+/// mark per verb would only flicker.
 fn emit_driven(session: &str, tab: Option<i32>, verb: Option<&str>) {
     if let Some(tab) = tab {
         emit("browser_driven", json!({ "sessionId": session, "tab": tab, "verb": verb }));
@@ -666,7 +675,10 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 None => {
                     let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
                     open_url(session, url, true).await?;
-                    new_tab(session, &before).await?
+                    let tab = new_tab(session, &before).await?;
+                    // Marked before it loads: `run` had no tab to mark.
+                    emit_driven(session, Some(tab), Some("open"));
+                    tab
                 }
             };
             wait_loaded(tab).await?;
@@ -714,6 +726,8 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
             open_url(session, url, true).await?;
             let tab = new_tab(session, &before).await?;
+            // Marked before it loads: `run` marked the tab it was opened from.
+            emit_driven(session, Some(tab), Some("tab_new"));
             wait_loaded(tab).await?;
             let (text, mut data) = page(tab);
             data["id"] = json!(tab);
