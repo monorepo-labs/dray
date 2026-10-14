@@ -212,9 +212,25 @@ async fn local_address() -> Result<(String, String, bool), String> {
     let port_file = tokio::fs::read_to_string(home.join(crate::serve::PORT_FILE)).await.unwrap_or_default();
     let mut lines = port_file.lines();
     let port: u16 = lines.next().and_then(|p| p.trim().parse().ok()).ok_or("The server on this Mac is starting.")?;
-    let stale = crate::serve::exe_stamp().is_some_and(|now| lines.next().map(str::trim) != Some(now.as_str()));
+    let stale = crate::serve::exe_stamp().is_some_and(|now| is_stale(lines.next().map(str::trim), &now, crate::is_dev()));
     let token = tokio::fs::read_to_string(home.join("serve-token")).await.map_err(|_| "The server on this Mac is starting.")?;
     Ok((format!("ws://127.0.0.1:{port}"), token.trim().to_string(), stale))
+}
+
+/// Whether a server's stamp says it runs code older than this binary. Every
+/// dev build shares one home, so a dev app leaves alone a server another
+/// worktree's binary started: two apps each restarting the other's dropped
+/// both off This Mac in a loop (#495). A stamp with no path predates the path
+/// being written, and is judged as before.
+fn is_stale(written: Option<&str>, now: &str, dev: bool) -> bool {
+    fn path(stamp: &str) -> Option<&str> {
+        stamp.split_once(' ').map(|(_, path)| path)
+    }
+    match written {
+        Some(theirs) if theirs == now => false,
+        Some(theirs) if dev && path(theirs).is_some() && path(theirs) != path(now) => false,
+        _ => true,
+    }
 }
 
 async fn servers_path() -> anyhow::Result<std::path::PathBuf> {
@@ -999,6 +1015,19 @@ mod tests {
         assert_eq!(normalize("https://a-b.trycloudflare.com/").unwrap(), "wss://a-b.trycloudflare.com");
         assert_eq!(normalize("wss://a-b.trycloudflare.com").unwrap(), "wss://a-b.trycloudflare.com");
         assert!(normalize("").is_err());
+    }
+
+    #[test]
+    fn a_dev_app_restarts_only_its_own_binarys_server() {
+        let mine = "1.000000001 /wt/a/target/debug/dray";
+        let rebuilt = "2.000000002 /wt/a/target/debug/dray";
+        let other = "3.000000003 /wt/b/target/debug/dray";
+        assert!(!is_stale(Some(mine), mine, true));
+        assert!(is_stale(Some(mine), rebuilt, true));
+        assert!(!is_stale(Some(other), mine, true));
+        assert!(is_stale(Some(other), mine, false));
+        assert!(is_stale(Some("1.000000001"), mine, true));
+        assert!(is_stale(None, mine, true));
     }
 
     /// A name picks one server for `--machine`, so a second one may not take

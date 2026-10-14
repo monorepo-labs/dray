@@ -144,12 +144,14 @@ async fn write_port_file(home: &Path, port: u16) -> Result<()> {
 }
 
 /// The executable's modified time, which moves when an update lands or cargo
-/// rebuilds. The server writes the one it started from under its port; the
-/// app compares it with the file now to tell a server running old code.
+/// rebuilds, then its path. The server writes the one it started from under
+/// its port; the app compares it with the file now to tell a server running
+/// old code, and a dev app reads the path to tell another worktree's.
 pub fn exe_stamp() -> Option<String> {
-    let modified = std::fs::metadata(std::env::current_exe().ok()?).ok()?.modified().ok()?;
+    let exe = std::env::current_exe().ok()?;
+    let modified = std::fs::metadata(&exe).ok()?.modified().ok()?;
     let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
-    Some(format!("{}.{:09}", since.as_secs(), since.subsec_nanos()))
+    Some(format!("{}.{:09} {}", since.as_secs(), since.subsec_nanos(), exe.display()))
 }
 
 /// Exits once no turn is running, for launchd to start the binary now on
