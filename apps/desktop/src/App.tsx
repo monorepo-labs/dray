@@ -2670,12 +2670,14 @@ function App() {
           archivedShown={archivedShown}
           archivedRequested={archivedRequested}
           onToggleArchived={() => {
+            if (draftsShown) setOpenDraftId(null);
             setDraftsShown(false);
             setShowArchived((v) => draftsShown || !v);
           }}
           draftsShown={draftsShown}
           onToggleDrafts={() => {
-            if (!draftsShown) setShowArchived(false);
+            if (draftsShown) setOpenDraftId(null);
+            else setShowArchived(false);
             setDraftsShown(!draftsShown);
           }}
           updateStatus={updateStatus}
