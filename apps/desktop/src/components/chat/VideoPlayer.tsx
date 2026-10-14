@@ -12,6 +12,9 @@ export default function VideoPlayer({ src, className }: { src: string; className
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  // A path the agent named that holds no video draws nothing, rather than a
+  // player stuck at 0:00 that never plays. Keyed on `src` so a new one is tried.
+  const [failed, setFailed] = useState<string | null>(null);
 
   const toggle = () => {
     const v = video.current;
@@ -23,6 +26,8 @@ export default function VideoPlayer({ src, className }: { src: string; className
     const v = video.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
     v?.requestFullscreen().catch(() => v.webkitEnterFullscreen?.());
   };
+
+  if (failed === src) return null;
 
   return (
     // A span, since it sits inside the paragraph that names the path.
@@ -41,6 +46,7 @@ export default function VideoPlayer({ src, className }: { src: string; className
         onPause={() => setPlaying(false)}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+        onError={() => setFailed(src)}
         className={cn("block max-h-96 max-w-full cursor-pointer", className)}
       />
       {!playing && (

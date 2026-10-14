@@ -32,13 +32,13 @@ function prompt(seq: number, text: string, queued: boolean): AgentEvent {
   });
 }
 
-function callStarted(seq: number, callId: string): AgentEvent {
+function callStarted(seq: number, callId: string, input: Record<string, string> = {}): AgentEvent {
   return event(seq, {
     type: "tool_call_started",
     callId,
     name: "Bash",
     toolType: "other",
-    input: {},
+    input,
     rawInput: null,
     title: null,
   } as AgentEventPayload);
@@ -780,6 +780,7 @@ describe("segmentMedia", () => {
   }
 
   const video = "/Users/me/.dray/browser/recordings/s1/flow.mp4";
+  const stop = { command: 'dray browser record stop "flow"' };
 
   /// A grouped run's results sit after the group in `work`, so the pictures of
   /// calls folded into one row must still be found.
@@ -789,11 +790,10 @@ describe("segmentMedia", () => {
         prompt(0, "go", false),
         callStarted(1, "a"),
         result(2, "a", "", 1),
-        callStarted(3, "b"),
+        callStarted(3, "b", stop),
         result(4, "b", `saved ${video}`, 2),
-        text(5, `watch ${video}.`),
-        text(6, "done"),
-        completed(7, "done"),
+        text(5, "done"),
+        completed(6, "done"),
       ],
       false,
     );
@@ -805,6 +805,13 @@ describe("segmentMedia", () => {
       "/archived/b-1.png",
       video,
     ]);
+  });
+
+  /// A file that only mentions a recording path — this very test file, read
+  /// back by an agent — is not a recording, so it draws no player.
+  it("reads recordings out of record stop's output alone", () => {
+    const media = segmentMedia([callStarted(1, "a", { file_path: "/x/transcript.test.ts" }), result(2, "a", `const video = "${video}"`, 0)], null);
+    expect(media).toEqual([]);
   });
 
   /// The collapsed view already draws the final message, video and all.
@@ -830,7 +837,15 @@ describe("segmentMedia", () => {
       cwd: null,
     });
     const fromSubagent = { ...result(3, "c", "", 1), subagent: { toolUseId: "t" } } as unknown as AgentEvent;
-    const media = sessionMedia([attached, result(1, "a", `saved ${video}`, 1), text(2, `watch ${video}`), fromSubagent]);
+    const other = "/Users/me/.dray/browser/recordings/s1/other.mp4";
+    const media = sessionMedia([
+      attached,
+      callStarted(1, "a", stop),
+      result(2, "a", `saved ${video}`, 1),
+      callStarted(3, "b"),
+      result(4, "b", `read ${other}`, 0),
+      fromSubagent,
+    ]);
     expect(media.map((m) => ["image" in m ? m.image.path : m.video, m.byYou])).toEqual([
       [video, false],
       ["/archived/a-0.png", false],

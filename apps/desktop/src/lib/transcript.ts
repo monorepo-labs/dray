@@ -172,6 +172,22 @@ export function segmentWork(turn: Turn): TurnSegment[] {
 const RECORDING_IN_TEXT =
   /\/[^\s"'`()<>]*\/\.dray\/browser(?:-dev)?\/recordings\/[^/\s"'`()<>]+\/[^/\s"'`()<>]+\.mp4/g;
 
+/// The calls whose output may name a recording: `dray browser record stop`
+/// prints the MP4's path. Any other tool's output is not read for one, or a
+/// file that merely mentions a path — a test fixture read back — draws a
+/// player for a video that was never made. Read off the whole input, since
+/// each harness shapes a shell command its own way.
+function recordStops(calls: WorkItem[]): Set<string> {
+  const started = calls.flatMap((item) => (isToolGroup(item) ? item.calls : [item]));
+  return new Set(
+    started.flatMap(({ payload }) =>
+      payload.type === "tool_call_started" && /\bdray\s+browser\s+record\s+stop\b/.test(JSON.stringify(payload.input))
+        ? [payload.callId]
+        : [],
+    ),
+  );
+}
+
 /// A picture or a recording, in the order the work produced them.
 export type Media = { image: ImageRef } | { video: string };
 
@@ -195,12 +211,13 @@ export function segmentMedia(items: WorkItem[], finalText: string | null): Media
       media.push({ video: path });
     }
   };
+  const stops = recordStops(items);
   for (const item of items) {
     if (isToolGroup(item)) continue;
     const { payload } = item;
     if (payload.type === "tool_call_completed") {
       media.push(...payload.result.images.map((image) => ({ image })));
-      scan(payload.result.text);
+      if (stops.has(payload.callId)) scan(payload.result.text);
     } else if (payload.type === "assistant_text") {
       scan(payload.text);
     }
@@ -231,6 +248,7 @@ export function sessionMedia(events: AgentEvent[]): SessionMedia[] {
       if (key) add(key, { image, byYou });
     }
   };
+  const stops = recordStops(events);
   for (const { subagent, payload } of events) {
     if (subagent) continue;
     // A relayed `dray send` arrives as a user message too, but another
@@ -238,7 +256,7 @@ export function sessionMedia(events: AgentEvent[]): SessionMedia[] {
     if (payload.type === "user_message") images(payload.images, payload.from === null);
     else if (payload.type === "tool_call_completed") {
       images(payload.result.images, false);
-      scan(payload.result.text);
+      if (stops.has(payload.callId)) scan(payload.result.text);
     } else if (payload.type === "assistant_text") scan(payload.text);
   }
   return media.reverse();
