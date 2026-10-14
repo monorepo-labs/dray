@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 
 import Chat from "@/components/Chat";
+import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import GitBranchIcon from "@/components/icons/GitBranchIcon";
 import { Button } from "@/components/ui/button";
 import ShortcutKeys, { DigitKeys } from "@/components/ShortcutKeys";
@@ -13,6 +14,8 @@ import { basename } from "@/lib/format";
 import { dropLabel, paneOrder, type Region, type SplitGroup } from "@/lib/groups";
 import { IS_MAC } from "@/lib/platform";
 import { sessionBranch } from "@/lib/pr";
+import { serverConnected, useServers } from "@/lib/servers";
+import { serverOfSession } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { SessionIndexItem } from "@/types/events";
 
@@ -68,6 +71,9 @@ export default function SplitView({
 }: SplitViewProps) {
   const drag = useSessionDrag();
   const metaHeld = useMetaHeld();
+  // Read for the re-render alone: a pane's server dropping or coming back
+  // moves it between the skeleton and its transcript.
+  useServers();
   // Composing into the focused pane, so every other transcript gives way. The
   // draft store is read here directly rather than threaded down from the
   // composer — it is module-level and keyed by session, which is the whole
@@ -150,16 +156,22 @@ export default function SplitView({
                     composing && !focused && "opacity-35",
                   )}
                 >
-                  <Chat
-                    {...paneState(item.sessionId)}
-                    {...chat}
-                    // Narrowest the transcript gets, so the rail always gives way.
-                    crowded
-                    // The rail only where the pane has the column's whole
-                    // height: halved, it sits over the text.
-                    rail={column.length === 1}
-                    active={active && focused}
-                  />
+                  {/* A pane its server has not answered for yet; the
+                      reconnect loads it. */}
+                  {!paneState(item.sessionId).session && !serverConnected(serverOfSession(item.sessionId)) ? (
+                    <TranscriptSkeleton />
+                  ) : (
+                    <Chat
+                      {...paneState(item.sessionId)}
+                      {...chat}
+                      // Narrowest the transcript gets, so the rail always gives way.
+                      crowded
+                      // The rail only where the pane has the column's whole
+                      // height: halved, it sits over the text.
+                      rail={column.length === 1}
+                      active={active && focused}
+                    />
+                  )}
                 </div>
                 {hint && hint.region !== "left" && hint.region !== "right" && (
                   <DropZone region={hint.region} label={hint.label} />
