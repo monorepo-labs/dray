@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use ts_rs::TS;
 
-use crate::{settings, store, store::get_home_app_dir};
+use crate::{settings, store};
 
 /// Who tracks the issue. On the wire and on disk, which is what kept a session
 /// linked to a Linear issue readable when the second variant landed.
@@ -475,7 +475,7 @@ static CREDENTIALS_LOCK: Mutex<()> = Mutex::const_new(());
 const LINEAR_CREDENTIAL: &str = "linear";
 
 async fn credentials_path() -> Result<PathBuf, String> {
-    get_home_app_dir()
+    crate::store::config_dir()
         .await
         .map(|dir| dir.join(CREDENTIALS_FILE))
         .map_err(|e| format!("could not open the Dray directory: {e}"))

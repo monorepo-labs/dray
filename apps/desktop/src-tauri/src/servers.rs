@@ -34,6 +34,14 @@ const ADMIT: Duration = Duration::from_secs(5);
 /// reach, so coming back soon matters more than sparing a refused connect.
 const MAX_BACKOFF: Duration = Duration::from_secs(10);
 
+/// A remote socket can die without closing — the Mac sleeps, the network
+/// moves, a tunnel drops it — and then nothing reaches `run`'s retry and a
+/// call waits forever. So a remote is pinged, and one silent for `SILENCE`
+/// is dropped. The server answers pings from its read loop, which never
+/// blocks on a command.
+const PING: Duration = if cfg!(test) { Duration::from_millis(100) } else { Duration::from_secs(15) };
+const SILENCE: Duration = if cfg!(test) { Duration::from_millis(500) } else { Duration::from_secs(45) };
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Saved {
     id: String,
@@ -212,26 +220,9 @@ async fn local_address() -> Result<(String, String, bool), String> {
     let port_file = tokio::fs::read_to_string(home.join(crate::serve::PORT_FILE)).await.unwrap_or_default();
     let mut lines = port_file.lines();
     let port: u16 = lines.next().and_then(|p| p.trim().parse().ok()).ok_or("The server on this Mac is starting.")?;
-    let stale = crate::serve::exe_stamp().is_some_and(|now| is_stale(lines.next().map(str::trim), &now, crate::is_dev()));
+    let stale = crate::serve::exe_stamp().is_some_and(|now| lines.next().map(str::trim) != Some(now.as_str()));
     let token = tokio::fs::read_to_string(home.join("serve-token")).await.map_err(|_| "The server on this Mac is starting.")?;
     Ok((format!("ws://127.0.0.1:{port}"), token.trim().to_string(), stale))
-}
-
-/// Whether a server's stamp says it runs code older than this binary. Every
-/// dev build shares one home, so a dev app leaves alone a server another
-/// worktree's binary started: two apps each restarting the other's dropped
-/// both off This Mac in a loop (#495). Otherwise the time alone decides, as
-/// before the path was written: two release copies built alike share one.
-fn is_stale(written: Option<&str>, now: &str, dev: bool) -> bool {
-    fn split(stamp: &str) -> (&str, Option<&str>) {
-        stamp.split_once(' ').map_or((stamp, None), |(time, path)| (time, Some(path)))
-    }
-    let Some(written) = written else { return true };
-    let ((their_time, their_path), (time, path)) = (split(written), split(now));
-    if dev && their_path.is_some() && their_path != path {
-        return false;
-    }
-    their_time != time
 }
 
 async fn servers_path() -> anyhow::Result<std::path::PathBuf> {
@@ -527,15 +518,26 @@ async fn serve(id: &str, ws: Socket) {
         conn.fix = None;
     }
     announce();
+    // This Mac's server is loopback, which cannot die silently.
+    let remote = id != LOCAL;
     let writer = tokio::spawn(async move {
-        while let Some(frame) = frames.recv().await {
-            if write.send(Message::text(frame)).await.is_err() {
+        let mut ping = tokio::time::interval(PING);
+        loop {
+            let message = tokio::select! {
+                frame = frames.recv() => match frame {
+                    Some(frame) => Message::text(frame),
+                    None => break,
+                },
+                _ = ping.tick(), if remote => Message::Ping(Default::default()),
+            };
+            if write.send(message).await.is_err() {
                 break;
             }
         }
         write.close().await.ok();
     });
-    while let Some(Ok(message)) = read.next().await {
+    let silence = if remote { SILENCE } else { Duration::MAX };
+    while let Ok(Some(Ok(message))) = tokio::time::timeout(silence, read.next()).await {
         let Message::Text(text) = message else {
             if matches!(message, Message::Close(_)) {
                 break;
@@ -1018,20 +1020,6 @@ mod tests {
         assert!(normalize("").is_err());
     }
 
-    #[test]
-    fn a_dev_app_restarts_only_its_own_binarys_server() {
-        let mine = "1.000000001 /wt/a/target/debug/dray";
-        let rebuilt = "2.000000002 /wt/a/target/debug/dray";
-        let other = "3.000000003 /wt/b/target/debug/dray";
-        assert!(!is_stale(Some(mine), mine, true));
-        assert!(is_stale(Some(mine), rebuilt, true));
-        assert!(!is_stale(Some(other), mine, true));
-        assert!(is_stale(Some(other), mine, false));
-        assert!(!is_stale(Some("1.000000001 /Applications/Dray.app"), "1.000000001 /Users/me/Dray.app", false));
-        assert!(is_stale(Some("0.000000001"), mine, true));
-        assert!(is_stale(None, mine, true));
-    }
-
     /// A name picks one server for `--machine`, so a second one may not take
     /// it — but the server already holding it may, which is a rename to itself
     /// or a re-add after rotating a token. This Mac's row is no name to route to.
@@ -1055,6 +1043,41 @@ mod tests {
         conn.pending.insert(1, reply);
         conn.restart();
         assert!(answer.try_recv().unwrap().is_err());
+    }
+
+    /// A server that admits, then either reads (so tungstenite answers our
+    /// pings) or goes quiet the way a dead tunnel does.
+    async fn fake_server(answers: bool) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            ws.next().await;
+            ws.send(Message::text(json!({ "v": PROTOCOL }).to_string())).await.unwrap();
+            if answers {
+                while ws.next().await.is_some() {}
+            } else {
+                std::future::pending::<()>().await;
+            }
+        });
+        url
+    }
+
+    async fn served_for(id: &str, answers: bool) -> Option<()> {
+        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, unknown: Default::default() };
+        conns().push(Conn::new(saved));
+        let ws = admit(&fake_server(answers).await, "t").await.unwrap();
+        let served = tokio::time::timeout(SILENCE * 3, serve(id, ws)).await.ok();
+        // `CONNS` is shared, and the live tests read it from row 0.
+        conns().retain(|c| c.saved.id != id);
+        served
+    }
+
+    #[tokio::test]
+    async fn drops_a_server_gone_silent() {
+        assert!(served_for("silent", false).await.is_some(), "a silent server is dropped");
+        assert!(served_for("alive", true).await.is_none(), "a server answering pings is kept");
     }
 
     #[test]
@@ -1106,6 +1129,8 @@ mod tests {
         let live = next_event(&mut rx, |e, p| e == "server_event" && p["event"] == "live_state").await;
         assert_eq!(live["server"], added.id.as_str());
 
+        // Idle past `SILENCE`: the server's pongs keep the connection.
+        tokio::time::sleep(SILENCE * 3).await;
         let projects = server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.unwrap();
         assert!(projects.is_array());
         let unknown = server_invoke(added.id.clone(), "open_in_app".into(), json!({})).await.unwrap_err();

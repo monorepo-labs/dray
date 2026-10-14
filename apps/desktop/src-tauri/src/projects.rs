@@ -15,7 +15,7 @@ use crate::{
     git,
     github::{self, PrUnavailable},
     sink::Sink,
-    store::{get_home_app_dir, read_json, write_atomic},
+    store::{config_dir, read_json, write_atomic},
     Fail,
 };
 
@@ -80,7 +80,7 @@ pub async fn list_projects() -> Result<Vec<Project>, Fail> {
 }
 
 async fn projects_path() -> Result<std::path::PathBuf> {
-    Ok(get_home_app_dir().await?.join("projects.json"))
+    Ok(config_dir().await?.join("projects.json"))
 }
 
 /// Caller must hold `PROJECTS_LOCK`: this rewrites the whole file, so a
@@ -97,6 +97,7 @@ pub async fn add_project(path: &str) -> Result<Vec<Project>, Fail> {
     let path = canonical(path).await?;
 
     let _guard = PROJECTS_LOCK.lock().await;
+    let _across = crate::store::lock_across_processes("projects.json").await;
     let mut projects = list_projects().await?;
     let now = now_rfc3339();
 
@@ -120,6 +121,7 @@ pub async fn add_project(path: &str) -> Result<Vec<Project>, Fail> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remove_project(path: &str) -> Result<Vec<Project>, Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
+    let _across = crate::store::lock_across_processes("projects.json").await;
     let mut projects = list_projects().await?;
 
     projects.retain(|p| p.path != path);
@@ -134,6 +136,7 @@ pub async fn remove_project(path: &str) -> Result<Vec<Project>, Fail> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_last_selected_project(path: &str) -> Result<(), Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
+    let _across = crate::store::lock_across_processes("projects.json").await;
     let mut projects = list_projects().await?;
 
     let Some(project) = projects.iter_mut().find(|p| p.path == path) else {
@@ -151,6 +154,7 @@ pub async fn set_last_selected_project(path: &str) -> Result<(), Fail> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<Project>, Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
+    let _across = crate::store::lock_across_processes("projects.json").await;
     let mut projects = list_projects().await?;
 
     // By index, not `iter_mut().find()`: the borrow checker will not let the
@@ -170,6 +174,7 @@ pub async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn move_project(path: &str, delta: isize) -> Result<Vec<Project>, Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
+    let _across = crate::store::lock_across_processes("projects.json").await;
     let mut projects = list_projects().await?;
 
     if move_by(&mut projects, path, delta) {
@@ -228,6 +233,7 @@ fn retag(projects: &mut [Project], from: &str, to: Option<String>) -> bool {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>, Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
+    let _across = crate::store::lock_across_processes("projects.json").await;
     let mut projects = list_projects().await?;
 
     // A space nobody had filled yet carries no tag, so changing nothing is the

@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::{
     issues::TrackerAccount,
-    store::{get_home_app_dir, read_json, write_atomic},
+    store::{config_dir, read_json, write_atomic},
 };
 
 /// Serializes writers. The file is rewritten whole, so a concurrent writer
@@ -155,7 +155,7 @@ pub async fn get_settings() -> SettingsView {
 /// never touched it. Never an error: this sits on the launch path, and a
 /// hand-edited file must not be able to stop the app starting.
 pub async fn read() -> AppSettings {
-    let dir = match get_home_app_dir().await {
+    let dir = match config_dir().await {
         Ok(dir) => dir,
         Err(e) => {
             eprintln!("[settings read err] {e:#}");
@@ -204,7 +204,7 @@ async fn read_from(dir: &Path) -> Result<AppSettings> {
 pub async fn update(edit: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> {
     let _guard = SETTINGS_LOCK.lock().await;
     let _across = crate::store::lock_across_processes("settings.json").await;
-    let dir = get_home_app_dir().await?;
+    let dir = config_dir().await?;
 
     // **Only a malformed file recovers**, and the distinction is the whole of
     // this branch. A file that cannot be *parsed* can never be preserved, and
@@ -253,7 +253,7 @@ pub async fn ensure_install_id() -> Option<String> {
     let _guard = SETTINGS_LOCK.lock().await;
     let _across = crate::store::lock_across_processes("settings.json").await;
 
-    let dir = match get_home_app_dir().await {
+    let dir = match config_dir().await {
         Ok(dir) => dir,
         Err(e) => {
             eprintln!("[settings read err] {e:#}");

@@ -235,14 +235,48 @@ pub async fn get_home_app_dir() -> Result<PathBuf> {
 /// directory lose each other's writes — which is a `dray-serve` started on a
 /// Mac whose app is running. This is what lets the two sit side by side.
 ///
-/// A dev build answers `~/.dray-dev` where `DRAY_HOME` is unset: its app and
+/// A dev build answers [`dev_home`] where `DRAY_HOME` is unset: its app and
 /// its background server are one binary, so both read this and agree with
 /// nothing passed between them, and neither touches the real sessions.
 pub fn home_override() -> Option<PathBuf> {
     std::env::var_os("DRAY_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .or_else(|| crate::is_dev().then(|| std::env::home_dir().unwrap_or_default().join(".dray-dev")))
+        .or_else(|| crate::is_dev().then(dev_home))
+}
+
+/// `~/.dray-dev`, or `~/.dray-worktrees/<name>` for a build compiled in a
+/// worktree. One home is one server, so worktrees sharing one ran whichever
+/// build's server started first and never their own code (#495).
+fn dev_home() -> PathBuf {
+    let home = std::env::home_dir().unwrap_or_default();
+    match worktree_name(env!("CARGO_MANIFEST_DIR")) {
+        Some(name) => home.join(".dray-worktrees").join(name),
+        None => home.join(".dray-dev"),
+    }
+}
+
+/// Where projects, settings and credentials live: the home, except that every
+/// worktree's dev build shares `~/.dray-dev`'s, so a project attached or a
+/// login made in one is there in all. Each writer takes
+/// [`lock_across_processes`], which is what makes several servers on one
+/// file safe. Sessions stay per home, since two servers would resume one
+/// conversation at once.
+pub async fn config_dir() -> Result<PathBuf> {
+    let home = get_home_app_dir().await?;
+    if !crate::is_dev() || home != dev_home() {
+        return Ok(home);
+    }
+    let shared = std::env::home_dir().context("could not resolve home directory")?.join(".dray-dev");
+    fs::create_dir_all(&shared).await?;
+    restrict_to_owner(&shared).await;
+    Ok(shared)
+}
+
+/// The `<name>` of a path under `.claude/worktrees/<name>/`.
+fn worktree_name(dir: &str) -> Option<&str> {
+    let (_, rest) = dir.split_once("/.claude/worktrees/")?;
+    rest.split('/').next().filter(|name| !name.is_empty())
 }
 
 async fn make_home_app_dir() -> Result<PathBuf> {
@@ -453,13 +487,13 @@ pub async fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) ->
     serde_json::from_str(&contents).with_context(|| format!("could not parse {}", path.display()))
 }
 
-/// An exclusive `flock` on `<home>/<name>.lock`, held until the file is
+/// An exclusive `flock` on `<config_dir>/<name>.lock`, held until the file is
 /// dropped. On a Mac the app and its background server both rewrite
-/// `settings.json` and `credentials.json` whole, and a process-local mutex
-/// orders neither against the other. `None` where the lock cannot be had,
+/// `settings.json` and `credentials.json` whole, as does every worktree's dev
+/// server, and a process-local mutex orders none of them against another. `None` where the lock cannot be had,
 /// which is the old risk of a lost write rather than a refused one.
 pub async fn lock_across_processes(name: &str) -> Option<std::fs::File> {
-    let path = get_home_app_dir().await.ok()?.join(format!("{name}.lock"));
+    let path = config_dir().await.ok()?.join(format!("{name}.lock"));
     tokio::task::spawn_blocking(move || {
         let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(path).ok()?;
         let locked = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) } == 0;
@@ -2013,6 +2047,13 @@ pub async fn get_session_path(session_id: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_worktree_build_names_its_own_dev_home() {
+        assert_eq!(worktree_name("/r/.claude/worktrees/opal-plum/apps/desktop/src-tauri"), Some("opal-plum"));
+        assert_eq!(worktree_name("/r/apps/desktop/src-tauri"), None);
+        assert_eq!(worktree_name("/r/.claude/worktrees/"), None);
+    }
 
     /// Another build replacing the index must be read back, or the next
     /// whole-file rewrite here erases what it wrote.
