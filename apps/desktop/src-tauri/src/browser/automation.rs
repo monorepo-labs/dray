@@ -24,7 +24,7 @@ use dray_proto::{BrowserAction, Get, Is, Locator};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
@@ -605,33 +605,42 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
     }
     // Opened here, past the early returns above, so every opening send meets
     // its closing one below — the pane holds a running mark until it does.
-    emit_driven(session, tab, verb.as_deref());
-    let answer = perform(session, action).await;
-    if input {
-        let _ = relayout();
-    }
-    // Closed on the tab it opened on as well as whichever is active now, since
-    // a verb can move the active tab, and a mark left running there would
-    // stand for a minute over a tab nothing is touching.
-    let after = active_id(session);
-    if tab != after {
-        emit_driven(session, tab, None);
-    }
-    if let Some(tab) = after {
-        touch(tab);
-        emit_driven(session, Some(tab), None);
-    }
-    answer
+    let run = NEXT_RUN.fetch_add(1, AtomicOrdering::Relaxed);
+    RUN.scope(run, async {
+        emit_driven(session, tab, verb.as_deref());
+        let answer = perform(session, action).await;
+        if input {
+            let _ = relayout();
+        }
+        let after = active_id(session);
+        if let Some(tab) = after {
+            touch(tab);
+        }
+        // Closes every mark this run made, wherever the active tab went.
+        emit_driven(session, after, None);
+        answer
+    })
+    .await
+}
+
+static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
+
+tokio::task_local! {
+    /// The `run` a verb is inside, so a mark made deep in `perform` — a tab
+    /// it opened — closes with the rest of that verb's.
+    static RUN: u64;
 }
 
 /// Tells the pane the agent is acting on `tab`, so the strip can mark it and
 /// the reader knows to keep their hands off. `verb` names the one running,
-/// and the pane holds the mark while it runs; the closing send (`None`)
-/// starts a few seconds' hold, since the agent thinks between verbs and a
-/// mark per verb would only flicker.
+/// and the pane holds the mark until the closing send (`None`) for the same
+/// run, which ends that run's marks alone — two verbs can overlap in one
+/// session. The pane then holds a few seconds more, since the agent thinks
+/// between verbs and a mark per verb would only flicker.
 fn emit_driven(session: &str, tab: Option<i32>, verb: Option<&str>) {
-    if let Some(tab) = tab {
-        emit("browser_driven", json!({ "sessionId": session, "tab": tab, "verb": verb }));
+    let Ok(run) = RUN.try_with(|r| *r) else { return };
+    if tab.is_some() || verb.is_none() {
+        emit("browser_driven", json!({ "sessionId": session, "run": run, "tab": tab, "verb": verb }));
     }
 }
 
