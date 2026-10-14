@@ -1068,7 +1068,10 @@ mod tests {
         let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, unknown: Default::default() };
         conns().push(Conn::new(saved));
         let ws = admit(&fake_server(answers).await, "t").await.unwrap();
-        tokio::time::timeout(SILENCE * 3, serve(id, ws)).await.ok()
+        let served = tokio::time::timeout(SILENCE * 3, serve(id, ws)).await.ok();
+        // `CONNS` is shared, and the live tests read it from row 0.
+        conns().retain(|c| c.saved.id != id);
+        served
     }
 
     #[tokio::test]
