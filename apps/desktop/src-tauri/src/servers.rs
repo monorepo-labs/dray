@@ -34,6 +34,14 @@ const ADMIT: Duration = Duration::from_secs(5);
 /// reach, so coming back soon matters more than sparing a refused connect.
 const MAX_BACKOFF: Duration = Duration::from_secs(10);
 
+/// A remote socket can die without closing — the Mac sleeps, the network
+/// moves, a tunnel drops it — and then nothing reaches `run`'s retry and a
+/// call waits forever. So a remote is pinged, and one silent for `SILENCE`
+/// is dropped. The server answers pings from its read loop, which never
+/// blocks on a command.
+const PING: Duration = if cfg!(test) { Duration::from_millis(100) } else { Duration::from_secs(15) };
+const SILENCE: Duration = if cfg!(test) { Duration::from_millis(500) } else { Duration::from_secs(45) };
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Saved {
     id: String,
@@ -510,15 +518,26 @@ async fn serve(id: &str, ws: Socket) {
         conn.fix = None;
     }
     announce();
+    // This Mac's server is loopback, which cannot die silently.
+    let remote = id != LOCAL;
     let writer = tokio::spawn(async move {
-        while let Some(frame) = frames.recv().await {
-            if write.send(Message::text(frame)).await.is_err() {
+        let mut ping = tokio::time::interval(PING);
+        loop {
+            let message = tokio::select! {
+                frame = frames.recv() => match frame {
+                    Some(frame) => Message::text(frame),
+                    None => break,
+                },
+                _ = ping.tick(), if remote => Message::Ping(Default::default()),
+            };
+            if write.send(message).await.is_err() {
                 break;
             }
         }
         write.close().await.ok();
     });
-    while let Some(Ok(message)) = read.next().await {
+    let silence = if remote { SILENCE } else { Duration::MAX };
+    while let Ok(Some(Ok(message))) = tokio::time::timeout(silence, read.next()).await {
         let Message::Text(text) = message else {
             if matches!(message, Message::Close(_)) {
                 break;
@@ -1026,6 +1045,38 @@ mod tests {
         assert!(answer.try_recv().unwrap().is_err());
     }
 
+    /// A server that admits, then either reads (so tungstenite answers our
+    /// pings) or goes quiet the way a dead tunnel does.
+    async fn fake_server(answers: bool) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            ws.next().await;
+            ws.send(Message::text(json!({ "v": PROTOCOL }).to_string())).await.unwrap();
+            if answers {
+                while ws.next().await.is_some() {}
+            } else {
+                std::future::pending::<()>().await;
+            }
+        });
+        url
+    }
+
+    async fn served_for(id: &str, answers: bool) -> Option<()> {
+        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, unknown: Default::default() };
+        conns().push(Conn::new(saved));
+        let ws = admit(&fake_server(answers).await, "t").await.unwrap();
+        tokio::time::timeout(SILENCE * 3, serve(id, ws)).await.ok()
+    }
+
+    #[tokio::test]
+    async fn drops_a_server_gone_silent() {
+        assert!(served_for("silent", false).await.is_some(), "a silent server is dropped");
+        assert!(served_for("alive", true).await.is_none(), "a server answering pings is kept");
+    }
+
     #[test]
     fn names_a_server_by_its_host() {
         assert_eq!(default_name("ws://dray-vps:7317"), "dray-vps");
@@ -1075,6 +1126,8 @@ mod tests {
         let live = next_event(&mut rx, |e, p| e == "server_event" && p["event"] == "live_state").await;
         assert_eq!(live["server"], added.id.as_str());
 
+        // Idle past `SILENCE`: the server's pongs keep the connection.
+        tokio::time::sleep(SILENCE * 3).await;
         let projects = server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.unwrap();
         assert!(projects.is_array());
         let unknown = server_invoke(added.id.clone(), "open_in_app".into(), json!({})).await.unwrap_err();
