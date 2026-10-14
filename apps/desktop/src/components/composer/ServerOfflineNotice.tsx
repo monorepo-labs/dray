@@ -12,18 +12,20 @@ export default function ServerOfflineNotice({ server }: { server: ServerInfo }) 
   const reason = !server.on ? "turned off" : connecting ? "Reconnecting…" : server.error;
 
   return (
-    <div className="mb-2 flex items-center gap-3 px-1">
-      <SignalSlashIcon className="-mr-1 size-3.5 shrink-0 text-muted-foreground" />
+    // Button height, so the row holds still as the two states trade places.
+    <div className="mb-2 flex min-h-7 items-center gap-2 px-1">
+      <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
+        {connecting ? (
+          <Orb state="searching" variant="lighthouse" speed={3} label="Reconnecting" />
+        ) : (
+          <SignalSlashIcon className="size-3.5" />
+        )}
+      </span>
       <p className="min-w-0 flex-1 truncate text-ui text-foreground">
         {server.name} is offline
         {reason && <span className="text-muted-foreground"> · {reason}</span>}
       </p>
-      {connecting ? (
-        // Button height, so the row holds still as the two states trade places.
-        <span className="flex h-7 shrink-0 items-center">
-          <Orb state="searching" variant="lighthouse" speed={3} label="Reconnecting" />
-        </span>
-      ) : (
+      {!connecting && (
         <Button
           variant="secondary"
           size="sm"
