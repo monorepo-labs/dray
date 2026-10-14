@@ -1,4 +1,4 @@
-import { ServerOff } from "lucide-react";
+import { SignalSlashIcon } from "@heroicons/react/16/solid";
 
 import { Button } from "@/components/ui/button";
 import Spinner from "@/components/ui/spinner";
@@ -15,13 +15,16 @@ export default function ServerOfflineNotice({ server }: { server: ServerInfo }) 
 
   return (
     <div className="mb-2 flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2">
-      <ServerOff className="-mr-1 size-3.5 shrink-0 text-muted-foreground" />
+      <SignalSlashIcon className="-mr-1 size-3.5 shrink-0 text-muted-foreground" />
       <p className="min-w-0 flex-1 truncate text-ui text-foreground">
         {server.name} is offline
         {reason && <span className="text-muted-foreground"> · {reason}</span>}
       </p>
       {connecting ? (
-        <Spinner className="size-3.5 shrink-0 text-muted-foreground" />
+        // Button height, so the row holds still as the two states trade places.
+        <span className="flex h-7 shrink-0 items-center">
+          <Spinner className="size-3.5 text-muted-foreground" />
+        </span>
       ) : (
         <Button
           variant="secondary"
