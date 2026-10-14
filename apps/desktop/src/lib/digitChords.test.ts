@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { digitSlot, heldMods, modsAfterUp, sameMods, usableMods } from "./digitChords";
+import { IS_MAC } from "./platform";
+import {
+  digitSlot,
+  heldMods,
+  modsAfterUp,
+  registryHolder,
+  sameMods,
+  usableMods,
+} from "./digitChords";
 
 const ev = (key: string, m: Partial<Record<"metaKey" | "ctrlKey" | "altKey" | "shiftKey", boolean>> = {}) => ({
   key,
@@ -52,6 +60,29 @@ describe("modsAfterUp", () => {
 describe("sameMods", () => {
   it("refuses a superset, so ⌘⌥digit stays the split pane's", () => {
     expect(sameMods(mods({ meta: true, alt: true }), mods({ alt: true }))).toBe(false);
+  });
+});
+
+describe("registryHolder", () => {
+  beforeEach(() => {
+    const held = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (k: string) => held.get(k) ?? null,
+        setItem: (k: string, v: string) => held.set(k, v),
+      },
+    });
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis, "localStorage");
+  });
+
+  // ⌘0 is "Actual size". The same chord's ⌃0 alias is left to a digit row.
+  it("hands a digit to the shortcut bound on the exact accelerator", () => {
+    expect(registryHolder(mods(IS_MAC ? { meta: true } : { ctrl: true }), 9)).toBe("zoom.reset");
+    expect(registryHolder(mods(IS_MAC ? { ctrl: true } : { meta: true }), 9)).toBeNull();
+    expect(registryHolder(mods({ alt: true }), 9)).toBeNull();
   });
 });
 

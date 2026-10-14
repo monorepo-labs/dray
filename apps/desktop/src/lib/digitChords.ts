@@ -1,9 +1,10 @@
 import { useSyncExternalStore } from "react";
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
+import { holderOf } from "@/hooks/useShortcuts";
 import { channel } from "@/lib/channel";
 import { IS_MAC } from "@/lib/platform";
-import type { ShortcutGroup } from "@/lib/shortcuts";
+import type { ShortcutGroup, ShortcutId } from "@/lib/shortcuts";
 
 /// A modifier set, bound once over a run of digits.
 ///
@@ -19,7 +20,8 @@ const ACCEL: Partial<Mods> = IS_MAC ? { meta: true } : { ctrl: true };
 /// in settings rather than one per digit. `slots` is how many digits it takes:
 /// 9 is 1–9, 10 adds 0 as the tenth.
 export const DIGIT_CHORDS = [
-  { id: "session.jump", label: "Jump to session", group: "Sessions", slots: 10, mods: mods({ ctrl: true }) },
+  // Off Mac, Ctrl is the accelerator `tab.pick` already holds.
+  { id: "session.jump", label: "Jump to session", group: "Sessions", slots: 10, mods: mods(IS_MAC ? { ctrl: true } : { alt: true }) },
   { id: "pane.focus", label: "Focus pane", group: "Sessions", slots: 9, mods: mods({ ...ACCEL, alt: true }) },
   // By position in the titlebar's row, the way a browser numbers its tabs; 9
   // is the last tab, not the ninth.
@@ -55,6 +57,30 @@ export function setMods(id: DigitChordId, next: Mods | null) {
 export function useMods(id: DigitChordId): Mods {
   useSyncExternalStore(changed.subscribe, store);
   return modsFor(id);
+}
+
+/// Whether any row has left its default, for the settings tab's "Reset all".
+export function useAnyModsOverride(): boolean {
+  return Object.keys(useSyncExternalStore(changed.subscribe, store)).length > 0;
+}
+
+export function resetAllMods() {
+  overrides = {};
+  writeLocalStorage(KEY, overrides);
+  changed.emit();
+}
+
+/// The ordinary shortcut bound on exactly `mods` plus this slot's digit, if any.
+///
+/// Such a binding wins its digit: it predates the row (search moved onto ⌘5
+/// back when tab 5 was unbound) or was refused against it since. Only the
+/// accelerator alone can say that — the registry spells nothing else under a
+/// digit, and its `meta` taking ⌃ on a Mac is an alias nobody presses, so a
+/// digit row on ⌃ claims those keys outright.
+export function registryHolder(m: Mods, slot: number): ShortcutId | null {
+  const accel = IS_MAC ? m.meta && !m.ctrl : m.ctrl && !m.meta;
+  if (!accel) return null;
+  return holderOf({ key: String((slot + 1) % 10), meta: true, shift: m.shift, alt: m.alt });
 }
 
 type ModEvent = {
@@ -123,6 +149,10 @@ export function digitSlot(code: string): number | null {
 /// threading an index through every group it draws.
 let shown: readonly string[] | null = null;
 const badges = channel<void>();
+
+/// The rows the badges name, so a digit pressed while they are up opens the
+/// session wearing it even if the list has reordered underneath.
+export const jumpBadges = () => shown;
 
 export function showJumpBadges(ids: readonly string[] | null) {
   if (shown === ids) return;

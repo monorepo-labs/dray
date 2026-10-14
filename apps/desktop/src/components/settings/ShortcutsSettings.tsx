@@ -31,27 +31,42 @@ import {
   type Mods,
   modsAfterUp,
   modsFor,
+  registryHolder,
+  resetAllMods,
   sameMods,
   setMods,
   usableMods,
+  useAnyModsOverride,
   useMods,
 } from "@/lib/digitChords";
 import { IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /// Who already answers `mods` plus one of the first `slots` digits: another
-/// digit row, or a registry chord. Only the platform accelerator can collide
-/// with the registry, which spells nothing else under a digit.
+/// digit row, or the ordinary shortcut `registryHolder` would hand the key to.
 function digitClash(mods: Mods, slots: number, except?: DigitChordId): string | null {
   const row = DIGIT_CHORDS.find((c) => c.id !== except && sameMods(modsFor(c.id), mods));
   if (row) return row.label;
-  const accel = IS_MAC ? mods.meta && !mods.ctrl : mods.ctrl && !mods.meta;
-  if (!accel) return null;
-  const by = [..."1234567890"]
-    .slice(0, slots)
-    .map((key) => holderOf({ key, meta: true, shift: mods.shift, alt: mods.alt }))
-    .find((id) => id !== null);
+  const by = Array.from({ length: slots }, (_, slot) => registryHolder(mods, slot)).find(
+    (id) => id !== null,
+  );
   return by ? shortcutLabel(by) : null;
+}
+
+/// The digit row an ordinary chord would land on. A recorded chord's `meta`
+/// is ⌘ or ⌃ alike, and `useHotkey` answers both, so the keys actually
+/// pressed are checked beside the accelerator they are stored as.
+function digitRowFor(e: KeyboardEvent, chord: { meta: boolean; alt: boolean; shift: boolean }) {
+  const slot = digitSlot(e.code);
+  if (slot === null) return null;
+  const stored = { meta: IS_MAC && chord.meta, ctrl: !IS_MAC && chord.meta, alt: chord.alt, shift: chord.shift };
+  return (
+    DIGIT_CHORDS.find(
+      (c) =>
+        slot < c.slots &&
+        (sameMods(modsFor(c.id), stored) || sameMods(modsFor(c.id), heldMods(e))),
+    ) ?? null
+  );
 }
 
 /// One row for a modifier set bound over a run of digits.
@@ -174,7 +189,8 @@ export default function ShortcutsSettings() {
   const overrides = useShortcutOverrides();
   const [recording, setRecording] = useState<ShortcutId | null>(null);
   const [refused, setRefused] = useState<{ id: ShortcutId; reason: string } | null>(null);
-  const anyOverride = Object.keys(overrides).length > 0;
+  const digitsMoved = useAnyModsOverride();
+  const anyOverride = Object.keys(overrides).length > 0 || digitsMoved;
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   const matches = (label: string, group: string) =>
@@ -276,19 +292,7 @@ export default function ShortcutsSettings() {
                         return setRefused({ id, reason: "Reserved for a system shortcut." });
                       const by = holderOf(chord, id);
                       if (by) return setRefused({ id, reason: `Already used by ${shortcutLabel(by)}.` });
-                      const slot = digitSlot(e.nativeEvent.code);
-                      const row =
-                        slot !== null &&
-                        DIGIT_CHORDS.find(
-                          (c) =>
-                            slot < c.slots &&
-                            sameMods(modsFor(c.id), {
-                              meta: IS_MAC && chord.meta,
-                              ctrl: !IS_MAC && chord.meta,
-                              alt: chord.alt,
-                              shift: chord.shift,
-                            }),
-                        );
+                      const row = digitRowFor(e.nativeEvent, chord);
                       if (row) return setRefused({ id, reason: `Already used by ${row.label}.` });
                       setChord(id, chord);
                       setRecording(null);
@@ -320,7 +324,15 @@ export default function ShortcutsSettings() {
         </section>
       ))}
       {anyOverride && (
-        <Button variant="outline" size="sm" className="self-start" onClick={resetAllChords}>
+        <Button
+          variant="outline"
+          size="sm"
+          className="self-start"
+          onClick={() => {
+            resetAllChords();
+            resetAllMods();
+          }}
+        >
           Reset all to defaults
         </Button>
       )}

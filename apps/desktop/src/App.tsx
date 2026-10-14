@@ -126,7 +126,15 @@ import {
 import { stepZoom } from "@/lib/zoom";
 import { cycleTheme, toggleMode } from "@/hooks/useTheme";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
-import { digitSlot, heldMods, modsFor, sameMods, showJumpBadges } from "@/lib/digitChords";
+import {
+  digitSlot,
+  heldMods,
+  jumpBadges,
+  modsFor,
+  registryHolder,
+  sameMods,
+  showJumpBadges,
+} from "@/lib/digitChords";
 import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
 import { checkChangelog, markChangelogSeen, type Release } from "@/lib/changelog";
 import WhatsNewCard from "@/components/WhatsNewCard";
@@ -1815,13 +1823,17 @@ function App() {
     };
     const modifier = (e: KeyboardEvent) => ["Meta", "Control", "Shift", "Alt"].includes(e.key);
     const onKeyDown = (e: KeyboardEvent) => {
-      if (hotkeysSuspended() || !sameMods(heldMods(e), modsFor("session.jump"))) return hide();
+      const mods = modsFor("session.jump");
+      if (hotkeysSuspended() || !sameMods(heldMods(e), mods)) return hide();
       const slot = digitSlot(e.code);
       if (slot !== null) {
+        if (registryHolder(mods, slot)) return hide();
         e.preventDefault();
         e.stopPropagation();
+        // The numbers on screen, not today's order, or a row that moved while
+        // the modifier was held opens a session other than the one it wears.
+        const id = (jumpBadges() ?? jumpRef.current.rows())[slot];
         hide();
-        const id = jumpRef.current.rows()[slot];
         if (id) jumpRef.current.go(id);
         return;
       }

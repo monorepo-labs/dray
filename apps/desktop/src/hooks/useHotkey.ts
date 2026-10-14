@@ -7,6 +7,7 @@ import {
   digitSlot,
   heldMods,
   modsFor,
+  registryHolder,
   sameMods,
 } from "@/lib/digitChords";
 import { IS_MAC } from "@/lib/platform";
@@ -144,15 +145,20 @@ export function useDigitHotkey(
   useEffect(() => {
     if (!enabled) return;
     const slots = DIGIT_CHORDS.find((c) => c.id === id)!.slots;
+    // Capture on `window`, ahead of every `useHotkey`: those take ⌃ as ⌘, so a
+    // row on ⌃ would otherwise fire beside whatever ⌘ chord shares its digit.
     const onKeyDown = (e: KeyboardEvent) => {
       if (suspended) return;
       const slot = digitSlot(e.code);
-      if (slot === null || slot >= slots || !sameMods(heldMods(e), modsFor(id))) return;
+      const mods = modsFor(id);
+      if (slot === null || slot >= slots || !sameMods(heldMods(e), mods)) return;
+      if (registryHolder(mods, slot)) return;
       e.preventDefault();
+      e.stopPropagation();
       handlerRef.current(slot);
     };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [id, enabled]);
 }
 
