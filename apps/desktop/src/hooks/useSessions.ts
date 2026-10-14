@@ -1,5 +1,5 @@
 import { invoke, listen, LOCAL, noteSession, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
-import { mergeFrom, remoteServers, serverName, subscribeServers } from "@/lib/servers";
+import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
 import { restoreAttachments } from "@/hooks/useAttachments";
@@ -1346,7 +1346,9 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
     // deletion is the likely cause rather than the observed one.
     setError("Session not found.");
   } catch (e) {
-    fail(e);
+    // An offline server has its own notice over the composer, and its
+    // reconnect loads the transcript; the read's failure would say it twice.
+    if (serverConnected(serverOfSession(sessionId))) fail(e);
   }
 
   return false;
@@ -2338,6 +2340,11 @@ useEffect(() => {
       if (!ours(s.sessionId)) continue;
       retireStreamingBlock(s.sessionId);
       catchUp(s.sessionId).catch((e) => console.error("could not catch up", s.sessionId, e));
+    }
+    // A transcript opened while this server was down never loaded, so there is
+    // nothing above to catch up — it is read now rather than left blank.
+    for (const id of [selectedSessionIdRef.current, ...onScreenRef.current]) {
+      if (id && ours(id) && !sessionsRef.current.some((s) => s.sessionId === id)) void ensureLoaded(id);
     }
   });
   // Remote servers connected before this webview was listening, so their

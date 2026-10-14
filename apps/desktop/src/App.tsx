@@ -143,6 +143,9 @@ import { useSessionIssues } from "@/hooks/useIssues";
 import { useSessions } from "@/hooks/useSessions";
 import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailability";
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
+import ServerOfflineNotice from "@/components/composer/ServerOfflineNotice";
+import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
+import { useServers } from "@/lib/servers";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
 import { useAgentUpdates } from "@/hooks/useAgentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
@@ -403,6 +406,11 @@ function App() {
   // while the first read is out and null when it is installed — both mean
   // there is nothing to say, so the composer sends as it always did.
   const missingAgent = useMissingAgent(harness, activeServer);
+  // The open session's server, while it cannot be reached. Shown in place of
+  // the error a read or send would raise, and cleared by the reconnect itself.
+  const offlineServer = useServers().find(
+    (s) => !!selectedSessionId && s.id === activeServer && s.status !== "connected",
+  );
   // Held on a new task for every agent, so the session starts on the new
   // version. A live session only for pi and fx, whose update overwrites files
   // its child reads; the other three install beside the running binary.
@@ -3133,7 +3141,9 @@ function App() {
           // session cannot be pointed at one that is missing — and a session
           // that already exists has a CLI that already ran.
           notice={
-            !selectedSessionId && missingAgent ? (
+            offlineServer ? (
+              <ServerOfflineNotice server={offlineServer} />
+            ) : !selectedSessionId && missingAgent ? (
               <AgentMissingNotice agent={missingAgent} />
             ) : loggedOutAgent && authTurn && selectedSession ? (
               <LoginExpiredNotice
@@ -3292,15 +3302,21 @@ function App() {
           composing && mainSessionId !== selectedSessionId && "opacity-35",
         )}
       >
-        <Chat
-          {...paneState(mainSessionId ?? "")}
-          {...paneChat}
-          crowded={!collapsed && (panelShown || crewUp || (issuesOpen && !!pickedIssue))}
-          // Its own chords only while the composer is pointed here — the same
-          // gate a split pane takes, since Stop and scroll-to-bottom act on
-          // the session being written to.
-          active={!issuesOpen && viewTab === "chat" && mainSessionId === selectedSessionId}
-        />
+        {/* A transcript its server has not answered for yet; the reconnect
+            loads it. One already loaded keeps drawing what it has. */}
+        {offlineServer && !selectedSession && mainSessionId === selectedSessionId ? (
+          <TranscriptSkeleton />
+        ) : (
+          <Chat
+            {...paneState(mainSessionId ?? "")}
+            {...paneChat}
+            crowded={!collapsed && (panelShown || crewUp || (issuesOpen && !!pickedIssue))}
+            // Its own chords only while the composer is pointed here — the same
+            // gate a split pane takes, since Stop and scroll-to-bottom act on
+            // the session being written to.
+            active={!issuesOpen && viewTab === "chat" && mainSessionId === selectedSessionId}
+          />
+        )}
       </div>
       {singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
       </div>
