@@ -172,20 +172,21 @@ export function segmentWork(turn: Turn): TurnSegment[] {
 const RECORDING_IN_TEXT =
   /\/[^\s"'`()<>]*\/\.dray\/browser(?:-dev)?\/recordings\/[^/\s"'`()<>]+\/[^/\s"'`()<>]+\.mp4/g;
 
-/// The calls whose output may name a recording: `dray browser record stop`
-/// prints the MP4's path. Any other tool's output is not read for one, or a
-/// file that merely mentions a path — a test fixture read back — draws a
-/// player for a video that was never made. Read off the whole input, since
-/// each harness shapes a shell command its own way.
-function recordStops(calls: WorkItem[]): Set<string> {
-  const started = calls.flatMap((item) => (isToolGroup(item) ? item.calls : [item]));
-  return new Set(
-    started.flatMap(({ payload }) =>
-      payload.type === "tool_call_started" && /\bdray\s+browser\s+record\s+stop\b/.test(JSON.stringify(payload.input))
-        ? [payload.callId]
-        : [],
-    ),
-  );
+/// `dray browser record stop` run as a command: opening it, after a shell
+/// separator, or quoted after `-c` the way Codex wraps every command.
+/// `rg 'dray browser record stop'` only quotes it, and prints a fixture's fake
+/// path beside it.
+const RECORD_STOP = /(?:^|[;&|(\n]|\s-\w*c\s+['"])\s*dray\s+browser\s+record\s+stop\b/;
+
+/// The call's id where it is a `dray browser record stop`, which prints the
+/// MP4's path. No other tool's output is read for one, or a file that merely
+/// mentions a path — a test fixture read back — draws a player for a video
+/// that was never made. Every string in the input is tried, since each harness
+/// shapes a shell command its own way.
+function recordStopId({ payload }: AgentEvent): string | null {
+  if (payload.type !== "tool_call_started") return null;
+  const values = Object.values((payload.input ?? {}) as Record<string, unknown>).flat();
+  return values.some((v) => typeof v === "string" && RECORD_STOP.test(v)) ? payload.callId : null;
 }
 
 /// A picture or a recording, in the order the work produced them.
@@ -196,10 +197,16 @@ export type Media = { image: ImageRef } | { video: string };
 /// A screenshot the agent took is the one thing in its work the reader most
 /// wants to see and the least able to guess from "6 tool calls", so a closed
 /// segment draws these under its summary line the way a prompt draws its
-/// attachments. Read off the results sitting in `items` between the calls —
-/// a group's results are there too, held after it. `finalText` is skipped:
+/// attachments. Pictures are read off the results sitting in `items` between
+/// the calls — a group's results are there too, held after it. A recording is
+/// read off its call's result through `resultByCallId`, since a prompt sent
+/// mid-call can leave that result in a later segment. `finalText` is skipped:
 /// the collapsed view already draws that message, video and all.
-export function segmentMedia(items: WorkItem[], finalText: string | null): Media[] {
+export function segmentMedia(
+  items: WorkItem[],
+  finalText: string | null,
+  resultByCallId: Map<string, ToolResult>,
+): Media[] {
   const media: Media[] = [];
   // Seeded with the final message's own, which it plays itself — wherever else
   // in the stretch the same path turns up.
@@ -211,13 +218,12 @@ export function segmentMedia(items: WorkItem[], finalText: string | null): Media
       media.push({ video: path });
     }
   };
-  const stops = recordStops(items);
-  for (const item of items) {
-    if (isToolGroup(item)) continue;
-    const { payload } = item;
-    if (payload.type === "tool_call_completed") {
+  for (const event of items.flatMap((item) => (isToolGroup(item) ? item.calls : [item]))) {
+    const { payload } = event;
+    const stop = recordStopId(event);
+    if (stop) scan(resultByCallId.get(stop)?.text ?? "");
+    else if (payload.type === "tool_call_completed") {
       media.push(...payload.result.images.map((image) => ({ image })));
-      if (stops.has(payload.callId)) scan(payload.result.text);
     } else if (payload.type === "assistant_text") {
       scan(payload.text);
     }
@@ -248,7 +254,7 @@ export function sessionMedia(events: AgentEvent[]): SessionMedia[] {
       if (key) add(key, { image, byYou });
     }
   };
-  const stops = recordStops(events);
+  const stops = new Set(events.map(recordStopId));
   for (const { subagent, payload } of events) {
     if (subagent) continue;
     // A relayed `dray send` arrives as a user message too, but another

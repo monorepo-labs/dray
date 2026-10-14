@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildTranscript, drawsSameTurn, isToolGroup, segmentMedia, segmentWork, sessionMedia, type Turn } from "@/lib/transcript";
-import type { AgentEvent, AgentEventPayload } from "@/types/events";
+import type { AgentEvent, AgentEventPayload, ToolResult } from "@/types/events";
 
 /// Only the envelope fields `buildTranscript` orders and keys by are filled;
 /// the rest has no bearing on the two rules under test.
@@ -785,33 +785,56 @@ describe("segmentMedia", () => {
   /// A grouped run's results sit after the group in `work`, so the pictures of
   /// calls folded into one row must still be found.
   it("finds every picture, grouped calls included, and each recording once", () => {
-    const { turns } = buildTranscript(
+    const { turns, resultByCallId } = buildTranscript(
       [
         prompt(0, "go", false),
         callStarted(1, "a"),
         result(2, "a", "", 1),
         callStarted(3, "b", stop),
         result(4, "b", `saved ${video}`, 2),
-        text(5, "done"),
-        completed(6, "done"),
+        text(5, `watch ${video}.`),
+        text(6, "done"),
+        completed(7, "done"),
       ],
       false,
     );
     const [seg] = segmentWork(turns[0]);
-    const media = segmentMedia(seg.items, turns[0].finalText);
+    const media = segmentMedia(seg.items, turns[0].finalText, resultByCallId);
     expect(media.map((m) => ("image" in m ? m.image.path : m.video))).toEqual([
       "/archived/a-0.png",
+      video,
       "/archived/b-0.png",
       "/archived/b-1.png",
-      video,
     ]);
   });
 
+  const paths = (items: AgentEvent[]) => {
+    const results = new Map(
+      items.flatMap(({ payload }) => (payload.type === "tool_call_completed" ? [[payload.callId, payload.result]] : [])) as [string, ToolResult][],
+    );
+    return segmentMedia(items, null, results).map((m) => ("video" in m ? m.video : null));
+  };
+
   /// A file that only mentions a recording path — this very test file, read
-  /// back by an agent — is not a recording, so it draws no player.
+  /// back by an agent, or searched for the command — is not a recording.
   it("reads recordings out of record stop's output alone", () => {
-    const media = segmentMedia([callStarted(1, "a", { file_path: "/x/transcript.test.ts" }), result(2, "a", `const video = "${video}"`, 0)], null);
-    expect(media).toEqual([]);
+    const fixture = `const video = "${video}"`;
+    expect(paths([callStarted(1, "a", { file_path: "/x/transcript.test.ts" }), result(2, "a", fixture, 0)])).toEqual([]);
+    expect(paths([callStarted(1, "a", { command: "rg -n 'dray browser record stop' src" }), result(2, "a", fixture, 0)])).toEqual([]);
+  });
+
+  /// Codex wraps every command in its shell's `-lc '…'`.
+  it("takes record stop wherever a shell runs it", () => {
+    for (const command of [`/bin/zsh -lc 'dray browser record stop flow'`, "cd /x && dray browser record stop"]) {
+      expect(paths([callStarted(1, "a", { command }), result(2, "a", `saved ${video}`, 0)])).toEqual([video]);
+    }
+  });
+
+  /// A prompt sent mid-call can leave the result in a later segment, so it is
+  /// read through the transcript's own map rather than out of `items`.
+  it("finds a recording whose result landed after its segment", () => {
+    const results = new Map([["a", (result(2, "a", `saved ${video}`, 0).payload as { result: ToolResult }).result]]);
+    expect(segmentMedia([callStarted(1, "a", stop)], null, results)).toEqual([{ video }]);
   });
 
   /// The collapsed view already draws the final message, video and all.
@@ -819,6 +842,7 @@ describe("segmentMedia", () => {
     const media = segmentMedia(
       [result(1, "a", `saved ${video}`, 0), text(2, `here: ${video}`)],
       `here: ${video}`,
+      new Map(),
     );
     expect(media).toEqual([]);
   });

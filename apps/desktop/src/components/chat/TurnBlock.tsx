@@ -156,7 +156,7 @@ export default memo(function TurnBlock({
             }
             // Open, every row draws its own pictures; closed, they would be
             // behind the click, so they are lifted out under the summary.
-            const media = open ? null : segmentMedia(seg.items, turn.finalText);
+            const media = open ? null : segmentMedia(seg.items, turn.finalText, resultByCallId);
             return (
               <Fragment key={i}>
                 {seg.rows > 0 && <SummaryToggle label={segmentLabel(seg)} open={open} onToggle={toggle} />}
