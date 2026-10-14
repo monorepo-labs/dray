@@ -538,15 +538,19 @@ const setProjectSpace = async (path: string, space: string | null) => {
 // filter both draw. Settings is the only caller.
 //
 // The order is kept on this device, since it may interleave servers. The
-// project's own server still takes the move within its share, so its
-// `projects.json` keeps the same relative order for any other client.
+// project's own server still takes the move, placed after the same neighbour
+// it now follows here — measured against the server's own list, which another
+// client may have arranged differently.
 const moveProject = async (path: string, delta: number) => {
-  const before = orderedProjects.map(pathOfProject);
-  const after = moveSpace(before, path, delta);
+  const after = moveSpace(orderedProjects.map(pathOfProject), path, delta);
   setProjectOrder(after);
   const server = serverOfPath(path);
   const share = (paths: string[]) => paths.filter((p) => serverOfPath(p) === server);
-  const step = share(after).indexOf(path) - share(before).indexOf(path);
+  const placed = share(after);
+  const prev = placed[placed.indexOf(path) - 1];
+  const current = share(projects.map(pathOfProject));
+  const rest = current.filter((p) => p !== path);
+  const step = (prev ? rest.indexOf(prev) + 1 : 0) - current.indexOf(path);
   if (!step) return;
   try {
     const list = await invoke<Project[]>("move_project", { path, delta: step });
