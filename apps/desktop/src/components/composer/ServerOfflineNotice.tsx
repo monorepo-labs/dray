@@ -1,3 +1,5 @@
+import { ServerOff } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
 import Spinner from "@/components/ui/spinner";
 import { invoke, LOCAL } from "@/lib/transport";
@@ -13,6 +15,7 @@ export default function ServerOfflineNotice({ server }: { server: ServerInfo }) 
 
   return (
     <div className="mb-2 flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2">
+      <ServerOff className="-mr-1 size-3.5 shrink-0 text-muted-foreground" />
       <p className="min-w-0 flex-1 truncate text-ui text-foreground">
         {server.name} is offline
         {reason && <span className="text-muted-foreground"> · {reason}</span>}
