@@ -1543,12 +1543,12 @@ export default function Sidebar({
   );
 }
 
-/// The ⌘⇧↑/↓ hint, laid out on the session rows' own edges so it reads as the
-/// last row rather than as a caption under the list.
+/// The ⌘⇧↑/↓ and jump hint, laid out on the session rows' own edges so it reads
+/// as the last row rather than as a caption under the list.
 ///
 /// With nothing selected both arrows land on the same place — the newest session
-/// — so showing the pair would offer a choice that isn't one. One arrow, and the
-/// verb changes with it: entering the list is a jump, walking it is a switch.
+/// — so showing the pair would offer a choice that isn't one, and one arrow is
+/// drawn.
 function ShortcutHint({
   selected,
   grouped,
@@ -1563,16 +1563,14 @@ function ShortcutHint({
 }) {
   return (
     <>
-      <HintRow label={selected ? "Switch tasks" : "Jump to task"}>
+      {/* Both ways to move between tasks on one row, at its two ends. No
+          label: beside both sets of keys there was room for one word, and the
+          keys say it. */}
+      <HintRow>
         <ShortcutKeys
           ids={selected ? ["session.prev", "session.next"] : ["session.next"]}
           className={HINT_KEYS}
         />
-      </HintRow>
-      {/* Its own row rather than squeezed beside the arrows: the pair already
-          spends the width, and holding the modifier draws the numbers this
-          row promises. */}
-      <HintRow label="Go to task">
         <DigitKeys id="session.jump" className={HINT_KEYS} />
       </HintRow>
       {/* The chord steps every heading — projects included — but it is only
@@ -1599,7 +1597,7 @@ function HintRow({
   children,
   className,
 }: {
-  label: string;
+  label?: string;
   children?: React.ReactNode;
   className?: string;
 }) {
