@@ -108,6 +108,18 @@ function start() {
     present();
     notify();
   });
+  void listen<{ sessionId: string; tab: number; verb: string | null }>("browser_driven", (e) => {
+    const { tab, verb } = e.payload;
+    clearTimeout(driven.get(tab)?.timer);
+    driven.set(tab, {
+      timer: setTimeout(() => {
+        driven.delete(tab);
+        notify();
+      }, DRIVEN_HOLD),
+      doing: `Agent is ${(verb && DOING[verb]) || "using this tab"}`,
+    });
+    notify();
+  });
   void listen<{ sessionId: string; recording: boolean }>("browser_recording", (e) => {
     if (e.payload.recording) recording.add(e.payload.sessionId);
     else recording.delete(e.payload.sessionId);
@@ -294,6 +306,57 @@ const recording = new Set<string>();
 
 export function useRecording(sessionId: string): boolean {
   return useSyncExternalStore(subscribe, () => recording.has(sessionId));
+}
+
+/// Tabs a `dray browser` verb touched within `DRIVEN_HOLD`, keyed by tab id,
+/// which is unique across sessions. Held past the verb because the agent
+/// thinks between verbs, and a mark that blinks off meanwhile tells the
+/// reader the tab is theirs again a moment before the next click lands.
+const driven = new Map<number, { timer: ReturnType<typeof setTimeout>; doing: string }>();
+const DRIVEN_HOLD = 8000;
+
+/// What the agent is doing, by `dray browser` verb. A verb missing here, and
+/// the gap between verbs, read as "using this tab".
+const DOING: Record<string, string> = {
+  open: "opening a page",
+  back: "going back",
+  forward: "going forward",
+  reload: "reloading the page",
+  close: "closing the tab",
+  tabs: "listing tabs",
+  tab_new: "opening a tab",
+  tab_switch: "switching tabs",
+  tab_close: "closing a tab",
+  snapshot: "reading the page",
+  click: "clicking",
+  dbl_click: "double-clicking",
+  focus: "focusing a field",
+  hover: "hovering",
+  type: "typing",
+  fill: "filling a field",
+  press: "pressing a key",
+  check: "ticking a box",
+  uncheck: "unticking a box",
+  select: "picking an option",
+  scroll: "scrolling",
+  scroll_into_view: "scrolling",
+  get: "reading the page",
+  is: "reading the page",
+  wait: "waiting on the page",
+  screenshot: "taking a screenshot",
+  eval: "running a script",
+  console: "reading the console",
+  errors: "reading the page's errors",
+  set_viewport: "resizing the page",
+  set_device: "resizing the page",
+  zoom: "zooming",
+  record_start: "recording",
+  record_stop: "saving a recording",
+};
+
+/// The sentence for a tab the agent is driving, or null where it is not.
+export function useDriven(tab: number | undefined): string | null {
+  return useSyncExternalStore(subscribe, () => (tab === undefined ? null : (driven.get(tab)?.doing ?? null)));
 }
 
 /// Read at a keypress, where a hook's copy would be the last render's.

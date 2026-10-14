@@ -582,6 +582,9 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
     );
     let _driving = Driving::start(session);
     let tab = active_id(session);
+    // The verb's wire name — `click`, `screenshot` — which the pane words.
+    let verb = serde_json::to_value(&action).ok().and_then(|v| Some(v["action"].as_str()?.to_string()));
+    emit_driven(session, tab, verb.as_deref());
     // Every verb counts as the tab being seen. All but these act on the
     // active tab, so a discarded one is woken first.
     let wakes = !matches!(
@@ -607,8 +610,20 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
     }
     if let Some(tab) = active_id(session) {
         touch(tab);
+        emit_driven(session, Some(tab), None);
     }
     answer
+}
+
+/// Tells the pane the agent just acted on `tab`, so the strip can mark it and
+/// the reader knows to keep their hands off. Sent as a verb starts and again
+/// as it ends; the pane holds the mark a few seconds past the last one, since
+/// the agent thinks between verbs and a mark per verb would only flicker.
+/// `verb` is the one now running, absent on the closing send.
+fn emit_driven(session: &str, tab: Option<i32>, verb: Option<&str>) {
+    if let Some(tab) = tab {
+        emit("browser_driven", json!({ "sessionId": session, "tab": tab, "verb": verb }));
+    }
 }
 
 /// Sessions a `dray browser` verb is running in, one entry per verb, so
