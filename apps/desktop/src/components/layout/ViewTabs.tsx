@@ -21,7 +21,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useDragReorder } from "@/hooks/useDragReorder";
-import { useHotkey } from "@/hooks/useHotkey";
+import { useDigitHotkey, useHotkey } from "@/hooks/useHotkey";
 import { activateFile, closeFile, useOpenFiles } from "@/hooks/useOpenFiles";
 import {
   activateBlankTab,
@@ -292,15 +292,7 @@ export default function ViewTabs({
 
   // ⌘1–⌘8 by position and ⌘9 the last, every browser's numbering.
   const pickAt = (i: number) => items[i] && !items[i].locked && items[i].pick();
-  useHotkey("tab.1", () => pickAt(0));
-  useHotkey("tab.2", () => pickAt(1));
-  useHotkey("tab.3", () => pickAt(2));
-  useHotkey("tab.4", () => pickAt(3));
-  useHotkey("tab.5", () => pickAt(4));
-  useHotkey("tab.6", () => pickAt(5));
-  useHotkey("tab.7", () => pickAt(6));
-  useHotkey("tab.8", () => pickAt(7));
-  useHotkey("tab.9", () => pickAt(items.length - 1));
+  useDigitHotkey("tab.pick", (slot) => pickAt(slot === 8 ? items.length - 1 : slot));
   // ⌘⇧[ and ⌘⇧], wrapping at the ends the way a browser's do.
   const step = (delta: number) => {
     const at = items.findIndex((item) => item.active);

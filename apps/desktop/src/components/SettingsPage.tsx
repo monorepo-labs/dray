@@ -1044,7 +1044,7 @@ function SupportBlock() {
 function Section({ title, children }: { title?: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-4">
-      {title && <h2 className="text-ui font-medium text-muted-foreground">{title}</h2>}
+      {title && <h2 className="text-ui font-medium text-foreground">{title}</h2>}
       {children}
     </section>
   );

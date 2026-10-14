@@ -67,15 +67,6 @@ export const SHORTCUTS = [
   { id: "filter.prev", label: "Previous project filter", group: "Sessions", chord: k("ArrowLeft", { alt: true }) },
   { id: "filter.next", label: "Next project filter", group: "Sessions", chord: k("ArrowRight", { alt: true }) },
   { id: "search", label: "Search sessions", group: "Sessions", chord: k("f") },
-  { id: "pane.1", label: "Focus pane 1", group: "Sessions", chord: k("1", { alt: true, code: "Digit1" }) },
-  { id: "pane.2", label: "Focus pane 2", group: "Sessions", chord: k("2", { alt: true, code: "Digit2" }) },
-  { id: "pane.3", label: "Focus pane 3", group: "Sessions", chord: k("3", { alt: true, code: "Digit3" }) },
-  { id: "pane.4", label: "Focus pane 4", group: "Sessions", chord: k("4", { alt: true, code: "Digit4" }) },
-  { id: "pane.5", label: "Focus pane 5", group: "Sessions", chord: k("5", { alt: true, code: "Digit5" }) },
-  { id: "pane.6", label: "Focus pane 6", group: "Sessions", chord: k("6", { alt: true, code: "Digit6" }) },
-  { id: "pane.7", label: "Focus pane 7", group: "Sessions", chord: k("7", { alt: true, code: "Digit7" }) },
-  { id: "pane.8", label: "Focus pane 8", group: "Sessions", chord: k("8", { alt: true, code: "Digit8" }) },
-  { id: "pane.9", label: "Focus pane 9", group: "Sessions", chord: k("9", { alt: true, code: "Digit9" }) },
   { id: "tab.close", label: "Close tab or pane", group: "Sessions", chord: k("w") },
 
   { id: "sidebar.toggle", label: "Toggle sidebar", group: "Panels and views", chord: k("b") },
@@ -94,18 +85,6 @@ export const SHORTCUTS = [
   { id: "doc.save", label: "Save doc", group: "Panels and views", chord: k("s") },
   { id: "subtab.prev", label: "Previous tab in the view or panel", group: "Panels and views", chord: k("ArrowLeft", { shift: true }) },
   { id: "subtab.next", label: "Next tab in the view or panel", group: "Panels and views", chord: k("ArrowRight", { shift: true }) },
-  // By position in the titlebar's row, the way a browser numbers its tabs:
-  // the reader arranges the row, so a fixed key per view would point at
-  // wherever that view had been dragged to. ⌘9 is the last tab, not the ninth.
-  { id: "tab.1", label: "Tab 1", group: "Panels and views", chord: k("1") },
-  { id: "tab.2", label: "Tab 2", group: "Panels and views", chord: k("2") },
-  { id: "tab.3", label: "Tab 3", group: "Panels and views", chord: k("3") },
-  { id: "tab.4", label: "Tab 4", group: "Panels and views", chord: k("4") },
-  { id: "tab.5", label: "Tab 5", group: "Panels and views", chord: k("5") },
-  { id: "tab.6", label: "Tab 6", group: "Panels and views", chord: k("6") },
-  { id: "tab.7", label: "Tab 7", group: "Panels and views", chord: k("7") },
-  { id: "tab.8", label: "Tab 8", group: "Panels and views", chord: k("8") },
-  { id: "tab.9", label: "Last tab", group: "Panels and views", chord: k("9") },
   { id: "tab.prev", label: "Previous tab", group: "Panels and views", chord: k("{", { shift: true, code: "BracketLeft" }) },
   { id: "tab.next", label: "Next tab", group: "Panels and views", chord: k("}", { shift: true, code: "BracketRight" }) },
   { id: "chat.bottom", label: "Scroll chat to bottom", group: "Panels and views", chord: k("ArrowDown") },
@@ -152,11 +131,7 @@ export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord | null>> = {
   // The panel's tabs gave ⌘⇧[ ] to the titlebar's.
   "panel.tab.prev": k("{", { shift: true, code: "BracketLeft" }),
   "panel.tab.next": k("}", { shift: true, code: "BracketRight" }),
-  ...Object.fromEntries(
-    [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`pane.${n}`, k(String(n))]),
-  ),
   // The titlebar's tabs, new with it.
-  ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`tab.${n}`, null])),
   "tab.prev": null,
   "tab.next": null,
   "mode.toggle": null,

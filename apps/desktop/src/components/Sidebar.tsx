@@ -40,7 +40,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import ShortcutKeys from "@/components/ShortcutKeys";
+import ShortcutKeys, { DigitKeys } from "@/components/ShortcutKeys";
 import { Kbd } from "@/components/ui/kbd";
 import {
   Tooltip,
@@ -57,6 +57,7 @@ import { sessionBranch } from "@/lib/pr";
 import { projectLabel, serverConnected, serverName, useServers } from "@/lib/servers";
 import { LOCAL, serverOfPath } from "@/lib/transport";
 import { useResizable } from "@/components/ResizeHandle";
+import { useJumpDigit } from "@/lib/digitChords";
 import { cn } from "@/lib/utils";
 import type {
   PrMark,
@@ -1568,6 +1569,12 @@ function ShortcutHint({
           className={HINT_KEYS}
         />
       </HintRow>
+      {/* Its own row rather than squeezed beside the arrows: the pair already
+          spends the width, and holding the modifier draws the numbers this
+          row promises. */}
+      <HintRow label="Go to task">
+        <DigitKeys id="session.jump" className={HINT_KEYS} />
+      </HintRow>
       {/* The chord steps every heading — projects included — but it is only
           taught where a grid exists. Two chords a keystroke apart in the same
           corner is one too many to read past, and the project jump is the half
@@ -2336,6 +2343,8 @@ function SessionRow({
   const parentCarriesOn = guides[depth - 1] ?? false;
   // The trailing slot is drawing a spinner or an orb rather than a timestamp.
   const live = (marksLive && pr?.checksState === "RUNNING") || status === "in_progress";
+  // While the jump modifier is held, this row's digit takes the slot.
+  const digit = useJumpDigit(item.sessionId);
 
   return (
     <RowMenu
@@ -2591,7 +2600,7 @@ function SessionRow({
               "pointer-events-none flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150",
               // Only the timestamp gives way to the buttons. Something in
               // flight is still in flight under the cursor.
-              !live && "row-reached:opacity-0",
+              !live && !digit && "row-reached:opacity-0",
             )}
           >
             {/* The orb takes the timestamp's place rather than a slot of its
@@ -2617,7 +2626,9 @@ function SessionRow({
                 `mr-[3px]` sits it on the orb's centre line: the glyph is 14px
                 against the orb's 20px box, and both are flush right, so without
                 it the mark shifts sideways row to row. */}
-            {marksLive && pr?.checksState === "RUNNING" ? (
+            {digit ? (
+              <Kbd>{digit}</Kbd>
+            ) : marksLive && pr?.checksState === "RUNNING" ? (
               <CircleDashed
                 className="mr-[3px] size-3.5 animate-spin text-accent-command [animation-duration:3s]"
                 strokeWidth={1.5}

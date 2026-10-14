@@ -87,7 +87,7 @@ export default function SpacesSettings({
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-4">
-          <h2 className="text-ui font-medium text-muted-foreground">Spaces</h2>
+          <h2 className="text-ui font-medium text-foreground">Spaces</h2>
           {/* On the heading's own row: it acts on the list under it, and a
               button at the bottom of a list that grows moves every time one is
               added. */}
@@ -197,7 +197,7 @@ export default function SpacesSettings({
       </div>
 
       <div className="flex flex-col gap-3">
-        <h2 className="text-ui font-medium text-muted-foreground">Projects</h2>
+        <h2 className="text-ui font-medium text-foreground">Projects</h2>
 
         {projects.length > 1 && (
           <p className="text-ui text-muted-foreground">

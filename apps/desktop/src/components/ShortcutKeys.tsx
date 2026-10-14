@@ -3,6 +3,7 @@ import { Fragment } from "react";
 
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { useShortcutOverrides, chordFor } from "@/hooks/useShortcuts";
+import { DIGIT_CHORDS, type DigitChordId, modCaps, useMods } from "@/lib/digitChords";
 import { FOLD, formatChords, type ShortcutId } from "@/lib/shortcuts";
 
 /// The caps for one or more shortcuts, read off the same store `useHotkey`
@@ -33,6 +34,29 @@ export default function ShortcutKeys({
           ))}
         </Fragment>
       ))}
+    </KbdGroup>
+  );
+}
+
+/// The caps for one `DIGIT_CHORDS` row: its modifiers, then `digit` — or the
+/// row's whole range where none is given.
+export function DigitKeys({
+  id,
+  digit,
+  className,
+}: {
+  id: DigitChordId;
+  digit?: number;
+  className?: string;
+}) {
+  const mods = useMods(id);
+  const slots = DIGIT_CHORDS.find((c) => c.id === id)!.slots;
+  return (
+    <KbdGroup className={className}>
+      {modCaps(mods).map((cap) => (
+        <Kbd key={cap}>{cap}</Kbd>
+      ))}
+      <Kbd>{digit ?? (slots === 10 ? "1–0" : `1–${slots}`)}</Kbd>
     </KbdGroup>
   );
 }

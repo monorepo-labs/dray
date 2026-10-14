@@ -307,7 +307,7 @@ export default function TranscriptionSettings({
     <div className="flex flex-col gap-7">
       <section className="flex flex-col gap-4">
         <div className="flex flex-col gap-1">
-          <h2 className="text-ui font-medium text-muted-foreground">Model</h2>
+          <h2 className="text-ui font-medium text-foreground">Model</h2>
           {/* The one thing worth saying here, and the reason the download is
               worth its size: nothing is sent anywhere. */}
           <p className="text-ui text-muted-foreground">
@@ -351,7 +351,7 @@ export default function TranscriptionSettings({
       </section>
 
       <section className="flex flex-col gap-4">
-        <h2 className="text-ui font-medium text-muted-foreground">Input</h2>
+        <h2 className="text-ui font-medium text-foreground">Input</h2>
 
         <div className="flex flex-col gap-1">
           <div className="flex items-center justify-between gap-4">

@@ -117,10 +117,16 @@ import { closeFile, useOpenFiles } from "@/hooks/useOpenFiles";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
-import { setHotkeysSuspended, useHotkey } from "@/hooks/useHotkey";
+import {
+  hotkeysSuspended,
+  setHotkeysSuspended,
+  useDigitHotkey,
+  useHotkey,
+} from "@/hooks/useHotkey";
 import { stepZoom } from "@/lib/zoom";
 import { cycleTheme, toggleMode } from "@/hooks/useTheme";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { digitSlot, heldMods, modsFor, sameMods, showJumpBadges } from "@/lib/digitChords";
 import { dismissNotice, getNotices, pushNotice } from "@/hooks/useNotices";
 import { checkChangelog, markChangelogSeen, type Release } from "@/lib/changelog";
 import WhatsNewCard from "@/components/WhatsNewCard";
@@ -166,7 +172,6 @@ import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { buildTranscript, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 
-const PANE_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 /// One empty set, so clearing the rail's open rows twice is one state change.
 const NO_ROWS: ReadonlySet<string> = new Set();
 
@@ -1789,6 +1794,55 @@ function App() {
       document.removeEventListener("keyup", onKeyUp);
     };
   }, [prevChord, nextChord]);
+  // Holding the jump modifier numbers the first ten rows; a digit under it
+  // selects one. On `window` in the capture phase, ahead of every `useHotkey`:
+  // those accept ⌃ as ⌘, so ⌃1 would also flip to the Chat view, and ⌥1 would
+  // type "¡" into the composer. Not `useDigitHotkey`, which has no hold.
+  const jumpRef = useRef({ rows: (): string[] => [], go: (_id: string) => {} });
+  jumpRef.current = {
+    rows: () => (draftsShown ? [] : ordered.slice(0, 10).map((i) => i.sessionId)),
+    go: (id) =>
+      goToSession(() => {
+        if (id !== selectedSessionId) void handleSelectSessionIndexItem(id);
+      }),
+  };
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const hide = () => {
+      clearTimeout(timer);
+      timer = undefined;
+      showJumpBadges(null);
+    };
+    const modifier = (e: KeyboardEvent) => ["Meta", "Control", "Shift", "Alt"].includes(e.key);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (hotkeysSuspended() || !sameMods(heldMods(e), modsFor("session.jump"))) return hide();
+      const slot = digitSlot(e.code);
+      if (slot !== null) {
+        e.preventDefault();
+        e.stopPropagation();
+        hide();
+        const id = jumpRef.current.rows()[slot];
+        if (id) jumpRef.current.go(id);
+        return;
+      }
+      if (!modifier(e)) return hide();
+      // Long enough that a quick chord never flashes the numbers.
+      timer ??= setTimeout(() => showJumpBadges(jumpRef.current.rows()), 300);
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (modifier(e)) hide();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    // A modifier released in another app sends no keyup here.
+    window.addEventListener("blur", hide);
+    return () => {
+      hide();
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+      window.removeEventListener("blur", hide);
+    };
+  }, []);
   // Headings, not split groups: with no grid on screen the chord used to be
   // ⌘⇧ under another name, stepping one row at a time and never reaching the
   // next project the way its own label promised.
@@ -2327,9 +2381,8 @@ function App() {
     void handleSelectSessionIndexItem(id);
     focusComposer();
   };
-  // Nine digits, so a tenth pane has no chord — it still takes a click. A
-  // fixed list, so the hook count never moves between renders.
-  for (const n of PANE_DIGITS) useHotkey(`pane.${n}`, () => focusPane(n), { enabled: gridShown });
+  // Nine digits, so a tenth pane has no chord — it still takes a click.
+  useDigitHotkey("pane.focus", (slot) => focusPane(slot + 1), { enabled: gridShown });
   // ⌘W closes the innermost thing the main column has open, which is what it
   // means in every editor and browser this app is read beside. The views are
   // mutually exclusive, so the chain is an ordering rather than an

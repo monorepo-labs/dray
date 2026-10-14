@@ -77,34 +77,41 @@ describe("yieldMovedDefaults", () => {
     expect(yieldMovedDefaults(store)).toBe(store);
   });
 
-  // ⌘⌥5 was free before the views and panes swapped, so a reader may hold it.
-  // The pane's old ⌘5 is tab 5's now, so it yields to nothing rather than
-  // collide with it.
-  it("unbinds a pane whose old chord is a tab's now", () => {
-    const out = yieldMovedDefaults({ search: chord("5", true) });
-    expect(out.search).toEqual(chord("5", true));
-    expect(out["pane.5"]).toBeNull();
+  const brk = (alt: boolean, shift: boolean) => ({
+    key: shift ? "{" : "[",
+    meta: true,
+    shift,
+    alt,
+    code: "BracketLeft",
   });
 
-  // ⌘5 was free before the titlebar's tabs, so a reader may hold it.
+  // ⌘⌥[ was free before the panel's tabs moved onto it. Their old ⌘⇧[ is the
+  // titlebar's now, so the row yields to nothing rather than collide.
+  it("unbinds a moved row whose old chord is taken now", () => {
+    const out = yieldMovedDefaults({ search: brk(true, false) });
+    expect(out.search).toEqual(brk(true, false));
+    expect(out["panel.tab.prev"]).toBeNull();
+  });
+
+  it("puts a moved row back on its old chord where that is free", () => {
+    const out = yieldMovedDefaults({ search: brk(true, false), "tab.prev": chord("j") });
+    expect(out["panel.tab.prev"]).toEqual(brk(false, true));
+  });
+
+  // ⌘⌥L was free before the mode toggle, so a reader may hold it.
   it("unbinds a new row whose default the reader already holds", () => {
-    const out = yieldMovedDefaults({ search: chord("5") });
-    expect(out.search).toEqual(chord("5"));
-    expect(out["tab.5"]).toBeNull();
-    expect("tab.4" in out).toBe(false);
-  });
-
-  it("unbinds rather than collide where the old chord is taken too", () => {
-    const out = yieldMovedDefaults({ search: chord("5", true), attach: chord("5") });
-    expect(out["pane.5"]).toBeNull();
+    const out = yieldMovedDefaults({ search: chord("l", true) });
+    expect(out.search).toEqual(chord("l", true));
+    expect(out["mode.toggle"]).toBeNull();
+    expect("theme.next" in out).toBe(false);
   });
 
   it("writes the fix back on the first read", async () => {
-    held.set("ade.shortcuts", JSON.stringify({ search: chord("5", true) }));
+    held.set("ade.shortcuts", JSON.stringify({ search: chord("l", true) }));
     vi.resetModules();
     const fresh = await import("@/hooks/useShortcuts");
-    expect(fresh.chordFor("pane.5")).toBeNull();
-    expect(fresh.chordFor("search")).toEqual(chord("5", true));
-    expect(JSON.parse(held.get("ade.shortcuts")!)["pane.5"]).toBeNull();
+    expect(fresh.chordFor("mode.toggle")).toBeNull();
+    expect(fresh.chordFor("search")).toEqual(chord("l", true));
+    expect(JSON.parse(held.get("ade.shortcuts")!)["mode.toggle"]).toBeNull();
   });
 });
