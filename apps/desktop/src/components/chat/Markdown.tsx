@@ -231,7 +231,7 @@ function MarkdownImpl({
 
 /// Where `dray browser record` writes, the one place the asset protocol lets
 /// a video be read from.
-const RECORDING = /\/\.dray\/browser(-dev)?\/recordings\/[^/]+\/[^/]+\.mp4$/;
+const RECORDING = /\/\.dray(?:-dev|-worktrees\/[^/]+)?\/browser(-dev)?\/recordings\/[^/]+\/[^/]+\.mp4$/;
 
 /// Every `span` in the rendered markdown, passed through untouched unless
 /// `rehypeFilePaths` marked it.

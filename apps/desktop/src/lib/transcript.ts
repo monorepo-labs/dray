@@ -170,7 +170,7 @@ export function segmentWork(turn: Turn): TurnSegment[] {
 /// is anchored, since this searches prose and tool output rather than judging
 /// one path.
 const RECORDING_IN_TEXT =
-  /\/[^\s"'`()<>]*\/\.dray\/browser(?:-dev)?\/recordings\/[^/\s"'`()<>]+\/[^/\s"'`()<>]+\.mp4/g;
+  /\/[^\s"'`()<>]*\/\.dray(?:-dev|-worktrees\/[^/\s"'`()<>]+)?\/browser(?:-dev)?\/recordings\/[^/\s"'`()<>]+\/[^/\s"'`()<>]+\.mp4/g;
 
 /// A picture or a recording, in the order the work produced them.
 export type Media = { image: ImageRef } | { video: string };

@@ -273,9 +273,10 @@ pub async fn config_dir() -> Result<PathBuf> {
     Ok(shared)
 }
 
-/// The `<name>` of a path under `.claude/worktrees/<name>/`.
+/// The `<name>` of a path under `.claude/worktrees/<name>/`, the innermost
+/// where worktrees nest.
 fn worktree_name(dir: &str) -> Option<&str> {
-    let (_, rest) = dir.split_once("/.claude/worktrees/")?;
+    let (_, rest) = dir.rsplit_once("/.claude/worktrees/")?;
     rest.split('/').next().filter(|name| !name.is_empty())
 }
 
@@ -2051,6 +2052,7 @@ mod tests {
     #[test]
     fn a_worktree_build_names_its_own_dev_home() {
         assert_eq!(worktree_name("/r/.claude/worktrees/opal-plum/apps/desktop/src-tauri"), Some("opal-plum"));
+        assert_eq!(worktree_name("/r/.claude/worktrees/a/.claude/worktrees/b/apps"), Some("b"));
         assert_eq!(worktree_name("/r/apps/desktop/src-tauri"), None);
         assert_eq!(worktree_name("/r/.claude/worktrees/"), None);
     }

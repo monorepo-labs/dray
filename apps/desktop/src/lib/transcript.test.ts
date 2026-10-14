@@ -816,6 +816,18 @@ describe("segmentMedia", () => {
     expect(media).toEqual([]);
   });
 
+  it("finds a recording under any dev home", () => {
+    const paths = [
+      "/Users/me/.dray-dev/browser/recordings/s1/a.mp4",
+      "/Users/me/.dray-worktrees/opal-plum/browser/recordings/s1/b.mp4",
+    ];
+    const media = segmentMedia(
+      paths.map((path, i) => result(i, `c${i}`, `saved ${path}`, 0)),
+      "done",
+    );
+    expect(media.map((m) => ("video" in m ? m.video : null))).toEqual(paths);
+  });
+
   /// The More tab's grid: the reader's own pictures too, newest first, each
   /// recording once, and nothing a subagent produced.
   it("sessionMedia lists the main thread's media newest first", () => {
