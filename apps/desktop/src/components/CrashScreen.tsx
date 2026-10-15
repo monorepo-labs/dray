@@ -14,7 +14,7 @@ export default class CrashScreen extends Component<{ children: ReactNode }, { cr
     return { crashed: true };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo) {
+  componentDidCatch(error: unknown, info: ErrorInfo) {
     trackRenderError(error, info.componentStack ?? "");
   }
 

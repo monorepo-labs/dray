@@ -21,8 +21,11 @@ export function trackFeature(feature: string) {
 /// `name@bundle:line:col` — our own minified bundle, which a source map of that
 /// release names. A frame pointing anywhere else is dropped, so no path, prompt
 /// or message text can ride along. Swallows failures like [`trackFeature`].
-export function trackRenderError(error: Error, componentStack: string) {
-  const code = /Minified React error #(\d+)/.exec(error.message)?.[1];
+export function trackRenderError(error: unknown, componentStack: string) {
+  // A component may throw anything, `null` included, and this runs inside the
+  // boundary's catch: a throw here would take the Reload screen down too.
+  const message = String((error as { message?: unknown } | null)?.message ?? "");
+  const code = /Minified React error #(\d+)/.exec(message)?.[1];
   const frames = componentStack
     .split("\n")
     .map((line) => /^\s*at (\S+) \(tauri:\/\/localhost\/assets\/([\w.-]+\.js):(\d+):(\d+)\)$/.exec(line))
