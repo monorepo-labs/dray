@@ -1,5 +1,5 @@
 import { Cog6ToothIcon } from "@heroicons/react/16/solid";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -1108,12 +1108,8 @@ export default function Sidebar({
     return () => observer.disconnect();
   }, [more, settledLimit]);
 
-  // A run's identity is its project and its position among that project's runs,
-  // never the state it holds. An unsplit project's state is whatever its
-  // strongest row happens to be, so keying on that remounted every row in the
-  // project the moment one session finished — and a remount re-runs the active
-  // row's `scrollIntoView` and closes a context menu open over it, for a list
-  // that did not move at all.
+  // Keys for a run's own break and heading. Rows are keyed by session id
+  // alone, as siblings across every run, so these may change freely.
   const groupKeys = useMemo(
     () =>
       runs.map((group) => {
@@ -1340,7 +1336,7 @@ export default function Sidebar({
         {runs.length === 0 ? (
           <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
-          runs.map((group, index) => {
+          runs.flatMap((group, index) => {
             // A project heading is drawn only where the list spans projects:
             // under a filter the label above already names the one project
             // every row belongs to, and a heading repeating it would be a
@@ -1359,22 +1355,26 @@ export default function Sidebar({
                   ? projectName(group.projectPath)
                   : null;
 
-            return (
-              <Fragment key={groupKeys[index]}>
-                {/* The first run sits under the filter's own row, which already
-                    carries the gap. */}
-                {/* `shrink-0` is load-bearing: a bare height in a flex column
-                    shrinks to nothing the moment the list overflows, so the
-                    break between runs vanished on exactly the long sidebar it
-                    exists for. Every row beside it is protected by its own
-                    `min-h`. */}
-                {index > 0 && <div aria-hidden className="h-4 shrink-0" />}
+            // One flat list of siblings rather than a fragment per run, so a
+            // row keeps its key across runs: a session changing stage moves,
+            // where under a fragment it — and every row whose run was rekeyed —
+            // remounted, closing an open menu and re-running the active row's
+            // `scrollIntoView`.
+            const key = groupKeys[index];
+            return [
+              // The first run sits under the filter's own row, which already
+              // carries the gap. `shrink-0` is load-bearing: a bare height in a
+              // flex column shrinks to nothing the moment the list overflows,
+              // so the break between runs vanished on exactly the long sidebar
+              // it exists for. Every row beside it is held up by its own `min-h`.
+              index > 0 && <div key={`gap ${key}`} aria-hidden className="h-4 shrink-0" />,
 
-                {heading !== null && (
+              heading !== null && (
                   // A project heading is a way in to that project: clicking it
                   // opens the empty composer already pointed there. Pinned is
                   // not — it spans projects, so there is nothing to point at.
                   <HeadingRow
+                    key={`heading ${key}`}
                     onClick={
                       underProject
                         ? () => onNewSessionInProject(group.projectPath)
@@ -1388,9 +1388,9 @@ export default function Sidebar({
                     }
                     offline={underProject && offline(group.projectPath)}
                   />
-                )}
+                ),
 
-                {group.kind === "drafts" && group.drafts.map((draft) => (
+                ...(group.kind === "drafts" ? group.drafts.map((draft) => (
                   <DraftRow
                     key={draft.id}
                     draft={draft}
@@ -1398,9 +1398,9 @@ export default function Sidebar({
                     onOpen={onOpenDraft}
                     onDelete={onDeleteDraft}
                   />
-                ))}
+                )) : []),
 
-                {group.kind !== "drafts" && group.rows.map(({ item, depth, guides, opens }) => (
+                ...(group.kind !== "drafts" ? group.rows.map(({ item, depth, guides, opens }) => (
                   <SessionRow
                     key={item.sessionId}
                     item={item}
@@ -1453,9 +1453,8 @@ export default function Sidebar({
                     onDetach={onDetach}
                     onMarkUnread={onMarkUnread}
                   />
-                ))}
-              </Fragment>
-            );
+                )) : []),
+            ];
           })
         )}
 
