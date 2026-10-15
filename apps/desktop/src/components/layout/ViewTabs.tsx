@@ -5,6 +5,7 @@ import {
 import { Folder, Plus, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 
+import AgentBeam from "@/components/browser/AgentBeam";
 import Favicon, { hostOf } from "@/components/browser/Favicon";
 import FileIcon from "@/components/FileIcon";
 import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
@@ -90,6 +91,7 @@ type Item = {
   /// Sized by its own label rather than by the row.
   fixed?: boolean;
   rename?: Rename;
+  overlay?: React.ReactNode;
 };
 
 /// The titlebar as a browser's tab strip.
@@ -185,6 +187,7 @@ export default function ViewTabs({
       icon: <Favicon tab={page} />,
       label: page.error ? "Can't reach page" : page.title || hostOf(page.url),
       active: tab === "browser" && page.active && !pending,
+      overlay: <AgentBeam tab={page.id} />,
       locked: recording,
       pick: () => {
         onChange("browser");
@@ -375,6 +378,7 @@ export default function ViewTabs({
           // Per session too, so a rename left open does not follow the reader.
           key={item.key === "chat" ? `chat:${lone}:${sessionId}` : item.key}
           icon={item.icon}
+          overlay={item.overlay}
           label={item.label}
           active={item.active}
           locked={item.locked}
@@ -470,8 +474,11 @@ export function ItemTab({
   plain = false,
   hint,
   rename,
+  overlay,
 }: {
   icon: React.ReactNode;
+  /// Drawn over the whole tab, out of the row's flow: the agent's beam.
+  overlay?: React.ReactNode;
   label: string;
   active: boolean;
   /// Neither picked nor closed, while a recording holds the strip.
@@ -534,7 +541,7 @@ export function ItemTab({
       onPointerDown={onPointerDown}
       style={{ transform }}
       className={cn(
-        "group flex cursor-default items-center gap-1.5 h-7 rounded-md pl-2 text-ui select-none",
+        "group relative flex cursor-default items-center gap-1.5 h-7 rounded-md pl-2 text-ui select-none",
         "transition-[color,background-color,min-width] duration-150 ease-out",
         onClose ? "pr-1" : "pr-2",
         fixed || plain
@@ -556,10 +563,11 @@ export function ItemTab({
           : locked
             ? "text-muted-foreground opacity-50"
             : "text-muted-foreground hover:text-foreground",
-        held && "relative z-10",
+        held && "z-10",
         gliding && "transition-[color,background-color,min-width,transform]",
       )}
     >
+      {overlay}
       {icon}
       {renaming && rename ? (
         <TitleInput title={rename.title} onSave={rename.save} onDone={() => setRenaming(false)} />

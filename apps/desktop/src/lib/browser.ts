@@ -108,6 +108,36 @@ function start() {
     present();
     notify();
   });
+  void listen<{ run: number; tab: number | null; verb: string | null }>("browser_driven", (e) => {
+    const { run, tab, verb } = e.payload;
+    // Worded after the newest verb still running, so one ending under
+    // another hands the tooltip back to the one still going.
+    const mark = (id: number, runs: Map<number, string>) => {
+      clearTimeout(driven.get(id)?.timer);
+      driven.set(id, {
+        runs,
+        doing: [...runs.values()].at(-1) ?? "Agent is using this tab",
+        // A running verb is held until its closing send; the cap is only for
+        // one that never arrives, which would otherwise leave the orb forever.
+        timer: setTimeout(
+          () => {
+            driven.delete(id);
+            notify();
+          },
+          runs.size ? RUNNING_CAP : DRIVEN_HOLD,
+        ),
+      });
+    };
+    if (verb && tab !== null) {
+      mark(tab, new Map(driven.get(tab)?.runs).set(run, `Agent is ${DOING[verb] ?? "using this tab"}`));
+    } else {
+      // Ends this run's marks wherever they are — a tab it opened that the
+      // reader then left included — and nothing another run still holds.
+      for (const [id, m] of driven) if (m.runs.delete(run)) mark(id, m.runs);
+      if (tab !== null && !driven.get(tab)?.runs.size) mark(tab, new Map());
+    }
+    notify();
+  });
   void listen<{ sessionId: string; recording: boolean }>("browser_recording", (e) => {
     if (e.payload.recording) recording.add(e.payload.sessionId);
     else recording.delete(e.payload.sessionId);
@@ -294,6 +324,63 @@ const recording = new Set<string>();
 
 export function useRecording(sessionId: string): boolean {
   return useSyncExternalStore(subscribe, () => recording.has(sessionId));
+}
+
+/// Tabs a `dray browser` verb touched within `DRIVEN_HOLD`, keyed by tab id,
+/// which is unique across sessions. Held past the verb because the agent
+/// thinks between verbs, and a mark that blinks off meanwhile tells the
+/// reader the tab is theirs again a moment before the next click lands.
+/// `runs` are the verbs still running on the tab — `run` id to its sentence.
+const driven = new Map<
+  number,
+  { runs: Map<number, string>; timer: ReturnType<typeof setTimeout>; doing: string }
+>();
+const DRIVEN_HOLD = 8000;
+/// Past the longest a verb runs: `wait` sleeps 30s at most, a navigation 20s.
+const RUNNING_CAP = 60_000;
+
+/// What the agent is doing, by `dray browser` verb. A verb missing here, and
+/// the gap between verbs, read as "using this tab".
+const DOING: Record<string, string> = {
+  open: "opening a page",
+  back: "going back",
+  forward: "going forward",
+  reload: "reloading the page",
+  close: "closing the tab",
+  tabs: "listing tabs",
+  tab_new: "opening a tab",
+  tab_switch: "switching tabs",
+  tab_close: "closing a tab",
+  snapshot: "reading the page",
+  click: "clicking",
+  dbl_click: "double-clicking",
+  focus: "focusing a field",
+  hover: "hovering",
+  type: "typing",
+  fill: "filling a field",
+  press: "pressing a key",
+  check: "ticking a box",
+  uncheck: "unticking a box",
+  select: "picking an option",
+  scroll: "scrolling",
+  scroll_into_view: "scrolling",
+  get: "reading the page",
+  is: "reading the page",
+  wait: "waiting on the page",
+  screenshot: "taking a screenshot",
+  eval: "running a script",
+  console: "reading the console",
+  errors: "reading the page's errors",
+  set_viewport: "resizing the page",
+  set_device: "resizing the page",
+  zoom: "zooming",
+  record_start: "recording",
+  record_stop: "saving a recording",
+};
+
+/// The sentence for a tab the agent is driving, or null where it is not.
+export function useDriven(tab: number | undefined): string | null {
+  return useSyncExternalStore(subscribe, () => (tab === undefined ? null : (driven.get(tab)?.doing ?? null)));
 }
 
 /// Read at a keypress, where a hook's copy would be the last render's.

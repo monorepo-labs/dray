@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
+import AgentBeam from "@/components/browser/AgentBeam";
 import Favicon, { hostOf } from "@/components/browser/Favicon";
 import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
 import RecordingNotice from "@/components/browser/RecordingNotice";
@@ -404,6 +405,7 @@ function Chrome({
               paint={tab.active && !pending && tab.background ? tint(tab.background) : undefined}
               title={tab.error ? `${tab.error} — ${tab.url}` : tab.url}
               icon={<Favicon tab={tab} />}
+              overlay={<AgentBeam tab={tab.id} top />}
               label={tab.error ? "Can't reach page" : tab.title || hostOf(tab.url)}
               locked={recording}
               onPick={() => {
@@ -686,10 +688,13 @@ function TabButton({
   held = false,
   gliding = false,
   paint,
+  overlay,
 }: {
   active: boolean;
   title: string;
   icon: React.ReactNode;
+  /// Drawn over the whole tab, out of the row's flow: the agent's beam.
+  overlay?: React.ReactNode;
   label: string;
   /// Neither picked nor closed, while a recording holds the strip.
   locked?: boolean;
@@ -718,7 +723,7 @@ function TabButton({
       onPointerDown={onPointerDown}
       style={{ ...paint, transform }}
       className={cn(
-        "group/tab flex h-7 w-40 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-t-md px-2 text-ui",
+        "group/tab relative flex h-7 w-40 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-t-md px-2 text-ui",
         active
           ? "browser-tab-active bg-card text-foreground [--tab-edge:color-mix(in_oklab,var(--foreground)_10%,transparent)]"
           : locked
@@ -728,7 +733,7 @@ function TabButton({
               : "text-muted-foreground hover:text-foreground",
         // The one in hand tracks the pointer and draws over the tabs it
         // passes; only those making room glide.
-        held && "relative z-10",
+        held && "z-10",
         gliding && "transition-transform duration-150 ease-out",
       )}
     >
@@ -740,6 +745,7 @@ function TabButton({
           className="pointer-events-none absolute inset-x-0 top-0 bottom-2 rounded-t-md border-x border-t border-(--tab-edge)"
         />
       )}
+      {overlay}
       {icon}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {!locked && <button

@@ -799,6 +799,7 @@ pub fn run() {
             servers::install_on_server,
             servers::run_server_login,
             servers::run_gh_login,
+            servers::upload_attachment,
             attachments::paste_attachments,
             // Here and not on the server: a video plays through this
             // webview's asset protocol, which only this process can widen.

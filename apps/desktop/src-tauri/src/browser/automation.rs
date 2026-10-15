@@ -24,7 +24,7 @@ use dray_proto::{BrowserAction, Get, Is, Locator};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
@@ -582,6 +582,8 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
     );
     let _driving = Driving::start(session);
     let tab = active_id(session);
+    // The verb's wire name — `click`, `screenshot` — which the pane words.
+    let verb = serde_json::to_value(&action).ok().and_then(|v| Some(v["action"].as_str()?.to_string()));
     // Every verb counts as the tab being seen. All but these act on the
     // active tab, so a discarded one is woken first.
     let wakes = !matches!(
@@ -601,14 +603,45 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
     if let (true, Some(tab)) = (input, tab) {
         reveal_for_input(tab).await?;
     }
-    let answer = perform(session, action).await;
-    if input {
-        let _ = relayout();
+    // Opened here, past the early returns above, so every opening send meets
+    // its closing one below — the pane holds a running mark until it does.
+    let run = NEXT_RUN.fetch_add(1, AtomicOrdering::Relaxed);
+    RUN.scope(run, async {
+        emit_driven(session, tab, verb.as_deref());
+        let answer = perform(session, action).await;
+        if input {
+            let _ = relayout();
+        }
+        let after = active_id(session);
+        if let Some(tab) = after {
+            touch(tab);
+        }
+        // Closes every mark this run made, wherever the active tab went.
+        emit_driven(session, after, None);
+        answer
+    })
+    .await
+}
+
+static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
+
+tokio::task_local! {
+    /// The `run` a verb is inside, so a mark made deep in `perform` — a tab
+    /// it opened — closes with the rest of that verb's.
+    static RUN: u64;
+}
+
+/// Tells the pane the agent is acting on `tab`, so the strip can mark it and
+/// the reader knows to keep their hands off. `verb` names the one running,
+/// and the pane holds the mark until the closing send (`None`) for the same
+/// run, which ends that run's marks alone — two verbs can overlap in one
+/// session. The pane then holds a few seconds more, since the agent thinks
+/// between verbs and a mark per verb would only flicker.
+fn emit_driven(session: &str, tab: Option<i32>, verb: Option<&str>) {
+    let Ok(run) = RUN.try_with(|r| *r) else { return };
+    if tab.is_some() || verb.is_none() {
+        emit("browser_driven", json!({ "sessionId": session, "run": run, "tab": tab, "verb": verb }));
     }
-    if let Some(tab) = active_id(session) {
-        touch(tab);
-    }
-    answer
 }
 
 /// Sessions a `dray browser` verb is running in, one entry per verb, so
@@ -651,7 +684,10 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 None => {
                     let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
                     open_url(session, url, true).await?;
-                    new_tab(session, &before).await?
+                    let tab = new_tab(session, &before).await?;
+                    // Marked before it loads: `run` had no tab to mark.
+                    emit_driven(session, Some(tab), Some("open"));
+                    tab
                 }
             };
             wait_loaded(tab).await?;
@@ -699,6 +735,8 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
             open_url(session, url, true).await?;
             let tab = new_tab(session, &before).await?;
+            // Marked before it loads: `run` marked the tab it was opened from.
+            emit_driven(session, Some(tab), Some("tab_new"));
             wait_loaded(tab).await?;
             let (text, mut data) = page(tab);
             data["id"] = json!(tab);

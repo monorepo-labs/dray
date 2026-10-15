@@ -66,6 +66,7 @@ export default function EventRow({
     case "user_message":
       return (
         <UserMessage
+          eventId={event.id}
           text={payload.text}
           images={payload.images}
           issues={payload.issues}
