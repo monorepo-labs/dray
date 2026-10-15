@@ -32,6 +32,9 @@ const EMPTY: Attachment[] = [];
 export const attachmentKey = (composerKey: string | null, cwd: string | null): string | null =>
   composerKey ?? (cwd ? `new:${cwd}` : null);
 
+/// What a tray holds right now, for a reader outside render.
+export const readAttachments = (sessionId: string | null): Attachment[] => bySession.get(sessionId) ?? EMPTY;
+
 function write(sessionId: string | null, next: Attachment[]) {
   if (next.length) bySession.set(sessionId, next);
   else bySession.delete(sessionId);

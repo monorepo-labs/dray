@@ -47,12 +47,18 @@ describe("upload", () => {
     expect(upload("vps", "/c.log", 10)).toBe(second);
   });
 
-  it("starts a pinned file again when a send elsewhere forgets it", async () => {
+  it("starts a pinned file again when forgotten, and a removed one never", async () => {
     invoke.mockReset();
     invoke.mockResolvedValue("/srv/d.png");
 
-    const stop = keepUploading("vps", [{ path: "/d.png", size: 10 }]);
+    let pinned = [{ path: "/d.png", size: 10 }];
+    const stop = keepUploading("vps", () => pinned);
     await upload("vps", "/d.png", 10);
+    forget("vps", ["/d.png"]);
+    expect(invoke).toHaveBeenCalledTimes(2);
+
+    // Taken off the tray before the tray re-renders: forgotten, and left so.
+    pinned = [];
     forget("vps", ["/d.png"]);
     expect(invoke).toHaveBeenCalledTimes(2);
     stop();

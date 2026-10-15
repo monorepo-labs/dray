@@ -85,10 +85,13 @@ export function upload(server: ServerId, path: string, size: number): Promise<st
 /// Keeps every pinned file uploading: starts each one with no upload, now and
 /// whenever one is forgotten — a send elsewhere may forget a file this tray
 /// still holds. A failed one is left for the send to retry, or a file that
-/// cannot go over would be retried on every emit. Answers the unsubscribe.
-export function keepUploading(server: ServerId, files: { path: string; size: number }[]): () => void {
+/// cannot go over would be retried on every emit. `files` is read at each
+/// start rather than captured, since a tile taken off forgets its upload before
+/// the tray re-renders, and a captured list would start it straight back up.
+/// Answers the unsubscribe.
+export function keepUploading(server: ServerId, files: () => { path: string; size: number }[]): () => void {
   const start = () => {
-    for (const file of files) {
+    for (const file of files()) {
       if (!uploads.has(keyOf(server, file.path))) void upload(server, file.path, file.size);
     }
   };
