@@ -111,7 +111,7 @@ import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { closeActiveTab, ItemTab, type ViewTab } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { clearAttachments, pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
+import { attachmentKey, clearAttachments, pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
 import { closeFile, useOpenFiles } from "@/hooks/useOpenFiles";
@@ -342,7 +342,18 @@ function App() {
       setProjectFilter(projectPath);
     }
     const id = openDraftRef.current;
-    if (!id || selectedSessionId) return void handleSendMsg(message, attachments);
+    if (!id || selectedSessionId) {
+      const trayKey = attachmentKey(selectedSessionId, composerCwd);
+      const sending = handleSendMsg(message, attachments);
+      const nav = navGen.current;
+      // The composer cleared both on handing them over, and a failed upload
+      // is no reason to type the message or pick the files again.
+      if (!(await sending) && nav === navGen.current) {
+        if (!readDraft(selectedSessionId)) writeDraft(selectedSessionId, message);
+        restoreAttachments(trayKey, attachments);
+      }
+      return;
+    }
     const prompt = getDraft(id)?.prompt ?? message;
     const base = getDraft(id)?.base ?? null;
     openDraftRef.current = null;
@@ -3237,7 +3248,7 @@ function App() {
               onCancelBranchSwitch={() => setPendingBranch(null)}
               useWorktree={useWorktree}
               onToggleWorktree={() => setUseWorktree((v) => !v)}
-              onAttach={() => void pickAttachments(composerKey)}
+              onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
               contextUsage={contextUsage}
               isNewSession={!selectedSessionId}
               busy={busy}

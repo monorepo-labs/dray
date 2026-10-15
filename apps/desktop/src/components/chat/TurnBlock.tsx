@@ -321,6 +321,7 @@ function userProps(turn: Turn) {
   const payload = turn.prompt?.payload;
   return payload?.type === "user_message"
     ? {
+        eventId: turn.prompt?.id,
         text: payload.text,
         images: payload.images,
         issues: payload.issues,

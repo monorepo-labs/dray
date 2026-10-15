@@ -30,6 +30,7 @@ import { mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KEY, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { FIRST_MOUNT } from "@/lib/turnWindow";
+import { stopWaiting, upload, waitFor } from "@/lib/uploads";
 import type { Draft } from "./useDrafts";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
@@ -143,6 +144,11 @@ const pathOfProject = (p: Project) => p.path;
 /// Each server's last index answer, per side (`<server>:<archived>`), so a
 /// server that cannot be asked still draws the side the reader picks.
 const lastIndex = new Map<string, SessionIndexItem[]>();
+
+/// Per session, a send still waiting on its uploads. A later send there waits
+/// behind it, or a prompt typed after one carrying a screenshot would arrive
+/// first.
+const uploadsAhead = new Map<string, Promise<void>>();
 
 /// Whether a remote server has been taken off the list since a read began.
 const removed = (server: ServerId): boolean =>
@@ -906,12 +912,32 @@ const handleSendMsg = async (
 
   try {
     // An attachment is a path on this Mac, which a remote server cannot read,
-    // so the files go over first and the send names the server's copies.
+    // so the send names the copy uploaded when it was pinned — its bubble
+    // dimmed here until any still on its way lands.
     const server = serverOfPath(cwd);
-    const sentPaths =
-      attachmentPaths.length && server !== LOCAL
-        ? await invoke<string[]>("upload_attachments", { server, sessionId, paths: attachmentPaths }, LOCAL)
-        : attachmentPaths;
+    const remote = attachments.length > 0 && server !== LOCAL;
+    const ahead = uploadsAhead.get(sessionId);
+    let sentPaths = attachmentPaths;
+    if (remote || ahead) {
+      if (remote) waitFor(provisional, server, attachmentPaths);
+      const gate = (async () => {
+        await ahead;
+        return remote ? Promise.all(attachments.map((a) => upload(server, a.path, a.size))) : attachmentPaths;
+      })();
+      const settled = gate.then(
+        () => {},
+        () => {},
+      );
+      uploadsAhead.set(sessionId, settled);
+      try {
+        sentPaths = await gate;
+      } finally {
+        stopWaiting(provisional);
+        if (uploadsAhead.get(sessionId) === settled) uploadsAhead.delete(sessionId);
+      }
+    }
+    // Nothing awaited between here and the dispatch, so a send queued behind
+    // this one cannot overtake it.
     const outcome = await invoke<SendOutcome>("send_msg", {
       sessionId,
       prompt: message,

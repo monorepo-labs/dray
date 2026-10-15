@@ -639,10 +639,9 @@ async fn read_head(
     Ok((Head { target, bearer, length }, reader))
 }
 
-/// `POST /upload?session=…&name=…`: a file attached on another machine,
-/// written into the session's own attachments directory so the send that
-/// follows can name it. Answers the path it landed at. Bearer token alone —
-/// nothing loads this from a URL.
+/// `POST /upload?name=…`: a file attached on another machine, written under
+/// `attachments/uploads` so a send can name it. Answers the path it landed at.
+/// Bearer token alone — nothing loads this from a URL.
 async fn upload(stream: TcpStream, token: &str) -> Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -652,28 +651,33 @@ async fn upload(stream: TcpStream, token: &str) -> Result<()> {
     let mut stream = reader.into_inner().into_inner();
 
     let query = head.target.split_once('?').map(|(_, q)| q).unwrap_or_default();
-    let (mut session, mut name) = (String::new(), String::new());
-    for (key, value) in form_urlencoded::parse(query.as_bytes()) {
-        match &*key {
-            "session" => session = value.into_owned(),
-            "name" => name = value.into_owned(),
-            _ => {}
-        }
-    }
+    let name = form_urlencoded::parse(query.as_bytes())
+        .find(|(key, _)| *key == "name")
+        .map(|(_, value)| value.into_owned())
+        .unwrap_or_default();
 
     let refuse = |status: &str| format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
     if !same_token(head.bearer.as_deref().unwrap_or_default(), token) {
         stream.write_all(refuse("401 Unauthorized").as_bytes()).await?;
         return Ok(());
     }
-    let (Some(length), Ok(path)) = (head.length, crate::attachments::upload_path(&session, &name).await) else {
+    let Some(length) = head.length else {
+        stream.write_all(refuse("411 Length Required").as_bytes()).await?;
+        return Ok(());
+    };
+    if length > crate::attachments::MAX_UPLOAD_BYTES {
+        stream.write_all(refuse("413 Content Too Large").as_bytes()).await?;
+        return Ok(());
+    }
+    let Ok(path) = crate::attachments::upload_path(&name).await else {
         stream.write_all(refuse("400 Bad Request").as_bytes()).await?;
         return Ok(());
     };
 
     let mut out = tokio::fs::File::create(&path).await?;
     let mut body = (&early[..]).chain(&mut stream).take(length);
-    let written = tokio::io::copy(&mut body, &mut out).await?;
+    // A dropped connection leaves no half a file behind to be named.
+    let written = tokio::io::copy(&mut body, &mut out).await.unwrap_or(0);
     if written != length {
         let _ = tokio::fs::remove_file(&path).await;
         anyhow::bail!("upload ended at {written} of {length} bytes");
@@ -1283,10 +1287,10 @@ mod tests {
         std::fs::remove_dir_all(&home).ok();
     }
 
-    /// A body larger than one read lands whole, under the session's own
-    /// directory and its own name; a wrong token or a path in the name does not.
+    /// A streamed body larger than one read lands whole under its own name, as
+    /// the app sends it; a wrong token or a path for a name does not.
     #[tokio::test]
-    async fn an_upload_lands_in_the_sessions_attachments() {
+    async fn an_upload_lands_under_uploads() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}/upload", listener.local_addr().unwrap());
         tokio::spawn(async move {
@@ -1294,16 +1298,20 @@ mod tests {
                 tokio::spawn(upload(stream, "tok"));
             }
         });
-        let session = uuid::Uuid::new_v4().to_string();
         let body: Vec<u8> = (0..300_000u32).map(|i| i as u8).collect();
         let post = |token: &'static str, name: &'static str| {
-            let (base, session, body) = (base.clone(), session.clone(), body.clone());
+            let (base, body) = (base.clone(), body.clone());
             async move {
+                let len = body.len();
+                let chunks = futures_util::stream::iter(
+                    body.chunks(64 * 1024).map(|c| Ok::<_, std::io::Error>(c.to_vec())).collect::<Vec<_>>(),
+                );
                 reqwest::Client::new()
                     .post(base)
-                    .query(&[("session", session.as_str()), ("name", name)])
+                    .query(&[("name", name)])
                     .bearer_auth(token)
-                    .body(body)
+                    .header(reqwest::header::CONTENT_LENGTH, len)
+                    .body(reqwest::Body::wrap_stream(chunks))
                     .send()
                     .await
                     .unwrap()
@@ -1311,14 +1319,14 @@ mod tests {
         };
 
         let landed = post("tok", "data.csv").await.text().await.unwrap();
-        let dir = store::get_home_app_dir().await.unwrap().join("attachments").join(&session);
-        assert!(Path::new(&landed).starts_with(&dir), "{landed}");
+        let uploads = store::get_home_app_dir().await.unwrap().join("attachments/uploads");
+        assert!(Path::new(&landed).starts_with(&uploads), "{landed}");
         assert!(landed.ends_with("/data.csv"));
         assert_eq!(std::fs::read(&landed).unwrap(), body);
+        std::fs::remove_dir_all(Path::new(&landed).parent().unwrap()).ok();
 
         assert_eq!(post("nope", "data.csv").await.status(), 401);
         assert_eq!(post("tok", "..").await.status(), 400);
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]

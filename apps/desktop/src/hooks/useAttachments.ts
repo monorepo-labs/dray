@@ -26,6 +26,12 @@ const { emit, subscribe } = channel<void>();
 // would loop forever.
 const EMPTY: Attachment[] = [];
 
+/// The tray a composer reads: a session's or a draft's own, and on a new task
+/// the project's, so switching projects and coming back finds what was pinned
+/// there — a remote project's tiles have already started uploading to it.
+export const attachmentKey = (composerKey: string | null, cwd: string | null): string | null =>
+  composerKey ?? (cwd ? `new:${cwd}` : null);
+
 function write(sessionId: string | null, next: Attachment[]) {
   if (next.length) bySession.set(sessionId, next);
   else bySession.delete(sessionId);

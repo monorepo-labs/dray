@@ -1013,42 +1013,63 @@ fn http_base(server: &str) -> Result<(String, String), String> {
     Ok((base, token))
 }
 
-/// Copies files on this Mac into a session's attachments on `server`, and
-/// answers where each landed there — what the send names in their place, since
-/// the server cannot read a path on this Mac.
-// ponytail: each file is read whole into memory; stream it if attaching
-// files of several hundred MB to a remote session becomes a thing.
+/// Copies a file on this Mac to `server` and answers where it landed there —
+/// what a send names in its place, since the server cannot read a path on this
+/// Mac. Streamed, with `upload_progress` `{id, sent, total}` per chunk read, so
+/// the composer's tile can say how far it has got.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn upload_attachments(server: String, session_id: String, paths: Vec<String>) -> Result<Vec<String>, String> {
-    let (base, token) = http_base(&server)?;
-    let client = reqwest::Client::new();
-    let mut landed = Vec::with_capacity(paths.len());
-    for path in paths {
-        let name = std::path::Path::new(&path)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.clone());
-        let body = tokio::fs::read(&path).await.map_err(|e| format!("Could not read {name}: {e}"))?;
-        let failed = |e: reqwest::Error| format!("Could not upload {name}: {e}");
-        let response = client
-            .post(format!("{base}/upload"))
-            .query(&[("session", session_id.as_str()), ("name", name.as_str())])
-            .bearer_auth(&token)
-            .body(body)
-            .send()
-            .await
-            .map_err(failed)?;
-        // A server older than this route reads the request as a socket
-        // handshake and refuses it, which is the one cure worth naming.
-        if !response.status().is_success() {
-            return Err(format!(
-                "Could not upload {name} ({}). Update Dray on the server if it is older than this app.",
-                response.status()
-            ));
-        }
-        landed.push(response.text().await.map_err(failed)?);
+pub async fn upload_attachment(server: String, path: String, id: String) -> Result<String, String> {
+    use tokio::io::AsyncReadExt;
+
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.clone());
+    let unreadable = |e: std::io::Error| format!("Could not read {name}: {e}");
+    let file = tokio::fs::File::open(&path).await.map_err(unreadable)?;
+    let total = file.metadata().await.map_err(unreadable)?.len();
+    if total > crate::attachments::MAX_UPLOAD_BYTES {
+        return Err(format!("{name} is over 100MB, the most a remote server takes."));
     }
-    Ok(landed)
+    let (base, token) = http_base(&server)?;
+
+    let chunks = futures_util::stream::unfold((file, 0u64), move |(mut file, sent)| {
+        let id = id.clone();
+        async move {
+            let mut buf = vec![0; 256 * 1024];
+            let n = match file.read(&mut buf).await {
+                Ok(0) => return None,
+                Ok(n) => n,
+                Err(e) => return Some((Err(e), (file, sent))),
+            };
+            buf.truncate(n);
+            let sent = sent + n as u64;
+            if let Some(sink) = SINK.get() {
+                let _ = sink.emit("upload_progress", json!({ "id": id, "sent": sent, "total": total }));
+            }
+            Some((Ok(buf), (file, sent)))
+        }
+    });
+    let failed = |e: reqwest::Error| format!("Could not upload {name}: {e}");
+    let response = reqwest::Client::new()
+        .post(format!("{base}/upload"))
+        .query(&[("name", name.as_str())])
+        .bearer_auth(&token)
+        // The route reads exactly this many bytes and refuses a chunked body.
+        .header(reqwest::header::CONTENT_LENGTH, total)
+        .body(reqwest::Body::wrap_stream(chunks))
+        .send()
+        .await
+        .map_err(failed)?;
+    // A server older than this route reads the request as a socket handshake
+    // and refuses it, which is the one cure worth naming.
+    if !response.status().is_success() {
+        return Err(format!(
+            "Could not upload {name} ({}). Update Dray on the server if it is older than this app.",
+            response.status()
+        ));
+    }
+    response.text().await.map_err(failed)
 }
 
 #[cfg(test)]
