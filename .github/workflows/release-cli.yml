@@ -125,7 +125,10 @@ jobs:
       - name: Build dray-serve
         if: matrix.serve
         working-directory: apps/desktop/src-tauri
+        # The CLI's version rides into the server, which reports it to the app
+        # so the app can tell whether a newer release is out on its channel.
         run: |
+          export DRAY_CLI_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$GITHUB_WORKSPACE/apps/cli/Cargo.toml" | head -n 1)
           cargo build --release --no-default-features --features serve \
             --bin dray-serve --target ${{ matrix.target }}
           cp "target/${{ matrix.target }}/release/dray-serve" "$GITHUB_WORKSPACE/apps/cli/target/${{ matrix.target }}/release/"

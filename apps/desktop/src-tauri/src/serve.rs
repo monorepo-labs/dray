@@ -78,6 +78,9 @@ pub const SERVER_LOG: &str = "server.log";
 
 /// Runs the server until the process ends.
 pub async fn run(port: u16) -> Result<()> {
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = STARTED_FROM.set((exe.clone(), stamp_of(&exe)));
+    }
     let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
     let home = start_core(sink.clone()).await?;
 
@@ -129,7 +132,7 @@ pub async fn run_mac() -> Result<()> {
             _ = term.recv() => {}
             _ = int.recv() => {}
         }
-        shut_down().await;
+        shut_down(0).await;
     });
 
     eprintln!("dray --serve listening on 127.0.0.1:{port}, home {}", home.display());
@@ -147,15 +150,36 @@ async fn write_port_file(home: &Path, port: u16) -> Result<()> {
 /// rebuilds. The server writes the one it started from under its port; the
 /// app compares it with the file now to tell a server running old code.
 pub fn exe_stamp() -> Option<String> {
-    let modified = std::fs::metadata(std::env::current_exe().ok()?).ok()?.modified().ok()?;
+    stamp_of(&std::env::current_exe().ok()?)
+}
+
+fn stamp_of(path: &Path) -> Option<String> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
     let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
     Some(format!("{}.{:09}", since.as_secs(), since.subsec_nanos()))
 }
 
-/// Exits once no turn is running, for launchd to start the binary now on
-/// disk. Asked by the app when the server it met is older than itself, and by
-/// an update. Twice is once.
-#[cfg(feature = "desktop")]
+/// `dray-serve`'s binary and its stamp when it started. Taken at start, since
+/// once an update renames over the file Linux's `current_exe` names the
+/// deleted inode rather than the path.
+static STARTED_FROM: std::sync::OnceLock<(PathBuf, Option<String>)> = std::sync::OnceLock::new();
+
+/// Whether the binary on disk has moved since `dray-serve` started: an update
+/// landed and this process still runs the old code. False on the Mac's
+/// server, which the app judges by the port file instead.
+fn stale() -> bool {
+    STARTED_FROM.get().is_some_and(|(path, then)| stamp_of(path) != *then)
+}
+
+/// How a restart exits. launchd's `KeepAlive` on a failed exit and systemd's
+/// `Restart=on-failure` both bring back a non-zero exit alone, which is also
+/// what keeps a stopped `dray-serve` stopped. The Mac app's agent restarts on
+/// any exit.
+const RESTART_CODE: i32 = if cfg!(feature = "desktop") { 0 } else { 75 };
+
+/// Exits once no turn is running, for launchd or systemd to start the binary
+/// now on disk. Asked by the app when the server it met is older than its
+/// binary, and by an update. Twice is once.
 async fn restart_when_idle() {
     static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if ASKED.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -166,7 +190,45 @@ async fn restart_when_idle() {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
         eprintln!("[serve] restarting onto the binary now on disk");
-        shut_down().await;
+        shut_down(RESTART_CODE).await;
+    });
+}
+
+/// Runs `dray update` from beside this binary, then restarts once idle where
+/// it brought a new one. Answers `"restarting"`, or `"current"` where the
+/// channel had nothing newer. The `dray` there shipped in the same archive, so
+/// it always knows `--channel`.
+#[cfg(not(feature = "desktop"))]
+async fn update_server(channel: String) -> Result<&'static str, String> {
+    let dray = STARTED_FROM.get().map(|(exe, _)| exe.with_file_name("dray")).ok_or("could not find this server's binary")?;
+    let run = tokio::process::Command::new(&dray)
+        .args(["update", "--channel", &channel])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(std::time::Duration::from_secs(300), run)
+        .await
+        .map_err(|_| "dray update did not finish in 5 minutes".to_string())?
+        .map_err(|e| format!("could not run {}: {e}", dray.display()))?;
+    if !out.status.success() {
+        let said = String::from_utf8_lossy(&out.stderr);
+        return Err(said.lines().rfind(|l| !l.trim().is_empty()).unwrap_or("dray update failed").trim().to_string());
+    }
+    if !stale() {
+        return Ok("current");
+    }
+    restart_when_idle().await;
+    Ok("restarting")
+}
+
+/// Restarts now, stopping every running turn. After a beat, so the reply
+/// reaches the app first.
+#[cfg(not(feature = "desktop"))]
+fn restart_now() {
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        eprintln!("[serve] restarting now, as asked");
+        shut_down(RESTART_CODE).await;
     });
 }
 
@@ -179,9 +241,9 @@ async fn restart_when_idle() {
 /// whatever is left is killed off the process table, walked *before* the
 /// agents went, so their reparented children are still named — and never off
 /// the session map alone, whose locks a stuck send can hold forever.
-#[cfg(feature = "desktop")]
-async fn shut_down() -> ! {
+async fn shut_down(code: i32) -> ! {
     crate::session::hold_sends();
+    #[cfg(feature = "desktop")]
     crate::remote_access::stop_on_exit();
     let me = std::process::id();
     let walk = move || tokio::task::spawn_blocking(move || crate::local_servers::descendants(me));
@@ -194,7 +256,7 @@ async fn shut_down() -> ! {
     for pid in tree.into_iter().filter(|&p| p != me) {
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
     }
-    std::process::exit(0)
+    std::process::exit(code)
 }
 
 /// Removes the browser profiles of deleted and settled sessions, the backlog
@@ -855,9 +917,16 @@ async fn connection(
         let live = hub.live.lock().unwrap_or_else(|e| e.into_inner());
         (hub.events.subscribe(), live.snapshot())
     };
-    write
-        .send(Message::text(json!({ "v": PROTOCOL }).to_string()))
-        .await?;
+    // `release` is the CLI release this binary shipped in, which is what the
+    // app compares with the newest one out. Set by release-cli.yml alone, so a
+    // local build says none and is never offered an update.
+    let welcome = json!({
+        "v": PROTOCOL,
+        "version": env!("CARGO_PKG_VERSION"),
+        "release": option_env!("DRAY_CLI_VERSION"),
+        "stale": stale(),
+    });
+    write.send(Message::text(welcome.to_string())).await?;
     write.send(Message::text(snapshot)).await?;
 
     // Replies come back from concurrent tasks, so one writer owns the socket.
@@ -1015,6 +1084,15 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     #[cfg(feature = "desktop")]
     if matches!(cmd, "get_remote_access" | "set_remote_access" | "remote_access_token" | "restart_when_idle") {
         return dispatch_mac(cmd, args, sink).await;
+    }
+    // A `dray-serve` updates itself; the Mac's server follows the app instead.
+    #[cfg(not(feature = "desktop"))]
+    if matches!(cmd, "update_server" | "restart_now" | "restart_when_idle") {
+        return table! { cmd, args;
+            update_server(channel: String) => update_server(channel).await;
+            restart_now() => ok(restart_now());
+            restart_when_idle() => ok(restart_when_idle().await);
+        };
     }
     table! { cmd, args;
         // What a connect opens with, asked again by an app whose webview was

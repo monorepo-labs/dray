@@ -16,6 +16,7 @@ import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
 import type { SettingsTab } from "@/components/SettingsPage";
 import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog";
+import { useInstallWithServers } from "@/components/ServerUpdateDialog";
 import MorePanel from "@/components/MorePanel";
 import PlanPanel from "@/components/PlanPanel";
 
@@ -502,11 +503,12 @@ function App() {
   const {
     status: updateStatus,
     manual: updateManual,
-    install: installUpdate,
+    install: installAppUpdate,
     checkNow: checkForUpdates,
     channel: updateChannel,
     setChannel: setUpdateChannel,
   } = useUpdater();
+  const { request: installUpdate, dialog: serverUpdateDialog } = useInstallWithServers(updateChannel, installAppUpdate);
 
   // Every session the app has started this run, not the open one: the install
   // relaunches the app, so any live child is one this would kill mid-turn. A
@@ -3469,6 +3471,7 @@ function App() {
       onConfirm={(sessionId) => removeWorktree(sessionId)}
       onClose={() => setWorktreePrompt(null)}
     />
+    {serverUpdateDialog}
     </DiffWorkerPool>
     </TooltipProvider>
   );

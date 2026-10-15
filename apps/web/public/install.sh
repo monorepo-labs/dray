@@ -91,17 +91,30 @@ cli_tags() {
     | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(cli-v[^"]*\)".*/\1/p'
 }
 
-# The newer of a beta tag ($1) and a stable one ($2), either possibly empty.
-# A beta sorts below the release of its own version, the semver rule the app's
-# channels use: so the release a beta led up to replaces it, and a stable
-# hotfix cut after a newer beta never moves a beta install backwards. POSIX
-# `sort -k…n` rather than `sort -V`, which is not portable.
+# Whether tag $1 is a newer release than tag $2, by semver's order for the
+# shapes these tags take: a beta sorts below the release of its own version,
+# and `beta.10` above `beta.9`. POSIX `sort -k…n` rather than `sort -V`, which
+# is not portable and puts `0.9.4-beta.2` above `0.9.4`.
+newer() {
+  a=${1#cli-v}; b=${2#cli-v}
+  [ "$a" != "$b" ] || return 1
+  ac=${a%%-*}; bc=${b%%-*}
+  if [ "$ac" != "$bc" ]; then
+    [ "$(printf '%s\n%s\n' "$ac" "$bc" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)" = "$ac" ]
+    return
+  fi
+  case "$a" in *-*) ;; *) return 0 ;; esac
+  case "$b" in *-*) ;; *) return 1 ;; esac
+  [ "${a##*.}" -gt "${b##*.}" ] 2>/dev/null
+}
+
+# The newer of two tags, either possibly empty. So the release a beta led up
+# to replaces it, and a stable hotfix cut after a newer beta never moves a
+# beta install backwards.
 newest_of() {
   [ -n "$1" ] || { printf '%s' "$2"; return; }
   [ -n "$2" ] || { printf '%s' "$1"; return; }
-  b=${1#cli-v}; b=${b%%-*}; s=${2#cli-v}
-  top=$(printf '%s\n%s\n' "$b" "$s" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
-  if [ "$b" != "$s" ] && [ "$top" = "$b" ]; then printf '%s' "$1"; else printf '%s' "$2"; fi
+  if newer "$1" "$2"; then printf '%s' "$1"; else printf '%s' "$2"; fi
 }
 
 # A beta tag carries a `-` after the version (`cli-v0.12.0-beta.1`).
@@ -197,8 +210,15 @@ if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
   # binary, because the caller is the binary — `dray update` knows its own
   # version and nothing here can ask for it without guessing which `dray` on
   # disk is the one that ran.
-  if [ -n "${DRAY_CURRENT_VERSION:-}" ] && [ "$VERSION" = "$DRAY_CURRENT_VERSION" ]; then
-    say "dray $VERSION is already installed."
+  #
+  # Newer counts as current too: a beta install that moved to stable keeps its
+  # build until a stable release passes it, rather than going back.
+  if [ -n "${DRAY_CURRENT_VERSION:-}" ] && ! newer "$VERSION" "$DRAY_CURRENT_VERSION"; then
+    if [ "$VERSION" = "$DRAY_CURRENT_VERSION" ]; then
+      say "dray $VERSION is already installed."
+    else
+      say "dray $DRAY_CURRENT_VERSION is newer than $VERSION, so it stays."
+    fi
     # Guarded here rather than inside the function: on the install path the
     # binary was just written, so a failure there is worth the note it prints.
     if [ -x "$INSTALL_DIR/dray" ]; then
