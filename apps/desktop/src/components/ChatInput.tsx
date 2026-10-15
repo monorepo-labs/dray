@@ -35,7 +35,7 @@ import { highlightSegments } from "@/lib/highlight";
 import { applyIssue, cutRange, insertIssue, issueSpan, rememberIssueTitle } from "@/lib/issue";
 import { placeSegments } from "@/lib/richText";
 import { LOCAL, serverOfPath } from "@/lib/transport";
-import { MAX_UPLOAD_BYTES, upload } from "@/lib/uploads";
+import { forget, MAX_UPLOAD_BYTES, upload } from "@/lib/uploads";
 import {
   canSwitchTracker,
   effectiveTracker,
@@ -980,7 +980,10 @@ export default function ChatInput({
                 <AttachmentTray
                   attachments={attachments}
                   server={server}
-                  onRemove={(path) => removeAttachment(attachKey, path)}
+                  onRemove={(path) => {
+                    removeAttachment(attachKey, path);
+                    forget(server, [path]);
+                  }}
                   modelTakesImages={modelTakesImages}
                 />
               </div>

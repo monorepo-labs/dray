@@ -7,7 +7,7 @@ vi.mock("@/lib/transport", () => ({
   listen: () => Promise.resolve(() => {}),
 }));
 
-import { MAX_UPLOAD_BYTES, upload } from "@/lib/uploads";
+import { forget, MAX_UPLOAD_BYTES, upload } from "@/lib/uploads";
 
 describe("upload", () => {
   it("sends a file once, and again only after it failed", async () => {
@@ -19,6 +19,15 @@ describe("upload", () => {
     expect(upload("vps", "/a.png", 10)).toBe(retried);
     await expect(retried).resolves.toBe("/srv/a.png");
     expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends a file again once a send has used it", async () => {
+    invoke.mockReset();
+    invoke.mockResolvedValueOnce("/srv/1/b.txt").mockResolvedValueOnce("/srv/2/b.txt");
+
+    await expect(upload("vps", "/b.txt", 10)).resolves.toBe("/srv/1/b.txt");
+    forget("vps", ["/b.txt"]);
+    await expect(upload("vps", "/b.txt", 10)).resolves.toBe("/srv/2/b.txt");
   });
 
   it("refuses a file over the cap without sending it", async () => {

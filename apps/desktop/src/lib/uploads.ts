@@ -73,6 +73,14 @@ export function upload(server: ServerId, path: string, size: number): Promise<st
   return settled;
 }
 
+/// Drops these uploads, so the file is read and sent again the next time it is
+/// pinned — after a send has used it, or a tile was taken off. Kept, a file
+/// edited and attached again would go over as it was the first time.
+export function forget(server: ServerId, paths: string[]) {
+  for (const path of paths) uploads.delete(keyOf(server, path));
+  emit();
+}
+
 /// Draws `eventId`'s bubble as waiting on these uploads until `stopWaiting`.
 export function waitFor(eventId: string, server: ServerId, paths: string[]) {
   waiting.set(eventId, paths.map((path) => keyOf(server, path)));

@@ -30,7 +30,7 @@ import { mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KEY, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { FIRST_MOUNT } from "@/lib/turnWindow";
-import { stopWaiting, upload, waitFor } from "@/lib/uploads";
+import { forget, stopWaiting, upload, waitFor } from "@/lib/uploads";
 import type { Draft } from "./useDrafts";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
@@ -931,6 +931,7 @@ const handleSendMsg = async (
       uploadsAhead.set(sessionId, settled);
       try {
         sentPaths = await gate;
+        if (remote) forget(server, attachmentPaths);
       } finally {
         stopWaiting(provisional);
         if (uploadsAhead.get(sessionId) === settled) uploadsAhead.delete(sessionId);
