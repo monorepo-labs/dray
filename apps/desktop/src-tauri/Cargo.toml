@@ -157,6 +157,11 @@ version = "0.3"
 [target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
 version = "0.3"
 
+# The sidebar's swipe reads NSEvent's gesture phases (trackpad.rs). Already in
+# the lock through tao.
+[target.'cfg(target_os = "macos")'.dependencies.block2]
+version = "0.6"
+
 [[bin]]
 name = "dray"
 path = "src/main.rs"

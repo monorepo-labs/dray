@@ -1259,6 +1259,7 @@ version = "0.28.0-beta.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "block2",
  "cef",
  "chrono",
  "cpal",

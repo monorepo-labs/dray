@@ -2735,6 +2735,7 @@ function App() {
           space={space}
           projectFilter={projectFilter}
           onProjectFilterChange={changeProjectFilter}
+          onStepProjectFilter={stepProjectFilter}
           statusBySession={statusBySession}
           askingSessions={sidebarAsking}
           prFor={prMarks.prFor}

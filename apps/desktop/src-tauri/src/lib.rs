@@ -32,6 +32,8 @@ pub mod cef;
 // what keeps its types in `events.ts` and its tests in a bare `cargo test`.
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 pub mod chromium;
+#[cfg(all(feature = "desktop", target_os = "macos"))]
+mod trackpad;
 // `dray browser` on a server: a headless Chromium under the same verbs the
 // Mac's CEF answers. In the desktop build too, since that binary is also the
 // Mac's background server. See HEADLESS-PLAN.md.
@@ -717,6 +719,8 @@ pub fn run() {
             // window already exists here for it to parent a view into.
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::init(app.handle());
+            #[cfg(target_os = "macos")]
+            trackpad::watch(app.handle());
             // Dictations kept past a failure. Pruning on write alone left the
             // last one on disk forever, since nothing else sweeps them and a
             // reader who gives up after one failure writes no more.

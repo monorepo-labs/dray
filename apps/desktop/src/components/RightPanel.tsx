@@ -1,4 +1,4 @@
-import { Suspense, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 
 import OpenInButton from "@/components/OpenInButton";
@@ -9,6 +9,7 @@ import { FILE_OPENER } from "@/lib/openWith";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useResizable } from "@/components/ResizeHandle";
+import { useSwipe } from "@/lib/swipe";
 import { cn } from "@/lib/utils";
 
 /// The header button that opens and closes the pane. Lives here rather than in
@@ -251,8 +252,16 @@ export default function RightPanel({
     pane: open ? "panel" : undefined,
   });
 
+  // A swipe over the pane steps its tabs, wrapping, the way ⌘⇧[ ] does.
+  const asideRef = useRef<HTMLElement>(null);
+  useSwipe(asideRef, (delta) => {
+    const from = tabs.indexOf(tab);
+    if (tabs.length > 1) onTabChange(tabs[(from + delta + tabs.length) % tabs.length]);
+  });
+
   return (
     <aside
+      ref={asideRef}
       style={style}
       className={cn(
         // No border of its own: it sits in a card, whose ring is the edge.

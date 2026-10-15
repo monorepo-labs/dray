@@ -5,7 +5,6 @@ import {
   ArchiveRestore,
   Check,
   CheckCheck,
-  ChevronDown,
   Circle,
   CircleDashed,
   CircleDot,
@@ -38,9 +37,12 @@ import {
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ShortcutKeys, { DigitKeys } from "@/components/ShortcutKeys";
+import { useSwipe } from "@/lib/swipe";
+import { playSwipeTick } from "@/lib/tick";
 import { Kbd } from "@/components/ui/kbd";
 import {
   Tooltip,
@@ -168,6 +170,9 @@ type SidebarProps = {
   // `null` is every project, and it is the entry the filter opens on.
   projectFilter: string | null;
   onProjectFilterChange: (path: string | null) => void;
+  /// Steps the filter one entry, wrapping; a horizontal swipe over the sidebar
+  /// calls it once per swipe.
+  onStepProjectFilter: (delta: -1 | 1) => void;
   /// Starts a new task with the composer's project picker already on this
   /// project — the only thing a project heading can offer, since the picker is
   /// hidden once a session exists.
@@ -977,6 +982,7 @@ export default function Sidebar({
   projectFilter,
   onDetach,
   onProjectFilterChange,
+  onStepProjectFilter,
   onNewSessionInProject,
   updateStatus,
   updateBlocked,
@@ -1161,6 +1167,14 @@ export default function Sidebar({
           ? "Nothing settled yet."
           : "No tasks yet.";
 
+  const asideRef = useRef<HTMLElement>(null);
+  // The click is the project switch's alone: the right panel's tabs swipe
+  // silently, a sound there being one more thing announcing a tab change.
+  useSwipe(asideRef, (delta) => {
+    playSwipeTick();
+    onStepProjectFilter(delta);
+  });
+
   // Collapsed is nothing at all, not a rail. The toggle moves to the app header
   // in that state, which is the one row present either way.
   if (collapsed) return null;
@@ -1169,6 +1183,7 @@ export default function Sidebar({
     <aside
       className="relative flex shrink-0 flex-col"
       style={style}
+      ref={asideRef}
     >
       {handle}
       {/* `px-1.5` on the buttons rather than `size="sm"`'s `px-2.5`, so their
@@ -1569,10 +1584,10 @@ function HintRow({
 /// is looking at.
 export const HINT_KEYS = "[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60";
 
-/// From this many projects a tap opens a menu instead of stepping one. Tapping
+/// From this many projects a hover opens a menu beside the tap's step. Tapping
 /// through a long list is a scrub rather than a pick, and the dots stop being
 /// countable.
-const PROJECT_MENU_FROM = 5;
+const PROJECT_MENU_FROM = 3;
 
 // Dot geometry, in px, kept here because the track's offset is computed from it
 // rather than measured: `size-1` plus `gap-1`.
@@ -1740,7 +1755,10 @@ function ProjectFilter({
 
   // Wraps, since a tap has no direction and no dot to slide — a dead end at the
   // last entry would just look broken.
-  const cycle = () => onChange(entries[(activeIndex + 1) % entries.length].path);
+  const cycle = () => {
+    playSwipeTick();
+    onChange(entries[(activeIndex + 1) % entries.length].path);
+  };
 
   // The dots are the one thing on screen that says which entry of how many,
   // which is exactly what a switch raises — so a switch shows them for a beat
@@ -1768,8 +1786,7 @@ function ProjectFilter({
     <div
       role="button"
       tabIndex={0}
-      // In menu mode the trigger's own handlers arrive through `asChild`.
-      onClick={menuMode ? undefined : cycle}
+      onClick={tap}
       onKeyDown={
         menuMode
           ? undefined
@@ -1795,9 +1812,6 @@ function ProjectFilter({
             on the strip says the strip is what answers. */}
         <span className="flex items-center gap-1 text-ui text-muted-foreground transition-colors group-hover/projects:text-foreground">
           <span className="max-w-40 truncate">{active.name}</span>
-          {/* The one mark that says a tap opens a list rather than stepping one.
-              Menu mode is otherwise invisible — same label, same dots. */}
-          {menuMode && <ChevronDown className="size-3 shrink-0 opacity-60" />}
         </span>
 
         <DotTrack
@@ -1827,20 +1841,63 @@ function ProjectFilter({
     ) : (
       <Tooltip delayDuration={400}>
         <TooltipTrigger asChild>{trigger}</TooltipTrigger>
-        <TooltipContent side="bottom" align="start" className="px-1.5">
+        <TooltipContent side="bottom" align="start" className="flex items-center gap-1.5 px-1.5">
           <ShortcutKeys ids={["filter.prev", "filter.next"]} />
+          or swipe anywhere on the sidebar
         </TooltipContent>
       </Tooltip>
     );
 
+  // Hover-open state lives here rather than in the menu: Radix only opens on a
+  // press, and a pass-by must not open it, so both edges wait a beat.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // Somebody clicking through projects is not asking for the list, so a click
+  // holds hover-open off until the pointer leaves and comes back.
+  const clicked = useRef(false);
+  useEffect(() => () => clearTimeout(hoverTimer.current), []);
+  const hover = (open: boolean) => {
+    clearTimeout(hoverTimer.current);
+    if (open && clicked.current) return;
+    hoverTimer.current = setTimeout(() => setMenuOpen(open), open ? 600 : 200);
+  };
+
+  // Below the threshold there is no menu, and closing one does nothing.
+  function tap() {
+    clicked.current = true;
+    clearTimeout(hoverTimer.current);
+    setMenuOpen(false);
+    cycle();
+  }
+
   if (!menuMode) return withHint(band);
 
-  // The band is the trigger, so a tap anywhere on it opens the list rather
-  // than a second smaller target on the label.
+  // A tap steps, as below the threshold, and a hover opens the list; the
+  // keyboard still opens it through the trigger. Not modal: a modal menu locks
+  // pointer events on everything else, so leaving it could never close it.
   return (
-    <DropdownMenu>
-      {withHint(<DropdownMenuTrigger asChild>{band}</DropdownMenuTrigger>)}
-      <DropdownMenuContent align="start" className="min-w-52">
+    <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen} modal={false}>
+      <DropdownMenuTrigger
+        asChild
+        onPointerEnter={() => hover(true)}
+        onPointerLeave={() => {
+          clicked.current = false;
+          hover(false);
+        }}
+        // Skips Radix's own toggle on press, so the click is the tap's alone.
+        onPointerDown={(e) => e.preventDefault()}
+      >
+        {band}
+      </DropdownMenuTrigger>
+      {/* Focus handed back to the band on close opened its tooltip, which then
+          sat there until the pointer left and came back. */}
+      <DropdownMenuContent
+        align="start"
+        className="min-w-52"
+        onCloseAutoFocus={(e) => e.preventDefault()}
+        onPointerEnter={() => clearTimeout(hoverTimer.current)}
+        onPointerLeave={() => hover(false)}
+      >
         <DropdownMenuRadioGroup
           // Radix radio values are strings, so All rides on the empty one — no
           // path is ever empty, so the two can't collide.
@@ -1860,6 +1917,13 @@ function ProjectFilter({
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
+        {/* The tooltip's hint, moved in here: the menu opens where the tooltip
+            would, so the two drawn together covered each other. */}
+        <DropdownMenuSeparator />
+        <div className="flex flex-col items-start gap-1 px-2 py-1 text-xs text-muted-foreground">
+          <ShortcutKeys ids={["filter.prev", "filter.next"]} />
+          <span>or swipe the sidebar</span>
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   );
