@@ -201,17 +201,39 @@ async fn restart_when_idle() {
 #[cfg(not(feature = "desktop"))]
 async fn update_server(channel: String) -> Result<&'static str, String> {
     let dray = STARTED_FROM.get().map(|(exe, _)| exe.with_file_name("dray")).ok_or("could not find this server's binary")?;
-    let run = tokio::process::Command::new(&dray)
+    use tokio::io::AsyncReadExt;
+    let mut child = tokio::process::Command::new(&dray)
         .args(["update", "--channel", &channel])
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
-        .output();
-    let out = tokio::time::timeout(std::time::Duration::from_secs(300), run)
-        .await
-        .map_err(|_| "dray update did not finish in 5 minutes".to_string())?
+        .spawn()
         .map_err(|e| format!("could not run {}: {e}", dray.display()))?;
-    if !out.status.success() {
-        let said = String::from_utf8_lossy(&out.stderr);
+    let mut stderr = child.stderr.take();
+    let said = tokio::spawn(async move {
+        let mut text = String::new();
+        if let Some(stderr) = stderr.as_mut() {
+            let _ = stderr.read_to_string(&mut text).await;
+        }
+        text
+    });
+    let status = match tokio::time::timeout(std::time::Duration::from_secs(300), child.wait()).await {
+        Ok(status) => status.map_err(|e| format!("dray update did not finish: {e}"))?,
+        // The installer is `sh` running curl under `dray`, so killing `dray`
+        // alone leaves a download that could still land a binary after this
+        // answered — and nothing would restart onto it. Walked while `dray`
+        // is alive, or its children are reparented out of reach.
+        Err(_) => {
+            if let Some(root) = child.id() {
+                crate::local_servers::kill_descendants(root).await;
+            }
+            let _ = child.kill().await;
+            return Err("dray update did not finish in 5 minutes".into());
+        }
+    };
+    if !status.success() {
+        let said = said.await.unwrap_or_default();
         return Err(said.lines().rfind(|l| !l.trim().is_empty()).unwrap_or("dray update failed").trim().to_string());
     }
     if !stale() {

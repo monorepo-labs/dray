@@ -274,11 +274,12 @@ fn releases() -> Releases {
 }
 
 /// Reads GitHub's releases again where the last reading is older than
-/// `fresh`, then redraws the rows. A failed read keeps the last reading.
-async fn refresh_releases(fresh: Duration) {
+/// `fresh`, then redraws the rows. A failed read keeps the last reading, and
+/// says why for a caller the reader is waiting on.
+async fn refresh_releases(fresh: Duration) -> Result<(), String> {
     let held = RELEASES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|(at, _)| at.elapsed() < fresh);
     if held {
-        return;
+        return Ok(());
     }
     let read = async {
         let list: Vec<Value> = reqwest::Client::new()
@@ -296,8 +297,12 @@ async fn refresh_releases(fresh: Duration) {
         Ok(found) => {
             *RELEASES.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), found));
             announce();
+            Ok(())
         }
-        Err(e) => eprintln!("[servers] could not read releases: {e}"),
+        Err(e) => {
+            eprintln!("[servers] could not read releases: {e}");
+            Err(format!("Couldn't check for updates: {e}"))
+        }
     }
 }
 
@@ -382,7 +387,7 @@ pub async fn start(sink: Sink) {
     tokio::spawn(async {
         loop {
             if conns().iter().any(|c| c.saved.id != LOCAL) {
-                refresh_releases(RELEASES_FRESH).await;
+                let _ = refresh_releases(RELEASES_FRESH).await;
             }
             tokio::time::sleep(RELEASES_FRESH).await;
         }
@@ -1120,7 +1125,8 @@ pub async fn restart_server_now(server: String) -> Result<(), String> {
 /// before `update_server` is left to its row, which says how.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn servers_behind(beta: bool) -> Vec<String> {
-    refresh_releases(Duration::from_secs(60)).await;
+    // A failed read leaves the last one, which still answers.
+    let _ = refresh_releases(Duration::from_secs(60)).await;
     conns()
         .iter()
         .filter(|c| c.saved.id != LOCAL && c.status == ServerStatus::Connected && (c.saved.beta || !beta))
@@ -1153,8 +1159,8 @@ pub async fn check_server_update(id: String) -> Result<Option<String>, String> {
     if unignored {
         save().await?;
     }
-    refresh_releases(Duration::ZERO).await;
     announce();
+    refresh_releases(Duration::ZERO).await?;
     Ok(conns().iter().find(|c| c.saved.id == id).and_then(latest))
 }
 
@@ -1350,7 +1356,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn reads_the_live_releases() {
-        refresh_releases(Duration::ZERO).await;
+        refresh_releases(Duration::ZERO).await.unwrap();
         let found = releases();
         assert!(found.stable.is_some(), "{found:?}");
         eprintln!("{found:?}");
