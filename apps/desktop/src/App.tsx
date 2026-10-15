@@ -1685,11 +1685,11 @@ function App() {
         projects,
         // The same reading the sidebar groups by, and withheld on the same list
         // — the walk has to step the runs the eye is looking at.
-        archivedShown ? undefined : { statusBySession, asking: sidebarAsking },
+        archivedShown ? undefined : { statusBySession, asking: sidebarAsking, prFor: prMarks.prFor },
         archivedShown,
         archivedShown ? [] : spaceGroups,
       ),
-    [searchedSessions, projects, archivedShown, statusBySession, sidebarAsking, spaceGroups],
+    [searchedSessions, projects, archivedShown, statusBySession, sidebarAsking, prMarks.prFor, spaceGroups],
   );
 
   // Wraps downward only. Falling off the bottom returns to the newest session,
@@ -1886,11 +1886,11 @@ function App() {
       sessionUnits(
         searchedSessions,
         projects,
-        archivedShown ? undefined : { statusBySession, asking: sidebarAsking },
+        archivedShown ? undefined : { statusBySession, asking: sidebarAsking, prFor: prMarks.prFor },
         archivedShown,
         archivedShown ? [] : spaceGroups,
       ),
-    [searchedSessions, projects, archivedShown, statusBySession, sidebarAsking, spaceGroups],
+    [searchedSessions, projects, archivedShown, statusBySession, sidebarAsking, prMarks.prFor, spaceGroups],
   );
   const stepGroup = (delta: number) => stepThrough(units, delta);
 
