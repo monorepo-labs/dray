@@ -62,7 +62,9 @@ On Linux the same line makes the machine a Dray server: [drayhq.com/docs/server]
 `apps/desktop/src-tauri/tauri.conf.json`, and a stable release needs a
 matching section in `apps/desktop/CHANGELOG.md`.
 
-**CLI:** tag `cli-vX.Y.Z`, matching `apps/cli/Cargo.toml`. Never a prerelease.
+**CLI:** tag `cli-vX.Y.Z` (stable) or `cli-vX.Y.Z-beta.N` (beta), matching the
+version in `apps/cli/Cargo.toml` exactly. Cut one beside every app release, beta
+included, so a server can run the core that release expects.
 
 ## Credits
 
