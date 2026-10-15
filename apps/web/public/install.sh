@@ -10,7 +10,8 @@
 #
 # Honours:
 #   DRAY_INSTALL_DIR      where the binary lands (default ~/.local/bin)
-#   DRAY_VERSION          a specific release tag (default: the newest cli-v* one)
+#   DRAY_VERSION          a specific release tag (default: the newest on the channel)
+#   DRAY_CHANNEL          stable (default) or beta, which also takes stable releases
 #   DRAY_CURRENT_VERSION  the tag already installed; stop if it is the newest one
 #   DRAY_UPDATING         set by `dray update`: no setup questions afterwards
 
@@ -18,6 +19,7 @@ set -eu
 
 REPO="monorepo-labs/dray"
 INSTALL_DIR="${DRAY_INSTALL_DIR:-$HOME/.local/bin}"
+CHANNEL="${DRAY_CHANNEL:-stable}"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
@@ -70,25 +72,44 @@ else
   die "curl or wget is required."
 fi
 
-# The newest `cli-v*` tag, asked of the releases API rather than guessed at.
+# Every `cli-v*` tag, newest first, asked of the releases API rather than
+# guessed at.
 #
 # `/releases/latest/download/` cannot serve here: the app and the CLI publish
-# into the same repo and both ship non-prerelease, so that URL belongs to
-# whichever went out most recently, and an app release there carries no
-# `dray-*.tar.gz` at all.
+# into the same repo, so that URL belongs to whichever went out most recently,
+# and an app release there carries no `dray-*.tar.gz` at all.
 #
-# The API answers newest-first, so the first match wins and nothing has to sort
-# versions — `sort -V` is not portable anyway. `tr` splits a compact response
-# into lines the `sed` can match one at a time.
+# The API answers newest-first, so the first match per channel wins. `tr`
+# splits a compact response into lines the `sed` can match one at a time.
 #
 # `per_page=100` caps how far back this looks. If the app ever ships 100
 # releases between two `cli-v*` ones the resolver finds nothing, and the refusal
 # below is the escape hatch.
-resolve_version() {
+cli_tags() {
   fetch_stdout "https://api.github.com/repos/$REPO/releases?per_page=100" \
     | tr ',' '\n' \
-    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(cli-v[^"]*\)".*/\1/p' \
-    | head -n 1
+    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(cli-v[^"]*\)".*/\1/p'
+}
+
+# The newer of a beta tag ($1) and a stable one ($2), either possibly empty.
+# A beta sorts below the release of its own version, the semver rule the app's
+# channels use: so the release a beta led up to replaces it, and a stable
+# hotfix cut after a newer beta never moves a beta install backwards. POSIX
+# `sort -k…n` rather than `sort -V`, which is not portable.
+newest_of() {
+  [ -n "$1" ] || { printf '%s' "$2"; return; }
+  [ -n "$2" ] || { printf '%s' "$1"; return; }
+  b=${1#cli-v}; b=${b%%-*}; s=${2#cli-v}
+  top=$(printf '%s\n%s\n' "$b" "$s" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+  if [ "$b" != "$s" ] && [ "$top" = "$b" ]; then printf '%s' "$1"; else printf '%s' "$2"; fi
+}
+
+# A beta tag carries a `-` after the version (`cli-v0.12.0-beta.1`).
+resolve_version() {
+  tags=$(cli_tags) || return 1
+  stable=$(printf '%s\n' "$tags" | grep -v '^cli-v[^-]*-' | head -n 1)
+  [ "$CHANNEL" = beta ] || { printf '%s' "$stable"; return; }
+  newest_of "$(printf '%s\n' "$tags" | grep '^cli-v[^-]*-' | head -n 1)" "$stable"
 }
 
 # From the binary itself rather than downloaded separately, so the skill can
@@ -149,13 +170,18 @@ add_to_path() {
   fi
 }
 
+case "$CHANNEL" in
+  stable|beta) ;;
+  *) die "DRAY_CHANNEL must be stable or beta, not '$CHANNEL'." ;;
+esac
+
 TARGET=$(detect_target)
 
 # `latest` is spelled as a request to resolve, not as a tag: it used to build a
 # `/releases/latest/download/` URL, which is the trap above.
 VERSION="${DRAY_VERSION:-}"
 if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
-  say "Finding the latest dray release…"
+  say "Finding the latest dray release ($CHANNEL)…"
   VERSION=$(resolve_version) || VERSION=""
   # No falling back to an older pin: a rate-limited or unreachable API quietly
   # installing something ancient is the failure mode this replaced.
