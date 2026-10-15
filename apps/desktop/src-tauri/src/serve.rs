@@ -200,7 +200,13 @@ async fn restart_when_idle() {
 /// it always knows `--channel`.
 #[cfg(not(feature = "desktop"))]
 async fn update_server(channel: String) -> Result<&'static str, String> {
-    let dray = STARTED_FROM.get().map(|(exe, _)| exe.with_file_name("dray")).ok_or("could not find this server's binary")?;
+    // One at a time: two apps on different channels would otherwise run two
+    // installers over one binary, and the slower could land the older one.
+    // Queued, the second runs the `dray` the first installed, which reports
+    // the newer version, and the installer keeps a newer install.
+    static ONE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one = ONE.lock().await;
+    let dray =STARTED_FROM.get().map(|(exe, _)| exe.with_file_name("dray")).ok_or("could not find this server's binary")?;
     use tokio::io::AsyncReadExt;
     let mut child = tokio::process::Command::new(&dray)
         .args(["update", "--channel", &channel])
