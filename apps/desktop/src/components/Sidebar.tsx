@@ -1855,11 +1855,17 @@ function ProjectFilter({
   // Somebody clicking through projects is not asking for the list, so a click
   // holds hover-open off until the pointer leaves and comes back.
   const clicked = useRef(false);
+  // A hover-opened list leaves focus where it was: taking it would pull the
+  // caret out of a draft the reader is mid-sentence in.
+  const byHover = useRef(false);
   useEffect(() => () => clearTimeout(hoverTimer.current), []);
   const hover = (open: boolean) => {
     clearTimeout(hoverTimer.current);
     if (open && clicked.current) return;
-    hoverTimer.current = setTimeout(() => setMenuOpen(open), open ? 600 : 200);
+    hoverTimer.current = setTimeout(() => {
+      if (open) byHover.current = true;
+      setMenuOpen(open);
+    }, open ? 600 : 200);
   };
 
   // Below the threshold there is no menu, and closing one does nothing.
@@ -1876,7 +1882,15 @@ function ProjectFilter({
   // keyboard still opens it through the trigger. Not modal: a modal menu locks
   // pointer events on everything else, so leaving it could never close it.
   return (
-    <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen} modal={false}>
+    <DropdownMenu
+      open={menuOpen}
+      onOpenChange={(open) => {
+        // Radix only opens it from the keyboard here, the press being ours.
+        if (open) byHover.current = false;
+        setMenuOpen(open);
+      }}
+      modal={false}
+    >
       <DropdownMenuTrigger
         asChild
         onPointerEnter={() => hover(true)}
@@ -1895,6 +1909,9 @@ function ProjectFilter({
         align="start"
         className="min-w-52"
         onCloseAutoFocus={(e) => e.preventDefault()}
+        // Untyped on purpose: Radix keeps `onOpenAutoFocus` off the public
+        // props but spreads it through to the focus scope all the same.
+        {...{ onOpenAutoFocus: (e: Event) => byHover.current && e.preventDefault() }}
         onPointerEnter={() => clearTimeout(hoverTimer.current)}
         onPointerLeave={() => hover(false)}
       >
