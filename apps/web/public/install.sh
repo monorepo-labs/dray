@@ -12,7 +12,7 @@
 #   DRAY_INSTALL_DIR      where the binary lands (default ~/.local/bin)
 #   DRAY_VERSION          a specific release tag (default: the newest on the channel)
 #   DRAY_CHANNEL          stable (default) or beta, which also takes stable releases
-#   DRAY_CURRENT_VERSION  the tag already installed; stop if it is the newest one
+#   DRAY_CURRENT_VERSION  the tag already installed; stop unless the newest is newer
 #   DRAY_UPDATING         set by `dray update`: no setup questions afterwards
 
 set -eu
@@ -91,17 +91,27 @@ cli_tags() {
     | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\(cli-v[^"]*\)".*/\1/p'
 }
 
-# The newer of a beta tag ($1) and a stable one ($2), either possibly empty.
-# A beta sorts below the release of its own version, the semver rule the app's
-# channels use: so the release a beta led up to replaces it, and a stable
-# hotfix cut after a newer beta never moves a beta install backwards. POSIX
-# `sort -k…n` rather than `sort -V`, which is not portable.
+# Whether tag $1 is newer than tag $2. A beta sorts below the release of its
+# own version, the semver rule the app's channels use: so the release a beta
+# led up to replaces it, and a stable hotfix cut after a newer beta never moves
+# a beta install backwards. POSIX `sort -k…n` rather than `sort -V`, which is
+# not portable; the fourth field is a beta's number (`0.12.0-beta.2`).
+newer() {
+  a=${1#cli-v}; b=${2#cli-v}
+  [ "$a" != "$b" ] || return 1
+  if [ "${a%%-*}" = "${b%%-*}" ]; then
+    [ "$a" = "${a%%-*}" ] && return 0
+    [ "$b" = "${b%%-*}" ] && return 1
+  fi
+  top=$(printf '%s\n%s\n' "$a" "$b" | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -n 1)
+  [ "$top" = "$a" ]
+}
+
+# The newer of two tags, either possibly empty.
 newest_of() {
   [ -n "$1" ] || { printf '%s' "$2"; return; }
   [ -n "$2" ] || { printf '%s' "$1"; return; }
-  b=${1#cli-v}; b=${b%%-*}; s=${2#cli-v}
-  top=$(printf '%s\n%s\n' "$b" "$s" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
-  if [ "$b" != "$s" ] && [ "$top" = "$b" ]; then printf '%s' "$1"; else printf '%s' "$2"; fi
+  if newer "$1" "$2"; then printf '%s' "$1"; else printf '%s' "$2"; fi
 }
 
 # A beta tag carries a `-` after the version (`cli-v0.12.0-beta.1`).
@@ -197,8 +207,16 @@ if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
   # binary, because the caller is the binary — `dray update` knows its own
   # version and nothing here can ask for it without guessing which `dray` on
   # disk is the one that ran.
-  if [ -n "${DRAY_CURRENT_VERSION:-}" ] && [ "$VERSION" = "$DRAY_CURRENT_VERSION" ]; then
-    say "dray $VERSION is already installed."
+  #
+  # "Not newer" rather than "the same", so leaving beta never downgrades: a
+  # beta install on the stable channel stays until a stable release passes it,
+  # the way the app's own updater behaves.
+  if [ -n "${DRAY_CURRENT_VERSION:-}" ] && ! newer "$VERSION" "$DRAY_CURRENT_VERSION"; then
+    if [ "$VERSION" = "$DRAY_CURRENT_VERSION" ]; then
+      say "dray $VERSION is already installed."
+    else
+      say "dray $DRAY_CURRENT_VERSION is newer than $VERSION; keeping it."
+    fi
     # Guarded here rather than inside the function: on the install path the
     # binary was just written, so a failure there is worth the note it prints.
     if [ -x "$INSTALL_DIR/dray" ]; then

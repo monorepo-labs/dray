@@ -722,8 +722,6 @@ pub fn run() {
             // reader who gives up after one failure writes no more.
             tauri::async_runtime::spawn(transcription::recordings::prune());
 
-            tauri::async_runtime::spawn(updater::sync_cli());
-
             // Sessions live in the background server launchd runs from this
             // binary, which owns the data, the orchestration socket and
             // Remote access. The app is its client, through the same

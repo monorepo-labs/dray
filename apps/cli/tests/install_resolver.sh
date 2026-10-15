@@ -4,7 +4,7 @@
 # release-cli's test job runs it under Ubuntu's dash as well as macOS's sh.
 set -eu
 src="$1"
-eval "$(sed -n '/^newest_of() {/,/^}/p;/^resolve_version() {/,/^}/p' "$src")"
+eval "$(sed -n '/^newer() {/,/^}/p;/^newest_of() {/,/^}/p;/^resolve_version() {/,/^}/p' "$src")"
 check() { # channel tags expected
   CHANNEL=$1; TAGS=$2
   cli_tags() { printf '%s\n' $TAGS; }
@@ -22,3 +22,18 @@ check beta   "cli-v0.9.5 cli-v0.10.0-beta.1" cli-v0.10.0-beta.1
 check beta   "cli-v0.11.0" cli-v0.11.0
 check beta   "cli-v0.12.0-beta.1" cli-v0.12.0-beta.1
 check stable "cli-v0.12.0-beta.1" ""
+
+# Whether an update installs the resolved tag over the one running: the
+# installer stops unless it is newer, so leaving beta never downgrades.
+installs() { # resolved current yes|no
+  if newer "$1" "$2"; then got=yes; else got=no; fi
+  [ "$got" = "$3" ] && echo "ok   $1 over $2: $got" || { echo "FAIL $1 over $2: got $got want $3"; exit 1; }
+}
+installs cli-v0.11.0         cli-v0.12.0-beta.2 no
+installs cli-v0.12.0         cli-v0.12.0-beta.2 yes
+installs cli-v0.12.0         cli-v0.12.0        no
+installs cli-v0.12.0-beta.2  cli-v0.12.0-beta.1 yes
+installs cli-v0.12.0-beta.10 cli-v0.12.0-beta.9 yes
+installs cli-v0.12.0-beta.1  cli-v0.12.0        no
+installs cli-v0.12.1         cli-v0.12.0        yes
+installs cli-v0.10.0         cli-v0.9.5         yes
