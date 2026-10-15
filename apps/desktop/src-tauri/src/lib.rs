@@ -424,6 +424,25 @@ fn track_feature(feature: String) {
     analytics::track("feature_used", serde_json::json!({ "feature": feature }));
 }
 
+/// Reports a render error the frontend's crash screen caught: React's error
+/// code and the component stack as `name@bundle:line:col` frames of our own
+/// bundle. The frontend already drops anything else; this keeps only frames
+/// spelled from that alphabet too, so no message text or path can reach the
+/// event whatever the caller sends (see [`analytics::error`]).
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn track_render_error(code: Option<u32>, frames: Vec<String>) {
+    let frames: Vec<String> = frames
+        .into_iter()
+        .filter(|f| {
+            f.len() <= 120
+                && f.contains(".js:")
+                && f.chars().all(|c| c.is_ascii_alphanumeric() || "_$.@:-".contains(c))
+        })
+        .take(8)
+        .collect();
+    analytics::error("render", serde_json::json!({ "react_code": code, "frames": frames }));
+}
+
 /// The slash commands available in a directory, for the harness that will run
 /// there. Cached per directory in the backend, so the composer may call this
 /// whenever the project or the harness changes.

@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "streamdown/styles.css";
 import App from "./App";
+import CrashScreen from "@/components/CrashScreen";
 import { trackActiveDay } from "@/lib/analytics";
 import { onFocusChange } from "@/lib/focus";
 import { startSurveys } from "@/lib/surveys";
@@ -26,6 +27,8 @@ applyZoom();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <CrashScreen>
+      <App />
+    </CrashScreen>
   </React.StrictMode>,
 );

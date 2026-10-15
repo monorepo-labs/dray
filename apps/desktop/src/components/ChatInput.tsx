@@ -266,12 +266,22 @@ export default function ChatInput({
   // Past one line the text takes the card's whole width and the controls drop
   // under it; one line keeps them beside it, so the resting height is unchanged.
   const [stacked, setStacked] = useState(false);
+  const stackedRef = useRef(stacked);
+  stackedRef.current = stacked;
+  // The draft the last swap was made for. A swap reflows the very text it
+  // measured, so in WebKit the same text can measure the other way once moved;
+  // swapping back for it traded the two layouts every commit until React gave
+  // up (#185) and unmounted the whole app, leaving the glass window empty.
+  const swappedFor = useRef<string | null>(null);
   useLayoutEffect(() => {
     const box = editorRef.current;
     const controlsBox = controlsRef.current;
     if (!box || !controlsBox) return;
     const check = () => {
-      if (!message) return setStacked(false);
+      if (!message) {
+        swappedFor.current = null;
+        return setStacked(false);
+      }
       const range = document.createRange();
       range.selectNodeContents(box);
       const rect = range.getBoundingClientRect();
@@ -281,7 +291,12 @@ export default function ChatInput({
       // controls fits on one line without them. Back only once it would fit
       // beside them again — their width, the gap and the box's own padding.
       const room = box.clientWidth - controlsBox.offsetWidth - 16;
-      setStacked((was) => (was ? !(oneLine && rect.width <= room) : !oneLine));
+      const was = stackedRef.current;
+      const next = was ? !(oneLine && rect.width <= room) : !oneLine;
+      if (next === was || swappedFor.current === message) return;
+      swappedFor.current = message;
+      stackedRef.current = next;
+      setStacked(next);
     };
     // Layout, not an ordinary effect: measured before paint, so a keystroke
     // crossing the line boundary moves the controls in the same frame. The
@@ -290,7 +305,7 @@ export default function ChatInput({
     const observer = new ResizeObserver(check);
     observer.observe(box);
     return () => observer.disconnect();
-  }, [message, stacked, sessionId]);
+  }, [message, sessionId]);
   // Read by the session-switch effect below, which must stay keyed on the
   // session alone: the draft it wants is the one that arrived *with* that
   // switch, and depending on `message` would rerun it on every keystroke and
