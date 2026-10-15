@@ -343,6 +343,7 @@ pub async fn listen(
         connections.spawn(async move {
             let served = match request_line(&stream).await {
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
+                Some(line) if line.starts_with("POST /upload?") => upload(stream, &token).await,
                 Some(_) => connection(stream, sink, hub, &token, &tunnel_file, hosts).await,
                 None => Ok(()),
             };
@@ -594,23 +595,24 @@ async fn request_line(stream: &TcpStream) -> Option<String> {
     None
 }
 
-/// `GET /file?token=…&path=…`: what `convertFileSrc` serves inside the desktop
-/// app — attached images, browser recordings and screenshots — for a client
-/// elsewhere. An
-/// `<img>` cannot set a header, hence the token in the query; a client that
-/// can sends `Authorization: Bearer …` instead and leaves it out of the URL.
-///
-/// Confined to those three directories, plus videos `read_file` handed out, by
-/// **canonical** path, so neither `..` nor a symlink inside one reaches
-/// anything else.
-// ponytail: no Range support, so a long video plays but cannot seek; add it
-// when recordings are viewed remotely.
-async fn file(stream: TcpStream, token: &str) -> Result<()> {
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+/// An HTTP request head: its target, the bearer token if one was sent, and
+/// the body length it declared.
+struct Head {
+    target: String,
+    bearer: Option<String>,
+    length: Option<u64>,
+}
+
+/// Reads a request head off `stream`, bounded in size and time. The reader
+/// comes back too, since it may already hold the start of a body.
+async fn read_head(
+    stream: TcpStream,
+) -> Result<(Head, tokio::io::BufReader<tokio::io::Take<TcpStream>>)> {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
     let mut reader = BufReader::new(stream.take(FILE_HEAD_LIMIT));
     let mut line = String::new();
-    let mut bearer = None;
+    let (mut bearer, mut length) = (None, None);
     // The rest of the head is read too, so closing does not reset the
     // connection under a response the client has not finished reading.
     let head = async {
@@ -623,6 +625,8 @@ async fn file(stream: TcpStream, token: &str) -> Result<()> {
             if let Some((name, value)) = header.split_once(':') {
                 if name.eq_ignore_ascii_case("authorization") {
                     bearer = value.trim().strip_prefix("Bearer ").map(str::to_string);
+                } else if name.eq_ignore_ascii_case("content-length") {
+                    length = value.trim().parse().ok();
                 }
             }
         }
@@ -632,12 +636,80 @@ async fn file(stream: TcpStream, token: &str) -> Result<()> {
         anyhow::bail!("request head over {FILE_HEAD_LIMIT} bytes");
     }
     let target = line.split(' ').nth(1).unwrap_or_default().to_string();
+    Ok((Head { target, bearer, length }, reader))
+}
+
+/// `POST /upload?session=…&name=…`: a file attached on another machine,
+/// written into the session's own attachments directory so the send that
+/// follows can name it. Answers the path it landed at. Bearer token alone —
+/// nothing loads this from a URL.
+async fn upload(stream: TcpStream, token: &str) -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (head, reader) = read_head(stream).await?;
+    // Whatever of the body arrived with the head sits in the reader's buffer.
+    let early = reader.buffer().to_vec();
     let mut stream = reader.into_inner().into_inner();
 
-    let query = target.split_once('?').map(|(_, q)| q).unwrap_or_default();
+    let query = head.target.split_once('?').map(|(_, q)| q).unwrap_or_default();
+    let (mut session, mut name) = (String::new(), String::new());
+    for (key, value) in form_urlencoded::parse(query.as_bytes()) {
+        match &*key {
+            "session" => session = value.into_owned(),
+            "name" => name = value.into_owned(),
+            _ => {}
+        }
+    }
+
+    let refuse = |status: &str| format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    if !same_token(head.bearer.as_deref().unwrap_or_default(), token) {
+        stream.write_all(refuse("401 Unauthorized").as_bytes()).await?;
+        return Ok(());
+    }
+    let (Some(length), Ok(path)) = (head.length, crate::attachments::upload_path(&session, &name).await) else {
+        stream.write_all(refuse("400 Bad Request").as_bytes()).await?;
+        return Ok(());
+    };
+
+    let mut out = tokio::fs::File::create(&path).await?;
+    let mut body = (&early[..]).chain(&mut stream).take(length);
+    let written = tokio::io::copy(&mut body, &mut out).await?;
+    if written != length {
+        let _ = tokio::fs::remove_file(&path).await;
+        anyhow::bail!("upload ended at {written} of {length} bytes");
+    }
+    out.flush().await?;
+
+    let path = path.to_string_lossy();
+    let reply = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{path}",
+        path.len()
+    );
+    stream.write_all(reply.as_bytes()).await?;
+    stream.shutdown().await.ok();
+    Ok(())
+}
+
+/// `GET /file?token=…&path=…`: what `convertFileSrc` serves inside the desktop
+/// app — attached images, browser recordings and screenshots — for a client
+/// elsewhere. An
+/// `<img>` cannot set a header, hence the token in the query; a client that
+/// can sends `Authorization: Bearer …` instead and leaves it out of the URL.
+///
+/// Confined to those three directories, plus videos `read_file` handed out, by
+/// **canonical** path, so neither `..` nor a symlink inside one reaches
+/// anything else.
+// ponytail: no Range support, so a long video plays but cannot seek; add it
+// when recordings are viewed remotely.
+async fn file(stream: TcpStream, token: &str) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let (head, reader) = read_head(stream).await?;
+    let mut stream = reader.into_inner().into_inner();
+    let query = head.target.split_once('?').map(|(_, q)| q).unwrap_or_default();
     // A header where the client can set one — the desktop app's proxy — so the
     // token rides no URL; the query for an `<img>` in a plain browser.
-    let mut given = (bearer.unwrap_or_default(), String::new());
+    let mut given = (head.bearer.unwrap_or_default(), String::new());
     for (key, value) in form_urlencoded::parse(query.as_bytes()) {
         match &*key {
             "token" if given.0.is_empty() => given.0 = value.into_owned(),
@@ -1209,6 +1281,44 @@ mod tests {
         assert!(serve(PathBuf::from("/etc/passwd")).await.is_none());
         assert_eq!(content_type(&inside), "image/png");
         std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// A body larger than one read lands whole, under the session's own
+    /// directory and its own name; a wrong token or a path in the name does not.
+    #[tokio::test]
+    async fn an_upload_lands_in_the_sessions_attachments() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/upload", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(upload(stream, "tok"));
+            }
+        });
+        let session = uuid::Uuid::new_v4().to_string();
+        let body: Vec<u8> = (0..300_000u32).map(|i| i as u8).collect();
+        let post = |token: &'static str, name: &'static str| {
+            let (base, session, body) = (base.clone(), session.clone(), body.clone());
+            async move {
+                reqwest::Client::new()
+                    .post(base)
+                    .query(&[("session", session.as_str()), ("name", name)])
+                    .bearer_auth(token)
+                    .body(body)
+                    .send()
+                    .await
+                    .unwrap()
+            }
+        };
+
+        let landed = post("tok", "data.csv").await.text().await.unwrap();
+        let dir = store::get_home_app_dir().await.unwrap().join("attachments").join(&session);
+        assert!(Path::new(&landed).starts_with(&dir), "{landed}");
+        assert!(landed.ends_with("/data.csv"));
+        assert_eq!(std::fs::read(&landed).unwrap(), body);
+
+        assert_eq!(post("nope", "data.csv").await.status(), 401);
+        assert_eq!(post("tok", "..").await.status(), 400);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]

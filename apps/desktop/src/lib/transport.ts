@@ -156,6 +156,7 @@ export const APP_COMMANDS = new Set([
   "install_on_server",
   "run_server_login",
   "run_gh_login",
+  "upload_attachments",
   "paste_attachments",
   "read_file",
   "browser_open",

@@ -975,17 +975,7 @@ fn live_forward(conn: &mut Conn, port: u16) -> Option<u16> {
 /// its `/file` route with the token in a header, for the webview's
 /// `drayserver://` scheme. The token stays out of every URL the page holds.
 pub async fn fetch_file(server: &str, path: &str) -> Result<(String, Vec<u8>), String> {
-    let (url, token) = conns()
-        .iter()
-        .find(|c| c.saved.id == server)
-        .ok_or("no such server")?
-        .live
-        .clone()
-        .ok_or("the server is not connected")?;
-    let base = match url.strip_prefix("wss://") {
-        Some(rest) => format!("https://{rest}"),
-        None => url.replacen("ws://", "http://", 1),
-    };
+    let (base, token) = http_base(server)?;
     let response = reqwest::Client::new()
         .get(format!("{base}/file"))
         .query(&[("path", path)])
@@ -1004,6 +994,61 @@ pub async fn fetch_file(server: &str, path: &str) -> Result<(String, Vec<u8>), S
         .to_string();
     let body = response.bytes().await.map_err(|e| e.to_string())?;
     Ok((kind, body.to_vec()))
+}
+
+/// The `http(s)://` address and token of a connected server, for the routes
+/// it serves beside its socket.
+fn http_base(server: &str) -> Result<(String, String), String> {
+    let (url, token) = conns()
+        .iter()
+        .find(|c| c.saved.id == server)
+        .ok_or("no such server")?
+        .live
+        .clone()
+        .ok_or("the server is not connected")?;
+    let base = match url.strip_prefix("wss://") {
+        Some(rest) => format!("https://{rest}"),
+        None => url.replacen("ws://", "http://", 1),
+    };
+    Ok((base, token))
+}
+
+/// Copies files on this Mac into a session's attachments on `server`, and
+/// answers where each landed there — what the send names in their place, since
+/// the server cannot read a path on this Mac.
+// ponytail: each file is read whole into memory; stream it if attaching
+// files of several hundred MB to a remote session becomes a thing.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn upload_attachments(server: String, session_id: String, paths: Vec<String>) -> Result<Vec<String>, String> {
+    let (base, token) = http_base(&server)?;
+    let client = reqwest::Client::new();
+    let mut landed = Vec::with_capacity(paths.len());
+    for path in paths {
+        let name = std::path::Path::new(&path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.clone());
+        let body = tokio::fs::read(&path).await.map_err(|e| format!("Could not read {name}: {e}"))?;
+        let failed = |e: reqwest::Error| format!("Could not upload {name}: {e}");
+        let response = client
+            .post(format!("{base}/upload"))
+            .query(&[("session", session_id.as_str()), ("name", name.as_str())])
+            .bearer_auth(&token)
+            .body(body)
+            .send()
+            .await
+            .map_err(failed)?;
+        // A server older than this route reads the request as a socket
+        // handshake and refuses it, which is the one cure worth naming.
+        if !response.status().is_success() {
+            return Err(format!(
+                "Could not upload {name} ({}). Update Dray on the server if it is older than this app.",
+                response.status()
+            ));
+        }
+        landed.push(response.text().await.map_err(failed)?);
+    }
+    Ok(landed)
 }
 
 #[cfg(test)]

@@ -801,12 +801,6 @@ const handleSendMsg = async (
     setError("Attach a project first.");
     return false;
   }
-  // An attachment is a path on this Mac, which a remote server cannot read.
-  if (attachmentPaths.length && serverOfPath(cwd) !== LOCAL) {
-    setError("Attachments can't be sent to a remote server yet.");
-    return false;
-  }
-
   if (!sessionId) {
     sessionId = crypto.randomUUID();
     // Before the selection moves, so the composer reads this server's models
@@ -911,10 +905,17 @@ const handleSendMsg = async (
   }
 
   try {
+    // An attachment is a path on this Mac, which a remote server cannot read,
+    // so the files go over first and the send names the server's copies.
+    const server = serverOfPath(cwd);
+    const sentPaths =
+      attachmentPaths.length && server !== LOCAL
+        ? await invoke<string[]>("upload_attachments", { server, sessionId, paths: attachmentPaths }, LOCAL)
+        : attachmentPaths;
     const outcome = await invoke<SendOutcome>("send_msg", {
       sessionId,
       prompt: message,
-      attachmentPaths,
+      attachmentPaths: sentPaths,
       harness,
       model: modelId,
       effort,

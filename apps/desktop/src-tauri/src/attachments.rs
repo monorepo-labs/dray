@@ -297,6 +297,18 @@ async fn attachments_dir(session_id: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Where a file uploaded from another machine lands: a fresh directory under
+/// the session's own, so it keeps its name and goes when the session does.
+/// The session must be a uuid and the name a bare file name, since both come
+/// off the wire and end up in a path.
+pub async fn upload_path(session_id: &str, name: &str) -> Result<PathBuf> {
+    Uuid::parse_str(session_id).context("not a session id")?;
+    let name = Path::new(name).file_name().context("not a file name")?;
+    let dir = attachments_dir(session_id).await?.join(Uuid::now_v7().to_string());
+    fs::create_dir_all(&dir).await?;
+    Ok(dir.join(name))
+}
+
 /// Drops a session's archived images. Called when the session itself is
 /// deleted; a missing directory is the ordinary case, not an error.
 pub async fn delete_session_attachments(session_id: &str) -> Result<()> {
