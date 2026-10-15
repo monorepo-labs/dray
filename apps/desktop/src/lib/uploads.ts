@@ -17,7 +17,7 @@ export type Upload = {
   error: string | null;
 };
 
-type Entry = Upload & { done: Promise<string> };
+type Entry = Upload & { id: string; done: Promise<string> };
 
 /// Keyed on server and local path, so a tile and the send that carries it find
 /// one upload, and the same file pinned twice goes over once.
@@ -28,9 +28,17 @@ const { emit, subscribe } = channel<void>();
 
 const keyOf = (server: ServerId, path: string) => `${server}\n${path}`;
 
-function patch(key: string, change: Partial<Upload>) {
+/// One id per transfer, its key plus a count, so a file forgotten and pinned
+/// again mid-upload is two transfers rather than one.
+let transfers = 0;
+
+/// Writes to transfer `id`'s entry, unless it was forgotten or replaced since:
+/// a transfer still running after its tile went must not report for the one
+/// that took its place.
+function patch(id: string, change: Partial<Upload>) {
+  const key = id.slice(0, id.lastIndexOf("\n"));
   const entry = uploads.get(key);
-  if (!entry) return;
+  if (entry?.id !== id) return;
   uploads.set(key, { ...entry, ...change });
   emit();
 }
@@ -52,25 +60,40 @@ export function upload(server: ServerId, path: string, size: number): Promise<st
     );
   }
 
+  const id = `${key}\n${++transfers}`;
   const done =
     size > MAX_UPLOAD_BYTES
       ? Promise.reject(new Error("Over 100MB, the most a remote server takes."))
-      : invoke<string>("upload_attachment", { server, path, id: key }, LOCAL);
+      : invoke<string>("upload_attachment", { server, path, id }, LOCAL);
   const settled = done.then(
     (landed) => {
-      patch(key, { sent: size, path: landed });
+      patch(id, { sent: size, path: landed });
       return landed;
     },
     (e: unknown) => {
-      patch(key, { error: e instanceof Error ? e.message : String(e) });
+      patch(id, { error: e instanceof Error ? e.message : String(e) });
       throw e;
     },
   );
   // A tile starts this and never awaits it; the failure is drawn, not thrown.
   settled.catch(() => {});
-  uploads.set(key, { sent: 0, total: size, path: null, error: null, done: settled });
+  uploads.set(key, { id, sent: 0, total: size, path: null, error: null, done: settled });
   emit();
   return settled;
+}
+
+/// Keeps every pinned file uploading: starts each one with no upload, now and
+/// whenever one is forgotten — a send elsewhere may forget a file this tray
+/// still holds. A failed one is left for the send to retry, or a file that
+/// cannot go over would be retried on every emit. Answers the unsubscribe.
+export function keepUploading(server: ServerId, files: { path: string; size: number }[]): () => void {
+  const start = () => {
+    for (const file of files) {
+      if (!uploads.has(keyOf(server, file.path))) void upload(server, file.path, file.size);
+    }
+  };
+  start();
+  return subscribe(start);
 }
 
 /// Drops these uploads, so the file is read and sent again the next time it is

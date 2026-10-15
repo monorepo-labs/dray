@@ -35,7 +35,7 @@ import { highlightSegments } from "@/lib/highlight";
 import { applyIssue, cutRange, insertIssue, issueSpan, rememberIssueTitle } from "@/lib/issue";
 import { placeSegments } from "@/lib/richText";
 import { LOCAL, serverOfPath } from "@/lib/transport";
-import { forget, MAX_UPLOAD_BYTES, upload } from "@/lib/uploads";
+import { forget, keepUploading, MAX_UPLOAD_BYTES } from "@/lib/uploads";
 import {
   canSwitchTracker,
   effectiveTracker,
@@ -317,10 +317,7 @@ export default function ChatInput({
   // A remote session cannot read a path on this Mac, so whatever is pinned
   // goes over at once, however it arrived — drop, paste, picker, a draft
   // reopened or a cancelled prompt handed back.
-  useEffect(() => {
-    if (server === LOCAL) return;
-    for (const a of attachments) void upload(server, a.path, a.size);
-  }, [server, attachments]);
+  useEffect(() => (server === LOCAL ? undefined : keepUploading(server, attachments)), [server, attachments]);
   // Set while the OS is dragging files over the window. Tauri intercepts the
   // native drop before the webview sees it, so there are no HTML drag events to
   // read here — `onDragDropEvent` is the only source, and it reports paths
