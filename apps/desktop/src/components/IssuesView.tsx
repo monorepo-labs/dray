@@ -1,6 +1,7 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type MutableRefObject,
@@ -42,7 +43,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import GitHubIcon from "@/components/GitHubIcon";
 import IssueTrackerChips from "@/components/IssueTrackerChips";
-import { useHotkey } from "@/hooks/useHotkey";
+import { hotkeysSuspended, useHotkey } from "@/hooks/useHotkey";
 import { issueErrorText, useIssues } from "@/hooks/useIssues";
 import { GROUPS, groupIssues, shortIdentifier } from "@/lib/issue";
 import {
@@ -170,7 +171,8 @@ export default function IssuesView({
   /// The issue whose detail the pane beside this is showing, so the row can
   /// say which one it is. Owned by `App`, because the pane is.
   picked: string | null;
-  onPick: (issue: Issue) => void;
+  /// `null` closes the pane.
+  onPick: (issue: Issue | null) => void;
   /// Takes the reader to the empty composer with this issue tagged. Owned by
   /// `App`, which is the only thing that can leave this page.
   onWorkOn: (issue: Issue) => void;
@@ -230,6 +232,73 @@ export default function IssuesView({
   /// failed read — the page simply has no repository named yet, which is the
   /// state it opens in the first time.
   const needsRepo = tracker === "github" && !query.teamId;
+
+  // **The row the keys act on: the open one, or the one last opened.** Kept
+  // after the pane shuts, so ⌘E and Return have something to reopen, and synced
+  // during render so a pick from elsewhere — a tag clicked in a prompt — moves
+  // it on the same frame.
+  const [cursor, setCursor] = useState<string | null>(picked);
+  if (picked && picked !== cursor) setCursor(picked);
+  const listRef = useRef<HTMLDivElement>(null);
+  const issueById = (id: string | null) =>
+    issues.find((issue) => issue.identifier === id) ??
+    settled.issues.find((issue) => issue.identifier === id);
+
+  // ⌘E here is the pane's toggle, and `App` gives the chord up while this page
+  // is on screen: only this side knows which row to put back.
+  useHotkey(
+    "panel.toggle",
+    () => {
+      if (picked) return onPick(null);
+      const issue = issueById(cursor);
+      if (issue) onPick(issue);
+    },
+    { enabled: active },
+  );
+
+  // ↑/↓ step the rows and Return opens one, with or without a row picked.
+  // Plain keys rather than registry chords, the Files tree's reading: they are
+  // the list's own navigation. Answered only from the page body or the list,
+  // so the search box, menus and the pane keep their own arrows. Rows are read
+  // off the DOM, which is the one place that already knows draw order and
+  // which groups are folded.
+  const navigate = useRef<(e: KeyboardEvent) => void>(() => {});
+  navigate.current = (e) => {
+    if (e.defaultPrevented || hotkeysSuspended()) return;
+    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    const list = listRef.current;
+    const target = e.target as HTMLElement;
+    if (!list || (target !== document.body && !list.contains(target))) return;
+
+    if (e.key === "Enter") {
+      // A focused row answers Return itself.
+      const issue = target === document.body ? issueById(cursor) : undefined;
+      if (!issue) return;
+      e.preventDefault();
+      return onPick(issue);
+    }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const rows = [...list.querySelectorAll<HTMLElement>("[data-issue]")];
+    if (rows.length === 0) return;
+    e.preventDefault();
+    const at = rows.findIndex((row) => row.dataset.issue === cursor);
+    const down = e.key === "ArrowDown";
+    const next = rows[at < 0 ? (down ? 0 : rows.length - 1) : at + (down ? 1 : -1)] ?? rows[at];
+    // Focus follows, so Return on the focused row opens this one and not the
+    // row clicked last.
+    next.focus({ preventScroll: true });
+    next.scrollIntoView({ block: "nearest" });
+    setCursor(next.dataset.issue!);
+    // An open pane follows the selection; a shut one waits for Return.
+    const issue = picked && issueById(next.dataset.issue!);
+    if (issue) onPick(issue);
+  };
+  useEffect(() => {
+    if (!active) return;
+    const onKeyDown = (e: KeyboardEvent) => navigate.current(e);
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [active]);
 
   // Linear's alone: GitHub draws its rows flat under the state switch.
   const groups = useMemo(() => groupIssues(issues), [issues]);
@@ -428,7 +497,10 @@ export default function IssuesView({
         </p>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* A container, so the rows' chips drop by the list's width rather than
+          the window's: with the pane open the list is narrow in a wide window,
+          and viewport breakpoints kept every chip and left the title a letter. */}
+      <div ref={listRef} className="@container min-h-0 flex-1 overflow-y-auto">
         {/* **Nothing is read until a repository is picked**, and that is the
             GitHub half's own resting state rather than a failure: an issue
             number means nothing without one, and reading every attached project
@@ -505,7 +577,7 @@ export default function IssuesView({
                   <IssueRow
                     key={issue.id}
                     issue={issue}
-                    picked={issue.identifier === picked}
+                    picked={issue.identifier === cursor}
                     scopedToMe={query.scope === "assigned"}
                     states={statesFor(issue)}
                     onPick={onPick}
@@ -524,7 +596,7 @@ export default function IssuesView({
                       <IssueRow
                         key={issue.id}
                         issue={issue}
-                        picked={issue.identifier === picked}
+                        picked={issue.identifier === cursor}
                         scopedToMe={query.scope === "assigned"}
                         states={statesFor(issue)}
                         onPick={onPick}
@@ -562,7 +634,7 @@ export default function IssuesView({
                         <IssueRow
                           key={issue.id}
                           issue={issue}
-                          picked={issue.identifier === picked}
+                          picked={issue.identifier === cursor}
                           scopedToMe={query.scope === "assigned"}
                           states={statesFor(issue)}
                           onPick={onPick}
@@ -1126,6 +1198,7 @@ function IssueRow({
     <div
       role="button"
       tabIndex={0}
+      data-issue={issue.identifier}
       // ⌘-click leaves for the tracker, the same modifier the transcript's link
       // dialog uses to mean "out there, not here". An ordinary click still opens
       // the pane, which is what this row is for — Linear is the shortcut.
@@ -1146,8 +1219,12 @@ function IssueRow({
       }}
       className={cn(
         "group flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-ui transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-        picked ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/50",
+        "focus-visible:outline-none",
+        // No ring on the selected row: the keys move focus with the selection,
+        // and the fill already says which row it is.
+        picked
+          ? "bg-sidebar-accent"
+          : "hover:bg-sidebar-accent/50 focus-visible:ring-2 focus-visible:ring-sidebar-ring",
       )}
     >
       {/* Always drawn, "no priority" included. A glyph that appears on only
@@ -1232,7 +1309,7 @@ function IssueRow({
           an assignee besides, so a fourth thing about people would be the
           crowded end of a row that is already saying enough. */}
       {issue.tracker === "github" && issue.author && (
-        <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+        <span className="hidden shrink-0 items-center gap-1.5 text-muted-foreground @lg:flex">
           <Avatar src={issue.author.avatar} name={issue.author.name} className="size-3.5" />
           <span className="max-w-24 truncate">{issue.author.name}</span>
         </span>
@@ -1241,7 +1318,7 @@ function IssueRow({
       {/* The type as dot and name rather than a chip, so a `Bug` type beside a
           `bug` label reads as two facts and not one drawn twice. */}
       {issue.issueType && (
-        <span className="hidden shrink-0 items-center gap-1.5 text-muted-foreground lg:inline-flex">
+        <span className="hidden shrink-0 items-center gap-1.5 text-muted-foreground @2xl:inline-flex">
           <IssueLabelChip label={issue.issueType} dot />
           {issue.issueType.name}
         </span>
@@ -1253,11 +1330,11 @@ function IssueRow({
           Capped, and dropped on a narrow pane: past three they stop being
           information and start being a second title. */}
       {issue.labels.slice(0, 3).map((label) => (
-        <IssueLabelChip key={label.name} label={label} className="hidden lg:inline" />
+        <IssueLabelChip key={label.name} label={label} className="hidden @3xl:inline" />
       ))}
 
       {issue.project && (
-        <span className="hidden shrink-0 rounded-full border border-border px-1.5 py-px text-muted-foreground lg:inline">
+        <span className="hidden shrink-0 rounded-full border border-border px-1.5 py-px text-muted-foreground @3xl:inline">
           {issue.project}
         </span>
       )}
@@ -1274,7 +1351,7 @@ function IssueRow({
           ⌘-click on the row still leaves for the tracker, where they are
           listed. */}
       {issue.pullRequests.length > 0 && (
-        <span className="hidden shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-muted-foreground sm:inline-flex">
+        <span className="hidden shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-muted-foreground @md:inline-flex">
           <GitPullRequest className="size-3" />
           {issue.pullRequests.length === 1
             ? `#${issue.pullRequests[0]}`
@@ -1294,7 +1371,7 @@ function IssueRow({
         <Avatar
           src={issue.assignee.avatar}
           name={issue.assignee.name}
-          className="hidden sm:flex"
+          className="hidden @lg:flex"
         />
       )}
 
@@ -1306,7 +1383,7 @@ function IssueRow({
 
           The least of what the row says and the first thing to go when it is
           narrow — the identifier and the title are what it is read for. */}
-      <span className="hidden w-16 shrink-0 text-right text-muted-foreground sm:inline">
+      <span className="hidden w-16 shrink-0 text-right text-muted-foreground @sm:inline">
         {calendarDay(issue.createdAt)}
       </span>
     </div>

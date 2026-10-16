@@ -2520,13 +2520,9 @@ function App() {
   // Bound to the raw toggle rather than to `handleTogglePanel`, deliberately:
   // that one picks a tab on the way open, which is right for a button the
   // reader aimed at and wrong for a chord that draws nothing and so promises
-  // nothing. Which means the issues-page guard has to be repeated here — it
-  // lived only in `handleTogglePanel` at first, so the button honoured it and
-  // the chord went straight past it to a pane that is not on screen.
-  useHotkey("panel.toggle", () => {
-    if (issuesOpen) return setPickedIssue(null);
-    togglePanel();
-  });
+  // nothing. Off on the issues page, whose own binding opens and shuts the
+  // issue pane — only the list knows which row to put back.
+  useHotkey("panel.toggle", togglePanel, { enabled: !issuesOpen });
   // ⌘⌥E, the side beside ⌘E's visibility. Moves a hidden pane too: the pick
   // is a preference, and it lands wherever the pane next opens.
   useHotkey("panel.side", () => setPanelSide((s) => (s === "left" ? "right" : "left")));
