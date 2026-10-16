@@ -301,7 +301,7 @@ type SessionGroup =
 /// An open PR — ready to merge or not — is one stage, whether a turn is running
 /// or idle; one whose checks are still running sits near the bottom: nothing is
 /// asked of the reader until CI answers, and a merged one under that, its work
-/// landed. An unread turn outranks a merge. `aside` is the reader's own "not now",
+/// landed, unread or working alike. `aside` is the reader's own "not now",
 /// and it sits under everything else.
 type SessionState =
   | "asking"
@@ -409,9 +409,12 @@ function sessionState(
   if (live.asking.has(item.sessionId)) return "asking";
   const mark = live.prFor?.(item.projectPath, sessionBranch(item));
   const open = mark?.state === "OPEN" ? mark : undefined;
+  // A merged PR holds its session whatever the turn says: an unread answer or
+  // follow-up work there is minor work on something already landed.
+  if (!open && mark?.state === "MERGED") return "merged";
   const status = live.statusBySession[item.sessionId] ?? item.status;
   if (status === "completed") return open ? "unreadPr" : "completed";
-  if (!open) return mark?.state === "MERGED" ? "merged" : "idle";
+  if (!open) return "idle";
   return open.checksState === "RUNNING" ? "checks" : "pr";
 }
 

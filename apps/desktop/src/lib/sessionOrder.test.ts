@@ -527,11 +527,14 @@ describe("sessionGroups by stage", () => {
       item("done2", "2026-01-01T00:00:00Z"),
       item("busyPr", "2026-01-01T00:00:00Z"),
       item("busyChecks", "2026-01-01T00:00:00Z"),
+      item("doneMerged", "2026-01-01T00:00:00Z"),
+      item("busyMerged", "2026-01-01T00:00:00Z"),
     ];
 
     // Mid-turn files where it would rest: its row already says so where the
     // timestamp would be — under a PR too, and running checks outrank it.
-    // Ready to merge is an open PR like any other.
+    // Ready to merge is an open PR like any other. A merged PR holds its
+    // session unread or working; only needs-you takes it out.
     expect(
       shape(
         sessionGroups(
@@ -545,6 +548,8 @@ describe("sessionGroups by stage", () => {
               busy: "in_progress",
               busyPr: "in_progress",
               busyChecks: "in_progress",
+              doneMerged: "completed",
+              busyMerged: "in_progress",
             },
             ["ask", "ask2"],
             {
@@ -556,6 +561,8 @@ describe("sessionGroups by stage", () => {
               ask2: running,
               busyPr: {},
               busyChecks: running,
+              doneMerged: { state: "MERGED" },
+              busyMerged: { state: "MERGED" },
             },
           ),
         ),
@@ -567,7 +574,7 @@ describe("sessionGroups by stage", () => {
       ["unreadPr", ["donePr"]],
       ["pr", ["pr", "ready", "busyPr"]],
       ["checks", ["checks", "busyChecks"]],
-      ["merged", ["merged"]],
+      ["merged", ["merged", "doneMerged", "busyMerged"]],
     ]);
   });
 
