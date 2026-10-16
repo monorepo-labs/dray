@@ -240,7 +240,7 @@ export default function IssuesView({
   // it on the same frame. The whole ref, not its identifier, since a tagged
   // issue need not be in the list to be reopened.
   const [cursor, setCursor] = useState<IssueRef | null>(picked);
-  if (picked && picked.identifier !== cursor?.identifier) setCursor(picked);
+  if (picked && picked !== cursor) setCursor(picked);
   const listRef = useRef<HTMLDivElement>(null);
   const issueById = (id: string | null) =>
     issues.find((issue) => issue.identifier === id) ??
