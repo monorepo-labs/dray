@@ -64,7 +64,7 @@ pub async fn expose(profile: &'static str, label: &str, target: String) -> Resul
         }
         let entry = live.get_mut(profile).expect("inserted above");
         let name = route_name(&entry.token, label);
-        entry.routes.insert(name.clone(), target.into());
+        entry.routes.insert(name.clone(), target.clone().into());
         entry.tunnel.set_routes(entry.routes.clone())?;
         let url = format!("https://{name}.{}", entry.hostname);
         (name, url, entry.tunnel.status_watch())
@@ -90,19 +90,29 @@ pub async fn expose(profile: &'static str, label: &str, target: String) -> Resul
             LIVE.lock().await.remove(profile);
             Err(e)
         }
-        Err(_) => bail!("the relay did not attach the link in {}s; try again", READY_WAIT.as_secs()),
+        Err(_) => {
+            // The caller records no link, so nothing else would take it down.
+            withdraw(profile, label, Some(&target)).await;
+            bail!("the relay did not attach the link in {}s; try again", READY_WAIT.as_secs())
+        }
     }
 }
 
 /// Takes `label` off `profile`'s tunnel, and the tunnel down with its last
 /// route. Withdrawing one that is not there is no error.
-pub async fn withdraw(profile: &'static str, label: &str) {
+///
+/// With `target`, only while the route still points there: a share stopped
+/// and started again names the same route, and the stop's late withdrawal must
+/// not take the new one down.
+pub async fn withdraw(profile: &'static str, label: &str, target: Option<&str>) {
     let mut live = LIVE.lock().await;
     let Some(entry) = live.get_mut(profile) else { return };
     let name = route_name(&entry.token, label);
-    if entry.routes.remove(&name).is_none() {
+    let owned = entry.routes.get(&name).is_some_and(|r| target.is_none_or(|t| r.target == t));
+    if !owned {
         return;
     }
+    entry.routes.remove(&name);
     if entry.routes.is_empty() {
         // Dropping the handle stops it.
         live.remove(profile);

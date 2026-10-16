@@ -116,7 +116,7 @@ async fn switch(sink: &Sink, on: bool) {
         // Until it is dropped, so the listener is gone before the next bind.
         let _ = task.await;
     }
-    tunnel::withdraw(tunnel::REMOTE, ROUTE).await;
+    tunnel::withdraw(tunnel::REMOTE, ROUTE, None).await;
     WRITTEN.lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Ok(file) = tunnel_file().await {
         let _ = tokio::fs::remove_file(file).await;

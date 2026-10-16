@@ -582,8 +582,16 @@ fn tunnel_off() -> Result<(), String> {
     set_remote_access(false)
 }
 
+/// Asks the server whose home this is — `DRAY_HOME`'s socket, the same home
+/// `tunnel-url` and `serve-token` are read from — unless `DRAY_ENDPOINT` names
+/// one outright.
 fn set_remote_access(on: bool) -> Result<(), String> {
-    match super::send(dray_proto::Request::SetRemoteAccess(dray_proto::SetRemoteAccess { on }))? {
+    let endpoint = match std::env::var("DRAY_ENDPOINT") {
+        Ok(set) if !set.is_empty() => set,
+        _ => dray_home()?.join(dray_proto::SOCKET_NAME).to_string_lossy().into_owned(),
+    };
+    let request = dray_proto::Request::SetRemoteAccess(dray_proto::SetRemoteAccess { on });
+    match super::send_to(&endpoint, request)? {
         dray_proto::Response::RemoteAccess { .. } => Ok(()),
         dray_proto::Response::Error { message } => Err(message),
         other => Err(format!("unexpected answer from the server: {other:?}")),

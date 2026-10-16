@@ -24,6 +24,8 @@ use crate::tunnel;
 struct Link {
     /// The Host-rewriting proxy the route points at. Aborted on drop.
     proxy: JoinHandle<()>,
+    /// The proxy's address, which tells this link's route from a later one.
+    target: String,
     url: String,
 }
 
@@ -58,6 +60,13 @@ static LINKS: LazyLock<Mutex<Links>> = LazyLock::new(Default::default);
 
 fn label(session: &str, port: u16) -> String {
     format!("{session}:{port}")
+}
+
+/// Takes a stopped link's route down, unless a later share of the same port
+/// has repointed it already.
+fn retire(session: &str, port: u16, link: Link) {
+    let label = label(session, port);
+    tokio::spawn(async move { tunnel::withdraw(tunnel::SHARE, &label, Some(&link.target)).await });
 }
 
 /// Publishes one of the session's dev servers, answering its public URL.
@@ -106,7 +115,7 @@ pub async fn start(session: &str, port: u16, via: &'static str) -> Result<String
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| format!("could not listen: {e}"))?;
     let target = listener.local_addr().map_err(|e| format!("could not listen: {e}"))?.to_string();
     let proxy = tokio::spawn(proxy(listener, port));
-    let url = match tunnel::expose(tunnel::SHARE, &label(session, port), target).await {
+    let url = match tunnel::expose(tunnel::SHARE, &label(session, port), target.clone()).await {
         Ok(url) => url,
         Err(e) => {
             proxy.abort();
@@ -117,7 +126,7 @@ pub async fn start(session: &str, port: u16, via: &'static str) -> Result<String
         let mut links = LINKS.lock().unwrap();
         let current = links.stamp(session, port) == stamp;
         if current {
-            links.live.insert((session.to_string(), port), Link { proxy, url: url.clone() });
+            links.live.insert((session.to_string(), port), Link { proxy, target: target.clone(), url: url.clone() });
         } else {
             proxy.abort();
         }
@@ -125,7 +134,7 @@ pub async fn start(session: &str, port: u16, via: &'static str) -> Result<String
     };
     if !published {
         // The stop found nothing live to withdraw, so the route is still up.
-        tunnel::withdraw(tunnel::SHARE, &label(session, port)).await;
+        tunnel::withdraw(tunnel::SHARE, &label(session, port), Some(&target)).await;
         return Err("sharing was stopped before the link was ready".into());
     }
     crate::analytics::track("feature_used", serde_json::json!({ "feature": "share", "via": via }));
@@ -135,9 +144,8 @@ pub async fn start(session: &str, port: u16, via: &'static str) -> Result<String
 pub fn stop(session: &str, port: u16) {
     let mut links = LINKS.lock().unwrap();
     links.bump(session, Some(port));
-    if links.live.remove(&(session.to_string(), port)).is_some() {
-        let label = label(session, port);
-        tokio::spawn(async move { tunnel::withdraw(tunnel::SHARE, &label).await });
+    if let Some(link) = links.live.remove(&(session.to_string(), port)) {
+        retire(session, port, link);
     }
 }
 
@@ -147,9 +155,9 @@ pub fn close_session(session: &str) {
     links.bump(session, None);
     let ports: Vec<u16> = links.live.keys().filter(|(s, _)| s == session).map(|(_, p)| *p).collect();
     for port in ports {
-        links.live.remove(&(session.to_string(), port));
-        let label = label(session, port);
-        tokio::spawn(async move { tunnel::withdraw(tunnel::SHARE, &label).await });
+        if let Some(link) = links.live.remove(&(session.to_string(), port)) {
+            retire(session, port, link);
+        }
     }
 }
 
@@ -265,9 +273,9 @@ mod tests {
         eprintln!("reached in {:?}", t0.elapsed());
         assert_eq!(body, format!("localhost:{port}"));
 
-        tunnel::withdraw(tunnel::SHARE, "s:1").await;
+        tunnel::withdraw(tunnel::SHARE, "s:1", None).await;
         assert_eq!(tunnel::expose(tunnel::SHARE, "s:1", target).await.unwrap(), url, "shared again, the same link");
-        tunnel::withdraw(tunnel::SHARE, "s:1").await;
+        tunnel::withdraw(tunnel::SHARE, "s:1", None).await;
     }
 
     /// A WebSocket — Vite's hot reload — is spliced through whole after the

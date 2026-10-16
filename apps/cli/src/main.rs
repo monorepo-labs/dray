@@ -1048,7 +1048,11 @@ fn connect_failure(error: &std::io::Error, endpoint: &str) -> String {
 /// One request, one response, connection closed.
 fn send(request: Request) -> Result<Response, String> {
     let endpoint = dray_proto::endpoint().ok_or("could not work out where Dray is listening")?;
+    send_to(&endpoint, request)
+}
 
+/// [`send`] to a socket the caller names.
+fn send_to(endpoint: &str, request: Request) -> Result<Response, String> {
     let mut stream =
         UnixStream::connect(&endpoint).map_err(|e| connect_failure(&e, &endpoint))?;
 
