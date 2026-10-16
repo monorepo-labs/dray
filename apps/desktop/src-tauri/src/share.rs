@@ -141,11 +141,15 @@ async fn proxy(target: u16) -> std::io::Result<Proxy> {
     let tunnel = Arc::new(OnceLock::<String>::new());
     let named = tunnel.clone();
     let task = tokio::spawn(async move {
+        // Held here so aborting the listener aborts every relay with it: an
+        // idle stream, an HMR socket, never ends on its own once cloudflared is gone.
+        let mut relays = tokio::task::JoinSet::new();
         while let Ok((visitor, _)) = listener.accept().await {
             let named = named.clone();
-            tokio::spawn(async move {
+            relays.spawn(async move {
                 let _ = relay(visitor, target, named.get().map(String::as_str)).await;
             });
+            while relays.try_join_next().is_some() {}
         }
     })
     .abort_handle();
@@ -425,6 +429,23 @@ mod tests {
         let mut reply = String::new();
         visitor.read_to_string(&mut reply).await.unwrap();
         assert!(reply.ends_with("ok"), "{reply}");
+    }
+
+    /// A stream the dev server never ends is closed when the share is.
+    #[tokio::test]
+    async fn dropping_the_proxy_closes_an_open_relay() {
+        let server = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let target = server.local_addr().unwrap().port();
+        let proxy = proxy(target).await.unwrap();
+        let mut visitor = TcpStream::connect(("127.0.0.1", proxy.port)).await.unwrap();
+        visitor.write_all(b"GET /stream HTTP/1.1\r\n\r\n").await.unwrap();
+        let (mut conn, _) = server.accept().await.unwrap();
+        let mut head = [0u8; 64];
+        let _ = conn.read(&mut head).await.unwrap();
+        drop(proxy);
+        let mut rest = Vec::new();
+        let closed = tokio::time::timeout(Duration::from_secs(2), conn.read_to_end(&mut rest)).await;
+        assert!(closed.is_ok(), "the relay outlived its proxy");
     }
 
     #[test]
