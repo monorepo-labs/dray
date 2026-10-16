@@ -11,17 +11,20 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use dray_proto::SharedPort;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
+use tokio::task::AbortHandle;
 
 struct Tunnel {
     child: Child,
     url: String,
+    _proxy: Proxy,
 }
 
 #[derive(Default)]
@@ -90,16 +93,120 @@ pub async fn start(session: &str, port: u16) -> Result<String, String> {
             "nothing in this session is serving port {port}. Only the session's own dev servers can be shared."
         ));
     }
+    let proxy = proxy(port).await.map_err(|e| format!("could not start the share's proxy: {e}"))?;
     // Vite and its kin refuse a Host they do not know, and the visitor's is
     // `*.trycloudflare.com`; to the dev server it is local traffic.
-    let (child, url) = quick_tunnel(&format!("http://localhost:{port}"), &["--http-host-header", "localhost"]).await?;
+    let (child, url) =
+        quick_tunnel(&format!("http://127.0.0.1:{}", proxy.port), &["--http-host-header", "localhost"]).await?;
+    let _ = proxy.tunnel.set(url.clone());
     // Two shares racing: the first link stays, so a URL already handed out
     // keeps working, and the second child is dropped, which kills it.
     let mut tunnels = TUNNELS.lock().unwrap();
     if tunnels.stamp(session, port) != stamp {
         return Err("sharing was stopped before the link was ready".into());
     }
-    Ok(tunnels.live.entry((session.to_string(), port)).or_insert(Tunnel { child, url }).url.clone())
+    let tunnel = Tunnel { child, url, _proxy: proxy };
+    Ok(tunnels.live.entry((session.to_string(), port)).or_insert(tunnel).url.clone())
+}
+
+/// What a visitor's `Origin` naming the tunnel becomes: what the dev server
+/// would see from a browser on its own machine. Port-less on purpose, to match
+/// the `Host` cloudflared sends, or Next's server actions refuse the pair.
+const LOCAL_ORIGIN: &str = "http://localhost";
+/// A request head bigger than this is not a browser's, and is dropped.
+const MAX_HEAD: usize = 64 * 1024;
+
+/// The hop between cloudflared and a shared dev server, alive while its
+/// tunnel is. Next's dev server answers `/_next/*` 403 for any `Origin` but
+/// localhost, and cloudflared can rewrite `Host` but not `Origin`, so a shared
+/// Next page loaded with none of its code (#527).
+struct Proxy {
+    port: u16,
+    /// The tunnel's URL, once cloudflared names it: the one origin rewritten.
+    /// Any other passes untouched, so the dev server still refuses other sites.
+    tunnel: Arc<OnceLock<String>>,
+    task: AbortHandle,
+}
+
+impl Drop for Proxy {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// Listens on a free loopback port and relays every connection to `target`.
+async fn proxy(target: u16) -> std::io::Result<Proxy> {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let port = listener.local_addr()?.port();
+    let tunnel = Arc::new(OnceLock::<String>::new());
+    let named = tunnel.clone();
+    let task = tokio::spawn(async move {
+        while let Ok((visitor, _)) = listener.accept().await {
+            let named = named.clone();
+            tokio::spawn(async move {
+                let _ = relay(visitor, target, named.get().map(String::as_str)).await;
+            });
+        }
+    })
+    .abort_handle();
+    Ok(Proxy { port, tunnel, task })
+}
+
+/// One request: its head rewritten, then bytes both ways until either side
+/// closes, which carries a WebSocket upgrade through unchanged.
+async fn relay(mut visitor: TcpStream, target: u16, tunnel: Option<&str>) -> std::io::Result<()> {
+    let mut head = Vec::new();
+    let mut buf = [0u8; 8192];
+    let end = loop {
+        let n = visitor.read(&mut buf).await?;
+        if n == 0 || head.len() + n > MAX_HEAD {
+            return Ok(());
+        }
+        head.extend_from_slice(&buf[..n]);
+        if let Some(i) = head.windows(4).position(|w| w == b"\r\n\r\n") {
+            break i + 4;
+        }
+    };
+    let mut server = TcpStream::connect(("localhost", target)).await?;
+    server.write_all(&rewrite(&head[..end], tunnel)).await?;
+    server.write_all(&head[end..]).await?;
+    tokio::io::copy_bidirectional(&mut visitor, &mut server).await?;
+    Ok(())
+}
+
+/// The request head with a tunnel `Origin` made local and the connection
+/// closed after the reply.
+// ponytail: one request per connection, so the head is all that is parsed and
+// a body passes through as bytes. A keep-alive connection would need each
+// request's length read to find the next head; cloudflared opens a new
+// loopback connection per request instead, which costs well under a millisecond.
+fn rewrite(head: &[u8], tunnel: Option<&str>) -> Vec<u8> {
+    let head = head.strip_suffix(b"\r\n\r\n").unwrap_or(head);
+    let mut out = Vec::with_capacity(head.len() + 32);
+    let mut upgrade = false;
+    for (i, line) in head.split(|&b| b == b'\n').enumerate() {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let (name, value) = match line.iter().position(|&b| b == b':') {
+            Some(colon) if i > 0 => (&line[..colon], line[colon + 1..].trim_ascii()),
+            _ => (&b""[..], &b""[..]),
+        };
+        let connection = name.eq_ignore_ascii_case(b"connection");
+        if connection && !value.to_ascii_lowercase().windows(7).any(|w| w == b"upgrade") {
+            continue;
+        }
+        upgrade |= connection;
+        if name.eq_ignore_ascii_case(b"origin") && tunnel.is_some_and(|t| value == t.as_bytes()) {
+            out.extend_from_slice(format!("Origin: {LOCAL_ORIGIN}").as_bytes());
+        } else {
+            out.extend_from_slice(line);
+        }
+        out.extend_from_slice(b"\r\n");
+    }
+    if !upgrade {
+        out.extend_from_slice(b"Connection: close\r\n");
+    }
+    out.extend_from_slice(b"\r\n");
+    out
 }
 
 /// A quick tunnel to `origin`, answering its process and its address once the
@@ -258,6 +365,66 @@ mod tests {
         let t0 = std::time::Instant::now();
         wait_for_dns("https://www.cloudflare.com").await;
         assert!(t0.elapsed() < Duration::from_secs(3), "{:?}", t0.elapsed());
+    }
+
+    const TUNNEL: &str = "https://a-b-c.trycloudflare.com";
+
+    #[test]
+    fn only_the_tunnels_own_origin_is_made_local() {
+        let head = b"GET /_next/x.js HTTP/1.1\r\nHost: localhost\r\norigin:  https://a-b-c.trycloudflare.com\r\nConnection: keep-alive\r\n\r\n";
+        assert_eq!(
+            String::from_utf8(rewrite(head, Some(TUNNEL))).unwrap(),
+            "GET /_next/x.js HTTP/1.1\r\nHost: localhost\r\nOrigin: http://localhost\r\nConnection: close\r\n\r\n"
+        );
+        let other = b"GET / HTTP/1.1\r\nOrigin: https://evil.example\r\n\r\n";
+        assert_eq!(
+            String::from_utf8(rewrite(other, Some(TUNNEL))).unwrap(),
+            "GET / HTTP/1.1\r\nOrigin: https://evil.example\r\nConnection: close\r\n\r\n"
+        );
+        let early = b"GET / HTTP/1.1\r\nOrigin: https://a-b-c.trycloudflare.com\r\n\r\n";
+        assert!(String::from_utf8(rewrite(early, None)).unwrap().contains(TUNNEL), "no tunnel named yet, nothing rewritten");
+    }
+
+    #[test]
+    fn an_upgrade_keeps_its_connection() {
+        let head = b"GET /_next/webpack-hmr HTTP/1.1\r\nConnection: keep-alive, Upgrade\r\nUpgrade: websocket\r\n\r\n";
+        let out = String::from_utf8(rewrite(head, Some(TUNNEL))).unwrap();
+        assert!(out.contains("Connection: keep-alive, Upgrade\r\n"));
+        assert!(!out.contains("close"));
+    }
+
+    /// The dev server gets the rewritten head, then the body as sent, and the
+    /// visitor gets the reply.
+    #[tokio::test]
+    async fn a_request_crosses_the_proxy() {
+        let server = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let target = server.local_addr().unwrap().port();
+        let got = tokio::spawn(async move {
+            let (mut conn, _) = server.accept().await.unwrap();
+            let mut seen = Vec::new();
+            while !seen.ends_with(b"hello") {
+                let mut buf = [0u8; 1024];
+                let n = conn.read(&mut buf).await.unwrap();
+                seen.extend_from_slice(&buf[..n]);
+            }
+            conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").await.unwrap();
+            String::from_utf8(seen).unwrap()
+        });
+        let proxy = proxy(target).await.unwrap();
+        proxy.tunnel.set(TUNNEL.into()).unwrap();
+        let mut visitor = TcpStream::connect(("127.0.0.1", proxy.port)).await.unwrap();
+        let request = format!("POST /a HTTP/1.1\r\nOrigin: {TUNNEL}\r\nContent-Length: 5\r\n\r\nhello");
+        // Split mid-head, the way a slow network delivers it.
+        visitor.write_all(&request.as_bytes()[..20]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        visitor.write_all(&request.as_bytes()[20..]).await.unwrap();
+        assert_eq!(
+            got.await.unwrap(),
+            "POST /a HTTP/1.1\r\nOrigin: http://localhost\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello"
+        );
+        let mut reply = String::new();
+        visitor.read_to_string(&mut reply).await.unwrap();
+        assert!(reply.ends_with("ok"), "{reply}");
     }
 
     #[test]
