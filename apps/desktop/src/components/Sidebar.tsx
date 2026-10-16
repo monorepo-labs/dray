@@ -1168,12 +1168,8 @@ export default function Sidebar({
           : "No tasks yet.";
 
   const asideRef = useRef<HTMLElement>(null);
-  // The click is the project switch's alone: the right panel's tabs swipe
-  // silently, a sound there being one more thing announcing a tab change.
-  useSwipe(asideRef, (delta) => {
-    playSwipeTick();
-    onStepProjectFilter(delta);
-  });
+  // The step ticks for itself, in `App`, where the chords land too.
+  useSwipe(asideRef, onStepProjectFilter);
 
   // Collapsed is nothing at all, not a rail. The toggle moves to the app header
   // in that state, which is the one row present either way.
@@ -1754,10 +1750,25 @@ function ProjectFilter({
   const menuMode = projects.length >= PROJECT_MENU_FROM;
 
   // Wraps, since a tap has no direction and no dot to slide — a dead end at the
-  // last entry would just look broken.
+  // last entry would just look broken. Counted from the last entry asked for,
+  // not the last one drawn: a switch loads that project's session, and a quick
+  // second tap landing before the render read the old index and asked for the
+  // same entry again, so it was lost.
+  // Expires a second after the last tap, so a move made some other way
+  // meanwhile (a chord, a swipe) cannot leave a stale count behind.
+  const pending = useRef<number | null>(null);
+  const pendingTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => {
+    if (pending.current === activeIndex) pending.current = null;
+  }, [activeIndex]);
+  useEffect(() => () => clearTimeout(pendingTimer.current), []);
   const cycle = () => {
     playSwipeTick();
-    onChange(entries[(activeIndex + 1) % entries.length].path);
+    const next = ((pending.current ?? activeIndex) + 1) % entries.length;
+    pending.current = next;
+    clearTimeout(pendingTimer.current);
+    pendingTimer.current = setTimeout(() => (pending.current = null), 1000);
+    onChange(entries[next].path);
   };
 
   // The dots are the one thing on screen that says which entry of how many,

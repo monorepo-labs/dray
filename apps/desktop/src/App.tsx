@@ -184,6 +184,7 @@ import { worktreeNoticeDetail } from "@/lib/worktree";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { buildTranscript, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
+import { playSwipeTick } from "@/lib/tick";
 
 /// One empty set, so clearing the rail's open rows twice is one state change.
 const NO_ROWS: ReadonlySet<string> = new Set();
@@ -2072,6 +2073,7 @@ function App() {
   /// Bumped at every filter move, at call time, so a read across an await can
   /// tell the filter moved under it. Rendered state is a render behind.
   const filterGen = useRef(0);
+  const filterNavTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   /// Drops a session from every filter's memory, so a filter cannot reopen a
   /// transcript the reader has just put away.
@@ -2095,23 +2097,35 @@ function App() {
   /// A remembered session is only restored where the list still holds it under
   /// the new filter: it can have been settled, deleted, or moved out of the
   /// space since, and the empty composer is the right answer for all three.
+  ///
+  /// The list moves at once but the session waits for the clicks to stop:
+  /// opening one per step is what lagged a quick run through the projects.
+  /// Mid-run the selection still belongs to the filter the run left, so only
+  /// the first step records it.
   const changeProjectFilter = (next: string | null) => {
     if (next === projectFilter) return;
-    filterSelection.current[projectFilter ?? ""] = selectedSessionId;
-    filterGen.current++;
+    if (!filterNavTimer.current) filterSelection.current[projectFilter ?? ""] = selectedSessionId;
+    const gen = ++filterGen.current;
     setProjectFilter(next);
     if (next) handleSelectProject(next);
 
-    const remembered = filterSelection.current[next ?? ""] ?? null;
-    const restorable =
-      remembered &&
-      sessionIndexItems.some(
-        (i) => i.sessionId === remembered && (!next || i.projectPath === next),
-      );
-    goToSession(() => {
-      if (restorable) void handleSelectSessionIndexItem(remembered);
-      else handleNewSession();
-    });
+    clearTimeout(filterNavTimer.current);
+    const nav = navGen.current;
+    filterNavTimer.current = setTimeout(() => {
+      filterNavTimer.current = undefined;
+      // Something else moved the filter or the selection meanwhile.
+      if (gen !== filterGen.current || nav !== navGen.current) return;
+      const remembered = filterSelection.current[next ?? ""] ?? null;
+      const restorable =
+        remembered &&
+        sessionIndexItems.some(
+          (i) => i.sessionId === remembered && (!next || i.projectPath === next),
+        );
+      goToSession(() => {
+        if (restorable) void handleSelectSessionIndexItem(remembered);
+        else handleNewSession();
+      });
+    }, 150);
   };
 
   /// Opens a session named by a notice or a banner, which can be in any project,
@@ -2407,6 +2421,8 @@ function App() {
     const entries: (string | null)[] = [null, ...spaceProjects.map((p) => p.path)];
     const from = entries.indexOf(projectFilter);
     const at = from === -1 ? 0 : from;
+    // The chords and the swipe both step through here, so both tick.
+    if (entries.length > 1) playSwipeTick();
     changeProjectFilter(entries[(at + delta + entries.length) % entries.length]);
   };
   useHotkey("filter.prev", () => stepProjectFilter(-1), {
