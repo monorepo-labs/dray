@@ -1619,7 +1619,24 @@ error: string | null,
 /**
  * What the reader can do about `error`.
  */
-fix: Fix | null, };
+fix: Fix | null, 
+/**
+ * The CLI release the server runs, once it has said. `None` from a server
+ * that never connected, predates saying, or is a local build.
+ */
+release: string | null, 
+/**
+ * The server takes beta releases.
+ */
+beta: boolean, 
+/**
+ * The newer release out on its channel, while the server is behind it.
+ */
+latest: string | null, 
+/**
+ * An update landed on the server and it restarts onto it once idle.
+ */
+restarting: boolean, };
 
 export type ServerStatus = "connecting" | "connected" | "disconnected";
 

@@ -2,7 +2,7 @@
   "name": "dray",
   "private": true,
   "license": "Apache-2.0",
-  "version": "0.28.0-beta.2",
+  "version": "0.28.0",
   "type": "module",
   "packageManager": "pnpm@11.9.0",
   "scripts": {
@@ -27,6 +27,7 @@
     "@tauri-apps/plugin-opener": "^2",
     "@yogesharc/thinking-orbs": "^0.1.1",
     "blobatar": "^2.5.0",
+    "border-beam": "1.4.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.28.0",

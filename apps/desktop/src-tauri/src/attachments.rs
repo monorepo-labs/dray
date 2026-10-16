@@ -245,8 +245,9 @@ fn read_pasteboard() -> Pasted {
     Pasted::Text
 }
 
-/// How long a pasted image outlives its paste. The send archives its own copy,
-/// so this only has to cover a draft left unsent.
+/// How long a pasted image or an uploaded file outlives its arrival. The send
+/// archives its own copy of an image, so this only has to cover a draft left
+/// unsent — and, for an uploaded file, the turn that reads it.
 const PASTE_RETAIN: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Writes a pasted image where it can sit until the send copies it into the
@@ -257,19 +258,7 @@ const PASTE_RETAIN: std::time::Duration = std::time::Duration::from_secs(7 * 24 
 /// send, a removed tile and a deleted session all leave the source behind.
 async fn write_pasted_image(png: &[u8]) -> Result<String> {
     let root = std::env::temp_dir().join("dray-paste");
-    if let Ok(mut entries) = fs::read_dir(&root).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let stale = entry
-                .metadata()
-                .await
-                .and_then(|m| m.modified())
-                .map(|t| t.elapsed().unwrap_or_default() > PASTE_RETAIN)
-                .unwrap_or(false);
-            if stale {
-                let _ = fs::remove_dir_all(entry.path()).await;
-            }
-        }
-    }
+    sweep_stale(&root).await;
 
     let dir = root.join(Uuid::new_v4().to_string());
     fs::create_dir_all(&dir)
@@ -295,6 +284,43 @@ async fn attachments_dir(session_id: &str) -> Result<PathBuf> {
     let path = attachments_path(session_id).await?;
     fs::create_dir_all(&path).await?;
     Ok(path)
+}
+
+/// Removes every entry of `root` older than [`PASTE_RETAIN`].
+async fn sweep_stale(root: &Path) {
+    let Ok(mut entries) = fs::read_dir(root).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let stale = entry
+            .metadata()
+            .await
+            .and_then(|m| m.modified())
+            .map(|t| t.elapsed().unwrap_or_default() > PASTE_RETAIN)
+            .unwrap_or(false);
+        if stale {
+            let _ = fs::remove_dir_all(entry.path()).await;
+        }
+    }
+}
+
+/// The most a remote server takes per attachment. An upload rides the
+/// reader's own uplink — 2.7MB/s measured over SSH to a VPS — so this is about
+/// forty seconds of waiting.
+pub const MAX_UPLOAD_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Where a file uploaded from another machine lands:
+/// `attachments/uploads/<uuid>/<name>`, so it keeps its name. Uploaded at
+/// attach time, before any session may exist, so it belongs to none — swept
+/// like a pasted image instead, once a send has long since read it. The name
+/// comes off the wire, so only its last component is kept.
+pub async fn upload_path(name: &str) -> Result<PathBuf> {
+    let name = Path::new(name).file_name().context("not a file name")?;
+    let root = get_home_app_dir().await?.join("attachments").join("uploads");
+    sweep_stale(&root).await;
+    let dir = root.join(Uuid::now_v7().to_string());
+    fs::create_dir_all(&dir).await?;
+    Ok(dir.join(name))
 }
 
 /// Drops a session's archived images. Called when the session itself is

@@ -56,6 +56,15 @@ struct Saved {
     /// The reader turned the connection off; the row stays.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     off: bool,
+    /// The server takes beta releases, which also means stable ones. Its own,
+    /// never the app's. A bool rather than a channel enum: a value an older
+    /// build cannot spell fails the line, and one line is the whole list.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    beta: bool,
+    /// A release the reader chose to ignore. Only that one: a newer release
+    /// is offered again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ignored: Option<String>,
     /// Fields a newer build wrote, carried back untouched — the index's own
     /// `unknown` bargain, since this file is rewritten whole too.
     #[serde(flatten)]
@@ -92,6 +101,15 @@ pub struct ServerInfo {
     pub error: Option<String>,
     /// What the reader can do about `error`.
     pub fix: Option<ssh::Fix>,
+    /// The CLI release the server runs, once it has said. `None` from a server
+    /// that never connected, predates saying, or is a local build.
+    pub release: Option<String>,
+    /// The server takes beta releases.
+    pub beta: bool,
+    /// The newer release out on its channel, while the server is behind it.
+    pub latest: Option<String>,
+    /// An update landed on the server and it restarts onto it once idle.
+    pub restarting: bool,
 }
 
 type Reply = Result<Value, Value>;
@@ -112,6 +130,9 @@ struct Conn {
     /// Dev-server ports forwarded for the Mac's browser, by remote port. They
     /// last as long as the connection does.
     forwards: HashMap<u16, ssh::Forward>,
+    /// What the server said when last admitted, kept across a drop so the row
+    /// still says what it last knew. `None` until it first connects.
+    met: Option<Welcome>,
 }
 
 impl Conn {
@@ -129,6 +150,7 @@ impl Conn {
             pending: HashMap::new(),
             task: None,
             forwards: HashMap::new(),
+            met: None,
         };
         conn.restart();
         conn
@@ -183,6 +205,104 @@ fn info(conn: &Conn) -> ServerInfo {
         stage: conn.stage,
         error: conn.error.clone(),
         fix: conn.fix.clone(),
+        release: conn.met.as_ref().and_then(|w| w.release.clone()),
+        beta: conn.saved.beta,
+        latest: latest(conn),
+        restarting: conn.met.as_ref().is_some_and(|w| w.stale),
+    }
+}
+
+/// The newer release out on a server's channel, unless it is the one the
+/// reader ignored or the server is not behind it.
+fn latest(conn: &Conn) -> Option<String> {
+    let releases = releases();
+    let newest = releases.newest(conn.saved.beta)?.to_string();
+    let behind = conn.met.as_ref().is_some_and(|w| behind(w, conn.saved.beta, &releases));
+    (behind && conn.saved.ignored.as_ref() != Some(&newest)).then_some(newest)
+}
+
+/// The newest CLI releases out, each channel's. A `dray-serve` ships in them.
+#[derive(Debug, Clone, Default)]
+struct Releases {
+    stable: Option<semver::Version>,
+    beta: Option<semver::Version>,
+}
+
+impl Releases {
+    /// From GitHub's tags, the way install.sh reads them: `cli-v` and a
+    /// version, a prerelease one being a beta. Newest by semver, so a beta
+    /// sorts below its own release.
+    fn from_tags<'a>(tags: impl Iterator<Item = &'a str>) -> Self {
+        let mut out = Releases::default();
+        for v in tags.filter_map(|t| semver::Version::parse(t.strip_prefix("cli-v")?).ok()) {
+            let slot = if v.pre.is_empty() { &mut out.stable } else { &mut out.beta };
+            if slot.as_ref().is_none_or(|have| v > *have) {
+                *slot = Some(v);
+            }
+        }
+        out
+    }
+
+    /// The newest a server on this channel would install. Beta takes stable
+    /// releases too, so whichever is newer.
+    fn newest(&self, beta: bool) -> Option<&semver::Version> {
+        if beta { self.stable.as_ref().max(self.beta.as_ref()) } else { self.stable.as_ref() }
+    }
+}
+
+/// Whether a newer release than the one a server runs is out on its channel.
+/// One that says no version predates saying, so anything out is newer; one
+/// with a version and no release is a local build and is never offered one.
+/// A server ahead of its channel — beta left behind — is not behind, so
+/// leaving beta never downgrades.
+fn behind(met: &Welcome, beta: bool, releases: &Releases) -> bool {
+    let Some(newest) = releases.newest(beta) else { return false };
+    if met.version.is_none() {
+        return true;
+    }
+    met.release.as_deref().and_then(|r| semver::Version::parse(r).ok()).is_some_and(|r| r < *newest)
+}
+
+/// How long one reading of GitHub's releases stands. Unauthenticated, the API
+/// allows 60 reads an hour from one address, shared with the installer.
+const RELEASES_FRESH: Duration = Duration::from_secs(60 * 60);
+
+static RELEASES: Mutex<Option<(std::time::Instant, Releases)>> = Mutex::new(None);
+
+fn releases() -> Releases {
+    RELEASES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(_, r)| r.clone()).unwrap_or_default()
+}
+
+/// Reads GitHub's releases again where the last reading is older than
+/// `fresh`, then redraws the rows. A failed read keeps the last reading, and
+/// says why for a caller the reader is waiting on.
+async fn refresh_releases(fresh: Duration) -> Result<(), String> {
+    let held = RELEASES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|(at, _)| at.elapsed() < fresh);
+    if held {
+        return Ok(());
+    }
+    let read = async {
+        let list: Vec<Value> = reqwest::Client::new()
+            .get("https://api.github.com/repos/monorepo-labs/dray/releases?per_page=100")
+            .header("User-Agent", "dray")
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok::<_, reqwest::Error>(Releases::from_tags(list.iter().filter_map(|r| r["tag_name"].as_str())))
+    };
+    match read.await {
+        Ok(found) => {
+            *RELEASES.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), found));
+            announce();
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("[servers] could not read releases: {e}");
+            Err(format!("Couldn't check for updates: {e}"))
+        }
     }
 }
 
@@ -255,12 +375,23 @@ pub async fn start(sink: Sink) {
             url: String::new(),
             ssh: None,
             off: false,
+            beta: false,
+            ignored: None,
             unknown: Default::default(),
         };
         list.push(Conn::new(this_mac));
         list.extend(saved.into_iter().map(Conn::new));
     }
     announce();
+    // Hourly, for an app left open for days on a connection that never drops.
+    tokio::spawn(async {
+        loop {
+            if conns().iter().any(|c| c.saved.id != LOCAL) {
+                let _ = refresh_releases(RELEASES_FRESH).await;
+            }
+            tokio::time::sleep(RELEASES_FRESH).await;
+        }
+    });
 }
 
 /// Spelled the way a reader types it — `host:port`, `http://…`, `ws://…`, or
@@ -285,19 +416,32 @@ fn normalize(url: &str) -> Result<String, String> {
 
 type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+/// The server's first frame once admitted: its core version, the CLI release
+/// it shipped in, and whether an update already landed on disk that it is not
+/// running yet. A server from before sends none of them.
+#[derive(Debug, Default, Deserialize)]
+struct Welcome {
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    release: Option<String>,
+    #[serde(default)]
+    stale: bool,
+}
+
 /// Connects and says hello. Answers the admitted socket, or why not.
-async fn admit(url: &str, token: &str) -> Result<Socket, String> {
+async fn admit(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
     admit_with(url, json!({ "v": PROTOCOL, "token": token })).await
 }
 
 /// This Mac's own server, which may call back into the app: browser steps go
 /// to the app's Chromium where this build has one.
-async fn admit_as_host(url: &str, token: &str) -> Result<Socket, String> {
+async fn admit_as_host(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
     let browser = cfg!(all(feature = "cef", target_os = "macos"));
     admit_with(url, json!({ "v": PROTOCOL, "token": token, "host": { "browser": browser } })).await
 }
 
-async fn admit_with(url: &str, hello: Value) -> Result<Socket, String> {
+async fn admit_with(url: &str, hello: Value) -> Result<(Socket, Welcome), String> {
     let attempt = async {
         let (mut ws, _) = tokio_tungstenite::connect_async(url)
             .await
@@ -311,7 +455,7 @@ async fn admit_with(url: &str, hello: Value) -> Result<Socket, String> {
                     let frame: Value = serde_json::from_str(&text).unwrap_or_default();
                     return match frame.get("err").and_then(Value::as_str) {
                         Some(err) => Err(format!("the server refused: {err}")),
-                        None => Ok(ws),
+                        None => Ok((ws, serde_json::from_value(frame).unwrap_or_default())),
                     };
                 }
                 Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
@@ -368,7 +512,7 @@ async fn run(id: String) {
         if id == LOCAL {
             match local_address().await {
                 Ok((url, token, stale)) => match admit_as_host(&url, &token).await {
-                    Ok(mut ws) => {
+                    Ok((mut ws, _)) => {
                         if stale || crate::launchd::reload_pending() {
                             // The reply has no waiter and is dropped.
                             let restart = json!({ "id": 0, "cmd": "restart_when_idle", "args": {} });
@@ -431,7 +575,7 @@ async fn run(id: String) {
             None => admit(&url, &token).await,
         };
         match admitted {
-            Ok(ws) => {
+            Ok((mut ws, welcome)) => {
                 backoff = Duration::from_secs(1);
                 // Once a day per route, so it reads as servers in use rather
                 // than as reconnects. Tags alone: never the address or name.
@@ -441,9 +585,20 @@ async fn run(id: String) {
                     format!("server_connected:{via}"),
                     json!({ "feature": "server_connected", "via": via }),
                 );
+                // This Mac's rule: a server running older code than its own
+                // binary restarts once idle. Covers a `dray update` run by
+                // hand there too.
+                if welcome.stale {
+                    let restart = json!({ "id": 0, "cmd": "restart_when_idle", "args": {} });
+                    let _ = ws.send(Message::text(restart.to_string())).await;
+                }
                 if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
                     conn.live = Some((url.clone(), token.clone()));
+                    conn.met = Some(welcome);
                 }
+                // The hourly read skips a launch with no servers, so a server
+                // added since would wait an hour for its row to say anything.
+                tokio::spawn(refresh_releases(RELEASES_FRESH));
                 serve(&id, ws).await;
                 set_status(&id, ServerStatus::Disconnected, Some("connection lost".into()));
             }
@@ -611,7 +766,7 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| default_name(&url));
     refuse_taken(&conns(), &name, existing.as_deref())?;
-    admit(&url, &token).await?.close(None).await.ok();
+    admit(&url, &token).await?.0.close(None).await.ok();
 
     let id = existing.clone().unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
     crate::issues::set_credential(&credential_name(&id), Some(&token)).await?;
@@ -630,7 +785,7 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
                 conn.saved.name = name;
                 conn.restart();
             } else {
-                list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, unknown: Default::default() }));
+                list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, beta: false, ignored: None, unknown: Default::default() }));
             }
         })
     };
@@ -655,7 +810,7 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
 pub async fn set_server_address(id: String, url: String) -> Result<(), String> {
     let url = normalize(&url)?;
     let token = crate::issues::credential(&credential_name(&id)).await.unwrap_or_default();
-    admit(&url, &token).await?.close(None).await.ok();
+    admit(&url, &token).await?.0.close(None).await.ok();
     {
         let mut list = conns();
         let conn = list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?;
@@ -741,7 +896,7 @@ pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<Server
     .await?;
     let url = format!("ws://127.0.0.1:{}", tunnel.port);
     match admit(&url, &tunnel.token).await {
-        Ok(mut ws) => drop(ws.close(None).await),
+        Ok((mut ws, _)) => drop(ws.close(None).await),
         Err(e) => return Err(failed(tunnel.said().unwrap_or(e))),
     }
     drop(tunnel);
@@ -758,7 +913,7 @@ pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<Server
             conn.saved.id.clone()
         } else {
             let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
-            list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, unknown: Default::default() }));
+            list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, beta: false, ignored: None, unknown: Default::default() }));
             id
         }
     };
@@ -937,6 +1092,102 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
         .unwrap_or_else(|_| Err(json!("the connection closed before the server answered")))
 }
 
+/// Asks `server` to update itself on its own channel. Answers `"restarting"` —
+/// marked on the row at once, since nothing else will say so until the
+/// restart — or `"current"`, where the channel had nothing newer.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn update_server(server: String) -> Result<String, String> {
+    let beta = conns().iter().find(|c| c.saved.id == server).is_some_and(|c| c.saved.beta);
+    let channel = if beta { "beta" } else { "stable" };
+    let reply = server_invoke(server.clone(), "update_server".into(), json!({ "channel": channel })).await;
+    let answer = match reply {
+        Ok(answer) => answer.as_str().unwrap_or_default().to_string(),
+        Err(err) => {
+            let err = err.as_str().map_or_else(|| err.to_string(), str::to_owned);
+            return Err(if err.starts_with("unknown command") {
+                "This server is too old to update from the app. Update it once on the server: dray update, then restart it.".into()
+            } else {
+                err
+            });
+        }
+    };
+    if answer == "restarting" {
+        if let Some(met) = conns().iter_mut().find(|c| c.saved.id == server).and_then(|c| c.met.as_mut()) {
+            met.stale = true;
+        }
+        announce();
+    }
+    Ok(answer)
+}
+
+/// Restarts `server` now, stopping every turn running there.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn restart_server_now(server: String) -> Result<(), String> {
+    match server_invoke(server, "restart_now".into(), Value::Null).await {
+        Ok(_) => Ok(()),
+        Err(err) => Err(err.as_str().map_or_else(|| err.to_string(), str::to_owned)),
+    }
+}
+
+/// The connected servers an app update offers to update beside itself: behind
+/// on their own channel, and on beta where the app is, since a beta app's
+/// release says nothing about the stable channel. Releases are read again
+/// first, as the app's own release is usually what just came out. One from
+/// before `update_server` is left to its row, which says how.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn servers_behind(beta: bool) -> Vec<String> {
+    // A failed read leaves the last one, which still answers.
+    let _ = refresh_releases(Duration::from_secs(60)).await;
+    conns()
+        .iter()
+        .filter(|c| c.saved.id != LOCAL && c.status == ServerStatus::Connected && (c.saved.beta || !beta))
+        .filter(|c| c.met.as_ref().is_some_and(|w| w.version.is_some()) && latest(c).is_some())
+        .map(|c| c.saved.id.clone())
+        .collect()
+}
+
+/// Stops offering `version` on a server's row and in an app update.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn ignore_server_update(id: String, version: String) -> Result<(), String> {
+    {
+        let mut list = conns();
+        let conn = list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?;
+        conn.saved.ignored = Some(version);
+    }
+    announce();
+    save().await
+}
+
+/// Reads the releases again now and answers the newer one out, or `None` for
+/// up to date. Asked for by the reader, so an ignored release is offered again.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn check_server_update(id: String) -> Result<Option<String>, String> {
+    let unignored = {
+        let mut list = conns();
+        let conn = list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?;
+        conn.saved.ignored.take().is_some()
+    };
+    if unignored {
+        save().await?;
+    }
+    announce();
+    refresh_releases(Duration::ZERO).await?;
+    Ok(conns().iter().find(|c| c.saved.id == id).and_then(latest))
+}
+
+/// Puts a server on beta or back on stable. Leaving beta keeps the build it
+/// has until a stable release passes it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn set_server_beta(id: String, beta: bool) -> Result<(), String> {
+    {
+        let mut list = conns();
+        let conn = list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?;
+        conn.saved.beta = beta;
+    }
+    announce();
+    save().await
+}
+
 /// A local port carrying dev-server `port` on `server`, for the Mac's own
 /// browser to open. One per port for the life of the connection, so clicking
 /// the row again reuses it.
@@ -986,17 +1237,7 @@ fn live_forward(conn: &mut Conn, port: u16) -> Option<u16> {
 /// its `/file` route with the token in a header, for the webview's
 /// `drayserver://` scheme. The token stays out of every URL the page holds.
 pub async fn fetch_file(server: &str, path: &str) -> Result<(String, Vec<u8>), String> {
-    let (url, token) = conns()
-        .iter()
-        .find(|c| c.saved.id == server)
-        .ok_or("no such server")?
-        .live
-        .clone()
-        .ok_or("the server is not connected")?;
-    let base = match url.strip_prefix("wss://") {
-        Some(rest) => format!("https://{rest}"),
-        None => url.replacen("ws://", "http://", 1),
-    };
+    let (base, token) = http_base(server)?;
     let response = reqwest::Client::new()
         .get(format!("{base}/file"))
         .query(&[("path", path)])
@@ -1017,9 +1258,120 @@ pub async fn fetch_file(server: &str, path: &str) -> Result<(String, Vec<u8>), S
     Ok((kind, body.to_vec()))
 }
 
+/// The `http(s)://` address and token of a connected server, for the routes
+/// it serves beside its socket.
+fn http_base(server: &str) -> Result<(String, String), String> {
+    let (url, token) = conns()
+        .iter()
+        .find(|c| c.saved.id == server)
+        .ok_or("no such server")?
+        .live
+        .clone()
+        .ok_or("the server is not connected")?;
+    let base = match url.strip_prefix("wss://") {
+        Some(rest) => format!("https://{rest}"),
+        None => url.replacen("ws://", "http://", 1),
+    };
+    Ok((base, token))
+}
+
+/// Copies a file on this Mac to `server` and answers where it landed there —
+/// what a send names in its place, since the server cannot read a path on this
+/// Mac. Streamed, with `upload_progress` `{id, sent, total}` per chunk read, so
+/// the composer's tile can say how far it has got.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn upload_attachment(server: String, path: String, id: String) -> Result<String, String> {
+    use tokio::io::AsyncReadExt;
+
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.clone());
+    let unreadable = |e: std::io::Error| format!("Could not read {name}: {e}");
+    let file = tokio::fs::File::open(&path).await.map_err(unreadable)?;
+    let total = file.metadata().await.map_err(unreadable)?.len();
+    if total > crate::attachments::MAX_UPLOAD_BYTES {
+        return Err(format!("{name} is over 100MB, the most a remote server takes."));
+    }
+    let (base, token) = http_base(&server)?;
+
+    let chunks = futures_util::stream::unfold((file, 0u64), move |(mut file, sent)| {
+        let id = id.clone();
+        async move {
+            let mut buf = vec![0; 256 * 1024];
+            let n = match file.read(&mut buf).await {
+                Ok(0) => return None,
+                Ok(n) => n,
+                Err(e) => return Some((Err(e), (file, sent))),
+            };
+            buf.truncate(n);
+            let sent = sent + n as u64;
+            if let Some(sink) = SINK.get() {
+                let _ = sink.emit("upload_progress", json!({ "id": id, "sent": sent, "total": total }));
+            }
+            Some((Ok(buf), (file, sent)))
+        }
+    });
+    let failed = |e: reqwest::Error| format!("Could not upload {name}: {e}");
+    let response = reqwest::Client::new()
+        .post(format!("{base}/upload"))
+        .query(&[("name", name.as_str())])
+        .bearer_auth(&token)
+        // The route reads exactly this many bytes and refuses a chunked body.
+        .header(reqwest::header::CONTENT_LENGTH, total)
+        .body(reqwest::Body::wrap_stream(chunks))
+        .send()
+        .await
+        .map_err(failed)?;
+    // A server older than this route reads the request as a socket handshake
+    // and refuses it, which is the one cure worth naming.
+    if !response.status().is_success() {
+        return Err(format!(
+            "Could not upload {name} ({}). Update Dray on the server if it is older than this app.",
+            response.status()
+        ));
+    }
+    response.text().await.map_err(failed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tells_a_server_behind_its_channel() {
+        let out = Releases::from_tags(
+            ["v0.29.0", "cli-v0.12.0-beta.2", "cli-v0.11.1", "cli-v0.12.0-beta.10", "cli-v0.9.0", "nonsense"].into_iter(),
+        );
+        assert_eq!(out.stable.as_ref().map(ToString::to_string).as_deref(), Some("0.11.1"));
+        assert_eq!(out.beta.as_ref().map(ToString::to_string).as_deref(), Some("0.12.0-beta.10"), "numeric, not lexical");
+
+        let on = |release: &str| Welcome { version: Some("0.28.0".into()), release: Some(release.into()), stale: false };
+        assert!(behind(&on("0.11.0"), false, &out));
+        assert!(!behind(&on("0.11.1"), false, &out));
+        assert!(!behind(&on("0.11.1"), false, &Releases::default()), "nothing out is nothing to update to");
+        assert!(behind(&on("0.11.1"), true, &out), "beta takes betas");
+        assert!(behind(&on("0.12.0-beta.2"), true, &out));
+        assert!(!behind(&on("0.12.0-beta.10"), false, &out), "leaving beta never downgrades");
+
+        let released = Releases::from_tags(["cli-v0.12.0", "cli-v0.12.0-beta.10"].into_iter());
+        assert!(behind(&on("0.12.0-beta.10"), true, &released), "a beta sorts below its own release");
+
+        let old = Welcome::default();
+        assert!(behind(&old, false, &out), "a server that says nothing predates saying");
+        let local = Welcome { version: Some("0.28.0".into()), release: None, stale: false };
+        assert!(!behind(&local, true, &out), "a local build is never offered one");
+    }
+
+    /// Against GitHub itself, which refuses a request with no User-Agent.
+    #[tokio::test]
+    #[ignore]
+    async fn reads_the_live_releases() {
+        refresh_releases(Duration::ZERO).await.unwrap();
+        let found = releases();
+        assert!(found.stable.is_some(), "{found:?}");
+        eprintln!("{found:?}");
+    }
 
     #[test]
     fn normalizes_what_a_reader_types() {
@@ -1036,7 +1388,7 @@ mod tests {
     /// or a re-add after rotating a token. This Mac's row is no name to route to.
     #[test]
     fn a_name_belongs_to_one_server() {
-        let saved = |id: &str, name: &str| Saved { id: id.into(), name: name.into(), url: String::new(), ssh: None, off: true, unknown: Default::default() };
+        let saved = |id: &str, name: &str| Saved { id: id.into(), name: name.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, unknown: Default::default() };
         let list = vec![Conn::new(saved("a", "vps")), Conn::new(saved(LOCAL, "This Mac"))];
         assert!(refuse_taken(&list, "vps", None).is_err());
         assert!(refuse_taken(&list, "vps", Some("b")).is_err());
@@ -1048,7 +1400,7 @@ mod tests {
     /// loop is left to drain them, so they would wait for ever.
     #[test]
     fn turning_off_answers_calls_in_flight() {
-        let saved = Saved { id: "s".into(), name: "box".into(), url: String::new(), ssh: None, off: true, unknown: Default::default() };
+        let saved = Saved { id: "s".into(), name: "box".into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, unknown: Default::default() };
         let mut conn = Conn::new(saved);
         let (reply, mut answer) = oneshot::channel();
         conn.pending.insert(1, reply);
@@ -1076,9 +1428,9 @@ mod tests {
     }
 
     async fn served_for(id: &str, answers: bool) -> Option<()> {
-        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, unknown: Default::default() };
+        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, unknown: Default::default() };
         conns().push(Conn::new(saved));
-        let ws = admit(&fake_server(answers).await, "t").await.unwrap();
+        let (ws, _) = admit(&fake_server(answers).await, "t").await.unwrap();
         let served = tokio::time::timeout(SILENCE * 3, serve(id, ws)).await.ok();
         // `CONNS` is shared, and the live tests read it from row 0.
         conns().retain(|c| c.saved.id != id);

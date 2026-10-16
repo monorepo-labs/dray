@@ -23,6 +23,7 @@ import { openLink } from "@/lib/openLink";
 import { commandBrand } from "@/lib/pluginBrand";
 import { stripSenderPrefix } from "@/lib/relay";
 import { shortenPath } from "@/lib/tools";
+import { useSendProgress } from "@/lib/uploads";
 import { cn } from "@/lib/utils";
 import type { ImageRef, IssueRef, MessageSender } from "@/types/events";
 
@@ -60,6 +61,7 @@ import type { ImageRef, IssueRef, MessageSender } from "@/types/events";
 /// naming an issue that never resolved stays coloured and inert instead of
 /// becoming a link to nowhere.
 export default function UserMessage({
+  eventId,
   text,
   images = [],
   issues = [],
@@ -67,6 +69,9 @@ export default function UserMessage({
   cwd: writtenIn = null,
   onOpenSession,
 }: {
+  /// The event drawn, which is how a send still waiting on its uploads finds
+  /// its bubble.
+  eventId?: string;
   text: string;
   images?: ImageRef[];
   /// What this prompt was tagged with. Not drawn — the tags are already in the
@@ -109,9 +114,11 @@ export default function UserMessage({
   // cleared out from under a transcript that still names it. `ImageRow` drops
   // those, so this row is what is left to say about them.
   const missing = images.filter((image) => !image.path && !image.url);
+  // Dimmed the way a queued prompt is: the same message a moment early.
+  const uploading = useSendProgress(eventId ?? "");
 
   return (
-    <div className="flex flex-col items-end gap-1.5">
+    <div className={cn("flex flex-col items-end gap-1.5", uploading !== null && "opacity-55")}>
       {/* Topmost, above even the attachments: who is talking is read before
           anything they sent. The mark is generated from the session's id rather
           than fetched — a session is not an account and has no picture — so it
@@ -326,6 +333,11 @@ export default function UserMessage({
         </span>
       ))}
 
+      {uploading !== null && (
+        <span className="pr-1 text-ui text-muted-foreground tabular-nums">
+          Uploading {Math.floor(uploading * 100)}%
+        </span>
+      )}
     </div>
   );
 }

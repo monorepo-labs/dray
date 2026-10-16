@@ -94,7 +94,7 @@ const remotes: Remote[] = [];
 const announce = () => void emit("servers_changed", remotes.map((r) => r.info));
 
 function addRemote(url: string, token: string, name: string, id = crypto.randomUUID().slice(0, 8)): ServerInfo {
-  const info: ServerInfo = { id, name, named: true, url, ssh: null, on: true, status: "connecting", stage: null, error: null, fix: null };
+  const info: ServerInfo = { id, name, named: true, url, ssh: null, on: true, status: "connecting", stage: null, error: null, fix: null, release: null, beta: false, latest: null, restarting: false };
   const remote: Remote = {
     info,
     conn: connect(
@@ -154,6 +154,28 @@ mockIPC(
       case "reconnect_servers":
         for (const r of remotes) r.conn.reconnect();
         return null;
+      // Updates are faked here: a real `update_server` would run `dray update`
+      // beside the demo's own servers. A check always finds a release.
+      case "set_server_beta":
+      case "check_server_update":
+      case "ignore_server_update":
+      case "update_server":
+      case "restart_server_now": {
+        const remote = remotes.find((r) => r.info.id === (a.id ?? a.server))!;
+        const latest = remote.info.beta ? "0.12.0-beta.1" : "0.11.0";
+        const next: Partial<ServerInfo> = {
+          set_server_beta: { beta: !!a.beta },
+          check_server_update: { latest },
+          ignore_server_update: { latest: null },
+          update_server: { latest: null, restarting: true },
+          restart_server_now: { restarting: false },
+        }[cmd];
+        remote.info = { ...remote.info, ...next };
+        announce();
+        return cmd === "check_server_update" ? latest : cmd === "update_server" ? "restarting" : null;
+      }
+      case "servers_behind":
+        return remotes.filter((r) => r.info.latest && (r.info.beta || !a.beta)).map((r) => r.info.id);
       case "server_invoke": {
         const remote = remotes.find((r) => r.info.id === a.server);
         if (!remote) throw `no server named ${a.server}`;

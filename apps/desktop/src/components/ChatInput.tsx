@@ -19,6 +19,8 @@ import SlashCommandMenu from "@/components/composer/SlashCommandMenu";
 import { Button } from "@/components/ui/button";
 import {
   addAttachmentPaths,
+  attachmentKey,
+  readAttachments,
   clearAttachments,
   pasteAttachments,
   pickAttachments,
@@ -33,6 +35,8 @@ import { useRecentCommands } from "@/hooks/useRecentCommands";
 import { highlightSegments } from "@/lib/highlight";
 import { applyIssue, cutRange, insertIssue, issueSpan, rememberIssueTitle } from "@/lib/issue";
 import { placeSegments } from "@/lib/richText";
+import { LOCAL, serverOfPath } from "@/lib/transport";
+import { forget, keepUploading, MAX_UPLOAD_BYTES } from "@/lib/uploads";
 import {
   canSwitchTracker,
   effectiveTracker,
@@ -266,12 +270,22 @@ export default function ChatInput({
   // Past one line the text takes the card's whole width and the controls drop
   // under it; one line keeps them beside it, so the resting height is unchanged.
   const [stacked, setStacked] = useState(false);
+  const stackedRef = useRef(stacked);
+  stackedRef.current = stacked;
+  // The draft the last swap was made for. A swap reflows the very text it
+  // measured, so in WebKit the same text can measure the other way once moved;
+  // swapping back for it traded the two layouts every commit until React gave
+  // up (#185) and unmounted the whole app, leaving the glass window empty.
+  const swappedFor = useRef<string | null>(null);
   useLayoutEffect(() => {
     const box = editorRef.current;
     const controlsBox = controlsRef.current;
     if (!box || !controlsBox) return;
     const check = () => {
-      if (!message) return setStacked(false);
+      if (!message) {
+        swappedFor.current = null;
+        return setStacked(false);
+      }
       const range = document.createRange();
       range.selectNodeContents(box);
       const rect = range.getBoundingClientRect();
@@ -281,7 +295,12 @@ export default function ChatInput({
       // controls fits on one line without them. Back only once it would fit
       // beside them again — their width, the gap and the box's own padding.
       const room = box.clientWidth - controlsBox.offsetWidth - 16;
-      setStacked((was) => (was ? !(oneLine && rect.width <= room) : !oneLine));
+      const was = stackedRef.current;
+      const next = was ? !(oneLine && rect.width <= room) : !oneLine;
+      if (next === was || swappedFor.current === message) return;
+      swappedFor.current = message;
+      stackedRef.current = next;
+      setStacked(next);
     };
     // Layout, not an ordinary effect: measured before paint, so a keystroke
     // crossing the line boundary moves the controls in the same frame. The
@@ -290,7 +309,7 @@ export default function ChatInput({
     const observer = new ResizeObserver(check);
     observer.observe(box);
     return () => observer.disconnect();
-  }, [message, stacked, sessionId]);
+  }, [message, sessionId]);
   // Read by the session-switch effect below, which must stay keyed on the
   // session alone: the draft it wants is the one that arrived *with* that
   // switch, and depending on `message` would rerun it on every keystroke and
@@ -308,7 +327,17 @@ export default function ChatInput({
 
   const [recent, recordCommand] = useRecentCommands();
 
-  const attachments = useAttachments(sessionId);
+  const attachKey = attachmentKey(sessionId, cwd);
+  const attachments = useAttachments(attachKey);
+  const server = serverOfPath(cwd ?? "");
+  // A remote session cannot read a path on this Mac, so whatever is pinned
+  // goes over at once, however it arrived — drop, paste, picker, a draft
+  // reopened or a cancelled prompt handed back.
+  useEffect(
+    () => (server === LOCAL ? undefined : keepUploading(server, () => readAttachments(attachKey))),
+    // `attachments` only to start what was just pinned; the list is read live.
+    [server, attachKey, attachments],
+  );
   // Set while the OS is dragging files over the window. Tauri intercepts the
   // native drop before the webview sees it, so there are no HTML drag events to
   // read here — `onDragDropEvent` is the only source, and it reports paths
@@ -539,7 +568,7 @@ export default function ChatInput({
   }, [sessionId]);
 
   // ⌥ as well as ⌘, so the chord can't collide with the webview's own ⌘O.
-  useHotkey("attach", () => void pickAttachments(sessionId));
+  useHotkey("attach", () => void pickAttachments(attachKey));
 
   // What Esc does, wherever focus is. Held in a ref so the listener below can
   // register once and still read current state. Returns whether it consumed the
@@ -638,7 +667,7 @@ export default function ChatInput({
           setDragging(true);
         } else if (event.payload.type === "drop") {
           setDragging(false);
-          void addAttachmentPaths(sessionId, event.payload.paths);
+          void addAttachmentPaths(attachKey, event.payload.paths);
         } else {
           setDragging(false);
         }
@@ -655,7 +684,7 @@ export default function ChatInput({
       live = false;
       unlisten?.();
     };
-  }, [sessionId, archived]);
+  }, [attachKey, archived]);
 
   // `busy` no longer gates this: a prompt typed into a running turn is queued
   // rather than refused, and the CLI folds it into that turn on its own.
@@ -746,6 +775,8 @@ export default function ChatInput({
     // An attachment on its own is a real prompt — dropping a screenshot and
     // pressing Enter is asking about the screenshot.
     if (!trimmed && !attachments.length) return;
+    // A file the server would refuse can only fail the send; its tile says so.
+    if (server !== LOCAL && attachments.some((a) => a.size > MAX_UPLOAD_BYTES)) return;
 
     // Recorded on send rather than on pick: choosing a command from the list
     // and then deleting it is not using it. Taken from the text, so a command
@@ -758,7 +789,7 @@ export default function ChatInput({
     // The box is empty, so the caret has nowhere else to be — and left where it
     // was it would name a position past the end of whatever is typed next.
     setCaret(0);
-    clearAttachments(sessionId);
+    clearAttachments(attachKey);
   };
 
   // Returns before the form, so there is no disabled textarea to focus and no
@@ -965,7 +996,11 @@ export default function ChatInput({
               <div className={cn("pt-3", isNewTask ? "px-0" : "px-3")}>
                 <AttachmentTray
                   attachments={attachments}
-                  onRemove={(path) => removeAttachment(sessionId, path)}
+                  server={server}
+                  onRemove={(path) => {
+                    removeAttachment(attachKey, path);
+                    forget(server, [path]);
+                  }}
                   modelTakesImages={modelTakesImages}
                 />
               </div>
@@ -1002,7 +1037,7 @@ export default function ChatInput({
                     setCaret(at);
                   }}
                   onCaretChange={setCaret}
-                  onPasteFiles={() => pasteAttachments(sessionId)}
+                  onPasteFiles={() => pasteAttachments(attachKey)}
                   maxRows={isNewTask ? NEW_TASK_MAX_ROWS : MAX_ROWS}
                   // The two that are always there lead, and the two that come
                   // and go trail — so the line grows and shrinks at its end

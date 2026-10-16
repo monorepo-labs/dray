@@ -125,7 +125,10 @@ jobs:
       - name: Build dray-serve
         if: matrix.serve
         working-directory: apps/desktop/src-tauri
+        # The CLI's version rides into the server, which reports it to the app
+        # so the app can tell whether a newer release is out on its channel.
         run: |
+          export DRAY_CLI_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$GITHUB_WORKSPACE/apps/cli/Cargo.toml" | head -n 1)
           cargo build --release --no-default-features --features serve \
             --bin dray-serve --target ${{ matrix.target }}
           cp "target/${{ matrix.target }}/release/dray-serve" "$GITHUB_WORKSPACE/apps/cli/target/${{ matrix.target }}/release/"
@@ -186,15 +189,24 @@ jobs:
           ls -1
           sha256sum -c ./*.sha256
 
+      # A `-` after the version is a beta (`cli-v0.12.0-beta.1`), the same
+      # shape install.sh reads to keep betas off the stable channel. Read off
+      # the tag rather than a `contains`, since `cli-v` holds a `-` itself.
+      - name: Read the channel off the tag
+        id: channel
+        run: |
+          case "${GITHUB_REF_NAME#cli-v}" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             artifacts/*.tar.gz
             artifacts/*.tar.gz.sha256
-          # install.sh resolves the newest `cli-v*` tag without reading this
-          # flag, so hard-coding it false is what keeps the resolver honest — a
-          # CLI marked prerelease would be handed to everyone re-running the
-          # installer. Teaching the resolver to read the flag is the moment a
-          # beta channel becomes possible, and not before.
-          prerelease: false
+          # A label for people reading the releases page. install.sh never reads
+          # it and goes by the tag's shape instead, so a release mislabelled
+          # here cannot reach the wrong channel.
+          prerelease: ${{ steps.channel.outputs.prerelease }}
           generate_release_notes: true

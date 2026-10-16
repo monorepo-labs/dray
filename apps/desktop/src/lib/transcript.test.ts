@@ -852,10 +852,11 @@ describe("segmentMedia", () => {
       "/Users/me/.dray-dev/browser/recordings/s1/a.mp4",
       "/Users/me/.dray-worktrees/opal-plum/browser/recordings/s1/b.mp4",
     ];
-    const media = segmentMedia(
-      paths.map((path, i) => result(i, `c${i}`, `saved ${path}`, 0)),
-      "done",
+    const items = paths.flatMap((path, i) => [callStarted(2 * i, `c${i}`, stop), result(2 * i + 1, `c${i}`, `saved ${path}`, 0)]);
+    const results = new Map(
+      items.flatMap(({ payload }) => (payload.type === "tool_call_completed" ? [[payload.callId, payload.result]] : [])) as [string, ToolResult][],
     );
+    const media = segmentMedia(items, "done", results);
     expect(media.map((m) => ("video" in m ? m.video : null))).toEqual(paths);
   });
 

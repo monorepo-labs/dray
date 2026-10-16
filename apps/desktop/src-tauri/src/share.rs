@@ -9,15 +9,15 @@
 //! the session is settled or deleted; a server restart takes every one with it.
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use dray_proto::SharedPort;
 use hyper::body::Incoming;
-use hyper::header::{HeaderValue, HOST, UPGRADE};
+use hyper::header::{HeaderValue, HOST, ORIGIN, UPGRADE};
 use hyper::{Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use crate::tunnel;
 
@@ -114,7 +114,8 @@ pub async fn start(session: &str, port: u16, via: &'static str) -> Result<String
     }
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| format!("could not listen: {e}"))?;
     let target = listener.local_addr().map_err(|e| format!("could not listen: {e}"))?.to_string();
-    let proxy = tokio::spawn(proxy(listener, port));
+    let link = Arc::new(OnceLock::new());
+    let proxy = tokio::spawn(proxy(listener, port, link.clone()));
     let url = match tunnel::expose(tunnel::SHARE, &label(session, port), target.clone()).await {
         Ok(url) => url,
         Err(e) => {
@@ -122,6 +123,7 @@ pub async fn start(session: &str, port: u16, via: &'static str) -> Result<String
             return Err(format!("{e:#}"));
         }
     };
+    let _ = link.set(url.clone());
     let published = {
         let mut links = LINKS.lock().unwrap();
         let current = links.stamp(session, port) == stamp;
@@ -168,43 +170,68 @@ pub async fn share_ready() -> bool {
     tunnel::provisioned(tunnel::SHARE).await
 }
 
-/// Forwards each connection to `localhost:<port>` with the Host header
-/// rewritten to match. The relay forwards bytes untouched, and Vite and its
-/// kin refuse a Host they do not know; to the dev server this is local
-/// traffic. WebSocket upgrades (HMR) are spliced through whole.
-async fn proxy(listener: TcpListener, port: u16) {
-    let host = HeaderValue::from_str(&format!("localhost:{port}")).expect("ascii");
-    while let Ok((visitor, _)) = listener.accept().await {
-        let host = host.clone();
-        tokio::spawn(async move {
-            // `localhost`, not `127.0.0.1`: a dev server may listen on `::1` alone.
-            let Ok(upstream) = TcpStream::connect(("localhost", port)).await else { return };
-            let Ok((sender, conn)) = hyper::client::conn::http1::handshake(TokioIo::new(upstream)).await else { return };
-            tokio::spawn(conn.with_upgrades());
-            let sender = Arc::new(tokio::sync::Mutex::new(sender));
-            let service = hyper::service::service_fn(move |mut req: Request<Incoming>| {
-                let (sender, host) = (sender.clone(), host.clone());
-                async move {
-                    req.headers_mut().insert(HOST, host);
-                    let upgrading = req.headers().contains_key(UPGRADE).then(|| hyper::upgrade::on(&mut req));
-                    let mut res = sender.lock().await.send_request(req).await?;
-                    if let (Some(visitor), StatusCode::SWITCHING_PROTOCOLS) = (upgrading, res.status()) {
-                        let server = hyper::upgrade::on(&mut res);
-                        tokio::spawn(async move {
-                            if let (Ok(visitor), Ok(server)) = tokio::join!(visitor, server) {
-                                let _ = tokio::io::copy_bidirectional(&mut TokioIo::new(visitor), &mut TokioIo::new(server)).await;
-                            }
-                        });
-                    }
-                    Ok::<_, hyper::Error>(res)
-                }
-            });
-            let _ = hyper::server::conn::http1::Builder::new()
-                .serve_connection(TokioIo::new(visitor), service)
-                .with_upgrades()
-                .await;
-        });
+/// Forwards each connection to `localhost:<port>` as local traffic. The
+/// relay forwards bytes untouched, so the visitor's `Host` names the link, and
+/// Vite and its kin refuse a Host they do not know. Next's dev server also
+/// answers `/_next/*` 403 for any `Origin` but localhost (#527), so the link's
+/// own origin is made local too; any other passes untouched, and the dev
+/// server still refuses other sites. `link` is the URL, once the relay names it.
+async fn proxy(listener: TcpListener, port: u16, link: Arc<OnceLock<String>>) {
+    // Owned here, so aborting the share aborts every open connection with it:
+    // an idle stream or an HMR socket never ends on its own.
+    let mut conns = JoinSet::new();
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok((visitor, _)) => drop(conns.spawn(relay(visitor, port, link.clone()))),
+                Err(_) => return,
+            },
+            Some(_) = conns.join_next() => {}
+        }
     }
+}
+
+/// One visitor's connection, request by request, with WebSocket upgrades
+/// (HMR) spliced through whole.
+async fn relay(visitor: TcpStream, port: u16, link: Arc<OnceLock<String>>) {
+    // `localhost`, not `127.0.0.1`: a dev server may listen on `::1` alone.
+    let Ok(upstream) = TcpStream::connect(("localhost", port)).await else { return };
+    let Ok((sender, conn)) = hyper::client::conn::http1::handshake(TokioIo::new(upstream)).await else { return };
+    // The upstream driver and any spliced upgrade, held so they end with this task.
+    let tasks = Arc::new(Mutex::new(JoinSet::new()));
+    tasks.lock().unwrap().spawn(async move { drop(conn.with_upgrades().await) });
+    let sender = Arc::new(tokio::sync::Mutex::new(sender));
+    let host = HeaderValue::from_str(&format!("localhost:{port}")).expect("ascii");
+    // With the port, to match `Host`, or Next's server actions refuse the pair.
+    let local = HeaderValue::from_str(&format!("http://localhost:{port}")).expect("ascii");
+    let spliced = tasks.clone();
+    let service = hyper::service::service_fn(move |mut req: Request<Incoming>| {
+        let (sender, host, local, link, spliced) = (sender.clone(), host.clone(), local.clone(), link.clone(), spliced.clone());
+        async move {
+            req.headers_mut().insert(HOST, host);
+            let from_link = req.headers().get(ORIGIN).zip(link.get()).is_some_and(|(o, l)| o.as_bytes() == l.as_bytes());
+            if from_link {
+                req.headers_mut().insert(ORIGIN, local);
+            }
+            let upgrading = req.headers().contains_key(UPGRADE).then(|| hyper::upgrade::on(&mut req));
+            let mut res = sender.lock().await.send_request(req).await?;
+            if let (Some(visitor), StatusCode::SWITCHING_PROTOCOLS) = (upgrading, res.status()) {
+                let server = hyper::upgrade::on(&mut res);
+                spliced.lock().unwrap().spawn(async move {
+                    if let (Ok(visitor), Ok(server)) = tokio::join!(visitor, server) {
+                        let _ = tokio::io::copy_bidirectional(&mut TokioIo::new(visitor), &mut TokioIo::new(server)).await;
+                    }
+                });
+            }
+            Ok::<_, hyper::Error>(res)
+        }
+    });
+    let _ = hyper::server::conn::http1::Builder::new()
+        .serve_connection(TokioIo::new(visitor), service)
+        .with_upgrades()
+        .await;
+    let mut tasks = std::mem::take(&mut *tasks.lock().unwrap());
+    while tasks.join_next().await.is_some() {}
 }
 
 #[cfg(test)]
@@ -256,7 +283,7 @@ mod tests {
         });
         let front = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let target = front.local_addr().unwrap().to_string();
-        tokio::spawn(proxy(front, port));
+        tokio::spawn(proxy(front, port, Default::default()));
 
         let t0 = std::time::Instant::now();
         let url = tunnel::expose(tunnel::SHARE, "s:1", target.clone()).await.unwrap();
@@ -296,7 +323,7 @@ mod tests {
         });
         let front = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let front_addr = front.local_addr().unwrap();
-        tokio::spawn(proxy(front, port));
+        tokio::spawn(proxy(front, port, Default::default()));
 
         let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{front_addr}/hmr")).await.unwrap();
         for word in ["one", "two"] {
@@ -304,6 +331,58 @@ mod tests {
             let Some(Ok(Message::Text(back))) = ws.next().await else { panic!("no echo") };
             assert_eq!(back.as_str(), format!("echo {word}"));
         }
+    }
+
+    /// The link's own `Origin` reaches the dev server as localhost, the way
+    /// Next's `/_next/*` and server actions want it; another site's does not.
+    #[tokio::test]
+    async fn only_the_links_own_origin_is_made_local() {
+        const LINK: &str = "https://abc.def.opentunnel.xyz";
+        let server = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = server.local_addr().unwrap().port();
+        let seen = tokio::spawn(async move {
+            let mut heads = Vec::new();
+            for _ in 0..2 {
+                let (mut s, _) = server.accept().await.unwrap();
+                let mut buf = [0u8; 4096];
+                let n = s.read(&mut buf).await.unwrap();
+                heads.push(String::from_utf8_lossy(&buf[..n]).to_lowercase());
+                s.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok").await.unwrap();
+            }
+            heads
+        });
+        let front = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let front_addr = front.local_addr().unwrap();
+        tokio::spawn(proxy(front, port, Arc::new(OnceLock::from(LINK.to_string()))));
+        for origin in [LINK, "https://evil.example"] {
+            let mut visitor = TcpStream::connect(front_addr).await.unwrap();
+            let req = format!("GET /_next/x.js HTTP/1.1\r\nhost: abc.def.opentunnel.xyz\r\norigin: {origin}\r\n\r\n");
+            visitor.write_all(req.as_bytes()).await.unwrap();
+            let mut buf = [0u8; 512];
+            let _ = visitor.read(&mut buf).await.unwrap();
+        }
+        let heads = seen.await.unwrap();
+        assert!(heads[0].contains(&format!("origin: http://localhost:{port}\r\n")), "{}", heads[0]);
+        assert!(heads[1].contains("origin: https://evil.example\r\n"), "{}", heads[1]);
+    }
+
+    /// A stream the dev server never ends is closed when the share is.
+    #[tokio::test]
+    async fn stopping_the_proxy_closes_an_open_relay() {
+        let server = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = server.local_addr().unwrap().port();
+        let front = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let front_addr = front.local_addr().unwrap();
+        let proxy = tokio::spawn(proxy(front, port, Default::default()));
+        let mut visitor = TcpStream::connect(front_addr).await.unwrap();
+        visitor.write_all(b"GET /stream HTTP/1.1\r\nhost: x\r\n\r\n").await.unwrap();
+        let (mut conn, _) = server.accept().await.unwrap();
+        let mut head = [0u8; 256];
+        let _ = conn.read(&mut head).await.unwrap();
+        proxy.abort();
+        let mut rest = Vec::new();
+        let closed = tokio::time::timeout(std::time::Duration::from_secs(2), conn.read_to_end(&mut rest)).await;
+        assert!(closed.is_ok(), "the relay outlived its proxy");
     }
 
     /// The dev server sees `Host: localhost:<port>` on every request of a
@@ -325,7 +404,7 @@ mod tests {
         });
         let front = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let front_addr = front.local_addr().unwrap();
-        tokio::spawn(proxy(front, port));
+        tokio::spawn(proxy(front, port, Default::default()));
 
         let mut visitor = TcpStream::connect(front_addr).await.unwrap();
         let mut buf = [0u8; 4096];

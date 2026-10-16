@@ -200,6 +200,11 @@ struct Update {
     /// Reinstalls a damaged binary; `DRAY_VERSION=<tag>` downgrades.
     #[arg(long)]
     force: bool,
+
+    /// Which releases to take: `beta` also takes stable ones. Defaults to the
+    /// channel this binary came from, so a beta install stays on beta.
+    #[arg(long, value_parser = ["stable", "beta"])]
+    channel: Option<String>,
 }
 
 #[derive(Args)]
@@ -944,7 +949,8 @@ fn update(args: Update) -> Result<(), String> {
     // unix binary is safe: the process keeps the inode it started from.
     .env("DRAY_INSTALL_DIR", dir)
     // An update is not a first install: no setup questions.
-    .env("DRAY_UPDATING", "1");
+    .env("DRAY_UPDATING", "1")
+    .env("DRAY_CHANNEL", args.channel.as_deref().unwrap_or(own_channel()));
 
     if args.force {
         // Cleared rather than left alone, or a value the caller exported makes
@@ -975,6 +981,12 @@ fn update(args: Update) -> Result<(), String> {
 /// work out for itself, since it cannot tell which `dray` on disk ran it.
 fn current_tag() -> String {
     format!("cli-v{}", env!("CARGO_PKG_VERSION"))
+}
+
+/// Read off the version rather than stored, so there is no setting to drift
+/// from the binary: a prerelease version is a beta build.
+fn own_channel() -> &'static str {
+    if env!("CARGO_PKG_VERSION").contains('-') { "beta" } else { "stable" }
 }
 
 /// Every agent reads the same SKILL.md format from its own home dir, so one

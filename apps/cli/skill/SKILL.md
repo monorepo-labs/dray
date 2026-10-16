@@ -440,7 +440,8 @@ binary. So whatever you are reading always describes the `dray` you actually
 have.
 
 `dray update --force` installs the newest release even when it is the one you
-have, which repairs a damaged binary.
+have, which repairs a damaged binary. A beta build updates to betas and a stable
+one to stable releases; `--channel beta` or `--channel stable` switches.
 
 The app and this CLI ship separately, so they can drift. When they disagree about
 the protocol the app **refuses the command** — every command, not just whichever

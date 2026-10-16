@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,14 @@ impl UpdateChannel {
         match self {
             Self::Stable => STABLE_MANIFEST,
             Self::Beta => BETA_MANIFEST,
+        }
+    }
+
+    /// The CLI's spelling, for `--channel` and `DRAY_CHANNEL`.
+    fn cli_name(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Beta => "beta",
         }
     }
 }
@@ -125,6 +134,10 @@ pub async fn check_update(
     channel: UpdateChannel,
     app: AppHandle,
 ) -> Result<(), String> {
+    // Here because this is where the channel arrives: it lives in the
+    // frontend's local storage, out of reach of `setup`.
+    tauri::async_runtime::spawn(sync_cli(channel));
+
     let updater = app
         .updater_builder()
         .endpoints(vec![channel.manifest().parse().map_err(|e| format!("{e}"))?])
@@ -316,10 +329,24 @@ fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
 /// The marker is its own file rather than a field on `settings.json`: that file
 /// is rewritten whole, and a second app instance (the `open -n` relaunch is
 /// one) writing a marker from a stale read would undo the reader's settings.
-pub async fn sync_cli() {
-    if tauri::is_dev() || cfg!(debug_assertions) {
+///
+/// The CLI takes the app's channel, and only here: flipping the switch moves
+/// the CLI at the next app update, the same moment it moves the app. Leaving
+/// beta downgrades nothing, since the installer keeps a CLI newer than what
+/// the channel offers.
+///
+/// Every update check calls this, so one run at a time: a manual check during
+/// the first one would otherwise start a second installer beside it.
+async fn sync_cli(channel: UpdateChannel) {
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    if tauri::is_dev() || cfg!(debug_assertions) || RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
+    sync_cli_once(channel).await;
+    RUNNING.store(false, Ordering::SeqCst);
+}
+
+async fn sync_cli_once(channel: UpdateChannel) {
     let version = env!("CARGO_PKG_VERSION");
     let Ok(marker) = get_home_app_dir().await.map(|dir| dir.join("cli-synced")) else {
         return;
@@ -331,9 +358,16 @@ pub async fn sync_cli() {
         return;
     }
 
-    if let Some(dray) = installed_cli().await {
-        let child = tokio::process::Command::new(&dray)
-            .arg("update")
+    if let Some((dray, cli_version)) = installed_cli().await {
+        let mut command = tokio::process::Command::new(&dray);
+        command.arg("update");
+        // A CLI before 0.12 refuses `--channel` but hands `DRAY_CHANNEL` on to
+        // the installer; a newer one sets that variable itself, from the flag.
+        command.env("DRAY_CHANNEL", channel.cli_name());
+        if takes_channel_flag(&cli_version) {
+            command.args(["--channel", channel.cli_name()]);
+        }
+        let child = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -378,8 +412,8 @@ const CLI_UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The `dray` on disk, only where it answers `--version` the way Dray's CLI
 /// does — the name is generic enough for something else on `PATH` to carry it,
-/// and this is about to be run with `update`.
-async fn installed_cli() -> Option<PathBuf> {
+/// and this is about to be run with `update`. Answers the version beside it.
+async fn installed_cli() -> Option<(PathBuf, String)> {
     let dray = binpath::dray().await?;
     let out = tokio::process::Command::new(&dray)
         .arg("--version")
@@ -387,7 +421,14 @@ async fn installed_cli() -> Option<PathBuf> {
         .kill_on_drop(true)
         .output();
     let out = tokio::time::timeout(Duration::from_secs(5), out).await.ok()?.ok()?;
-    (out.status.success() && out.stdout.starts_with(b"dray ")).then_some(dray)
+    let version = String::from_utf8_lossy(&out.stdout).strip_prefix("dray ")?.trim().to_owned();
+    out.status.success().then_some((dray, version))
+}
+
+/// Whether `dray update` knows `--channel`, which arrived in CLI 0.12.
+fn takes_channel_flag(version: &str) -> bool {
+    let mut parts = version.split(['.', '-']).map(|p| p.parse::<u64>().unwrap_or(0));
+    (parts.next().unwrap_or(0), parts.next().unwrap_or(0)) >= (0, 12)
 }
 
 fn emit_status(app: &AppHandle, status: UpdateStatus) {
@@ -400,6 +441,21 @@ fn emit_status(app: &AppHandle, status: UpdateStatus) {
 mod tests {
     use super::bundle_of;
     use std::path::Path;
+
+    /// A wrong answer one way fails every sync on an unknown flag; the other
+    /// way leaves a 0.12 CLI on the channel its own version names.
+    #[test]
+    fn only_a_cli_from_0_12_is_handed_the_channel_flag() {
+        for (version, takes) in [
+            ("0.11.0", false),
+            ("0.9.5", false),
+            ("0.12.0-beta.1", true),
+            ("0.12.0", true),
+            ("1.0.0", true),
+        ] {
+            assert_eq!(super::takes_channel_flag(version), takes, "{version}");
+        }
+    }
 
     #[test]
     fn finds_the_bundle_an_executable_sits_in() {

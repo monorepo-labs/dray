@@ -78,6 +78,9 @@ pub const SERVER_LOG: &str = "server.log";
 
 /// Runs the server until the process ends.
 pub async fn run(port: u16) -> Result<()> {
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = STARTED_FROM.set((exe.clone(), stamp_of(&exe)));
+    }
     let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
     let home = start_core(sink.clone()).await?;
 
@@ -132,7 +135,7 @@ pub async fn run_mac() -> Result<()> {
             _ = term.recv() => {}
             _ = int.recv() => {}
         }
-        shut_down().await;
+        shut_down(0).await;
     });
 
     eprintln!("dray --serve listening on 127.0.0.1:{port}, home {}", home.display());
@@ -150,15 +153,36 @@ async fn write_port_file(home: &Path, port: u16) -> Result<()> {
 /// rebuilds. The server writes the one it started from under its port; the
 /// app compares it with the file now to tell a server running old code.
 pub fn exe_stamp() -> Option<String> {
-    let modified = std::fs::metadata(std::env::current_exe().ok()?).ok()?.modified().ok()?;
+    stamp_of(&std::env::current_exe().ok()?)
+}
+
+fn stamp_of(path: &Path) -> Option<String> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
     let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
     Some(format!("{}.{:09}", since.as_secs(), since.subsec_nanos()))
 }
 
-/// Exits once no turn is running, for launchd to start the binary now on
-/// disk. Asked by the app when the server it met is older than itself, and by
-/// an update. Twice is once.
-#[cfg(feature = "desktop")]
+/// `dray-serve`'s binary and its stamp when it started. Taken at start, since
+/// once an update renames over the file Linux's `current_exe` names the
+/// deleted inode rather than the path.
+static STARTED_FROM: std::sync::OnceLock<(PathBuf, Option<String>)> = std::sync::OnceLock::new();
+
+/// Whether the binary on disk has moved since `dray-serve` started: an update
+/// landed and this process still runs the old code. False on the Mac's
+/// server, which the app judges by the port file instead.
+fn stale() -> bool {
+    STARTED_FROM.get().is_some_and(|(path, then)| stamp_of(path) != *then)
+}
+
+/// How a restart exits. launchd's `KeepAlive` on a failed exit and systemd's
+/// `Restart=on-failure` both bring back a non-zero exit alone, which is also
+/// what keeps a stopped `dray-serve` stopped. The Mac app's agent restarts on
+/// any exit.
+const RESTART_CODE: i32 = if cfg!(feature = "desktop") { 0 } else { 75 };
+
+/// Exits once no turn is running, for launchd or systemd to start the binary
+/// now on disk. Asked by the app when the server it met is older than its
+/// binary, and by an update. Twice is once.
 async fn restart_when_idle() {
     static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if ASKED.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -169,7 +193,73 @@ async fn restart_when_idle() {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
         eprintln!("[serve] restarting onto the binary now on disk");
-        shut_down().await;
+        shut_down(RESTART_CODE).await;
+    });
+}
+
+/// Runs `dray update` from beside this binary, then restarts once idle where
+/// it brought a new one. Answers `"restarting"`, or `"current"` where the
+/// channel had nothing newer. The `dray` there shipped in the same archive, so
+/// it always knows `--channel`.
+#[cfg(not(feature = "desktop"))]
+async fn update_server(channel: String) -> Result<&'static str, String> {
+    // One at a time: two apps on different channels would otherwise run two
+    // installers over one binary, and the slower could land the older one.
+    // Queued, the second runs the `dray` the first installed, which reports
+    // the newer version, and the installer keeps a newer install.
+    static ONE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one = ONE.lock().await;
+    let dray =STARTED_FROM.get().map(|(exe, _)| exe.with_file_name("dray")).ok_or("could not find this server's binary")?;
+    use tokio::io::AsyncReadExt;
+    let mut child = tokio::process::Command::new(&dray)
+        .args(["update", "--channel", &channel])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("could not run {}: {e}", dray.display()))?;
+    let mut stderr = child.stderr.take();
+    let said = tokio::spawn(async move {
+        let mut text = String::new();
+        if let Some(stderr) = stderr.as_mut() {
+            let _ = stderr.read_to_string(&mut text).await;
+        }
+        text
+    });
+    let status = match tokio::time::timeout(std::time::Duration::from_secs(300), child.wait()).await {
+        Ok(status) => status.map_err(|e| format!("dray update did not finish: {e}"))?,
+        // The installer is `sh` running curl under `dray`, so killing `dray`
+        // alone leaves a download that could still land a binary after this
+        // answered — and nothing would restart onto it. Walked while `dray`
+        // is alive, or its children are reparented out of reach.
+        Err(_) => {
+            if let Some(root) = child.id() {
+                crate::local_servers::kill_descendants(root).await;
+            }
+            let _ = child.kill().await;
+            return Err("dray update did not finish in 5 minutes".into());
+        }
+    };
+    if !status.success() {
+        let said = said.await.unwrap_or_default();
+        return Err(said.lines().rfind(|l| !l.trim().is_empty()).unwrap_or("dray update failed").trim().to_string());
+    }
+    if !stale() {
+        return Ok("current");
+    }
+    restart_when_idle().await;
+    Ok("restarting")
+}
+
+/// Restarts now, stopping every running turn. After a beat, so the reply
+/// reaches the app first.
+#[cfg(not(feature = "desktop"))]
+fn restart_now() {
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        eprintln!("[serve] restarting now, as asked");
+        shut_down(RESTART_CODE).await;
     });
 }
 
@@ -182,9 +272,9 @@ async fn restart_when_idle() {
 /// whatever is left is killed off the process table, walked *before* the
 /// agents went, so their reparented children are still named — and never off
 /// the session map alone, whose locks a stuck send can hold forever.
-#[cfg(feature = "desktop")]
-async fn shut_down() -> ! {
+async fn shut_down(code: i32) -> ! {
     crate::session::hold_sends();
+    #[cfg(feature = "desktop")]
     crate::remote_access::stop_on_exit();
     let me = std::process::id();
     let walk = move || tokio::task::spawn_blocking(move || crate::local_servers::descendants(me));
@@ -197,7 +287,7 @@ async fn shut_down() -> ! {
     for pid in tree.into_iter().filter(|&p| p != me) {
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
     }
-    std::process::exit(0)
+    std::process::exit(code)
 }
 
 /// Removes the browser profiles of deleted and settled sessions, the backlog
@@ -346,6 +436,7 @@ pub async fn listen(
         connections.spawn(async move {
             let served = match request_line(&stream).await {
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
+                Some(line) if line.starts_with("POST /upload?") => upload(stream, &token).await,
                 Some(_) => connection(stream, sink, hub, &token, &tunnel_file, hosts).await,
                 None => Ok(()),
             };
@@ -597,23 +688,24 @@ async fn request_line(stream: &TcpStream) -> Option<String> {
     None
 }
 
-/// `GET /file?token=…&path=…`: what `convertFileSrc` serves inside the desktop
-/// app — attached images, browser recordings and screenshots — for a client
-/// elsewhere. An
-/// `<img>` cannot set a header, hence the token in the query; a client that
-/// can sends `Authorization: Bearer …` instead and leaves it out of the URL.
-///
-/// Confined to those three directories, plus videos `read_file` handed out, by
-/// **canonical** path, so neither `..` nor a symlink inside one reaches
-/// anything else.
-// ponytail: no Range support, so a long video plays but cannot seek; add it
-// when recordings are viewed remotely.
-async fn file(stream: TcpStream, token: &str) -> Result<()> {
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+/// An HTTP request head: its target, the bearer token if one was sent, and
+/// the body length it declared.
+struct Head {
+    target: String,
+    bearer: Option<String>,
+    length: Option<u64>,
+}
+
+/// Reads a request head off `stream`, bounded in size and time. The reader
+/// comes back too, since it may already hold the start of a body.
+async fn read_head(
+    stream: TcpStream,
+) -> Result<(Head, tokio::io::BufReader<tokio::io::Take<TcpStream>>)> {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
     let mut reader = BufReader::new(stream.take(FILE_HEAD_LIMIT));
     let mut line = String::new();
-    let mut bearer = None;
+    let (mut bearer, mut length) = (None, None);
     // The rest of the head is read too, so closing does not reset the
     // connection under a response the client has not finished reading.
     let head = async {
@@ -626,6 +718,8 @@ async fn file(stream: TcpStream, token: &str) -> Result<()> {
             if let Some((name, value)) = header.split_once(':') {
                 if name.eq_ignore_ascii_case("authorization") {
                     bearer = value.trim().strip_prefix("Bearer ").map(str::to_string);
+                } else if name.eq_ignore_ascii_case("content-length") {
+                    length = value.trim().parse().ok();
                 }
             }
         }
@@ -635,12 +729,84 @@ async fn file(stream: TcpStream, token: &str) -> Result<()> {
         anyhow::bail!("request head over {FILE_HEAD_LIMIT} bytes");
     }
     let target = line.split(' ').nth(1).unwrap_or_default().to_string();
+    Ok((Head { target, bearer, length }, reader))
+}
+
+/// `POST /upload?name=…`: a file attached on another machine, written under
+/// `attachments/uploads` so a send can name it. Answers the path it landed at.
+/// Bearer token alone — nothing loads this from a URL.
+async fn upload(stream: TcpStream, token: &str) -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (head, reader) = read_head(stream).await?;
+    // Whatever of the body arrived with the head sits in the reader's buffer.
+    let early = reader.buffer().to_vec();
     let mut stream = reader.into_inner().into_inner();
 
-    let query = target.split_once('?').map(|(_, q)| q).unwrap_or_default();
+    let query = head.target.split_once('?').map(|(_, q)| q).unwrap_or_default();
+    let name = form_urlencoded::parse(query.as_bytes())
+        .find(|(key, _)| *key == "name")
+        .map(|(_, value)| value.into_owned())
+        .unwrap_or_default();
+
+    let refuse = |status: &str| format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    if !same_token(head.bearer.as_deref().unwrap_or_default(), token) {
+        stream.write_all(refuse("401 Unauthorized").as_bytes()).await?;
+        return Ok(());
+    }
+    let Some(length) = head.length else {
+        stream.write_all(refuse("411 Length Required").as_bytes()).await?;
+        return Ok(());
+    };
+    if length > crate::attachments::MAX_UPLOAD_BYTES {
+        stream.write_all(refuse("413 Content Too Large").as_bytes()).await?;
+        return Ok(());
+    }
+    let Ok(path) = crate::attachments::upload_path(&name).await else {
+        stream.write_all(refuse("400 Bad Request").as_bytes()).await?;
+        return Ok(());
+    };
+
+    let mut out = tokio::fs::File::create(&path).await?;
+    let mut body = (&early[..]).chain(&mut stream).take(length);
+    // A dropped connection leaves no half a file behind to be named.
+    let written = tokio::io::copy(&mut body, &mut out).await.unwrap_or(0);
+    if written != length {
+        let _ = tokio::fs::remove_file(&path).await;
+        anyhow::bail!("upload ended at {written} of {length} bytes");
+    }
+    out.flush().await?;
+
+    let path = path.to_string_lossy();
+    let reply = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{path}",
+        path.len()
+    );
+    stream.write_all(reply.as_bytes()).await?;
+    stream.shutdown().await.ok();
+    Ok(())
+}
+
+/// `GET /file?token=…&path=…`: what `convertFileSrc` serves inside the desktop
+/// app — attached images, browser recordings and screenshots — for a client
+/// elsewhere. An
+/// `<img>` cannot set a header, hence the token in the query; a client that
+/// can sends `Authorization: Bearer …` instead and leaves it out of the URL.
+///
+/// Confined to those three directories, plus videos `read_file` handed out, by
+/// **canonical** path, so neither `..` nor a symlink inside one reaches
+/// anything else.
+// ponytail: no Range support, so a long video plays but cannot seek; add it
+// when recordings are viewed remotely.
+async fn file(stream: TcpStream, token: &str) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let (head, reader) = read_head(stream).await?;
+    let mut stream = reader.into_inner().into_inner();
+    let query = head.target.split_once('?').map(|(_, q)| q).unwrap_or_default();
     // A header where the client can set one — the desktop app's proxy — so the
     // token rides no URL; the query for an `<img>` in a plain browser.
-    let mut given = (bearer.unwrap_or_default(), String::new());
+    let mut given = (head.bearer.unwrap_or_default(), String::new());
     for (key, value) in form_urlencoded::parse(query.as_bytes()) {
         match &*key {
             "token" if given.0.is_empty() => given.0 = value.into_owned(),
@@ -782,9 +948,16 @@ async fn connection(
         let live = hub.live.lock().unwrap_or_else(|e| e.into_inner());
         (hub.events.subscribe(), live.snapshot())
     };
-    write
-        .send(Message::text(json!({ "v": PROTOCOL }).to_string()))
-        .await?;
+    // `release` is the CLI release this binary shipped in, which is what the
+    // app compares with the newest one out. Set by release-cli.yml alone, so a
+    // local build says none and is never offered an update.
+    let welcome = json!({
+        "v": PROTOCOL,
+        "version": env!("CARGO_PKG_VERSION"),
+        "release": option_env!("DRAY_CLI_VERSION"),
+        "stale": stale(),
+    });
+    write.send(Message::text(welcome.to_string())).await?;
     write.send(Message::text(snapshot)).await?;
 
     // Replies come back from concurrent tasks, so one writer owns the socket.
@@ -943,6 +1116,15 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     if matches!(cmd, "get_remote_access" | "set_remote_access" | "remote_access_token" | "restart_when_idle") {
         return dispatch_mac(cmd, args, sink).await;
     }
+    // A `dray-serve` updates itself; the Mac's server follows the app instead.
+    #[cfg(not(feature = "desktop"))]
+    if matches!(cmd, "update_server" | "restart_now" | "restart_when_idle") {
+        return table! { cmd, args;
+            update_server(channel: String) => update_server(channel).await;
+            restart_now() => ok(restart_now());
+            restart_when_idle() => ok(restart_when_idle().await);
+        };
+    }
     table! { cmd, args;
         // What a connect opens with, asked again by an app whose webview was
         // not yet listening when it connected — `dray-serve` included, which
@@ -1013,6 +1195,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         set_analytics_enabled(enabled: bool) => crate::set_analytics_enabled(enabled).await;
         analytics_identity() => ok(crate::analytics::analytics_identity().await);
         track_feature(feature: String) => ok(crate::track_feature(feature));
+        track_render_error(code: Option<u32>, frames: Vec<String>) => ok(crate::track_render_error(code, frames));
         track_active_day() => ok(crate::analytics::track_active_day());
 
         // Git and files.
@@ -1212,6 +1395,48 @@ mod tests {
         assert!(serve(PathBuf::from("/etc/passwd")).await.is_none());
         assert_eq!(content_type(&inside), "image/png");
         std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// A streamed body larger than one read lands whole under its own name, as
+    /// the app sends it; a wrong token or a path for a name does not.
+    #[tokio::test]
+    async fn an_upload_lands_under_uploads() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/upload", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(upload(stream, "tok"));
+            }
+        });
+        let body: Vec<u8> = (0..300_000u32).map(|i| i as u8).collect();
+        let post = |token: &'static str, name: &'static str| {
+            let (base, body) = (base.clone(), body.clone());
+            async move {
+                let len = body.len();
+                let chunks = futures_util::stream::iter(
+                    body.chunks(64 * 1024).map(|c| Ok::<_, std::io::Error>(c.to_vec())).collect::<Vec<_>>(),
+                );
+                reqwest::Client::new()
+                    .post(base)
+                    .query(&[("name", name)])
+                    .bearer_auth(token)
+                    .header(reqwest::header::CONTENT_LENGTH, len)
+                    .body(reqwest::Body::wrap_stream(chunks))
+                    .send()
+                    .await
+                    .unwrap()
+            }
+        };
+
+        let landed = post("tok", "data.csv").await.text().await.unwrap();
+        let uploads = store::get_home_app_dir().await.unwrap().join("attachments/uploads");
+        assert!(Path::new(&landed).starts_with(&uploads), "{landed}");
+        assert!(landed.ends_with("/data.csv"));
+        assert_eq!(std::fs::read(&landed).unwrap(), body);
+        std::fs::remove_dir_all(Path::new(&landed).parent().unwrap()).ok();
+
+        assert_eq!(post("nope", "data.csv").await.status(), 401);
+        assert_eq!(post("tok", "..").await.status(), 400);
     }
 
     #[tokio::test]

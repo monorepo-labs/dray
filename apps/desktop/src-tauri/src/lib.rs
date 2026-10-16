@@ -32,6 +32,8 @@ pub mod cef;
 // what keeps its types in `events.ts` and its tests in a bare `cargo test`.
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 pub mod chromium;
+#[cfg(all(feature = "desktop", target_os = "macos"))]
+mod trackpad;
 // `dray browser` on a server: a headless Chromium under the same verbs the
 // Mac's CEF answers. In the desktop build too, since that binary is also the
 // Mac's background server. See HEADLESS-PLAN.md.
@@ -425,6 +427,25 @@ fn track_feature(feature: String) {
     analytics::track("feature_used", serde_json::json!({ "feature": feature }));
 }
 
+/// Reports a render error the frontend's crash screen caught: React's error
+/// code and the component stack as `name@bundle:line:col` frames of our own
+/// bundle. The frontend already drops anything else; this keeps only frames
+/// spelled from that alphabet too, so no message text or path can reach the
+/// event whatever the caller sends (see [`analytics::error`]).
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn track_render_error(code: Option<u32>, frames: Vec<String>) {
+    let frames: Vec<String> = frames
+        .into_iter()
+        .filter(|f| {
+            f.len() <= 120
+                && f.contains(".js:")
+                && f.chars().all(|c| c.is_ascii_alphanumeric() || "_$.@:-".contains(c))
+        })
+        .take(8)
+        .collect();
+    analytics::error("render", serde_json::json!({ "react_code": code, "frames": frames }));
+}
+
 /// The slash commands available in a directory, for the harness that will run
 /// there. Cached per directory in the backend, so the composer may call this
 /// whenever the project or the harness changes.
@@ -718,12 +739,12 @@ pub fn run() {
             // window already exists here for it to parent a view into.
             #[cfg(all(feature = "cef", target_os = "macos"))]
             cef::init(app.handle());
+            #[cfg(target_os = "macos")]
+            trackpad::watch(app.handle());
             // Dictations kept past a failure. Pruning on write alone left the
             // last one on disk forever, since nothing else sweeps them and a
             // reader who gives up after one failure writes no more.
             tauri::async_runtime::spawn(transcription::recordings::prune());
-
-            tauri::async_runtime::spawn(updater::sync_cli());
 
             // Sessions live in the background server launchd runs from this
             // binary, which owns the data, the orchestration socket and
@@ -790,6 +811,12 @@ pub fn run() {
             servers::remove_server,
             servers::reconnect_servers,
             servers::server_invoke,
+            servers::update_server,
+            servers::restart_server_now,
+            servers::servers_behind,
+            servers::set_server_beta,
+            servers::ignore_server_update,
+            servers::check_server_update,
             servers::forward_port,
             servers::add_ssh_server,
             servers::set_server_on,
@@ -800,6 +827,7 @@ pub fn run() {
             servers::install_on_server,
             servers::run_server_login,
             servers::run_gh_login,
+            servers::upload_attachment,
             attachments::paste_attachments,
             // Here and not on the server: a video plays through this
             // webview's asset protocol, which only this process can widen.

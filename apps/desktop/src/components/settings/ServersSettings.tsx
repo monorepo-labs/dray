@@ -1,4 +1,4 @@
-import { Check, Copy, Globe, GlobeOff, MoreHorizontal, Plus } from "lucide-react";
+import { Check, CircleArrowUp, Copy, Globe, GlobeOff, MoreHorizontal, Plus, RotateCw } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import CommandChip from "@/components/settings/CommandChip";
@@ -56,7 +56,7 @@ function StatusDot({ status }: { status: ServerStatus }) {
 /// What a server's row says under its name: where a connect is, why it
 /// failed, or simply how it is reached.
 function detailOf(server: ServerInfo): string {
-  const address = server.ssh ?? server.url;
+  const address = server.beta ? `${server.ssh ?? server.url} · Beta` : (server.ssh ?? server.url);
   if (!server.on) return `Off · ${address}`;
   if (server.status === "connecting" && server.stage) return STAGE_LABELS[server.stage];
   if (server.status === "disconnected" && server.error) return server.error;
@@ -71,6 +71,19 @@ export default function ServersSettings() {
   const [adding, setAdding] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [updates, setUpdates] = useState<Record<string, UpdateState>>({});
+  const patchUpdate = (id: string, next: UpdateState) =>
+    setUpdates((all) => ({ ...all, [id]: { ...all[id], ...next } }));
+  const checkUpdate = (id: string) => {
+    patchUpdate(id, { checking: true, said: undefined });
+    invoke<string | null>("check_server_update", { id }, LOCAL)
+      .then((latest) => {
+        patchUpdate(id, { checking: false, said: latest ? undefined : "Up to date." });
+        // A verdict, not a state: it retires the way the app's own check does.
+        if (!latest) setTimeout(() => setUpdates((all) => all[id]?.said === "Up to date." ? { ...all, [id]: { ...all[id], said: undefined } } : all), 4000);
+      })
+      .catch((e) => patchUpdate(id, { checking: false, said: String(e) }));
+  };
   // The host-key question for a saved row, whose loop parked on it.
   const [trusting, setTrusting] = useState<{ server: ServerInfo; fix: TrustHost } | null>(null);
   // A server with no Dray on it, being set up: from its row, or from Add.
@@ -141,6 +154,8 @@ export default function ServersSettings() {
               setConfirming(null);
               setRenaming(server.id);
             }}
+            beta={server.beta}
+            onBeta={(beta) => void invoke("set_server_beta", { id: server.id, beta }, LOCAL).catch(console.error)}
             confirming={confirming === server.id}
             onRemove={() => setConfirming(server.id)}
             onCancel={() => setConfirming(null)}
@@ -148,7 +163,12 @@ export default function ServersSettings() {
               setConfirming(null);
               void invoke("remove_server", { id: server.id }, LOCAL).catch(console.error);
             }}
-          />
+            onCheckUpdate={server.status === "connected" ? () => checkUpdate(server.id) : undefined}
+          >
+            {showsUpdate(server, updates[server.id] ?? {}) && (
+              <UpdateLine server={server} state={updates[server.id] ?? {}} onChange={(next) => patchUpdate(server.id, next)} />
+            )}
+          </Row>
           </div>
         ))}
       </div>
@@ -181,6 +201,100 @@ export default function ServersSettings() {
       )}
     </>
   );
+}
+
+/// Where one server's update has got to on this page, held by the list: a
+/// check started from the row's ⋯ answers on the line below it.
+type UpdateState = { checking?: boolean; busy?: boolean; asking?: boolean; said?: string };
+
+/// Whether a server's row draws its update line at all, so a row with
+/// nothing to say keeps its height.
+function showsUpdate(server: ServerInfo, state: UpdateState): boolean {
+  if (state.checking || state.said) return true;
+  return server.status === "connected" && (server.restarting || server.latest !== null);
+}
+
+/// A remote server's update, on its own line under the row: offered while a
+/// newer release is out on its channel, then Restart now once the new one
+/// landed and the server waits on its agents.
+function UpdateLine({
+  server,
+  state,
+  onChange,
+}: {
+  server: ServerInfo;
+  state: UpdateState;
+  onChange: (next: UpdateState) => void;
+}) {
+  const connected = server.status === "connected";
+  const update = () => {
+    onChange({ busy: true, said: undefined });
+    invoke<string>("update_server", { server: server.id }, LOCAL)
+      .then((answer) => onChange({ busy: false, said: answer === "current" ? "No newer release is out yet." : undefined }))
+      .catch((e) => onChange({ busy: false, said: String(e) }));
+  };
+
+  // One line, the buttons' height, whatever it says: a check, its answer and
+  // the offer it finds all land in the same place, so the list never moves.
+  // A sentence of the reader's own action outranks the standing label.
+  const label = (fallback: string) => <span className="min-w-0 flex-1">{state.said ?? fallback}</span>;
+  let line: ReactNode;
+  if (state.checking) {
+    line = (
+      <>
+        <Spinner className="size-3.5" />
+        {label("Checking for updates…")}
+      </>
+    );
+  } else if (connected && server.restarting) {
+    line = (
+      <>
+        {label("Updated. Restarts once its agents finish.")}
+        {state.asking ? (
+          <CancelOrConfirm
+            verb="Restart"
+            autoFocus
+            onCancel={() => onChange({ asking: false })}
+            onConfirm={() => {
+              onChange({ asking: false });
+              void invoke("restart_server_now", { server: server.id }, LOCAL).catch((e) => onChange({ said: String(e) }));
+            }}
+          >
+            <span>Stops running agents.</span>
+          </CancelOrConfirm>
+        ) : (
+          <Button variant="ghost" size="sm" onClick={() => onChange({ asking: true, said: undefined })}>
+            <RotateCw className="size-3.5" />
+            Restart now
+          </Button>
+        )}
+      </>
+    );
+  } else if (connected && server.latest) {
+    line = (
+      <>
+        {label(state.busy ? "Updating…" : `Update available · v${server.latest}`)}
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={state.busy}
+          onClick={() =>
+            void invoke("ignore_server_update", { id: server.id, version: server.latest }, LOCAL).catch(console.error)
+          }
+        >
+          Ignore
+        </Button>
+        <Button variant="secondary" size="sm" disabled={state.busy} onClick={update}>
+          {state.busy ? <Spinner className="size-3.5" /> : <CircleArrowUp className="size-3.5" />}
+          Update
+        </Button>
+      </>
+    );
+  } else {
+    line = label("");
+  }
+
+  return <div className="flex min-h-7 items-center gap-1.5 text-ui text-muted-foreground">{line}</div>;
 }
 
 /// This Mac's background server, and its remote access: on, the server
@@ -293,6 +407,9 @@ function Row({
   onToggle,
   onRetry,
   onRename,
+  beta = false,
+  onBeta,
+  onCheckUpdate,
   confirming = false,
   onRemove,
   onCancel,
@@ -317,6 +434,11 @@ function Row({
   /// Present while a connect is not running, to start one now.
   onRetry?: () => void;
   onRename?: () => void;
+  /// The server takes beta releases. Its own channel, never the app's.
+  beta?: boolean;
+  onBeta?: (beta: boolean) => void;
+  /// Present while connected: a check needs the server to know its release.
+  onCheckUpdate?: () => void;
   confirming?: boolean;
   onRemove?: () => void;
   onCancel?: () => void;
@@ -364,11 +486,8 @@ function Row({
                 </Button>
               )}
               {action}
-              {onToggle && (
-                <Switch aria-label={`Connect to ${name}`} checked={on} onCheckedChange={onToggle} />
-              )}
               {/* The Accounts rows' ⋯: the switch is what a row is for, and the
-                  two that change the row itself wait behind it. */}
+                  items that change the row itself wait beside it. */}
               {onRemove && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -385,11 +504,20 @@ function Row({
                     }}
                   >
                     {onRename && <DropdownMenuItem onSelect={elsewhere(onRename)}>Rename</DropdownMenuItem>}
+                    {onCheckUpdate && <DropdownMenuItem onSelect={onCheckUpdate}>Check for updates</DropdownMenuItem>}
+                    {onBeta && (
+                      <DropdownMenuItem onSelect={() => onBeta(!beta)}>
+                        {beta ? "Leave beta" : "Join beta"}
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuItem variant="destructive" onSelect={elsewhere(onRemove)}>
                       Remove
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
+              )}
+              {onToggle && (
+                <Switch aria-label={`Connect to ${name}`} checked={on} onCheckedChange={onToggle} />
               )}
             </div>
           )

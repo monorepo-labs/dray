@@ -16,6 +16,7 @@ import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
 import type { SettingsTab } from "@/components/SettingsPage";
 import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog";
+import { useInstallWithServers } from "@/components/ServerUpdateDialog";
 import MorePanel from "@/components/MorePanel";
 import PlanPanel from "@/components/PlanPanel";
 
@@ -111,7 +112,7 @@ import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { closeActiveTab, ItemTab, type ViewTab } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { clearAttachments, pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
+import { attachmentKey, clearAttachments, pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
 import { closeFile, useOpenFiles } from "@/hooks/useOpenFiles";
@@ -183,6 +184,7 @@ import { worktreeNoticeDetail } from "@/lib/worktree";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { buildTranscript, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
+import { playSwipeTick } from "@/lib/tick";
 
 /// One empty set, so clearing the rail's open rows twice is one state change.
 const NO_ROWS: ReadonlySet<string> = new Set();
@@ -342,7 +344,18 @@ function App() {
       setProjectFilter(projectPath);
     }
     const id = openDraftRef.current;
-    if (!id || selectedSessionId) return void handleSendMsg(message, attachments);
+    if (!id || selectedSessionId) {
+      const trayKey = attachmentKey(selectedSessionId, composerCwd);
+      const sending = handleSendMsg(message, attachments);
+      const nav = navGen.current;
+      // The composer cleared both on handing them over, and a failed upload
+      // is no reason to type the message or pick the files again.
+      if (!(await sending) && nav === navGen.current) {
+        if (!readDraft(selectedSessionId)) writeDraft(selectedSessionId, message);
+        restoreAttachments(trayKey, attachments);
+      }
+      return;
+    }
     const prompt = getDraft(id)?.prompt ?? message;
     const base = getDraft(id)?.base ?? null;
     openDraftRef.current = null;
@@ -491,11 +504,12 @@ function App() {
   const {
     status: updateStatus,
     manual: updateManual,
-    install: installUpdate,
+    install: installAppUpdate,
     checkNow: checkForUpdates,
     channel: updateChannel,
     setChannel: setUpdateChannel,
   } = useUpdater();
+  const { request: installUpdate, dialog: serverUpdateDialog } = useInstallWithServers(updateChannel, installAppUpdate);
 
   // Every session the app has started this run, not the open one: the install
   // relaunches the app, so any live child is one this would kill mid-turn. A
@@ -1685,11 +1699,11 @@ function App() {
         projects,
         // The same reading the sidebar groups by, and withheld on the same list
         // — the walk has to step the runs the eye is looking at.
-        archivedShown ? undefined : { statusBySession, asking: sidebarAsking },
+        archivedShown ? undefined : { statusBySession, asking: sidebarAsking, prFor: prMarks.prFor },
         archivedShown,
         archivedShown ? [] : spaceGroups,
       ),
-    [searchedSessions, projects, archivedShown, statusBySession, sidebarAsking, spaceGroups],
+    [searchedSessions, projects, archivedShown, statusBySession, sidebarAsking, prMarks.prFor, spaceGroups],
   );
 
   // Wraps downward only. Falling off the bottom returns to the newest session,
@@ -1886,11 +1900,11 @@ function App() {
       sessionUnits(
         searchedSessions,
         projects,
-        archivedShown ? undefined : { statusBySession, asking: sidebarAsking },
+        archivedShown ? undefined : { statusBySession, asking: sidebarAsking, prFor: prMarks.prFor },
         archivedShown,
         archivedShown ? [] : spaceGroups,
       ),
-    [searchedSessions, projects, archivedShown, statusBySession, sidebarAsking, spaceGroups],
+    [searchedSessions, projects, archivedShown, statusBySession, sidebarAsking, prMarks.prFor, spaceGroups],
   );
   const stepGroup = (delta: number) => stepThrough(units, delta);
 
@@ -2059,6 +2073,9 @@ function App() {
   /// Bumped at every filter move, at call time, so a read across an await can
   /// tell the filter moved under it. Rendered state is a render behind.
   const filterGen = useRef(0);
+  /// The session open a run of filter steps is holding back, and the selection
+  /// generation it was set under.
+  const filterNav = useRef<{ timer: ReturnType<typeof setTimeout>; nav: number } | null>(null);
 
   /// Drops a session from every filter's memory, so a filter cannot reopen a
   /// transcript the reader has just put away.
@@ -2082,13 +2099,36 @@ function App() {
   /// A remembered session is only restored where the list still holds it under
   /// the new filter: it can have been settled, deleted, or moved out of the
   /// space since, and the empty composer is the right answer for all three.
+  ///
+  /// The list moves at once but the session waits for the clicks to stop:
+  /// opening one per step is what lagged a quick run through the projects.
+  /// Mid-run the selection still belongs to the filter the run left, so only
+  /// the first step records it.
   const changeProjectFilter = (next: string | null) => {
     if (next === projectFilter) return;
-    filterSelection.current[projectFilter ?? ""] = selectedSessionId;
-    filterGen.current++;
+    // A selection made since the last step ends the run, so it is kept.
+    const run = filterNav.current;
+    if (!run || run.nav !== navGen.current) {
+      filterSelection.current[projectFilter ?? ""] = selectedSessionId;
+    }
+    const gen = ++filterGen.current;
     setProjectFilter(next);
     if (next) handleSelectProject(next);
 
+    clearTimeout(run?.timer);
+    const nav = navGen.current;
+    const timer = setTimeout(() => {
+      filterNav.current = null;
+      // Something else moved the filter or the selection meanwhile.
+      if (gen !== filterGen.current || nav !== navGen.current) return;
+      // Through the ref: this render's index and handlers are 150ms stale, and
+      // a stale `handleNewSession` puts the previous project's branch back.
+      openFilterSessionRef.current(next);
+    }, 150);
+    filterNav.current = { timer, nav };
+  };
+
+  const openFilterSession = (next: string | null) => {
     const remembered = filterSelection.current[next ?? ""] ?? null;
     const restorable =
       remembered &&
@@ -2100,6 +2140,8 @@ function App() {
       else handleNewSession();
     });
   };
+  const openFilterSessionRef = useRef(openFilterSession);
+  openFilterSessionRef.current = openFilterSession;
 
   /// Opens a session named by a notice or a banner, which can be in any project,
   /// and takes the filter to it — or the sidebar shows no row selected.
@@ -2394,6 +2436,8 @@ function App() {
     const entries: (string | null)[] = [null, ...spaceProjects.map((p) => p.path)];
     const from = entries.indexOf(projectFilter);
     const at = from === -1 ? 0 : from;
+    // The chords and the swipe both step through here, so both tick.
+    if (entries.length > 1) playSwipeTick();
     changeProjectFilter(entries[(at + delta + entries.length) % entries.length]);
   };
   useHotkey("filter.prev", () => stepProjectFilter(-1), {
@@ -2724,6 +2768,7 @@ function App() {
           space={space}
           projectFilter={projectFilter}
           onProjectFilterChange={changeProjectFilter}
+          onStepProjectFilter={stepProjectFilter}
           statusBySession={statusBySession}
           askingSessions={sidebarAsking}
           prFor={prMarks.prFor}
@@ -3237,7 +3282,7 @@ function App() {
               onCancelBranchSwitch={() => setPendingBranch(null)}
               useWorktree={useWorktree}
               onToggleWorktree={() => setUseWorktree((v) => !v)}
-              onAttach={() => void pickAttachments(composerKey)}
+              onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
               contextUsage={contextUsage}
               isNewSession={!selectedSessionId}
               busy={busy}
@@ -3458,6 +3503,7 @@ function App() {
       onConfirm={(sessionId) => removeWorktree(sessionId)}
       onClose={() => setWorktreePrompt(null)}
     />
+    {serverUpdateDialog}
     </DiffWorkerPool>
     </TooltipProvider>
   );

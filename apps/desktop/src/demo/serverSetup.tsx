@@ -146,6 +146,10 @@ const serverInfo = (over: Partial<ServerInfo> & Pick<ServerInfo, "id" | "name">)
   stage: null,
   error: null,
   fix: null,
+  release: null,
+  beta: false,
+  latest: null,
+  restarting: false,
   ...over,
 });
 

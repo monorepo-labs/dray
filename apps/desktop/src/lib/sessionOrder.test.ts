@@ -11,7 +11,7 @@ import {
 } from "@/components/Sidebar";
 import type { LiveSessions } from "@/components/Sidebar";
 import type { Draft } from "@/hooks/useDrafts";
-import type { Project, SessionIndexItem } from "@/types/events";
+import type { PrMark, Project, SessionIndexItem } from "@/types/events";
 
 /// Only the fields the ordering reads. Everything else on the index item is
 /// irrelevant here and spelling it out would make each case harder to read than
@@ -25,6 +25,7 @@ function item(
 ): SessionIndexItem {
   return {
     sessionId,
+    branch: sessionId,
     modified,
     parentSessionId,
     projectPath,
@@ -48,14 +49,16 @@ const ids = (items: SessionIndexItem[]) => items.map((i) => i.sessionId);
 /// it takes from a project, so the rest would be noise here.
 const project = (path: string) => ({ path }) as unknown as Project;
 
-/// What the heading over each run says — the project's own path, or the one
-/// word the pinned group is drawn under.
+/// What names each run — the project's own path, a stage, or the one word the
+/// pinned group is drawn under.
 const label = (group: ReturnType<typeof sessionGroups>[number]) =>
   group.kind === "pinned"
     ? "Pinned"
     : group.kind === "group"
       ? `Group ${group.id}`
-      : group.projectPath;
+      : group.kind === "stage"
+        ? group.state
+        : group.projectPath;
 
 /// Each run as its heading and the rows drawn under it.
 const shape = (groups: ReturnType<typeof sessionGroups>) =>
@@ -481,45 +484,59 @@ describe("sessionGroups", () => {
   });
 });
 
-describe("sessionGroups by state", () => {
+describe("sessionGroups by stage", () => {
   /// The live reading the sidebar hands in. A session named in `asking` is one
   /// holding a permission card or a question, whatever the backend calls it.
+  /// `prs` marks a session's branch — every test item's branch is its own id.
   const live = (
     statusBySession: Record<string, string>,
     asking: string[] = [],
+    prs: Record<string, Partial<PrMark>> = {},
   ) =>
     ({
       statusBySession,
       asking: new Set(asking),
+      prFor: (_repo: string, branch: string | null) =>
+        branch && prs[branch]
+          ? ({
+              state: "OPEN",
+              isDraft: false,
+              checksState: "CLEAR",
+              mergeable: "MERGEABLE",
+              mergeStateStatus: "BLOCKED",
+              ...prs[branch],
+            } as PrMark)
+          : undefined,
     }) as unknown as LiveSessions;
 
-  /// Each run as its state and the rows under it, for the cases where the
-  /// project heading is the same throughout.
-  const states = (groups: ReturnType<typeof sessionGroups>) =>
-    groups.map(
-      (g) =>
-        [
-          g.kind === "project" ? g.state : label(g),
-          g.rows.map((r) => r.item.sessionId),
-        ] as const,
-    );
+  const ready: Partial<PrMark> = { mergeStateStatus: "CLEAN" };
+  const running: Partial<PrMark> = { checksState: "RUNNING" };
 
-  it("splits a project into runs, strongest first", () => {
-    // Two completed rows, so the pair keeps its own break — one of each is the
-    // case that shares one, pinned below.
+  it("splits the list into stages, strongest first", () => {
     const items = [
-      item("idle", "2026-01-05T00:00:00Z"),
-      item("done", "2026-01-04T00:00:00Z"),
-      item("done2", "2026-01-03T00:00:00Z"),
-      item("busy", "2026-01-02T00:00:00Z"),
-      item("ask", "2026-01-01T00:00:00Z"),
+      item("idle", "2026-01-09T00:00:00Z"),
+      item("busy", "2026-01-08T00:00:00Z"),
+      item("checks", "2026-01-07T00:00:00Z"),
+      item("pr", "2026-01-06T00:00:00Z"),
+      item("done", "2026-01-05T00:00:00Z"),
+      item("donePr", "2026-01-04T00:00:00Z"),
+      item("ready", "2026-01-03T00:00:00Z"),
+      item("ask", "2026-01-02T00:00:00Z"),
+      item("merged", "2026-01-01T00:00:00Z"),
+      item("ask2", "2026-01-01T00:00:00Z"),
+      item("done2", "2026-01-01T00:00:00Z"),
+      item("busyPr", "2026-01-01T00:00:00Z"),
+      item("busyChecks", "2026-01-01T00:00:00Z"),
+      item("doneMerged", "2026-01-01T00:00:00Z"),
+      item("busyMerged", "2026-01-01T00:00:00Z"),
     ];
 
-    // `busy` is mid-turn and files under idle with the rest: its row already
-    // says so where the timestamp would be, and a run of its own would move it
-    // twice for one piece of work.
+    // Mid-turn files where it would rest: its row already says so where the
+    // timestamp would be — under a PR too, and running checks outrank it.
+    // Ready to merge is an open PR like any other. A merged PR holds its
+    // session unread or working; only needs-you takes it out.
     expect(
-      states(
+      shape(
         sessionGroups(
           items,
           [],
@@ -527,21 +544,128 @@ describe("sessionGroups by state", () => {
             {
               done: "completed",
               done2: "completed",
+              donePr: "completed",
               busy: "in_progress",
-              ask: "in_progress",
+              busyPr: "in_progress",
+              busyChecks: "in_progress",
+              doneMerged: "completed",
+              busyMerged: "in_progress",
             },
-            ["ask"],
+            ["ask", "ask2"],
+            {
+              checks: running,
+              pr: {},
+              donePr: {},
+              ready,
+              merged: { state: "MERGED" },
+              ask2: running,
+              busyPr: {},
+              busyChecks: running,
+              doneMerged: { state: "MERGED" },
+              busyMerged: { state: "MERGED" },
+            },
           ),
         ),
       ),
     ).toEqual([
-      ["asking", ["ask"]],
+      ["asking", ["ask", "ask2"]],
       ["completed", ["done", "done2"]],
       ["idle", ["idle", "busy"]],
+      ["unreadPr", ["donePr"]],
+      ["pr", ["pr", "ready", "busyPr"]],
+      ["checks", ["checks", "busyChecks"]],
+      ["merged", ["merged", "doneMerged", "busyMerged"]],
     ]);
   });
 
-  it("sinks set-aside and stale rows to the end of their project", () => {
+  it("folds neighbouring single-row PR stages under one break", () => {
+    // `pr` holds two rows, so it keeps its own break and cuts the run; the lone
+    // stages either side of the empty one still touch on screen.
+    const items = [
+      item("donePr", "2026-01-06T00:00:00Z"),
+      item("pr", "2026-01-05T00:00:00Z"),
+      item("pr2", "2026-01-04T00:00:00Z"),
+      item("checks", "2026-01-03T00:00:00Z"),
+      item("merged", "2026-01-02T00:00:00Z"),
+      item("idle", "2026-01-01T00:00:00Z"),
+    ];
+    const reading = live({ donePr: "completed" }, [], {
+      donePr: {},
+      pr: {},
+      pr2: {},
+      checks: running,
+      merged: { state: "MERGED" },
+    });
+
+    expect(shape(sessionGroups(items, [], reading))).toEqual([
+      ["idle", ["idle"]],
+      ["unreadPr", ["donePr"]],
+      ["pr", ["pr", "pr2"]],
+      ["checks", ["checks", "merged"]],
+    ]);
+
+    // Without the middle stage the three lone ones run together.
+    expect(
+      shape(sessionGroups(items.filter((i) => !i.sessionId.startsWith("pr")), [], reading)),
+    ).toEqual([
+      ["idle", ["idle"]],
+      ["unreadPr", ["donePr", "checks", "merged"]],
+    ]);
+  });
+
+  it("shares one break where needs-you and unread are a single row each", () => {
+    const items = [
+      item("ask", "2026-01-04T00:00:00Z"),
+      item("done", "2026-01-03T00:00:00Z"),
+      item("idle", "2026-01-02T00:00:00Z"),
+    ];
+
+    expect(shape(sessionGroups(items, [], live({ done: "completed" }, ["ask"])))).toEqual([
+      ["asking", ["ask", "done"]],
+      ["idle", ["idle"]],
+    ]);
+  });
+
+  it("reads asking over a PR, and unread over running checks", () => {
+    const items = [
+      item("a", "2026-01-03T00:00:00Z"),
+      item("b", "2026-01-02T00:00:00Z"),
+      item("c", "2026-01-01T00:00:00Z"),
+    ];
+
+    expect(
+      shape(
+        sessionGroups(
+          items,
+          [],
+          live({ b: "completed" }, ["a"], { a: ready, b: running, c: { isDraft: true } }),
+        ),
+      ),
+    ).toEqual([
+      ["asking", ["a"]],
+      // Two lone PR stages, so they share a break; `b` leads as the unread one.
+      ["unreadPr", ["b", "c"]],
+    ]);
+  });
+
+  it("puts every project's rows in one stage, under no project", () => {
+    const items = [
+      item("a-idle", "2026-01-03T00:00:00Z", null, "/a"),
+      item("b-ask", "2026-01-02T00:00:00Z", null, "/b"),
+      item("a-ask", "2026-01-01T00:00:00Z", null, "/a"),
+    ];
+
+    expect(
+      shape(
+        sessionGroups(items, [project("/a"), project("/b")], live({}, ["b-ask", "a-ask"])),
+      ),
+    ).toEqual([
+      ["asking", ["b-ask", "a-ask"]],
+      ["idle", ["a-idle"]],
+    ]);
+  });
+
+  it("sinks set-aside and stale rows to the end", () => {
     vi.setSystemTime(new Date("2026-01-10T00:00:00Z"));
     const items = [
       // Set aside by the reader: goes, and its fresh child stays behind.
@@ -559,19 +683,20 @@ describe("sessionGroups by state", () => {
       item("leaf", "2026-01-09T00:00:00Z", "mid"),
     ];
     try {
-      expect(states(sessionGroups(items, [], live({ parked: "completed" })))).toEqual([
+      expect(shape(sessionGroups(items, [], live({ parked: "completed" })))).toEqual([
         ["idle", ["parkedKid", "leaf", "fresh", "old", "kid", "gran"]],
         ["aside", ["parked", "mid", "stale", "oldKid"]],
       ]);
-      // The settled list is a history, and draws no aside run.
-      expect(sessionGroups(items, [], undefined, true).map((g) => g.kind === "project" && g.state))
-        .not.toContain("aside");
+      // The settled list is a history, and draws no stage at all.
+      expect(sessionGroups(items, [], undefined, true).map((g) => g.kind)).not.toContain(
+        "stage",
+      );
     } finally {
       vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     }
   });
 
-  it("carries a whole nest into the strongest state anything in it holds", () => {
+  it("carries a whole nest into the strongest stage anything in it holds", () => {
     // The parent is idle and the child is blocked. Ranking on the root alone
     // would leave the run that says "these want you" without the only session
     // in it that does — and split the nest besides.
@@ -581,22 +706,10 @@ describe("sessionGroups by state", () => {
       item("other", "2026-01-03T00:00:00Z"),
     ];
 
-    expect(states(sessionGroups(items, [], live({}, ["child"])))).toEqual([
+    expect(shape(sessionGroups(items, [], live({}, ["child"])))).toEqual([
       ["asking", ["parent", "child"]],
       ["idle", ["other"]],
     ]);
-  });
-
-  it("reads asking ahead of the status the backend reports", () => {
-    // A blocked session is still `in_progress` to the backend, and it is right
-    // to — the turn is open, it is only the agent that has stopped.
-    const items = [item("blocked", "2026-01-01T00:00:00Z")];
-
-    expect(
-      states(
-        sessionGroups(items, [], live({ blocked: "in_progress" }, ["blocked"])),
-      ),
-    ).toEqual([["asking", ["blocked"]]]);
   });
 
   it("falls back to the item's own status where the live map is empty", () => {
@@ -605,112 +718,19 @@ describe("sessionGroups by state", () => {
       { ...item("unread", "2026-01-01T00:00:00Z"), status: "completed" },
     ] as SessionIndexItem[];
 
-    expect(states(sessionGroups(items, [], live({})))).toEqual([
-      ["completed", ["unread"]],
-    ]);
+    expect(shape(sessionGroups(items, [], live({})))).toEqual([["completed", ["unread"]]]);
   });
 
-  it("splits each project separately and keeps the project order", () => {
-    const items = [
-      item("a-idle", "2026-01-01T00:00:00Z", null, "/a"),
-      item("b-ask", "2026-01-02T00:00:00Z", null, "/b"),
-    ];
-
-    // `/b` holds the one session wanting the reader and still sits second: the
-    // runs answer "what is happening here", one repo at a time.
-    expect(
-      shape(
-        sessionGroups(items, [project("/a"), project("/b")], live({}, ["b-ask"])),
-      ),
-    ).toEqual([
-      ["/a", ["a-idle"]],
-      ["/b", ["b-ask"]],
-    ]);
-  });
-
-  it("keeps two unattached projects out of each other's runs", () => {
-    const items = [
-      item("x-ask", "2026-01-06T00:00:00Z", null, "/x"),
-      item("x-idle", "2026-01-05T00:00:00Z", null, "/x"),
-      item("x-idle2", "2026-01-04T00:00:00Z", null, "/x"),
-      item("y-ask", "2026-01-03T00:00:00Z", null, "/y"),
-      item("y-idle", "2026-01-02T00:00:00Z", null, "/y"),
-      item("y-idle2", "2026-01-01T00:00:00Z", null, "/y"),
-    ];
-
-    expect(shape(sessionGroups(items, [], live({}, ["x-ask", "y-ask"])))).toEqual([
-      ["/x", ["x-ask"]],
-      ["/x", ["x-idle", "x-idle2"]],
-      ["/y", ["y-ask"]],
-      ["/y", ["y-idle", "y-idle2"]],
-    ]);
-  });
-
-  it("leaves a project under three rows as one run", () => {
+  it("leaves a list under three rows as one run", () => {
     // The split earns its break by making a long list quicker to scan, and
-    // there is nothing to scan in two rows. `/short` holds one of each state
-    // and still draws whole; `/long` is the same shape with one row more.
+    // there is nothing to scan in two rows.
     const items = [
-      item("s-ask", "2026-01-05T00:00:00Z", null, "/short"),
-      item("s-idle", "2026-01-04T00:00:00Z", null, "/short"),
-      item("l-ask", "2026-01-03T00:00:00Z", null, "/long"),
-      item("l-idle", "2026-01-02T00:00:00Z", null, "/long"),
-      item("l-idle2", "2026-01-01T00:00:00Z", null, "/long"),
-    ];
-
-    expect(
-      shape(
-        sessionGroups(
-          items,
-          [project("/short"), project("/long")],
-          live({}, ["s-ask", "l-ask"]),
-        ),
-      ),
-    ).toEqual([
-      ["/short", ["s-ask", "s-idle"]],
-      ["/long", ["l-ask"]],
-      ["/long", ["l-idle", "l-idle2"]],
-    ]);
-  });
-
-  it("shares one break where both marked runs are a single row", () => {
-    // A run of one row between two breaks reads as a heading rather than as a
-    // row. The idle run below keeps its own break.
-    const items = [
-      item("ask", "2026-01-04T00:00:00Z"),
-      item("done", "2026-01-03T00:00:00Z"),
-      item("idle", "2026-01-02T00:00:00Z"),
-      item("idle2", "2026-01-01T00:00:00Z"),
-    ];
-
-    expect(
-      states(sessionGroups(items, [], live({ done: "completed" }, ["ask"]))),
-    ).toEqual([
-      ["asking", ["ask", "done"]],
-      ["idle", ["idle", "idle2"]],
-    ]);
-  });
-
-  it("keeps the runs apart where either holds more than one row", () => {
-    const items = [
-      item("ask", "2026-01-04T00:00:00Z"),
-      item("done", "2026-01-03T00:00:00Z"),
-      item("done2", "2026-01-02T00:00:00Z"),
+      item("ask", "2026-01-02T00:00:00Z"),
       item("idle", "2026-01-01T00:00:00Z"),
     ];
 
-    expect(
-      states(
-        sessionGroups(
-          items,
-          [],
-          live({ done: "completed", done2: "completed" }, ["ask"]),
-        ),
-      ),
-    ).toEqual([
-      ["asking", ["ask"]],
-      ["completed", ["done", "done2"]],
-      ["idle", ["idle"]],
+    expect(shape(sessionGroups(items, [], live({}, ["ask"])))).toEqual([
+      ["asking", ["ask", "idle"]],
     ]);
   });
 
@@ -723,34 +743,33 @@ describe("sessionGroups by state", () => {
       item("done", "2026-01-01T00:00:00Z"),
     ];
 
-    expect(states(sessionGroups(items, [], live({ done: "completed" })))).toEqual([
+    expect(shape(sessionGroups(items, [], live({ done: "completed" })))).toEqual([
       ["completed", ["done"]],
       ["idle", ["parent", "child"]],
     ]);
   });
 
   it("leaves the pinned run whole", () => {
-    // Pinned is a set the reader made by hand; splitting it by state would be
+    // Pinned is a set the reader made by hand; splitting it by stage would be
     // the app taking that pick apart.
     const items = [
       pin("p-ask", "2026-01-02T00:00:00Z"),
       pin("p-idle", "2026-01-01T00:00:00Z"),
     ];
 
-    expect(states(sessionGroups(items, [], live({}, ["p-ask"])))).toEqual([
+    expect(shape(sessionGroups(items, [], live({}, ["p-ask"])))).toEqual([
       ["Pinned", ["p-ask", "p-idle"]],
     ]);
   });
 
   it("collapses to one run per project with no live reading", () => {
-    // The settled list passes none, and comes back exactly as it did before
-    // these runs existed.
+    // The settled list passes none, and keeps its project headings.
     const items = [
       { ...item("done", "2026-01-02T00:00:00Z"), status: "completed" },
       item("plain", "2026-01-01T00:00:00Z"),
     ] as SessionIndexItem[];
 
-    expect(states(sessionGroups(items))).toEqual([["idle", ["done", "plain"]]]);
+    expect(shape(sessionGroups(items))).toEqual([["/repo", ["done", "plain"]]]);
   });
 
   it("steps the same order it draws", () => {
@@ -933,9 +952,7 @@ describe("sessionUnits", () => {
     ]);
   });
 
-  it("folds a project's state runs back into one step", () => {
-    // Three rows, so the project splits — but it draws one heading, so the
-    // chord must not stop twice inside it.
+  it("steps each stage, across projects", () => {
     const items = [
       item("idle", "2026-01-03T00:00:00Z"),
       item("done", "2026-01-02T00:00:00Z"),
@@ -944,8 +961,8 @@ describe("sessionUnits", () => {
     ];
     const reading = live({ done: "completed", ask: "in_progress" }, ["ask"]);
     expect(unitIds(sessionUnits(items, [project("/repo"), project("/other")], reading))).toEqual([
-      ["ask", "done", "idle"],
-      ["elsewhere"],
+      ["ask", "done"],
+      ["elsewhere", "idle"],
     ]);
   });
 
@@ -1027,16 +1044,5 @@ describe("placeDrafts", () => {
         [project("/a"), project("/b"), project("/c")],
       ),
     ).toEqual(["/a", "drafts /b: d", "/c", "drafts /gone: x"]);
-  });
-
-  it("opens a split project once, ahead of its first run", () => {
-    const live: LiveSessions = { statusBySession: { s1: "completed" }, asking: new Set() };
-    const items = ["s1", "s2", "s3"].map((id) => item(id, "2026-09-01", null, "/a"));
-    const placed = placeDrafts(
-      sessionGroups(items, [project("/a")], live),
-      [draft("d", "/a")],
-      [project("/a")],
-    );
-    expect(placed.map((g) => g.kind)).toEqual(["drafts", "project", "project"]);
   });
 });

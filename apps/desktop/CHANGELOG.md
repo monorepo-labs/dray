@@ -19,6 +19,129 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.28.0 · 2026-10-16 · notify
+
+### New
+
+- **Sessions keep running when Dray quits.** They run in a background
+  server on this Mac now. Quit offers Quit, or Quit and stop sessions.
+  macOS shows a "Background item added" notice once; it is Dray's
+  server, listed under Login Items.
+- **Run sessions on your own servers.** Settings → Servers adds one from
+  an SSH line, or by address and token. Its projects join the sidebar
+  and its sessions run there, with a browser of their own. Dray can
+  install itself on the server, clone a GitHub repo there, and reach it
+  without SSH through `dray server tunnel on`. A Mac with no Dray app
+  can be a server too, and Remote access shares this Mac with another.
+- **Update servers from the app.** A server row says "Update available"
+  when a newer release is out on its channel. Update installs it, and
+  the server restarts once its agents finish. Join beta in the row's ⋯
+  menu. A server on a CLI older than 0.12 needs one `dray update` by
+  hand first. Pairs with CLI 0.12.0.
+- **The sidebar groups sessions by stage.** Needs you, unread and idle
+  first, then open PRs, running checks and merged, across every
+  project.
+- **Jump to a session with ⌃ and a digit.** Hold ⌃ and the first ten
+  rows show 1–0. Settings → Shortcuts changes the modifier and now has
+  a search field.
+- **Swipe to switch projects.** A two-finger swipe over the sidebar
+  steps the project filter. Over the side panel it steps the tabs.
+- **Tabs in the titlebar.** Chat, Diff, Files, browser pages and open
+  files are one draggable tab row: ⌘1–⌘9 by position, ⌘T new tab, ⌘W
+  closes.
+- **Save a task without starting it.** ⌘S on a new task saves it as a
+  draft, in a sidebar view of its own. Agents can make them with
+  `dray draft`.
+- **Set sessions aside.** Row menu → Set aside; rows untouched for three
+  days go on their own. Any message brings one back.
+- **A session continues when its usage limit resets.** A Claude Code
+  turn stopped by the limit sends `continue` a minute after the reset.
+  The notice above the composer says when, and Cancel turns it off.
+- **Links in a transcript open in Dray's browser.** ⌘-click still leaves
+  for the system browser.
+- **Browser history.** Each session remembers the pages its browser
+  visited: the empty tab lists them and the address bar suggests
+  matches.
+- **See when the agent drives a browser tab.** The tab glows and its
+  icon says what the agent is doing.
+- **GitHub sign-in from the app.** Settings → Accounts has a GitHub row
+  for this Mac and every server.
+- **The CLI reads noun-verb now.** `dray session new|ls|send`,
+  `dray server install|start|tunnel`, `dray machine add|ls|rm`,
+  `dray share start|stop|ls`. Old spellings still work.
+
+### Improved
+
+- A long running turn folds its older rows behind a live "N tool calls"
+  line and keeps the newest five on screen.
+- The Changes tab keeps the last diff when a turn only answers a
+  question.
+- Remote sessions take attachments, up to 100MB each.
+- A remote server that is down shows Reconnecting… above the composer,
+  with Try again, and a silent connection is dropped and retried.
+- A localhost link from a remote session opens the server's port,
+  forwarded over SSH.
+- The default appearance follows the system; ⌘⌥L toggles light and dark.
+- ⌘⇧↑/↓ opens every session it steps to, and a ⋯ button on each row
+  opens its menu.
+- Starting a task in another project moves the sidebar's filter to it.
+- The quit dialog puts Quit first, so ⌘Q then ⏎ quits and leaves
+  sessions running.
+- Settling or deleting a session removes its browser profile.
+- Chromium updated to 154.0.8037.98.
+
+### Fixed
+
+- Typing in the composer could crash the app and leave the window
+  empty. It no longer does, and a crash now shows a Reload button.
+- Notification banners no longer pin the CPU.
+- Switching from the Browser tab to Chat no longer blanks the page area.
+- A video player no longer appears for a path that is not a recording.
+
+## 0.28.0-beta.3 · 2026-10-15 · notify
+
+### New
+
+- **Update servers from the app.** A row in Settings → Servers says
+  "Update available" when a newer release is out on that server's
+  channel. Update installs it, and the server restarts once its agents
+  finish. The ⋯ menu has Check for updates and Join beta. Restart to
+  update offers to update your servers too. A server on a CLI older than
+  0.12 needs one `dray update` by hand first. Pairs with CLI
+  0.12.0-beta.1.
+- **The sidebar groups sessions by stage.** Needs you, unread and idle
+  first, then open PRs, running checks and merged, across every
+  project.
+- **Jump to a session with ⌃ and a digit.** Hold ⌃ and the first ten
+  rows show 1–0. Change the modifier in Settings → Shortcuts, which now
+  has a search field.
+- **Swipe to switch projects.** A two-finger swipe over the sidebar
+  steps the project filter. Over the side panel it steps the tabs.
+- **Attachments on remote sessions.** Files upload to the server as you
+  add them, up to 100MB each.
+- **See when the agent drives a browser tab.** The tab glows and its
+  icon says what the agent is doing.
+
+### Improved
+
+- The `dray` CLI follows the app's update channel when the app updates.
+  Leaving beta never downgrades it.
+- A remote server that is down shows Reconnecting… above the composer,
+  with Try again. The transcript loads once the server is back. A
+  connection that goes silent is dropped after 45s and retried.
+- A localhost link from a remote session opens the server's port,
+  forwarded over SSH.
+- Starting a task in another project moves the sidebar's filter to it.
+- A remote project dragged in Settings → Spaces stays where you drop it.
+- Settings → Appearance shows the light/dark chord.
+
+### Fixed
+
+- Typing in the composer could crash the app and leave the window
+  empty. It no longer does, and a crash now shows a Reload button.
+- A video player no longer appears for a path that is not a recording.
+- Leaving the drafts view closes the open draft.
+
 ## 0.28.0-beta.2 · 2026-10-13
 
 ### New

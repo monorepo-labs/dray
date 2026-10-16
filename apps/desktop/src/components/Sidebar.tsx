@@ -1,11 +1,10 @@
 import { Cog6ToothIcon } from "@heroicons/react/16/solid";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
   Check,
   CheckCheck,
-  ChevronDown,
   Circle,
   CircleDashed,
   CircleDot,
@@ -38,9 +37,12 @@ import {
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ShortcutKeys, { DigitKeys } from "@/components/ShortcutKeys";
+import { useSwipe } from "@/lib/swipe";
+import { playSwipeTick } from "@/lib/tick";
 import { Kbd } from "@/components/ui/kbd";
 import {
   Tooltip,
@@ -168,6 +170,9 @@ type SidebarProps = {
   // `null` is every project, and it is the entry the filter opens on.
   projectFilter: string | null;
   onProjectFilterChange: (path: string | null) => void;
+  /// Steps the filter one entry, wrapping; a horizontal swipe over the sidebar
+  /// calls it once per swipe.
+  onStepProjectFilter: (delta: -1 | 1) => void;
   /// Starts a new task with the composer's project picker already on this
   /// project — the only thing a project heading can offer, since the picker is
   /// hidden once a session exists.
@@ -279,14 +284,10 @@ export function sessionRows(items: SessionIndexItem[]): SessionListRow[] {
 type SessionGroup =
   | { kind: "pinned"; rows: SessionListRow[] }
   | { kind: "group"; id: number; rows: SessionListRow[] }
-  | {
-      kind: "project";
-      projectPath: string;
-      state: SessionState;
-      rows: SessionListRow[];
-    };
+  | { kind: "project"; projectPath: string; rows: SessionListRow[] }
+  | { kind: "stage"; state: SessionState; rows: SessionListRow[] };
 
-/// What a run of rows under a project is waiting on, strongest first.
+/// What a run of rows is waiting on, strongest first.
 ///
 /// Read off the same pair the sidebar rail and the dock badge already draw from
 /// — a session held behind a permission card or a question is `asking` even
@@ -296,11 +297,39 @@ type SessionGroup =
 /// saying so on its own row — the working indicator sits where the timestamp
 /// would be — and a run of its own moved a row twice for one piece of work,
 /// out on send and back on the turn ending.
-/// `aside` is the reader's own "not now", and it sits under everything else.
-type SessionState = "asking" | "completed" | "idle" | "aside";
+/// The PR stages read the sidebar's own marks, so they cost no `gh` call. An
+/// An open PR — ready to merge or not — is one stage, whether a turn is running
+/// or idle; one whose checks are still running sits near the bottom: nothing is
+/// asked of the reader until CI answers, and a merged one under that, its work
+/// landed, unread or working alike. `aside` is the reader's own "not now",
+/// and it sits under everything else.
+type SessionState =
+  | "asking"
+  | "unreadPr"
+  | "completed"
+  | "pr"
+  | "idle"
+  | "checks"
+  | "merged"
+  | "aside";
 
 /// Strongest first, which is also the order the runs are drawn in.
-const SESSION_STATES: SessionState[] = ["asking", "completed", "idle", "aside"];
+const SESSION_STATES: SessionState[] = [
+  "asking",
+  "completed",
+  "idle",
+  "unreadPr",
+  "pr",
+  "checks",
+  "merged",
+  "aside",
+];
+
+/// Stages whose single-row runs may share a break, each in drawn order.
+const SHARED_BREAKS: SessionState[][] = [
+  ["asking", "completed"],
+  ["unreadPr", "pr", "checks", "merged"],
+];
 
 /// Three untouched days set a session aside without being asked.
 const ASIDE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
@@ -366,6 +395,7 @@ const SETTLED_STEP = 40;
 export type LiveSessions = {
   statusBySession: Record<string, SessionStatus>;
   asking: Set<string>;
+  prFor?: (repoPath: string, branch: string | null) => PrMark | undefined;
 };
 
 /// Live status wins over the item's own field, which is only as fresh as the
@@ -377,8 +407,15 @@ function sessionState(
 ): SessionState {
   if (!live) return "idle";
   if (live.asking.has(item.sessionId)) return "asking";
+  const mark = live.prFor?.(item.projectPath, sessionBranch(item));
+  const open = mark?.state === "OPEN" ? mark : undefined;
+  // A merged PR holds its session whatever the turn says: an unread answer or
+  // follow-up work there is minor work on something already landed.
+  if (!open && mark?.state === "MERGED") return "merged";
   const status = live.statusBySession[item.sessionId] ?? item.status;
-  return status === "completed" ? "completed" : "idle";
+  if (status === "completed") return open ? "unreadPr" : "completed";
+  if (!open) return "idle";
+  return open.checksState === "RUNNING" ? "checks" : "pr";
 }
 
 /// The items that draw in the Pinned group, and everything else.
@@ -419,8 +456,8 @@ function splitPinned(
   return [pinned, rest];
 }
 
-/// [`sessionRows`] gathered under the project each row's *root* belongs to,
-/// with the reader's own pins led out into a group of their own.
+/// [`sessionRows`] gathered into stages — or, in the settled list, under each
+/// project — with the reader's own pins led out into a group of their own.
 ///
 /// **Pinned leads, whatever the project order says.** It is the one group built
 /// by hand, and a pick that sorted in with the rest would be no easier to find
@@ -433,33 +470,9 @@ function splitPinned(
 /// sees them, so the Pinned group holds that project's pins alone and opens no
 /// group at all when it holds none.
 ///
-/// Grouped on the root rather than on the row: a spawned session hangs off its
-/// parent wherever its own `projectPath` points, and splitting one nest across
-/// two headings would draw a child under a parent that isn't there.
-///
-/// A project with no session opens no group, which is the whole of "don't show
-/// an empty project" — headings come from the sessions present, never from the
-/// attached list.
-///
-/// **Group order is the project list's own**, not the recency of the sessions
-/// inside it. Ordering on the newest session read well for one screenshot and
-/// badly in use: every reply to any session lifted its whole project over the
-/// others, so headings the eye had learned the position of moved while a turn
-/// was running. The project list only reorders when the reader moves a project
-/// in Settings. A project no longer attached still has
-/// sessions to draw, so it keeps first-appearance order after the attached
-/// ones.
-///
-/// **Each project's run then splits again by what its sessions are waiting on**
-/// — needs attention, completed, idle — in that order, which is the
-/// order the reader can act on them in. Under the project rather than over it:
-/// the question "what is happening" is asked of one repo at a time, and a
-/// workspace-wide "Needs attention" run would put two repos' rows in one place
-/// and leave every project heading below it describing only what is left.
-///
-/// Rows inside a run stay newest-first, and a nest stays whole under its own
-/// root. Recency alone no longer orders a project, though — the runs do, so a
-/// session that has just finished sits above an idle one modified since.
+/// **The live list is one run per [`SessionState`], in that order, across every
+/// project and under no heading** — the break between runs is the whole signal.
+/// Rows inside a run stay newest-first, and a nest stays whole under its root.
 export function sessionGroups(
   items: SessionIndexItem[],
   projects: Project[] = [],
@@ -515,93 +528,82 @@ export function sessionGroups(
       )
     ];
 
-  // First appearance, which is what an unattached project is placed by.
-  const byPath = new Map<string, { held: SessionListRow[][]; aside: SessionListRow[][] }>();
-  const file = (nests: SessionListRow[][], side: "held" | "aside") => {
-    for (const nest of nests) {
-      const path = nest[0].item.projectPath;
-      let runs = byPath.get(path);
-      if (!runs) byPath.set(path, (runs = { held: [], aside: [] }));
-      runs[side].push(nest);
-    }
-  };
-  file(nestsOf(activeItems), "held");
-  file(nestsOf(asideItems), "aside");
-
-  type ProjectGroup = Extract<SessionGroup, { kind: "project" }>;
-  const groups: ProjectGroup[] = [];
-
-  for (const [projectPath, { held, aside }] of byPath) {
-    // Its own run whatever the project's size, so it always sits at the end.
-    if (aside.length) {
-      groups.push({ kind: "project", projectPath, state: "aside", rows: aside.flat() });
-    }
-    if (!held.length) continue;
-    const rows = held.reduce((n, nest) => n + nest.length, 0);
-
-    // A short project draws as one run. The split earns its break by making a
-    // long list quicker to scan, and there is nothing to scan in two rows — the
-    // reader's eye already holds the whole project, so a gap through it only
-    // says the app found the rows worth separating when it didn't.
-    if (rows < STATE_SPLIT_MIN) {
-      groups.push({
-        kind: "project",
-        projectPath,
-        state: nestState(held.flat()),
-        rows: held.flat(),
-      });
-      continue;
-    }
-
-    const byState = new Map<SessionState, ProjectGroup>();
-    const made: ProjectGroup[] = [];
-    for (const nest of held) {
-      const state = nestState(nest);
-      let group = byState.get(state);
-      if (!group) {
-        group = { kind: "project", projectPath, state, rows: [] };
-        byState.set(state, group);
-        made.push(group);
-      }
-      group.rows.push(...nest);
-    }
-
-    // A run of one row between two breaks reads as a heading rather than as a
-    // row. Where both marked runs are a single row they share one break: the
-    // pair says "these want you" either way, and the marks themselves — yellow
-    // against green — are what tell the two apart.
-    const asking = byState.get("asking");
-    const completed = byState.get("completed");
-    if (asking?.rows.length === 1 && completed?.rows.length === 1) {
-      asking.rows.push(...completed.rows);
-      made.splice(made.indexOf(completed), 1);
-    }
-
-    groups.push(...made);
-  }
-
-  const seenPath = new Map([...byPath.keys()].map((path, i) => [path, i]));
-
-  // Unattached sorts to the end rather than to the front, keeping the order it
-  // was built in — hence first appearance rather than one shared sentinel, which
-  // would let two unattached projects interleave through each other's runs.
-  const rank = new Map(projects.map((p, i) => [p.path, i]));
-  const place = (group: ProjectGroup) =>
-    rank.get(group.projectPath) ??
-    projects.length + (seenPath.get(group.projectPath) ?? 0);
-
-  groups.sort(
-    (a, b) =>
-      place(a) - place(b) ||
-      SESSION_STATES.indexOf(a.state) - SESSION_STATES.indexOf(b.state),
-  );
-
   const pinnedRows = sessionRows(pinned);
-  return [
+  const lead: SessionGroup[] = [
     ...splitRuns,
     ...(pinnedRows.length ? [{ kind: "pinned" as const, rows: pinnedRows }] : []),
-    ...groups,
   ];
+
+  // The settled list is a history, so it keeps one run per project under its
+  // heading — the question asked of it is "what did I finish in this repo".
+  if (!live) return [...lead, ...projectRuns(nestsOf(rest), projects)];
+
+  // The live list is stages on top, workspace-wide. Split per project, the
+  // answer to "what wants me" was scattered under every heading, and past three
+  // rows nobody could read it. Rows inside a stage stay newest-first.
+  const byState = new Map<SessionState, SessionListRow[]>();
+  const file = (state: SessionState, rows: SessionListRow[]) =>
+    byState.set(state, [...(byState.get(state) ?? []), ...rows]);
+  const held = nestsOf(activeItems);
+  // A short list draws as one run. The split earns its break by making a long
+  // list quicker to scan, and there is nothing to scan in two rows.
+  const flat = held.flat();
+  if (flat.length < STATE_SPLIT_MIN) {
+    if (flat.length) file(nestState(flat), flat);
+  } else {
+    for (const nest of held) file(nestState(nest), nest);
+    // A run of one row between two breaks reads as a heading rather than as a
+    // row. So neighbouring single-row stages in one family share a break: the
+    // row's own mark — yellow, green, the PR glyph, the checks spinner — tells
+    // them apart. A stage with nothing in it is skipped, since on screen its
+    // neighbours touch.
+    for (const family of SHARED_BREAKS) {
+      let into: SessionListRow[] | undefined;
+      for (const state of family) {
+        const rows = byState.get(state);
+        if (!rows) continue;
+        if (rows.length > 1) into = undefined;
+        else if (into) {
+          into.push(...rows);
+          byState.delete(state);
+        } else into = rows;
+      }
+    }
+  }
+  const aside = nestsOf(asideItems).flat();
+  if (aside.length) file("aside", aside);
+
+  return [
+    ...lead,
+    ...SESSION_STATES.flatMap((state) => {
+      const rows = byState.get(state);
+      return rows ? [{ kind: "stage" as const, state, rows }] : [];
+    }),
+  ];
+}
+
+/// The settled list's runs: one per project, under its heading.
+///
+/// **Order is the project list's own**, not the recency of the sessions inside
+/// it, so headings the eye has learned the position of hold still. A project no
+/// longer attached goes after the attached ones in first-appearance order —
+/// not one shared sentinel, which would let two unattached projects interleave.
+///
+/// Grouped on the root rather than on the row: a spawned session hangs off its
+/// parent wherever its own `projectPath` points, and splitting one nest across
+/// two headings would draw a child under a parent that isn't there.
+function projectRuns(nests: SessionListRow[][], projects: Project[]): SessionGroup[] {
+  const byPath = new Map<string, SessionListRow[]>();
+  for (const nest of nests) {
+    const path = nest[0].item.projectPath;
+    byPath.set(path, [...(byPath.get(path) ?? []), ...nest]);
+  }
+  const seen = new Map([...byPath.keys()].map((path, i) => [path, i]));
+  const rank = new Map(projects.map((p, i) => [p.path, i]));
+  const place = (path: string) => rank.get(path) ?? projects.length + seen.get(path)!;
+  return [...byPath]
+    .sort(([a], [b]) => place(a) - place(b))
+    .map(([projectPath, rows]) => ({ kind: "project" as const, projectPath, rows }));
 }
 
 /// The order alone, for callers that only step through it.
@@ -679,16 +681,8 @@ export function placeDrafts(
   return [...out, ...alone.map(run)];
 }
 
-/// That same order with each *heading's* run folded into one step, for the
-/// chord that walks headings rather than rows.
-///
-/// The unit is what the reader sees a heading over: a split group, the Pinned
-/// run, or a project. A project's state runs fold back together because they
-/// draw under one heading — stepping into "Completed" inside the project the
-/// reader is already in is not the jump the chord promises.
-///
-/// Keyed rather than counted, since the runs of one project are consecutive by
-/// construction and nothing else should ever fold.
+/// That same order one run per step, for the chord that walks runs rather than
+/// rows: a split group, Pinned, a stage, or a settled project.
 export function sessionUnits(
   items: SessionIndexItem[],
   projects: Project[] = [],
@@ -696,22 +690,9 @@ export function sessionUnits(
   settled = false,
   splits: SplitGroup[] = [],
 ): SessionIndexItem[][] {
-  const key = (group: SessionGroup) =>
-    group.kind === "project"
-      ? `p${group.projectPath}`
-      : group.kind === "group"
-        ? `g${group.id}`
-        : "pinned";
-
-  const units: SessionIndexItem[][] = [];
-  let last: string | null = null;
-  for (const group of sessionGroups(items, projects, live, settled, splits)) {
-    const rows = group.rows.map((row) => row.item);
-    if (key(group) === last) units[units.length - 1].push(...rows);
-    else units.push(rows);
-    last = key(group);
-  }
-  return units;
+  return sessionGroups(items, projects, live, settled, splits).map((group) =>
+    group.rows.map((row) => row.item),
+  );
 }
 
 /// The rows a query leaves on screen, matched on `title` alone.
@@ -1004,6 +985,7 @@ export default function Sidebar({
   projectFilter,
   onDetach,
   onProjectFilterChange,
+  onStepProjectFilter,
   onNewSessionInProject,
   updateStatus,
   updateBlocked,
@@ -1048,8 +1030,8 @@ export default function Sidebar({
     () =>
       archivedShown
         ? undefined
-        : { statusBySession, asking: askingSessions },
-    [archivedShown, statusBySession, askingSessions],
+        : { statusBySession, asking: askingSessions, prFor },
+    [archivedShown, statusBySession, askingSessions, prFor],
   );
   // No split runs in the settled list, for the reason it draws no Pinned group.
   const groups = useMemo(
@@ -1135,23 +1117,18 @@ export default function Sidebar({
     return () => observer.disconnect();
   }, [more, settledLimit]);
 
-  // A run's identity is its project and its position among that project's runs,
-  // never the state it holds. An unsplit project's state is whatever its
-  // strongest row happens to be, so keying on that remounted every row in the
-  // project the moment one session finished — and a remount re-runs the active
-  // row's `scrollIntoView` and closes a context menu open over it, for a list
-  // that did not move at all.
-  const groupKeys = useMemo(() => {
-    const drawn = new Map<string, number>();
-    return runs.map((group) => {
-      if (group.kind === "pinned") return "pinned";
-      if (group.kind === "group") return `group ${group.id}`;
-      if (group.kind === "drafts") return `drafts ${group.projectPath}`;
-      const nth = drawn.get(group.projectPath) ?? 0;
-      drawn.set(group.projectPath, nth + 1);
-      return `${group.projectPath} ${nth}`;
-    });
-  }, [runs]);
+  // Keys for a run's own break and heading. Rows are keyed by session id
+  // alone, as siblings across every run, so these may change freely.
+  const groupKeys = useMemo(
+    () =>
+      runs.map((group) => {
+        if (group.kind === "pinned") return "pinned";
+        if (group.kind === "group") return `group ${group.id}`;
+        if (group.kind === "stage") return `stage ${group.state}`;
+        return `${group.kind} ${group.projectPath}`;
+      }),
+    [runs],
+  );
 
   // A session under a repo nobody attached still has a project, so the folder
   // name stands in rather than the heading being dropped — the row has to sit
@@ -1193,6 +1170,10 @@ export default function Sidebar({
           ? "Nothing settled yet."
           : "No tasks yet.";
 
+  const asideRef = useRef<HTMLElement>(null);
+  // The step ticks for itself, in `App`, where the chords land too.
+  useSwipe(asideRef, onStepProjectFilter);
+
   // Collapsed is nothing at all, not a rail. The toggle moves to the app header
   // in that state, which is the one row present either way.
   if (collapsed) return null;
@@ -1201,6 +1182,7 @@ export default function Sidebar({
     <aside
       className="relative flex shrink-0 flex-col"
       style={style}
+      ref={asideRef}
     >
       {handle}
       {/* `px-1.5` on the buttons rather than `size="sm"`'s `px-2.5`, so their
@@ -1368,66 +1350,45 @@ export default function Sidebar({
         {runs.length === 0 ? (
           <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
-          runs.map((group, index) => {
+          runs.flatMap((group, index) => {
             // A project heading is drawn only where the list spans projects:
             // under a filter the label above already names the one project
             // every row belongs to, and a heading repeating it would be a
             // second copy of the same fact. Pinned is never dropped — it names
             // a set the reader made themselves, which nothing else on screen
             // says. Word only, no icon and no count, like the project headings
-            // it sits above.
-            // Only the first of a project's state runs names the project. The
-            // rest sit under it and repeating it on each would say the runs
-            // belonged to different repos.
-            // A draft run is a project's own run, so it opens the project like
-            // one and the session run after it does not open it again.
-            const previous = runs[index - 1];
+            // it sits above. A stage names nothing: the break is the signal.
             const underProject = group.kind === "project" || group.kind === "drafts";
-            const opensProject =
-              underProject &&
-              !(
-                (previous?.kind === "project" || previous?.kind === "drafts") &&
-                previous.projectPath === group.projectPath
-              );
 
             const heading =
               group.kind === "pinned"
                 ? "Pinned"
                 : group.kind === "group"
                   ? groupName(group)
-                  : opensProject && projectFilter === null
+                  : underProject && projectFilter === null
                   ? projectName(group.projectPath)
                   : null;
 
-            return (
-              <Fragment key={groupKeys[index]}>
-                {/* The first run sits under the filter's own row, which already
-                    carries the gap. A run that only changes state keeps a
-                    smaller one, so the eye still reads the project above it as
-                    one block. A run drawing no heading at all needs the break
-                    most: under a project filter the Pinned group is followed by
-                    that same project's remaining rows, and with nothing between
-                    them the whole list reads as sitting under Pinned. */}
-                {/* `shrink-0` is load-bearing: a bare height in a flex column
-                    shrinks to nothing the moment the list overflows, so the
-                    break between runs vanished on exactly the long sidebar it
-                    exists for. Every row beside it is protected by its own
-                    `min-h`. */}
-                {index > 0 && (
-                  <div
-                    aria-hidden
-                    className={cn(
-                      "shrink-0",
-                      !underProject || opensProject ? "h-4" : "h-3",
-                    )}
-                  />
-                )}
+            // One flat list of siblings rather than a fragment per run, so a
+            // row keeps its key across runs: a session changing stage moves,
+            // where under a fragment it — and every row whose run was rekeyed —
+            // remounted, closing an open menu and re-running the active row's
+            // `scrollIntoView`.
+            const key = groupKeys[index];
+            return [
+              // The first run sits under the filter's own row, which already
+              // carries the gap. `shrink-0` is load-bearing: a bare height in a
+              // flex column shrinks to nothing the moment the list overflows,
+              // so the break between runs vanished on exactly the long sidebar
+              // it exists for. Every row beside it is held up by its own `min-h`.
+              index > 0 && <div key={`gap ${key}`} aria-hidden className="h-4 shrink-0" />,
 
-                {heading !== null && (
+              heading !== null && (
                   // A project heading is a way in to that project: clicking it
                   // opens the empty composer already pointed there. Pinned is
                   // not — it spans projects, so there is nothing to point at.
                   <HeadingRow
+                    key={`heading ${key}`}
                     onClick={
                       underProject
                         ? () => onNewSessionInProject(group.projectPath)
@@ -1441,9 +1402,9 @@ export default function Sidebar({
                     }
                     offline={underProject && offline(group.projectPath)}
                   />
-                )}
+                ),
 
-                {group.kind === "drafts" && group.drafts.map((draft) => (
+                ...(group.kind === "drafts" ? group.drafts.map((draft) => (
                   <DraftRow
                     key={draft.id}
                     draft={draft}
@@ -1451,9 +1412,9 @@ export default function Sidebar({
                     onOpen={onOpenDraft}
                     onDelete={onDeleteDraft}
                   />
-                ))}
+                )) : []),
 
-                {group.kind !== "drafts" && group.rows.map(({ item, depth, guides, opens }) => (
+                ...(group.kind !== "drafts" ? group.rows.map(({ item, depth, guides, opens }) => (
                   <SessionRow
                     key={item.sessionId}
                     item={item}
@@ -1475,7 +1436,7 @@ export default function Sidebar({
                     // pinned ancestor, where no aside run holds it.
                     aside={
                       !archivedShown &&
-                      ((group.kind === "project" && group.state === "aside") || item.aside)
+                      ((group.kind === "stage" && group.state === "aside") || item.aside)
                     }
                     // Nothing refreshes marks over here: the archived view asks for
                     // no repos, so its rows draw from a cache nothing will update.
@@ -1506,9 +1467,8 @@ export default function Sidebar({
                     onDetach={onDetach}
                     onMarkUnread={onMarkUnread}
                   />
-                ))}
-              </Fragment>
-            );
+                )) : []),
+            ];
           })
         )}
 
@@ -1623,10 +1583,10 @@ function HintRow({
 /// is looking at.
 export const HINT_KEYS = "[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60";
 
-/// From this many projects a tap opens a menu instead of stepping one. Tapping
+/// From this many projects a hover opens a menu beside the tap's step. Tapping
 /// through a long list is a scrub rather than a pick, and the dots stop being
 /// countable.
-const PROJECT_MENU_FROM = 5;
+const PROJECT_MENU_FROM = 3;
 
 // Dot geometry, in px, kept here because the track's offset is computed from it
 // rather than measured: `size-1` plus `gap-1`.
@@ -1793,8 +1753,26 @@ function ProjectFilter({
   const menuMode = projects.length >= PROJECT_MENU_FROM;
 
   // Wraps, since a tap has no direction and no dot to slide — a dead end at the
-  // last entry would just look broken.
-  const cycle = () => onChange(entries[(activeIndex + 1) % entries.length].path);
+  // last entry would just look broken. Counted from the last entry asked for,
+  // not the last one drawn: a switch loads that project's session, and a quick
+  // second tap landing before the render read the old index and asked for the
+  // same entry again, so it was lost.
+  // Expires a second after the last tap, so a move made some other way
+  // meanwhile (a chord, a swipe) cannot leave a stale count behind.
+  const pending = useRef<number | null>(null);
+  const pendingTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => {
+    if (pending.current === activeIndex) pending.current = null;
+  }, [activeIndex]);
+  useEffect(() => () => clearTimeout(pendingTimer.current), []);
+  const cycle = () => {
+    playSwipeTick();
+    const next = ((pending.current ?? activeIndex) + 1) % entries.length;
+    pending.current = next;
+    clearTimeout(pendingTimer.current);
+    pendingTimer.current = setTimeout(() => (pending.current = null), 1000);
+    onChange(entries[next].path);
+  };
 
   // The dots are the one thing on screen that says which entry of how many,
   // which is exactly what a switch raises — so a switch shows them for a beat
@@ -1822,8 +1800,7 @@ function ProjectFilter({
     <div
       role="button"
       tabIndex={0}
-      // In menu mode the trigger's own handlers arrive through `asChild`.
-      onClick={menuMode ? undefined : cycle}
+      onClick={tap}
       onKeyDown={
         menuMode
           ? undefined
@@ -1849,9 +1826,6 @@ function ProjectFilter({
             on the strip says the strip is what answers. */}
         <span className="flex items-center gap-1 text-ui text-muted-foreground transition-colors group-hover/projects:text-foreground">
           <span className="max-w-40 truncate">{active.name}</span>
-          {/* The one mark that says a tap opens a list rather than stepping one.
-              Menu mode is otherwise invisible — same label, same dots. */}
-          {menuMode && <ChevronDown className="size-3 shrink-0 opacity-60" />}
         </span>
 
         <DotTrack
@@ -1881,20 +1855,80 @@ function ProjectFilter({
     ) : (
       <Tooltip delayDuration={400}>
         <TooltipTrigger asChild>{trigger}</TooltipTrigger>
-        <TooltipContent side="bottom" align="start" className="px-1.5">
+        <TooltipContent side="bottom" align="start" className="flex items-center gap-1.5 px-1.5">
           <ShortcutKeys ids={["filter.prev", "filter.next"]} />
+          or swipe anywhere on the sidebar
         </TooltipContent>
       </Tooltip>
     );
 
+  // Hover-open state lives here rather than in the menu: Radix only opens on a
+  // press, and a pass-by must not open it, so both edges wait a beat.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // Somebody clicking through projects is not asking for the list, so a click
+  // holds hover-open off until the pointer leaves and comes back.
+  const clicked = useRef(false);
+  // A hover-opened list leaves focus where it was: taking it would pull the
+  // caret out of a draft the reader is mid-sentence in.
+  const byHover = useRef(false);
+  useEffect(() => () => clearTimeout(hoverTimer.current), []);
+  const hover = (open: boolean) => {
+    clearTimeout(hoverTimer.current);
+    if (open && clicked.current) return;
+    hoverTimer.current = setTimeout(() => {
+      if (open) byHover.current = true;
+      setMenuOpen(open);
+    }, open ? 600 : 200);
+  };
+
+  // Below the threshold there is no menu, and closing one does nothing.
+  function tap() {
+    clicked.current = true;
+    clearTimeout(hoverTimer.current);
+    setMenuOpen(false);
+    cycle();
+  }
+
   if (!menuMode) return withHint(band);
 
-  // The band is the trigger, so a tap anywhere on it opens the list rather
-  // than a second smaller target on the label.
+  // A tap steps, as below the threshold, and a hover opens the list; the
+  // keyboard still opens it through the trigger. Not modal: a modal menu locks
+  // pointer events on everything else, so leaving it could never close it.
   return (
-    <DropdownMenu>
-      {withHint(<DropdownMenuTrigger asChild>{band}</DropdownMenuTrigger>)}
-      <DropdownMenuContent align="start" className="min-w-52">
+    <DropdownMenu
+      open={menuOpen}
+      onOpenChange={(open) => {
+        // Radix only opens it from the keyboard here, the press being ours.
+        if (open) byHover.current = false;
+        setMenuOpen(open);
+      }}
+      modal={false}
+    >
+      <DropdownMenuTrigger
+        asChild
+        onPointerEnter={() => hover(true)}
+        onPointerLeave={() => {
+          clicked.current = false;
+          hover(false);
+        }}
+        // Skips Radix's own toggle on press, so the click is the tap's alone.
+        onPointerDown={(e) => e.preventDefault()}
+      >
+        {band}
+      </DropdownMenuTrigger>
+      {/* Focus handed back to the band on close opened its tooltip, which then
+          sat there until the pointer left and came back. */}
+      <DropdownMenuContent
+        align="start"
+        className="min-w-52"
+        onCloseAutoFocus={(e) => e.preventDefault()}
+        // Untyped on purpose: Radix keeps `onOpenAutoFocus` off the public
+        // props but spreads it through to the focus scope all the same.
+        {...{ onOpenAutoFocus: (e: Event) => byHover.current && e.preventDefault() }}
+        onPointerEnter={() => clearTimeout(hoverTimer.current)}
+        onPointerLeave={() => hover(false)}
+      >
         <DropdownMenuRadioGroup
           // Radix radio values are strings, so All rides on the empty one — no
           // path is ever empty, so the two can't collide.
@@ -1914,6 +1948,13 @@ function ProjectFilter({
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
+        {/* The tooltip's hint, moved in here: the menu opens where the tooltip
+            would, so the two drawn together covered each other. */}
+        <DropdownMenuSeparator />
+        <div className="flex flex-col items-start gap-1 px-2 py-1 text-xs text-muted-foreground">
+          <ShortcutKeys ids={["filter.prev", "filter.next"]} />
+          <span>or swipe the sidebar</span>
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   );
