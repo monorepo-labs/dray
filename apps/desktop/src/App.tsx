@@ -3295,7 +3295,7 @@ function App() {
         <MountOnce when={issuesOpen}>
         <IssuesView
           active={issuesOpen}
-          picked={pickedIssue?.identifier ?? null}
+          picked={pickedIssue}
           onPick={setPickedIssue}
           onWorkOn={workOnIssue}
           refreshRef={issuesRefreshRef}

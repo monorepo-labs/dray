@@ -58,6 +58,7 @@ import type {
   IssueGroup,
   IssueLabel,
   IssueQuery,
+  IssueRef,
   IssueScope,
   IssueState,
   IssueStateKind,
@@ -170,9 +171,9 @@ export default function IssuesView({
   onRecheckGithub: () => Promise<void>;
   /// The issue whose detail the pane beside this is showing, so the row can
   /// say which one it is. Owned by `App`, because the pane is.
-  picked: string | null;
+  picked: IssueRef | null;
   /// `null` closes the pane.
-  onPick: (issue: Issue | null) => void;
+  onPick: (issue: IssueRef | null) => void;
   /// Takes the reader to the empty composer with this issue tagged. Owned by
   /// `App`, which is the only thing that can leave this page.
   onWorkOn: (issue: Issue) => void;
@@ -236,9 +237,10 @@ export default function IssuesView({
   // **The row the keys act on: the open one, or the one last opened.** Kept
   // after the pane shuts, so ⌘E and Return have something to reopen, and synced
   // during render so a pick from elsewhere — a tag clicked in a prompt — moves
-  // it on the same frame.
-  const [cursor, setCursor] = useState<string | null>(picked);
-  if (picked && picked !== cursor) setCursor(picked);
+  // it on the same frame. The whole ref, not its identifier, since a tagged
+  // issue need not be in the list to be reopened.
+  const [cursor, setCursor] = useState<IssueRef | null>(picked);
+  if (picked && picked.identifier !== cursor?.identifier) setCursor(picked);
   const listRef = useRef<HTMLDivElement>(null);
   const issueById = (id: string | null) =>
     issues.find((issue) => issue.identifier === id) ??
@@ -249,9 +251,7 @@ export default function IssuesView({
   useHotkey(
     "panel.toggle",
     () => {
-      if (picked) return onPick(null);
-      const issue = issueById(cursor);
-      if (issue) onPick(issue);
+      onPick(picked ? null : cursor);
     },
     { enabled: active },
   );
@@ -272,26 +272,29 @@ export default function IssuesView({
 
     if (e.key === "Enter") {
       // A focused row answers Return itself.
-      const issue = target === document.body ? issueById(cursor) : undefined;
-      if (!issue) return;
+      if (target !== document.body || !cursor) return;
       e.preventDefault();
-      return onPick(issue);
+      return onPick(cursor);
     }
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     const rows = [...list.querySelectorAll<HTMLElement>("[data-issue]")];
     if (rows.length === 0) return;
     e.preventDefault();
-    const at = rows.findIndex((row) => row.dataset.issue === cursor);
+    // From the focused row where there is one, so a row tabbed to steps on
+    // from itself.
+    const from = target.closest<HTMLElement>("[data-issue]")?.dataset.issue ?? cursor?.identifier;
+    const at = rows.findIndex((row) => row.dataset.issue === from);
     const down = e.key === "ArrowDown";
     const next = rows[at < 0 ? (down ? 0 : rows.length - 1) : at + (down ? 1 : -1)] ?? rows[at];
     // Focus follows, so Return on the focused row opens this one and not the
     // row clicked last.
     next.focus({ preventScroll: true });
     next.scrollIntoView({ block: "nearest" });
-    setCursor(next.dataset.issue!);
+    const issue = issueById(next.dataset.issue!);
+    if (!issue) return;
+    setCursor(issue);
     // An open pane follows the selection; a shut one waits for Return.
-    const issue = picked && issueById(next.dataset.issue!);
-    if (issue) onPick(issue);
+    if (picked) onPick(issue);
   };
   useEffect(() => {
     if (!active) return;
@@ -577,7 +580,7 @@ export default function IssuesView({
                   <IssueRow
                     key={issue.id}
                     issue={issue}
-                    picked={issue.identifier === cursor}
+                    picked={issue.identifier === cursor?.identifier}
                     scopedToMe={query.scope === "assigned"}
                     states={statesFor(issue)}
                     onPick={onPick}
@@ -596,7 +599,7 @@ export default function IssuesView({
                       <IssueRow
                         key={issue.id}
                         issue={issue}
-                        picked={issue.identifier === cursor}
+                        picked={issue.identifier === cursor?.identifier}
                         scopedToMe={query.scope === "assigned"}
                         states={statesFor(issue)}
                         onPick={onPick}
@@ -634,7 +637,7 @@ export default function IssuesView({
                         <IssueRow
                           key={issue.id}
                           issue={issue}
-                          picked={issue.identifier === cursor}
+                          picked={issue.identifier === cursor?.identifier}
                           scopedToMe={query.scope === "assigned"}
                           states={statesFor(issue)}
                           onPick={onPick}
