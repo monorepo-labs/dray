@@ -38,7 +38,9 @@ use std::path::PathBuf;
 /// session verbs, listing shares across sessions, and `base` — a create or a
 /// draft naming one goes out as v10, since an older app ignores the field and
 /// starts the worktree at `origin/<default>` as if it had been honoured.
-pub const PROTOCOL_VERSION: u32 = 10;
+/// v11 added `set_remote_access`, which `dray server tunnel` sends now that
+/// the server runs the tunnel itself.
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// The oldest envelope the app still answers. Rises only when a shape is
 /// *renamed*, never for an addition: v4 renamed `LinkIssues.identifiers` to
@@ -113,6 +115,7 @@ impl Request {
             | Request::SettleSession(_)
             | Request::SetAside(_)
             | Request::ListShares(_) => 10,
+            Request::SetRemoteAccess(_) => 11,
         }
     }
 }
@@ -140,6 +143,16 @@ pub enum Request {
     SettleSession(SettleSession),
     SetAside(SetAside),
     ListShares(ListSessions),
+    SetRemoteAccess(SetRemoteAccess),
+}
+
+/// Remote access on or off: the server's own listener behind a public
+/// address that stays the same across restarts. Remembered, so the server
+/// serves again whenever it starts.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetRemoteAccess {
+    pub on: bool,
 }
 
 /// The reader's own name for a session, locked against generated titles the
@@ -688,6 +701,10 @@ pub enum Response {
     /// one taken off the list.
     Server { server: ServerSummary },
     Servers { servers: Vec<ServerSummary> },
+    /// Remote access as it stands after the switch. The address arrives in
+    /// [`TUNNEL_URL_FILE`] once the relay has it, which a first start can
+    /// take a minute over.
+    RemoteAccess { on: bool },
     Error { message: String },
 }
 
@@ -828,84 +845,13 @@ pub const AGENTS: [Agent; 5] = [
     },
 ];
 
-/// The cloudflared release public links run on, pinned so its bytes cannot
-/// move under the hashes: the app downloads it on first share, and `dray
-/// setup` offers it. Hashes are the release assets' own sha256, which GitHub
-/// publishes beside each.
-pub const CLOUDFLARED_VERSION: &str = "2026.10.0";
-
-pub struct CloudflaredBuild {
-    /// The release asset's name: a bare binary on Linux, a `.tgz` holding one
-    /// on macOS.
-    pub asset: &'static str,
-    pub size: u64,
-    pub sha256: &'static str,
-}
-
-/// This machine's build, by `(std::env::consts::OS, ARCH)`.
-pub fn cloudflared_build() -> Option<CloudflaredBuild> {
-    let (asset, size, sha256) = match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("linux", "x86_64") => (
-            "cloudflared-linux-amd64",
-            40_129_756,
-            "d33ff2d14475178d2012c2c56beba87389ac5ded27649519f198a7d3134a99db",
-        ),
-        ("linux", "aarch64") => (
-            "cloudflared-linux-arm64",
-            37_687_584,
-            "e6422b9d4f72d3194bc5a38676f13667c06666523217b842a877d72a80b5ac08",
-        ),
-        ("macos", "aarch64") => (
-            "cloudflared-darwin-arm64.tgz",
-            19_809_074,
-            "a2f79ff7b9420aa537d74af239f376da170bbabeb529aec416002adac6a72e70",
-        ),
-        ("macos", "x86_64") => (
-            "cloudflared-darwin-amd64.tgz",
-            21_741_581,
-            "903845b81828c8cb3c5d13d816a2de71c06a3da5785469df8eb0e1b736d92f9f",
-        ),
-        _ => return None,
-    };
-    Some(CloudflaredBuild { asset, size, sha256 })
-}
-
-impl CloudflaredBuild {
-    pub fn url(&self) -> String {
-        format!(
-            "https://github.com/cloudflare/cloudflared/releases/download/{CLOUDFLARED_VERSION}/{}",
-            self.asset
-        )
-    }
-}
-
-/// The port `dray-serve` listens on unless told otherwise, and so the one
-/// `dray tunnel` points cloudflared at.
+/// The port `dray-serve` listens on unless told otherwise.
 pub const SERVE_PORT: u16 = 7317;
 
-/// The file in the Dray directory holding the server's current tunnel
-/// address, written by `dray tunnel` on every start and removed on exit.
+/// The file in the Dray directory holding the server's Remote access
+/// address while it is on: what an SSH login reads, and the one origin the
+/// server lets through besides its own.
 pub const TUNNEL_URL_FILE: &str = "tunnel-url";
-
-/// A quick tunnel's address out of cloudflared's banner, which boxes it:
-/// `|  https://four-random-words.trycloudflare.com   |`.
-pub fn quick_tunnel_url(line: &str) -> Option<String> {
-    let start = line.find("https://")?;
-    let url: String = line[start..].chars().take_while(|c| !c.is_whitespace() && *c != '|').collect();
-    url.ends_with(".trycloudflare.com").then_some(url)
-}
-
-/// cloudflared prints the address a moment before the tunnel is registered,
-/// and is said before the name exists in DNS too: measured, 1.6–2.6s after
-/// this line, and a resolver asked in that gap caches the miss for the zone's
-/// 60s. So an address is handed out only once this line has been said and
-/// [`DOH_QUERY`] answers for the name.
-pub const TUNNEL_REGISTERED: &str = "Registered tunnel connection";
-
-/// Cloudflare's DNS-over-HTTPS; append the host. Polled every 0.5s through
-/// the gap, it answered as soon as the name existed rather than caching the
-/// miss. JSON, where `"Status":0` means the name resolves.
-pub const DOH_QUERY: &str = "https://1.1.1.1/dns-query?type=A&name=";
 
 /// How each package manager installs git, the first one found winning. The
 /// app shows the same line to copy where `dray setup` would print it, so the
@@ -922,18 +868,6 @@ pub const GIT_INSTALLS: [(&str, &str); 6] = [
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reads_the_address_out_of_the_banner() {
-        let banner = "2026-10-07T05:26:15Z INF |  https://eligible-recipients-expanded-pepper.trycloudflare.com                             |";
-        assert_eq!(
-            quick_tunnel_url(banner).as_deref(),
-            Some("https://eligible-recipients-expanded-pepper.trycloudflare.com")
-        );
-        // The terms line names Cloudflare's own site, which is no address.
-        assert_eq!(quick_tunnel_url("INF ... (https://www.cloudflare.com/website-terms/), and"), None);
-        assert_eq!(quick_tunnel_url("INF Requesting new quick Tunnel on trycloudflare.com..."), None);
-    }
 
     /// Deliberately a v1 line, and that is half the point: an envelope from a
     /// version we no longer speak still has to *parse*, or the app answers
@@ -1023,7 +957,10 @@ mod tests {
         for request in based.iter().chain(&sessions) {
             assert_eq!(Envelope::new(request.clone()).v, 10, "{request:?}");
         }
-        let newest = old.iter().chain(&drafts).chain([&share]).chain(&servers).chain(&sessions).map(Request::version).max();
+        let remote = Request::SetRemoteAccess(Default::default());
+        assert_eq!(Envelope::new(remote.clone()).v, 11);
+        let newest =
+            old.iter().chain(&drafts).chain([&share]).chain(&servers).chain(&sessions).chain([&remote]).map(Request::version).max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));
         assert!(OLDEST_SPOKEN <= PROTOCOL_VERSION);
     }

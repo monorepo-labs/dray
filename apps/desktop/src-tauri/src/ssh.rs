@@ -174,7 +174,7 @@ pub struct Tunnel {
     _stdout: BufReader<ChildStdout>,
     pub port: u16,
     pub token: String,
-    /// The server's quick tunnel address, where `dray tunnel` is running there.
+    /// The server's Remote access address, where it is on there.
     pub address: Option<String>,
     stderr: Arc<Mutex<String>>,
 }
@@ -254,7 +254,8 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
                         return Ok(Ok(token.trim().to_string()));
                     }
                     if let Some(url) = rest.strip_prefix("tunnel ") {
-                        address = dray_proto::quick_tunnel_url(url.trim());
+                        let url = url.trim();
+                        address = url.starts_with("https://").then(|| url.to_string());
                     }
                 }
                 // Whatever a dotfile echoes on login.

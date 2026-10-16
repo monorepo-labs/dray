@@ -368,18 +368,18 @@ first, then open it. `--json` on any verb answers as JSON for scripting.
 ## Sharing a dev server
 
 ```bash
-dray share start 5173    # prints a public https://….trycloudflare.com link
+dray share start 5173    # prints a public https://….opentunnel.xyz link
 dray share ls            # this project's live links; --all, --json
 dray share stop 5173
 ```
 
-A Cloudflare quick tunnel to one of this session's own dev servers — the ones
+A public link to one of this session's own dev servers — the ones
 the user's Browser tab lists for it, nothing else on the machine. **Anyone with
 the link can open it**, so share when the user asked for a link they can open
 elsewhere or send on, and not to check your own work: `dray browser` does that
 without publishing anything. The link shows on that server's row in the app,
 where the user can stop it, and it goes when the session is settled or deleted.
-The URL is random each time and Cloudflare promises no uptime for it.
+Sharing the same port from the same session again gives the same link.
 
 ## The app's machines
 
@@ -410,12 +410,13 @@ dray server install      # install what is missing, then start the server; --too
 dray server start        # in the background, surviving reboot
 dray server run          # in this terminal instead
 dray server status       # running or not, and its tunnel address
-dray server tunnel on    # a public address in front of it; off takes it down
+dray server tunnel on    # a public address in front of it, the same across restarts; off takes it down
 dray server stop         # stop it and remove it from the background
 ```
 
 What makes a machine with no Dray app — Linux, or a headless Mac — a Dray
-server. On a Mac with the app, the app runs the server and these are refused.
+server. On a Mac with the app, the app runs the server and these are refused,
+apart from `tunnel`, which is the Remote access button in Settings → Servers.
 
 ## Reporting back to the user
 

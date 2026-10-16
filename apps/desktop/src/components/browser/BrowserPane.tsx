@@ -1085,7 +1085,7 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
   // Bumped after a share or a stop, so the row moves without waiting a poll.
   const [reread, setReread] = useState(0);
   const [sharing, setSharing] = useState<number | null>(null);
-  // The first share on a machine fetches cloudflared, a wait of its own.
+  // The first share on a machine sets up its tunnel, a wait of its own.
   const [fetching, setFetching] = useState(false);
   const [copied, copy] = useCopied();
 
@@ -1104,7 +1104,7 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
     };
   }, [sessionId, polling, reread]);
 
-  // Cloudflare takes a few seconds to hand out a link, so the row says so.
+  // The relay takes a moment to attach a link, so the row says so.
   const share = (port: number) => {
     setSharing(port);
     void shareReady(sessionId).then((ready) => setFetching(!ready));
@@ -1166,7 +1166,7 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
                           {sharing !== s.port
                             ? "Get public link"
                             : fetching
-                              ? "Downloading tunnel…"
+                              ? "Setting up tunnel…"
                               : "Creating link…"}
                         </Button>
                       </TooltipTrigger>

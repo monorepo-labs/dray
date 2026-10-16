@@ -166,9 +166,10 @@ answered, the Mac-only `open_in_app` refused as unknown, reconnect.
 
 ## What was left out
 
-- A stable address and a login: a named tunnel on the reader's own domain, or
-  our own relay. Next.
-- Encryption inside the WebSocket. Cloudflare sees the traffic.
+- A login: our own relay, or a named tunnel on the reader's own domain. The
+  stable address landed in stage 8.
+- Encryption inside the WebSocket. Cloudflare saw the traffic; since stage 8
+  the relay cannot.
 - `/file?token=` stays for a plain browser's `<img>`, which cannot set a
   header. The browser UI is dropped, so nothing of ours sends it; a phone app
   must use the header.
@@ -179,3 +180,37 @@ answered, the Mac-only `open_in_app` refused as unknown, reconnect.
   the next. Both heal on their own; only the no-SSH fallback is affected.
 - `forward_port` and Sign in still need SSH: a server reached by tunnel alone
   has neither, and says so as before.
+
+## Stage 8: OpenTunnel, a kept address (#518)
+
+**The quick tunnel is gone; every public address is OpenTunnel's.** A blind
+TLS relay: the `opentunnel` crate runs in-process, holds the certificate's
+private key and ends TLS here, so the relay never sees plaintext. Its identity
+lives in `<DRAY_HOME>/opentunnel`, so an address outlives a restart, and each
+home — release, dev build, worktree — gets its own. Deleting that directory is
+the only way to new addresses. No account, no download, no child process.
+
+- **Two tunnels, `remote` and `share`** ([tunnel.rs](src-tauri/src/tunnel.rs)).
+  Adding or removing a route ends every connection on its tunnel (read in the
+  crate's supervisor), so a share link coming and going must not drop every
+  Mac connected to this one.
+- **Route names are a hash of the tunnel's token and a label** — `remote`, or
+  `<session>:<port>` — so they are stable with nothing stored, and
+  unguessable. Route names stay out of certificate logs; the tunnel's own id
+  does not.
+- **Share links go through a Host-rewriting proxy** in front of the dev
+  server. The relay forwards bytes untouched, and Vite refuses a Host it does
+  not know; cloudflared's `--http-host-header` did this before. HTTP/1.1, with
+  upgrades spliced through for HMR.
+- **`dray-serve` runs the tunnel itself.** `dray server tunnel on` sends
+  `set_remote_access` (protocol v11) and waits for `tunnel-url`; the server
+  remembers it in `settings.json`, as the Mac's does. An old `dray-tunnel`
+  unit's `dray tunnel` now just asks the same, and `tunnel on|off` removes the
+  unit. On a Mac with the app, `dray server tunnel` is the This Mac button.
+- **The Mac's Remote access listener takes any free port**, since nothing
+  needs to know it but the route.
+
+Measured: Remote access through the relay, first start 25s (the certificate),
+a client admitted and an event delivered, off and on again the same address.
+`dray-serve` restarted came back on the same address in 1s. A share link
+reached a Host-echoing server as `localhost:<port>` 0.5s after attach.

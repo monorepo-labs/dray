@@ -87,6 +87,9 @@ pub async fn run(port: u16) -> Result<()> {
         .await
         .with_context(|| format!("could not bind {addr}"))?;
     write_port_file(&home, listener.local_addr()?.port()).await?;
+    // Remote access fronts this listener rather than binding one of its own.
+    crate::remote_access::fronts(listener.local_addr()?.port());
+    tokio::spawn(crate::remote_access::start(sink.clone()));
 
     eprintln!(
         "dray-serve listening on ws://{}, token in {}",
@@ -170,9 +173,9 @@ async fn restart_when_idle() {
     });
 }
 
-/// Ends the server and everything under it: cloudflared, which would go on
-/// answering at an address nobody shows, and every session's tree, which a dev
-/// server or watcher would otherwise outlive.
+/// Ends the server and everything under it: the Remote access address file,
+/// which would name a server that is gone, and every session's tree, which a
+/// dev server or watcher would otherwise outlive.
 ///
 /// Agents get 3s to exit the way a settle ends them, since pi and fx release
 /// locks on a clean exit and a killed one stalls the next start. Then
@@ -401,10 +404,10 @@ fn local_origin(origin: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
-/// Whether `origin` is the address `dray tunnel` last wrote. A page there can
-/// only be one this server answered, since the tunnel forwards nowhere else,
-/// and a phone's WebSocket names it as the origin it connected to. Read per
-/// handshake, as the address moves with every tunnel start.
+/// Whether `origin` is the Remote access address. A page there can only be
+/// one this server answered, since the route forwards nowhere else, and a
+/// phone's WebSocket names it as the origin it connected to. Read per
+/// handshake, since Remote access comes and goes.
 fn tunnel_origin(origin: &str, tunnel_file: &Path) -> bool {
     std::fs::read_to_string(tunnel_file).is_ok_and(|url| {
         let url = url.trim();

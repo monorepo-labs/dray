@@ -184,8 +184,8 @@ export default function ServersSettings() {
 }
 
 /// This Mac's background server, and its remote access: on, the server
-/// serves this Mac's sessions through a quick tunnel for another Mac's Add
-/// server. A button rather than a switch, since a switch on this row reads as
+/// serves this Mac's sessions at a public address, the same across restarts,
+/// for another Mac's Add server. A button rather than a switch, since a switch on this row reads as
 /// turning the Mac off.
 function ThisMacRow() {
   const server = useLocalServer();
@@ -218,7 +218,7 @@ function ThisMacRow() {
   ) : starting ? (
     <span className="inline-flex items-center gap-1.5">
       <Spinner className="size-3" />
-      Starting remote access. Takes about 20 seconds.
+      Starting remote access. The first time takes about 30 seconds.
     </span>
   ) : (
     (remote.error ?? "Other Macs can reach it while this Mac is awake, with Dray open or closed.")
@@ -305,7 +305,7 @@ function Row({
   status: ServerStatus;
   fix?: Fix | null;
   onTrust?: (fix: TrustHost) => void;
-  /// The tunnel's new address, for a row whose old one Cloudflare let go.
+  /// The tunnel's new address, for a row whose old one is gone.
   onNewAddress?: (url: string) => Promise<void>;
   /// Drawn under the detail.
   children?: ReactNode;
@@ -435,7 +435,7 @@ function NewAddressField({ onSave }: { onSave: (url: string) => Promise<void> })
         <Input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="wss://…trycloudflare.com"
+          placeholder="wss://…opentunnel.xyz"
           aria-label="New address"
           spellCheck={false}
           autoCapitalize="off"
@@ -575,7 +575,7 @@ function AddServerDialog({
                     setUrl(pasted.url);
                     if (pasted.token) setToken(pasted.token);
                   }}
-                  placeholder="wss://…trycloudflare.com"
+                  placeholder="wss://…opentunnel.xyz"
                   autoFocus
                   required
                   spellCheck={false}

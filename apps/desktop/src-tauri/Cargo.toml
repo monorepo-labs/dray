@@ -78,6 +78,13 @@ futures-util = "0.3"
 # Verifies a downloaded model against the catalog's hash. A partial file left by
 # a killed process is otherwise indistinguishable from a whole one.
 sha2 = "0.10"
+# Public addresses for Remote access and shared dev servers (tunnel.rs). TLS
+# ends in this process, so the relay sees no plaintext, and the address is kept.
+opentunnel = "0.5.1"
+# The Host-rewriting proxy in front of a shared dev server. Both already in the
+# tree under `reqwest`.
+hyper = { version = "1", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 tauri-plugin-window-state = { version = "2", optional = true }
 # `dray-serve`'s WebSocket. The server half alone, and no TLS: it binds localhost.
 tokio-tungstenite = { version = "0.28", optional = true, default-features = false, features = ["handshake"] }

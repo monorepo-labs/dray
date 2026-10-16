@@ -438,7 +438,7 @@ export function shareServer(sessionId: string, port: number) {
   });
 }
 
-/** False where the first share has cloudflared to download, asked of the session's own machine. */
+/** False where the first share sets up its tunnel first, asked of the session's own machine. */
 export function shareReady(sessionId: string) {
   return invoke<boolean>("share_ready", {}, serverOfSession(sessionId)).catch(() => true);
 }

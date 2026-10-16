@@ -67,12 +67,13 @@ pub mod launchd;
 // The desktop app serves too, behind Remote access (remote_access.rs).
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod serve;
-#[cfg(feature = "desktop")]
+#[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod remote_access;
 #[cfg(feature = "desktop")]
 pub mod servers;
 pub mod session;
 pub mod share;
+pub mod tunnel;
 #[cfg(feature = "desktop")]
 pub mod ssh;
 pub mod settings;

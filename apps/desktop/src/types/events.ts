@@ -1550,7 +1550,7 @@ issues: Array<IssueRef>, };
  */
 export type RemoteAccess = { on: boolean, 
 /**
- * `wss://…`, once the tunnel is registered and in DNS.
+ * `wss://…`, once the relay has it attached.
  */
 address: string | null, 
 /**

@@ -277,6 +277,11 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             answer_session(&stop.session_id).await
         }
         Request::SettleSession(settle) => settle_session(settle, app).await,
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        Request::SetRemoteAccess(set) => {
+            let now = crate::remote_access::set_remote_access(app.clone(), set.on).await.map_err(anyhow::Error::msg)?;
+            Ok(Response::RemoteAccess { on: now.on })
+        }
         Request::SetAside(aside) => {
             crate::set_session_flags(&aside.session_id, None, None, None, Some(aside.aside)).await?;
             announce_change(&[aside.session_id.clone()], app).await;
@@ -473,7 +478,7 @@ async fn share_port(request: dray_proto::ShareRequest) -> Result<Response> {
     use dray_proto::ShareAction;
     let session = request.session_id;
     let done = match request.action {
-        ShareAction::Start { port } => crate::share::start(&session, port).await.map(drop),
+        ShareAction::Start { port } => crate::share::start(&session, port, "cli").await.map(drop),
         ShareAction::Stop { port } => Ok(crate::share::stop(&session, port)),
         ShareAction::List => Ok(()),
     };

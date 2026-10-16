@@ -1,16 +1,16 @@
-//! Remote access: this Mac as a Dray server, reached through a Cloudflare
-//! quick tunnel. The app runs the same listener `dray-serve` runs, in this
-//! process and on `127.0.0.1`, so another Mac connects to the very sessions
-//! on this screen — one process, one data dir, no second writer. See
-//! TUNNEL-PLAN.md.
+//! Remote access: this machine as a Dray server, reached through an
+//! OpenTunnel address that stays the same across restarts ([`crate::tunnel`]).
+//! On a Mac the server runs a listener of its own for it, apart from the
+//! app's, so a remote Mac is never handed the host calls; `dray-serve` fronts
+//! the listener it already has ([`fronts`]). See TUNNEL-PLAN.md.
 
-use std::{future::Future, path::PathBuf, sync::LazyLock, time::Duration};
+use std::{future::Future, path::PathBuf, sync::LazyLock, sync::OnceLock, time::Duration};
 
 use serde::Serialize;
 use std::sync::Mutex;
 use ts_rs::TS;
 
-use crate::{serve, share, sink::Sink, store};
+use crate::{serve, sink::Sink, store, tunnel};
 
 /// What the This Mac row draws. No token: it is asked for on Copy, and never
 /// stored in the webview.
@@ -19,7 +19,7 @@ use crate::{serve, share, sink::Sink, store};
 #[serde(rename_all = "camelCase")]
 pub struct RemoteAccess {
     pub on: bool,
-    /// `wss://…`, once the tunnel is registered and in DNS.
+    /// `wss://…`, once the relay has it attached.
     pub address: Option<String>,
     /// Why this Mac is not answering, while on.
     pub error: Option<String>,
@@ -31,16 +31,21 @@ fn state() -> std::sync::MutexGuard<'static, (RemoteAccess, Option<tokio::task::
     STATE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// A dev build serves beside the release app, as its socket does.
-fn port() -> u16 {
-    if crate::is_dev() { dray_proto::SERVE_PORT + 1 } else { dray_proto::SERVE_PORT }
+/// The route's label on the [`tunnel::REMOTE`] tunnel.
+const ROUTE: &str = "remote";
+
+/// The port `dray-serve` already listens on, which the tunnel fronts instead
+/// of a listener of its own.
+static FRONTED: OnceLock<u16> = OnceLock::new();
+
+/// Fronts `port` rather than binding a listener for Remote access.
+pub fn fronts(port: u16) {
+    let _ = FRONTED.set(port);
 }
 
-/// Where the address lives for the Origin check. The two builds share
-/// `~/.dray`, so each keeps its own.
+/// Where the address lives, for the Origin check and an SSH login to read.
 async fn tunnel_file() -> anyhow::Result<PathBuf> {
-    let name = if crate::is_dev() { "tunnel-url-dev" } else { dray_proto::TUNNEL_URL_FILE };
-    Ok(store::get_home_app_dir().await?.join(name))
+    Ok(store::get_home_app_dir().await?.join(dray_proto::TUNNEL_URL_FILE))
 }
 
 /// Held across a whole change, the saved setting included. Two presses racing
@@ -48,8 +53,12 @@ async fn tunnel_file() -> anyhow::Result<PathBuf> {
 /// an "off" starts serving while the row says it is off.
 static SWITCHING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// The running cloudflared and the address file it backs, for [`stop_on_exit`].
-static TUNNEL: Mutex<Option<(u32, PathBuf)>> = Mutex::new(None);
+/// Somebody turned Remote access on, and its address has not attached yet. A
+/// launch serving from the saved setting is no new use, so it reports nothing.
+static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The address file while one is written, for [`stop_on_exit`].
+static WRITTEN: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// Serves at launch if the switch was left on.
 pub async fn start(sink: Sink) {
@@ -59,14 +68,10 @@ pub async fn start(sink: Sink) {
     }
 }
 
-/// Takes the tunnel down on quit. The app leaves through `_exit`, which runs
-/// no destructor, so `kill_on_drop` never fires and cloudflared would outlive
-/// it, still answering at an address nobody shows.
+/// Removes the address on quit, which leaves through `_exit` and runs no
+/// destructor. The tunnel goes with the process.
 pub fn stop_on_exit() {
-    if let Some((pid, file)) = TUNNEL.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        // SIGKILL: on SIGTERM cloudflared drains for its 30s grace period,
-        // serving the address all the while.
-        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    if let Some(file) = WRITTEN.lock().unwrap_or_else(|e| e.into_inner()).take() {
         let _ = std::fs::remove_file(file);
     }
 }
@@ -84,6 +89,7 @@ pub fn set_remote_access(sink: Sink, on: bool) -> std::pin::Pin<Box<dyn Future<O
     Box::pin(async move {
         let _held = SWITCHING.lock().await;
         crate::settings::update(|s| s.remote_access = on).await.map_err(|e| format!("{e:#}"))?;
+        ASKED.store(on, std::sync::atomic::Ordering::Relaxed);
         switch(&sink, on).await;
         Ok(get_remote_access())
     })
@@ -96,9 +102,9 @@ pub async fn remote_access_token() -> Result<String, String> {
     Ok(token)
 }
 
-/// Stops whatever is serving and, if `on`, starts afresh: a new listener and
-/// a new tunnel. Dropping the task drops the listener, every connection it
-/// holds and cloudflared with it. Callers hold [`SWITCHING`].
+/// Stops whatever is serving and, if `on`, starts afresh. Dropping the task
+/// drops the listener and every connection it holds. Callers hold
+/// [`SWITCHING`].
 async fn switch(sink: &Sink, on: bool) {
     let old = {
         let mut state = state();
@@ -107,10 +113,11 @@ async fn switch(sink: &Sink, on: bool) {
     };
     if let Some(task) = old {
         task.abort();
-        // Until it is dropped, so the port is free before the next bind.
+        // Until it is dropped, so the listener is gone before the next bind.
         let _ = task.await;
     }
-    TUNNEL.lock().unwrap_or_else(|e| e.into_inner()).take();
+    tunnel::withdraw(tunnel::REMOTE, ROUTE).await;
+    WRITTEN.lock().unwrap_or_else(|e| e.into_inner()).take();
     if let Ok(file) = tunnel_file().await {
         let _ = tokio::fs::remove_file(file).await;
     }
@@ -135,61 +142,90 @@ fn set(sink: &Sink, address: Option<String>, error: Option<String>) {
 }
 
 async fn serve_and_tunnel(sink: Sink) {
-    let port = port();
     let prepared = async {
-        let (token, _) = serve::mint_token().await.map_err(|e| format!("{e:#}"))?;
         let file = tunnel_file().await.map_err(|e| format!("{e:#}"))?;
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| {
-            format!("Port {port} is taken ({e}). A dray-serve running on this Mac holds it; stop it and turn this on again.")
-        })?;
-        Ok::<_, String>((token, file, listener))
+        if let Some(&port) = FRONTED.get() {
+            return Ok::<_, String>((port, file, None));
+        }
+        let (token, _) = serve::mint_token().await.map_err(|e| format!("{e:#}"))?;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| format!("could not listen: {e}"))?;
+        let port = listener.local_addr().map_err(|e| format!("could not listen: {e}"))?.port();
+        let listening = serve::listen(listener, serve::HUB.clone(), sink.clone(), token.into(), file.clone().into(), false);
+        Ok((port, file, Some(listening)))
     };
-    let (token, file, listener) = match prepared.await {
+    let (port, file, listening) = match prepared.await {
         Ok(ready) => ready,
         Err(e) => return set(&sink, None, Some(e)),
     };
-    let listening = serve::listen(listener, serve::HUB.clone(), sink.clone(), token.into(), file.clone().into(), false);
     let tunnel = async {
         let mut backoff = Duration::from_secs(2);
         loop {
-            match share::quick_tunnel(&format!("http://127.0.0.1:{port}"), &[]).await {
-                Ok((mut child, url)) => {
-                    if let Some(pid) = child.id() {
-                        *TUNNEL.lock().unwrap_or_else(|e| e.into_inner()) = Some((pid, file.clone()));
+            match tunnel::expose(tunnel::REMOTE, ROUTE, format!("127.0.0.1:{port}")).await {
+                Ok(url) => {
+                    let _ = store::write_atomic(&file, format!("{url}\n")).await;
+                    *WRITTEN.lock().unwrap_or_else(|e| e.into_inner()) = Some(file.clone());
+                    let address = url.replacen("https://", "wss://", 1);
+                    set(&sink, Some(address.clone()), None);
+                    if ASKED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                        crate::analytics::feature_used("remote_access");
                     }
-                    let _ = tokio::fs::write(&file, format!("{url}\n")).await;
-                    set(&sink, Some(url.replacen("https://", "wss://", 1)), None);
                     backoff = Duration::from_secs(2);
-                    let _ = child.wait().await;
-                    // Its pid may be anybody's now.
-                    TUNNEL.lock().unwrap_or_else(|e| e.into_inner()).take();
-                    let _ = tokio::fs::remove_file(&file).await;
-                    set(&sink, None, Some("The tunnel dropped. Starting a new one, under a new address.".into()));
+                    follow(&sink, &address).await;
                 }
-                Err(e) => set(&sink, None, Some(e)),
+                Err(e) => set(&sink, None, Some(format!("{e:#}"))),
             }
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(Duration::from_secs(60));
         }
     };
-    tokio::select! {
-        served = listening => {
-            let why = served.err().map(|e| format!("{e:#}")).unwrap_or_default();
-            set(&sink, None, Some(format!("This Mac stopped serving: {why}")));
-        }
-        () = tunnel => {}
+    match listening {
+        Some(listening) => tokio::select! {
+            served = listening => {
+                let why = served.err().map(|e| format!("{e:#}")).unwrap_or_default();
+                set(&sink, None, Some(format!("This Mac stopped serving: {why}")));
+            }
+            () = tunnel => {}
+        },
+        None => tunnel.await,
     }
 }
 
-#[cfg(test)]
+/// Draws the relay dropping and coming back, which the tunnel does on its
+/// own under the same address. Returns once it has stopped for good.
+async fn follow(sink: &Sink, address: &str) {
+    let Some(mut status) = tunnel::status(tunnel::REMOTE).await else { return };
+    let mut drawn = None;
+    loop {
+        let now = status.borrow_and_update().clone();
+        // The status moves with every connection too; only the state is news.
+        if drawn.replace(now.state.clone()) != Some(now.state.clone()) {
+            match now.state {
+                opentunnel::State::Connected => set(sink, Some(address.into()), None),
+                opentunnel::State::Stopped => {
+                    let why = now.last_error.unwrap_or_default();
+                    return set(sink, None, Some(format!("The tunnel stopped: {why}. Starting it again.")));
+                }
+                _ => {
+                    let why = now.last_error.map(|e| format!(": {e}")).unwrap_or_default();
+                    set(sink, Some(address.into()), Some(format!("Reconnecting to the relay{why}")));
+                }
+            }
+        }
+        if status.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+#[cfg(all(test, feature = "desktop"))]
 mod tests {
     use super::*;
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
-    /// This process serving through a real quick tunnel, in a throwaway
-    /// `DRAY_HOME`: a client admitted at the address, a call answered, an
-    /// event the core emits reaching it, and off dropping it.
+    /// This process serving through a real tunnel, in a throwaway
+    /// `DRAY_HOME`: a client admitted at the address, an event the core emits
+    /// reaching it, off dropping it, and on again answering the same address.
     ///
     /// ```text
     /// cargo test remote_access::tests::serves_through_a_tunnel -- --ignored --nocapture
@@ -200,25 +236,26 @@ mod tests {
         let home = std::env::temp_dir().join(format!("dray-remote-test-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&home).unwrap();
         std::env::set_var("DRAY_HOME", &home);
-        // The cloudflared an earlier share downloaded, rather than another.
-        let version = std::path::Path::new(dray_proto::CLOUDFLARED_VERSION);
-        let downloaded = std::env::home_dir().unwrap().join(".dray/cloudflared").join(version);
-        std::fs::create_dir_all(home.join("cloudflared")).unwrap();
-        let _ = std::os::unix::fs::symlink(downloaded, home.join("cloudflared").join(version));
         let sink = Sink::new(|_, _| {});
+        let wait_for_address = || async {
+            let t0 = std::time::Instant::now();
+            loop {
+                let now = get_remote_access();
+                if let (Some(address), None) = (now.address, &now.error) {
+                    return address;
+                }
+                assert!(t0.elapsed() < Duration::from_secs(120), "no address: {:?}", now.error);
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        };
 
         let t0 = std::time::Instant::now();
         switch(&sink, true).await;
-        let address = loop {
-            let now = get_remote_access();
-            if let Some(address) = now.address {
-                break address;
-            }
-            assert!(now.error.is_none() || t0.elapsed() < Duration::from_secs(5), "{:?}", now.error);
-            assert!(t0.elapsed() < Duration::from_secs(60), "no address");
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        };
-        eprintln!("address in {:?}", t0.elapsed());
+        let address = wait_for_address().await;
+        eprintln!("address {address} in {:?}", t0.elapsed());
+        assert!(address.starts_with("wss://") && address.ends_with(".opentunnel.xyz"), "{address}");
+        let file = home.join(dray_proto::TUNNEL_URL_FILE);
+        assert_eq!(std::fs::read_to_string(&file).unwrap().trim(), address.replacen("wss://", "https://", 1));
         let token = remote_access_token().await.unwrap();
 
         let (mut ws, _) = tokio_tungstenite::connect_async(&address).await.unwrap();
@@ -240,19 +277,13 @@ mod tests {
             }
         }
 
-        // Quit's path: cloudflared killed and the address gone, by hand.
-        let (pid, file) = TUNNEL.lock().unwrap().clone().expect("a tunnel is recorded");
-        stop_on_exit();
-        assert!(!file.exists(), "quit removes the address");
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        // Gone, or a zombie this process has not reaped yet.
-        let stat = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().unwrap();
-        let stat = String::from_utf8_lossy(&stat.stdout);
-        assert!(stat.trim().is_empty() || stat.starts_with('Z'), "quit kills cloudflared: {stat}");
-
         switch(&sink, false).await;
         let closed = tokio::time::timeout(Duration::from_secs(10), async { while let Some(Ok(_)) = ws.next().await {} }).await;
         assert!(closed.is_ok(), "off drops the client");
-        assert!(!home.join("tunnel-url-dev").exists() && !home.join("tunnel-url").exists());
+        assert!(!file.exists(), "off removes the address");
+
+        switch(&sink, true).await;
+        assert_eq!(wait_for_address().await, address, "on again, the same address");
+        switch(&sink, false).await;
     }
 }

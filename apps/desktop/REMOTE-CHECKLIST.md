@@ -7,7 +7,7 @@ Issues: #413 (stage 1), #415 (stages 2 and 4, draft), #414 (stage 3). Stage 2's 
 ## How clients connect (settled)
 
 - **Now: SSH**, desktop app to VPS. Direct, free, nothing for us to run. The app runs the Mac's own `ssh`; Dray never sees the key.
-- **Also: a Cloudflare quick tunnel** (#452), no SSH and no account. The address changes when the tunnel restarts; the token does not. Plan in [TUNNEL-PLAN.md](TUNNEL-PLAN.md).
+- **Also: a public address** (#452, OpenTunnel since #518), no SSH and no account. The address stays the same across restarts. Plan in [TUNNEL-PLAN.md](TUNNEL-PLAN.md).
 - **Later: our own relay** on Cloudflare, with sign-in and a QR code, for the phone, which cannot use SSH. Encrypt end to end.
 - **Never required:** Tailscale.
 - The server speaks the same WebSocket whatever carries it, so the relay is a pipe added later, not a rebuild.

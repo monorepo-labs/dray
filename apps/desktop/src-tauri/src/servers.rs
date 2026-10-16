@@ -433,6 +433,14 @@ async fn run(id: String) {
         match admitted {
             Ok(ws) => {
                 backoff = Duration::from_secs(1);
+                // Once a day per route, so it reads as servers in use rather
+                // than as reconnects. Tags alone: never the address or name.
+                let via = if tunnel.is_some() { "ssh" } else { "address" };
+                crate::analytics::track_daily(
+                    "feature_used",
+                    format!("server_connected:{via}"),
+                    json!({ "feature": "server_connected", "via": via }),
+                );
                 if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
                     conn.live = Some((url.clone(), token.clone()));
                 }
@@ -479,11 +487,12 @@ async fn remember_address(id: &str, address: Option<&str>, token: &str) {
     }
 }
 
-/// Whether a quick tunnel's address is one Cloudflare no longer serves —
-/// rather than this Mac being offline, or the server behind a live address
-/// being down. Measured: a stopped tunnel's host answers 530 while its DNS
-/// lingers, then stops resolving at all; a live tunnel with nothing behind it
-/// answers 502.
+/// Whether a Cloudflare quick tunnel's address is one Cloudflare no longer
+/// serves — rather than this Mac being offline, or the server behind a live
+/// address being down. Servers tunnelled that way before #518, which come back
+/// under an OpenTunnel address once updated. Measured: a stopped tunnel's
+/// host answers 530 while its DNS lingers, then stops resolving at all; a live
+/// tunnel with nothing behind it answers 502.
 async fn tunnel_gone(url: &str) -> bool {
     // The host alone, or a port or a trailing slash fails the suffix check.
     let host = reqwest::Url::parse(url).ok().filter(|u| u.scheme() == "wss").and_then(|u| u.host_str().map(str::to_owned));
@@ -634,6 +643,7 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
     }
     save().await?;
     announce();
+    crate::analytics::track("feature_used", json!({ "feature": "server_added", "via": "address" }));
     let added = conns().iter().find(|c| c.saved.id == id).map(info);
     added.ok_or_else(|| "the server was removed while it was being added".into())
 }
@@ -754,6 +764,7 @@ pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<Server
     };
     save().await.map_err(failed)?;
     announce();
+    crate::analytics::track("feature_used", json!({ "feature": "server_added", "via": "ssh" }));
     let added = conns().iter().find(|c| c.saved.id == id).map(info);
     added.ok_or_else(|| failed("the server was removed while it was being added".into()))
 }

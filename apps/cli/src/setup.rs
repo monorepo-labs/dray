@@ -14,7 +14,7 @@ use clap::{Args, Subcommand};
 pub struct Install {
     /// Install these without asking, which is how a run with no terminal
     /// installs anything: git, gh, claude_code, codex, pi, fx, grok, and on
-    /// Linux browser, ffmpeg and cloudflared.
+    /// Linux browser and ffmpeg.
     #[arg(long, alias = "install", value_delimiter = ',', value_name = "TOOL")]
     tools: Vec<String>,
 }
@@ -35,8 +35,8 @@ pub enum ServerCommand {
     Stop,
     /// Show whether the server is running, and its tunnel address.
     Status,
-    /// Keep a public address in front of the server, through a Cloudflare
-    /// quick tunnel, or take it down. Linux only.
+    /// Keep a public address in front of the server, the same one across
+    /// restarts, or take it down.
     Tunnel {
         #[arg(value_enum)]
         state: OnOff,
@@ -62,8 +62,8 @@ pub enum ServiceCommand {
     Status,
     /// Stop the server and remove it from the background.
     Uninstall,
-    /// Keep a public address in front of the server, through a Cloudflare
-    /// quick tunnel, or take it down. Linux only.
+    /// Keep a public address in front of the server, the same one across
+    /// restarts, or take it down.
     Tunnel {
         #[arg(value_enum)]
         state: OnOff,
@@ -139,7 +139,6 @@ fn tools() -> Vec<Tool> {
     if LINUX {
         tools.push(Tool { id: "browser", name: "Browser for agents", bin: "" });
         tools.push(Tool { id: "ffmpeg", name: "ffmpeg", bin: "ffmpeg" });
-        tools.push(Tool { id: "cloudflared", name: "cloudflared", bin: "cloudflared" });
     }
     tools
 }
@@ -240,7 +239,6 @@ pub fn setup(args: Install) -> Result<(), String> {
                 "git" => (format!("git {DIM}(Dray needs it){RESET}"), true),
                 "browser" => (format!("Browser for agents {DIM}(system libraries for dray browser){RESET}"), false),
                 "ffmpeg" => (format!("ffmpeg {DIM}(dray browser record){RESET}"), false),
-                "cloudflared" => (format!("cloudflared {DIM}(public links: dray share, dray server tunnel){RESET}"), false),
                 _ => (t.name.to_string(), false),
             })
             .collect();
@@ -325,7 +323,6 @@ fn install(tool: &Tool, tty: Option<&File>) -> Result<(), InstallError> {
         }
         "browser" => return as_admin(&browser_script(), stdin()),
         "ffmpeg" => return apt("ffmpeg", stdin()),
-        "cloudflared" => cloudflared_script()?,
         "gh" if LINUX => GH_LINUX.to_string(),
         "gh" if find("brew").is_some() => "brew install gh".to_string(),
         "gh" => return Err(Failed("get it from https://cli.github.com".into())),
@@ -384,22 +381,6 @@ curl -fsSL "https://github.com/cli/cli/releases/download/v$v/gh_${v}_checksums.t
 tar -xzf "$t/gh.tgz" -C "$t"
 mkdir -p "$HOME/.local/bin" && mv "$t/$n/bin/gh" "$HOME/.local/bin/gh"
 "#;
-
-/// The release the app itself would download, into ~/.local/bin, where the
-/// app looks first. Linux's asset is the bare binary.
-fn cloudflared_script() -> Result<String, InstallError> {
-    let build = dray_proto::cloudflared_build().ok_or_else(|| Failed("no cloudflared build for this machine".into()))?;
-    Ok(format!(
-        r#"set -eu
-t=$(mktemp); trap 'rm -f "$t"' EXIT
-curl -fsSL "{url}" -o "$t"
-[ "$(sha256sum "$t" | cut -d' ' -f1)" = "{sha}" ] || {{ echo "cloudflared checksum mismatch" >&2; exit 1; }}
-mkdir -p "$HOME/.local/bin" && install -m 755 "$t" "$HOME/.local/bin/cloudflared"
-"#,
-        url = build.url(),
-        sha = build.sha256
-    ))
-}
 
 /// Logins still to do, as commands. Asked where a CLI answers by exit code;
 /// pi, fx and grok have no such question, so they are listed whenever present.
@@ -500,11 +481,8 @@ pub fn service(command: ServiceCommand) -> Result<(), String> {
             if !systemctl(false, &["status", UNIT, "--no-pager"]) {
                 return Err("the server is not running".into());
             }
-            if systemctl(true, &["is-enabled", TUNNEL_UNIT]) {
-                match tunnel_address()? {
-                    Some(url) => println!("\n{}", connect_text(&url)?),
-                    None => println!("\nThe tunnel has no address yet. See why: journalctl --user -u dray-tunnel -n 20"),
-                }
+            if let Some(url) = tunnel_address()? {
+                println!("\n{}", connect_text(&url)?);
             }
         }
         ServiceCommand::Tunnel { state: OnOff::On } => tunnel_on()?,
@@ -513,7 +491,7 @@ pub fn service(command: ServiceCommand) -> Result<(), String> {
             println!("The tunnel is down; the server is reachable over SSH alone.");
         }
         ServiceCommand::Uninstall => {
-            tunnel_off()?;
+            remove_tunnel_unit()?;
             // `stop`, not `disable --now`: a unit stays loaded after its file
             // moved or went, and `disable` refuses one with no file.
             let stopped = systemctl(true, &["stop", UNIT]);
@@ -577,43 +555,47 @@ fn unit_env_path(bin: &Path) -> Result<String, String> {
     Ok(format!("{dir}:{}:{}", homes.join(":"), std::env::var("PATH").unwrap_or_default()))
 }
 
-/// Installs `dray-tunnel.service` beside the server and waits for its address.
-/// `PartOf` restarts and stops it with `dray.service`, and `WantedBy` starts it
-/// whenever the server starts, boot included. Off until asked for: a public
-/// address is the reader's call.
+/// Asks the running server to serve itself at its public address, and waits
+/// for the address. The server remembers it, so it serves again whenever it
+/// starts, boot included. Off until asked for: a public address is the
+/// reader's call.
 fn tunnel_on() -> Result<(), String> {
-    cloudflared().ok_or(NO_CLOUDFLARED)?;
-    service_start()?;
-    let dray = std::env::current_exe().map_err(|e| format!("could not find the running dray binary: {e}"))?;
-    let unit = format!(
-        "[Unit]\nDescription=Dray tunnel\nAfter={UNIT}\nPartOf={UNIT}\n\n[Service]\nExecStart=\"{}\" tunnel\n\
-         Environment=\"PATH={}\"\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy={UNIT}\n",
-        unit_escape(&dray.display().to_string()),
-        unit_escape(&unit_env_path(&dray)?),
-    );
-    write_unit(&unit_file(TUNNEL_UNIT)?, &unit)?;
-    // A tunnel that died hard leaves its address behind, which the wait below
-    // would hand out before the new one is up.
-    if !systemctl(true, &["is-active", "--quiet", TUNNEL_UNIT]) {
-        let _ = std::fs::remove_file(dray_home()?.join(dray_proto::TUNNEL_URL_FILE));
+    remove_tunnel_unit()?;
+    // Where the app runs this Mac's server, that server is the one asked.
+    if may_serve().is_ok() {
+        service_start()?;
     }
-    if !systemctl(true, &["daemon-reload"]) || !systemctl(true, &["enable", "--now", TUNNEL_UNIT]) {
-        return Err(format!("systemd would not start the tunnel. See: systemctl --user status {TUNNEL_UNIT}"));
-    }
-    // Measured at ~6s from start to a registered address.
-    for _ in 0..60 {
+    set_remote_access(true)?;
+    // A first start provisions a certificate; measured well under a minute.
+    for _ in 0..240 {
         if let Some(url) = tunnel_address()? {
             println!("{}", connect_text(&url)?);
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
-    Err("the tunnel has no address after 30s. See why: journalctl --user -u dray-tunnel -n 20".into())
+    Err("the server has no public address after 2 minutes. See why: dray server status".into())
 }
 
-/// Takes the tunnel unit away, if there is one. The tunnel removes its own
-/// address file as it stops.
 fn tunnel_off() -> Result<(), String> {
+    remove_tunnel_unit()?;
+    set_remote_access(false)
+}
+
+fn set_remote_access(on: bool) -> Result<(), String> {
+    match super::send(dray_proto::Request::SetRemoteAccess(dray_proto::SetRemoteAccess { on }))? {
+        dray_proto::Response::RemoteAccess { .. } => Ok(()),
+        dray_proto::Response::Error { message } => Err(message),
+        other => Err(format!("unexpected answer from the server: {other:?}")),
+    }
+}
+
+/// Takes away the `dray-tunnel.service` an older CLI wrote to run
+/// cloudflared, if there is one. The server runs the tunnel itself now.
+fn remove_tunnel_unit() -> Result<(), String> {
+    if MAC {
+        return Ok(());
+    }
     let file = unit_file(TUNNEL_UNIT)?;
     // Separately, and judged by what is left running: `disable --now` can
     // refuse a unit whose file is already gone and still be running it. An
@@ -621,16 +603,14 @@ fn tunnel_off() -> Result<(), String> {
     let _ = systemctl(true, &["disable", TUNNEL_UNIT]);
     let _ = systemctl(true, &["stop", TUNNEL_UNIT]);
     if systemctl(true, &["is-active", "--quiet", TUNNEL_UNIT]) {
-        return Err(format!("the tunnel is still running. See: systemctl --user status {TUNNEL_UNIT}"));
+        return Err(format!("the old tunnel is still running. See: systemctl --user status {TUNNEL_UNIT}"));
     }
     if file.exists() {
         std::fs::remove_file(&file).map_err(|e| format!("could not remove {}: {e}", file.display()))?;
+        let _ = systemctl(true, &["daemon-reload"]);
     }
-    let _ = systemctl(true, &["daemon-reload"]);
     Ok(())
 }
-
-const NO_CLOUDFLARED: &str = "cloudflared is not installed: dray server install --tools cloudflared";
 
 /// The Dray directory, `DRAY_HOME` where set, as the server reads it.
 fn dray_home() -> Result<PathBuf, String> {
@@ -641,14 +621,7 @@ fn dray_home() -> Result<PathBuf, String> {
         .ok_or_else(|| "could not resolve your home directory".into())
 }
 
-/// cloudflared where `dray server install` or a package manager put it, or where an
-/// earlier `dray share` downloaded it.
-fn cloudflared() -> Option<PathBuf> {
-    let downloaded = dray_home().ok()?.join("cloudflared").join(dray_proto::CLOUDFLARED_VERSION).join("cloudflared");
-    find("cloudflared").or_else(|| downloaded.is_file().then_some(downloaded))
-}
-
-/// The address the running tunnel wrote, if one is up.
+/// The server's public address, while Remote access is on.
 fn tunnel_address() -> Result<Option<String>, String> {
     let file = dray_home()?.join(dray_proto::TUNNEL_URL_FILE);
     Ok(std::fs::read_to_string(file).ok().map(|u| u.trim().to_string()).filter(|u| !u.is_empty()))
@@ -674,133 +647,16 @@ fn connect_text(url: &str) -> Result<String, String> {
     Ok(format!(
         "Tunnel up: {wss}\n\nIn the Dray app, Settings, Servers, Add server, Use an address and token, \
          and paste this into Address:\n\n   {wss} {}\n\n{DIM}Anyone holding that line can use this server. \
-         The address changes when the tunnel restarts; the token does not.{RESET}",
+         The address stays the same across restarts.{RESET}",
         serve_token()?
     ))
 }
 
-/// `dray tunnel`: a Cloudflare quick tunnel in front of this machine's
-/// server, in the foreground. Writes the address where the app's SSH connect
-/// reads it, and removes it once the tunnel is down. Hidden from `--help`:
-/// what runs it is the unit `dray server tunnel on` writes.
-pub fn tunnel(args: Tunnel) -> Result<(), String> {
-    use std::io::{BufRead, BufReader};
-    use std::sync::atomic::Ordering;
-
-    serve_token()?;
-    if std::net::TcpStream::connect(("127.0.0.1", args.port)).is_err() {
-        return Err(format!("no Dray server on port {}. Start it first: dray server start", args.port));
-    }
-    let exe = cloudflared().ok_or(NO_CLOUDFLARED)?;
-    let mut child = Command::new(exe)
-        .args(["tunnel", "--no-autoupdate", "--grace-period", "1s"])
-        .args(["--url", &format!("http://127.0.0.1:{}", args.port)])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not run cloudflared: {e}"))?;
-    hand_stop_signals_to(child.id());
-
-    let mut lines = BufReader::new(child.stderr.take().expect("piped")).lines();
-    let (mut url, mut registered, mut said) = (None, false, None);
-    for line in lines.by_ref() {
-        let Ok(line) = line else { break };
-        url = url.or_else(|| dray_proto::quick_tunnel_url(&line));
-        registered |= line.contains(dray_proto::TUNNEL_REGISTERED);
-        if line.contains(" ERR ") {
-            said = Some(line);
-        } else if let (true, Some(url)) = (registered, &url) {
-            wait_for_dns(url);
-            if STOPPED.load(Ordering::Relaxed) {
-                // Stopped while waiting: the address is already dead.
-                let _ = child.wait();
-                return Ok(());
-            }
-            let file = dray_home()?.join(dray_proto::TUNNEL_URL_FILE);
-            let published = (|| {
-                let part = file.with_extension("part");
-                std::fs::write(&part, format!("{url}\n"))
-                    .and_then(|()| std::fs::rename(&part, &file))
-                    .map_err(|e| format!("could not write {}: {e}", file.display()))?;
-                connect_text(url)
-            })();
-            match published {
-                Ok(text) => println!("{text}"),
-                Err(e) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    remove_if_ours(&file, url);
-                    return Err(e);
-                }
-            }
-            // cloudflared logs for as long as it runs, and a pipe nobody
-            // drains fills and stalls it.
-            std::thread::spawn(move || lines.for_each(drop));
-            let _ = child.wait();
-            remove_if_ours(&file, url);
-            return if STOPPED.load(Ordering::Relaxed) { Ok(()) } else { Err("the tunnel went down".into()) };
-        }
-    }
-    let _ = child.wait();
-    if STOPPED.load(Ordering::Relaxed) {
-        return Ok(());
-    }
-    let said = said.map(|l| format!(": {}", l.trim())).unwrap_or_default();
-    Err(format!("cloudflared exited without an address{said}"))
-}
-
-/// Removes the address file only while it holds `url`: another tunnel may own
-/// it, and taking its address hides it from SSH and the Origin check.
-fn remove_if_ours(file: &Path, url: &str) {
-    if std::fs::read_to_string(file).is_ok_and(|u| u.trim() == url) {
-        let _ = std::fs::remove_file(file);
-    }
-}
-
-/// Until the tunnel's name resolves, so nobody's resolver asks early and
-/// caches the miss: see `TUNNEL_REGISTERED`. Through curl, which every server
-/// that ran the install line has; give up after 15s and hand it out anyway.
-fn wait_for_dns(url: &str) {
-    let query = format!("{}{}", dray_proto::DOH_QUERY, url.trim_start_matches("https://"));
-    // A deadline, not a count: with 1.1.1.1 unreachable each ask takes its
-    // whole timeout. And a stop ends the wait, the tunnel already going down.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    while std::time::Instant::now() < deadline && !STOPPED.load(std::sync::atomic::Ordering::Relaxed) {
-        let answer = Command::new("curl")
-            .args(["-fsS", "--max-time", "3", "-H", "accept: application/dns-json", &query])
-            .stderr(Stdio::null())
-            .output();
-        match answer {
-            Ok(out) if String::from_utf8_lossy(&out.stdout).contains("\"Status\":0") => return,
-            Err(_) => return std::thread::sleep(std::time::Duration::from_secs(5)),
-            _ => std::thread::sleep(std::time::Duration::from_millis(500)),
-        }
-    }
-}
-
-static STOPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static CHILD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-
-/// Ctrl-C, `systemctl stop` or a plain `kill` reach cloudflared, which takes
-/// the tunnel down, while this process lives on to remove the address file. A
-/// handler rather than ignoring them, since an ignored signal stays ignored
-/// across `exec` — cloudflared is spawned first for that reason too.
-fn hand_stop_signals_to(pid: u32) {
-    extern "C" {
-        fn signal(sig: i32, handler: extern "C" fn(i32)) -> usize;
-        fn kill(pid: i32, sig: i32) -> i32;
-    }
-    extern "C" fn pass_on(sig: i32) {
-        STOPPED.store(true, std::sync::atomic::Ordering::Relaxed);
-        // Async-signal-safe: an atomic load and kill(2).
-        unsafe { kill(CHILD.load(std::sync::atomic::Ordering::Relaxed), sig) };
-    }
-    CHILD.store(pid as i32, std::sync::atomic::Ordering::Relaxed);
-    // SIGHUP, SIGINT, SIGTERM: the same numbers on Linux and macOS.
-    for sig in [1, 2, 15] {
-        unsafe { signal(sig, pass_on) };
-    }
+/// `dray tunnel`, which a `dray-tunnel.service` an older CLI wrote still
+/// runs: asks the server to serve itself at its public address and exits.
+/// Hidden from `--help`.
+pub fn tunnel(_: Tunnel) -> Result<(), String> {
+    set_remote_access(true)
 }
 
 fn systemctl(quiet: bool, args: &[&str]) -> bool {
@@ -1016,8 +872,10 @@ fn agent_service(command: ServiceCommand) -> Result<(), String> {
                 println!("\n{}", connect_text(&url)?);
             }
         }
-        ServiceCommand::Tunnel { .. } => {
-            return Err("dray server tunnel runs on Linux for now. On a Mac, run dray tunnel under tmux.".into());
+        ServiceCommand::Tunnel { state: OnOff::On } => tunnel_on()?,
+        ServiceCommand::Tunnel { state: OnOff::Off } => {
+            tunnel_off()?;
+            println!("The tunnel is down.");
         }
         ServiceCommand::Uninstall => {
             let path = agent_plist_path()?;
