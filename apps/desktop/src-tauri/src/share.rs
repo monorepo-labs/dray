@@ -241,7 +241,10 @@ async fn dial(port: u16, tasks: &Mutex<JoinSet<()>>) -> std::io::Result<hyper::c
     // `localhost`, not `127.0.0.1`: a dev server may listen on `::1` alone.
     let upstream = TcpStream::connect(("localhost", port)).await?;
     let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(upstream)).await.map_err(std::io::Error::other)?;
-    tasks.lock().unwrap().spawn(async move { drop(conn.with_upgrades().await) });
+    let mut tasks = tasks.lock().unwrap();
+    // Reap drivers of connections the dev server already closed.
+    while tasks.try_join_next().is_some() {}
+    tasks.spawn(async move { drop(conn.with_upgrades().await) });
     Ok(sender)
 }
 
