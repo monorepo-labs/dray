@@ -9,7 +9,6 @@
 //! tunnel, so a shared link coming and going must not do that to every Mac
 //! connected to this one.
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -30,7 +29,14 @@ struct Live {
     routes: Routes,
 }
 
-static LIVE: tokio::sync::Mutex<BTreeMap<&'static str, Live>> = tokio::sync::Mutex::const_new(BTreeMap::new());
+// One lock per profile: a first share's certificate wait must not hold up
+// turning Remote access off.
+static REMOTE_LIVE: tokio::sync::Mutex<Option<Live>> = tokio::sync::Mutex::const_new(None);
+static SHARE_LIVE: tokio::sync::Mutex<Option<Live>> = tokio::sync::Mutex::const_new(None);
+
+fn slot(profile: &str) -> &'static tokio::sync::Mutex<Option<Live>> {
+    if profile == REMOTE { &REMOTE_LIVE } else { &SHARE_LIVE }
+}
 
 async fn client() -> Result<Client> {
     let root = crate::store::get_home_app_dir().await?.join("opentunnel");
@@ -55,14 +61,14 @@ fn route_name(token: &str, label: &str) -> String {
 /// its `https://` address once the relay has it attached.
 pub async fn expose(profile: &'static str, label: &str, target: String) -> Result<String> {
     let (name, url, mut status) = {
-        let mut live = LIVE.lock().await;
-        if !live.contains_key(profile) {
+        let mut live = slot(profile).lock().await;
+        if live.is_none() {
             let client = client().await?;
             let identity = client.ensure(profile).await.context("could not set up the tunnel")?;
             let tunnel = client.connect(profile, Routes::new())?;
-            live.insert(profile, Live { tunnel, hostname: identity.hostname, token: identity.token, routes: Routes::new() });
+            *live = Some(Live { tunnel, hostname: identity.hostname, token: identity.token, routes: Routes::new() });
         }
-        let entry = live.get_mut(profile).expect("inserted above");
+        let entry = live.as_mut().expect("set above");
         let name = route_name(&entry.token, label);
         entry.routes.insert(name.clone(), target.clone().into());
         entry.tunnel.set_routes(entry.routes.clone())?;
@@ -87,7 +93,7 @@ pub async fn expose(profile: &'static str, label: &str, target: String) -> Resul
         Ok(Ok(())) => Ok(url),
         Ok(Err(e)) => {
             // A stopped tunnel stays stopped; the next expose starts over.
-            LIVE.lock().await.remove(profile);
+            *slot(profile).lock().await = None;
             Err(e)
         }
         Err(_) => {
@@ -105,8 +111,8 @@ pub async fn expose(profile: &'static str, label: &str, target: String) -> Resul
 /// and started again names the same route, and the stop's late withdrawal must
 /// not take the new one down.
 pub async fn withdraw(profile: &'static str, label: &str, target: Option<&str>) {
-    let mut live = LIVE.lock().await;
-    let Some(entry) = live.get_mut(profile) else { return };
+    let mut live = slot(profile).lock().await;
+    let Some(entry) = live.as_mut() else { return };
     let name = route_name(&entry.token, label);
     let owned = entry.routes.get(&name).is_some_and(|r| target.is_none_or(|t| r.target == t));
     if !owned {
@@ -115,7 +121,7 @@ pub async fn withdraw(profile: &'static str, label: &str, target: Option<&str>) 
     entry.routes.remove(&name);
     if entry.routes.is_empty() {
         // Dropping the handle stops it.
-        live.remove(profile);
+        *live = None;
     } else {
         let _ = entry.tunnel.set_routes(entry.routes.clone());
     }
@@ -123,7 +129,7 @@ pub async fn withdraw(profile: &'static str, label: &str, target: Option<&str>) 
 
 /// `profile`'s tunnel state as it moves, while it has one.
 pub async fn status(profile: &str) -> Option<tokio::sync::watch::Receiver<opentunnel::Status>> {
-    LIVE.lock().await.get(profile).map(|entry| entry.tunnel.status_watch())
+    slot(profile).lock().await.as_ref().map(|entry| entry.tunnel.status_watch())
 }
 
 #[cfg(test)]

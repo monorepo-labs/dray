@@ -194,13 +194,11 @@ async fn proxy(listener: TcpListener, port: u16, link: Arc<OnceLock<String>>) {
 /// One visitor's connection, request by request, with WebSocket upgrades
 /// (HMR) spliced through whole.
 async fn relay(visitor: TcpStream, port: u16, link: Arc<OnceLock<String>>) {
-    // `localhost`, not `127.0.0.1`: a dev server may listen on `::1` alone.
-    let Ok(upstream) = TcpStream::connect(("localhost", port)).await else { return };
-    let Ok((sender, conn)) = hyper::client::conn::http1::handshake(TokioIo::new(upstream)).await else { return };
     // The upstream driver and any spliced upgrade, held so they end with this task.
     let tasks = Arc::new(Mutex::new(JoinSet::new()));
-    tasks.lock().unwrap().spawn(async move { drop(conn.with_upgrades().await) });
-    let sender = Arc::new(tokio::sync::Mutex::new(sender));
+    // Dialled on the first request, and again whenever the dev server has
+    // closed an idle one, which it may well do before the visitor does.
+    let sender = Arc::new(tokio::sync::Mutex::new(None));
     let host = HeaderValue::from_str(&format!("localhost:{port}")).expect("ascii");
     // With the port, to match `Host`, or Next's server actions refuse the pair.
     let local = HeaderValue::from_str(&format!("http://localhost:{port}")).expect("ascii");
@@ -214,7 +212,11 @@ async fn relay(visitor: TcpStream, port: u16, link: Arc<OnceLock<String>>) {
                 req.headers_mut().insert(ORIGIN, local);
             }
             let upgrading = req.headers().contains_key(UPGRADE).then(|| hyper::upgrade::on(&mut req));
-            let mut res = sender.lock().await.send_request(req).await?;
+            let mut upstream = sender.lock().await;
+            if upstream.as_ref().is_none_or(hyper::client::conn::http1::SendRequest::is_closed) {
+                *upstream = Some(dial(port, &spliced).await?);
+            }
+            let mut res = upstream.as_mut().expect("dialled above").send_request(req).await.map_err(std::io::Error::other)?;
             if let (Some(visitor), StatusCode::SWITCHING_PROTOCOLS) = (upgrading, res.status()) {
                 let server = hyper::upgrade::on(&mut res);
                 spliced.lock().unwrap().spawn(async move {
@@ -223,7 +225,7 @@ async fn relay(visitor: TcpStream, port: u16, link: Arc<OnceLock<String>>) {
                     }
                 });
             }
-            Ok::<_, hyper::Error>(res)
+            Ok::<_, std::io::Error>(res)
         }
     });
     let _ = hyper::server::conn::http1::Builder::new()
@@ -232,6 +234,15 @@ async fn relay(visitor: TcpStream, port: u16, link: Arc<OnceLock<String>>) {
         .await;
     let mut tasks = std::mem::take(&mut *tasks.lock().unwrap());
     while tasks.join_next().await.is_some() {}
+}
+
+/// A connection to the dev server, its driver held in `tasks`.
+async fn dial(port: u16, tasks: &Mutex<JoinSet<()>>) -> std::io::Result<hyper::client::conn::http1::SendRequest<Incoming>> {
+    // `localhost`, not `127.0.0.1`: a dev server may listen on `::1` alone.
+    let upstream = TcpStream::connect(("localhost", port)).await?;
+    let (sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(upstream)).await.map_err(std::io::Error::other)?;
+    tasks.lock().unwrap().spawn(async move { drop(conn.with_upgrades().await) });
+    Ok(sender)
 }
 
 #[cfg(test)]
@@ -417,5 +428,33 @@ mod tests {
         let heads = seen.await.unwrap().to_lowercase();
         assert_eq!(heads.matches(&format!("host: localhost:{port}")).count(), 2, "{heads}");
         assert!(!heads.contains("opentunnel"), "{heads}");
+    }
+
+    /// A dev server dropping an idle connection costs the visitor nothing:
+    /// their next request goes out on a fresh one.
+    #[tokio::test]
+    async fn a_dropped_upstream_is_dialled_again() {
+        let server = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = server.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            // One request per connection, then closed, with no `connection: close`.
+            while let Ok((mut s, _)) = server.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf).await;
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok").await;
+            }
+        });
+        let front = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let front_addr = front.local_addr().unwrap();
+        tokio::spawn(proxy(front, port, Default::default()));
+
+        let mut visitor = TcpStream::connect(front_addr).await.unwrap();
+        let mut buf = [0u8; 4096];
+        for _ in 0..2 {
+            visitor.write_all(b"GET / HTTP/1.1\r\nhost: x\r\n\r\n").await.unwrap();
+            let n = visitor.read(&mut buf).await.unwrap();
+            assert!(String::from_utf8_lossy(&buf[..n]).ends_with("ok"), "{}", String::from_utf8_lossy(&buf[..n]));
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
     }
 }

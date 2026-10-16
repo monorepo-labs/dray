@@ -1561,10 +1561,16 @@ mod tests {
             std::thread::sleep(Duration::from_millis(500));
         }
         eprintln!("same address after a restart, in {:?}", t0.elapsed());
-        set_server_on(added.id.clone(), true).await.unwrap();
-        connected("after the restart");
+        // No Try again: a call fails on the dead socket until the row has
+        // found its own way back.
+        let t0 = std::time::Instant::now();
+        let call = || tokio::time::timeout(Duration::from_secs(5), server_invoke(added.id.clone(), "list_projects".into(), json!({})));
+        while !matches!(call().await, Ok(Ok(_))) {
+            assert!(t0.elapsed() < Duration::from_secs(90), "never came back: {:?}", list_servers()[0].error);
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        eprintln!("answered after the restart in {:?}", t0.elapsed());
         assert!(list_servers()[0].fix.is_none(), "asked the reader for something");
-        assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_ok());
         remove_server(added.id).await.unwrap();
 
         // Over SSH: the address rides the login.
