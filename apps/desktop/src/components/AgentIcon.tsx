@@ -1,6 +1,7 @@
 import { Bot } from "lucide-react";
 
 import { acpLabel, findAcpAgent, useAcpAgents } from "@/lib/acpAgents";
+import { LOCAL, type ServerId } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { Harness } from "@/types/events";
 
@@ -114,10 +115,13 @@ const CLAUDE_RUST = "text-[#d97757]";
 /// loudest thing on it.
 export default function AgentIcon({
   harness,
+  server = LOCAL,
   className,
   brand = false,
 }: {
   harness: Harness;
+  /// Whose list names an ACP agent, since a custom one can reuse an id.
+  server?: ServerId;
   className?: string;
   brand?: boolean;
 }) {
@@ -136,7 +140,7 @@ export default function AgentIcon({
       // second copy is a second thing to redraw when the logo moves.
       return <GrokIcon className={className} />;
     default:
-      if (harness.startsWith("acp:")) return <AcpIcon harness={harness} className={className} />;
+      if (harness.startsWith("acp:")) return <AcpIcon harness={harness} server={server} className={className} />;
       return <ClaudeIcon className={cn(brand && CLAUDE_RUST, className)} />;
   }
 }
@@ -145,10 +149,10 @@ export default function AgentIcon({
 /// `<img>` paints black, so dark mode inverts them. A CSS mask would take
 /// `currentColor` like the marks above, but the CDN sends no CORS header and a
 /// cross-origin mask draws nothing. No icon draws a bot.
-function AcpIcon({ harness, className }: { harness: Harness; className?: string }) {
-  useAcpAgents();
-  const agent = findAcpAgent(harness);
-  const label = acpLabel(harness);
+function AcpIcon({ harness, server, className }: { harness: Harness; server: ServerId; className?: string }) {
+  useAcpAgents(server);
+  const agent = findAcpAgent(harness, server);
+  const label = acpLabel(harness, server);
   if (!agent?.icon) return <Bot role="img" aria-label={label} className={cn("size-4 shrink-0", className)} />;
   return <img src={agent.icon} alt={label} className={cn("size-4 shrink-0 dark:invert", className)} />;
 }

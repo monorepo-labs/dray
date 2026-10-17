@@ -128,8 +128,8 @@ impl Mapper {
                 meta,
             } => {
                 // Some agents open a call with its first update, and some open
-                // one before its arguments. Either is drawn once there is
-                // something to draw, or at the latest when it finishes.
+                // one before its arguments. Either is drawn on its first update,
+                // which is where a held call's arguments arrive.
                 let mut out = Vec::new();
                 let undrawn = self.undrawn.remove(&tool_call_id);
                 if undrawn.is_some() || !self.calls.contains_key(&tool_call_id) {
@@ -140,12 +140,7 @@ impl Mapper {
                     }
                     let title = title.or_else(|| known.and_then(|k| k.title));
                     let kind = undrawn.unwrap_or_default();
-                    if is_empty(&input) && !status.is_some_and(ToolStatus::is_final) {
-                        self.calls.insert(tool_call_id.clone(), KnownCall { title, input });
-                        self.undrawn.insert(tool_call_id.clone(), kind);
-                    } else {
-                        out.extend(self.open_call(tool_call_id.clone(), title, kind, input));
-                    }
+                    out.extend(self.open_call(tool_call_id.clone(), title, kind, input));
                 }
 
                 let text: String = content
@@ -246,8 +241,23 @@ impl Mapper {
         out
     }
 
+    /// Draws every call still held for its arguments, so a turn cut short
+    /// leaves them on screen for the transcript to mark unfinished.
+    fn flush_undrawn(&mut self) -> Vec<AgentEvent> {
+        let mut held: Vec<(String, ToolKind)> = self.undrawn.drain().collect();
+        held.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut out = Vec::new();
+        for (id, kind) in held {
+            let known = self.calls.remove(&id);
+            let (title, input) = known.map_or((None, json!({})), |k| (k.title, k.input));
+            out.extend(self.open_call(id, title, kind, input));
+        }
+        out
+    }
+
     fn prompt_done(&mut self, response: PromptResponse) -> Vec<AgentEvent> {
-        let mut out = self.close_open();
+        let mut out = self.flush_undrawn();
+        out.extend(self.close_open());
         let (status, final_text) = match response.stop_reason.as_str() {
             "refusal" | "refused" => (TurnStatus::Error, Some("The agent refused this prompt.".to_string())),
             "max_tokens" => (
@@ -275,7 +285,8 @@ impl Mapper {
     }
 
     fn prompt_failed(&mut self, message: String) -> Vec<AgentEvent> {
-        let mut out = self.close_open();
+        let mut out = self.flush_undrawn();
+        out.extend(self.close_open());
         let auth_failed = mentions_any(&message, LOGIN_NEEDLES);
         out.push(self.turn_completed(TurnStatus::Error, None, Some(message), auth_failed, None));
         out
@@ -539,5 +550,23 @@ mod tests {
         assert!(events.iter().any(|e| matches!(e.payload, P::ToolCallStarted { .. })));
         assert!(events.iter().any(|e| matches!(&e.payload,
             P::ToolCallCompleted { result, .. } if result.is_error && result.text == "no such file")));
+    }
+
+    /// A call still waiting on its arguments when the turn is cut short is
+    /// drawn, so the transcript can mark it unfinished instead of losing it.
+    #[test]
+    fn a_held_call_is_drawn_when_the_turn_ends() {
+        let mut mapper = Mapper::new("s".into(), Harness::Acp("test"), Arc::new(AtomicU64::new(0)));
+        let params = json!({"sessionId": "x", "update":
+            {"sessionUpdate":"tool_call","toolCallId":"c","title":"Run","kind":"execute","status":"pending"}});
+        let Ok(note) = parse_notification("session/update", params) else { panic!("unparsed") };
+        assert!(mapper.map(AcpEvent::Update(note.update)).is_empty());
+
+        let done = serde_json::from_value(json!({"stopReason": "cancelled"})).unwrap();
+        let events = mapper.map(AcpEvent::PromptDone(done));
+        assert!(events
+            .iter()
+            .any(|e| matches!(&e.payload, P::ToolCallStarted { title: Some(t), .. } if t == "Run")));
+        assert!(matches!(events.last().unwrap().payload, P::TurnCompleted { .. }));
     }
 }

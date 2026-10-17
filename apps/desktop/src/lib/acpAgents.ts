@@ -51,9 +51,12 @@ export function isAcp(harness: Harness): boolean {
   return harness.startsWith("acp:");
 }
 
-/// The agent behind a harness on whichever server lists it — the registry is
-/// the same everywhere, so any answer names it.
-export function findAcpAgent(harness: Harness): AcpAgent | undefined {
+/// The agent behind a harness on `server`. A custom agent can reuse an id on
+/// another server, so another server's list answers only while this one's is
+/// still out — the registry being the same everywhere.
+export function findAcpAgent(harness: Harness, server?: ServerId): AcpAgent | undefined {
+  const own = server === undefined ? undefined : lists.get(server);
+  if (own) return own.find((a) => a.harness === harness);
   for (const list of lists.values()) {
     const found = list.find((a) => a.harness === harness);
     if (found) return found;
@@ -62,8 +65,8 @@ export function findAcpAgent(harness: Harness): AcpAgent | undefined {
 }
 
 /// The agent's own name, or its id while no list has landed.
-export function acpLabel(harness: Harness): string {
-  return findAcpAgent(harness)?.name ?? harness.slice("acp:".length);
+export function acpLabel(harness: Harness, server?: ServerId): string {
+  return findAcpAgent(harness, server)?.name ?? harness.slice("acp:".length);
 }
 
 export async function setAcpAgentEnabled(harness: Harness, enabled: boolean, server: ServerId = LOCAL) {

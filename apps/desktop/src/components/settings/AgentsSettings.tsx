@@ -122,6 +122,7 @@ export default function AgentsSettings({ cwd }: { cwd: string }) {
           <AgentRow
             key={agent.harness}
             agent={agent}
+            server={server}
             onToggle={(on) => void run(() => setAcpAgentEnabled(agent.harness, on, server))}
             onRemove={() => void run(() => removeCustomAcpAgent(agent.id, server))}
           />
@@ -136,17 +137,19 @@ export default function AgentsSettings({ cwd }: { cwd: string }) {
 
 function AgentRow({
   agent,
+  server,
   onToggle,
   onRemove,
 }: {
   agent: AcpAgent;
+  server: ServerId;
   onToggle: (on: boolean) => void;
   onRemove: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   return (
     <div className="flex items-start gap-3 border-b border-border py-2.5 last:border-b-0">
-      <AgentIcon harness={agent.harness} className="mt-0.5 size-4 text-muted-foreground" />
+      <AgentIcon harness={agent.harness} server={server} className="mt-0.5 size-4 text-muted-foreground" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-ui font-medium">{agent.name}</span>
         {agent.description && (
