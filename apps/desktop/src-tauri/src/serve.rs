@@ -1171,6 +1171,12 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         refresh_models() => ok(crate::refresh_models().await);
         set_fx_provider(provider: String) => crate::set_fx_provider(provider).await;
         list_slash_commands(cwd: String, harness: Harness) => crate::list_slash_commands(&cwd, harness).await;
+        agent_modes(harness: Harness, session_id: Option<String>) => ok(crate::agent_modes(harness, session_id).await);
+        set_agent_mode(session_id: String, mode: String) => crate::set_agent_mode(&session_id, &mode, sink).await;
+        list_acp_agents(recheck: Option<bool>) => ok(crate::harness::agents::catalog::list_acp_agents(recheck).await);
+        set_acp_agent_enabled(id: String, enabled: bool) => crate::harness::agents::catalog::set_acp_agent_enabled(id, enabled).await;
+        save_custom_acp_agent(agent: crate::harness::agents::catalog::CustomAgent) => crate::harness::agents::catalog::save_custom_acp_agent(agent).await;
+        remove_custom_acp_agent(id: String) => crate::harness::agents::catalog::remove_custom_acp_agent(id).await;
         agent_accounts(cwd: String) => ok(crate::accounts::agent_accounts(cwd).await);
         agent_auth_options(harness: Harness, provider: Option<String>) =>
             ok(crate::accounts::agent_auth_options(harness, provider));

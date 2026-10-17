@@ -53,6 +53,41 @@ impl std::fmt::Display for RpcError {
     }
 }
 
+/// The id a server request arrived under, answered back verbatim.
+///
+/// JSON-RPC allows a number or a string and each agent picks: Codex, fx and
+/// grok count integers, Devin sends UUIDs. Read as integers alone, a string id
+/// fell into the notification arm and the request was never answered — a hung
+/// turn with nothing on screen saying why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestId {
+    Num(i64),
+    Str(String),
+}
+
+impl From<i64> for RequestId {
+    fn from(id: i64) -> Self {
+        RequestId::Num(id)
+    }
+}
+
+impl RequestId {
+    fn of(value: &Value) -> Option<Self> {
+        match value {
+            Value::Number(n) => n.as_i64().map(RequestId::Num),
+            Value::String(s) => Some(RequestId::Str(s.clone())),
+            _ => None,
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        match self {
+            RequestId::Num(n) => json!(n),
+            RequestId::Str(s) => json!(s),
+        }
+    }
+}
+
 /// One line read off the server, sorted by what it is rather than what it says.
 ///
 /// JSON-RPC tells the three apart structurally: a request has both an id and a
@@ -62,7 +97,7 @@ impl std::fmt::Display for RpcError {
 pub enum Incoming {
     /// The server is asking us something and is blocked until we answer.
     Request {
-        id: i64,
+        id: RequestId,
         method: String,
         params: Value,
     },
@@ -156,8 +191,8 @@ impl RpcClient {
     /// Silence is not neutral — the server blocks its turn on this, the same
     /// way Claude's `can_use_tool` does — so every server request must reach
     /// either this or [`Self::respond_err`].
-    pub fn respond(&self, id: i64, result: Value) -> Result<()> {
-        self.send(&json!({"jsonrpc": "2.0", "id": id, "result": result}))
+    pub fn respond(&self, id: RequestId, result: Value) -> Result<()> {
+        self.send(&json!({"jsonrpc": "2.0", "id": id.to_json(), "result": result}))
     }
 
     /// Refuses a request the server made of us.
@@ -165,10 +200,10 @@ impl RpcClient {
     /// A JSON-RPC *error*, not silence and not a made-up success: a request of
     /// a kind this build cannot put to the user has no honest answer, and
     /// inventing one decides on the user's behalf.
-    pub fn respond_err(&self, id: i64, code: i64, message: &str) -> Result<()> {
+    pub fn respond_err(&self, id: RequestId, code: i64, message: &str) -> Result<()> {
         self.send(&json!({
             "jsonrpc": "2.0",
-            "id": id,
+            "id": id.to_json(),
             "error": {"code": code, "message": message},
         }))
     }
@@ -184,21 +219,28 @@ impl RpcClient {
         };
 
         let method = value.get("method").and_then(Value::as_str);
-        // Absent and null are both "no id" here. Only an integer id can be
-        // ours: the counter above mints nothing else.
-        let id = value.get("id").and_then(Value::as_i64);
+        let params = || value.get("params").cloned().unwrap_or(Value::Null);
 
-        match (id, method) {
-            (Some(id), Some(method)) => Incoming::Request {
-                id,
-                method: method.to_string(),
-                params: value.get("params").cloned().unwrap_or(Value::Null),
-            },
-            (None, Some(method)) => Incoming::Notification {
-                method: method.to_string(),
-                params: value.get("params").cloned().unwrap_or(Value::Null),
-            },
-            (Some(id), None) => {
+        if let Some(method) = method {
+            // A request's id is the server's and may be a string. Absent and
+            // null are both "no id", which makes it a notification.
+            return match value.get("id").and_then(RequestId::of) {
+                Some(id) => Incoming::Request {
+                    id,
+                    method: method.to_string(),
+                    params: params(),
+                },
+                None => Incoming::Notification {
+                    method: method.to_string(),
+                    params: params(),
+                },
+            };
+        }
+
+        // A response's id can only be ours, and the counter above mints
+        // integers alone.
+        match value.get("id").and_then(Value::as_i64) {
+            Some(id) => {
                 let outcome = match value.get("error") {
                     Some(err) => Err(RpcError {
                         code: err.get("code").and_then(Value::as_i64).unwrap_or(0),
@@ -214,7 +256,7 @@ impl RpcClient {
                 let matched = self.pending.settle(&id, outcome);
                 Incoming::Response { id, matched }
             }
-            (None, None) => Incoming::Malformed,
+            None => Incoming::Malformed,
         }
     }
 
@@ -290,7 +332,16 @@ mod tests {
             client
                 .accept(r#"{"id":0,"method":"item/commandExecution/requestApproval","params":{}}"#)
                 .await,
-            Incoming::Request { id: 0, .. }
+            Incoming::Request { id: RequestId::Num(0), .. }
+        ));
+
+        // Devin's permission requests carry a UUID, and must still read as a
+        // request rather than a notification nobody answers.
+        assert!(matches!(
+            client
+                .accept(r#"{"id":"39b34882","method":"session/request_permission","params":{}}"#)
+                .await,
+            Incoming::Request { id: RequestId::Str(_), .. }
         ));
 
         assert!(matches!(

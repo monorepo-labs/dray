@@ -58,6 +58,39 @@ async fn cached<T: Clone>(slot: &'static OnceCell<T>, resolve: impl Future<Outpu
     slot.get_or_init(|| resolve).await.clone()
 }
 
+/// Binaries ACP agents launch through, keyed by name — one slot per agent would
+/// be a static per registry entry. A miss is cached too, until
+/// [`forget_acp_agents`].
+static ACP_PATHS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, PathBuf>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// The absolute path to an ACP agent's binary (or `npx`/`uvx`), or the bare
+/// name where it cannot be found.
+pub async fn acp_agent(bin: &str) -> PathBuf {
+    if let Some(hit) = ACP_PATHS.lock().unwrap().get(bin) {
+        return hit.clone();
+    }
+    let found = or_bare(bin).await;
+    ACP_PATHS.lock().unwrap().insert(bin.to_string(), found.clone());
+    found
+}
+
+/// Whether `bin` resolves without spawning a login shell. For listing every
+/// registry agent at once, where a shell per miss would take seconds; a cached
+/// full answer wins where one exists.
+pub fn acp_agent_found(bin: &str) -> bool {
+    if let Some(hit) = ACP_PATHS.lock().unwrap().get(bin) {
+        return hit.is_absolute();
+    }
+    search_path(bin).or_else(|| search_known_dirs(bin)).is_some()
+}
+
+/// Drops every cached ACP answer, so an agent installed while Dray runs is
+/// found on the next look.
+pub fn forget_acp_agents() {
+    ACP_PATHS.lock().unwrap().clear();
+}
+
 /// Resolves `name`, or the bare name for [`claude`]'s reason.
 async fn or_bare(name: &str) -> PathBuf {
     resolve(name).await.unwrap_or_else(|| PathBuf::from(name))
@@ -256,6 +289,12 @@ pub async fn agent_binary(harness: Harness) -> PathBuf {
         Harness::Pi => pi().await,
         Harness::Fx => fx().await,
         Harness::Grok => grok().await,
+        // Its catalog recipe's program, resolved. An agent the catalog cannot
+        // start answers its own id, which is relative and so reads as missing.
+        Harness::Acp(id) => match crate::harness::agents::catalog::launch(id).await {
+            Ok(launch) => launch.program,
+            Err(_) => PathBuf::from(id),
+        },
         // A harness only some other build knows. Its own spelling, which is
         // relative and so reads as "not installed" — the refusal has to happen
         // here rather than by falling back to Claude Code, which would run the

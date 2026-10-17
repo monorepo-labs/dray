@@ -57,6 +57,20 @@ canChangeMethod: boolean, };
 export type AccountState = "logged_in" | "logged_out" | "unknown";
 
 /**
+ * One row of Settings → Agents.
+ */
+export type AcpAgent = { harness: Harness, id: string, name: string, description: string, website: string | null, icon: string | null, enabled: boolean, custom: boolean, 
+/**
+ * Whether the command it starts with is on this machine. Always true for
+ * an `npx`/`uvx` package once those are, since they fetch on first run.
+ */
+installed: boolean, 
+/**
+ * The command as a reader would type it, for the row's own line.
+ */
+command: string, };
+
+/**
  * One harness's whole answer: can it run here, who is it, and what may be added.
  */
 export type AgentAccounts = { harness: Harness, label: string, 
@@ -359,6 +373,20 @@ reason: string | null, } | { "type": "context_compacted",
  */
 trigger: string | null, preTokens: number | null, postTokens: number | null, durationMs: number | null, } | { "type": "error", source: ErrorSource, message: string, fatal: boolean, } | { "type": "unrecognized" };
 
+/**
+ * One of an agent's own permission modes.
+ */
+export type AgentMode = { id: string, name: string, description: string | null, };
+
+/**
+ * What the stance picker draws for an ACP agent.
+ */
+export type AgentModes = { modes: Array<AgentMode>, 
+/**
+ * Where the agent's last session started, which is its default.
+ */
+current: string | null, };
+
 export type AgentUpdate = { harness: Harness, label: string, current: string, latest: string, };
 
 /**
@@ -605,6 +633,15 @@ authoredAt: string, };
 export type ContextWindow = { usedTokens: number, maxTokens: number, };
 
 /**
+ * An agent the reader added by hand: any command speaking ACP over stdio.
+ */
+export type CustomAgent = { 
+/**
+ * Lowercase letters, digits and dashes. Also its harness name, `acp:<id>`.
+ */
+id: string, name: string, command: string, args: Array<string>, env: { [key in string]: string }, };
+
+/**
  * Incremental content for a block.
  *
  * **Deltas are a preview, never the source of truth**: the committed event for
@@ -784,7 +821,7 @@ path: string | null, };
  *
  * [`SessionIndexItem.unknown`]: crate::store::SessionIndexItem
  */
-export type Harness = "claude_code" | "codex" | "pi" | "fx" | "grok";
+export type Harness = "claude_code" | "codex" | "pi" | "fx" | "grok" | `acp:${string}`;
 
 export type ImageRef = { path: string | null, url: string | null, mimeType: string | null, };
 
@@ -1733,6 +1770,11 @@ forkFrom: string | null,
  */
 threadId: string | null, 
 /**
+ * An ACP agent's own permission mode, by the agent's id for it. ACP agents
+ * name their own stances, which `permission_mode`'s closed set cannot.
+ */
+agentMode?: string | null, 
+/**
  * The issues this session's work is against, newest link last.
  *
  * A list because one session really does carry several — three tags in one
@@ -1889,6 +1931,11 @@ forkFrom: string | null,
  * written *before* the child answers. This is read by resume alone.
  */
 threadId: string | null, 
+/**
+ * An ACP agent's own permission mode, by the agent's id for it. ACP agents
+ * name their own stances, which `permission_mode`'s closed set cannot.
+ */
+agentMode?: string | null, 
 /**
  * The issues this session's work is against, newest link last.
  *

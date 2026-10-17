@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import {
   BoltIcon,
+  CpuChipIcon,
   InformationCircleIcon,
   MicrophoneIcon,
   PuzzlePieceIcon,
@@ -51,6 +52,7 @@ import {
   pickFileOpener,
 } from "@/lib/openWith";
 import AccountsSettings from "@/components/settings/AccountsSettings";
+import AgentsSettings from "@/components/settings/AgentsSettings";
 import AppShell from "@/components/layout/AppShell";
 import { SettingsHeaderSlot } from "@/components/settings/headerAction";
 import ServersSettings from "@/components/settings/ServersSettings";
@@ -212,6 +214,7 @@ export default function SettingsPage({
         ),
         servers: <ServersSettings />,
         accounts: <AccountsSettings cwd={cwd} />,
+        agents: <AgentsSettings cwd={cwd} />,
         transcription: (
           <TranscriptionSettings
             status={transcription.status}
@@ -1064,6 +1067,7 @@ const SETTINGS_TABS = [
   { id: "spaces", label: "Spaces", Icon: Square3Stack3DIcon },
   { id: "servers", label: "Servers", Icon: ServerStackIcon },
   { id: "accounts", label: "Accounts", Icon: KeyIcon },
+  { id: "agents", label: "Agents", Icon: CpuChipIcon },
   { id: "transcription", label: "Transcription", Icon: MicrophoneIcon },
   { id: "integrations", label: "Integrations", Icon: PuzzlePieceIcon },
   { id: "shortcuts", label: "Shortcuts", Icon: BoltIcon },
@@ -1078,6 +1082,7 @@ export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
 /// which nothing on the page itself would show.
 const TAB_SUBTITLES: Partial<Record<SettingsTab, string>> = {
   accounts: "Manage each harness's sign-in. Switch one off to hide it from the model picker.",
+  agents: "Any agent that speaks ACP. Switch one on to add it to the agent picker.",
 };
 
 /// The page's groups as a list down the left, standing where the sidebar

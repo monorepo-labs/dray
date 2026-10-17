@@ -38,6 +38,12 @@ export const DEFAULT_MODEL_FOR: Record<Harness, ModelId> = {
   grok: "grok-4.7",
 };
 
+/// [`DEFAULT_MODEL_FOR`] with ACP agents answered: they name none, their list
+/// being learned off the session itself, so the spawn sends no model at all.
+export function defaultModel(harness: Harness): ModelId {
+  return DEFAULT_MODEL_FOR[harness] ?? UNSET_MODEL;
+}
+
 /// The providers `fx provider` takes, in fx's own words. Fixed by fx's CLI
 /// (`fx provider <gateway|codex|grok>`), not discovered — the *models* are.
 /// `label` is fx's own full name, and it is the screen reader's alone — the
@@ -59,7 +65,7 @@ export type ModelByHarness = Partial<Record<Harness, ModelId>>;
 /// happened to start with — a pick nobody made, and one that read as the
 /// composer forgetting.
 export function rememberedModel(remembered: ModelByHarness, harness: Harness): ModelId {
-  return remembered[harness] ?? DEFAULT_MODEL_FOR[harness];
+  return remembered[harness] ?? defaultModel(harness);
 }
 
 /// The model to run, given a pick and the list the current harness can run.
@@ -80,7 +86,7 @@ export function rememberedModel(remembered: ModelByHarness, harness: Harness): M
 export function usableModel(models: Model[], picked: ModelId, harness: Harness): ModelId {
   if (models.length === 0 || models.some((m) => m.id === picked)) return picked;
 
-  const fallback = DEFAULT_MODEL_FOR[harness];
+  const fallback = defaultModel(harness);
 
   // A harness naming no default answers the sentinel, never the head of the
   // list: pi picks for itself, and the spawn omits the flag. A pick this list

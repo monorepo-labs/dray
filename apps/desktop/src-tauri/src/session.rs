@@ -610,6 +610,7 @@ impl SessionManager {
             // Codex's list is the machine's answer too now, with the table
             // behind it — so a model shipped after this build still spawns.
             Harness::Codex => crate::harness::codex::models::find(&model).await,
+            Harness::Acp(_) => crate::harness::agents::find_model(harness, &model),
             _ => Some(find_model(&model).with_context(|| format!("unknown model {model}"))?),
         };
 
@@ -625,8 +626,10 @@ impl SessionManager {
         // searched what Codex reported *and* the table, where `runs_on`
         // knows only the table and would refuse a model newer than this
         // build.
+        // An ACP agent likewise judges its own ids, which may well be
+        // `opus` — a name `runs_on` would read as Claude Code's.
         let runnable = match harness {
-            Harness::Codex => model_spec.is_some(),
+            Harness::Codex | Harness::Acp(_) => model_spec.is_some(),
             _ => runs_on(&model, harness),
         };
 
@@ -1448,6 +1451,38 @@ impl SessionManager {
         live(&mut guard, session_id)?.interrupt().await
     }
 
+    /// Moves an ACP agent's session onto one of the agent's own modes.
+    ///
+    /// Recorded on the index where the session has an entry, applied in place
+    /// where a child runs, and held for the spawn where neither exists yet — a
+    /// new session's id is minted before its first send, so the composer can
+    /// say the mode first.
+    /// The mode an ACP session is on: the live child's word, else the index's.
+    pub async fn agent_mode(&self, session_id: &str) -> Option<String> {
+        if let Some(slot) = self.existing(session_id).await {
+            if let Some(Session { stdin: Transport::Acp(session), .. }) = slot.lock().await.as_ref() {
+                if let Some(mode) = crate::harness::agents::current_mode(session) {
+                    return Some(mode);
+                }
+            }
+        }
+        crate::store::get_session_index_item(session_id).await.ok().flatten()?.agent_mode
+    }
+
+    pub async fn set_agent_mode(&self, session_id: &str, mode: &str, app: &Sink) -> Result<()> {
+        // A live child takes it first, so a refusal records nothing.
+        if let Some(slot) = self.existing(session_id).await {
+            let guard = slot.lock().await;
+            if let Some(Session { stdin: Transport::Acp(session), .. }) = guard.as_ref() {
+                crate::harness::agents::set_mode(session, mode, app).await?;
+            }
+        }
+        if !crate::store::set_session_agent_mode(session_id, mode).await? {
+            crate::harness::agents::hold_mode(session_id, mode);
+        }
+        Ok(())
+    }
+
     /// Stops one of a session's background tasks. Errors for a dead child like
     /// the rest of these: the task ran inside that process and died with it.
     pub async fn stop_task(&self, session_id: &str, task_id: &str) -> Result<()> {
@@ -1750,6 +1785,9 @@ pub enum Transport {
     /// chose — grok honours `_meta.sessionId`, so there is no minted id to
     /// carry. See [`GrokSession`](crate::harness::grok::GrokSession).
     Grok(crate::harness::grok::GrokSession),
+    /// Any other ACP agent, through the generic harness. See
+    /// [`AcpSession`](crate::harness::agents::AcpSession).
+    Acp(crate::harness::agents::AcpSession),
 }
 
 impl Transport {
@@ -1770,7 +1808,9 @@ impl Transport {
     /// a batch over at, seconds away, which is why this is a question about the
     /// transport rather than a flag on the session.
     pub fn one_prompt_per_turn(&self) -> bool {
-        matches!(self, Transport::Fx(_))
+        // A generic ACP agent has no steering extension Dray knows of, so it
+        // takes fx's hold-and-join for the same reason.
+        matches!(self, Transport::Fx(_) | Transport::Acp(_))
     }
 
     /// Opens a turn with one prompt, for the transports that take it as a
@@ -1783,6 +1823,7 @@ impl Transport {
         match self {
             Transport::Fx(session) => Some(crate::harness::fx::start_turn(session, text).await),
             Transport::Grok(session) => Some(crate::harness::grok::start_turn(session, text).await),
+            Transport::Acp(session) => Some(crate::harness::agents::start_turn(session, text).await),
             _ => None,
         }
     }
@@ -1796,7 +1837,7 @@ impl Transport {
     pub fn lines(&self) -> Result<&Arc<Mutex<ChildStdin>>> {
         match self {
             Transport::Lines(stdin) => Ok(stdin),
-            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) | Transport::Grok(_) => {
+            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) | Transport::Grok(_) | Transport::Acp(_) => {
                 bail!("this control is not wired for this harness")
             }
         }
@@ -1981,6 +2022,27 @@ impl Session {
                     session_cwd,
                     is_new_session,
                     fork_from,
+                    app,
+                )
+                .await
+            }
+            Harness::Acp(_) => {
+                // No ACP agent has a worktree flag, so the tree is made first.
+                if worktree_name.is_some() {
+                    bail!("{} cannot create a worktree — it has to be made first", harness.label());
+                }
+                if fork_from.is_some() {
+                    bail!("{} sessions cannot be forked", harness.label());
+                }
+                crate::harness::agents::init(
+                    session_id,
+                    harness,
+                    model,
+                    effort,
+                    permission_mode,
+                    cwd,
+                    session_cwd,
+                    is_new_session,
                     app,
                 )
                 .await
@@ -2229,6 +2291,12 @@ impl Session {
             return Ok(());
         }
 
+        if let Transport::Acp(session) = &self.stdin {
+            crate::harness::agents::set_model(session, model, app).await?;
+            self.model = model.id.clone();
+            return Ok(());
+        }
+
         write_line(
             self.stdin.lines()?,
             &ControlLine::new(ControlRequest::SetModel { model: &model.arg }),
@@ -2293,6 +2361,14 @@ impl Session {
             return Ok(());
         }
 
+        if let Transport::Acp(session) = &self.stdin {
+            if let Some(effort) = effort {
+                crate::harness::agents::set_effort(session, effort, app).await?;
+            }
+            self.effort = effort;
+            return Ok(());
+        }
+
         // pi's `set_thinking_level`. `None` is pi's own default, which nothing
         // here can spell, so it is recorded and left to the next respawn.
         if let Transport::Pi(client) = &self.stdin {
@@ -2345,6 +2421,10 @@ impl Session {
             return crate::harness::grok::cancel(session);
         }
 
+        if let Transport::Acp(session) = &self.stdin {
+            return crate::harness::agents::cancel(session);
+        }
+
         // pi never reaches here: its Stop goes through
         // [`pi::desk`](crate::harness::pi::desk), which is registered for the
         // life of the reader. Arriving means the desk has gone and the child
@@ -2392,6 +2472,13 @@ impl Session {
     pub async fn set_permission_mode(&mut self, mode: ApprovalPolicy) -> Result<()> {
         if let Transport::Fx(session) = &self.stdin {
             crate::harness::fx::set_mode(session, mode).await?;
+            self.permission_mode = mode;
+            return Ok(());
+        }
+
+        // An ACP agent's stance is its own mode, moved by `set_agent_mode`;
+        // Dray's stance is recorded and goes nowhere.
+        if matches!(self.stdin, Transport::Acp(_)) {
             self.permission_mode = mode;
             return Ok(());
         }
@@ -2452,7 +2539,7 @@ impl Session {
                     .decision
                     .clone()
                     .context("this option carries no decision to send")?;
-                thread.client.respond(*rpc_id, json!({"decision": decision}))?;
+                thread.client.respond(rpc_id.clone(), json!({"decision": decision}))?;
             }
             // fx's decision is the whole ACP outcome envelope, built by the
             // button, so it goes back as the result itself.
@@ -2461,7 +2548,7 @@ impl Session {
                     .decision
                     .clone()
                     .context("this option carries no outcome to send")?;
-                session.client.respond(*rpc_id, outcome)?;
+                session.client.respond(rpc_id.clone(), outcome)?;
             }
             // grok's is the same envelope for a consent, and the **whole**
             // result for a plan approval — `{"outcome":"approved"}` rather than
@@ -2472,7 +2559,14 @@ impl Session {
                     .decision
                     .clone()
                     .context("this option carries no outcome to send")?;
-                session.client.respond(*rpc_id, outcome)?;
+                session.client.respond(rpc_id.clone(), outcome)?;
+            }
+            (Transport::Acp(session), Reply::Rpc(rpc_id)) => {
+                let outcome = chosen
+                    .decision
+                    .clone()
+                    .context("this option carries no outcome to send")?;
+                session.client.respond(rpc_id.clone(), outcome)?;
             }
             _ => {
                 write_line(
@@ -2554,7 +2648,7 @@ impl Session {
         match (&self.stdin, &pending.reply) {
             (Transport::Grok(session), Reply::Rpc(rpc_id)) => {
                 let result = crate::harness::grok::permissions::question_answer(&answers);
-                session.client.respond(*rpc_id, result)?;
+                session.client.respond(rpc_id.clone(), result)?;
             }
             _ => {
                 write_line(

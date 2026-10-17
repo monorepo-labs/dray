@@ -25,7 +25,7 @@ use super::parser::{AskUserQuestion, ExitPlanMode, PermissionRequest};
 /// Builds the held request and its buttons in one pass.
 pub fn pending_for(
     request: &PermissionRequest,
-    rpc_id: i64,
+    rpc_id: crate::harness::codex::rpc::RequestId,
 ) -> (PendingRequest, Vec<PermissionOption>) {
     let call = &request.tool_call;
     acp::pending_for("grok", &call.tool_call_id, call.meta.name().unwrap_or("tool"), &request.options, rpc_id)
@@ -40,7 +40,7 @@ pub fn pending_for(
 /// `approved: true`, `outcome: abandon`) *and* a JSON-RPC error all read as
 /// "The user wants to revise the plan", so Revise sends the cheapest of them.
 /// Abandoning a plan is the reader's next prompt rather than a third button.
-pub fn plan_pending(request: &ExitPlanMode, rpc_id: i64) -> (PendingRequest, Vec<PermissionOption>) {
+pub fn plan_pending(request: &ExitPlanMode, rpc_id: crate::harness::codex::rpc::RequestId) -> (PendingRequest, Vec<PermissionOption>) {
     let resolved = plan_options();
     let offered = resolved.iter().map(|r| r.option.clone()).collect();
 
@@ -95,7 +95,7 @@ fn plan_options() -> Vec<ResolvedOption> {
 
 /// A held question, registered like a permission — grok is blocked on it either
 /// way — but with **no options**, because the form is the answer.
-pub fn question_pending(request: &AskUserQuestion, rpc_id: i64) -> (PendingRequest, Vec<Question>) {
+pub fn question_pending(request: &AskUserQuestion, rpc_id: crate::harness::codex::rpc::RequestId) -> (PendingRequest, Vec<Question>) {
     let questions = request
         .questions
         .iter()
@@ -197,7 +197,7 @@ mod tests {
             ("reject-once", "reject_once"),
             ("reject-always", "reject_always"),
         ]);
-        let (pending, offered) = pending_for(&request, 7);
+        let (pending, offered) = pending_for(&request, 7.into());
 
         let kinds: Vec<PermissionOptionKind> = offered.iter().map(|o| o.kind).collect();
         assert_eq!(
@@ -209,7 +209,7 @@ mod tests {
                 PermissionOptionKind::Deny,
             ]
         );
-        assert_eq!(pending.reply, Reply::Rpc(7));
+        assert_eq!(pending.reply, Reply::Rpc(7.into()));
         assert_eq!(pending.tool_use_id, "call-1");
         assert_eq!(
             pending.options["grok-allow-once"].decision.as_ref().unwrap(),
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn a_request_with_no_refusal_gets_one() {
         let request = request(&[("allow-once", "allow_once"), ("later", "some_new_kind")]);
-        let (pending, offered) = pending_for(&request, 2);
+        let (pending, offered) = pending_for(&request, 2.into());
 
         assert_eq!(offered.len(), 2, "the unknown kind goes, a Deny arrives");
         assert_eq!(
@@ -242,7 +242,7 @@ mod tests {
                 tool_call_id: "call-9".into(),
                 plan_content: "do the thing".into(),
             },
-            3,
+            3.into(),
         );
 
         assert_eq!(offered.len(), 2);
@@ -296,7 +296,7 @@ mod tests {
             }],
         };
 
-        let (pending, questions) = question_pending(&asked, 4);
+        let (pending, questions) = question_pending(&asked, 4.into());
         assert!(pending.options.is_empty());
         assert_eq!(pending.tool_name, "ask_user_question");
         assert_eq!(questions.len(), 1);

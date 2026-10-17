@@ -122,7 +122,7 @@ fn update_args(harness: Harness) -> &'static [&'static str] {
         Harness::Pi => &["update", "--self"],
         Harness::Fx => &["upgrade"],
         Harness::Grok => &["update"],
-        Harness::Other(_) => &[],
+        Harness::Acp(_) | Harness::Other(_) => &[],
     }
 }
 

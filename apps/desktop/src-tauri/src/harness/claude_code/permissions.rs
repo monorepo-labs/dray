@@ -54,7 +54,7 @@ pub enum Reply {
     /// is filed under.
     Control,
     /// Codex asked as a JSON-RPC peer, so the answer names the id it asked with.
-    Rpc(i64),
+    Rpc(crate::harness::codex::rpc::RequestId),
     /// A pi *extension* dialog (`select`, `confirm`, `input`), answered in its
     /// method's own shape: pi has no one verdict envelope, and `confirm` reads
     /// a different field from the other two. A pi permission gate — should one

@@ -282,6 +282,8 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
         // second child to write a title grok has already written would be one
         // model call for an answer that is on the wire.
         Harness::Grok => bail!("grok titles its own sessions on the wire"),
+        // ACP has `session_info_update` for this, and the agent writes it.
+        Harness::Acp(_) => bail!("ACP agents title their own sessions on the wire"),
         Harness::Fx => {
             let bin = crate::binpath::fx().await;
             let mut cmd = Command::new(&bin);

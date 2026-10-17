@@ -36,7 +36,7 @@ impl ApprovalKind {
 pub fn pending_for(
     request: &ApprovalRequest,
     kind: ApprovalKind,
-    rpc_id: i64,
+    rpc_id: crate::harness::codex::rpc::RequestId,
 ) -> (PendingRequest, Vec<PermissionOption>) {
     let resolved = build_options(request);
     let offered = resolved.iter().map(|r| r.option.clone()).collect();
@@ -207,7 +207,7 @@ mod tests {
             "cancel"
         ]));
 
-        let (pending, offered) = pending_for(&request, ApprovalKind::COMMAND, 7);
+        let (pending, offered) = pending_for(&request, ApprovalKind::COMMAND, 7.into());
 
         let labels: Vec<&str> = offered.iter().map(|o| o.label.as_str()).collect();
         assert_eq!(
@@ -221,7 +221,7 @@ mod tests {
         assert!(offered
             .iter()
             .any(|o| o.behavior == PermissionBehavior::Deny));
-        assert_eq!(pending.reply, Reply::Rpc(7));
+        assert_eq!(pending.reply, Reply::Rpc(7.into()));
         assert_eq!(pending.tool_use_id, "exec-1");
     }
 
@@ -232,7 +232,7 @@ mod tests {
         let amendment = json!({"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["/bin/zsh"]}});
         let request = request_offering(json!(["accept", amendment.clone(), "decline"]));
 
-        let (pending, offered) = pending_for(&request, ApprovalKind::COMMAND, 1);
+        let (pending, offered) = pending_for(&request, ApprovalKind::COMMAND, 1.into());
         let always = offered
             .iter()
             .find(|o| o.kind == PermissionOptionKind::AlwaysRule)
@@ -255,7 +255,7 @@ mod tests {
             "decline"
         ]));
 
-        let (_, offered) = pending_for(&request, ApprovalKind::COMMAND, 1);
+        let (_, offered) = pending_for(&request, ApprovalKind::COMMAND, 1.into());
         let labels: Vec<&str> = offered.iter().map(|o| o.label.as_str()).collect();
         assert_eq!(
             labels,
@@ -273,7 +273,7 @@ mod tests {
             ..Default::default()
         };
 
-        let (pending, _) = pending_for(&request, ApprovalKind::FILE_CHANGE, 2);
+        let (pending, _) = pending_for(&request, ApprovalKind::FILE_CHANGE, 2.into());
         assert_eq!(pending.tool_name, "apply_patch");
     }
 }
