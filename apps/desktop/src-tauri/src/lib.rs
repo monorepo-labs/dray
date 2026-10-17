@@ -279,6 +279,25 @@ async fn agent_availability() -> Vec<AgentAvailability> {
             login_hint: harness.login_hint().map(str::to_string),
         });
     }
+    // The ACP agents the reader switched on. The registry names no installer,
+    // so the agent's own page is the cure.
+    for harness in harness::agents::catalog::enabled().await {
+        let (reason, curable) = unavailable_reason(harness).await;
+        let docs_url = match harness {
+            harness::Harness::Acp(id) if curable => harness::agents::catalog::website(id).await,
+            _ => None,
+        };
+        out.push(AgentAvailability {
+            harness,
+            available: binpath::agent_available(harness).await,
+            label: harness.label().to_string(),
+            reason,
+            install_command: None,
+            docs_url,
+            login_command: String::new(),
+            login_hint: None,
+        });
+    }
     out
 }
 
@@ -356,6 +375,7 @@ async fn list_models(sink: Sink, harness: Option<harness::Harness>) -> Vec<Model
         }
         harness::Harness::Grok => harness::grok::models::list().await,
         harness::Harness::Codex => harness::codex::models::list().await,
+        acp @ harness::Harness::Acp(_) => harness::agents::list_models(acp),
         other => models::models_for(other),
     }
 }
@@ -475,6 +495,8 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
         // probe that has not landed: the menu stays shut rather than claiming
         // grok has no commands. See `harness/grok/commands.rs`.
         Harness::Grok => harness::grok::commands::list_commands(cwd).await?,
+        // The wire's, like grok's, and pending until a session has published it.
+        acp @ Harness::Acp(_) => harness::agents::list_commands(acp, cwd)?,
         Harness::Other(_) => Vec::new(),
     })
 }
@@ -627,6 +649,19 @@ async fn interrupt_session(
     sink: Sink,
 ) -> Result<(), Fail> {
     Ok(manager().interrupt(session_id, &sink).await?)
+}
+
+/// An ACP agent's own permission modes, as its last session reported them.
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn agent_modes(harness: Harness) -> harness::agents::AgentModes {
+    harness::agents::modes(harness)
+}
+
+/// Moves a session onto one of its ACP agent's own modes. See
+/// [`session::SessionManager::set_agent_mode`].
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn set_agent_mode(session_id: &str, mode: &str, sink: Sink) -> Result<(), Fail> {
+    Ok(manager().set_agent_mode(session_id, mode, &sink).await?)
 }
 
 /// Stops one background task without touching the rest of the session.

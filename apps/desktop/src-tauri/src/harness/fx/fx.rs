@@ -1057,7 +1057,7 @@ async fn read_stdout(
                 // `can_use_tool` does.
                 Incoming::Request { id, method, params } => {
                     if method == "session/request_permission" {
-                        if let Err(err) = raise_permission(&handles, &mut mapper, id, params).await {
+                        if let Err(err) = raise_permission(&handles, &mut mapper, id.clone(), params).await {
                             record_failure(Fx, &handles.session_id, "unsupported_request", &err.to_string(), &line)
                                 .await;
                             let _ = handles
@@ -1208,7 +1208,7 @@ fn prompt_answer(session: &FxSession, line: &str) -> Option<parser::FxEvent> {
 async fn raise_permission(
     handles: &ReaderHandles,
     mapper: &mut mapper::Mapper,
-    rpc_id: i64,
+    rpc_id: crate::harness::codex::rpc::RequestId,
     params: Value,
 ) -> Result<()> {
     let request: parser::PermissionRequest = serde_json::from_value(params)?;

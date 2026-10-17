@@ -1,3 +1,6 @@
+import { Bot } from "lucide-react";
+
+import { acpLabel, useAcpAgents } from "@/lib/acpAgents";
 import { cn } from "@/lib/utils";
 import type { Harness } from "@/types/events";
 
@@ -133,8 +136,20 @@ export default function AgentIcon({
       // second copy is a second thing to redraw when the logo moves.
       return <GrokIcon className={className} />;
     default:
+      if (harness.startsWith("acp:")) return <AcpIcon harness={harness} className={className} />;
       return <ClaudeIcon className={cn(brand && CLAUDE_RUST, className)} />;
   }
+}
+
+/// An ACP agent's registry icon. The registry's are monochrome SVGs, which an
+/// `<img>` paints black, so dark mode inverts them. A CSS mask would take
+/// `currentColor` like the marks above, but the CDN sends no CORS header and a
+/// cross-origin mask draws nothing. No icon draws a bot.
+function AcpIcon({ harness, className }: { harness: Harness; className?: string }) {
+  const agent = useAcpAgents().find((a) => a.harness === harness);
+  const label = acpLabel(harness);
+  if (!agent?.icon) return <Bot role="img" aria-label={label} className={cn("size-4 shrink-0", className)} />;
+  return <img src={agent.icon} alt={label} className={cn("size-4 shrink-0 dark:invert", className)} />;
 }
 
 /// Vercel's triangle, for fx's gateway provider.

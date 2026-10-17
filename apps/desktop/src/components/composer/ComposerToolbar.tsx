@@ -4,6 +4,8 @@ import BranchSelector from "@/components/composer/BranchSelector";
 import BranchSwitchDialog from "@/components/composer/BranchSwitchDialog";
 import ContextMeter from "@/components/composer/ContextMeter";
 import ModelSelector from "@/components/composer/ModelSelector";
+import AgentModeSelector from "@/components/composer/AgentModeSelector";
+import { isAcp } from "@/lib/acpAgents";
 import PermissionSelector, {
   offersPermissionModes,
 } from "@/components/composer/PermissionSelector";
@@ -85,6 +87,11 @@ type ComposerToolbarProps = {
   /// reads it — it is the one control here that moves the child on the click
   /// rather than at the next send.
   busy: boolean;
+
+  /// The selected session and the ACP mode its index entry holds, for an ACP
+  /// agent's own mode picker. Null for a new task.
+  sessionId: string | null;
+  agentMode: string | null;
 };
 
 /// The composer's control row. Model and permission change a running session in
@@ -125,6 +132,8 @@ export default function ComposerToolbar({
   contextUsage,
   isNewSession,
   busy,
+  sessionId,
+  agentMode,
 }: ComposerToolbarProps) {
   return (
     <div className="flex min-w-0 items-center gap-0.5 px-1">
@@ -222,6 +231,14 @@ export default function ComposerToolbar({
           harness={harness}
           value={permissionMode}
           onChange={onPermissionModeChange}
+          locked={lockedMidTurn(harness, "stance", busy)}
+        />
+      )}
+      {isAcp(harness) && (
+        <AgentModeSelector
+          harness={harness}
+          sessionId={sessionId}
+          recorded={agentMode}
           locked={lockedMidTurn(harness, "stance", busy)}
         />
       )}

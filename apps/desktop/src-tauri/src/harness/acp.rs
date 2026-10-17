@@ -178,7 +178,7 @@ pub fn pending_for(
     tool_use_id: &str,
     tool_name: &str,
     choices: &[PermissionChoice],
-    rpc_id: i64,
+    rpc_id: crate::harness::codex::rpc::RequestId,
 ) -> (PendingRequest, Vec<PermissionOption>) {
     let resolved = build_options(prefix, choices);
     let offered = resolved.iter().map(|r| r.option.clone()).collect();

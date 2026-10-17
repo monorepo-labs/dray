@@ -1,0 +1,969 @@
+{
+ "agents": [
+  {
+   "id": "agoragentic-acp",
+   "name": "Agoragentic",
+   "description": "Agent marketplace with 174+ AI capabilities. Browse, invoke, and pay for agent services settled in USDC on Base L2.",
+   "website": "https://agoragentic.com",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/agoragentic-acp.svg",
+   "distribution": {
+    "npx": {
+     "package": "agoragentic-mcp@1.3.0",
+     "args": [
+      "--acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "amp-acp",
+   "name": "Amp",
+   "description": "ACP wrapper for Amp - the frontier coding agent",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/amp-acp.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./amp-acp",
+      "args": []
+     },
+     "darwin-x86_64": {
+      "cmd": "./amp-acp",
+      "args": []
+     },
+     "linux-aarch64": {
+      "cmd": "./amp-acp",
+      "args": []
+     },
+     "linux-x86_64": {
+      "cmd": "./amp-acp",
+      "args": []
+     }
+    }
+   }
+  },
+  {
+   "id": "antigravity-acp",
+   "name": "Google Antigravity",
+   "description": "Google\u2019s AI coding agent",
+   "website": "https://antigravity.google/docs/ide/extensions",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/antigravity-acp.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./agy_acp_server.par",
+      "args": []
+     },
+     "darwin-x86_64": {
+      "cmd": "./agy_acp_server.par",
+      "args": []
+     },
+     "linux-x86_64": {
+      "cmd": "./agy_acp_server.par",
+      "args": [
+       "--uid="
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./agy_acp_server.par",
+      "args": [
+       "--uid="
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "auggie",
+   "name": "Auggie CLI",
+   "description": "Augment Code's powerful software agent, backed by industry-leading context engine",
+   "website": "https://www.augmentcode.com/",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/auggie.svg",
+   "distribution": {
+    "npx": {
+     "package": "@augmentcode/auggie@0.36.0",
+     "args": [
+      "--acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "autohand",
+   "name": "Autohand Code",
+   "description": "Autohand Code - AI coding agent powered by Autohand AI",
+   "website": "https://www.autohand.ai/cli/",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/autohand.svg",
+   "distribution": {
+    "npx": {
+     "package": "@autohandai/autohand-acp@0.2.1",
+     "args": []
+    }
+   }
+  },
+  {
+   "id": "bob",
+   "name": "Bob",
+   "description": "IBM Bob is your AI-Powered Development Partner",
+   "website": "https://bob.ibm.com",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/bob.svg",
+   "distribution": {
+    "npx": {
+     "package": "@ibm/bob@2.0.8",
+     "args": [
+      "acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "claude-acp",
+   "name": "Claude Agent",
+   "description": "ACP wrapper for Anthropic's Claude",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/claude-acp.svg",
+   "distribution": {
+    "npx": {
+     "package": "@agentclientprotocol/claude-agent-acp@0.93.0",
+     "args": []
+    }
+   }
+  },
+  {
+   "id": "cline",
+   "name": "Cline",
+   "description": "Autonomous coding agent CLI - capable of creating/editing files, running commands, using the browser, and more",
+   "website": "https://cline.bot/cli",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/cline.svg",
+   "distribution": {
+    "npx": {
+     "package": "cline@3.0.73",
+     "args": [
+      "--acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "codebuddy-code",
+   "name": "Codebuddy Code",
+   "description": "Tencent Cloud's official intelligent coding tool",
+   "website": "https://www.codebuddy.cn/cli/",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/codebuddy-code.svg",
+   "distribution": {
+    "npx": {
+     "package": "@tencent-ai/codebuddy-code@2.168.2",
+     "args": [
+      "--acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "codex-acp",
+   "name": "Codex",
+   "description": "ACP adapter for OpenAI's coding assistant",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/codex-acp.svg",
+   "distribution": {
+    "npx": {
+     "package": "@agentclientprotocol/codex-acp@2.2.2",
+     "args": []
+    }
+   }
+  },
+  {
+   "id": "cortex-code",
+   "name": "Cortex Code",
+   "description": "Snowflake's Cortex Code coding agent",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/cortex-code.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./coco-1.0.73+180523.e6179a031de9-darwin-arm64/cortex",
+      "args": [
+       "acp",
+       "serve"
+      ]
+     },
+     "darwin-x86_64": {
+      "cmd": "./coco-1.0.73+180523.e6179a031de9-darwin-amd64/cortex",
+      "args": [
+       "acp",
+       "serve"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./coco-1.0.73+180523.e6179a031de9-linux-amd64/cortex",
+      "args": [
+       "acp",
+       "serve"
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./coco-1.0.73+180523.e6179a031de9-linux-arm64/cortex",
+      "args": [
+       "acp",
+       "serve"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "corust-agent",
+   "name": "Corust Agent",
+   "description": "Co-building with a seasoned Rust partner.",
+   "website": "https://corust.ai/",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/corust-agent.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./corust-agent-acp",
+      "args": []
+     },
+     "darwin-x86_64": {
+      "cmd": "./corust-agent-acp",
+      "args": []
+     },
+     "linux-x86_64": {
+      "cmd": "./corust-agent-acp",
+      "args": []
+     }
+    }
+   }
+  },
+  {
+   "id": "crow-cli",
+   "name": "crow-cli",
+   "description": "Minimal ACP Native Coding Agent",
+   "website": "https://crow-ai.dev",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/crow-cli.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./crow-cli",
+      "args": [
+       "acp"
+      ]
+     },
+     "darwin-x86_64": {
+      "cmd": "./crow-cli",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./crow-cli",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./crow-cli",
+      "args": [
+       "acp"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "cursor",
+   "name": "Cursor",
+   "description": "Cursor's coding agent",
+   "website": "https://cursor.com/docs/cli/acp",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/cursor.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./dist-package/cursor-agent",
+      "args": [
+       "acp"
+      ]
+     },
+     "darwin-x86_64": {
+      "cmd": "./dist-package/cursor-agent",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./dist-package/cursor-agent",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./dist-package/cursor-agent",
+      "args": [
+       "acp"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "deepagents",
+   "name": "DeepAgents",
+   "description": "Batteries-included AI coding and general purpose agent powered by LangChain.",
+   "website": "https://docs.langchain.com/oss/javascript/deepagents/overview",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/deepagents.svg",
+   "distribution": {
+    "npx": {
+     "package": "deepagents-acp@0.1.7",
+     "args": []
+    }
+   }
+  },
+  {
+   "id": "devin",
+   "name": "Devin",
+   "description": "Devin CLI coding agent by Cognition",
+   "website": "https://docs.devin.ai/cli",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/devin.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./bin/devin",
+      "args": [
+       "acp"
+      ]
+     },
+     "darwin-x86_64": {
+      "cmd": "./bin/devin",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./bin/devin",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./bin/devin",
+      "args": [
+       "acp"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "dimcode",
+   "name": "DimCode",
+   "description": "A coding agent that puts leading models at your command.",
+   "website": "https://dimcode.dev/docs/acp.html",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/dimcode.svg",
+   "distribution": {
+    "npx": {
+     "package": "dimcode@0.5.19",
+     "args": [
+      "acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "dirac",
+   "name": "Dirac",
+   "description": "Reduces API costs by more than 50%, produces better and faster work. Uses Hash anchored parallel edits, AST manipulation and a whole lot of neat optimizations. Fully Open Source.",
+   "website": "https://dirac.run",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/dirac.svg",
+   "distribution": {
+    "npx": {
+     "package": "dirac-cli@0.5.21",
+     "args": [
+      "--acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "factory-droid",
+   "name": "Factory Droid",
+   "description": "Factory Droid - AI coding agent powered by Factory AI",
+   "website": "https://factory.ai/product/cli",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/factory-droid.svg",
+   "distribution": {
+    "npx": {
+     "package": "droid@0.244.0",
+     "args": [
+      "exec",
+      "--output-format",
+      "acp-daemon"
+     ]
+    }
+   }
+  },
+  {
+   "id": "fast-agent",
+   "name": "fast-agent",
+   "description": "Code and build agents with comprehensive multi-provider support",
+   "website": "https://fast-agent.ai",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/fast-agent.svg",
+   "distribution": {
+    "uvx": {
+     "package": "fast-agent-acp==0.10.1",
+     "args": [
+      "-x"
+     ]
+    }
+   }
+  },
+  {
+   "id": "gemini",
+   "name": "Gemini CLI",
+   "description": "Google's official CLI for Gemini",
+   "website": "https://geminicli.com",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/gemini.svg",
+   "distribution": {
+    "npx": {
+     "package": "@google/gemini-cli@0.64.0",
+     "args": [
+      "--acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "github-copilot-cli",
+   "name": "Copilot",
+   "description": "GitHub's AI pair programmer",
+   "website": "https://github.com/features/copilot/cli/",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/github-copilot-cli.svg",
+   "distribution": {
+    "npx": {
+     "package": "@github/copilot@1.0.98",
+     "args": [
+      "--acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "glm-acp-agent",
+   "name": "GLM Agent",
+   "description": "ACP agent powered by Zhipu AI's GLM Coding Plan models (glm-5.1, glm-5-turbo, glm-4.7, glm-4.5-air). Supports streaming, tool calls, mid-session model switching, image input via Z.AI Coding Plan Vision MCP, and session load/fork/resume with on-disk persistence.",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/glm-acp-agent.svg",
+   "distribution": {
+    "npx": {
+     "package": "glm-acp-agent@1.15.0",
+     "args": []
+    }
+   }
+  },
+  {
+   "id": "goose",
+   "name": "goose",
+   "description": "A local, extensible, open source AI agent that automates engineering tasks",
+   "website": "https://block.github.io/goose/",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/goose.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./goose",
+      "args": [
+       "acp"
+      ]
+     },
+     "darwin-x86_64": {
+      "cmd": "./goose",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./goose",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./goose",
+      "args": [
+       "acp"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "grok-build",
+   "name": "Grok Build",
+   "description": "xAI's coding agent and CLI",
+   "website": "https://x.ai/cli",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/grok-build.svg",
+   "distribution": {
+    "npx": {
+     "package": "@xai-official/grok@1.0.63",
+     "args": [
+      "agent",
+      "stdio"
+     ]
+    }
+   }
+  },
+  {
+   "id": "harn",
+   "name": "Harn",
+   "description": "Harn runs .harn agent pipelines as a native ACP coding agent over stdio.",
+   "website": "https://harnlang.com",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/harn.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./harn",
+      "args": [
+       "serve",
+       "acp"
+      ]
+     },
+     "darwin-x86_64": {
+      "cmd": "./harn",
+      "args": [
+       "serve",
+       "acp"
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./harn",
+      "args": [
+       "serve",
+       "acp"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./harn",
+      "args": [
+       "serve",
+       "acp"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "junie",
+   "name": "Junie",
+   "description": "AI Coding Agent by JetBrains",
+   "website": "https://junie.jetbrains.com",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/junie.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./Applications/junie.app/Contents/MacOS/junie",
+      "args": [
+       "--acp=true"
+      ]
+     },
+     "darwin-x86_64": {
+      "cmd": "./Applications/junie.app/Contents/MacOS/junie",
+      "args": [
+       "--acp=true"
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./junie-app/bin/junie",
+      "args": [
+       "--acp=true"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./junie-app/bin/junie",
+      "args": [
+       "--acp=true"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "kilo",
+   "name": "Kilo",
+   "description": "The open source coding agent",
+   "website": "https://kilo.ai/",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/kilo.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./kilo",
+      "args": [
+       "acp"
+      ]
+     },
+     "darwin-x86_64": {
+      "cmd": "./kilo",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./kilo",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./kilo",
+      "args": [
+       "acp"
+      ]
+     }
+    },
+    "npx": {
+     "package": "@kilocode/cli@7.8.12",
+     "args": [
+      "acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "kimchi",
+   "name": "Kimchi",
+   "description": "Coding agent powered by multi-model orchestration",
+   "website": "https://kimchi.dev",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/kimchi.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./bin/kimchi",
+      "args": [
+       "--mode",
+       "acp"
+      ]
+     },
+     "darwin-x86_64": {
+      "cmd": "./bin/kimchi",
+      "args": [
+       "--mode",
+       "acp"
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./bin/kimchi",
+      "args": [
+       "--mode",
+       "acp"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./bin/kimchi",
+      "args": [
+       "--mode",
+       "acp"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "kimi",
+   "name": "Kimi CLI",
+   "description": "Moonshot AI's coding assistant",
+   "website": "https://moonshotai.github.io/kimi-cli/",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/kimi.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./kimi",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./kimi",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./kimi",
+      "args": [
+       "acp"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "minimax-code",
+   "name": "MiniMax Code",
+   "description": "MiniMax Code is an AI coding agent with Agent Client Protocol support.",
+   "website": "https://agent.minimax.io",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/minimax-code.svg",
+   "distribution": {
+    "npx": {
+     "package": "@minimax-ai/code@0.2.7",
+     "args": [
+      "acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "minion-code",
+   "name": "Minion Code",
+   "description": "An enhanced AI code assistant built on the Minion framework with rich development tools",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/minion-code.svg",
+   "distribution": {
+    "uvx": {
+     "package": "minion-code@0.1.44",
+     "args": [
+      "acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "mistral-vibe",
+   "name": "Mistral Vibe",
+   "description": "Mistral's open-source coding assistant",
+   "website": "https://mistral.ai/products/vibe",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/mistral-vibe.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./vibe-acp",
+      "args": []
+     },
+     "darwin-x86_64": {
+      "cmd": "./vibe-acp",
+      "args": []
+     },
+     "linux-aarch64": {
+      "cmd": "./vibe-acp",
+      "args": []
+     },
+     "linux-x86_64": {
+      "cmd": "./vibe-acp",
+      "args": []
+     }
+    }
+   }
+  },
+  {
+   "id": "nova",
+   "name": "Nova",
+   "description": "Nova by Compass AI - a fully-fledged software engineer at your command",
+   "website": "https://www.compassap.ai/portfolio/nova.html",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/nova.svg",
+   "distribution": {
+    "npx": {
+     "package": "@compass-ai/nova@1.1.55",
+     "args": [
+      "acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "opencode",
+   "name": "OpenCode",
+   "description": "The open source coding agent",
+   "website": "https://opencode.ai",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/opencode.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./opencode",
+      "args": [
+       "acp"
+      ]
+     },
+     "darwin-x86_64": {
+      "cmd": "./opencode",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./opencode",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./opencode",
+      "args": [
+       "acp"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "pi-acp",
+   "name": "pi ACP",
+   "description": "ACP adapter for pi coding agent",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/pi-acp.svg",
+   "distribution": {
+    "npx": {
+     "package": "pi-acp@0.0.34",
+     "args": []
+    }
+   }
+  },
+  {
+   "id": "poolside",
+   "name": "Poolside",
+   "description": "Poolside's coding agent",
+   "website": "https://poolside.ai",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/poolside.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./pool-darwin-arm64",
+      "args": [
+       "acp"
+      ]
+     },
+     "darwin-x86_64": {
+      "cmd": "./pool-darwin-amd64",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./pool-linux-arm64",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./pool-linux-amd64",
+      "args": [
+       "acp"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "qoder",
+   "name": "Qoder CLI",
+   "description": "AI coding assistant with agentic capabilities",
+   "website": "https://qoder.com",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/qoder.svg",
+   "distribution": {
+    "npx": {
+     "package": "@qoder-ai/qodercli@0.2.14",
+     "args": [
+      "--acp"
+     ]
+    }
+   }
+  },
+  {
+   "id": "qwen-code",
+   "name": "Qwen Code",
+   "description": "Alibaba's Qwen coding assistant",
+   "website": "https://qwenlm.github.io/qwen-code-docs/en/users/overview",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/qwen-code.svg",
+   "distribution": {
+    "npx": {
+     "package": "@qwen-code/qwen-code@0.25.2",
+     "args": [
+      "--acp",
+      "--experimental-skills"
+     ]
+    }
+   }
+  },
+  {
+   "id": "sigit",
+   "name": "siGit Code",
+   "description": "Local-first coding agent. Runs entirely on your machine with optional on-device LLM inference via Onde.",
+   "website": "https://github.com/getsigit/sigit",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/sigit.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./sigit",
+      "args": []
+     },
+     "darwin-x86_64": {
+      "cmd": "./sigit",
+      "args": []
+     },
+     "linux-aarch64": {
+      "cmd": "./sigit-linux-arm64",
+      "args": []
+     },
+     "linux-x86_64": {
+      "cmd": "./sigit-linux-amd64",
+      "args": []
+     }
+    },
+    "npx": {
+     "package": "@smbcloud/sigit@1.7.0",
+     "args": []
+    }
+   }
+  },
+  {
+   "id": "stakpak",
+   "name": "Stakpak",
+   "description": "Open-source DevOps agent in Rust with enterprise-grade security",
+   "website": "https://stakpak.dev",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/stakpak.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./stakpak",
+      "args": [
+       "acp"
+      ]
+     },
+     "darwin-x86_64": {
+      "cmd": "./stakpak",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-aarch64": {
+      "cmd": "./stakpak",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./stakpak",
+      "args": [
+       "acp"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "vtcode",
+   "name": "VT Code",
+   "description": "An open-source coding agent with LLM-native code understanding and robust shell safety. Supports multiple LLM providers with automatic failover and efficient context management.",
+   "website": "https://github.com/vinhnx/VTCode/blob/main/docs/guides/zed-acp.md",
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/vtcode.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "cmd": "./vtcode",
+      "args": [
+       "acp"
+      ]
+     },
+     "darwin-x86_64": {
+      "cmd": "./vtcode",
+      "args": [
+       "acp"
+      ]
+     },
+     "linux-x86_64": {
+      "cmd": "./vtcode",
+      "args": [
+       "acp"
+      ]
+     }
+    }
+   }
+  }
+ ]
+}

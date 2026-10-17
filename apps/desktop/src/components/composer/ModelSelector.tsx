@@ -36,6 +36,7 @@ import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { FX_PROVIDERS, isUnsetModel } from "@/lib/model";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
+import { acpLabel } from "@/lib/acpAgents";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
 const EFFORT_LABELS: Record<Effort, string> = {
@@ -315,7 +316,7 @@ export default function ModelSelector({
 
   const selected = models.find((m) => m.id === modelId) ?? null;
   const enabledAgents = useEnabledAgents();
-  const agents = enabledAgents.map((id) => ({ id, label: AGENT_LABELS[id] }));
+  const agents = enabledAgents.map((id) => ({ id, label: AGENT_LABELS[id] ?? acpLabel(id) }));
   const activeAgent = agents.findIndex((a) => a.id === harness);
   // fx lists one provider at a time, so every row shares its provider — the
   // active one, which is what the segmented control marks. A pending switch

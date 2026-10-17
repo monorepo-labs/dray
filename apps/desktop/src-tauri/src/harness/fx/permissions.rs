@@ -8,7 +8,7 @@ use crate::harness::claude_code::permissions::PendingRequest;
 use super::parser::PermissionRequest;
 
 /// Builds the held request and its buttons in one pass.
-pub fn pending_for(request: &PermissionRequest, rpc_id: i64) -> (PendingRequest, Vec<PermissionOption>) {
+pub fn pending_for(request: &PermissionRequest, rpc_id: crate::harness::codex::rpc::RequestId) -> (PendingRequest, Vec<PermissionOption>) {
     let call = &request.tool_call;
     acp::pending_for("fx", &call.tool_call_id, call.name.as_deref().unwrap_or("tool"), &request.options, rpc_id)
 }
@@ -48,7 +48,7 @@ mod tests {
             ("allow_always", "allow_always"),
             ("reject_once", "reject_once"),
         ]);
-        let (pending, offered) = pending_for(&request, 1);
+        let (pending, offered) = pending_for(&request, 1.into());
 
         let kinds: Vec<PermissionOptionKind> = offered.iter().map(|o| o.kind).collect();
         assert_eq!(
@@ -59,7 +59,7 @@ mod tests {
                 PermissionOptionKind::Deny
             ]
         );
-        assert_eq!(pending.reply, Reply::Rpc(1));
+        assert_eq!(pending.reply, Reply::Rpc(1.into()));
         assert_eq!(pending.tool_use_id, "call_1");
         assert_eq!(
             pending.options["fx-allow_once"].decision.as_ref().unwrap(),
@@ -71,7 +71,7 @@ mod tests {
     #[test]
     fn a_request_with_no_refusal_gets_one() {
         let request = request(&[("allow_once", "allow_once"), ("later", "some_new_kind")]);
-        let (pending, offered) = pending_for(&request, 2);
+        let (pending, offered) = pending_for(&request, 2.into());
 
         assert_eq!(offered.len(), 2, "the unknown kind is dropped, a Deny is added");
         assert_eq!(

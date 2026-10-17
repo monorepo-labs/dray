@@ -3282,6 +3282,8 @@ function App() {
               contextUsage={contextUsage}
               isNewSession={!selectedSessionId}
               busy={busy}
+              sessionId={selectedSessionId}
+              agentMode={selectedItem?.agentMode ?? null}
             />
           }
         />

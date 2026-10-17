@@ -33,6 +33,13 @@ function read(server: ServerId) {
     .finally(() => inFlight.delete(server));
 }
 
+/// Drops every answer, for the one thing that moves it mid-process: the reader
+/// turning an ACP agent on or off, which adds or takes away a row.
+export function forgetAgentAvailability() {
+  answers.clear();
+  changed.emit();
+}
+
 /// The agents on `server`, or `null` until the first read lands.
 ///
 /// `null` is a resting state and not an error — the composer paints before the
