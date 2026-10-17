@@ -16,6 +16,8 @@ final class SmokeTests: XCTestCase {
         app.launch()
         snap(app, "1-empty")
 
+        // Through the Servers sheet, which offers Add whether or not a server is already saved.
+        app.buttons["Servers"].tap()
         app.buttons["Add server"].firstMatch.tap()
         let address = app.textFields["Address"]
         address.tap()
@@ -25,6 +27,7 @@ final class SmokeTests: XCTestCase {
         secret.typeText(token)
         snap(app, "2-add-server")
         app.buttons["Add"].tap()
+        app.buttons["Done"].tap()
 
         let row = app.collectionViews.cells.firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15), "no session listed")
