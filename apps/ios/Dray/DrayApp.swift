@@ -186,23 +186,28 @@ struct AddServerView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Address", text: $address, prompt: Text("wss://…"))
-                        .onChange(of: address) { _, text in
-                            // A pasted connect line carries both halves.
-                            if let line = parseConnectLine(text) {
-                                address = line.url
-                                token = line.token
+                    Group {
+                        TextField("Address", text: $address, prompt: Text("wss://…"))
+                            .accessibilityLabel("Address")
+                            .onChange(of: address) { _, text in
+                                // A pasted connect line carries both halves.
+                                if let line = parseConnectLine(text) {
+                                    address = line.url
+                                    token = line.token
+                                }
                             }
-                        }
-                    SecureField("Token", text: $token)
+                        // Not a SecureField: iOS would offer to save a pasted server token as a password.
+                        TextField("Token", text: $token)
+                    }
+                    .font(.body.monospaced())
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
                 } footer: {
                     Text("On a Mac, turn on Remote access in Dray's Settings, Servers, This Mac, and copy the address and token. On a server, `dray server tunnel on` prints both on one line.")
                 }
-                .font(.body.monospaced())
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
                 Section {
                     TextField("Name", text: $name, prompt: Text(host ?? "Name"))
+                        .accessibilityLabel("Name")
                 }
             }
             .navigationTitle("Add server")
