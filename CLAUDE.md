@@ -53,13 +53,16 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 ## Repo layout
 
-pnpm workspace, three apps, no shared package yet.
+pnpm workspace, three apps, no shared package yet — plus a native iOS app outside the workspace.
 
 ```
 apps/desktop/   the Tauri app — everything below this section describe it
 apps/web/       marketing site: Next.js App Router, Tailwind 4, deploy Vercel
 apps/docs/      docs: Blume (Astro), own Vercel project, served at drayhq.com/docs
+apps/ios/       SwiftUI client of dray-serve, XcodeGen project — read apps/ios/PLAN.md
 ```
+
+**The iOS app speaks `dray-serve`'s wire with hand-written `Codable` types**, so a change to a command's arguments, an event's shape or the serve protocol is a change there too. Every decode is lenient by design; a renamed field shows up as a missing row, not an error.
 
 **Docs live at `drayhq.com/docs` through a rewrite in `apps/web/next.config.ts`** to `DOCS_ORIGIN`, the docs project's own URL. Blume builds with `base: "/docs"`, which puts `/docs` on every link but writes the files at the output root, so the rewrite strips it: `/docs/x` here is `/x` there. `blume dev` serves under the base, so the dev fallback origin carries `/docs`. Content folder is `content/`, not `docs/`, or every page lands at `/docs/docs/…`. Blume wants Node 22.19+. Copy describes what shipped, checked against the code — a docs page promising a feature is a bug report waiting to happen.
 
