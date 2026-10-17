@@ -106,18 +106,21 @@ final class Store {
         do {
             let list: [SessionItem] = try await c.call("list_session_index_items", ["archived": false])
             for key in items.keys where key.server == server { items[key] = nil }
-            for var item in list {
-                let key = SessionKey(server: server, id: item.sessionId)
-                // A status that arrived while the read was out is newer than it.
-                if let s = statuses[key], let m = s.modified, m >= item.modified {
-                    item.status = s.status
-                    item.modified = m
-                }
-                items[key] = item
-            }
+            for item in list { store(SessionKey(server: server, id: item.sessionId), item) }
         } catch {
             serverState[server] = .failed(error.localizedDescription)
         }
+    }
+
+    /// Writes an entry read off the index. A status event that arrived while
+    /// the read was out is newer than it, so it wins.
+    private func store(_ key: SessionKey, _ read: SessionItem) {
+        var item = read
+        if let s = statuses[key], let m = s.modified, m >= item.modified {
+            item.status = s.status
+            item.modified = m
+        }
+        items[key] = item
     }
 
     // MARK: Sessions
@@ -192,7 +195,7 @@ final class Store {
         do {
             let fresh: SessionItem? = try await c.call("get_session_by_id", ["sessionId": .string(key.id), "turns": 0])
             guard let item = fresh else { throw DrayError("Session not found") }
-            items[key] = item
+            store(key, item)
             let outcome: SendOutcome = try await c.call("send_msg", [
                 "sessionId": .string(key.id),
                 "prompt": .string(text),
