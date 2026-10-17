@@ -90,11 +90,14 @@ final class Connection {
         }
     }
 
-    /// Keeps the tunnel from idling the socket out.
+    /// Keeps the tunnel from idling the socket out, and finds a dead one: a
+    /// failed ping cancels the task, which ends the receive loop and reconnects.
     private func ping(_ t: URLSessionWebSocketTask, _ gen: Int) async {
         while gen == generation {
             try? await Task.sleep(for: .seconds(25))
-            if gen == generation { t.sendPing { _ in } }
+            if gen == generation {
+                t.sendPing { error in if error != nil { t.cancel(with: .goingAway, reason: nil) } }
+            }
         }
     }
 
@@ -134,6 +137,11 @@ final class Connection {
             t.send(.string(String(decoding: frame, as: UTF8.self))) { error in
                 guard let error else { return }
                 Task { @MainActor in self.waiting.removeValue(forKey: id)?.resume(throwing: error) }
+            }
+            // A socket that stops answering without closing would otherwise hold the call forever.
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(60))
+                self.waiting.removeValue(forKey: id)?.resume(throwing: DrayError("The server took too long to answer \(cmd)"))
             }
         }
         return try JSONDecoder().decode(Reply<T>.self, from: data).ok

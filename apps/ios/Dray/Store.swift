@@ -143,22 +143,26 @@ final class Store {
         }
     }
 
-    /// Re-reads the newest turns. Where they overlap what is held, only the
-    /// new events are added — matched on id, since a subagent restarts `seq`;
-    /// where they don't, the held transcript is too old to join and is replaced.
+    /// Re-reads the newest turns and lays them over what is held: older pages
+    /// the read starts inside are kept, the read's own events follow in log
+    /// order, and anything that arrived live while it was out goes last.
+    /// Matched on id, since a subagent restarts `seq`.
     private func reload(_ key: SessionKey) async {
         guard let c = connections[key.server] else { return }
+        let before = transcripts[key]?.ids ?? []
         do {
             let snap: Snapshot? = try await c.call("get_session_by_id", ["sessionId": .string(key.id), "turns": 8])
             guard let snap else { return }
-            if var held = transcripts[key], let last = held.events.last, snap.events.contains(where: { $0.id == last.id }) {
-                for e in snap.events { held.append(e) }
-                transcripts[key] = held
-            } else {
-                var t = Transcript(olderBefore: snap.olderBefore)
-                for e in snap.events { t.append(e) }
-                transcripts[key] = t
+            let read = Set(snap.events.map(\.id))
+            let held = transcripts[key]?.events ?? []
+            let live = held.filter { !before.contains($0.id) && !read.contains($0.id) }
+            var t = Transcript(olderBefore: snap.olderBefore)
+            if let first = snap.events.first, let i = held.firstIndex(where: { $0.id == first.id }) {
+                for e in held[..<i] { t.append(e) }
+                t.olderBefore = transcripts[key]?.olderBefore
             }
+            for e in snap.events + live { t.append(e) }
+            transcripts[key] = t
         } catch {
             lastError = error.localizedDescription
         }
@@ -180,10 +184,15 @@ final class Store {
     }
 
     /// Sends a prompt carrying the session's own recorded settings back, so
-    /// `send_msg` finds nothing changed and respawns nothing.
+    /// `send_msg` finds nothing changed and respawns nothing. They are read
+    /// fresh first: another client moving the model broadcasts nothing, and a
+    /// held copy sent back would undo its change.
     func send(_ key: SessionKey, _ text: String) async -> Bool {
-        guard let c = connections[key.server], let item = items[key] else { return false }
+        guard let c = connections[key.server] else { return false }
         do {
+            let fresh: SessionItem? = try await c.call("get_session_by_id", ["sessionId": .string(key.id), "turns": 0])
+            guard let item = fresh else { throw DrayError("Session not found") }
+            items[key] = item
             let outcome: SendOutcome = try await c.call("send_msg", [
                 "sessionId": .string(key.id),
                 "prompt": .string(text),

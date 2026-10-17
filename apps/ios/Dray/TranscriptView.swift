@@ -204,7 +204,10 @@ struct Composer: View {
                 guard !text.isEmpty else { return }
                 sending = true
                 Task {
-                    if await store.send(key, text) { store.drafts[key] = nil }
+                    // Only if untouched meanwhile: text typed while the send was out was never sent.
+                    if await store.send(key, text), store.drafts[key]?.trimmingCharacters(in: .whitespacesAndNewlines) == text {
+                        store.drafts[key] = nil
+                    }
                     sending = false
                 }
             } label: {
@@ -291,11 +294,13 @@ struct QuestionsCard: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    TextField("Or type an answer", text: Binding(
-                        get: { typed[q.question] ?? "" },
-                        set: { typed[q.question] = $0 }
-                    ))
-                    .textFieldStyle(.roundedBorder)
+                    if q.freeText != false {
+                        TextField("Or type an answer", text: Binding(
+                            get: { typed[q.question] ?? "" },
+                            set: { typed[q.question] = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                    }
                 }
             }
             Button {
@@ -327,7 +332,7 @@ struct QuestionsCard: View {
         var out: [String: String] = [:]
         for q in request.questions {
             let text = (typed[q.question] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty {
+            if !text.isEmpty && q.freeText != false {
                 out[q.question] = text
             } else if let set = picks[q.question], !set.isEmpty {
                 // In option order, so the answer reads the way the menu did.

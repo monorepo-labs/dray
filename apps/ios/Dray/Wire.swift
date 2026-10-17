@@ -191,6 +191,8 @@ struct Question: Decodable, Hashable {
     let header: String?
     let multiSelect: Bool
     let options: [QuestionOption]
+    /// False on pi's select and confirm, which take an offered option or nothing.
+    let freeText: Bool?
 }
 
 struct QuestionsRequest: Decodable, Hashable {
@@ -224,8 +226,10 @@ enum Payload: Decodable {
         do {
             switch type {
             case "turn_completed":
+                // A user's Stop ends a turn as `error` too; the desktop's `drawsFailure` rule.
+                let stop = try c.decodeIfPresent(String.self, forKey: "stopReason") ?? ""
                 self = .turnCompleted(
-                    failed: try c.decode(String.self, forKey: "status") == "error",
+                    failed: try c.decode(String.self, forKey: "status") == "error" && !stop.hasPrefix("aborted"),
                     finalText: try c.decodeIfPresent(String.self, forKey: "finalText"))
             case "user_message":
                 let from = try c.decodeIfPresent([String: String].self, forKey: "from")
