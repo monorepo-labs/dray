@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import AgentIcon from "@/components/AgentIcon";
+import { ServerPicker } from "@/components/settings/AccountsSettings";
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import SettingsHeaderAction from "@/components/settings/headerAction";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,8 @@ import {
   setAcpAgentEnabled,
   useAcpAgents,
 } from "@/lib/acpAgents";
+import { useServers } from "@/lib/servers";
+import { LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
 import type { AcpAgent } from "@/types/events";
 
 /// Every agent that speaks ACP: the public registry plus the reader's own.
@@ -25,8 +28,10 @@ import type { AcpAgent } from "@/types/events";
 ///
 /// Dray installs none of them. A row whose command is missing links to the
 /// agent's own page; Refresh looks again after the reader has installed it.
-export default function AgentsSettings() {
-  const agents = useAcpAgents();
+export default function AgentsSettings({ cwd }: { cwd: string }) {
+  const servers = useServers();
+  const [server, setServer] = useState<ServerId>(() => serverOfPath(cwd));
+  const agents = useAcpAgents(server);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -63,7 +68,7 @@ export default function AgentsSettings() {
               disabled={busy}
               onClick={() => {
                 setBusy(true);
-                void loadAcpAgents(true).finally(() => setBusy(false));
+                void loadAcpAgents(true, server).finally(() => setBusy(false));
               }}
             >
               {busy ? <Spinner className="size-3.5" /> : <RefreshCw className="size-3.5" />}
@@ -72,6 +77,15 @@ export default function AgentsSettings() {
           <TooltipContent>Look again for installed agents</TooltipContent>
         </Tooltip>
       </SettingsHeaderAction>
+
+      {servers.length > 0 && (
+        <ServerPicker
+          label="Agents on"
+          value={server}
+          options={[LOCAL, ...servers.map((s) => s.id)]}
+          onPick={setServer}
+        />
+      )}
 
       <div className="flex items-center gap-2">
         <Input
@@ -96,7 +110,7 @@ export default function AgentsSettings() {
           onCancel={() => setAdding(false)}
           onSave={(agent) =>
             run(async () => {
-              await saveCustomAcpAgent(agent);
+              await saveCustomAcpAgent(agent, server);
               setAdding(false);
             })
           }
@@ -108,8 +122,8 @@ export default function AgentsSettings() {
           <AgentRow
             key={agent.harness}
             agent={agent}
-            onToggle={(on) => void run(() => setAcpAgentEnabled(agent.harness, on))}
-            onRemove={() => void run(() => removeCustomAcpAgent(agent.id))}
+            onToggle={(on) => void run(() => setAcpAgentEnabled(agent.harness, on, server))}
+            onRemove={() => void run(() => removeCustomAcpAgent(agent.id, server))}
           />
         ))}
         {shown.length === 0 && agents.length > 0 && (

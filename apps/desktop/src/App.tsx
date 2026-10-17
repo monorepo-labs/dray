@@ -2614,7 +2614,7 @@ function App() {
   const composingNewSession = !selectedSessionId && !issuesOpen;
   // Steps the picker's own row in its own order, rather than toggling between
   // two — a toggle written when there were two silently never reached pi.
-  const enabledAgents = useEnabledAgents();
+  const enabledAgents = useEnabledAgents(activeServer);
   useHotkey("harness.next", () => setHarness(nextHarness(harness, enabledAgents)), {
     enabled: composingNewSession,
   });
@@ -3283,7 +3283,6 @@ function App() {
               isNewSession={!selectedSessionId}
               busy={busy}
               sessionId={selectedSessionId}
-              agentMode={selectedItem?.agentMode ?? null}
             />
           }
         />

@@ -106,11 +106,16 @@ pub async fn init(
     };
 
     let launch = catalog::launch(id).await?;
+    // A custom agent's own PATH leads, so tool dirs its owner named still win.
+    let path = match launch.env.get("PATH").filter(|p| !p.is_empty()) {
+        Some(own) => format!("{own}:{}", crate::harness::agent_path(&launch.program)),
+        None => crate::harness::agent_path(&launch.program),
+    };
     let mut command = Command::new(&launch.program);
     command
         .args(&launch.args)
         .envs(&launch.env)
-        .env("PATH", crate::harness::agent_path(&launch.program))
+        .env("PATH", path)
         .env("DRAY_SESSION_ID", session_id);
     if let Some(endpoint) = crate::orchestration::child_endpoint() {
         command.env("DRAY_ENDPOINT", endpoint);
@@ -191,7 +196,7 @@ pub async fn init(
         }
     }
     let held = PENDING_MODES.lock().unwrap().remove(session_id);
-    let mode = match held {
+    let mode = match held.clone() {
         Some(mode) => Some(mode),
         None => crate::store::get_session_index_item(session_id)
             .await
@@ -200,8 +205,16 @@ pub async fn init(
             .and_then(|item| item.agent_mode),
     };
     if let Some(mode) = mode {
-        if let Err(err) = set_mode(&session, &mode, app).await {
-            eprintln!("[acp mode err] {err:#}");
+        match set_mode(&session, &mode, app).await {
+            // A pick made before the session existed is recorded only once the
+            // agent took it, or a reopen could not restore it.
+            Ok(()) if held.is_some() => {
+                if let Err(err) = crate::store::set_session_agent_mode(session_id, &mode).await {
+                    eprintln!("[acp mode save err] {err:#}");
+                }
+            }
+            Ok(()) => {}
+            Err(err) => eprintln!("[acp mode err] {err:#}"),
         }
     }
 
@@ -520,6 +533,11 @@ pub struct AgentModes {
     pub current: Option<String>,
 }
 
+/// The mode this live session is on, as the agent last said.
+pub fn current_mode(session: &AcpSession) -> Option<String> {
+    session.options.lock().unwrap().mode.as_ref()?.current.clone()
+}
+
 pub fn modes(harness: Harness) -> AgentModes {
     let Ok(id) = agent_id(harness) else {
         return AgentModes::default();
@@ -668,9 +686,13 @@ async fn read_stdout(
                                 }
                                 continue;
                             }
+                            // The agent moved itself, so the record follows and the
+                            // picker is told to read it again.
                             SessionUpdate::CurrentModeUpdate { current_mode_id: Some(mode) } => {
                                 if let Some(session) = session {
                                     note_current(session, Which::Mode, &mode);
+                                    let _ = crate::store::set_session_agent_mode(&handles.session_id, &mode).await;
+                                    let _ = handles.app.emit("models_changed", json!({"harness": harness}));
                                 }
                                 continue;
                             }

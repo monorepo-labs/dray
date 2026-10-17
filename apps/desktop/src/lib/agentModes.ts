@@ -2,20 +2,22 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
-import { invoke, listen } from "@/lib/transport";
+import { invoke, listen, type ServerId } from "@/lib/transport";
 import type { AgentModes, Harness } from "@/types/events";
 
 const NONE: AgentModes = { modes: [], current: null };
 
-/// An ACP agent's own modes, as its last session reported them. Read again on
-/// `models_changed`, which is what a session opening publishes.
-export function useAgentModes(harness: Harness): AgentModes {
-  const [answer, setAnswer] = useState<{ harness: Harness; modes: AgentModes } | null>(null);
+/// An ACP agent's own modes, as its last session on `server` reported them,
+/// with `current` the selected session's own where there is one. Read again on
+/// `models_changed`, which a session opening or moving its mode publishes.
+export function useAgentModes(harness: Harness, sessionId: string | null, server: ServerId): AgentModes {
+  const key = `${server}|${harness}|${sessionId}`;
+  const [answer, setAnswer] = useState<{ key: string; modes: AgentModes } | null>(null);
   useEffect(() => {
     let live = true;
     const read = () =>
-      invoke<AgentModes>("agent_modes", { harness })
-        .then((modes) => live && setAnswer({ harness, modes }))
+      invoke<AgentModes>("agent_modes", { harness, sessionId }, server)
+        .then((modes) => live && setAnswer({ key, modes }))
         .catch(() => {});
     void read();
     const unlisten = listen("models_changed", () => void read());
@@ -23,9 +25,9 @@ export function useAgentModes(harness: Harness): AgentModes {
       live = false;
       void unlisten.then((stop) => stop());
     };
-  }, [harness]);
+  }, [key, harness, sessionId, server]);
   // Keyed, or the previous agent's modes draw for a frame after a switch.
-  return answer?.harness === harness ? answer.modes : NONE;
+  return answer?.key === key ? answer.modes : NONE;
 }
 
 /// The mode a new task on each ACP agent opens in, kept like the stance pref.

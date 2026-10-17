@@ -315,7 +315,7 @@ export default function ModelSelector({
   const providerGroups = useMemo(() => byProvider(listed), [listed]);
 
   const selected = models.find((m) => m.id === modelId) ?? null;
-  const enabledAgents = useEnabledAgents();
+  const enabledAgents = useEnabledAgents(server);
   const agents = enabledAgents.map((id) => ({ id, label: AGENT_LABELS[id] ?? acpLabel(id) }));
   const activeAgent = agents.findIndex((a) => a.id === harness);
   // fx lists one provider at a time, so every row shares its provider — the

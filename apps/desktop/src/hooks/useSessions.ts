@@ -942,7 +942,7 @@ const handleSendMsg = async (
     // An ACP agent's mode is its own, not a `send_msg` argument, so a new
     // session's pick is held in Rust ahead of the spawn that reads it.
     const agentMode = isNewSession && isAcp(harness) ? pendingAgentMode(harness) : null;
-    if (agentMode) await invoke("set_agent_mode", { sessionId, mode: agentMode });
+    if (agentMode) await invoke("set_agent_mode", { sessionId, mode: agentMode }, server);
     // Nothing awaited between here and the dispatch, so a send queued behind
     // this one cannot overtake it.
     const outcome = await invoke<SendOutcome>("send_msg", {

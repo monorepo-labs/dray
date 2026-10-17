@@ -1,29 +1,27 @@
-import { useSyncExternalStore } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 import { forgetAgentAvailability } from "@/hooks/useAgentAvailability";
 import { channel } from "@/lib/channel";
-import { invoke } from "@/lib/transport";
+import { invoke, LOCAL, type ServerId } from "@/lib/transport";
 import type { AcpAgent, CustomAgent, Harness } from "@/types/events";
 
-/// The ACP agents this machine knows of — the registry plus the reader's own —
+/// The ACP agents each server knows of — the registry plus the reader's own —
 /// as one module store, since the picker, the icon and Settings all read it and
-/// per-hook copies would disagree about which are on.
-///
-/// Local only: the list and the enabled set live in the shared config dir, and
-/// a remote server answers its own.
+/// per-hook copies would disagree about which are on. Per server, because each
+/// keeps its own enabled set and its own installs.
 const changed = channel<void>();
-let agents: AcpAgent[] = [];
-let loaded = false;
-let loading: Promise<void> | null = null;
+const NONE: AcpAgent[] = [];
+const lists = new Map<ServerId, AcpAgent[]>();
+const loading = new Map<ServerId, Promise<void>>();
 
-/// Reads the list again. `recheck` throws away the cached binary lookups, for
-/// an agent installed while the app is open.
-export function loadAcpAgents(recheck = false): Promise<void> {
-  if (loading && !recheck) return loading;
-  loading = invoke<AcpAgent[]>("list_acp_agents", { recheck })
+/// Reads `server`'s list again. `recheck` throws away the cached binary
+/// lookups, for an agent installed while the app is open.
+export function loadAcpAgents(recheck = false, server: ServerId = LOCAL): Promise<void> {
+  const running = loading.get(server);
+  if (running && !recheck) return running;
+  const read = invoke<AcpAgent[]>("list_acp_agents", { recheck }, server)
     .then((next) => {
-      agents = next;
-      loaded = true;
+      lists.set(server, next);
       forgetAgentAvailability();
       changed.emit();
     })
@@ -31,40 +29,54 @@ export function loadAcpAgents(recheck = false): Promise<void> {
     // picker needs; Settings says nothing worse than an empty list.
     .catch(() => {})
     .finally(() => {
-      loading = null;
+      if (loading.get(server) === read) loading.delete(server);
     });
-  return loading;
+  loading.set(server, read);
+  return read;
 }
 
-function subscribe(listener: () => void) {
-  if (!loaded) void loadAcpAgents();
-  return changed.subscribe(listener);
-}
-
-export function useAcpAgents(): AcpAgent[] {
-  return useSyncExternalStore(subscribe, () => agents, () => agents);
+export function useAcpAgents(server: ServerId = LOCAL): AcpAgent[] {
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      if (!lists.has(server)) void loadAcpAgents(false, server);
+      return changed.subscribe(listener);
+    },
+    [server],
+  );
+  const snapshot = () => lists.get(server) ?? NONE;
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 
 export function isAcp(harness: Harness): boolean {
   return harness.startsWith("acp:");
 }
 
-/// The agent's own name, or its id while the list is still out.
+/// The agent behind a harness on whichever server lists it — the registry is
+/// the same everywhere, so any answer names it.
+export function findAcpAgent(harness: Harness): AcpAgent | undefined {
+  for (const list of lists.values()) {
+    const found = list.find((a) => a.harness === harness);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/// The agent's own name, or its id while no list has landed.
 export function acpLabel(harness: Harness): string {
-  return agents.find((a) => a.harness === harness)?.name ?? harness.slice("acp:".length);
+  return findAcpAgent(harness)?.name ?? harness.slice("acp:".length);
 }
 
-export async function setAcpAgentEnabled(harness: Harness, enabled: boolean) {
-  await invoke("set_acp_agent_enabled", { id: harness.slice("acp:".length), enabled });
-  await loadAcpAgents(true);
+export async function setAcpAgentEnabled(harness: Harness, enabled: boolean, server: ServerId = LOCAL) {
+  await invoke("set_acp_agent_enabled", { id: harness.slice("acp:".length), enabled }, server);
+  await loadAcpAgents(true, server);
 }
 
-export async function saveCustomAcpAgent(agent: CustomAgent) {
-  await invoke("save_custom_acp_agent", { agent });
-  await loadAcpAgents(true);
+export async function saveCustomAcpAgent(agent: CustomAgent, server: ServerId = LOCAL) {
+  await invoke("save_custom_acp_agent", { agent }, server);
+  await loadAcpAgents(true, server);
 }
 
-export async function removeCustomAcpAgent(id: string) {
-  await invoke("remove_custom_acp_agent", { id });
-  await loadAcpAgents(true);
+export async function removeCustomAcpAgent(id: string, server: ServerId = LOCAL) {
+  await invoke("remove_custom_acp_agent", { id }, server);
+  await loadAcpAgents(true, server);
 }

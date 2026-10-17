@@ -1,6 +1,6 @@
 import { Bot } from "lucide-react";
 
-import { acpLabel, useAcpAgents } from "@/lib/acpAgents";
+import { acpLabel, findAcpAgent, useAcpAgents } from "@/lib/acpAgents";
 import { cn } from "@/lib/utils";
 import type { Harness } from "@/types/events";
 
@@ -146,7 +146,8 @@ export default function AgentIcon({
 /// `currentColor` like the marks above, but the CDN sends no CORS header and a
 /// cross-origin mask draws nothing. No icon draws a bot.
 function AcpIcon({ harness, className }: { harness: Harness; className?: string }) {
-  const agent = useAcpAgents().find((a) => a.harness === harness);
+  useAcpAgents();
+  const agent = findAcpAgent(harness);
   const label = acpLabel(harness);
   if (!agent?.icon) return <Bot role="img" aria-label={label} className={cn("size-4 shrink-0", className)} />;
   return <img src={agent.icon} alt={label} className={cn("size-4 shrink-0 dark:invert", className)} />;

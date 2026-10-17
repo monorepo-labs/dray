@@ -651,10 +651,15 @@ async fn interrupt_session(
     Ok(manager().interrupt(session_id, &sink).await?)
 }
 
-/// An ACP agent's own permission modes, as its last session reported them.
+/// An ACP agent's own permission modes, as its last session reported them,
+/// with `current` answered for `session_id` where one is named.
 #[cfg_attr(feature = "desktop", tauri::command)]
-async fn agent_modes(harness: Harness) -> harness::agents::AgentModes {
-    harness::agents::modes(harness)
+async fn agent_modes(harness: Harness, session_id: Option<String>) -> harness::agents::AgentModes {
+    let mut modes = harness::agents::modes(harness);
+    if let Some(id) = session_id {
+        modes.current = manager().agent_mode(&id).await.or(modes.current);
+    }
+    modes
 }
 
 /// Moves a session onto one of its ACP agent's own modes. See

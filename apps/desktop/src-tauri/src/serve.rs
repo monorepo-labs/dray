@@ -1171,7 +1171,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         refresh_models() => ok(crate::refresh_models().await);
         set_fx_provider(provider: String) => crate::set_fx_provider(provider).await;
         list_slash_commands(cwd: String, harness: Harness) => crate::list_slash_commands(&cwd, harness).await;
-        agent_modes(harness: Harness) => ok(crate::agent_modes(harness).await);
+        agent_modes(harness: Harness, session_id: Option<String>) => ok(crate::agent_modes(harness, session_id).await);
         set_agent_mode(session_id: String, mode: String) => crate::set_agent_mode(&session_id, &mode, sink).await;
         list_acp_agents(recheck: Option<bool>) => ok(crate::harness::agents::catalog::list_acp_agents(recheck).await);
         set_acp_agent_enabled(id: String, enabled: bool) => crate::harness::agents::catalog::set_acp_agent_enabled(id, enabled).await;

@@ -626,8 +626,10 @@ impl SessionManager {
         // searched what Codex reported *and* the table, where `runs_on`
         // knows only the table and would refuse a model newer than this
         // build.
+        // An ACP agent likewise judges its own ids, which may well be
+        // `opus` — a name `runs_on` would read as Claude Code's.
         let runnable = match harness {
-            Harness::Codex => model_spec.is_some(),
+            Harness::Codex | Harness::Acp(_) => model_spec.is_some(),
             _ => runs_on(&model, harness),
         };
 
@@ -1455,17 +1457,28 @@ impl SessionManager {
     /// where a child runs, and held for the spawn where neither exists yet — a
     /// new session's id is minted before its first send, so the composer can
     /// say the mode first.
+    /// The mode an ACP session is on: the live child's word, else the index's.
+    pub async fn agent_mode(&self, session_id: &str) -> Option<String> {
+        if let Some(slot) = self.existing(session_id).await {
+            if let Some(Session { stdin: Transport::Acp(session), .. }) = slot.lock().await.as_ref() {
+                if let Some(mode) = crate::harness::agents::current_mode(session) {
+                    return Some(mode);
+                }
+            }
+        }
+        crate::store::get_session_index_item(session_id).await.ok().flatten()?.agent_mode
+    }
+
     pub async fn set_agent_mode(&self, session_id: &str, mode: &str, app: &Sink) -> Result<()> {
+        // A live child takes it first, so a refusal records nothing.
+        if let Some(slot) = self.existing(session_id).await {
+            let guard = slot.lock().await;
+            if let Some(Session { stdin: Transport::Acp(session), .. }) = guard.as_ref() {
+                crate::harness::agents::set_mode(session, mode, app).await?;
+            }
+        }
         if !crate::store::set_session_agent_mode(session_id, mode).await? {
             crate::harness::agents::hold_mode(session_id, mode);
-            return Ok(());
-        }
-        let Some(slot) = self.existing(session_id).await else {
-            return Ok(());
-        };
-        let guard = slot.lock().await;
-        if let Some(Session { stdin: Transport::Acp(session), .. }) = guard.as_ref() {
-            crate::harness::agents::set_mode(session, mode, app).await?;
         }
         Ok(())
     }

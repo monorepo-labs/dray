@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { pickAgentMode, useAgentModes, usePendingAgentMode } from "@/lib/agentModes";
-import { invoke } from "@/lib/transport";
+import { invoke, type ServerId } from "@/lib/transport";
 import type { Harness } from "@/types/events";
 
 /// An ACP agent's stance picker, drawn from the agent's own modes under its own
@@ -19,28 +19,27 @@ import type { Harness } from "@/types/events";
 /// The list is learned off the agent's last session, so an agent never run here
 /// draws nothing until its first session has opened.
 export default function AgentModeSelector({
+  server,
   harness,
   sessionId,
-  recorded,
   locked = false,
 }: {
+  server: ServerId;
   harness: Harness;
   /// `null` for a new task, whose pick rides the send.
   sessionId: string | null;
-  /// The mode the index holds for this session, if one was ever picked.
-  recorded: string | null;
   locked?: boolean;
 }) {
-  const { modes, current } = useAgentModes(harness);
+  const { modes, current } = useAgentModes(harness, sessionId, server);
   const pending = usePendingAgentMode(harness);
-  // Moved optimistically, then confirmed by the index on the next reload.
+  // Moved optimistically, until the session's own answer comes back.
   const [moved, setMoved] = useState<string | null>(null);
-  useEffect(() => setMoved(null), [sessionId, recorded]);
+  useEffect(() => setMoved(null), [sessionId, current]);
   const [open, setOpen] = useState(false);
   if (locked && open) setOpen(false);
   if (modes.length < 2) return null;
 
-  const value = sessionId ? (moved ?? recorded ?? current) : (pending ?? current);
+  const value = sessionId ? (moved ?? current) : (pending ?? current);
   const selected = modes.find((m) => m.id === value);
 
   const choose = (mode: string) => {

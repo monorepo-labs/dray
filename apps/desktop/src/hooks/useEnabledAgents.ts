@@ -3,6 +3,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { isAcp, setAcpAgentEnabled, useAcpAgents } from "@/lib/acpAgents";
 import { channel } from "@/lib/channel";
+import { LOCAL, type ServerId } from "@/lib/transport";
 import { HARNESS_ORDER } from "@/lib/model";
 import type { Harness } from "@/types/events";
 
@@ -27,9 +28,9 @@ function read(): Harness[] {
 
 /// Turns one agent on or off in the composer's picker. Refuses to turn off the
 /// last native one standing.
-export function setAgentEnabled(harness: Harness, on: boolean) {
+export function setAgentEnabled(harness: Harness, on: boolean, server: ServerId = LOCAL) {
   if (isAcp(harness)) {
-    void setAcpAgentEnabled(harness, on);
+    void setAcpAgentEnabled(harness, on, server);
     return;
   }
   const next = on
@@ -42,11 +43,11 @@ export function setAgentEnabled(harness: Harness, on: boolean) {
 }
 
 /// The agents the picker offers and ⌘⇧A steps through, in picker order —
-/// native ones first, then the ACP agents the reader turned on.
+/// native ones first, then the ACP agents the reader turned on on `server`.
 /// Sessions already running on a disabled agent are untouched.
-export function useEnabledAgents(): Harness[] {
+export function useEnabledAgents(server: ServerId = LOCAL): Harness[] {
   const native = useSyncExternalStore(changed.subscribe, () => enabled, () => enabled);
-  const acp = useAcpAgents();
+  const acp = useAcpAgents(server);
   return useMemo(
     () => [...native, ...acp.filter((a) => a.enabled).map((a) => a.harness)],
     [native, acp],

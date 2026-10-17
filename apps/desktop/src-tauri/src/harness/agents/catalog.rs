@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, RwLock};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use ts_rs::TS;
 
 const REGISTRY_URL: &str = "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
@@ -160,6 +160,11 @@ fn remember_names<'a>(pairs: impl Iterator<Item = (&'a str, &'a str)>) {
 /// front of it, so a launch offline never waits on the network.
 async fn registry() -> Arc<Registry> {
     if let Some(hit) = REGISTRY.read().unwrap().clone() {
+        // A server runs for days, so freshness is asked again here too, and a
+        // failed fetch is retried a day later rather than never.
+        if LAST_TRY.lock().unwrap().is_some_and(|at| at.elapsed() >= STALE_AFTER) {
+            refresh_behind();
+        }
         return hit;
     }
 
@@ -184,14 +189,24 @@ async fn registry() -> Arc<Registry> {
     }));
     install(registry.clone());
 
-    if !fresh {
-        tokio::spawn(async {
-            if let Err(err) = refresh().await {
-                eprintln!("[acp registry refresh err] {err:#}");
-            }
-        });
+    if fresh {
+        *LAST_TRY.lock().unwrap() = Some(Instant::now());
+    } else {
+        refresh_behind();
     }
     registry
+}
+
+/// When the registry was last fetched or found fresh.
+static LAST_TRY: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
+fn refresh_behind() {
+    *LAST_TRY.lock().unwrap() = Some(Instant::now());
+    tokio::spawn(async {
+        if let Err(err) = refresh().await {
+            eprintln!("[acp registry refresh err] {err:#}");
+        }
+    });
 }
 
 fn install(registry: Arc<Registry>) {

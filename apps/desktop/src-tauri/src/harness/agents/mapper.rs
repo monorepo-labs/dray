@@ -41,6 +41,8 @@ pub struct Mapper {
     /// An exit code by call id. Devin reports it on an in-progress update and
     /// closes the call with an empty one, so it has to outlive the update.
     exits: HashMap<String, i32>,
+    /// Calls opened with no arguments yet, held until an update brings some.
+    undrawn: HashMap<String, ToolKind>,
     calls: HashMap<String, KnownCall>,
 }
 
@@ -56,6 +58,7 @@ impl Mapper {
             occupancy: None,
             outputs: HashMap::new(),
             exits: HashMap::new(),
+            undrawn: HashMap::new(),
             calls: HashMap::new(),
         }
     }
@@ -91,12 +94,29 @@ impl Mapper {
                 content,
                 raw_input,
             } => {
-                // A finished call on an opening line is a replay; Dray's own
-                // log already holds it.
-                if status.is_some_and(ToolStatus::is_final) {
+                let finished = status.filter(|s| s.is_final());
+                let input = tool_input(raw_input, &content);
+                // An edit announced before its arguments is drawn by the update
+                // that brings them, or its row keeps an empty input for good.
+                if finished.is_none() && is_empty(&input) {
+                    self.calls.insert(tool_call_id.clone(), KnownCall { title, input });
+                    self.undrawn.insert(tool_call_id, kind);
                     return Vec::new();
                 }
-                self.open_call(tool_call_id, title, kind, &content, raw_input)
+                let mut out = self.open_call(tool_call_id.clone(), title, kind, input);
+                // A quick call can arrive finished on its opening line. Not a
+                // replay: the read loop drops those before the session opens.
+                if finished.is_some() {
+                    out.extend(self.update(SessionUpdate::ToolCallUpdate {
+                        tool_call_id,
+                        title: None,
+                        status: finished,
+                        content,
+                        raw_input: None,
+                        meta: None,
+                    }));
+                }
+                out
             }
 
             SessionUpdate::ToolCallUpdate {
@@ -107,11 +127,25 @@ impl Mapper {
                 raw_input,
                 meta,
             } => {
-                // Some agents open a call with its first update. Drawn from
-                // whatever that carries rather than lost.
+                // Some agents open a call with its first update, and some open
+                // one before its arguments. Either is drawn once there is
+                // something to draw, or at the latest when it finishes.
                 let mut out = Vec::new();
-                if !self.calls.contains_key(&tool_call_id) {
-                    out.extend(self.open_call(tool_call_id.clone(), title, ToolKind::default(), &content, raw_input));
+                let undrawn = self.undrawn.remove(&tool_call_id);
+                if undrawn.is_some() || !self.calls.contains_key(&tool_call_id) {
+                    let known = self.calls.remove(&tool_call_id);
+                    let mut input = tool_input(raw_input, &content);
+                    if is_empty(&input) {
+                        input = known.as_ref().map(|k| k.input.clone()).unwrap_or(input);
+                    }
+                    let title = title.or_else(|| known.and_then(|k| k.title));
+                    let kind = undrawn.unwrap_or_default();
+                    if is_empty(&input) && !status.is_some_and(ToolStatus::is_final) {
+                        self.calls.insert(tool_call_id.clone(), KnownCall { title, input });
+                        self.undrawn.insert(tool_call_id.clone(), kind);
+                    } else {
+                        out.extend(self.open_call(tool_call_id.clone(), title, kind, input));
+                    }
                 }
 
                 let text: String = content
@@ -188,10 +222,8 @@ impl Mapper {
         id: String,
         title: Option<String>,
         kind: ToolKind,
-        content: &[ToolContent],
-        raw_input: Option<Value>,
+        input: Value,
     ) -> Vec<AgentEvent> {
-        let input = tool_input(raw_input, content);
         self.calls.insert(
             id.clone(),
             KnownCall {
@@ -274,6 +306,7 @@ impl Mapper {
         self.turn_open = false;
         self.outputs.clear();
         self.exits.clear();
+        self.undrawn.clear();
         self.calls.clear();
         event
     }
@@ -368,6 +401,10 @@ fn tool_input(raw: Option<Value>, content: &[ToolContent]) -> Value {
     input
 }
 
+fn is_empty(input: &Value) -> bool {
+    input.as_object().is_some_and(|map| map.is_empty())
+}
+
 /// A shell's exit code, where the agent says. Not ACP — Devin's
 /// `_meta.terminal_exit` — but un-namespaced and cheap to read.
 fn exit_code(meta: Option<&Value>) -> Option<i32> {
@@ -458,5 +495,49 @@ mod tests {
             &events.last().expect("events").payload,
             P::TurnCompleted { status: TurnStatus::Success, stop_reason: Some(r), .. } if r == "cancelled"
         ));
+    }
+
+    fn updates(lines: &[Value]) -> Vec<AgentEvent> {
+        let mut mapper = Mapper::new("s".into(), Harness::Acp("test"), Arc::new(AtomicU64::new(0)));
+        lines
+            .iter()
+            .flat_map(|update| {
+                let params = json!({ "sessionId": "x", "update": update });
+                let Ok(note) = parse_notification("session/update", params) else { panic!("unparsed") };
+                mapper.map(AcpEvent::Update(note.update))
+            })
+            .collect()
+    }
+
+    /// An edit announced bare is drawn by the update carrying its diff.
+    #[test]
+    fn a_call_opened_with_no_arguments_waits_for_them() {
+        let events = updates(&[
+            json!({"sessionUpdate":"tool_call","toolCallId":"c","title":"Edit","kind":"edit","status":"pending"}),
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"c","status":"in_progress",
+                "content":[{"type":"diff","path":"/a.txt","oldText":"x","newText":"y"}]}),
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"c","status":"completed"}),
+        ]);
+        let starts: Vec<&Value> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                P::ToolCallStarted { input, .. } => Some(input),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts.len(), 1);
+        assert_eq!(starts[0]["new_string"], "y");
+        assert!(events.iter().any(|e| matches!(e.payload, P::ToolCallCompleted { .. })));
+    }
+
+    /// A call that arrives finished is drawn whole, not dropped as a replay.
+    #[test]
+    fn a_call_opened_finished_is_drawn() {
+        let events = updates(&[json!({"sessionUpdate":"tool_call","toolCallId":"c","title":"Read",
+            "kind":"read","status":"failed","rawInput":{"path":"/a"},
+            "content":[{"type":"content","content":{"type":"text","text":"no such file"}}]})]);
+        assert!(events.iter().any(|e| matches!(e.payload, P::ToolCallStarted { .. })));
+        assert!(events.iter().any(|e| matches!(&e.payload,
+            P::ToolCallCompleted { result, .. } if result.is_error && result.text == "no such file")));
     }
 }

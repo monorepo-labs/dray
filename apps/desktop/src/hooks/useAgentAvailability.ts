@@ -10,18 +10,26 @@ import type { AgentAvailability, Harness } from "@/types/events";
 /// picker and the composer's notice both read it, and two copies would let one
 /// mark an agent unavailable while the other still offered to send to it.
 ///
-/// Read once per server per process. The answer cannot change while a server
-/// runs — Rust caches the resolution in a `OnceLock`, absence included — so
-/// refetching would spend a login shell to be told the same thing.
+/// Read once per server per process, except where the reader turns an ACP
+/// agent on or off. Otherwise the answer cannot change while a server runs —
+/// Rust caches the resolution, absence included — so refetching would spend a
+/// login shell to be told the same thing.
 const answers = new Map<ServerId, AgentAvailability[]>();
-const inFlight = new Set<ServerId>();
+/// The generation each running read started under, so a read begun before a
+/// [`forgetAgentAvailability`] can neither land nor block the one after it.
+const inFlight = new Map<ServerId, number>();
+/// Mounted readers per server, which a forget reads again for.
+const watched = new Map<ServerId, number>();
+let generation = 0;
 const changed = channel<void>();
 
-function read(server: ServerId) {
-  if (answers.has(server) || inFlight.has(server)) return;
-  inFlight.add(server);
+function read(server: ServerId, force = false) {
+  if ((!force && answers.has(server)) || inFlight.get(server) === generation) return;
+  const gen = generation;
+  inFlight.set(server, gen);
   invoke<AgentAvailability[]>("agent_availability", {}, server)
     .then((next) => {
+      if (gen !== generation) return;
       answers.set(server, next);
       changed.emit();
     })
@@ -30,14 +38,18 @@ function read(server: ServerId) {
     // missing. The send-time check still refuses, with the same sentence. A
     // remote server that was unreachable is asked again on the next mount.
     .catch(() => {})
-    .finally(() => inFlight.delete(server));
+    .finally(() => {
+      if (inFlight.get(server) === gen) inFlight.delete(server);
+    });
 }
 
-/// Drops every answer, for the one thing that moves it mid-process: the reader
-/// turning an ACP agent on or off, which adds or takes away a row.
+/// Reads every answer again, for the one thing that moves it mid-process: the
+/// reader turning an ACP agent on or off, which adds or takes away a row. A
+/// watched server keeps its old answer on screen until the new one lands.
 export function forgetAgentAvailability() {
-  answers.clear();
-  changed.emit();
+  generation += 1;
+  for (const server of answers.keys()) if (!watched.has(server)) answers.delete(server);
+  for (const server of watched.keys()) read(server, true);
 }
 
 /// The agents on `server`, or `null` until the first read lands.
@@ -48,8 +60,15 @@ export function forgetAgentAvailability() {
 export function useAgentAvailability(server: ServerId = LOCAL): AgentAvailability[] | null {
   const subscribe = useCallback(
     (listener: () => void) => {
+      watched.set(server, (watched.get(server) ?? 0) + 1);
       read(server);
-      return changed.subscribe(listener);
+      const stop = changed.subscribe(listener);
+      return () => {
+        stop();
+        const left = (watched.get(server) ?? 1) - 1;
+        if (left > 0) watched.set(server, left);
+        else watched.delete(server);
+      };
     },
     [server],
   );

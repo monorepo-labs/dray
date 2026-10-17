@@ -88,10 +88,9 @@ type ComposerToolbarProps = {
   /// rather than at the next send.
   busy: boolean;
 
-  /// The selected session and the ACP mode its index entry holds, for an ACP
-  /// agent's own mode picker. Null for a new task.
+  /// The selected session, for an ACP agent's own mode picker. Null for a new
+  /// task.
   sessionId: string | null;
-  agentMode: string | null;
 };
 
 /// The composer's control row. Model and permission change a running session in
@@ -133,7 +132,6 @@ export default function ComposerToolbar({
   isNewSession,
   busy,
   sessionId,
-  agentMode,
 }: ComposerToolbarProps) {
   return (
     <div className="flex min-w-0 items-center gap-0.5 px-1">
@@ -236,9 +234,9 @@ export default function ComposerToolbar({
       )}
       {isAcp(harness) && (
         <AgentModeSelector
+          server={server}
           harness={harness}
           sessionId={sessionId}
-          recorded={agentMode}
           locked={lockedMidTurn(harness, "stance", busy)}
         />
       )}

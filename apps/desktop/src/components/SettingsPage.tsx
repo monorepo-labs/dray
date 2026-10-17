@@ -214,7 +214,7 @@ export default function SettingsPage({
         ),
         servers: <ServersSettings />,
         accounts: <AccountsSettings cwd={cwd} />,
-        agents: <AgentsSettings />,
+        agents: <AgentsSettings cwd={cwd} />,
         transcription: (
           <TranscriptionSettings
             status={transcription.status}
