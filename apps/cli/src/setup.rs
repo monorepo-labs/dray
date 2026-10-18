@@ -41,6 +41,8 @@ pub enum ServerCommand {
         #[arg(value_enum)]
         state: OnOff,
     },
+    /// Show a QR code the Dray iPhone app scans to add this server.
+    Pair,
 }
 
 pub fn server(command: ServerCommand) -> Result<(), String> {
@@ -51,7 +53,23 @@ pub fn server(command: ServerCommand) -> Result<(), String> {
         ServerCommand::Stop => service(ServiceCommand::Uninstall),
         ServerCommand::Status => service(ServiceCommand::Status),
         ServerCommand::Tunnel { state } => service(ServiceCommand::Tunnel { state }),
+        ServerCommand::Pair => pair(),
     }
+}
+
+/// The phone's pairing QR, for a server with no app to draw it. Light
+/// modules are the blocks, since a terminal is usually light text on dark.
+fn pair() -> Result<(), String> {
+    use qrcode::render::unicode::Dense1x2;
+    let url = tunnel_address()?.ok_or("the server has no public address yet. Turn it on: dray server tunnel on")?;
+    let link = dray_proto::pair_link(&url, &serve_token()?, &dray_proto::machine_name());
+    let code = qrcode::QrCode::new(link).map_err(|e| e.to_string())?;
+    let art = code.render::<Dense1x2>().dark_color(Dense1x2::Light).light_color(Dense1x2::Dark).build();
+    println!(
+        "{art}\n\nPoint the iPhone's Camera at this, or scan it from Dray's Add server.\n\n\
+         {DIM}Anyone holding it can use this server.{RESET}"
+    );
+    Ok(())
 }
 
 #[derive(Subcommand)]

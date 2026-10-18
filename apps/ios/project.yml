@@ -22,6 +22,9 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
+        # The `dray://` scheme a pairing QR opens, which no INFOPLIST_KEY can say.
+        INFOPLIST_FILE: Dray/Info.plist
+        INFOPLIST_KEY_NSCameraUsageDescription: Dray scans the QR code a Mac or server shows, to add it.
         INFOPLIST_KEY_CFBundleDisplayName: Dray
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_UILaunchScreen_Generation: YES

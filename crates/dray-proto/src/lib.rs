@@ -853,6 +853,39 @@ pub const SERVE_PORT: u16 = 7317;
 /// server lets through besides its own.
 pub const TUNNEL_URL_FILE: &str = "tunnel-url";
 
+/// What a pairing QR encodes, for the phone to add this server by: the
+/// address, the token and a name, as `dray://connect?…`. The iOS app
+/// registers the scheme, so the system Camera opens it too.
+pub fn pair_link(url: &str, token: &str, name: &str) -> String {
+    let url = url.replacen("https://", "wss://", 1);
+    format!("dray://connect?url={}&token={}&name={}", encode(&url), encode(token), encode(name))
+}
+
+/// The name a pairing link offers the phone: a Mac's own name from Sharing,
+/// else the host name. Spawns, so keep it off an async runtime's threads.
+pub fn machine_name() -> String {
+    let (cmd, args): (&str, &[&str]) =
+        if cfg!(target_os = "macos") { ("scutil", &["--get", "ComputerName"]) } else { ("hostname", &[]) };
+    std::process::Command::new(cmd)
+        .args(args)
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Dray server".into())
+}
+
+/// Percent-encodes everything but RFC 3986's unreserved set.
+fn encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 /// How each package manager installs git, the first one found winning. The
 /// app shows the same line to copy where `dray setup` would print it, so the
 /// two are one table.
@@ -868,6 +901,14 @@ pub const GIT_INSTALLS: [(&str, &str); 6] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pair_link_encodes_every_part() {
+        assert_eq!(
+            pair_link("https://a.example.com", "ab12", "Yogesh's Mac"),
+            "dray://connect?url=wss%3A%2F%2Fa.example.com&token=ab12&name=Yogesh%27s%20Mac"
+        );
+    }
 
     /// Deliberately a v1 line, and that is half the point: an envelope from a
     /// version we no longer speak still has to *parse*, or the app answers

@@ -21,6 +21,7 @@ struct RootView: View {
     @State private var selection: SessionKey?
     @State private var showServers = false
     @State private var adding = false
+    @State private var pairing: PairLink?
 
     var body: some View {
         NavigationSplitView {
@@ -51,6 +52,9 @@ struct RootView: View {
         }
         .sheet(isPresented: $showServers) { ServersView() }
         .sheet(isPresented: $adding) { AddServerView() }
+        // Filled in, not added: a link from anywhere should not add a server unasked.
+        .sheet(item: $pairing) { AddServerView(link: $0) }
+        .onOpenURL { pairing = PairLink($0.absoluteString) }
         .alert("Something went wrong", isPresented: Binding(
             get: { store.lastError != nil },
             set: { if !$0 { store.lastError = nil } }
@@ -178,13 +182,18 @@ struct ServersView: View {
 struct AddServerView: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
+    var link: PairLink?
     @State private var address = ""
     @State private var token = ""
     @State private var name = ""
+    @State private var scanning = false
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Button("Scan QR code", systemImage: "qrcode.viewfinder") { scanning = true }
+                }
                 Section {
                     Group {
                         TextField("Address", text: $address, prompt: Text("wss://…"))
@@ -203,7 +212,7 @@ struct AddServerView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 } footer: {
-                    Text("On a Mac, turn on Remote access in Dray's Settings, Servers, This Mac, and copy the address and token. On a server, `dray server tunnel on` prints both on one line.")
+                    Text("On a Mac, turn on Remote access in Dray's Settings, Servers, This Mac, then scan its QR code or copy the address and token. On a server, `dray server pair` shows the code.")
                 }
                 Section {
                     TextField("Name", text: $name, prompt: Text(host ?? "Name"))
@@ -224,7 +233,17 @@ struct AddServerView: View {
                     .disabled(parsed == nil)
                 }
             }
+            .sheet(isPresented: $scanning) {
+                PairScanner { fill($0); scanning = false }
+            }
+            .onAppear { link.map(fill) }
         }
+    }
+
+    private func fill(_ link: PairLink) {
+        address = link.url
+        token = link.token
+        name = link.name ?? ""
     }
 
     private var parsed: (url: String, token: String)? {

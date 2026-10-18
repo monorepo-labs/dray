@@ -1,4 +1,4 @@
-import { Check, CircleArrowUp, Copy, Globe, GlobeOff, MoreHorizontal, Plus, RotateCw } from "lucide-react";
+import { Check, CircleArrowUp, Copy, Globe, GlobeOff, MoreHorizontal, Plus, QrCode, RotateCw } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import CommandChip from "@/components/settings/CommandChip";
@@ -374,22 +374,71 @@ function ThisMacRow() {
                 .catch(console.error)
             }
           />
+          <span aria-hidden className="h-full w-px bg-border dark:bg-input" />
+          <PairButton />
         </div>
       )}
     </Row>
   );
 }
 
+const STRIP_ICON =
+  "mx-1 flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50";
+
 function CopyIcon({ label, done, onClick }: { label: string; done: boolean; onClick: () => void }) {
   return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onClick}
-      className="mx-1 flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors outline-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
-    >
+    <button type="button" aria-label={label} onClick={onClick} className={STRIP_ICON}>
       {done ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
     </button>
+  );
+}
+
+/// The phone's way in: a QR of address, token and this Mac's name. It
+/// carries the token, so it is fetched on open and dropped on close, and
+/// never sits on screen unasked.
+function PairButton() {
+  const [svg, setSvg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+
+  const show = () => {
+    setOpen(true);
+    void invoke<string>("remote_access_qr", {}, LOCAL)
+      .then(setSvg)
+      .catch((e) => setError(String(e)));
+  };
+  const close = () => {
+    setOpen(false);
+    setSvg(null);
+    setError(null);
+  };
+
+  return (
+    <>
+      <button type="button" aria-label="Pair a phone" onClick={show} className={STRIP_ICON}>
+        <QrCode className="size-3.5" />
+      </button>
+      <Dialog open={open} onOpenChange={(next) => !next && close()}>
+        <DialogContent className="max-w-80">
+          <DialogHeader>
+            <DialogTitle>Pair a phone</DialogTitle>
+            <DialogDescription>
+              Point the iPhone's Camera at this, or scan it from Dray's Add server. Anyone holding it can use this Mac.
+            </DialogDescription>
+          </DialogHeader>
+          {/* White under the code whatever the theme: a scanner reads dark on light. */}
+          <div className="flex aspect-square items-center justify-center rounded-lg bg-white p-3">
+            {svg ? (
+              <img alt="Pairing QR code" className="size-full" src={`data:image/svg+xml;utf8,${encodeURIComponent(svg)}`} />
+            ) : error ? (
+              <p className="text-center text-ui text-black/60">{error}</p>
+            ) : (
+              <Spinner className="size-4 text-black/40" />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
