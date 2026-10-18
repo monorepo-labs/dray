@@ -130,6 +130,9 @@ struct NewSessionView: View {
     @State private var projectPath: String?
     @State private var agents: [AgentAvailability] = []
     @State private var models: [String: [Model]] = [:]
+    /// Lists that failed to read: not cached, so coming back retries, but no
+    /// longer holding Start, since an empty list lets the pick stand.
+    @State private var modelsFailed: Set<String> = []
     @AppStorage("new.harness") private var harness = "claude_code"
     @State private var modelPicks = Prefs.map("models")
     @State private var effortPicks = Prefs.map("efforts")
@@ -281,7 +284,7 @@ struct NewSessionView: View {
 
     private var ready: Bool {
         !sending && !checkingOut && server != nil && projectPath != nil && agent?.available == true
-            && models[modelsKey] != nil
+            && (models[modelsKey] != nil || modelsFailed.contains(modelsKey))
             && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -333,9 +336,9 @@ struct NewSessionView: View {
         if models[key] == nil {
             do {
                 models[key] = try await store.call(server, "list_models", ["harness": .string(harness)])
+                modelsFailed.remove(key)
             } catch {
-                // An empty list lets the pick stand, as the desktop's does.
-                models[key] = []
+                modelsFailed.insert(key)
                 failure = error.localizedDescription
             }
         }
