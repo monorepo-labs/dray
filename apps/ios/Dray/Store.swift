@@ -25,6 +25,8 @@ final class Store {
     private(set) var asks: [SessionKey: [AgentEvent]] = [:]
     private(set) var queued: [SessionKey: [Queued]] = [:]
     var drafts: [SessionKey: String] = [:]
+    /// gh's latest progress line per clone, by server and slug.
+    var cloneProgress: [UUID: [String: String]] = [:]
     var lastError: String?
 
     @ObservationIgnored private var tasks: [SessionKey: Int] = [:]
@@ -72,6 +74,18 @@ final class Store {
 
     func refresh() async {
         for s in servers where serverState[s.id] == .connected { await loadIndex(s.id) }
+    }
+
+    /// A command on one server, for screens that read lists the store does not hold.
+    func call<T: Decodable>(_ server: UUID, _ cmd: String, _ args: [String: JSON] = [:], as: T.Type = T.self,
+                            timeout: Duration = .seconds(60)) async throws -> T {
+        guard let c = connections[server] else { throw DrayError("Not connected") }
+        return try await c.call(cmd, args, timeout: timeout)
+    }
+
+    /// A session this phone just created, from the entry `send_msg` answered with.
+    func created(_ server: UUID, _ item: SessionItem) {
+        store(SessionKey(server: server, id: item.sessionId), item)
     }
 
     private func save() {
@@ -284,6 +298,9 @@ final class Store {
         case "session_title":
             guard let t = try? decoder.decode(EventFrame<TitleEvent>.self, from: data).payload else { return }
             items[SessionKey(server: server, id: t.sessionId)]?.title = t.title
+        case "clone_progress":
+            guard let p = try? decoder.decode(EventFrame<CloneProgress>.self, from: data).payload else { return }
+            cloneProgress[server, default: [:]][p.slug] = p.line
         case "session_created", "session_changed":
             guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload else { return }
             items[SessionKey(server: server, id: item.sessionId)] = item

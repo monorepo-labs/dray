@@ -21,6 +21,7 @@ struct RootView: View {
     @State private var selection: SessionKey?
     @State private var showServers = false
     @State private var adding = false
+    @State private var creating = false
 
     var body: some View {
         NavigationSplitView {
@@ -28,6 +29,8 @@ struct RootView: View {
                 .navigationTitle("Dray")
                 .toolbar {
                     Button("Servers", systemImage: "server.rack") { showServers = true }
+                    Button("New session", systemImage: "square.and.pencil") { creating = true }
+                        .disabled(store.servers.isEmpty)
                 }
                 .overlay {
                     if store.servers.isEmpty {
@@ -51,6 +54,7 @@ struct RootView: View {
         }
         .sheet(isPresented: $showServers) { ServersView() }
         .sheet(isPresented: $adding) { AddServerView() }
+        .sheet(isPresented: $creating) { NewSessionView { selection = $0 } }
         .alert("Something went wrong", isPresented: Binding(
             get: { store.lastError != nil },
             set: { if !$0 { store.lastError = nil } }
