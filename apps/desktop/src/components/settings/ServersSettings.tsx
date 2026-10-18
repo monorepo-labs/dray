@@ -400,14 +400,21 @@ function PairButton() {
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  // Bumped on open and close, so an answer landing after either is dropped
+  // rather than putting the token back in state.
+  const asked = useRef(0);
 
   const show = () => {
+    const ask = ++asked.current;
+    setSvg(null);
+    setError(null);
     setOpen(true);
     void invoke<string>("remote_access_qr", {}, LOCAL)
-      .then(setSvg)
-      .catch((e) => setError(String(e)));
+      .then((qr) => ask === asked.current && setSvg(qr))
+      .catch((e) => ask === asked.current && setError(String(e)));
   };
   const close = () => {
+    asked.current++;
     setOpen(false);
     setSvg(null);
     setError(null);

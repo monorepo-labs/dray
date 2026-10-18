@@ -36,7 +36,7 @@ struct PairScanner: View {
                 case nil:
                     Orb()
                 case true?:
-                    Scanner(onScan: onScan).ignoresSafeArea()
+                    Scanner(onScan: onScan) { allowed = false }.ignoresSafeArea()
                 default:
                     ContentUnavailableView(
                         "Can't use the camera",
@@ -64,8 +64,11 @@ struct PairScanner: View {
     }
 }
 
+/// `onFail` answers a scanner that would not start or stopped being
+/// available, so the reader is not left in front of a camera that reads nothing.
 private struct Scanner: UIViewControllerRepresentable {
     let onScan: (PairLink) -> Void
+    let onFail: () -> Void
 
     func makeUIViewController(context: Context) -> DataScannerViewController {
         let scanner = DataScannerViewController(recognizedDataTypes: [.barcode(symbologies: [.qr])], isHighlightingEnabled: true)
@@ -74,16 +77,28 @@ private struct Scanner: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ scanner: DataScannerViewController, context: Context) {
-        if !scanner.isScanning { try? scanner.startScanning() }
+        guard !scanner.isScanning else { return }
+        do { try scanner.startScanning() } catch {
+            // Not inside the view update that is running now.
+            DispatchQueue.main.async(execute: onFail)
+        }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(onScan: onScan) }
+    func makeCoordinator() -> Coordinator { Coordinator(onScan: onScan, onFail: onFail) }
 
     final class Coordinator: NSObject, DataScannerViewControllerDelegate {
         let onScan: (PairLink) -> Void
+        let onFail: () -> Void
         private var done = false
 
-        init(onScan: @escaping (PairLink) -> Void) { self.onScan = onScan }
+        init(onScan: @escaping (PairLink) -> Void, onFail: @escaping () -> Void) {
+            self.onScan = onScan
+            self.onFail = onFail
+        }
+
+        func dataScanner(_ scanner: DataScannerViewController, becameUnavailableWithError error: DataScannerViewController.ScanningUnavailable) {
+            onFail()
+        }
 
         func dataScanner(_ scanner: DataScannerViewController, didAdd items: [RecognizedItem], allItems: [RecognizedItem]) {
             for case .barcode(let code) in items {

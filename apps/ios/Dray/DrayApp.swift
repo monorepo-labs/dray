@@ -54,7 +54,18 @@ struct RootView: View {
         .sheet(isPresented: $adding) { AddServerView() }
         // Filled in, not added: a link from anywhere should not add a server unasked.
         .sheet(item: $pairing) { AddServerView(link: $0) }
-        .onOpenURL { pairing = PairLink($0.absoluteString) }
+        .onOpenURL { url in
+            guard let link = PairLink(url.absoluteString) else { return }
+            let covered = showServers || adding || pairing != nil
+            showServers = false
+            adding = false
+            pairing = nil
+            // A sheet asked for while another is still leaving is dropped.
+            Task {
+                if covered { try? await Task.sleep(for: .milliseconds(600)) }
+                pairing = link
+            }
+        }
         .alert("Something went wrong", isPresented: Binding(
             get: { store.lastError != nil },
             set: { if !$0 { store.lastError = nil } }
