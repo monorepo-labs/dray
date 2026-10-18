@@ -316,7 +316,7 @@ final class Store {
         case .backgroundTasks(let n):
             tasks[key] = n
             if n == 0 && items[key]?.busy != true { strand(key) }
-        case .userMessage(let text, _, _):
+        case .userMessage(let text, _, _, _):
             queued[key]?.removeAll { $0.text == text }
         default:
             break
