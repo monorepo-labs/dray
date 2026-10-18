@@ -1,9 +1,10 @@
 import XCTest
 
 /// Drives the Local servers sheet against a live `dray-serve` whose newest
-/// session has a dev server running in its checkout. Passed through as in
-/// `SmokeTests`; `DRAY_SHARE` says what the share should come to:
-/// `fail` for a refusal, anything else for a real link.
+/// session has a dev server running in its checkout, on `DRAY_PORT` (5544 if
+/// unset) — `python3 -m http.server 5544` started in the session's `cwd` will
+/// do. Passed through as in `SmokeTests`; `DRAY_SHARE` says what the share
+/// should come to: `fail` for a refusal, anything else for a real link.
 final class LocalServersTests: XCTestCase {
     func testListAndShare() throws {
         let env = ProcessInfo.processInfo.environment
@@ -11,10 +12,12 @@ final class LocalServersTests: XCTestCase {
             throw XCTSkip("set TEST_RUNNER_DRAY_URL and TEST_RUNNER_DRAY_TOKEN")
         }
         let expectFailure = env["DRAY_SHARE"] == "fail"
+        let port = env["DRAY_PORT"] ?? "5544"
         let app = XCUIApplication()
+        // Hides any saved servers, so the empty list's own Add server is the one on screen.
+        app.launchArguments = ["-servers", ""]
         app.launch()
 
-        // A fresh install, so the empty list's own Add server.
         app.buttons["Add server"].tap()
         app.textFields["Address"].tap()
         app.textFields["Address"].typeText(url)
@@ -27,7 +30,7 @@ final class LocalServersTests: XCTestCase {
         row.tap()
         app.buttons["Local servers"].tap()
 
-        let server = app.staticTexts["localhost:5544"]
+        let server = app.staticTexts["localhost:\(port)"]
         XCTAssertTrue(server.waitForExistence(timeout: 15), "the dev server is not listed")
         snap(app, "1-list")
         app.buttons["Get public link"].tap()

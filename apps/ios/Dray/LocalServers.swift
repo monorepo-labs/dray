@@ -148,6 +148,8 @@ struct LocalServersView: View {
             let list: [LocalServer] = try await call("list_local_servers", ["sessionId": .string(key.id)])
             servers = list
             readError = nil
+            // A share whose answer was lost with the socket can still land.
+            for s in list where s.share != nil { failures[s.port] = nil }
         } catch {
             // A failed poll keeps the last list; only an empty sheet says why.
             readError = sentence(error)
