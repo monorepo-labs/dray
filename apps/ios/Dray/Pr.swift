@@ -132,23 +132,23 @@ func commentText(_ body: String) -> String {
         if line.hasPrefix("```") { fenced.toggle() }
         return fenced || line.range(of: #"^\[[a-z-]+\]: #"#, options: [.regularExpression, .caseInsensitive]) == nil
     }.joined(separator: "\n")
-    // Code keeps its text whole: `Array<T>` in backticks is no tag.
-    let code = try! NSRegularExpression(pattern: "```[\\s\\S]*?(```|$)|`[^`\\n]*`")
+    // Code and HTML comments in one pass, whichever opens first winning, as
+    // markdown reads them: code keeps its text whole (`Array<T>` is no tag),
+    // and a comment goes whole even when it holds backticks.
+    let spans = try! NSRegularExpression(pattern: "```[\\s\\S]*?(```|$)|<!--[\\s\\S]*?-->|`[^`\\n]*`")
     let ns = text as NSString
     var out = "", last = 0
-    for m in code.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+    for m in spans.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
         out += prose(ns.substring(with: NSRange(location: last, length: m.range.location - last)))
-        out += ns.substring(with: m.range)
+        let span = ns.substring(with: m.range)
+        if !span.hasPrefix("<!--") { out += span }
         last = m.range.location + m.range.length
     }
     return (out + prose(ns.substring(from: last))).trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 private func prose(_ text: String) -> String {
-    var s = text
-    for pattern in [#"<!--[\s\S]*?-->"#, #"<[a-zA-Z/!][^>]*>"#] {
-        s = s.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
-    }
+    var s = text.replacingOccurrences(of: #"<[a-zA-Z/!][^>]*>"#, with: "", options: .regularExpression)
     // `&amp;` last, or `&amp;lt;` would decode twice.
     for (entity, char) in [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&nbsp;", " "), ("&amp;", "&")] {
         s = s.replacingOccurrences(of: entity, with: char)
