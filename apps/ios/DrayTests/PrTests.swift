@@ -37,7 +37,7 @@ final class PrTests: XCTestCase {
     func testCommentTextKeepsCode() {
         XCTAssertEqual(commentText("<!-- x --><b>Use</b> `Array<T>` &amp;\n```\n<div>&amp;</div>\n```"),
                        "Use `Array<T>` &\n```\n<div>&amp;</div>\n```")
-        XCTAssertEqual(commentText("[vc]: #abc\n<h2>Title</h2>"), "Title")
+        XCTAssertEqual(commentText("[vc]: #abc `foo`\n<h2>Title</h2>"), "Title")
     }
 
     func testUnavailableReadsTheServersObject() {

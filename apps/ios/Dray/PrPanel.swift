@@ -179,8 +179,7 @@ private struct PrSection: View {
         }
         if !pr.comments.isEmpty {
             Section("Comments") {
-                // Keyed on the url, so a new reply or an edit keeps an open thread open.
-                ForEach(pr.comments, id: \.url) { CommentRow(comment: $0) }
+                ForEach(pr.comments) { CommentRow(comment: $0) }
             }
         }
     }
@@ -261,7 +260,7 @@ private struct CommentRow: View {
                 if open { MarkdownText(text: text) } else { Text(.init(text)).lineLimit(3) }
             }
             if open {
-                ForEach(comment.replies, id: \.url) { CommentRow(comment: $0).padding(.leading, 12) }
+                ForEach(comment.replies) { CommentRow(comment: $0).padding(.leading, 12) }
             } else if !comment.replies.isEmpty {
                 Text("\(comment.replies.count) more").font(.caption).foregroundStyle(.secondary)
             }

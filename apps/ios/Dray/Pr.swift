@@ -36,15 +36,20 @@ struct PrCheck: Decodable, Hashable {
     let url: String?
 }
 
-struct PrComment: Decodable, Hashable {
+struct PrComment: Decodable, Hashable, Identifiable {
     let author: String
     let avatar: String?
     let body: String
+    let createdAt: String
     let url: String
     let kind: String
     let path: String?
     let resolved: Bool
     let replies: [PrComment]
+
+    /// Stable across polls, so a new reply or an edit keeps an open thread
+    /// open. Not the url alone: every review carries the PR's own.
+    var id: String { "\(url)|\(createdAt)|\(author)" }
 }
 
 /// Why the server could not ask GitHub: `{"kind":…,"detail":…}`.
@@ -120,11 +125,17 @@ func readiness(_ pr: PullRequest) -> (label: String, detail: String?) {
 /// A comment body as plain-ish text for markdown: bots hide state in `[vc]: #…`
 /// lines and HTML comments, and write HTML as often as markdown.
 func commentText(_ body: String) -> String {
+    // Bot markers off the whole body first, `stripBotMarkers`'s reading: a
+    // marker line holding backticks would otherwise leave them on screen.
+    var text = body
+    for pattern in [#"(?im)^\[[a-z-]+\]: #[^\n]*\n?"#, #"<!--[\s\S]*?-->"#] {
+        text = text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+    }
     // Code keeps its text whole: `Array<T>` in backticks is no tag.
     let code = try! NSRegularExpression(pattern: "```[\\s\\S]*?(```|$)|`[^`\\n]*`")
-    let ns = body as NSString
+    let ns = text as NSString
     var out = "", last = 0
-    for m in code.matches(in: body, range: NSRange(location: 0, length: ns.length)) {
+    for m in code.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
         out += prose(ns.substring(with: NSRange(location: last, length: m.range.location - last)))
         out += ns.substring(with: m.range)
         last = m.range.location + m.range.length
@@ -133,10 +144,7 @@ func commentText(_ body: String) -> String {
 }
 
 private func prose(_ text: String) -> String {
-    var s = text
-    for pattern in [#"(?im)^\[[a-z-]+\]: #[^\n]*\n?"#, #"<!--[\s\S]*?-->"#, #"<[a-zA-Z/!][^>]*>"#] {
-        s = s.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
-    }
+    var s = text.replacingOccurrences(of: #"<[a-zA-Z/!][^>]*>"#, with: "", options: .regularExpression)
     // `&amp;` last, or `&amp;lt;` would decode twice.
     for (entity, char) in [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&nbsp;", " "), ("&amp;", "&")] {
         s = s.replacingOccurrences(of: entity, with: char)
