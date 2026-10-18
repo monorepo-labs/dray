@@ -51,6 +51,7 @@ struct TranscriptView: View {
         .safeAreaInset(edge: .bottom) { Composer(key: key, busy: busy) }
         .navigationTitle(item?.title ?? "")
         .navigationBarTitleDisplayMode(.inline)
+        .modifier(LocalServersButton(key: key))
         .task { await store.open(key) }
     }
 }

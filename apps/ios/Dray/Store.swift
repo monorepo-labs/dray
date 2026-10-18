@@ -61,6 +61,8 @@ final class Store {
         save()
     }
 
+    func connection(_ server: UUID) -> Connection? { connections[server] }
+
     func name(of server: UUID) -> String {
         servers.first { $0.id == server }?.name ?? "Server"
     }
