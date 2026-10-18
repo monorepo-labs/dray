@@ -93,6 +93,8 @@ final class NewSessionTests: XCTestCase {
         let start = app.buttons["New session"]
         XCTAssertTrue(start.waitForExistence(timeout: 15))
         start.tap()
+        // Drawn once the server is connected, which can trail the button above.
+        XCTAssertTrue(app.buttons["Attach project…"].waitForExistence(timeout: 30))
         return app
     }
 

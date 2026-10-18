@@ -138,8 +138,11 @@ struct NewSessionView: View {
     @AppStorage("new.fast") private var fast = false
     @AppStorage("new.worktree") private var worktree = false
     @State private var branches: BranchList?
-    /// A branch picked over a dirty tree, waiting on Stash or Bring.
-    @State private var switching: String?
+    /// A branch picked over a dirty tree, waiting on Stash or Bring, with the
+    /// project it was picked in.
+    @State private var switching: (server: UUID, cwd: String, target: String)?
+    /// A branch read or checkout is out: the session must not start on the old branch.
+    @State private var checkingOut = false
     @State private var sending = false
     @State private var failure: String?
 
@@ -176,18 +179,21 @@ struct NewSessionView: View {
             }
             .task(id: server) { await loadServer() }
             .task(id: modelsKey) { await loadModels() }
+            // At once, not when the list lands: the old agent's model must never
+            // go out under the new agent's name.
+            .onChange(of: modelsKey) { modelId = Picks.usableModel(list, remembered, harness) }
             .task(id: projectPath) { await loadBranches() }
             .confirmationDialog(
                 "\(branches?.dirty ?? 0) uncommitted \(branches?.dirty == 1 ? "file" : "files")",
                 isPresented: Binding(get: { switching != nil }, set: { if !$0 { switching = nil } }),
                 titleVisibility: .visible
             ) {
-                if let target = switching {
-                    Button("Stash changes") { Task { await checkout(target, stash: true) } }
-                    Button("Bring changes") { Task { await checkout(target, stash: false) } }
+                if let s = switching {
+                    Button("Stash changes") { Task { await checkout(s.server, s.cwd, s.target, stash: true) } }
+                    Button("Bring changes") { Task { await checkout(s.server, s.cwd, s.target, stash: false) } }
                 }
             } message: {
-                Text("Switching to \(switching ?? ""). Bring moves them with you; Stash keeps them here, saved for later.")
+                Text("Switching to \(switching?.target ?? ""). Bring moves them with you; Stash keeps them here, saved for later.")
             }
         }
     }
@@ -274,8 +280,18 @@ struct NewSessionView: View {
     }
 
     private var ready: Bool {
-        !sending && server != nil && projectPath != nil && agent?.available == true
+        !sending && !checkingOut && server != nil && projectPath != nil && agent?.available == true
+            && models[modelsKey] != nil
             && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var remembered: String { modelPicks[harness] ?? Picks.defaultModel[harness] ?? "" }
+
+    /// Whether a reply read for this server and project still describes what is
+    /// on screen. A call outlives the task that made it, so a late one from a
+    /// server or project the reader left must not land.
+    private func still(_ s: UUID, _ cwd: String? = nil) -> Bool {
+        server == s && (cwd == nil || projectPath == cwd)
     }
 
     /// The project launch reopens: `add_project` and a pick both stamp it newest.
@@ -302,10 +318,12 @@ struct NewSessionView: View {
         do {
             async let p: [Project] = store.call(server, "list_projects")
             async let a: [AgentAvailability] = store.call(server, "agent_availability")
-            (projects, agents) = try await (p, a)
-            projectPath = newest(projects)
+            let (read, available) = try await (p, a)
+            guard still(server) else { return }
+            (projects, agents) = (read, available)
+            projectPath = newest(read)
         } catch {
-            failure = error.localizedDescription
+            if still(server) { failure = error.localizedDescription }
         }
     }
 
@@ -316,10 +334,12 @@ struct NewSessionView: View {
             do {
                 models[key] = try await store.call(server, "list_models", ["harness": .string(harness)])
             } catch {
+                // An empty list lets the pick stand, as the desktop's does.
+                models[key] = []
                 failure = error.localizedDescription
             }
         }
-        modelId = Picks.usableModel(list, modelPicks[harness] ?? Picks.defaultModel[harness] ?? "", harness)
+        if key == modelsKey { modelId = Picks.usableModel(list, remembered, harness) }
     }
 
     private func loadBranches() async {
@@ -328,35 +348,46 @@ struct NewSessionView: View {
         // Fire and forget, as the desktop does: losing it costs one pick next time.
         _ = try? await store.call(server, "set_last_selected_project", ["path": .string(cwd)], as: JSON.self)
         do {
-            branches = try await store.call(server, "list_branches", ["cwd": .string(cwd)])
+            let list: BranchList = try await store.call(server, "list_branches", ["cwd": .string(cwd)])
+            if still(server, cwd) { branches = list }
         } catch {
-            failure = error.localizedDescription
+            if still(server, cwd) { failure = error.localizedDescription }
         }
     }
 
     /// The dirty count is re-read at the pick: the one read with the project is
     /// stale by now, and a stale zero would move the reader's work silently.
     private func pickBranch(_ target: String) async {
-        guard let server, let cwd = projectPath, target != branches?.current else { return }
+        guard !checkingOut, let server, let cwd = projectPath, target != branches?.current else { return }
+        checkingOut = true
+        defer { checkingOut = false }
         do {
             let list: BranchList = try await store.call(server, "list_branches", ["cwd": .string(cwd)])
+            guard still(server, cwd) else { return }
             branches = list
-            if list.dirty > 0 { switching = target } else { await checkout(target, stash: false) }
+            if list.dirty > 0 {
+                switching = (server, cwd, target)
+            } else {
+                await checkout(server, cwd, target, stash: false)
+            }
         } catch {
-            failure = error.localizedDescription
+            if still(server, cwd) { failure = error.localizedDescription }
         }
     }
 
-    private func checkout(_ target: String, stash: Bool) async {
+    /// Runs where the branch was picked, never wherever the selection is by now.
+    private func checkout(_ server: UUID, _ cwd: String, _ target: String, stash: Bool) async {
         switching = nil
-        guard let server, let cwd = projectPath else { return }
+        checkingOut = true
+        defer { checkingOut = false }
         do {
-            branches = try await store.call(server, "checkout_branch", [
+            let list: BranchList = try await store.call(server, "checkout_branch", [
                 "cwd": .string(cwd), "branch": .string(target), "stash": .bool(stash),
             ])
+            if still(server, cwd) { branches = list }
         } catch {
             // Git refuses rather than clobbering, naming the files in the way.
-            failure = error.localizedDescription
+            if still(server, cwd) { failure = error.localizedDescription }
         }
     }
 
