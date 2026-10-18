@@ -15,8 +15,11 @@ phone reads and drives it over the same WebSocket the desktop uses
 - **New session** with the desktop composer's picks: project, harness, model,
   effort, stance, fast mode, worktree, branch.
 - **Pairing** by paste or by QR.
+- **Pull request** sheet from the session view: readiness in the desktop's
+  order, checks, comments; merge, mark ready, reopen. Hidden when the branch
+  has none.
 
-Left out: push, attachments, dictation, the Diff/Files/Browser/PR views,
+Left out: push, attachments, dictation, the Diff/Files/Browser views,
 forks, settle/pin, the settled list, spaces, issues.
 
 ## Stack
@@ -70,7 +73,8 @@ token answers for the connection.
 Commands used: `list_session_index_items`, `get_session_by_id`,
 `get_session_page`, `send_msg`, `interrupt_session`, `respond_permission`,
 `answer_questions`, `list_projects`, `agent_availability`, `list_models`,
-`list_branches`, `checkout_branch`, `mark_session_read`.
+`list_branches`, `checkout_branch`, `mark_session_read`, `work_status`,
+`prs_for_branch`, `merge_pr`, `mark_pr_ready`, `reopen_pr`.
 
 **Types are hand-written `Codable`, and every decode is lenient.** An unknown
 event `type` decodes as `.unrecognized`, an unknown enum value as its raw

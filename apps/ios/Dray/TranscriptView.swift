@@ -52,6 +52,7 @@ struct TranscriptView: View {
         .navigationTitle(item?.title ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .task { await store.open(key) }
+        .prPanel(key)
     }
 }
 

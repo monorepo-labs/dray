@@ -15,7 +15,7 @@ targets:
     platform: iOS
     sources: [Dray]
     scheme:
-      testTargets: [DrayUITests]
+      testTargets: [DrayTests, DrayUITests]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yogesh.dray.ios
@@ -30,6 +30,16 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         # Only HTTPS and standard crypto, so TestFlight asks nothing about export.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+  DrayTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [DrayTests]
+    dependencies:
+      - target: Dray
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yogesh.dray.ios.tests
+        GENERATE_INFOPLIST_FILE: YES
   DrayUITests:
     type: bundle.ui-testing
     platform: iOS

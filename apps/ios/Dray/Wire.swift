@@ -119,6 +119,9 @@ struct SessionItem: Decodable, Hashable {
     var status: String
     var modified: String
     let archived: Bool?
+    let branch: String?
+    let worktreeName: String?
+    let worktreeRemoved: Bool?
     let hidden: Bool?
 
     var busy: Bool { status == "in_progress" }
