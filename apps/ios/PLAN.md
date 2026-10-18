@@ -15,8 +15,12 @@ phone reads and drives it over the same WebSocket the desktop uses
 - **New session** with the desktop composer's picks: project, harness, model,
   effort, stance, fast mode, worktree, branch.
 - **Pairing** by paste or by QR.
+- **Dictation**, transcribed on the Mac: the phone records a 16kHz mono WAV,
+  uploads it through `POST /upload` and calls `transcribe_upload`. Only the
+  Mac's server has that command, and its welcome frame says `dictation: true`,
+  so the mic is drawn nowhere else.
 
-Left out: push, attachments, dictation, the Diff/Files/Browser/PR views,
+Left out: push, attachments, the Diff/Files/Browser/PR views,
 forks, settle/pin, the settled list, spaces, issues.
 
 ## Stack
@@ -70,7 +74,7 @@ token answers for the connection.
 Commands used: `list_session_index_items`, `get_session_by_id`,
 `get_session_page`, `send_msg`, `interrupt_session`, `respond_permission`,
 `answer_questions`, `list_projects`, `agent_availability`, `list_models`,
-`list_branches`, `checkout_branch`, `mark_session_read`.
+`list_branches`, `checkout_branch`, `mark_session_read`, `transcribe_upload`.
 
 **Types are hand-written `Codable`, and every decode is lenient.** An unknown
 event `type` decodes as `.unrecognized`, an unknown enum value as its raw

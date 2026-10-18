@@ -30,7 +30,7 @@ final class Store {
     @ObservationIgnored private var tasks: [SessionKey: Int] = [:]
     @ObservationIgnored private var reading: Set<UUID> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
-    @ObservationIgnored private var connections: [UUID: Connection] = [:]
+    @ObservationIgnored private(set) var connections: [UUID: Connection] = [:]
 
     init() {
         if let data = UserDefaults.standard.data(forKey: "servers"),

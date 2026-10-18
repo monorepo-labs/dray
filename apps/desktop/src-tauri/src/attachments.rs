@@ -316,11 +316,16 @@ pub const MAX_UPLOAD_BYTES: u64 = 100 * 1024 * 1024;
 /// comes off the wire, so only its last component is kept.
 pub async fn upload_path(name: &str) -> Result<PathBuf> {
     let name = Path::new(name).file_name().context("not a file name")?;
-    let root = get_home_app_dir().await?.join("attachments").join("uploads");
+    let root = uploads_dir().await?;
     sweep_stale(&root).await;
     let dir = root.join(Uuid::now_v7().to_string());
     fs::create_dir_all(&dir).await?;
     Ok(dir.join(name))
+}
+
+/// `attachments/uploads`, the root every [`upload_path`] sits under.
+pub async fn uploads_dir() -> Result<PathBuf> {
+    Ok(get_home_app_dir().await?.join("attachments").join("uploads"))
 }
 
 /// Drops a session's archived images. Called when the session itself is

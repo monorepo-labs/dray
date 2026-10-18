@@ -950,12 +950,14 @@ async fn connection(
     };
     // `release` is the CLI release this binary shipped in, which is what the
     // app compares with the newest one out. Set by release-cli.yml alone, so a
-    // local build says none and is never offered an update.
+    // local build says none and is never offered an update. `dictation` is
+    // whether `transcribe_upload` exists here, so a phone knows to draw a mic.
     let welcome = json!({
         "v": PROTOCOL,
         "version": env!("CARGO_PKG_VERSION"),
         "release": option_env!("DRAY_CLI_VERSION"),
         "stale": stale(),
+        "dictation": cfg!(feature = "desktop"),
     });
     write.send(Message::text(welcome.to_string())).await?;
     write.send(Message::text(snapshot)).await?;
@@ -1105,6 +1107,7 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
         set_remote_access(on: bool) => crate::remote_access::set_remote_access(sink, on).await;
         remote_access_token() => crate::remote_access::remote_access_token().await;
         restart_when_idle() => ok(restart_when_idle().await);
+        transcribe_upload(path: String) => crate::transcription::transcribe_upload(path).await;
     }
 }
 
@@ -1113,7 +1116,10 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
 /// Mac-only modules are not compiled here.
 async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     #[cfg(feature = "desktop")]
-    if matches!(cmd, "get_remote_access" | "set_remote_access" | "remote_access_token" | "restart_when_idle") {
+    if matches!(
+        cmd,
+        "get_remote_access" | "set_remote_access" | "remote_access_token" | "restart_when_idle" | "transcribe_upload"
+    ) {
         return dispatch_mac(cmd, args, sink).await;
     }
     // A `dray-serve` updates itself; the Mac's server follows the app instead.

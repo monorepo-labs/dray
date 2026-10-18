@@ -12,8 +12,10 @@ final class Connection {
     }
 
     let serverId: UUID
-    private let url: String
-    private let token: String
+    let url: String
+    let token: String
+    /// Whether the server can transcribe a phone's dictation; its welcome frame says.
+    private(set) var dictation = false
     /// Every event frame, whole, with its name. Decoded by the store, which knows the type.
     var onEvent: (String, Data) -> Void = { _, _ in }
     var onState: (State) -> Void = { _ in }
@@ -71,6 +73,7 @@ final class Connection {
                 throw DrayError(err.message)
             }
             guard gen == generation else { return }
+            dictation = (try? JSONDecoder().decode(Welcome.self, from: welcome))?.dictation ?? false
             connected = true
             retry = 1
             onState(.connected)

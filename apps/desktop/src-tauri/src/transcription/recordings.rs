@@ -67,15 +67,21 @@ pub async fn save(samples: &[f32]) -> Result<PathBuf> {
 /// this has no business reading — and the contents would then be transcribed
 /// into the reader's draft. Resolving first is what makes the boundary the
 /// directory rather than the spelling of the path.
+///
+/// A phone's dictation is the other place one may sit: uploaded through
+/// `/upload`, so at `attachments/uploads/<uuid>/<name>`, one level deeper.
 pub async fn read(path: &Path) -> Result<Vec<f32>> {
     let home = fs::canonicalize(dir().await?).await?;
+    let uploads = fs::canonicalize(crate::attachments::uploads_dir().await?).await.ok();
     let real = fs::canonicalize(path)
         .await
         .with_context(|| format!("{} is not there any more", path.display()))?;
 
     // `is_file` as well as the parent: a directory or a device node under this
     // directory is not a recording, and reading one is not a thing to attempt.
-    let ours = real.parent() == Some(home.as_path())
+    let parent = real.parent();
+    let ours = (parent == Some(home.as_path())
+        || uploads.is_some() && parent.and_then(Path::parent) == uploads.as_deref())
         && fs::metadata(&real).await.is_ok_and(|m| m.is_file());
 
     if !ours {
@@ -172,6 +178,17 @@ fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
         let len = u32::from_le_bytes(bytes[at + 4..at + 8].try_into()?) as usize;
         let body = at + 8;
 
+        // An uploaded file was written by another machine, and audio at any
+        // other rate or width reads as samples all the same — into nonsense.
+        if id == b"fmt " && len >= 16 && body + 16 <= bytes.len() {
+            let u16_at = |i: usize| u16::from_le_bytes([bytes[body + i], bytes[body + i + 1]]);
+            let rate = u32::from_le_bytes(bytes[body + 4..body + 8].try_into()?);
+            // 0xFFFE is WAVE_FORMAT_EXTENSIBLE, which Apple's encoder may write for plain PCM.
+            if !matches!(u16_at(0), 1 | 0xFFFE) || u16_at(2) != CHANNELS || rate != TARGET_RATE || u16_at(14) != BITS {
+                bail!("not 16kHz mono 16-bit PCM");
+            }
+        }
+
         if id == b"data" {
             // Clamped rather than refused, deliberately: a kept recording that
             // is damaged or cut short between the failure and the retry still
@@ -237,6 +254,14 @@ mod tests {
     fn a_file_with_no_data_chunk_is_an_error() {
         let mut wav = encode(&[0.1; 4]);
         wav[36..40].copy_from_slice(b"junk");
+
+        assert!(decode(&wav).is_err());
+    }
+
+    #[test]
+    fn another_rate_is_refused() {
+        let mut wav = encode(&[0.1; 4]);
+        wav[24..28].copy_from_slice(&44_100u32.to_le_bytes());
 
         assert!(decode(&wav).is_err());
     }

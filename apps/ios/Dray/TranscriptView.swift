@@ -191,6 +191,7 @@ struct Composer: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
+            DictateButton(key: key)
             if busy {
                 Button {
                     Task { await store.interrupt(key) }
