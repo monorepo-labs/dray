@@ -120,7 +120,20 @@ func readiness(_ pr: PullRequest) -> (label: String, detail: String?) {
 /// A comment body as plain-ish text for markdown: bots hide state in `[vc]: #…`
 /// lines and HTML comments, and write HTML as often as markdown.
 func commentText(_ body: String) -> String {
-    var s = body
+    // Code keeps its text whole: `Array<T>` in backticks is no tag.
+    let code = try! NSRegularExpression(pattern: "```[\\s\\S]*?(```|$)|`[^`\\n]*`")
+    let ns = body as NSString
+    var out = "", last = 0
+    for m in code.matches(in: body, range: NSRange(location: 0, length: ns.length)) {
+        out += prose(ns.substring(with: NSRange(location: last, length: m.range.location - last)))
+        out += ns.substring(with: m.range)
+        last = m.range.location + m.range.length
+    }
+    return (out + prose(ns.substring(from: last))).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func prose(_ text: String) -> String {
+    var s = text
     for pattern in [#"(?im)^\[[a-z-]+\]: #[^\n]*\n?"#, #"<!--[\s\S]*?-->"#, #"<[a-zA-Z/!][^>]*>"#] {
         s = s.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
     }
@@ -128,5 +141,5 @@ func commentText(_ body: String) -> String {
     for (entity, char) in [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&nbsp;", " "), ("&amp;", "&")] {
         s = s.replacingOccurrences(of: entity, with: char)
     }
-    return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    return s
 }

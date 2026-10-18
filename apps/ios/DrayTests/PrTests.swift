@@ -34,6 +34,12 @@ final class PrTests: XCTestCase {
         XCTAssertEqual(sessionBranch(branch: "worktree-a", worktreeName: nil, worktreeRemoved: true, observed: "main"), "worktree-a")
     }
 
+    func testCommentTextKeepsCode() {
+        XCTAssertEqual(commentText("<!-- x --><b>Use</b> `Array<T>` &amp;\n```\n<div>&amp;</div>\n```"),
+                       "Use `Array<T>` &\n```\n<div>&amp;</div>\n```")
+        XCTAssertEqual(commentText("[vc]: #abc\n<h2>Title</h2>"), "Title")
+    }
+
     func testUnavailableReadsTheServersObject() {
         let u = PrUnavailable.from(DrayError(#"{"kind":"not_authenticated"}"#))
         XCTAssertEqual(u.kind, "not_authenticated")

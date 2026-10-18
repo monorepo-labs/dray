@@ -84,8 +84,11 @@ private struct PrPanelModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         let busy = store.items[model.key]?.busy ?? false
+        let connected = store.serverState[model.key.server] == .connected
         content
-            .task(id: busy) { if !busy { await model.load(store) } }
+            // On arrival, on every turn edge, and on reconnect, where a read
+            // that failed with the socket down would otherwise never retry.
+            .task(id: "\(busy)|\(connected)") { if connected { await model.load(store) } }
             .toolbar {
                 if model.visible {
                     ToolbarItem(placement: .primaryAction) {
@@ -176,7 +179,8 @@ private struct PrSection: View {
         }
         if !pr.comments.isEmpty {
             Section("Comments") {
-                ForEach(pr.comments, id: \.self) { CommentRow(comment: $0) }
+                // Keyed on the url, so a new reply or an edit keeps an open thread open.
+                ForEach(pr.comments, id: \.url) { CommentRow(comment: $0) }
             }
         }
     }
@@ -257,7 +261,7 @@ private struct CommentRow: View {
                 if open { MarkdownText(text: text) } else { Text(.init(text)).lineLimit(3) }
             }
             if open {
-                ForEach(comment.replies, id: \.self) { CommentRow(comment: $0).padding(.leading, 12) }
+                ForEach(comment.replies, id: \.url) { CommentRow(comment: $0).padding(.leading, 12) }
             } else if !comment.replies.isEmpty {
                 Text("\(comment.replies.count) more").font(.caption).foregroundStyle(.secondary)
             }

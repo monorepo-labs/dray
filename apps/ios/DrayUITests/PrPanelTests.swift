@@ -32,14 +32,13 @@ final class PrPanelTests: XCTestCase {
         snap(app, "2-open-pr-comments")
         app.swipeDown()
         let merge = app.buttons["Merge…"]
-        if merge.waitForExistence(timeout: 5) {
-            merge.tap()
-            XCTAssertTrue(app.buttons["Squash and merge"].waitForExistence(timeout: 5))
-            snap(app, "3-merge-dialog")
-            // iOS 27 draws the dialog as a popover with no Cancel; a tap outside dismisses it.
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)).tap()
-            XCTAssertTrue(app.buttons["Squash and merge"].waitForNonExistence(timeout: 5))
-        }
+        XCTAssertTrue(merge.waitForExistence(timeout: 5), "no merge button on an open PR")
+        merge.tap()
+        XCTAssertTrue(app.buttons["Squash and merge"].waitForExistence(timeout: 5))
+        snap(app, "3-merge-dialog")
+        // iOS 27 draws the dialog as a popover with no Cancel; a tap outside dismisses it.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)).tap()
+        XCTAssertTrue(app.buttons["Squash and merge"].waitForNonExistence(timeout: 5))
         app.buttons["Done"].tap()
         back(app)
 
