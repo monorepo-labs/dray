@@ -287,7 +287,10 @@ async fn shut_down(code: i32) -> ! {
     for pid in tree.into_iter().filter(|&p| p != me) {
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
     }
-    std::process::exit(code)
+    // `_exit`, not `process::exit`: once a phone's dictation has loaded a
+    // model, ggml-metal's atexit handler aborts (lib.rs's `RunEvent::Exit`
+    // says how), which would end every stop and restart as 134, not `code`.
+    unsafe { libc::_exit(code) }
 }
 
 /// Removes the browser profiles of deleted and settled sessions, the backlog

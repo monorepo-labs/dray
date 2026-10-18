@@ -77,6 +77,11 @@ struct DictateButton: View {
     @State private var recorder: AVAudioRecorder?
     @State private var transcribing = false
     @State private var note: String?
+    /// A recording the server never answered for, kept for Retry: the only copy of the speech.
+    @State private var kept: URL?
+    /// False once the controls are gone, so a start still waiting on the
+    /// permission prompt does not open a microphone nothing can stop.
+    @State private var shown = false
 
     var body: some View {
         if store.canDictate(key.server) {
@@ -102,13 +107,26 @@ struct DictateButton: View {
                     .accessibilityLabel("Dictate")
                 }
             }
-            .popover(isPresented: Binding(get: { note != nil }, set: { if !$0 { note = nil } })) {
-                Text(note ?? "")
-                    .font(.callout)
-                    .padding()
-                    .presentationCompactAdaptation(.popover)
+            .popover(isPresented: Binding(get: { note != nil }, set: { if !$0 { dismissNote() } })) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(note ?? "").font(.callout)
+                    if let url = kept {
+                        Button("Retry") {
+                            // Taken first, so the dismissal below discards nothing.
+                            kept = nil
+                            note = nil
+                            Task { await send(url) }
+                        }
+                    }
+                }
+                .padding()
+                .presentationCompactAdaptation(.popover)
             }
-            .onDisappear(perform: cancel)
+            .onAppear { shown = true }
+            .onDisappear {
+                shown = false
+                cancel()
+            }
         }
     }
 
@@ -117,6 +135,7 @@ struct DictateButton: View {
             note = "Dray can't use the microphone. Allow it in Settings, under Privacy, Microphone."
             return
         }
+        guard shown else { return }
         do {
             try AVAudioSession.sharedInstance().setCategory(.record)
             try AVAudioSession.sharedInstance().setActive(true)
@@ -134,24 +153,30 @@ struct DictateButton: View {
             guard r.record() else { throw DrayError("The microphone would not start") }
             recorder = r
         } catch {
+            release()
             note = error.localizedDescription
         }
     }
 
-    /// The key is captured here, so words land in the draft they were spoken
-    /// into even if the reader has moved on by the time the model answers.
     private func stop() async {
         guard let r = recorder else { return }
         r.stop()
         recorder = nil
         release()
+        await send(r.url)
+    }
+
+    /// The key is captured here, so words land in the draft they were spoken
+    /// into even if the reader has moved on by the time the model answers.
+    /// The file goes once the server has answered, whatever it said; a send
+    /// that never reached it keeps the file for Retry.
+    private func send(_ url: URL) async {
         transcribing = true
-        defer {
-            transcribing = false
-            try? FileManager.default.removeItem(at: r.url)
-        }
+        defer { transcribing = false }
         do {
-            switch try await store.transcribe(key.server, wav: r.url) {
+            let outcome = try await store.transcribe(key.server, wav: url)
+            try? FileManager.default.removeItem(at: url)
+            switch outcome {
             case .text(let words): store.appendToDraft(key, words)
             case .needsModel: note = "\(store.name(of: key.server)) has no transcription model. Download one in Dray's Settings, under Transcription."
             case .noAudio: note = "No sound reached the microphone."
@@ -159,8 +184,16 @@ struct DictateButton: View {
             case .failed(let message): note = message
             }
         } catch {
+            kept = url
             note = error.localizedDescription
         }
+    }
+
+    /// Closing the popover without retrying is the reader letting the recording go.
+    private func dismissNote() {
+        note = nil
+        if let url = kept { try? FileManager.default.removeItem(at: url) }
+        kept = nil
     }
 
     private func cancel() {

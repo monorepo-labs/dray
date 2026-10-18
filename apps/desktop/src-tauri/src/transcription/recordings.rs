@@ -163,8 +163,8 @@ fn encode(samples: &[f32]) -> Vec<u8> {
 
 /// The inverse, walking chunks rather than assuming a 44-byte header.
 ///
-/// Only files this module wrote ever reach it, so the walk is cheap insurance
-/// rather than generality — but a header read at the wrong offset yields audio
+/// Files from this module and a phone's uploads reach it, the walk being cheap
+/// insurance rather than generality — a header read at the wrong offset yields audio
 /// that transcribes to nonsense instead of failing, which is the shape of bug
 /// worth spending fifteen lines to make impossible.
 fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
@@ -172,24 +172,33 @@ fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
         bail!("not a WAV file");
     }
 
+    // An uploaded file was written by another machine, and audio at any other
+    // rate or width reads as samples all the same — into nonsense. So the
+    // format is checked, and no samples are handed out until it has been.
+    let mut format_checked = false;
     let mut at = 12;
     while at + 8 <= bytes.len() {
         let id = &bytes[at..at + 4];
         let len = u32::from_le_bytes(bytes[at + 4..at + 8].try_into()?) as usize;
         let body = at + 8;
 
-        // An uploaded file was written by another machine, and audio at any
-        // other rate or width reads as samples all the same — into nonsense.
-        if id == b"fmt " && len >= 16 && body + 16 <= bytes.len() {
+        if id == b"fmt " {
+            if len < 16 || body + 16 > bytes.len() {
+                bail!("the WAV format chunk is cut short");
+            }
             let u16_at = |i: usize| u16::from_le_bytes([bytes[body + i], bytes[body + i + 1]]);
             let rate = u32::from_le_bytes(bytes[body + 4..body + 8].try_into()?);
             // 0xFFFE is WAVE_FORMAT_EXTENSIBLE, which Apple's encoder may write for plain PCM.
             if !matches!(u16_at(0), 1 | 0xFFFE) || u16_at(2) != CHANNELS || rate != TARGET_RATE || u16_at(14) != BITS {
                 bail!("not 16kHz mono 16-bit PCM");
             }
+            format_checked = true;
         }
 
         if id == b"data" {
+            if !format_checked {
+                bail!("the WAV file names no format before its audio");
+            }
             // Clamped rather than refused, deliberately: a kept recording that
             // is damaged or cut short between the failure and the retry still
             // holds most of what was said, and this whole feature exists to get
@@ -262,6 +271,22 @@ mod tests {
     fn another_rate_is_refused() {
         let mut wav = encode(&[0.1; 4]);
         wav[24..28].copy_from_slice(&44_100u32.to_le_bytes());
+
+        assert!(decode(&wav).is_err());
+    }
+
+    #[test]
+    fn audio_with_no_format_is_refused() {
+        let mut wav = encode(&[0.1; 4]);
+        wav[12..16].copy_from_slice(b"junk");
+
+        assert!(decode(&wav).is_err());
+    }
+
+    #[test]
+    fn a_short_format_chunk_is_refused() {
+        let mut wav = encode(&[0.1; 4]);
+        wav[16..20].copy_from_slice(&8u32.to_le_bytes());
 
         assert!(decode(&wav).is_err());
     }

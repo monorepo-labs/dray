@@ -46,8 +46,12 @@ final class DictationTests: XCTestCase {
         sleep(3)
         stop.tap()
 
-        // Back to the mic once the model has answered, whatever it said.
+        // A real answer from the model: words in the draft, or the sentence
+        // for silence. A failed upload or an unreadable reply shows neither.
         XCTAssertTrue(mic.waitForExistence(timeout: 90), "no answer from the server")
+        let draft = app.textFields["Message"].value as? String ?? ""
+        let heard = !draft.isEmpty && draft != "Message"
+        XCTAssertTrue(heard || app.staticTexts["No words heard."].exists, "the server's answer never landed")
         snap(app, "3-answered")
     }
 
