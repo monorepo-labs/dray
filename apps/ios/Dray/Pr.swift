@@ -125,12 +125,13 @@ func readiness(_ pr: PullRequest) -> (label: String, detail: String?) {
 /// A comment body as plain-ish text for markdown: bots hide state in `[vc]: #…`
 /// lines and HTML comments, and write HTML as often as markdown.
 func commentText(_ body: String) -> String {
-    // Bot markers off the whole body first, `stripBotMarkers`'s reading: a
-    // marker line holding backticks would otherwise leave them on screen.
-    var text = body
-    for pattern in [#"(?im)^\[[a-z-]+\]: #[^\n]*\n?"#, #"<!--[\s\S]*?-->"#] {
-        text = text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
-    }
+    // Marker lines go whole, backticks and all, before code is split out —
+    // but not inside a fence, where one is an example.
+    var fenced = false
+    let text = body.split(separator: "\n", omittingEmptySubsequences: false).filter { line in
+        if line.hasPrefix("```") { fenced.toggle() }
+        return fenced || line.range(of: #"^\[[a-z-]+\]: #"#, options: [.regularExpression, .caseInsensitive]) == nil
+    }.joined(separator: "\n")
     // Code keeps its text whole: `Array<T>` in backticks is no tag.
     let code = try! NSRegularExpression(pattern: "```[\\s\\S]*?(```|$)|`[^`\\n]*`")
     let ns = text as NSString
@@ -144,7 +145,10 @@ func commentText(_ body: String) -> String {
 }
 
 private func prose(_ text: String) -> String {
-    var s = text.replacingOccurrences(of: #"<[a-zA-Z/!][^>]*>"#, with: "", options: .regularExpression)
+    var s = text
+    for pattern in [#"<!--[\s\S]*?-->"#, #"<[a-zA-Z/!][^>]*>"#] {
+        s = s.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+    }
     // `&amp;` last, or `&amp;lt;` would decode twice.
     for (entity, char) in [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&nbsp;", " "), ("&amp;", "&")] {
         s = s.replacingOccurrences(of: entity, with: char)

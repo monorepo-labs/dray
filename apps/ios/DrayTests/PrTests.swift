@@ -38,6 +38,8 @@ final class PrTests: XCTestCase {
         XCTAssertEqual(commentText("<!-- x --><b>Use</b> `Array<T>` &amp;\n```\n<div>&amp;</div>\n```"),
                        "Use `Array<T>` &\n```\n<div>&amp;</div>\n```")
         XCTAssertEqual(commentText("[vc]: #abc `foo`\n<h2>Title</h2>"), "Title")
+        // Markers inside code are examples, and stay.
+        XCTAssertEqual(commentText("Use `<!-- keep -->`\n```\n[vc]: #abc\n```"), "Use `<!-- keep -->`\n```\n[vc]: #abc\n```")
     }
 
     func testUnavailableReadsTheServersObject() {
