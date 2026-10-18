@@ -7,7 +7,10 @@ phone reads and drives it over the same WebSocket the desktop uses
 
 ## What v1 does
 
-- **Every saved server at once, one merged list**, the desktop sidebar's way.
+- **Every saved server at once, one merged list**, the desktop sidebar's live
+  list: stages workspace-wide with a gap between runs and no headings, PR marks
+  read through `pr_marks` once per repo, and a chip per project to narrow it.
+  Pins are not drawn apart.
 - **Transcript**, live: prompts, assistant text as markdown, each tool call one
   line that expands to its output. No diffs, no highlighting, no images.
 - **Reply** to a session, **Stop** a turn.
@@ -70,7 +73,7 @@ token answers for the connection.
 Commands used: `list_session_index_items`, `get_session_by_id`,
 `get_session_page`, `send_msg`, `interrupt_session`, `respond_permission`,
 `answer_questions`, `list_projects`, `agent_availability`, `list_models`,
-`list_branches`, `checkout_branch`, `mark_session_read`.
+`list_branches`, `checkout_branch`, `mark_session_read`, `pr_marks`.
 
 **Types are hand-written `Codable`, and every decode is lenient.** An unknown
 event `type` decodes as `.unrecognized`, an unknown enum value as its raw

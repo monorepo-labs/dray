@@ -18,7 +18,7 @@ struct TranscriptView: View {
                             .frame(maxWidth: .infinity)
                     }
                     if transcript == nil {
-                        ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
+                        Orb(label: "Loading").frame(maxWidth: .infinity).padding(.top, 40)
                     }
                     ForEach(rows) { RowView(row: $0) }
                     ForEach(store.queued[key] ?? [], id: \.id) { q in
@@ -26,7 +26,7 @@ struct TranscriptView: View {
                     }
                     if busy {
                         HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
+                            Orb()
                             Text("Working…").foregroundStyle(.secondary)
                         }
                     }
@@ -108,7 +108,7 @@ struct ToolRow: View {
             } label: {
                 HStack(spacing: 6) {
                     switch state {
-                    case .pending: ProgressView().controlSize(.mini)
+                    case .pending: Orb(size: 16)
                     case .failed: Image(systemName: "xmark.circle").foregroundStyle(.red)
                     case .done: Image(systemName: open ? "chevron.down" : "chevron.right")
                     }

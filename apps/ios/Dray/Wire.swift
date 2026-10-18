@@ -120,9 +120,36 @@ struct SessionItem: Decodable, Hashable {
     var modified: String
     let archived: Bool?
     let hidden: Bool?
+    let aside: Bool?
+    let parentSessionId: String?
+    let branch: String?
+    let worktreeName: String?
+    let worktreeRemoved: Bool?
 
     var busy: Bool { status == "in_progress" }
     var project: String { (projectPath as NSString).lastPathComponent }
+
+    /// The branch a PR mark is looked up by — the sidebar's guess from
+    /// `sessionBranch` in pr.ts, without the observed HEAD the panel adds.
+    var prBranch: String? {
+        if worktreeRemoved == true { return branch }
+        return worktreeName.map { "worktree-\($0)" } ?? branch
+    }
+}
+
+struct Project: Decodable, Hashable {
+    let path: String
+    let name: String
+}
+
+/// One branch's pull request, as `pr_marks` answers it. Only `OPEN` and
+/// `MERGED` are asked for; `checksState` is `RUNNING`, `FAILING` or `CLEAR`.
+struct PrMark: Decodable, Hashable {
+    let number: Int
+    let headRefName: String
+    let isDraft: Bool
+    let state: String
+    let checksState: String
 }
 
 struct Snapshot: Decodable {
