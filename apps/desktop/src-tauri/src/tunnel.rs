@@ -9,6 +9,7 @@
 //! tunnel, so a shared link coming and going must not do that to every Mac
 //! connected to this one.
 
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -20,6 +21,11 @@ pub const SHARE: &str = "share";
 
 /// A first start provisions a certificate before anything connects.
 const READY_WAIT: Duration = Duration::from_secs(90);
+
+/// opentunnel polls a certificate order with no deadline, and the relay can
+/// leave one in `challenge` for good (#539). A fresh one has taken under four
+/// minutes.
+const PROVISION_WAIT: Duration = Duration::from_secs(5 * 60);
 
 struct Live {
     tunnel: Tunnel,
@@ -57,6 +63,17 @@ fn route_name(token: &str, label: &str) -> String {
     digest[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Removes `profile`'s registration if it never got a certificate, so the
+/// next attempt registers afresh. An issued one is kept even mid-renewal: its
+/// address is saved on phones and other Macs.
+fn drop_unissued(root: &Path, profile: &str) {
+    let dir = root.join(profile);
+    // A file that cannot be checked counts as there.
+    if !["tunnel.json", "certificate.pem"].iter().any(|f| dir.join(f).try_exists().unwrap_or(true)) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
 /// Routes `label` on `profile`'s tunnel to `target` (`host:port`), answering
 /// its `https://` address once the relay has it attached.
 pub async fn expose(profile: &'static str, label: &str, target: String) -> Result<String> {
@@ -64,7 +81,17 @@ pub async fn expose(profile: &'static str, label: &str, target: String) -> Resul
         let mut live = slot(profile).lock().await;
         if live.is_none() {
             let client = client().await?;
-            let identity = client.ensure(profile).await.context("could not set up the tunnel")?;
+            let identity = match tokio::time::timeout(PROVISION_WAIT, client.ensure(profile)).await {
+                Ok(identity) => identity.context("could not set up the tunnel")?,
+                Err(_) => {
+                    // Resuming it would wait on the same stalled order.
+                    drop_unissued(client.storage().root(), profile);
+                    bail!(
+                        "the relay did not issue the tunnel's certificate in {} minutes; try again",
+                        PROVISION_WAIT.as_secs() / 60
+                    )
+                }
+            };
             let tunnel = client.connect(profile, Routes::new())?;
             *live = Some(Live { tunnel, hostname: identity.hostname, token: identity.token, routes: Routes::new() });
         }
@@ -144,5 +171,26 @@ mod tests {
         assert_ne!(a, route_name("other", "remote"), "another tunnel, another name");
         assert_eq!(a.len(), 16);
         assert!(opentunnel::Route::new("127.0.0.1:1").validate(&a).is_ok(), "a name the relay takes");
+    }
+
+    #[test]
+    fn a_stalled_registration_is_dropped_and_an_issued_one_kept() {
+        let root = std::env::temp_dir().join(format!("dray-tunnel-test-{}", uuid::Uuid::new_v4().simple()));
+        for (profile, files) in [
+            ("pending", &["pending.json", "token", "private-key.pem"][..]),
+            ("issued", &["tunnel.json", "certificate.pem", "token"][..]),
+            ("renewing", &["tunnel.json", "certificate.pem", "pending.json"][..]),
+        ] {
+            std::fs::create_dir_all(root.join(profile)).unwrap();
+            for f in files {
+                std::fs::write(root.join(profile).join(f), "x").unwrap();
+            }
+            drop_unissued(&root, profile);
+        }
+        assert!(!root.join("pending").exists(), "never produced an address");
+        assert!(root.join("issued/tunnel.json").exists());
+        assert!(root.join("renewing/pending.json").exists(), "a renewal keeps its address");
+        drop_unissued(&root, "absent");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
