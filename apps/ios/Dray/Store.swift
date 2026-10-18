@@ -80,6 +80,7 @@ final class Store {
     func refresh() async {
         for s in servers where serverState[s.id] == .connected {
             await loadIndex(s.id)
+            await loadProjects(s.id)
             await loadMarks(s.id, force: true)
         }
     }
@@ -108,9 +109,14 @@ final class Store {
     /// transcript, so nothing that happened while it was down is missed.
     private func connected(_ server: UUID) async {
         await loadIndex(server)
-        if let list: [Project] = try? await connections[server]?.call("list_projects", [:]) { projects[server] = list }
-        await loadMarks(server, force: false)
         for key in transcripts.keys where key.server == server { await reload(key) }
+        // After the transcripts: a mark costs a `gh` call per repo, missed messages must not wait on it.
+        await loadProjects(server)
+        await loadMarks(server, force: false)
+    }
+
+    private func loadProjects(_ server: UUID) async {
+        if let list: [Project] = try? await connections[server]?.call("list_projects", [:]) { projects[server] = list }
     }
 
     // MARK: PR marks
