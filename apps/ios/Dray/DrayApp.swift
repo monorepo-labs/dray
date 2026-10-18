@@ -22,6 +22,7 @@ struct RootView: View {
     @State private var showServers = false
     @State private var adding = false
     @State private var pairing: PairLink?
+    @State private var opening: Task<Void, Never>?
 
     var body: some View {
         NavigationSplitView {
@@ -60,10 +61,12 @@ struct RootView: View {
             showServers = false
             adding = false
             pairing = nil
-            // A sheet asked for while another is still leaving is dropped.
-            Task {
+            // A sheet asked for while another is still leaving is dropped. A newer
+            // link cancels this one's wait, so the older can't land on top.
+            opening?.cancel()
+            opening = Task {
                 if covered { try? await Task.sleep(for: .milliseconds(600)) }
-                pairing = link
+                if !Task.isCancelled { pairing = link }
             }
         }
         .alert("Something went wrong", isPresented: Binding(
