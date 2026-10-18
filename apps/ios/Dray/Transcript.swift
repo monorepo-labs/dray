@@ -45,6 +45,12 @@ enum Item: Identifiable {
         }
     }
 
+    /// Moves whenever the row grows: a group keeps its first call's id but gains calls.
+    var newestId: String {
+        if case .group(_, _, let calls, _, _) = self, let last = calls.last { return last.id }
+        return id
+    }
+
     var isPrompt: Bool { if case .prompt = self { true } else { false } }
 }
 

@@ -38,7 +38,7 @@ struct TranscriptView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             // The newest row, not the count, or loading earlier turns would jump to the end.
-            .onChange(of: "\(turns.last?.id ?? "")|\(turns.last?.work.last?.id ?? "")|\(turns.last?.completed ?? false)|\(store.asks[key]?.count ?? 0)|\(busy)") {
+            .onChange(of: "\(turns.last?.id ?? "")|\(turns.last?.work.last?.newestId ?? "")|\(turns.last?.completed ?? false)|\(store.asks[key]?.count ?? 0)|\(busy)") {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -63,7 +63,11 @@ struct TurnView: View {
     var body: some View {
         let collapsible = !turn.running && turn.rows >= Self.collapseMin
         let segments = turn.segments
-        let lastOpen = open.contains(segments.count - 1)
+        // A lifted answer is out of every segment; a fallback one still sits in
+        // whichever stretch holds it, which is not always the last.
+        let answerOpen = turn.finalLifted ? false : segments.lastIndex {
+            $0.items.contains { if case .text(_, let t) = $0 { t == turn.finalText } else { false } }
+        }.map(open.contains) ?? false
         VStack(alignment: .leading, spacing: 12) {
             if let prompt = turn.prompt { UserBubble(text: prompt.text, from: prompt.from) }
             if collapsible || turn.running {
@@ -84,7 +88,7 @@ struct TurnView: View {
                 ForEach(turn.work) { ItemView(item: $0) }
             }
             // Collapsed, the last message stands in for the work; open, it already drew in place.
-            if let text = turn.finalText, turn.finalLifted || (collapsible && !lastOpen) {
+            if let text = turn.finalText, turn.finalLifted || (collapsible && !answerOpen) {
                 MarkdownText(text: text)
             }
             if let failure = turn.failure { FailureRow(text: failure) }
@@ -289,7 +293,8 @@ struct ToolRow: View {
                 HStack(spacing: 6) {
                     // A delegated run is a whole agent being waited on, so it carries the orb.
                     if pending && call.toolType == "subagent_spawn" { Orb() }
-                    if showLabel || summary == nil {
+                    // Inside a group the label is the only thing that turns red, so a failure keeps it.
+                    if showLabel || summary == nil || alarming {
                         Text(toolLabel(call.name, pending: pending))
                             .foregroundStyle(alarming ? AnyShapeStyle(.red) : AnyShapeStyle(.primary.opacity(0.8)))
                             .shimmer(pending)

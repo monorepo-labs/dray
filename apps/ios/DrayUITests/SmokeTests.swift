@@ -85,7 +85,11 @@ final class SmokeTests: XCTestCase {
         let groups = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Read 2 files'"))
         let group = lowest(groups, below: prompt)
         XCTAssertNotNil(group, "the back-to-back reads did not group")
+        // delta.txt is read only inside the group, so its row shows once the group opens.
+        let delta = app.buttons.matching(NSPredicate(format: "label CONTAINS 'delta.txt'"))
+        XCTAssertNil(lowest(delta, below: prompt), "the group's calls showed before it opened")
         group?.tap()
+        XCTAssertTrue(waitUntil(5) { lowest(delta, below: prompt) != nil }, "the group did not open to its calls")
         snap(app, "10-group-open")
     }
 
