@@ -19,39 +19,12 @@ import "../App.css";
 const ring = (c: BaseAudioContext, out: AudioNode, at: number, base: number, ratios: number[], gain: number, decay: number) =>
   ratios.forEach((r, i) => ping(c, out, at, "sine", base * r, base * r * 0.995, gain / (i + 1), decay / (1 + i * 0.4)));
 
-/// The click wheel with its onset eased in over `attack` seconds, and its top
-/// cut above `lowpass` Hz when given. WebKit plays the wheel much sharper than
-/// Chromium does, so these are judged in Safari, which is what the app sounds
-/// like.
-const eased =
-  (attack: number, lowpass?: number): Voice =>
-  (c, out, at) => {
-    let to: AudioNode = out;
-    if (lowpass) {
-      const filter = c.createBiquadFilter();
-      filter.type = "lowpass";
-      filter.frequency.value = lowpass;
-      filter.connect(to);
-      to = filter;
-    }
-    const onset = c.createGain();
-    onset.gain.setValueAtTime(0, at);
-    onset.gain.linearRampToValueAtTime(1, at + attack);
-    onset.connect(to);
-    clickWheel(c, onset, at);
-  };
-
+/// Judge these in Safari, not Dray's browser: the app is WebKit, which plays
+/// the bare wheel much sharper than Chromium does. A 2ms onset, a 9kHz lowpass
+/// and a lower wheel lost to the 1ms eased one there.
 const TICKS: { id: string; name: string; like: string; voice: Voice }[] = [
   { id: "wheel", name: "Click wheel", like: "the iPod's scroll wheel", voice: clickWheel },
-  { id: "ease1", name: "Eased 1ms", like: "the click wheel, its edge softened a little — the one the app plays", voice: easedWheel },
-  { id: "ease2", name: "Eased 2ms", like: "the click wheel, its edge softened more", voice: eased(0.002) },
-  { id: "ease2lp", name: "Eased 2ms, 9kHz", like: "softened and duller", voice: eased(0.002, 9000) },
-  {
-    id: "lower",
-    name: "Lower wheel",
-    like: "the click wheel pitched down, a touch longer",
-    voice: (c, out, at) => burst(c, out, at, "highpass", 3000, 0.8, 0.8, 0.008),
-  },
+  { id: "ease1", name: "Eased wheel", like: "the click wheel, its edge softened — the one the app plays", voice: easedWheel },
   {
     id: "steel",
     name: "Steel wheel",
