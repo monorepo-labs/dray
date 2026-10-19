@@ -1,0 +1,66 @@
+---
+title: Issues
+description: Tag a session with the Linear or GitHub issues its work is against using dray issue link, and remove tags with dray issue unlink.
+sidebar:
+  order: 5
+---
+
+`dray issue link` records that a session's work is against an issue. A tagged session gets an **Issue** tab in its right panel, showing that issue. Agents use it once they know which issue they are working on; you can run it yourself too.
+
+## Link an issue
+
+```bash
+dray issue link DRA-53 --title "Add the issue panel" --url https://linear.app/acme/issue/DRA-53
+```
+
+Prints every issue the session now carries, one per line: identifier, title and address.
+
+Run from inside a session, it tags that session. From your own terminal, name the session with `--session`:
+
+```bash
+dray issue link DRA-53 --session 0198f0a2-1c5e-7000-8000-000000000000
+```
+
+You can also put the session id first, before the issues. Name the session one way, not both.
+
+Several issues at once:
+
+```bash
+dray issue link DRA-53 DRA-54
+```
+
+| Flag | What it does |
+|---|---|
+| `--session <id>` | The session to tag. Defaults to the session running the command. |
+| `--title <title>` | The issue's title, so the tag reads as more than an identifier. |
+| `--url <url>` | The issue's web address, so the tag becomes a link. |
+
+`--title` and `--url` describe one issue, so they are refused when you name several.
+
+### Identifiers
+
+| Tracker | Form | Example |
+|---|---|---|
+| Linear | Team key and number | `DRA-53` |
+| GitHub | `owner/repo#number` | `monorepo-labs/dray#255` |
+
+A bare `#255` is refused. A number alone names no repository, so Dray will not guess one.
+
+## Remove an issue
+
+```bash
+dray issue unlink DRA-54
+```
+
+Takes the issue off the session and prints what is left. The issue itself is untouched. It takes the same `--session` flag and forms as `link`.
+
+## What it asks the tracker
+
+Nothing. `dray issue link` writes down what you give it, so it works without a connected tracker and without a network. Without `--title` and `--url`, the tag is the bare identifier and links nowhere.
+
+Two other ways to tag do look the issue up, and need the tracker connected in the app: `--issue` on [`dray session new`](/cli/sessions#start-a-session), and an identifier written into a prompt, like `#DRA-53`. If the lookup fails, the session still runs and the tag stays plain text.
+
+## Limits
+
+- **`dray` never writes to the tracker.** No status change, no comment, no assignee. Tagging records the link on the session in Dray and nothing else. To move or comment on an issue, use the tracker, or the status and priority menus in the app's issue panel.
+- A tag is a copy. If the issue's title changes in the tracker, the tag keeps the old one until you link it again.

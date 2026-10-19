@@ -1,0 +1,159 @@
+---
+title: Browser
+description: Drive a session's own browser with dray browser — open pages, read them, click and type, take screenshots and record videos.
+sidebar:
+  order: 6
+---
+
+Every session has its own browser, drawn in the app beside the chat. `dray browser` drives it from the command line. It is mostly for agents: an agent checks the dev server it just changed, fills a form, or records a video of a feature working, and you watch the same tabs it acts on.
+
+Each command acts on one session's tabs: the session running the command, or the one `--session` names. It cannot reach another session's pages. Every verb lands on that session's active tab, and `open` makes a tab if there is none.
+
+```bash
+dray browser open http://localhost:3000
+dray browser snapshot -i
+dray browser click @e4
+```
+
+## Flags
+
+| Flag | Used by | What it does |
+|---|---|---|
+| `--session <id>` | every verb | The session whose browser to drive. Defaults to the session running the command. Needed from your own terminal. |
+| `--json` | every verb | Answer as JSON instead of text. |
+| `-i`, `--interactive` | `snapshot` | Interactive elements only. |
+| `-c`, `--compact` | `snapshot` | Interactive elements and headings only. |
+| `-s`, `--selector <css>` | `snapshot` | Only inside this element. |
+| `--name <name>` | `find role` | The accessible name to match. |
+| `--exact` | `find` | Match the whole string, not part of it. |
+| `--url <text>` | `wait` | Wait for the URL to contain this. |
+| `--text <text>` | `wait` | Wait for this text to be on the page. |
+| `--load load` | `wait` | Wait for the page to finish loading. |
+| `--full` | `screenshot` | The whole page, not just the viewport. |
+
+A flag given to a verb that does not use it is refused.
+
+## Read a page
+
+```bash
+dray browser snapshot -i
+```
+
+`snapshot` lists the page's elements, one per line, each with a ref like `@e12`. Other verbs take that ref as their target. Refs are numbered fresh on every snapshot, so take a new one after anything that changes the page.
+
+A target is a ref from the last snapshot, or a CSS selector.
+
+| Verb | What it does |
+|---|---|
+| `snapshot [-i] [-c] [-s <selector>]` | The page's elements, with refs. |
+| `get text [target]` | The text of the page, or of one element. |
+| `get html\|value\|title\|url\|count\|box [target]` | An element's HTML, a field's value, the page title or URL, how many elements match, or an element's position and size. |
+| `get attr <target> <name>` | One attribute of an element. |
+| `is visible\|enabled\|checked <target>` | `true` or `false`. |
+| `eval <js>` | Runs JavaScript in the page and prints the result. |
+| `console` | What the page logged since you last asked. |
+| `errors` | Only the page's errors. |
+
+## Act on a page
+
+| Verb | What it does |
+|---|---|
+| `click <target>`, `dblclick <target>` | Clicks, or double-clicks. |
+| `hover <target>`, `focus <target>` | Moves the pointer over an element, or focuses it. |
+| `check <target>`, `uncheck <target>` | Ticks or clears a checkbox. |
+| `fill <target> <text>` | Clears a field, then types the text. |
+| `type <target> <text>` | Types the text after what is already there. |
+| `select <target> <value>` | Picks an option in a dropdown. |
+| `press <key>` | Presses a key, like `Enter`, `Tab`, `Escape`, `ArrowDown`, or a chord like `Meta+a`. |
+| `scroll up\|down\|left\|right [pixels]` | Scrolls the page. 500 pixels if you give no number. |
+| `scrollintoview <target>` | Scrolls until the element is on screen. |
+
+`click` and `press` wait for any page load they cause.
+
+### Find elements by what they say
+
+`find` locates an element the way a person would describe it, then runs a verb on it:
+
+```bash
+dray browser find role button click --name "Sign in"
+dray browser find text "Forgot password" click
+dray browser find label "Email" fill "me@example.com"
+dray browser find nth 2 ".result" click
+```
+
+`find` takes `role`, `text`, `label`, `placeholder`, `alt`, `title`, `testid`, `first <selector>`, `last <selector>` or `nth <index> <selector>`, then the value, then any verb that takes a target.
+
+### Wait
+
+```bash
+dray browser wait ".results"
+dray browser wait 1500
+dray browser wait --text "Saved"
+dray browser wait --url /done
+```
+
+Waits for an element to appear, for a number of milliseconds (up to a minute), for text or a URL, or with `--load load` for the page to finish loading.
+
+## Pages and tabs
+
+| Verb | What it does |
+|---|---|
+| `open <url>` | Opens a page in the active tab and waits for it to load. Only `http` and `https` pages. |
+| `back`, `forward`, `reload` | What the buttons do. |
+| `close` | Closes the active tab. |
+| `tab` | Lists the session's tabs with their ids. The active one is marked `*`. |
+| `tab new [url]` | Opens a new tab. |
+| `tab <id>` | Switches to a tab. |
+| `tab close [id]` | Closes a tab, or the active one. |
+
+A tab nobody has looked at for a while is put to sleep to save memory. It is listed as `(discarded, reloads when used)` and reloads the next time a verb uses it.
+
+## Screenshots
+
+```bash
+dray browser screenshot
+dray browser screenshot --full
+dray browser screenshot docs/login.png
+```
+
+Prints the PNG's path. With no path, it saves under `~/.dray/browser/shots`. A path of your own must be inside the session's checkout.
+
+Screenshots lay the page out at 1440×900, whatever the size of the pane on screen, or at the size you set:
+
+| Verb | What it does |
+|---|---|
+| `set viewport <width> <height>` | The size screenshots and recordings are laid out at. |
+| `set device <name>` | The same, by device name. |
+| `zoom <percent>` | Page zoom, 25 to 500. `zoom reset` sets it back to 100. You see it too, and it holds for that site. |
+
+Device names: `iPhone SE`, `iPhone 15`, `Pixel 8`, `iPad Mini`, `iPad Air`, `Laptop`, `Desktop`, `MacBook Pro 14`, `MacBook Pro 16`, `1080p`, `4K`.
+
+`set viewport` and `set device` change what is captured, not the pane you are looking at.
+
+## Record a video
+
+```bash
+dray browser record start
+dray browser click @e4
+dray browser fill @e2 "hello"
+dray browser record stop "checkout flow"
+```
+
+`record start` films the active tab at the screenshot size. `record stop` ends it and prints the MP4's path, named after what you pass: `checkout-flow.mp4`. Without a name, the file is named by when it started.
+
+Recordings are saved under `~/.dray/browser/recordings/<session-id>/` and deleted with the session. When an agent puts a recording's path in its reply, the app plays it inline in the transcript.
+
+While a recording runs, the pane shows a notice in place of the page, and you cannot switch the session's tabs. Screenshots still work. One recording per session at a time.
+
+## On a server
+
+On a Linux server, `dray browser` runs its own Chromium with no window. It needs the system libraries Chromium uses, and `record` needs ffmpeg. `dray server install` offers both as **Browser for agents** and **ffmpeg**. See [Servers](/cli/servers).
+
+Screenshots and recordings land in the same folders, under `~/.dray/browser` on the server.
+
+## Limits
+
+- Only `http` and `https` pages open.
+- Downloads, file pickers and the browser's own dialogs are out of reach.
+- Each command reaches one session's tabs, and nothing else on the machine.
+- Screenshot paths must be inside the session's checkout.

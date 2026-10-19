@@ -1,0 +1,144 @@
+---
+title: Troubleshooting
+description: Fixes for common problems — a missing or logged-out agent, a stuck session, a dead permission card, a refused dray command, silent dictation, missing notifications, gh, worktrees, rate limits — and where the logs are.
+sidebar:
+  order: 4
+---
+
+Each heading below is a problem, followed by what to do about it. Most of them start with a message in the app; it is quoted here as the app shows it.
+
+Several fixes say **restart the server**. On a Mac that means Quit → **Quit completely**, then open Dray again. Plain **Quit** leaves the background server, and every session in it, running. See [Sessions keep running when you quit](/reference/remote-access#sessions-keep-running-when-you-quit).
+
+## An agent is marked as not installed
+
+The agent picker in the composer puts a red dot on an agent Dray can't find. Pick it and the composer says "`<Agent>` isn't installed, so this session can't start." with **Copy command** and **Install guide**. Nothing is created until you send, so your prompt stays in the composer.
+
+1. Copy the install command and run it in Terminal, or follow the install guide.
+2. **Restart the server.** Dray looks for each agent once and remembers the answer, so an agent installed while Dray runs still reads as missing until then.
+3. Send again.
+
+Dray finds an agent on your `PATH`, in the usual install folders (`~/.local/bin`, Homebrew, nvm and others), or by asking your login shell. If it still can't, make sure `command -v <agent>` works in a new Terminal window.
+
+## "isn't logged in"
+
+When an agent's sign-in has expired, the composer says "`<Agent>` isn't logged in" with **Copy command** and **Log in**. **Log in** opens Terminal running that agent's own login. Finish it there, then send again.
+
+To see which account each agent uses, or to sign in before anything fails, open Settings → Accounts. See [Accounts](/settings/accounts).
+
+## A session seems stuck
+
+- **The agent is still working.** A turn can take minutes. A "Retrying — attempt n of m" row means the agent is retrying a failed request to its provider; leave it.
+- **Its server is offline.** The composer says "`<name>` is offline". Press **Try again**, or **Turn on** if you turned that server off. Its agents keep running there meanwhile.
+- **Stop it.** While a turn runs, the send button is **Stop**. Press it, then send your message again.
+- **Still nothing.** Restart the server, open the session and send again. The session resumes where it left off.
+
+If a session never shows any reply, look in the [logs](#logs-and-parse-failures) for an error from the agent.
+
+## A model or effort change does nothing
+
+Changing effort, and on some agents the model, restarts the agent. Dray waits to do that until the agent's background tasks have ended, and it doesn't say it is waiting. A dev server or a watch command the agent started in the background never ends on its own.
+
+Open the subagent panel from the background tasks count in the transcript, and stop the tasks you don't need with **Stop this subagent**, or **Stop all**. Then change the setting again.
+
+## A permission card's buttons don't work
+
+If the agent restarted while a permission card was open (for example, because you changed effort), the card is left behind and its buttons fail. Send your next message, or restart the server and open the session again. The agent asks again when it needs the permission.
+
+## `dray` is refused
+
+The `dray` command line and the app must speak the same version. The message names which half to update:
+
+| Message | Fix |
+|---|---|
+| "this dray CLI speaks protocol vN, the app speaks vM — run `dray update`" | The CLI is behind. Run `dray update`. |
+| "… — update the Dray app" | The app is behind. Update it in Settings → About → Updates. |
+| "Dray isn't running. Start the app and try again." | Open Dray. On a Linux server, start it with `dray server start`. |
+| "permission denied reaching Dray at …" | Dray may well be running. A sandbox around the command, or the folder's permissions, blocked it. Run that one command outside the sandbox. |
+
+The app updates an installed `dray` CLI by itself on the first launch of each new app version. See [the dray CLI](/cli).
+
+## Dictation records nothing
+
+| Message | Fix |
+|---|---|
+| "Dray needs microphone access. Turn it on in System Settings › Privacy & Security › Microphone." | Do that, then press the mic again. |
+| "No sound was recorded. Check microphone access in System Settings › Privacy & Security › Microphone." | macOS gave Dray silence, which is what a denied microphone looks like. Check the same setting, and the microphone picked in Settings → Transcription. |
+| "Nothing was said." | The model heard nothing it could write down. Speak closer or check the input level. |
+| "Transcription failed: …" | Your recording was saved. Press **Transcribe the recording again** beside the mic to retry, or **Show the recording** to find the file. |
+
+If the mic button opens Settings instead of recording, no dictation model is downloaded yet. Download one in Settings → Transcription. See [Dictation](/settings/dictation).
+
+**Sound stays muted after dictation.** With **Mute while recording** on, Dray mutes your Mac's output while you talk and puts it back after. If Dray was killed mid-recording, it could not put it back. Unmute from the menu bar or the volume keys.
+
+## Notifications don't show
+
+Dray picks one way to tell you a session finished or needs you, based on where you are:
+
+| You are | You get |
+|---|---|
+| In another app | A macOS banner. |
+| In Dray, on another session | A card inside Dray. |
+| Looking at that session | Nothing. The transcript already shows it. |
+
+So a banner never shows while Dray is in front. If you never see banners from another app:
+
+1. Open System Settings → Notifications → Dray and allow notifications. macOS asks the first time Dray posts one; if you said no then, nothing more is asked.
+2. Check Focus and Do Not Disturb.
+
+A session in a space other than the one you are in announces nothing. See [Notifications](/settings/notifications).
+
+A background subagent that reports back after its turn can make a session announce "finished" twice.
+
+## The PR tab asks for the GitHub CLI
+
+Dray reads pull requests through GitHub's own CLI, `gh`. Without it, the PR tab says "This branch's pull requests belong here. Dray reads them through GitHub's CLI." and shows `brew install gh` to copy, a button to open a terminal, and **Recheck**.
+
+1. Run the command in a terminal.
+2. Press **Recheck**. There is no need to restart.
+
+If it says "Still no gh — Dray looks where your login shell looks.", open a new Terminal window and check that `command -v gh` finds it.
+
+If `gh` is installed but logged out, the tab shows `gh auth login` instead. Run it, then press **Recheck**. On the issues page, GitHub's connect pane has **Check again** for the same thing.
+
+On a remote server, the tab shows `dray setup` instead, which installs `gh` there.
+
+## A worktree won't delete
+
+- **"that worktree is in use by another session (…)"**: another session's agent is working in that folder right now. Settle or stop that session, then delete again.
+- **"… is not a worktree Dray created, so it will not be removed"**: Dray only removes worktrees under `<project>/.claude/worktrees/`. Remove others yourself with `git worktree remove`.
+
+If you delete a session and its worktree can't be removed, the folder stays behind with nothing in Dray pointing at it. In the project, run `git worktree remove <path>`, then `git branch -D worktree-<name>`. See [Worktrees](/using-dray/worktrees).
+
+## Usage and rate limits
+
+- **"Usage limit reached. Resets …"** The agent's plan is out for now. For Claude Code, the composer shows "Continues automatically at …": Dray sends `continue` for you once the limit resets. **Cancel** turns that off, and **Continue when limit resets** turns it back on.
+- **"Plan limit reached — now billed as usage."** Your plan's limit is used up. Work goes on, billed as extra usage.
+- **GitHub's "API rate limit already exceeded"** from `gh`, often during `gh pr create`. Every `gh` call on your account shares one budget: Dray's PR tab and sidebar marks, and every agent's own `gh`. Wait a few minutes and try again.
+
+## An update won't install
+
+- **Restart to update stays waiting.** Dray won't restart while any session is mid-turn, since restarting would cut it off. It installs once they finish. Hover the button to see why it waits.
+- **"Check for Updates…" from the menu says nothing.** With the sidebar collapsed, the answer has nowhere to show. Open the sidebar, or use Settings → About → Updates.
+- **A remote server won't update from the app.** See [Update remote servers](/reference/remote-access#update-remote-servers).
+
+## Logs and parse failures
+
+| Where | What |
+|---|---|
+| `~/.dray/server.log` | The Mac's background server, where your sessions run. Start here. |
+| `journalctl --user -u dray -n 50` | A Linux server's log. `dray server status` shows whether it runs. |
+| `~/.dray/parse_failures.jsonl` | Lines from an agent CLI that Dray could not read. A new agent version that changed its output shows up here first, as missing rows in the transcript. |
+
+To see what kinds of line failed and how often:
+
+```bash
+jq -r '.stage + " " + .detail' ~/.dray/parse_failures.jsonl | sort | uniq -c
+```
+
+When you report a bug, those two files are the most useful things to attach. Check them for anything private first: they hold raw lines from your sessions. See [Data on disk](/reference/data) for everything else in `~/.dray`.
+
+## Limits
+
+- Quitting from the Dock's menu skips the quit question.
+- An agent installed while Dray runs needs a server restart to be found.
+- A model or effort change waits silently on background tasks.

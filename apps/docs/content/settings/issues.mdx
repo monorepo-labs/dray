@@ -1,0 +1,120 @@
+---
+title: Issues
+description: "Connect Linear with an API key or GitHub through gh, browse and filter issues on the Issues page, change status and priority, tag issues in prompts with #, and see the issues linked to a session."
+sidebar:
+  order: 2
+---
+
+Dray reads issues from Linear and GitHub. You browse them on the Issues page, tag them into a prompt with `#`, and see the ones a session is working on in its right panel. Dray changes two things on an issue — its status and its priority — and nothing else.
+
+## Connect a tracker
+
+Connecting happens on the Issues page, not in Settings. Click **Issues** in the sidebar, under **New task**, or press `⌘I`.
+
+At the top left of the page are two marks, Linear and GitHub. Click the one you want. If it is not connected yet, the page shows how to connect it.
+
+### Linear
+
+<Steps>
+  <Step title="Make a key">
+    Click **Create a key in Linear** to open Linear's security settings, and create a personal API key. A key with read and write access lets you change status and priority from Dray. A read-only key works too; you just cannot change a status or priority.
+  </Step>
+  <Step title="Paste it">
+    Paste the key into the field (it starts `lin_api_`) and press **Connect**. Dray checks the key with Linear before saving it.
+  </Step>
+</Steps>
+
+The key is saved in `~/.dray/credentials.json`, readable only by your user. To remove it, go to Settings → Integrations → Issue tracker and press **Disconnect**. Sessions keep the issues they are tagged with.
+
+The key fills Dray's own screens. It gives your agent nothing. For the agent to read and manage Linear issues in chat, add [Linear's MCP server](https://linear.app/docs/mcp) to your agent CLI.
+
+### GitHub
+
+Dray reads GitHub issues through the `gh` CLI and stores no GitHub credential of its own.
+
+1. If you don't have `gh`, install it: `brew install gh`.
+2. Run `gh auth login` in a terminal. You can also sign in from Settings → Accounts → GitHub, which opens Terminal for you.
+3. Back on the Issues page, press **Check again**.
+
+If `gh` is still missing or signed out, the page stays as it is. Sign out with `gh auth logout` in your own terminal.
+
+## The Issues page
+
+The page fills the main column. It is not a session, and the right panel is hidden while it is up.
+
+{/* screenshot: the Issues page with Linear connected, grouped by state, one issue open in the pane beside it */}
+
+### Pick a tracker
+
+The Linear and GitHub marks at the start of the filter row switch between the two. You see one tracker's issues at a time, never a merged list. The same pick applies to the composer's `#` menu.
+
+### Filter the list
+
+| Control | Linear | GitHub |
+|---|---|---|
+| Scope chips | **Assigned to me** or **Created** | **Assigned to me** or **All** |
+| Open or closed | Grouped by state: In Progress, Triage, Todo, Backlog, Done, Cancelled. Done and Cancelled start folded and load when you open them. | An **Open** / **Closed** switch. The list is flat, with no headings. |
+| Narrow further | The filters menu (sliders icon): **Team** and **Project**. Shown only when there is more than one of either. | **Choose a repository**, then **Type** and **Label** menus for that repository. |
+| Search | **Search issues**, or `⌘⇧F` to jump to it. `Escape` clears it. | Same. |
+| Refresh | The circular arrow, or `⌘R`. | Same. |
+
+GitHub shows one repository at a time. The repositories offered are your attached projects that have a `github.com` remote. Until you pick one, the page lists them for you to click. If none qualify, it asks you to attach a project with a GitHub remote.
+
+Both lists are ordered newest first by the date the issue was filed. In Linear, priority still sorts within each state group.
+
+A row shows the identifier, the title, labels, and a pull-request mark with its number (or a count) when a PR is linked to the issue.
+
+### Open an issue
+
+- Click a row to open it in the pane beside the list: description, people, labels and comments. `⌘E` closes the pane, and opens it again on the last issue.
+- Use `↑` and `↓` to move through the rows, and `Return` to open one.
+- ⌘-click a row to open it in Linear or GitHub instead.
+- **Work on it**, shown on a row when you hover it, takes you to an empty composer with the issue already tagged. It starts nothing until you send.
+
+## Change status and priority
+
+On a row, or in the opened issue's header, the status glyph and the priority glyph are menus. Click one and pick a new value. Press a digit `1`–`9` to pick that row of the menu.
+
+- Linear: status is any state in the issue's team workflow. Priority is Urgent, High priority, Medium priority, Low priority or No priority.
+- GitHub: status is open or closed, set from the opened issue. GitHub has no priority, so there is no priority menu.
+
+A Linear key without write access cannot change either; Linear's refusal appears as a card.
+
+## Tag an issue in a prompt
+
+Type `#` in the composer. A menu lists your issues from the tracker that is picked. Keep typing to narrow it, then press `Return` to insert the tag.
+
+- Under Linear the menu shows issues assigned to you.
+- Under GitHub it shows every open issue in the session's own repository.
+
+The tag goes into your text with its title, like `#DRA-53 Add issue tracker integration` or `#owner/repo#121 Add a fourth harness`. The agent reads the title. It can fetch more through its own tools — Linear's MCP server, or `gh` for GitHub.
+
+In the sent message the tag is a button. Click it to open the issue on the Issues page. ⌘-click it to open it in the tracker.
+
+A tag is a mention. It does not link the issue to the session.
+
+## Issues linked to a session
+
+When a session is linked to one or more issues, its right panel gets an **Issue** tab. Each row shows the issue with its status, description and labels. The buttons on a row remove the link from the session (the issue itself is untouched) or open the issue in the browser.
+
+The tab appears only once something is linked, and goes away when the last link is removed.
+
+### How issues get linked
+
+Linking is done by the agent, or by you from a terminal, with the `dray` CLI:
+
+```bash
+dray issue link DRA-53 --title "Add issue tracker integration" --url "https://linear.app/…"
+dray issue link owner/repo#12 --title "…" --url "…"
+```
+
+A GitHub issue is always named `owner/repo#123`; a bare `#123` is refused, because a number alone names no repository. `dray new --issue DRA-53` links an issue to a session as it is created. All the commands and flags are on [Issues in the CLI](/cli/issues).
+
+## Limits
+
+- Dray changes status and priority only. Comments, assignees, labels and titles are edited in the tracker.
+- The `dray` CLI never changes an issue. It only records links.
+- The connection is workspace-wide. There is no mapping from a project to a Linear team.
+- GitHub Projects are not read, and GitHub has no priority.
+- GitHub Enterprise hosts are not supported.
+- Shortcuts here (`⌘I`, `⌘⇧F`, `⌘R`, `⌘E`) can be changed in Settings → Shortcuts.

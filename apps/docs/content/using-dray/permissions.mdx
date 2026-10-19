@@ -1,0 +1,61 @@
+---
+title: Permissions and questions
+description: Answer an agent's permission requests and questions, approve a plan, and know what happens to an open request after a restart.
+sidebar:
+  order: 3
+---
+
+When an agent wants to do something its permission mode does not allow, or needs an answer from you, it stops and a card appears at the bottom of the transcript. The agent waits until you answer. How often it asks depends on the session's permission mode, set in the composer (see [The composer](/using-dray/composer#permission-mode)).
+
+{/* screenshot: a permission card with Allow once, Always allow and Deny */}
+
+## Know when an agent is waiting
+
+- The session's row in the sidebar gets a **yellow** mark on its left edge. It stays until you answer, even after you look at the session. (A green mark means a finished turn you have not read; yellow wins when both apply.)
+- The sidebar moves the session into the first group of its list, under any pinned sessions.
+- If Dray is in front but you are on another session, a card with **Answer** appears. `⌘G` takes it.
+- If you are in another app, you get a macOS notification. Clicking it opens the session.
+- The Dock badge counts it.
+
+## Answer a permission request
+
+The card says what the agent wants to do, and shows the command or input where there is one. The buttons are the agent's own options, so they differ by agent. For Claude Code:
+
+- **Allow once**: run this one call.
+- **Always allow …**: allow this and future calls that match the rule named on the button, like `Always allow touch ./marker.txt` or `Always allow in /tmp/proj`.
+- A mode switch, like **Stop asking this session** or **Switch to plan mode**, where the agent offers one.
+- **Deny**: refuse. The agent sees the refusal and carries on from there.
+
+Codex offers **Allow once**, **Allow for this session**, **Always allow …** and **Deny**. Other agents draw whatever options they send, plus **Deny** where they name no refusal. Once you press a button, the card's buttons disable and the agent continues.
+
+## Answer a question
+
+Some agents ask you questions, Claude Code through its question tool. The card shows the question and its choices, and takes focus so you can answer from the keyboard.
+
+- **Pick a choice**: click it, or press its number. Arrows move between choices.
+- **Several at once**: where the question allows it, you can tick more than one.
+- **Your own answer**: type in the "Something else…" box. `Shift+⏎` adds a new line there.
+- **Skip**: leave a question unanswered. The agent is told only about the ones you answered.
+- **Previous** and **Next** move between questions when there are several; **Send** sends the answers. `⏎` on a choice confirms it.
+
+What you have picked is kept if you switch sessions and come back before sending.
+
+## Approve a plan
+
+When an agent finishes planning and asks to start work, the card carries the plan. Its description is the plan, drawn as formatted text, and **View plan** opens it in the **Plan** tab of the right panel, where a long plan is easier to read.
+
+- **Claude Code** reaches this from the **Plan** permission mode. The buttons are its usual options, such as **Allow once** or a mode switch.
+- **Grok** has its own plan mode. Type `/plan` in a Grok session to enter it. When the plan is ready the card offers **Approve plan** and **Keep planning**. To drop the plan, send a new prompt instead.
+
+The Plan tab keeps the latest plan for each session until you quit Dray, so you can still read it after you approve.
+
+## After a restart
+
+**Quit** does not stop your sessions (only **Quit completely** does). On a Mac they run in Dray's background server, so an open card is still there when you reopen the app, and you can answer it.
+
+A card belongs to the agent process that asked. If that process ends — you stop or settle the session, or the background server restarts — the card goes away and its buttons can no longer work. Requests and answers are not saved in the transcript. Nothing is lost by it: when you send your next message, the agent asks again if it still needs the permission.
+
+## Limits
+
+- A permission request is never shown in the transcript afterwards. That it was allowed shows in the tool running; that it was denied shows in the tool's error.
+- `⌘G` can be changed in Settings → Shortcuts.

@@ -1,0 +1,95 @@
+---
+title: Privacy
+description: Exactly which analytics events Dray sends and what they carry, what is never sent, how to turn analytics off, and how surveys and the website measure visits.
+sidebar:
+  order: 3
+---
+
+Dray sends a small set of anonymous usage events, so we can see which builds are in use, which features get used and where the app breaks. Your prompts, code, conversations, file paths, session titles and error messages never leave your machine through analytics. Analytics is on by default and one switch turns it off.
+
+## Turn analytics off
+
+**Where:** Settings → About → **Share basic analytics**.
+
+Switch it off and Dray sends nothing more, from the app or from the background server on your Mac. Both read the same setting.
+
+To turn it off without opening Settings, set `DRAY_NO_ANALYTICS` to any value in the environment Dray starts from. The switch then shows as off and greyed out, with "Turned off for this run by DRAY_NO_ANALYTICS." See [Environment variables](/reference/data#environment-variables) for how to start the app with one.
+
+If `~/.dray/settings.json` exists but cannot be read, Dray treats analytics as off.
+
+## The install id
+
+Events are tied to a random id for this install, not to you. It is created with the first event, only while analytics is on, and stored in `~/.dray/settings.json`. Turning analytics off deletes it. Turning it back on creates a new one, so you come back as a new, unrelated install.
+
+## What is sent
+
+Every event carries the same few facts about the build:
+
+| Property | Example |
+|---|---|
+| `app_version` | `0.28.1` |
+| `os`, `arch` | `macos`, `aarch64` |
+| `is_debug` | `false` |
+| `source` | `app` |
+
+Then each event adds its own:
+
+| Event | When | Adds |
+|---|---|---|
+| `app_started` | Each launch | Nothing more. |
+| `active_day` | At most once a day: on launch, when Dray comes to the front, or when you send a message | Nothing more. Messages agents send each other do not count. |
+| `session_started` | You create a session | Agent, model, effort, permission mode, whether fast mode is on, whether it uses a worktree, whether another session started it. |
+| `feature_used` | A feature works | Which feature, from a fixed list (below). |
+| `error` | Something breaks | Where it broke, never what it said (below). |
+
+`feature_used` names one of: `dictation` (with the dictation model's id), `fork`, `pr_merged`, `linear_connected`, `space_created`, `worktree_deleted`, `settle`, `unsettle`, `pin`, `unpin`, `set_aside`, `unset_aside`, `handoff_commit`, `handoff_pr`, `handoff_runServer`, `remote_access`, `share`, `server_added` and `server_connected`. The last three add how: `app` or `cli` for a share, `ssh` or `address` for a server. Never the port, the address or the server's name. `server_connected` is sent at most once a day per kind.
+
+## What is never sent
+
+- Your prompts, the agent's replies, and anything else in a transcript.
+- Code, file names and file paths.
+- Session titles, project names, branch names, issue titles.
+- Server names and addresses, ports and links.
+- The text of any error message.
+- Screens or recordings. Session recording and click tracking are off.
+
+## Error reports
+
+When Dray breaks, the `error` event says where, in a form that cannot carry your data:
+
+- **A crash in the app's core:** the file and line in Dray's own source code, and the thread's name. Not the crash message, since that can contain a path.
+- **An agent line Dray could not read:** which agent, and at which step. Not the line itself. Sent once per agent and step per run. The full line stays on your machine in `~/.dray/parse_failures.jsonl`.
+- **A failed update install:** which step failed.
+- **A screen that crashed:** React's error code and up to eight locations in Dray's own code. Not the message.
+
+Other errors in the app's interface are not reported.
+
+## Surveys
+
+Now and then Dray may show a short survey card from PostHog, the analytics service it uses. Only while analytics is on: with it off, no survey is loaded. A survey can be aimed at installs by the facts above and by how many sessions this install has. Answering is optional, and your answer goes to PostHog. Dismiss the card to skip it.
+
+## Linux servers
+
+A Dray server you install on Linux sends no analytics. The Mac app counts `server_added` and `server_connected` when you add or connect one, as described above.
+
+## The website and these docs
+
+drayhq.com and these docs count page views, plus clicks on the download and sponsor buttons, in the same PostHog project. They use no cookies and store nothing in your browser, so there is no consent banner, and each visit counts as a new visitor. Click tracking and session recording are off.
+
+## Other connections Dray makes
+
+Besides analytics, Dray connects to the network for:
+
+- **Your agents.** Each agent CLI talks to its own provider, as it does in a terminal. Dray also asks the session's own agent, on its cheapest model, to write each session's title from your first prompt. For fx, Dray reads Vercel's public model list to know each model's effort levels.
+- **Updates.** Checking for and downloading new versions of the app and the `dray` CLI.
+- **The changelog.** Reading what's new from drayhq.com.
+- **Downloads you trigger or need:** the Chromium framework for Dray's browser (from Spotify's CEF build server), dictation models (from Hugging Face).
+- **GitHub and Linear,** when you use pull requests or issues, through `gh` or your Linear key.
+- **OpenTunnel,** only while [Remote access](/reference/remote-access#remote-access) is on or a [public link](/reference/remote-access#share-a-dev-server) is live.
+
+Dictation runs on your Mac. Your voice is never sent anywhere.
+
+## Limits
+
+- Analytics is on by default.
+- Surveys are drawn by PostHog and look like PostHog's, not like Dray.

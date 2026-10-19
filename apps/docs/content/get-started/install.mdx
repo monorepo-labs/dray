@@ -1,0 +1,90 @@
+---
+title: Install Dray
+description: What Dray needs, how to download and install it, how to add an agent CLI, and what happens on first launch.
+sidebar:
+  order: 1
+---
+
+Dray is a Mac app. It runs the coding agent CLIs you install yourself, so setting it up is two things: the app, and at least one agent.
+
+## Requirements
+
+- macOS 11 or later.
+- Apple silicon or Intel. There is one universal download for both.
+- At least one agent CLI: Claude Code, Codex, pi, fx or Grok Build. See [Agents](/using-dray/agents).
+- git, for branches and worktrees. A folder that is not a git repository still works, without those two.
+- Optional: the GitHub CLI (`gh`), signed in. Dray uses it to list your repositories when you attach a project, and for the pull request tab.
+
+## Download and install
+
+<Steps>
+  <Step title="Download">
+    On [drayhq.com](https://www.drayhq.com), click **Download for macOS**. You get `Dray_universal.dmg`.
+  </Step>
+  <Step title="Install">
+    Open the dmg and drag Dray into Applications.
+  </Step>
+  <Step title="Open">
+    Open Dray from Applications. It is signed and notarized by Apple.
+  </Step>
+</Steps>
+
+## Install an agent
+
+Dray installs no agent and stores no agent login. Each agent keeps its own, exactly as it does in your terminal. If an agent already works in your terminal, it works in Dray.
+
+You pick the agent in the composer's model picker. An agent that is not installed has a small red dot on its mark. Pick it anyway and the composer tells you:
+
+> Codex isn't installed, so this session can't start.
+
+Beside that line are two buttons:
+
+- **Copy command** copies the vendor's own install command. Paste it into a terminal.
+- **Install guide** opens the vendor's install page.
+
+Dray never runs the installer for you. These are the commands it offers:
+
+| Agent | Install command |
+|---|---|
+| Claude Code | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| Codex | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` |
+| pi | `curl -fsSL https://pi.dev/install.sh \| sh` |
+| fx | `curl -fsSL https://fx.sh/setup.sh \| bash` |
+| Grok Build | `curl -fsSL https://x.ai/cli/install.sh \| bash` |
+
+Then sign in to the agent. [Agents](/using-dray/agents#signing-in) says how, and [Accounts](/settings/accounts) shows who each agent runs as.
+
+:::note
+Dray looks for each agent once and remembers the answer. If you install an agent while Dray is running, it still reads as missing. Quit with **Quit completely** (see below) and open Dray again, so the background process looks again.
+:::
+
+## First launch
+
+Dray opens on a new task: a composer in the middle of the window, and the sidebar on the left. [Your first session](/get-started/first-session) walks through the rest.
+
+{/* screenshot: the empty window on first launch, composer centered, sidebar with New Task and Issues */}
+
+### Dray keeps running after you quit
+
+Your sessions run in a background process, not in the window. Close the window or quit the app and the agents keep working. Open Dray again and you find them where you left them.
+
+When you quit (`⌘Q`, or the window's close button), Dray asks first:
+
+- **Quit** closes the app. Sessions keep running in the background.
+- **Quit completely** closes the app and stops every session too.
+- **Cancel** keeps Dray open.
+
+### The browser downloads in the background
+
+Dray has a built-in browser, and it runs on Chromium. Chromium is not in the download, since it is a few hundred megabytes. A few seconds after the window first opens, Dray fetches it in the background. There is nothing to click.
+
+You can see how far it has got in Settings → Integrations → **Browser**, and on the browser tab while it is still downloading. If the download fails, Dray tries again; you can also press **Retry** there. **Remove** deletes it; it comes back the next time Dray starts.
+
+## The `dray` command line
+
+`dray` is a separate command line tool. It lets your agents start sessions of their own, message other sessions and drive the browser. Dray tells its agents how to install it when they need it. See [dray CLI](/cli).
+
+## Limits
+
+- Mac only. Dray can also run on a Linux server that you drive from the Mac app: see [Connect a server](/server).
+- Dray does not install an agent or sign you in to one. Each agent uses its own login, subscription or key.

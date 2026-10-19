@@ -1,0 +1,122 @@
+---
+title: Shortcuts
+description: Every default keyboard shortcut in Dray, and how to rebind, remove or reset one in Settings → Shortcuts.
+sidebar:
+  order: 6
+---
+
+Every shortcut in Dray can be changed or removed. The full list of defaults is below.
+
+## Where it is
+
+Settings → Shortcuts. Open Settings with the gear in the sidebar or `⌘,`.
+
+The tab lists every shortcut by group. Type in **Search shortcuts** to narrow the list by name or group; `Escape` clears the search.
+
+{/* screenshot: the Shortcuts tab with one row recording ("Press keys, ⌫ to remove") */}
+
+## Change a shortcut
+
+1. Click the keys on the row. The row says **Press keys…**.
+2. Press the new combination. It must include `⌘` or `⌥`; a plain letter is not accepted. Keys that are not letters, like `Tab` or the arrows, can also take `⇧` alone.
+3. It is saved at once. `Escape` backs out without changing anything.
+
+Dray refuses a combination that is already taken and says by what: "Already used by Next agent." Free that one first, then try again.
+
+These are refused because macOS and every text field need them: `⌘Q`, `⌘A`, `⌘X`, `⌘C`, `⌘V`, `⌘Z` and `⌘⇧Z` ("Reserved for a system shortcut.").
+
+## Remove a shortcut
+
+Click the keys, then press `⌫` (Backspace) or `⌦`. The row then reads **Not set**, and the action has no shortcut until you give it one.
+
+## Reset
+
+- A row you have changed or removed shows a circular arrow, **Reset to default**. If something else now holds that default, Dray says so and leaves the row as it is.
+- **Reset all to defaults**, at the bottom of the tab, puts every shortcut back.
+
+## Number rows
+
+Three rows bind one set of modifier keys over a run of digits: **Jump to session**, **Focus pane** and **Go to tab**. To change one, click its keys, hold the modifiers you want (at least one of `⌘`, `⌃` or `⌥`), and let go. The row takes whatever you were holding.
+
+## Default shortcuts
+
+### General
+
+| Action | Default |
+|---|---|
+| Settings | `⌘,` |
+| Next theme | `⌘⌥T` |
+| Toggle light and dark | `⌘⌥L` |
+| Zoom in | `⌘=` |
+| Zoom out | `⌘-` |
+| Actual size | `⌘0` |
+
+### Sessions
+
+| Action | Default |
+|---|---|
+| New task | `⌘N` |
+| Previous session | `⌘⇧↑` |
+| Next session | `⌘⇧↓` |
+| Previous project | `⌘⌥↑` |
+| Next project | `⌘⌥↓` |
+| Previous project filter | `⌘⌥←` |
+| Next project filter | `⌘⌥→` |
+| Search sessions | `⌘F` |
+| Close tab or pane | `⌘W` |
+| Jump to session | `⌃1` … `⌃9`, `⌃0` for the tenth |
+| Focus pane | `⌘⌥1` … `⌘⌥9` |
+
+### Panels and views
+
+| Action | Default |
+|---|---|
+| Toggle sidebar | `⌘B` |
+| Toggle right panel | `⌘E` |
+| Move panel to the other side | `⌘⌥E` |
+| Toggle crew | `⌘⇧C` |
+| Previous panel tab | `⌘⌥[` |
+| Next panel tab | `⌘⌥]` |
+| Refresh panel or reload page | `⌘R` |
+| New browser tab | `⌘T` |
+| Save doc | `⌘S` |
+| Previous tab in the view or panel | `⌘⇧←` |
+| Next tab in the view or panel | `⌘⇧→` |
+| Previous tab | `⌘⇧[` |
+| Next tab | `⌘⇧]` |
+| Scroll chat to bottom | `⌘↓` |
+| Open issues | `⌘I` |
+| Search issues | `⌘⇧F` |
+| Go to tab (9 is the last) | `⌘1` … `⌘9` |
+
+### Composer
+
+| Action | Default |
+|---|---|
+| Dictate | `⌘D` |
+| Attach files | `⌘⌥O` |
+| Next model | `⇧Tab` |
+| Next effort level | `⌘⇧E` |
+| Toggle fast mode | `⌘⇧F` |
+| Next agent | `⌘⇧A` |
+| Toggle worktree | `⌘⇧T` |
+| Next project in picker | `⌘⇧P` |
+| Send queued prompts now | `⌘⏎` |
+| Save as draft | `⌘S` |
+
+### Notifications
+
+| Action | Default |
+|---|---|
+| Open the notification | `⌘G` |
+| Delete worktree from notification | `⌘⇧D` |
+
+Two pairs share a default because they never apply at the same time. `⌘⇧F` searches issues on the Issues page and toggles fast mode in the composer everywhere else. `⌘S` saves a doc in a session's docs tab and saves a draft on the new-task composer.
+
+In Dray, the app draws `⇧` as the word **Shift**, so `⌘⇧↑` appears as `⌘ Shift ↑`.
+
+## Limits
+
+- A shortcut works only where its action applies. `⌘G` does nothing with no card on screen, and Send queued prompts now only on an fx session with prompts waiting.
+- `⌘W` closes a tab or pane, never the window.
+- While the built-in browser has focus, only some keys reach Dray, so a shortcut you moved onto an unusual key may not work there.

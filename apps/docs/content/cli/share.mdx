@@ -1,0 +1,59 @@
+---
+title: Share
+description: Publish a session's dev server as a public link with dray share, list live links, and take them down.
+sidebar:
+  order: 7
+---
+
+`dray share` gives one of a session's dev servers a public `https://` address, so you can open it on your phone or send it to someone. The link is made on the machine the dev server runs on, so a link from a server keeps working while your Mac sleeps.
+
+Anyone with the link can open it.
+
+## Share a dev server
+
+```bash
+dray share start 5173
+```
+
+Prints the public link, like `https://….opentunnel.xyz`. Sharing the same port from the same session again gives the same link.
+
+Only the session's own dev servers can be shared: the ones its Browser tab lists, which are servers its agent started or that run in its checkout. A database, or another project's server, cannot be.
+
+The link also shows on that server's row in the session's Browser tab, where you can stop it.
+
+Run from inside a session, it shares that session's server. From your own terminal, add `--session <id>`.
+
+## Stop a link
+
+```bash
+dray share stop 5173
+```
+
+Takes the link down. Stopping a link that is not up is not an error.
+
+## List links
+
+```bash
+dray share ls
+dray share ls --all --json
+```
+
+One line per live link: the session it belongs to, the port and the address.
+
+| Flag | What it does |
+|---|---|
+| `--all` | Every project, not just this one. |
+| `--project <path>` | List this repo instead. |
+| `--json` | One JSON array, for scripts. |
+
+`dray share <port>` is the older spelling of `dray share start <port>` and still works.
+
+## How long a link lasts
+
+Until you stop it, or the session is settled or deleted. Restarting the Dray server takes every link down.
+
+## Limits
+
+- Anyone with the link can reach the dev server. There is no password.
+- Only ports in the session's Browser tab can be shared.
+- To check your own work, use [`dray browser`](/cli/browser), which publishes nothing.
