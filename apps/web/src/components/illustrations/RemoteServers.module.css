@@ -1,0 +1,56 @@
+/* One 12s clock, Orchestration's bargain: explicit percentages per element,
+   base styles are the end state, reduced motion shows the finished picture.
+
+   Script:
+     0   the laptop is awake, the wires flow, every server is working
+     35  the laptop sleeps: it dims, the dot goes out, the wires go quiet
+     50  the load test on the Linux box finishes
+     62  the release build on the Mac mini finishes
+     78  the laptop wakes: the wires flow again and both finished sessions
+         are waiting for it, marked unread
+     94  the loop resets */
+
+.laptop { animation: laptop 12s ease-in-out infinite; }
+.awake { animation: awake 12s steps(1) infinite; }
+.asleep { opacity: 0; animation: asleep 12s steps(1) infinite; }
+.dot { animation: dot 12s steps(1) infinite; }
+.flow { animation: flow 1.2s linear infinite, wire 12s ease-in-out infinite; }
+
+.spin { opacity: 0; }
+.spin1 { animation: spin50 12s steps(1) infinite; }
+.done1 { animation: done50 12s steps(1) infinite; }
+.spin2 { animation: spin62 12s steps(1) infinite; }
+.done2 { animation: done62 12s steps(1) infinite; }
+.mark { animation: mark 12s steps(1) infinite; }
+
+@keyframes laptop {
+  0%, 35% { opacity: 1; }
+  39%, 76% { opacity: 0.45; }
+  80%, 100% { opacity: 1; }
+}
+@keyframes awake { 0%, 37% { opacity: 1; } 37.01%, 78% { opacity: 0; } 78.01%, 100% { opacity: 1; } }
+@keyframes asleep { 0%, 37% { opacity: 0; } 37.01%, 78% { opacity: 1; } 78.01%, 100% { opacity: 0; } }
+@keyframes dot {
+  0%, 37% { background-color: var(--color-accent-add); }
+  37.01%, 78% { background-color: var(--color-muted); }
+  78.01%, 100% { background-color: var(--color-accent-add); }
+}
+
+/* The dash travels down the wire, laptop to server, a full pattern a loop. */
+@keyframes flow { to { stroke-dashoffset: -12; } }
+@keyframes wire {
+  0%, 35% { opacity: 1; }
+  39%, 76% { opacity: 0; }
+  80%, 100% { opacity: 1; }
+}
+
+@keyframes spin50 { 0%, 50% { opacity: 1; } 50.01%, 94% { opacity: 0; } 94.01%, 100% { opacity: 1; } }
+@keyframes done50 { 0%, 50% { opacity: 0; } 50.01%, 94% { opacity: 1; } 94.01%, 100% { opacity: 0; } }
+@keyframes spin62 { 0%, 62% { opacity: 1; } 62.01%, 94% { opacity: 0; } 94.01%, 100% { opacity: 1; } }
+@keyframes done62 { 0%, 62% { opacity: 0; } 62.01%, 94% { opacity: 1; } 94.01%, 100% { opacity: 0; } }
+/* Unread is the app's word, so the marks light when the laptop wakes. */
+@keyframes mark { 0%, 78% { opacity: 0; } 78.01%, 94% { opacity: 1; } 94.01%, 100% { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .scene * { animation: none; }
+}

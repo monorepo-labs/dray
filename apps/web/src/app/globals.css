@@ -56,6 +56,13 @@
   --color-accent: oklch(0.269 0 0);
   --color-accent-issue: oklch(0.82 0.13 310);
   --color-surface-raised: oklch(0.19 0 0);
+  /* The window's frame and the raised sheets on it, the ramp's values: what
+     a palette with no block of its own falls through to. The default palette
+     names its own under `[data-app-window]` below. */
+  --color-surface-frame: oklch(0 0 0 / 22%);
+  --color-surface-sheet: transparent;
+  /* The active tab in the titlebar strip: the segmented control's thumb. */
+  --color-surface-thumb: color-mix(in oklab, oklch(1 0 0) 16%, var(--color-card));
   /* The picker's arrow-key highlight, a white veil rather than a fill. */
   --color-veil-strong: oklch(1 0 0 / 11.5%);
 
@@ -125,7 +132,10 @@ body {
    change of its own. Scoped to the wrapper the picker sets, so the page
    around the window stays the page. Default is the `@theme` set above and
    needs no block. */
-[data-proto-theme="catppuccin"] {
+[data-proto-theme="catppuccin"],
+[data-proto-theme="catppuccin"] [data-app-window] {
+  --color-surface-frame: oklch(0 0 0 / 22%);
+  --color-surface-sheet: transparent;
   --color-background: #181825;
   --color-surface-raised: #1e1e2e;
   --color-card: #313244;
@@ -147,7 +157,10 @@ body {
   --color-accent-command: #f9e2af;
   --color-accent-mention: #89b4fa;
 }
-[data-proto-theme="gruvbox"] {
+[data-proto-theme="gruvbox"],
+[data-proto-theme="gruvbox"] [data-app-window] {
+  --color-surface-frame: oklch(0 0 0 / 22%);
+  --color-surface-sheet: transparent;
   --color-background: #1d2021;
   --color-surface-raised: #282828;
   --color-card: #32302f;
@@ -169,7 +182,10 @@ body {
   --color-accent-command: #fabd2f;
   --color-accent-mention: #83a598;
 }
-[data-proto-theme="one-dark-pro"] {
+[data-proto-theme="one-dark-pro"],
+[data-proto-theme="one-dark-pro"] [data-app-window] {
+  --color-surface-frame: oklch(0 0 0 / 22%);
+  --color-surface-sheet: transparent;
   --color-background: #1e2227;
   --color-surface-raised: #23272e;
   --color-card: #323842;
@@ -191,7 +207,10 @@ body {
   --color-accent-command: #e5c07b;
   --color-accent-mention: #61afef;
 }
-[data-proto-theme="cobalt2"] {
+[data-proto-theme="cobalt2"],
+[data-proto-theme="cobalt2"] [data-app-window] {
+  --color-surface-frame: oklch(0 0 0 / 22%);
+  --color-surface-sheet: transparent;
   --color-background: #193549;
   --color-surface-raised: #243e51;
   --color-card: #1f4662;
@@ -212,4 +231,37 @@ body {
   --color-destructive: #ff628c;
   --color-accent-command: #ffc600;
   --color-accent-mention: #9effff;
+}
+
+/* The default palette inside a drawn window, as the app's
+   `[data-theme="default"][data-mode="dark"]` block has it now: a near-black
+   page gives the frame's scrim nothing to darken, so the frame deepens and
+   the sheet rises, and the card ladder rises with the sheet or the bubble and
+   composer sink into it. Scoped to the window so the cards and the page
+   around it keep the site's own values; the theme blocks above name the
+   window too, so a picked palette outranks this. */
+[data-app-window] {
+  --color-surface-frame: oklch(0 0 0 / 45%);
+  --color-surface-sheet: oklch(1 0 0 / 6%);
+  --color-card: oklch(0.3 0 0);
+  --color-composer: oklch(0.3 0 0);
+  --color-popover: oklch(0.3 0 0);
+  --color-surface-raised: oklch(0.25 0 0);
+  --color-muted: oklch(0.36 0 0);
+  /* Restated here rather than read off `@theme`, which resolves it at the
+     root against the site's card: declared on the window, it mixes from
+     whichever card the window's palette names. */
+  --color-surface-thumb: color-mix(in oklab, oklch(1 0 0) 16%, var(--color-card));
+}
+
+/* Both translucent over the page, painted as one fill each so a sheet is
+   opaque over the frame it sits on: the app gets the same picture from two
+   veils over one glass, with the frame drawn round the sheet in strips. */
+.app-frame {
+  background: linear-gradient(var(--color-surface-frame), var(--color-surface-frame)),
+    var(--color-background);
+}
+.app-sheet {
+  background: linear-gradient(var(--color-surface-sheet), var(--color-surface-sheet)),
+    var(--color-background);
 }

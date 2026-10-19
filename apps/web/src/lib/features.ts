@@ -46,6 +46,12 @@ export const FEATURES: Feature[] = [
     line: "Drag a session onto the chat to split it. As many panes as you like, each streaming live.",
   },
   {
+    id: "remote-servers",
+    label: "Remote servers",
+    title: "Run your agents on a server.",
+    line: "Turn a Linux box or a spare Mac mini into a Dray server. Your sessions run there, and keep going while your laptop sleeps.",
+  },
+  {
     id: "pull-requests",
     card: true,
     label: "Pull requests",

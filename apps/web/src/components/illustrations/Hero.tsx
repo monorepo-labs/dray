@@ -11,17 +11,11 @@ import Panel, {
   Section,
   VercelMark,
 } from "@/components/app/Panel";
-import Sidebar, {
-  GroupBreak,
-  HINT_KEYS,
-  HeadingRow,
-  HintRow,
-  Keys,
-  SessionRow,
-} from "@/components/app/Sidebar";
+import Sidebar, { GroupBreak, SessionRow, TaskHint } from "@/components/app/Sidebar";
+import { AddTab, BranchButton, ChatIcon, ItemTab } from "@/components/app/Tabs";
+import { GitHubGlyph } from "@/components/GitHubGlyph";
 import {
   AssistantText,
-  ChatHeader,
   CheckpointRail,
   Composer,
   ToolGroup,
@@ -47,30 +41,52 @@ export function Hero({ className }: { className?: string }) {
       <Window
         className="h-full w-full"
         sidebar={
+          // The live list runs by stage, workspace-wide, with no headings:
+          // what wants the reader first, then what is idle, then pull
+          // requests by how far along they are.
           <Sidebar>
-            <HeadingRow label="Pinned" />
-            <SessionRow title="Linear Agent" opens trailing="19h" />
-            <SessionRow title="Settings theme picker" depth={1} guides={[false]} trailing="18h" />
-            <GroupBreak />
-            <HeadingRow label="ade" />
-            <SessionRow title="Fix PR panel comments" trailing={<Orb />} />
+            <SessionRow title="Linear agent tags issues" unread="command" trailing="2m" />
             <SessionRow title="Add app speedrun" unread="add" trailing="5m" />
-            <SessionRow title="Stop background tasks" active trailing="6m" />
             <GroupBreak />
-            <HeadingRow label="yogesh" />
+            <SessionRow title="Fix PR panel comments" trailing={<Orb />} />
             <SessionRow title="Test run and greeting" trailing="1d" />
-            <HintRow label="Switch tasks">
-              <Keys caps={["⌘", "Shift", "⇅"]} className={HINT_KEYS} />
-            </HintRow>
+            <GroupBreak />
+            <SessionRow title="Stop background tasks" active pr={<PrFace />} trailing="6m" />
+            <SessionRow title="Settings theme picker" pr={<PrOpenGlyph />} trailing="18h" />
+            <GroupBreak />
+            <SessionRow title="Draw placed tags as chips" pr={<PrMergedGlyph />} trailing="2d" />
+            <SessionRow title="Clamp long user bubbles" pr={<PrMergedGlyph />} trailing="3d" />
+            <TaskHint />
           </Sidebar>
         }
-        header={
-          <ChatHeader
-            project="ade"
-            title="Stop background tasks"
-            branch="worktree-fleet-crimson-fjord"
-            tabs={["Chat", "Changes"]}
-          />
+        tabs={
+          <>
+            <ItemTab icon={<ChatIcon />} label="ade / Stop background tasks" active />
+            {/* The browser's pages are tabs of the same row. The one the agent
+                is driving wears the orb where its favicon would be. */}
+            <ItemTab
+              icon={
+                <span className="-m-0.5 flex shrink-0">
+                  <Orb state="searching" size={18} />
+                </span>
+              }
+              label="localhost:3000"
+            />
+            <ItemTab icon={<VercelMark className="size-3.5" />} label="dray – Deployments – Vercel" />
+            <ItemTab
+              icon={<GitHubGlyph className="size-3.5 shrink-0" />}
+              label="Stop background tasks · Pull Request #44"
+            />
+            <AddTab />
+          </>
+        }
+        headerEnd={
+          <>
+            <BranchButton name="fleet-crimson-fjord" />
+            {/* The pull request stands in for the panel toggle, lit while the
+                pane is open on it. */}
+            <ItemTab icon={<PrFace />} label="#44" active fixed />
+          </>
         }
         main={
           <>
@@ -96,8 +112,10 @@ export function Hero({ className }: { className?: string }) {
               </Turn>
             </Transcript>
             <Composer
+              placeholder="Follow-up. @files. /skills. &tasks. #issues."
+              mic
               agent={<ClaudeGlyph className="size-3.5" />}
-              model="Fable 5"
+              model="Opus 5.5"
               effort="High"
               mode="Auto"
               context={0.31}
@@ -105,18 +123,13 @@ export function Hero({ className }: { className?: string }) {
           </>
         }
         panel={
-          <Panel tabs={["PR", "Changes", "Subagents"]} active="PR" counts={{ Subagents: 13 }} width={410}>
+          <Panel tabs={["PR", "Changes", "Browser", "More"]} active="PR" width={410}>
             <PrRow
               number={44}
               title="Stop background tasks holding the turn open"
               added={275}
               removed={70}
-              glyph={
-                <span className="grid size-4 shrink-0">
-                  <PrOpenGlyph className={`col-start-1 row-start-1 ${s.open}`} />
-                  <PrMergedGlyph className={`col-start-1 row-start-1 ${s.merged}`} />
-                </span>
-              }
+              glyph={<PrFace />}
             />
             <div className="flex flex-col gap-4 pb-3">
               <Readiness
@@ -194,5 +207,16 @@ export function Hero({ className }: { className?: string }) {
         }
       />
     </ScaledWindow>
+  );
+}
+
+/// PR #44's glyph wherever it is drawn — the sidebar row, the titlebar tab and
+/// the panel all turn from open to merged on the one clock.
+function PrFace() {
+  return (
+    <span className="grid size-4 shrink-0">
+      <PrOpenGlyph className={`col-start-1 row-start-1 ${s.open}`} />
+      <PrMergedGlyph className={`col-start-1 row-start-1 ${s.merged}`} />
+    </span>
   );
 }

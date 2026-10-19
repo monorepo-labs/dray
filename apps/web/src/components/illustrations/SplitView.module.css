@@ -36,14 +36,14 @@
    drop into. Positions are the pane grid's own pixels, at its real size; the
    start sits left of it, over the sidebar row the ghost was picked off. */
 @keyframes ghost1 {
-  0%, 15% { opacity: 0; transform: translate(-224px, 188px); }
-  18% { opacity: 1; transform: translate(-224px, 188px); }
+  0%, 15% { opacity: 0; transform: translate(-224px, 208px); }
+  18% { opacity: 1; transform: translate(-224px, 208px); }
   27%, 30% { opacity: 1; transform: translate(570px, 330px); }
   30.01%, 100% { opacity: 0; transform: translate(570px, 330px); }
 }
 @keyframes ghost2 {
-  0%, 45% { opacity: 0; transform: translate(-224px, 217px); }
-  48% { opacity: 1; transform: translate(-224px, 217px); }
+  0%, 45% { opacity: 0; transform: translate(-224px, 237px); }
+  48% { opacity: 1; transform: translate(-224px, 237px); }
   57%, 60% { opacity: 1; transform: translate(600px, 500px); }
   60.01%, 100% { opacity: 0; transform: translate(600px, 500px); }
 }

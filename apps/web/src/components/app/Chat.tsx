@@ -1,10 +1,7 @@
 import type { ReactNode } from "react";
-import { ArrowUp, ChevronRight, Plus } from "lucide-react";
+import { ArrowUp, ChevronRight, Mic, Plus } from "lucide-react";
 
-import { PanelLeftIcon, cx } from "./Window";
-
-/// The main column's views. Set and order in one, as the app has it.
-const VIEW_TABS = ["Chat", "Browser", "Diff", "Files"];
+import { cx } from "./Window";
 
 /// Git branch glyph, drawn to the chrome's own 1.5 stroke rather than pulled
 /// from an icon family with a heavier one.
@@ -26,75 +23,6 @@ export function GitBranchIcon({ className }: { className?: string }) {
       <path d="M6 7.25v9.5" />
       <path d="M18 9.25a6 6 0 0 1-6 6H6" />
     </svg>
-  );
-}
-
-/// The chat column's titlebar row: `project / title`, the branch, the view tabs
-/// and the panel toggle.
-///
-/// The selected tab carries no fill, unlike the panel's own tab rows — this one
-/// sits in the titlebar next to nothing, where a lozenge is the loudest shape
-/// in a strip whose whole job is to be quiet. Colour alone marks it.
-export function ChatHeader({
-  project,
-  title,
-  branch,
-  tabs = VIEW_TABS,
-  activeTab = "Chat",
-  className,
-}: {
-  project: string;
-  /// Absent on a split group's header, which names the group alone.
-  title?: string;
-  branch?: string;
-  tabs?: string[];
-  activeTab?: string;
-  className?: string;
-}) {
-  return (
-    <header
-      className={cx(
-        "flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-3",
-        className,
-      )}
-    >
-      <div className="flex min-w-0 flex-1 items-center gap-3 text-ui">
-        <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-          <span className="shrink-0 text-muted-foreground">{project}</span>
-          {title && (
-            <>
-              <span className="shrink-0 text-muted-foreground/50">/</span>
-              <span className="truncate font-medium text-foreground">{title}</span>
-            </>
-          )}
-        </span>
-
-        {branch && (
-          <span className="flex min-w-0 items-center gap-1 rounded-md text-muted-foreground">
-            <GitBranchIcon className="size-3.5 shrink-0" />
-            <span className="truncate">{branch}</span>
-          </span>
-        )}
-      </div>
-
-      <div className="flex min-w-0 items-center gap-0.5 overflow-hidden">
-        {tabs.map((tab) => (
-          <span
-            key={tab}
-            className={cx(
-              "rounded-md bg-transparent px-1.5 py-1 text-ui",
-              tab === activeTab ? "text-sidebar-accent-foreground" : "text-muted-foreground",
-            )}
-          >
-            {tab}
-          </span>
-        ))}
-      </div>
-
-      <span className="grid size-7 shrink-0 place-items-center opacity-80">
-        <PanelLeftIcon className="size-4.5" mirrored />
-      </span>
-    </header>
   );
 }
 
@@ -227,6 +155,7 @@ export function Composer({
   placeholder = "Send follow-up",
   value,
   controls,
+  mic = false,
   toolbar = true,
   agent,
   model,
@@ -243,6 +172,9 @@ export function Composer({
   value?: ReactNode;
   /// Controls drawn before the send button — the dictate control, mostly.
   controls?: ReactNode;
+  /// The resting mic, which the app draws in every composer. Off by default,
+  /// since a card about dictation passes its own control instead.
+  mic?: boolean;
   /// The model, mode and context row under the card. Off where the card
   /// alone is the subject and the row would be chrome around it.
   toolbar?: boolean;
@@ -277,6 +209,11 @@ export function Composer({
 
             <div className="flex shrink-0 items-center gap-1">
               {controls}
+              {mic && (
+                <span className="grid size-7 place-items-center text-muted-foreground">
+                  <Mic className="size-4" />
+                </span>
+              )}
               {/* The one filled button that keeps `--primary`, and the one round
                   control in a row of rounded squares. */}
               <span className="grid size-7 place-items-center rounded-full bg-primary text-primary-foreground">

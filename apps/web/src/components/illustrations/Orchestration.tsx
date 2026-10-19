@@ -1,18 +1,12 @@
 import Avatar from "@/components/app/Avatar";
-import Crew, { CrewRow } from "@/components/app/Crew";
+import Crew, { CrewHint, CrewRow } from "@/components/app/Crew";
 import Orb from "@/components/app/Orb";
 import { PermissionCard } from "@/components/app/Permission";
-import Sidebar, {
-  GroupBreak,
-  HINT_KEYS,
-  HeadingRow,
-  HintRow,
-  Keys,
-  SessionRow,
-} from "@/components/app/Sidebar";
+import Sidebar, { GroupBreak, SessionRow, TaskHint } from "@/components/app/Sidebar";
+import { PrMergedGlyph, PrOpenGlyph } from "@/components/app/Panel";
+import { AddTab, BranchButton, ChatIcon, ItemTab, PanelToggle } from "@/components/app/Tabs";
 import {
   AssistantText,
-  ChatHeader,
   Composer,
   ToolGroup,
   Transcript,
@@ -40,7 +34,6 @@ export function Orchestration({ className }: { className?: string }) {
         className="h-full w-full"
         sidebar={
           <Sidebar>
-            <HeadingRow label="ade" />
             <SessionRow
               title="Ship the onboarding flow"
               active
@@ -77,19 +70,26 @@ export function Orchestration({ className }: { className?: string }) {
               trailing={<Settling spin={s.spin3} done={s.done3} />}
             />
             <GroupBreak />
-            <HeadingRow label="yogesh" />
-            <SessionRow title="Landing page illustrations" trailing="Sep 18" />
-            <HintRow label="Switch tasks">
-              <Keys caps={["⌘", "Shift", "⇅"]} className={HINT_KEYS} />
-            </HintRow>
+            <SessionRow title="Landing page illustrations" trailing="2h" />
+            <SessionRow title="Rate limit the share links" trailing="1d" />
+            <GroupBreak />
+            <SessionRow title="Draft sessions" pr={<PrOpenGlyph />} trailing="1d" />
+            <GroupBreak />
+            <SessionRow title="Spaces in the sidebar" pr={<PrMergedGlyph />} trailing="2d" />
+            <TaskHint />
           </Sidebar>
         }
-        header={
-          <ChatHeader
-            project="ade"
-            title="Ship the onboarding flow"
-            branch="worktree-calm-peach-nimbus"
-          />
+        tabs={
+          <>
+            <ItemTab icon={<ChatIcon />} label="ade / Ship the onboarding flow" plain />
+            <AddTab />
+          </>
+        }
+        headerEnd={
+          <>
+            <BranchButton name="calm-peach-nimbus" />
+            <PanelToggle />
+          </>
         }
         main={
           <>
@@ -115,8 +115,10 @@ export function Orchestration({ className }: { className?: string }) {
               </Turn>
             </Transcript>
             <Composer
+              placeholder="Follow-up. @files. /skills. &tasks. #issues."
+              mic
               agent={<ClaudeGlyph className="size-3.5" />}
-              model="Fable 5"
+              model="Opus 5.5"
               effort="High"
               mode="Auto"
               context={0.42}
@@ -184,6 +186,7 @@ export function Orchestration({ className }: { className?: string }) {
               avatar={<Avatar name="analytics-events" />}
               trailing={<Working spin={s.spin3} />}
             />
+            <CrewHint />
           </Crew>
         }
       />

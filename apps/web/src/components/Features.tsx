@@ -1,6 +1,7 @@
 import { FeatureCards } from "@/components/FeatureCards";
 import { LazyVideo } from "@/components/LazyVideo";
 import { Orchestration } from "@/components/illustrations/Orchestration";
+import { RemoteServers } from "@/components/illustrations/RemoteServers";
 import { SplitView } from "@/components/illustrations/SplitView";
 import { FEATURES } from "@/lib/features";
 
@@ -10,6 +11,7 @@ import { FEATURES } from "@/lib/features";
 const ILLUSTRATIONS: Record<string, React.ComponentType<{ className?: string }>> = {
   orchestration: Orchestration,
   "split-view": SplitView,
+  "remote-servers": RemoteServers,
 };
 
 /// The text column, the page's own 3xl. The section itself runs the shell's

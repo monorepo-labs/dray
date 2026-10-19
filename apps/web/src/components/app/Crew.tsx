@@ -1,6 +1,18 @@
 import type { ReactNode } from "react";
 
+import { HINT_KEYS, Keys } from "./Sidebar";
 import { cx } from "./Window";
+
+/// The chord taught at the foot of the list — the one thing standing between a
+/// reader and a column they cannot get back, since there is no button for it.
+export function CrewHint() {
+  return (
+    <div className="mt-auto flex min-h-7 shrink-0 items-center justify-between px-3 text-ui text-muted-foreground/60">
+      Toggle crew
+      <Keys caps={["⌘", "⇧", "C"]} className={HINT_KEYS} />
+    </div>
+  );
+}
 
 /// The crew's width, fixed — not a share, and not draggable. A split pane bids
 /// for width against its neighbour because both sides are places to work; this

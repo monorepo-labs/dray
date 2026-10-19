@@ -12,7 +12,7 @@ import {
 import { HINT_KEYS, Keys } from "./Sidebar";
 import { cx } from "./Window";
 
-/// The right pane, drawn as `RightPanel` draws it: one frame with a tab row,
+/// The right pane, drawn as `RightPanel` draws it: a sheet of its own with a tab row,
 /// and the PR tab's rows under it. Static; the scene animates over it.
 export default function Panel({
   tabs,
@@ -31,10 +31,10 @@ export default function Panel({
 }) {
   return (
     <aside
-      className={cx("relative flex shrink-0 flex-col border-l border-border", className)}
+      className={cx("relative flex shrink-0 flex-col", className)}
       style={{ width }}
     >
-      <div className="flex h-(--titlebar-h) shrink-0 items-center gap-0.5 overflow-hidden border-b border-border px-2">
+      <div className="flex h-[34px] shrink-0 items-center gap-0.5 overflow-hidden px-2 pt-1.5">
         <div className="flex h-full min-w-0 items-center gap-0.5">
           {tabs.map((tab) => (
             <span
@@ -50,7 +50,7 @@ export default function Panel({
               {!!counts?.[tab] && <span className="ml-1 text-muted-foreground">{counts[tab]}</span>}
             </span>
           ))}
-          <Keys caps={["⌘", "⇧", "[ ]"]} className={cx("ml-1.5 shrink-0 opacity-50", HINT_KEYS)} />
+          <Keys caps={["⌘", "⌥", "[ ]"]} className={cx("ml-1.5 shrink-0 opacity-50", HINT_KEYS)} />
         </div>
         <div className="ml-auto flex shrink-0 items-center">
           <span className="grid size-7 place-items-center text-muted-foreground/60">
@@ -221,9 +221,9 @@ export function CheckAvatar({ children }: { children: ReactNode }) {
 }
 
 /// Vercel's triangle, at the size a check or comment avatar draws it.
-export function VercelMark() {
+export function VercelMark({ className = "size-2" }: { className?: string }) {
   return (
-    <svg viewBox="0 0 16 16" className="size-2 fill-foreground" aria-hidden>
+    <svg viewBox="0 0 16 16" className={cx("shrink-0 fill-foreground", className)} aria-hidden>
       <path d="M8 2l7 12H1z" />
     </svg>
   );

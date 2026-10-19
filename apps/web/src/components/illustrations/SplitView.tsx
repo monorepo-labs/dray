@@ -6,10 +6,12 @@ import Sidebar, {
   HintRow,
   Keys,
   SessionRow,
+  TaskHint,
 } from "@/components/app/Sidebar";
+import { PrOpenGlyph } from "@/components/app/Panel";
+import { AddTab, ChatIcon, ItemTab, PanelToggle } from "@/components/app/Tabs";
 import {
   AssistantText,
-  ChatHeader,
   Composer,
   ToolGroup,
   Transcript,
@@ -35,26 +37,33 @@ export function SplitView({ className }: { className?: string }) {
       <Window
         className="relative h-full w-full"
         sidebar={
+          // A group the reader made keeps a heading, the way Pinned does; the
+          // stage runs under it name nothing.
           <Sidebar>
             <HeadingRow label="Group 1" />
             <SessionRow title="Window transparency" active trailing="31m" />
             <SessionRow title="Split screen multi-session" trailing="45m" />
             <SessionRow title="Browser tab auto-opens" trailing={<Orb />} />
             <GroupBreak />
-            <HeadingRow label="ade" />
-            <SessionRow title="Prepare new release" trailing="27m" />
+            <SessionRow title="Prepare new release" unread="add" trailing="27m" />
+            <SessionRow title="Analyze recent Twitter" trailing="1d" />
             <GroupBreak />
-            <HeadingRow label="yogesh" />
-            <SessionRow title="Analyze recent Twitter" trailing="31 Aug" />
-            <HintRow label="Switch tasks">
-              <Keys caps={["⌘", "Shift", "⇅"]} className={HINT_KEYS} />
-            </HintRow>
+            <SessionRow title="Fork into a worktree" pr={<PrOpenGlyph />} trailing="2d" />
+            <TaskHint />
             <HintRow label="Switch groups">
-              <Keys caps={["⌘", "⌥", "⇅"]} className={HINT_KEYS} />
+              <Keys caps={["⌘", "⌥", "↑ ↓"]} className={HINT_KEYS} />
             </HintRow>
           </Sidebar>
         }
-        header={<ChatHeader project="Group 1" tabs={["Chat", "Diff", "Browser"]} />}
+        // Over a grid the chat's tab names the group: each pane already names
+        // its own session.
+        tabs={
+          <>
+            <ItemTab icon={<ChatIcon />} label="Group 1" plain />
+            <AddTab />
+          </>
+        }
+        headerEnd={<PanelToggle />}
         main={
           <div className="relative flex h-full min-h-0 border-t border-hairline">
             {/* Column A: the pane that was here first, and the focused one. */}
@@ -77,7 +86,9 @@ export function SplitView({ className }: { className?: string }) {
               </Transcript>
               <Composer
                 agent={<ClaudeGlyph className="size-3.5" />}
-                model="Opus 5"
+                placeholder="Follow-up. @files. /skills. &tasks. #issues."
+                mic
+                model="Opus 5.5"
                 effort="High"
                 mode="Auto"
                 context={0.28}

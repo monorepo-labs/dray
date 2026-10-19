@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { CheckCheck, CircleDot, Plus, Search } from "lucide-react";
+import { CheckCheck, CircleDashed, CircleDot, Plus, Search } from "lucide-react";
 
-import { TitlebarIcons, TrafficLights, cx } from "./Window";
+import { cx } from "./Window";
 
 /// The sidebar's default width, and its floor too — narrower, the rows'
 /// timestamps and marks start eating the title beside them.
@@ -42,8 +42,10 @@ const HINT_KEYS = "[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60";
 const STRIP_BUTTON =
   "flex h-7 w-full shrink-0 cursor-default items-center justify-start gap-1 rounded-[min(var(--radius-md),12px)] border border-transparent px-1.5 text-ui font-medium whitespace-nowrap text-sidebar-foreground/80 [&_svg]:size-3.5 [&_svg]:shrink-0";
 
-/// The sidebar column: titlebar strip, the three ways a task starts, the
-/// project filter, then the list.
+/// The sidebar column: the three ways a task starts, the project filter, then
+/// the list. It sits on the frame's own fill under the titlebar, which spans
+/// the window now, so it has no strip of its own and no edge — the sheet
+/// beside it is the only thing raised.
 export default function Sidebar({
   children,
   className,
@@ -52,18 +54,8 @@ export default function Sidebar({
   className?: string;
 }) {
   return (
-    <aside
-      className={cx("relative flex shrink-0 flex-col border-r border-sidebar-border", className)}
-      style={{ width: SIDEBAR_WIDTH }}
-    >
-      {/* The toggle shares this strip with the traffic lights, so it sits at
-          the right to clear them. */}
-      <div className="flex h-(--titlebar-h) shrink-0 items-center justify-between px-2">
-        <TrafficLights className="pl-1" />
-        <TitlebarIcons />
-      </div>
-
-      <div className="flex flex-col gap-px px-2">
+    <aside className={cx("relative flex shrink-0 flex-col", className)} style={{ width: SIDEBAR_WIDTH }}>
+      <div className="flex flex-col gap-px px-2 pt-3">
         <div className={STRIP_BUTTON}>
           <Plus />
           New Task
@@ -72,6 +64,7 @@ export default function Sidebar({
         <div className={STRIP_BUTTON}>
           <CircleDot />
           Issues
+          <Keys caps={["⌘", "I"]} className="ml-auto" />
         </div>
         <div className={STRIP_BUTTON}>
           <Search />
@@ -80,29 +73,31 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* The filter is where project grouping went. The dot track under the
-          label is drawn at zero opacity at rest, so it is nothing to copy. */}
+      {/* The filter is where project grouping went; drafts and the settled
+          list are the two glyphs beside it. */}
       <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
-        <span className="flex items-center gap-1 pl-1 text-ui text-muted-foreground">
-          All Projects
-        </span>
-        <span className="grid size-6 place-items-center text-muted-foreground">
-          <CheckCheck className="size-3" />
+        <span className="flex items-center gap-1 pl-1 text-ui text-muted-foreground">All Projects</span>
+        <span className="flex items-center gap-0.5 text-muted-foreground">
+          <span className="grid size-6 place-items-center">
+            <CircleDashed className="size-3" />
+          </span>
+          <span className="grid size-6 place-items-center">
+            <CheckCheck className="size-3" />
+          </span>
         </span>
       </div>
 
-      {/* No right padding: the scrollbar gutter is the right-hand spacing, and
-          the rows balance it themselves with `pr-0.5`. */}
       {/* `pr-2` where the app has `pr-0`: there the scrollbar gutter is the
           right-hand spacing, and a drawing has no scrollbar. */}
-      <div className="flex min-h-0 flex-1 flex-col gap-px overflow-hidden pb-3 pl-2 pr-2">
+      <div className="flex min-h-0 flex-1 flex-col gap-px overflow-hidden pt-2 pb-3 pl-2 pr-2">
         {children}
       </div>
     </aside>
   );
 }
 
-/// A group heading — a project, or one of the runs the list splits into.
+/// A heading. The live list draws none — its runs are stages, and the break
+/// between them is the whole signal — so this is the settled list's project.
 export function HeadingRow({ label, className }: { label: string; className?: string }) {
   return (
     <div
@@ -140,6 +135,7 @@ export function SessionRow({
   opens = false,
   active = false,
   unread,
+  pr,
   unreadClassName,
   trailing,
   className,
@@ -152,6 +148,9 @@ export function SessionRow({
   /// `add` is the green "finished and unread" mark, `command` the yellow
   /// "waiting on you" one. Yellow wins where both apply.
   unread?: "add" | "command";
+  /// The branch's pull request, drawn ahead of the title. It takes no room
+  /// when there is none, unlike the rail, which holds its slot.
+  pr?: ReactNode;
   /// On the mark alone, so an animation can light it apart from the row.
   unreadClassName?: string;
   trailing?: ReactNode;
@@ -232,6 +231,8 @@ export function SessionRow({
           title on the same column whatever else the row is carrying. */}
       {depth > 0 && <span className="shrink-0" style={{ width: ownRail + ELBOW - 8 }} />}
 
+      {pr && <span className="mr-1 flex shrink-0 items-center">{pr}</span>}
+
       <span className="min-w-0 flex-1 truncate text-ui">{title}</span>
 
       {/* The min-width is what the *date* needs: wide enough for a month and a
@@ -251,7 +252,7 @@ export function HintRow({
   children,
   className,
 }: {
-  label: string;
+  label?: string;
   children?: ReactNode;
   className?: string;
 }) {
@@ -269,3 +270,15 @@ export function HintRow({
 }
 
 export { HINT_KEYS };
+
+/// The foot of the list: both ways to move between tasks on one row, at its
+/// two ends. No label — beside both sets of keys there is room for one word,
+/// and the keys say it.
+export function TaskHint() {
+  return (
+    <HintRow>
+      <Keys caps={["⌘", "Shift", "↑ ↓"]} className={HINT_KEYS} />
+      <Keys caps={["⌃", "1–0"]} className={HINT_KEYS} />
+    </HintRow>
+  );
+}

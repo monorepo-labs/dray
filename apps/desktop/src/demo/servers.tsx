@@ -177,6 +177,7 @@ mockIPC(
       case "servers_behind":
         return remotes.filter((r) => r.info.latest && (r.info.beta || !a.beta)).map((r) => r.info.id);
       case "server_invoke": {
+        if (a.server === "local") return local.call(String(a.cmd), a.args);
         const remote = remotes.find((r) => r.info.id === a.server);
         if (!remote) throw `no server named ${a.server}`;
         return remote.conn.call(String(a.cmd), a.args);
