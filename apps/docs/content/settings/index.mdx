@@ -1,0 +1,78 @@
+---
+title: Settings
+description: Open Settings with the gear or ⌘, and find what each tab holds — appearance, spaces, servers, accounts, transcription, integrations, shortcuts, the changelog and About.
+sidebar:
+  order: 0
+---
+
+Settings is a page that takes over the whole window. Your sessions keep running behind it, and every transcript is where you left it when you come back.
+
+## Open Settings
+
+- Click the gear in the sidebar's top strip, or
+- press `⌘,` from anywhere, even with the sidebar collapsed.
+
+The tabs run down the left where the sidebar usually is. Click one, or use the arrow keys to move between them.
+
+To leave, press `Escape` or click the back arrow in the top left, where the gear was. If a menu or a shortcut recorder is open, the first `Escape` closes that, and the next one leaves.
+
+{/* screenshot: the Settings page with the tab list on the left and Appearance open */}
+
+## The tabs
+
+| Tab | What it holds |
+|---|---|
+| Appearance | Theme, light or dark, zoom, and where the side panel sits. See [Appearance](/settings/appearance). |
+| Spaces | Make, rename and remove spaces, and file projects into them. See [Spaces](/using-dray/spaces). |
+| Servers | This Mac's background server, remote access, and the other machines you run sessions on. |
+| Accounts | Which account each agent and `gh` is signed in as, and how to sign in or out. See [Accounts](/settings/accounts). |
+| Transcription | Dictation models and your microphone. See [Dictation](/settings/dictation). |
+| Integrations | Which app opens files, the in-app browser's Chromium, and a connected issue tracker. |
+| Shortcuts | Every keyboard shortcut, each one changeable. See [Shortcuts](/settings/shortcuts). |
+| Changelog | Every release and what changed in it. |
+| About | Updates, the beta channel, analytics, and how to support or reach the author. |
+
+## Spaces
+
+Spaces has two lists. **Spaces** is where you make, rename and remove a space. **Projects** lists every attached project, whatever space is showing, so you can file each one into a space. How spaces work is on [Spaces](/using-dray/spaces).
+
+## Servers
+
+The **This Mac** row is the background server that runs your sessions on this Mac, with Dray open or closed. Its **Turn on remote access** button gives it a public address that another Mac can connect to; **Stop remote access** turns that off. While it is on, the row shows the address with **Copy address** and **Copy token** buttons. See [Remote access](/reference/remote-access).
+
+**Add server** connects a Linux machine you can SSH into, or any running `dray serve` by its address and token. Each server row has **Rename**, **Check for updates**, **Join beta** or **Leave beta**, and **Remove**. The full walk-through is on [Connect a server](/server).
+
+## Accounts
+
+One block per agent, plus GitHub. Each shows who is signed in and offers Sign in, Reauthorize or Sign out. The switch beside each agent's name hides it from the agent picker in the composer. See [Accounts](/settings/accounts).
+
+## Transcription
+
+Download a model for dictation, pick your microphone, and choose whether other audio is muted while you talk. See [Dictation](/settings/dictation).
+
+## Integrations
+
+- **Open files with** — the app a filename from the chat opens in when you ⌘-click it. Lists the editors Dray finds installed, plus Finder. Finder selects the file rather than opening it, and is used whenever no editor is picked or the pick fails. Markdown files open in Dray's own panel instead.
+- **Browser** — the Chromium that Dray's built-in browser runs on. It is not shipped with the app; Dray downloads it after install. The row shows its progress, offers **Retry** if the download failed, and **Remove** to take the space back. A removed copy downloads again the next time Dray starts.
+- **Issue tracker** — shown only when Linear is connected. It names the workspace and your user, and **Disconnect** makes Dray forget the key. Sessions keep the issues they are tagged with. Connecting happens on the Issues page; see [Issues](/settings/issues).
+
+## Shortcuts
+
+Search, rebind, unbind or reset any shortcut. See [Shortcuts](/settings/shortcuts).
+
+## Changelog
+
+The release notes for every version, newest first. **View changelog** in About opens the same list.
+
+## About
+
+- **Updates** — **Check for updates**, then **Restart to update** once a new version has downloaded. While any session is mid-turn, the restart button is held until the turn finishes.
+- **Beta updates** — **Turn on** to get new versions early, before they are fully tested. **Turn off** goes back to stable. Both ask you to confirm.
+- **What's new** — **View changelog** opens the Changelog tab.
+- **Share basic analytics** — counts launches, which features get used, and where errors happen, under a random id. Your prompts, code and conversations are never collected. See [Privacy](/reference/privacy).
+- **Support** — **Sponsor** and **Star on GitHub**, with the people who already sponsor Dray.
+- **Feedback** — **Open an issue** on GitHub, or **Message me**.
+
+## Limits
+
+- Settings opens on Appearance each time, except when Dray sends you to a tab, such as Transcription when you press the mic with no model downloaded.

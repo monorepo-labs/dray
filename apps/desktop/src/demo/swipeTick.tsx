@@ -4,7 +4,7 @@ import ReactDOM from "react-dom/client";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
-import { burst, clickWheel, ping, playVoice, type Voice } from "@/lib/tick";
+import { burst, clickWheel, easedWheel, ping, playVoice, type Voice } from "@/lib/tick";
 import "../App.css";
 
 /// Which click the sidebar swipe makes as it steps past each project.
@@ -19,8 +19,12 @@ import "../App.css";
 const ring = (c: BaseAudioContext, out: AudioNode, at: number, base: number, ratios: number[], gain: number, decay: number) =>
   ratios.forEach((r, i) => ping(c, out, at, "sine", base * r, base * r * 0.995, gain / (i + 1), decay / (1 + i * 0.4)));
 
+/// Judge these in Safari, not Dray's browser: the app is WebKit, which plays
+/// the bare wheel much sharper than Chromium does. A 2ms onset, a 9kHz lowpass
+/// and a lower wheel lost to the 1ms eased one there.
 const TICKS: { id: string; name: string; like: string; voice: Voice }[] = [
-  { id: "wheel", name: "Click wheel", like: "the iPod's scroll wheel — the one the app plays", voice: clickWheel },
+  { id: "wheel", name: "Click wheel", like: "the iPod's scroll wheel", voice: clickWheel },
+  { id: "ease1", name: "Eased wheel", like: "the click wheel, its edge softened — the one the app plays", voice: easedWheel },
   {
     id: "steel",
     name: "Steel wheel",
@@ -72,7 +76,7 @@ function run(tick: Tick, count: number, gap: number, volume: number) {
 }
 
 function Demo() {
-  const [volume, setVolume] = useState(0.5);
+  const [volume, setVolume] = useState(0.2);
   const [last, setLast] = useState<string | null>(null);
 
   React.useEffect(() => {

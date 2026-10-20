@@ -98,6 +98,8 @@ form_urlencoded = { version = "1", optional = true }
 # updater's zip, `png`'s flate2). See headless/download.rs.
 zip = { version = "4.6", optional = true, default-features = false, features = ["deflate-flate2"] }
 flate2 = { version = "1", optional = true }
+# The This Mac row's pairing QR for the phone. SVG alone: no `image` tree.
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 
 # Metal on macOS, CPU everywhere else — the backend is chosen at *build* time,
 # so it cannot be switched per model or per machine. Split across two tables

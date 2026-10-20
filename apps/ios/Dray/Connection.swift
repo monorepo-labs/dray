@@ -127,7 +127,8 @@ final class Connection {
     }
 
     /// Calls a server command, with arguments named as the desktop's `invoke` names them.
-    func call<T: Decodable>(_ cmd: String, _ args: [String: JSON] = [:], as: T.Type = T.self) async throws -> T {
+    /// `timeout` is how long a silent socket may hold the call.
+    func call<T: Decodable>(_ cmd: String, _ args: [String: JSON] = [:], as: T.Type = T.self, timeout: Duration = .seconds(60)) async throws -> T {
         guard connected, let t = task else { throw DrayError("Not connected") }
         let id = nextId
         nextId += 1
@@ -140,7 +141,7 @@ final class Connection {
             }
             // A socket that stops answering without closing would otherwise hold the call forever.
             Task { @MainActor in
-                try? await Task.sleep(for: .seconds(60))
+                try? await Task.sleep(for: timeout)
                 self.waiting.removeValue(forKey: id)?.resume(throwing: DrayError("The server took too long to answer \(cmd)"))
             }
         }

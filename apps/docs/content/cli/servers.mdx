@@ -1,0 +1,132 @@
+---
+title: Servers
+description: Make a machine a Dray server with dray server, give it a public address, and manage the app's list of servers with dray machine.
+sidebar:
+  order: 8
+---
+
+Two command groups, for two sides of the same setup:
+
+- `dray server` runs on the machine that will **be** a server: a Linux box, or a Mac with no Dray app. It installs what is missing and keeps the server running.
+- `dray machine` runs on your Mac and edits the **app's list** of servers, the same list as Settings → Servers.
+
+For the full walkthrough of putting Dray on a Linux server, see [Connect a server](/server).
+
+## dray server
+
+```bash
+dray server install
+dray server status
+```
+
+| Command | What it does |
+|---|---|
+| `install` | Installs what this machine is missing, then starts the server in the background. |
+| `start` | Runs the server in the background, surviving logout and reboot. |
+| `run [args]` | Runs the server in this terminal instead. |
+| `stop` | Stops the server and removes it from the background. |
+| `status` | Says whether the server is running, and its public address if it has one. |
+| `tunnel on` / `tunnel off` | Puts a public address in front of the server, or takes it down. |
+
+### Install
+
+```bash
+dray server install
+dray server install --tools git,gh,claude_code
+```
+
+Lists what is already here, asks what to install from what is missing, then starts the server. The choices are git, the GitHub CLI and the five agents (`claude_code`, `codex`, `pi`, `fx`, `grok`). On Linux it also offers **Browser for agents**, the system libraries `dray browser` needs, and **ffmpeg**, which `dray browser record` needs. Those two install with apt only.
+
+`--tools` installs the ones you name without asking. With no terminal to ask in and no `--tools`, it installs nothing and says what is missing. Anything that needs admin rights it cannot get is printed for you to run yourself.
+
+It then lists the agent logins still to do, and ends by printing the SSH line to paste into the app's **Add server**.
+
+A first install from `install.sh` runs this for you on any machine without the Dray app.
+
+### Start, run, stop
+
+```bash
+dray server start
+dray server run --port 7317
+dray server stop
+```
+
+On Linux, `start` installs a systemd user service, `dray.service`. If your user has no linger, the server stops when you log out, and `start` prints `sudo loginctl enable-linger <user>` to fix that. Read its log with `journalctl --user -u dray`. With no systemd user session at all, `start` refuses; run `dray server run` under tmux or nohup instead.
+
+On a Mac with no Dray app, `start` installs a login agent. Its log is `~/.dray/server.log`. It runs only while your user is logged in, so a headless Mac wants automatic login. For the app on another Mac to reach it, turn on Remote Login in System Settings → General → Sharing.
+
+`run` passes what follows to the server. Its one option is `--port`: the port it listens on, 7317 by default, or `0` to pick a free one.
+
+`start` never restarts a server that is already running, since that stops its agents. After `dray update`, it prints the command that restarts it onto the new version.
+
+`stop` stops the background server and removes the service. It removes only the server `dray server start` installed.
+
+### Public address
+
+```bash
+dray server tunnel on
+```
+
+Gives the server a public address that stays the same across restarts, and waits for it, up to two minutes. In a terminal it prints the address and a line to paste into the app: Settings → Servers → Add server → Use an address and token. Anyone holding that line can use the server.
+
+`dray server tunnel off` takes the address down. The server is then reachable over SSH alone. The address is off until you turn it on.
+
+### On a Mac with the Dray app
+
+The app runs this Mac's server, so `start`, `run` and `status` are refused with `the Dray app runs this Mac's server`. `install` still installs tools and then stops. `tunnel on` and `tunnel off` work, and do the same as the Remote access switch in Settings → Servers.
+
+To run a second server beside the app anyway, give it its own data directory with `DRAY_HOME`.
+
+### Older spellings
+
+These still work, because the app runs them on servers with older CLIs:
+
+| Older | Now |
+|---|---|
+| `dray setup` (`--install <tools>`) | `dray server install` (`--tools`) |
+| `dray serve` | `dray server run` |
+| `dray service start` / `status` / `uninstall` / `tunnel on\|off` | `dray server start` / `status` / `stop` / `tunnel on\|off` |
+
+## dray machine
+
+```bash
+dray machine add vps root@203.0.113.7
+dray machine ls
+```
+
+Edits the app's list of servers. Changes show in Settings → Servers as you run them. These run on a Mac with the app; on a server with no app they are refused, since the list lives in the Mac app.
+
+| Command | What it does |
+|---|---|
+| `add <name> <address>` | Adds a server. It connects first, and is saved only if that works. |
+| `ls` | Lists the servers: name, address, and `connected`, `connecting`, `disconnected` or `off`, with the last error if it failed. `--json` for scripts. |
+| `rename <name> <new-name>` | Renames a server. An empty name, `""`, puts back its host. |
+| `connect <name>` | Connects now, or tries again on one that failed. Waits and says how it went. |
+| `disconnect <name>` | Stops connecting. It stays on the list with its token, and its agents keep running. |
+| `rm <name>` | Takes a server off the list, with its token. Its agents keep running there. |
+
+Each name belongs to one server; `add` and `rename` refuse a name another server has.
+
+### Add a server
+
+The address is the line you log in with, or a `ws://` address:
+
+```bash
+dray machine add vps root@203.0.113.7
+dray machine add vps ssh -p 2222 root@203.0.113.7
+dray machine add vps my-ssh-alias
+cat serve-token | dray machine add vps ws://127.0.0.1:7317
+dray machine add --token-file serve-token vps ws://127.0.0.1:7317
+```
+
+For SSH, everything after the name is the login, so it needs no quotes. The app logs in with your Mac's own `ssh` and reads the server's token over that login. A login can take most of a minute.
+
+A `ws://` address needs the server's token, from `~/.dray/serve-token` on the server. Pass it with `--token-file`, which must come before the name, or on standard input. There is no flag that takes the token itself, so it never lands in your shell history.
+
+If the connection fails, `add` saves nothing and says why: an unknown host key, a login that wants a password, no Dray on the server.
+
+## Limits
+
+- `dray server` installs browser libraries and ffmpeg with apt alone.
+- On a Mac, the background server runs only while you are logged in.
+- `dray machine` works only where the Dray app runs.

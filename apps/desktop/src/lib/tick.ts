@@ -61,6 +61,17 @@ export function ping(c: BaseAudioContext, out: AudioNode, at: number, type: Osci
 /// picker tick, a ratchet, wood, and steel-ringing variants of itself.
 export const clickWheel: Voice = (c, out, at) => burst(c, out, at, "highpass", 5000, 0.8, 0.8, 0.005);
 
+/// The click wheel with its first millisecond faded in — the one the app plays.
+/// WebKit plays the bare wheel much sharper than Chromium, where it was picked,
+/// and the eased onset is what takes that edge off in Safari.
+export const easedWheel: Voice = (c, out, at) => {
+  const onset = c.createGain();
+  onset.gain.setValueAtTime(0, at);
+  onset.gain.linearRampToValueAtTime(1, at + 0.001);
+  onset.connect(out);
+  clickWheel(c, onset, at);
+};
+
 /// 16-bit mono PCM, the one format every `<audio>` takes.
 function wav(samples: Float32Array, rate: number) {
   const view = new DataView(new ArrayBuffer(44 + samples.length * 2));
@@ -124,7 +135,7 @@ export function playVoice(voice: Voice, volume = 0.5) {
     .catch(() => {});
 }
 
-export const playSwipeTick = () => playVoice(clickWheel);
+export const playSwipeTick = () => playVoice(easedWheel, 0.2);
 
 // Rendered at load, so the first swipe's first tick is not a render behind.
-if (typeof OfflineAudioContext !== "undefined") void pool(clickWheel).catch(() => {});
+if (typeof OfflineAudioContext !== "undefined") void pool(easedWheel).catch(() => {});

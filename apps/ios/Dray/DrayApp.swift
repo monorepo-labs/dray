@@ -22,6 +22,8 @@ struct RootView: View {
     @State private var showServers = false
     @State private var adding = false
     @Environment(\.scenePhase) private var phase
+    @State private var pairing: PairLink?
+    @State private var opening: Task<Void, Never>?
 
     var body: some View {
         NavigationSplitView {
@@ -52,6 +54,22 @@ struct RootView: View {
         }
         .sheet(isPresented: $showServers) { ServersView() }
         .sheet(isPresented: $adding) { AddServerView() }
+        // Filled in, not added: a link from anywhere should not add a server unasked.
+        .sheet(item: $pairing) { AddServerView(link: $0) }
+        .onOpenURL { url in
+            guard let link = PairLink(url.absoluteString) else { return }
+            let covered = showServers || adding || pairing != nil
+            showServers = false
+            adding = false
+            pairing = nil
+            // A sheet asked for while another is still leaving is dropped. A newer
+            // link cancels this one's wait, so the older can't land on top.
+            opening?.cancel()
+            opening = Task {
+                if covered { try? await Task.sleep(for: .milliseconds(600)) }
+                if !Task.isCancelled { pairing = link }
+            }
+        }
         .alert("Something went wrong", isPresented: Binding(
             get: { store.lastError != nil },
             set: { if !$0 { store.lastError = nil } }
@@ -184,7 +202,7 @@ struct SessionRow: View {
         if pr?.state == "OPEN" && pr?.checksState == "RUNNING" {
             ChecksSpinner()
         } else if item.busy {
-            Orb(label: "Working")
+            Orb()
         } else if let date = parseDate(item.modified) {
             Text(date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
                 .font(.caption)
@@ -243,13 +261,18 @@ struct ServersView: View {
 struct AddServerView: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
+    var link: PairLink?
     @State private var address = ""
     @State private var token = ""
     @State private var name = ""
+    @State private var scanning = false
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Button("Scan QR code", systemImage: "qrcode.viewfinder") { scanning = true }
+                }
                 Section {
                     Group {
                         TextField("Address", text: $address, prompt: Text("wss://…"))
@@ -268,7 +291,7 @@ struct AddServerView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 } footer: {
-                    Text("On a Mac, turn on Remote access in Dray's Settings, Servers, This Mac, and copy the address and token. On a server, `dray server tunnel on` prints both on one line.")
+                    Text("On a Mac, turn on Remote access in Dray's Settings, Servers, This Mac, then scan its QR code or copy the address and token. On a server, `dray server pair` shows the code.")
                 }
                 Section {
                     TextField("Name", text: $name, prompt: Text(host ?? "Name"))
@@ -289,7 +312,17 @@ struct AddServerView: View {
                     .disabled(parsed == nil)
                 }
             }
+            .sheet(isPresented: $scanning) {
+                PairScanner { fill($0); scanning = false }
+            }
+            .onAppear { link.map(fill) }
         }
+    }
+
+    private func fill(_ link: PairLink) {
+        address = link.url
+        token = link.token
+        name = link.name ?? ""
     }
 
     private var parsed: (url: String, token: String)? {

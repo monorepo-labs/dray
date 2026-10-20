@@ -1,0 +1,156 @@
+---
+title: Remote access and sharing
+description: Keep sessions running after you quit, connect the app to other machines, reach this Mac from another one, share a dev server by public link, and update remote servers.
+sidebar:
+  order: 1
+---
+
+Your sessions do not run inside the Dray window. They run in a Dray server: one in the background on your Mac, and one on each other machine you connect. The app is a client of all of them. This page covers the server on your Mac, the server list, Remote access, public links to dev servers, and keeping remote servers up to date.
+
+To put Dray on a Linux box, see [Connect a server](/server).
+
+## Sessions keep running when you quit
+
+On your Mac, sessions live in a background server that macOS starts when you log in. It owns every agent, so closing the window or quitting Dray leaves your agents working. Open Dray again and you pick up where they are.
+
+Every quit asks first:
+
+| Button | What it does |
+|---|---|
+| **Quit** | Closes the app. Sessions keep running in the background. This is the default, so `⌘Q` then `⏎` quits. |
+| **Quit completely** | Closes the app and stops the background server, which stops every running session. |
+| **Cancel** | Keeps Dray open. |
+
+The next time you open Dray, it starts the background server again. A stopped session resumes when you send it a message.
+
+{/* screenshot: the Quit Dray? dialog with Quit completely, Cancel and Quit */}
+
+:::note
+Quitting from the Dock icon's menu skips this question.
+:::
+
+## The server list
+
+**Where:** Settings → Servers (`⌘,` opens Settings).
+
+The list shows every Dray server this app uses. **This Mac** is always first. Each row has a dot: green when connected, yellow while connecting, grey when off or unreachable.
+
+A remote server's projects and sessions join your sidebar while it is connected. When it disconnects, they stay in the sidebar, dimmed, and its agents keep running there. If the session you have open is on a server that is offline, the composer says `<name> is offline` with **Try again**, or **Turn on** if you switched the server off.
+
+### Add a server
+
+Press **Add server** at the top of the tab. There are two ways in:
+
+- **SSH.** Paste the line you log in with, like `ssh root@203.0.113.7`. `-p` and names from `~/.ssh/config` work. This is the usual way; [Connect a server](/server) walks through it, including installing Dray there.
+- **Address and token.** Press **Use an address and token instead**, then fill in **Address** and **Token**. Use this for a server reached through Remote access (below) or any running Dray server. Paste the whole line that `dray server tunnel on` prints into **Address** and the token fills in too.
+
+**Name** is optional. It is drawn after that server's project names in the sidebar.
+
+The first time the app meets a server over SSH, it asks **Is this the right server?** and shows the host key fingerprint, with the command to check it on the server. **Trust and connect** saves the key the way `ssh` would.
+
+### Use several servers at once
+
+There is nothing to switch between. Every connected server's projects sit in one sidebar together. A project belongs to one server, and a session runs on the server its project is on. To start work on a server, attach a project there and start a session in it.
+
+### Manage a server
+
+Each remote row has a switch and a `⋯` menu:
+
+- **The switch** connects or disconnects the app. Off keeps the row, shows `Off`, and leaves the server and its agents running.
+- **Rename** changes the name drawn in the sidebar. Leave it empty to go back to the address.
+- **Check for updates**, **Join beta** / **Leave beta**: see [Update remote servers](#update-remote-servers).
+- **Remove** forgets the server, after you confirm in the row. It does not stop or uninstall Dray on that machine.
+
+When a connect fails, the row shows why and offers **Try again**. Some failures come with a command to copy, such as the `ssh-copy-id` line when SSH asks for a password.
+
+You can manage the same list from a terminal with `dray machine`. See [`dray machine`](/cli/servers).
+
+## Remote access
+
+Remote access lets another Mac running Dray connect to this Mac's sessions over the internet, through a public address. The other Mac sees your projects and sessions in its sidebar and can work in them.
+
+**Where:** Settings → Servers → the **This Mac** row.
+
+<Steps>
+  <Step title="Turn it on">
+    Press **Turn on remote access**. The row says "Starting remote access. The first time takes about 30 seconds."
+  </Step>
+  <Step title="Copy the address and token">
+    Once it is up, the row shows the address (`wss://….opentunnel.xyz`) and a hidden token. Use **Copy address** and **Copy token**.
+  </Step>
+  <Step title="Add it on the other Mac">
+    On the other Mac, open Settings → Servers → **Add server** → **Use an address and token instead**, paste both, and press **Add**.
+  </Step>
+</Steps>
+
+{/* screenshot: the This Mac row with Remote access on, showing the address and the Copy address / Copy token buttons */}
+
+What to know:
+
+- **The address stays the same.** It survives restarts of the server and of your Mac, so a Mac that added it once keeps working.
+- **Dray open or closed.** The background server answers, not the app, so other Macs can reach this one while it is awake even with Dray quit. Not while it sleeps.
+- **It stays on.** Dray remembers the setting and turns Remote access back on whenever the server starts. **Stop remote access** turns it off and drops every connected Mac.
+- **The token is the key.** Anyone with the address and the token can use your sessions, run agents and read your code. Share it only with machines you own. The token is kept in `~/.dray/serve-token`. To change it, delete that file and restart the server (Quit → **Quit completely**, then open Dray). Every Mac that used the old token then needs the new one.
+- **The relay cannot read your traffic.** The address is served through OpenTunnel. The encrypted connection ends on your Mac, so the relay passes bytes it cannot read.
+
+If the connection to the relay drops, the row says it is reconnecting and the same address comes back.
+
+### Remote access on a Linux server
+
+A Linux server you added over SSH needs none of this: the app reaches it through SSH. To reach a Linux server by address instead, run this on the server:
+
+```bash
+dray server tunnel on
+```
+
+It prints the address and token as one line, ready to paste into **Add server**. `dray server tunnel off` takes it down, and `dray server status` shows the address again.
+
+## Share a dev server
+
+A public link lets anyone open one of your session's dev servers in their browser, such as a preview of the site your agent is building. The link is made on the machine the dev server runs on, so a link from a remote server keeps working with your Mac asleep.
+
+**Where:** the Browser tab's start page, the page you see with no website open. Under **Running locally** (or **Running on** a server's name) it lists the dev servers your session can reach.
+
+1. Press **Get public link** beside a server. The first link on a machine sets up its tunnel first ("Setting up tunnel…"), then "Creating link…".
+2. The link appears under that server. Click it to open it in Dray's browser, or `⌘`-click to open it in your default browser. **Copy link** copies it.
+3. **Stop sharing** takes it down.
+
+Agents can do the same from the command line: `dray share start <port>`, `dray share stop <port>` and `dray share ls`. See [dray share](/cli/share).
+
+What to know:
+
+- Anyone with the link can open it. There is no password.
+- Only the session's own dev servers can be shared: one its agent started, or one running in its checkout. Not a database, and not another project's server.
+- Sharing the same port again gives the same link.
+- A link lasts until you stop it, or until the session is settled or deleted. Restarting the server takes every link down.
+
+## Update remote servers
+
+Remote servers update from the app. Each one has its own release channel, separate from the app's.
+
+**On a server's row** in Settings → Servers:
+
+- When a newer release is out on that server's channel, the row says `Update available · v<version>`. **Update** installs it. **Ignore** hides that one release; a newer one is offered again.
+- After an update, the row says "Updated. Restarts once its agents finish." The server restarts by itself once no agent is mid-turn. **Restart now** restarts it at once, after you confirm, and stops running agents.
+- `⋯` → **Check for updates** checks now. It answers "Up to date." when there is nothing newer.
+
+**With the app.** When you press **Restart to update** for a new version of Dray, the app also checks your servers. If any are behind, it asks first:
+
+| Button | What it does |
+|---|---|
+| **Update app and servers** | Updates those servers, then restarts the app. Each server restarts once its agents finish. |
+| **App only** | Restarts the app and leaves the servers as they are. |
+
+If a server's update fails, the dialog lists why, with **Restart anyway**. On the stable app, every server behind its own channel counts. On the beta app, only beta servers count.
+
+**Channels.** `⋯` → **Join beta** puts a server on the beta channel, and its row shows `Beta`. A beta server takes beta releases and stable ones, whichever is newer. **Leave beta** moves it back to stable without downgrading: it stays on the version it has until a stable release passes it. For the app's own channel, see [Updates](/get-started/updates).
+
+A server older than this feature cannot be updated from the app. The app says so. Log in to the server, run `dray update`, and restart the server once. After that, the app can update it.
+
+## Limits
+
+- A Mac can't be reached by SSH like a Linux server. Use Remote access.
+- Remote access works only while the Mac is awake.
+- The token gives full access. There are no read-only or per-project tokens.
+- Public links have no password and no expiry of their own.
+- There is no browser version and no phone app.
