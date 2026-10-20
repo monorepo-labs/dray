@@ -73,6 +73,9 @@ reqwest = { version = "0.12", default-features = false, features = [
 # never leaves the machine. See transcription/.
 cpal = { version = "0.16", optional = true }
 rubato = { version = "0.16", optional = true }
+# Voice activity detection, pure Rust with its weights compiled in: dictation
+# cuts the pauses out before the model reads the audio.
+earshot = { version = "1.2", optional = true }
 # macOS hands a *silent* stream to a process without microphone permission
 # rather than refusing it, so nothing downstream can tell "denied" from "quiet
 # room". This is what actually raises the system prompt. See transcription/.
@@ -134,6 +137,7 @@ desktop = [
   "dep:notify-rust",
   "dep:cpal",
   "dep:rubato",
+  "dep:earshot",
   "dep:transcribe-cpp",
   # The client half of the serve wire, for remote servers (servers.rs). TLS
   # for `wss://` through a tunnel: rustls on the system's roots, both already

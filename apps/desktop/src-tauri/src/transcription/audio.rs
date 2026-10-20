@@ -368,7 +368,7 @@ fn append(
 ///
 /// Averaging rather than taking the first channel: on a stereo interface the mic
 /// is often wired to one side only, and picking the wrong one records silence.
-fn to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+pub(super) fn to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
     if channels <= 1 {
         return samples.to_vec();
     }
@@ -380,9 +380,65 @@ fn to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
         .collect()
 }
 
+/// Samples per VAD frame: earshot scores 16ms at a time.
+const VAD_FRAME: usize = 256;
+/// Voiced frames in a row before a run counts as speech (64ms), so a click or
+/// a cough on its own keeps nothing.
+const VAD_ONSET: usize = 4;
+/// Frames kept either side of speech (~460ms), so a soft onset or a trailing
+/// consonant the detector scored low still reaches the model. Onset and pad
+/// follow Handy's timings.
+const VAD_PAD: usize = 29;
+const VAD_THRESHOLD: f32 = 0.5;
+
+/// Drops the stretches where nobody is talking, so the model reads less audio.
+///
+/// Answers the input untouched where no speech is found: the detector missing
+/// quiet speech must cost the old speed, never the reader's words.
+pub(super) fn trim_silence(audio: Vec<f32>) -> Vec<f32> {
+    let mut detector = earshot::Detector::default_boxed();
+    let mut frame = [0.0f32; VAD_FRAME];
+    let voiced: Vec<bool> = audio
+        .chunks(VAD_FRAME)
+        .map(|chunk| {
+            // Zero-padded for the last partial frame, and clamped because a
+            // resampled full-scale signal rings past ±1, which earshot forbids.
+            frame.fill(0.0);
+            for (f, s) in frame.iter_mut().zip(chunk) {
+                *f = s.clamp(-1.0, 1.0);
+            }
+            detector.predict_f32(&frame) >= VAD_THRESHOLD
+        })
+        .collect();
+
+    let mut keep = vec![false; voiced.len()];
+    let mut run = 0;
+    for (i, v) in voiced.iter().enumerate() {
+        run = if *v { run + 1 } else { 0 };
+        if run >= VAD_ONSET {
+            // The run's start and its lead-in once; after that only the new
+            // frame and its tail, or long speech refills a growing slice.
+            let from = if run == VAD_ONSET { (i + 1 - run).saturating_sub(VAD_PAD) } else { i };
+            let to = (i + VAD_PAD).min(keep.len() - 1);
+            keep[from..=to].fill(true);
+        }
+    }
+
+    if !keep.contains(&true) {
+        return audio;
+    }
+
+    audio
+        .chunks(VAD_FRAME)
+        .zip(&keep)
+        .filter(|(_, k)| **k)
+        .flat_map(|(chunk, _)| chunk.iter().copied())
+        .collect()
+}
+
 /// Resamples to [`TARGET_RATE`], returning the input untouched if it is already
 /// there or too short to filter.
-fn resample(samples: Vec<f32>, from_rate: u32) -> Vec<f32> {
+pub(super) fn resample(samples: Vec<f32>, from_rate: u32) -> Vec<f32> {
     if from_rate == TARGET_RATE || samples.is_empty() {
         return samples;
     }
@@ -440,6 +496,32 @@ mod tests {
     fn an_unreadable_output_reads_as_nothing() {
         assert_eq!(parse_muted("missing value"), None);
         assert_eq!(parse_muted(""), None);
+    }
+
+    /// "Hello there", 2.5s of nothing, "Goodbye". The pause goes, minus the
+    /// pad either side, and both words stay.
+    #[test]
+    fn trim_cuts_the_pause_and_keeps_the_words() {
+        let wav = include_bytes!("fixtures/pause.wav");
+        let audio = super::super::recordings::decode(wav).unwrap();
+        let secs = |n: usize| n as f32 / TARGET_RATE as f32;
+
+        let energy = |a: &[f32]| a.iter().map(|s| s * s).sum::<f32>();
+        let trimmed = trim_silence(audio.clone());
+        let kept = secs(trimmed.len());
+
+        assert!(kept < secs(audio.len()) - 1.0, "kept {kept}s of {}s", secs(audio.len()));
+        // The pause is digital silence, so every bit of energy is speech:
+        // dropping any word drops some of it.
+        assert!(energy(&trimmed) > energy(&audio) * 0.999, "speech was cut");
+    }
+
+    /// Nothing the detector calls speech is no reason to send nothing.
+    #[test]
+    fn trim_keeps_everything_when_it_hears_no_speech() {
+        let quiet = vec![0.0f32; TARGET_RATE as usize * 2];
+
+        assert_eq!(trim_silence(quiet.clone()), quiet);
     }
 
     #[test]

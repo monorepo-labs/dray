@@ -630,3 +630,69 @@ async fn mute_other_audio() {
 async fn restore_other_audio() {
     let _ = tokio::task::spawn_blocking(audio::restore_other_audio).await;
 }
+
+#[cfg(test)]
+mod bench {
+    use std::time::Instant;
+
+    use super::*;
+
+    /// Stop-to-text by stage, on a real model and a WAV clip. Needs a model on
+    /// disk, so ignored; run with
+    /// `DICT_CLIP=/tmp/clip.wav cargo test --release stop_to_text -- --ignored --nocapture`.
+    /// The clip is 16kHz mono 16-bit; it is upsampled to 48kHz stereo with a
+    /// little noise added, so the conversion and the trim see what a mic gives.
+    #[tokio::test]
+    #[ignore]
+    async fn stop_to_text() {
+        let clip = std::env::var("DICT_CLIP").expect("DICT_CLIP names a 16kHz mono WAV");
+        let model = std::env::var("DICT_MODEL").unwrap_or_else(|_| {
+            format!("{}/.dray/models/parakeet-unified-en-0.6b.gguf", std::env::var("HOME").unwrap())
+        });
+        let clean = recordings::decode(&std::fs::read(&clip).unwrap()).unwrap();
+
+        // A fixed LCG, so every run hears the same room.
+        let mut seed = 1u32;
+        let mut noise = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32 * 0.006 - 0.003
+        };
+        let captured: Vec<f32> = clean.iter().flat_map(|s| [*s; 6]).map(|s| s + noise()).collect();
+
+        let t = Instant::now();
+        let audio = audio::resample(audio::to_mono(&captured, 2), 48_000);
+        let convert = t.elapsed();
+
+        let t = Instant::now();
+        std::fs::write(std::env::temp_dir().join("parked.wav"), recordings::encode(&audio)).unwrap();
+        let park = t.elapsed();
+
+        let engine = Engine::default();
+        let path = PathBuf::from(&model);
+        let t = Instant::now();
+        engine.warm(engine.token(), "bench".into(), path.clone()).await;
+        let load = t.elapsed();
+
+        for run in 1..=3 {
+            let t = Instant::now();
+            let text = engine.transcribe("bench", &path, audio.clone()).await.unwrap();
+            eprintln!("run {run}: {:?}  {text}", t.elapsed());
+        }
+
+        let t = Instant::now();
+        let kept = audio::trim_silence(audio.clone()).len();
+        let trim = t.elapsed();
+
+        engine.unload().await;
+        let t = Instant::now();
+        engine.warm(engine.token(), "bench".into(), path.clone()).await;
+        let reload = t.elapsed();
+
+        let secs = |n: usize| n as f32 / audio::TARGET_RATE as f32;
+        eprintln!(
+            "audio {:.1}s, {:.1}s after trim | convert {convert:?} | park {park:?} | trim {trim:?} | load {load:?} | reload {reload:?}",
+            secs(audio.len()),
+            secs(kept),
+        );
+    }
+}

@@ -53,8 +53,19 @@ v2 (#565): status, across every live session.
 - The task list carries the sidebar's marks; the title opens its session in Dray.
 - A send says Sent and closes the panel.
 
-Screenshots, pen marks and file drops shipped (#566). Later, in order: comments
-on a mark, browser element pick.
+Screenshots, pen marks and file drops shipped (#566).
+
+**Drawing on the live screen is part of dictating** (#571), with no mode of
+its own: while the microphone records, a clear overlay lets the mouse through,
+so the page still scrolls and clicks, and holding Shift draws. Strokes made close
+together are one moment: 1.5s after the pen rests, the area around them is
+captured with the ink, the ink fades, and the image takes the row held for it
+at the moment's first stroke, where the speech was cut. "Hold Shift to draw" shows
+in the recording pill until the first stroke, for a reader's first five
+dictations. Screen Recording is asked for at the first moment taken, never for
+dictating alone. It may yet replace the screenshot mode.
+
+Later, in order: comments on a mark, browser element pick.
 A Notch page in Dray's Settings, for its key, placement, layout and what it alerts on;
 the key is a row under Shortcuts until then.
 

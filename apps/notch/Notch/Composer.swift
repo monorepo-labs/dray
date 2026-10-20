@@ -45,11 +45,22 @@ final class Composer {
     var target: Target?
     var dictation = Dictation.idle {
         didSet {
-            if dictation == .starting { notice = nil }
-            if dictation != .recording { recordingSince = nil } else if oldValue != .recording { recordingSince = Date() }
+            // Decided as the pill appears, so the hint arrives with it rather than a beat later.
+            if dictation == .starting { notice = nil; drawHint = UserDefaults.standard.integer(forKey: "notch.drawHints") < Self.drawHints }
+            if !listening { drawHint = false }
+            if (dictation == .recording) != (oldValue == .recording) {
+                recordingSince = dictation == .recording ? Date() : nil
+                recordingChanged(dictation == .recording)
+                // Counted once the microphone is open, so a refused start spends nothing.
+                if dictation == .recording, drawHint {
+                    UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "notch.drawHints") + 1, forKey: "notch.drawHints")
+                }
+            }
         }
     }
     var listening: Bool { dictation == .starting || dictation == .recording }
+    /// For the drawing overlay, up for exactly as long as the microphone records.
+    @ObservationIgnored var recordingChanged: (Bool) -> Void = { _ in }
     /// When the microphone opened, for the timer; `nil` unless recording.
     var recordingSince: Date?
     var mode = InputMode(rawValue: UserDefaults.standard.string(forKey: "notch.mode") ?? "") ?? .compact {
@@ -66,6 +77,9 @@ final class Composer {
     var sending = false
     /// A screenshot is in flight; Send waits for its row.
     var capturing = false
+    /// "Hold Shift to draw", until the first stroke of a dictation, for a reader's first few dictations.
+    var drawHint = false
+    static let drawHints = 5
     /// A lost cut is being transcribed again; Send waits for its words.
     private(set) var retryingCut = false
     /// Bumped to put focus in the input: every open, and every new task.
@@ -276,7 +290,7 @@ final class Composer {
     var attachments: [String] { rows.compactMap(\.file) }
 
     /// An image alone is a message, as it is in Dray's own composer.
-    var canSend: Bool { !capturing && !retryingCut && (!prompt.isEmpty || !attachments.isEmpty) }
+    var canSend: Bool { !capturing && !retryingCut && !rows.contains(where: \.pending) && (!prompt.isEmpty || !attachments.isEmpty) }
 
     var modelId: String {
         Picks.usableModel(models[harness] ?? [], modelPicks[harness] ?? Picks.defaultModel[harness] ?? "", harness)
@@ -427,6 +441,14 @@ final class Composer {
         // The words still being spoken belong to this message, so a failed
         // transcription keeps the draft open, its notice and Retry with it.
         if dictation == .recording, !(await stopDictation()) { return false }
+        // Closing the microphone takes the drawing still on screen; its image lands a moment later.
+        // ponytail: polls for up to 30s; an awaitable per held row if this ever needs to be exact.
+        var waited = 0
+        while rows.contains(where: \.pending), waited < 300 {
+            try? await Task.sleep(for: .milliseconds(100))
+            waited += 1
+        }
+        // After the wait: a dictation started meanwhile holds words this send would leave behind.
         guard dictation == .idle else { return false }
         let text = prompt, files = attachments
         guard canSend, !sending, let target else { return false }

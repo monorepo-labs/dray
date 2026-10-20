@@ -24,26 +24,10 @@ enum Capture {
 
     /// `nil` for a cancel.
     static func run() async throws -> Shot? {
-        guard CGPreflightScreenCaptureAccess() else {
-            _ = CGRequestScreenCaptureAccess()
-            throw DrayError("Allow Dray Notch in System Settings → Privacy & Security → Screen Recording, then try again.")
-        }
-        let mouse = NSEvent.mouseLocation
-        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main
-        else { return nil }
-        let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let display = content.displays.first(where: { $0.displayID == id }) else { throw DrayError("No display to capture.") }
-        // This app's windows are left out: the overlay's dimming, and the notch kept up over it.
-        let filter = SCContentFilter(display: display, excludingApplications: content.applications.filter { $0.processID == getpid() }, exceptingWindows: [])
-        let scale = screen.backingScaleFactor
+        guard let screen = screenUnderPointer() else { throw DrayError("No display to capture.") }
+        let grab = try await reader(of: screen)
         let model = Marking(size: screen.frame.size) { rect in
-            let config = SCStreamConfiguration()
-            config.sourceRect = rect
-            config.width = Int(rect.width * scale)
-            config.height = Int(rect.height * scale)
-            config.showsCursor = false
-            let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            let image = await grab(rect)
             if image != nil {
                 shutter?.stop()
                 shutter?.play()
@@ -55,10 +39,55 @@ enum Capture {
             show(model, on: screen) { done.resume(returning: $0) }
         }
         guard let (image, region) = marked else { return nil }
-        // The region is top-down within the screen; a window frame is bottom-up across all of them.
-        let frame = NSRect(x: screen.frame.minX + region.minX, y: screen.frame.maxY - region.maxY,
-                           width: region.width, height: region.height)
-        return Shot(path: try write(image), image: image, frame: frame)
+        return Shot(path: try write(image), image: image, frame: frame(region, on: screen))
+    }
+
+    static func screenUnderPointer() -> NSScreen? {
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
+    }
+
+    /// A reader of any region of `screen` as it is right now, in its top-down
+    /// points. This app's windows are left out: an overlay's dimming, its ink,
+    /// and the notch kept up over it.
+    static func reader(of screen: NSScreen) async throws -> (CGRect) async -> CGImage? {
+        guard CGPreflightScreenCaptureAccess() else {
+            _ = CGRequestScreenCaptureAccess()
+            throw DrayError("Allow Dray Notch in System Settings → Privacy & Security → Screen Recording, then try again.")
+        }
+        let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let display = content.displays.first(where: { $0.displayID == id }) else { throw DrayError("No display to capture.") }
+        let filter = SCContentFilter(display: display, excludingApplications: content.applications.filter { $0.processID == getpid() }, exceptingWindows: [])
+        let scale = screen.backingScaleFactor
+        return { rect in
+            let config = SCStreamConfiguration()
+            config.sourceRect = rect
+            config.width = Int(rect.width * scale)
+            config.height = Int(rect.height * scale)
+            config.showsCursor = false
+            return try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        }
+    }
+
+    /// A top-down region of `screen` as a bottom-up window frame across every display.
+    static func frame(_ region: CGRect, on screen: NSScreen) -> NSRect {
+        NSRect(x: screen.frame.minX + region.minX, y: screen.frame.maxY - region.maxY,
+               width: region.width, height: region.height)
+    }
+
+    /// `still`, the screen's `region` as captured, with `marks` drawn over it at
+    /// the still's own resolution. Marks are in screen points, like the region.
+    static func inked(_ still: CGImage, _ marks: [Mark], in region: CGRect) -> CGImage? {
+        let scale = CGFloat(still.width) / region.width
+        let renderer = ImageRenderer(content: ZStack(alignment: .topLeading) {
+            Image(decorative: still, scale: scale)
+            Strokes(marks: marks).offset(x: -region.minX, y: -region.minY)
+        }
+        .frame(width: region.width, height: region.height, alignment: .topLeading)
+        .clipped())
+        renderer.scale = scale
+        return renderer.cgImage
     }
 
     /// The picture shrinks from where it was taken into the panel, so the
@@ -137,7 +166,7 @@ enum Capture {
     /// PNG, unless that passes the API's 5MB image ceiling — over it Dray sends
     /// the file as a path the model has to open — so a big region steps down
     /// through JPEG qualities until it fits.
-    private static func write(_ image: CGImage) throws -> String {
+    static func write(_ image: CGImage) throws -> String {
         let cap = 5 * 1024 * 1024
         let rep = NSBitmapImageRep(cgImage: image)
         var (data, ext) = (rep.representation(using: .png, properties: [:]), "png")
@@ -166,8 +195,16 @@ enum Capture {
 }
 
 /// One pen stroke.
-struct Mark {
+struct Mark: Identifiable {
+    var id = UUID()
     var points: [CGPoint]
+
+    /// The area the stroke covers, its line's width included.
+    var bounds: CGRect {
+        let xs = points.map(\.x), ys = points.map(\.y)
+        guard let x0 = xs.min(), let x1 = xs.max(), let y0 = ys.min(), let y1 = ys.max() else { return .null }
+        return CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0).insetBy(dx: -4, dy: -4)
+    }
 }
 
 @MainActor @Observable
@@ -242,21 +279,13 @@ final class Marking {
     /// The still with its marks, at the still's own resolution.
     func done() {
         guard let r = region, let still else { return }
-        let scale = CGFloat(still.width) / r.width
-        let renderer = ImageRenderer(content: ZStack(alignment: .topLeading) {
-            Image(decorative: still, scale: scale)
-            Strokes(marks: marks).offset(x: -r.minX, y: -r.minY)
-        }
-        .frame(width: r.width, height: r.height, alignment: .topLeading)
-        .clipped())
-        renderer.scale = scale
-        finish(renderer.cgImage.map { ($0, r) })
+        finish(Capture.inked(still, marks, in: r).map { ($0, r) })
     }
 }
 
 /// Every mark, one red. Drawn the same on screen and into the written image;
 /// a wider white pass under a mark is its hover and selection halo.
-private struct Strokes: View {
+struct Strokes: View {
     let marks: [Mark]
     var color = Color.red
     var width: CGFloat = 4
