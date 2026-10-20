@@ -32,9 +32,12 @@ the sessions live in `dray --serve` now, not in the window.
   attachments.
 - **Comments attach to an item** — a mark, a screenshot, an element — and ride
   the prompt beside it.
-- **Annotating draws on the live screen**: a clear overlay, marks drawn over
-  whatever is there, Done captures the screen with the marks and adds it as a
-  row. Region capture only.
+- **A screenshot is taken off the live screen**: the camera button or ⌘⇧2 lays
+  a clear overlay, and letting go of a region drag is the shot (Full screen sits
+  in a bar at the bottom). The region then holds that still and takes pen marks,
+  which can be moved and deleted; Done adds it as a row. Mid-recording the
+  words so far are cut into a row ahead of it with the microphone left open
+  (`cut_transcription`), and the prompt names each image in place as `[Image 1]`.
 
 ## v1
 
@@ -50,7 +53,8 @@ v2 (#565): status, across every live session.
 - The task list carries the sidebar's marks; the title opens its session in Dray.
 - A send says Sent and closes the panel.
 
-Later: screenshots, annotation and dropped images (#566, its own session), then browser element pick.
+Screenshots, pen marks and file drops shipped (#566). Later, in order: comments
+on a mark, browser element pick.
 A Notch page in Dray's Settings, for its key, placement, layout and what it alerts on;
 the key is a row under Shortcuts until then.
 

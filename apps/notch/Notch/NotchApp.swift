@@ -47,6 +47,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     /// ⌘Esc from anywhere, held while the panel is open: bare Esc only reaches it while it has focus,
     /// and AppKit never hands ⌘Esc to the key monitor at all.
     private var closeKey: HotKey?
+    /// ⌘⇧2, beside macOS's own ⌘⇧3/4/5: a screenshot into the draft from anywhere.
+    private var captureKey: HotKey?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         waitForServer()
@@ -117,6 +119,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             }
         }
         composer.reposition = { [weak self] in self?.place() }
+        composer.capture = { [weak self] in self?.capture() }
 
         // One size for good, the cards drawn inside it: SwiftUI can animate a
         // card growing and shrinking, where a window resized under it jumps.
@@ -138,7 +141,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
         // The panel's keys, here rather than on views, which answer only
         // while focus sits inside them. Key codes: Escape 53, N 45, F 3, ↓ 125, ↑ 126.
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak composer, weak panel] e in
-            guard panel?.isVisible == true, let composer, composer.shown else { return e }
+            // A capture's overlay holds the keys while it runs: Esc there cancels it, not the panel.
+            guard panel?.isVisible == true, let composer, composer.shown, !composer.capturing else { return e }
             let mods = e.modifierFlags.intersection([.command, .shift, .option, .control])
             switch (e.keyCode, mods) {
             // Throwing away speech takes ⌘Esc, the hot key below: a bare Esc is too easy a slip mid-sentence.
@@ -170,6 +174,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
             guard let composer else { return }
             if composer.listening { Task { await composer.cancelDictation() } } else { composer.hide() }
         }
+        captureKey = HotKey(key: kVK_ANSI_2, mods: cmdKey | shiftKey) { [weak self] in
+            self?.capture()
+        }
+        captureKey?.held = true
         // The tap's twin for other processes: Dray.app, or a script driving the panel.
         DistributedNotificationCenter.default().addObserver(forName: .init("com.yogesh.dray.notch.tap"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.pressed() }
@@ -184,6 +192,58 @@ final class Delegate: NSObject, NSApplicationDelegate {
             Task { await composer.toggleDictation() }
         } else {
             show()
+        }
+    }
+
+    /// The shot flies into the notch and joins the draft. Mid-recording the
+    /// panel stays up over the overlay, so dictation can be seen running on,
+    /// and the words so far are cut off ahead of the shot with the microphone
+    /// left open, so speech and shots land in the order they came. Otherwise
+    /// the panel steps aside, and comes back only if it was open.
+    private func capture() {
+        // Claimed here, before the first await: a second ⌘⇧2 while the first
+        // is still reading the displays would otherwise start a second overlay.
+        guard let composer, let panel, !composer.capturing, [.idle, .recording].contains(composer.dictation) else { return }
+        composer.capturing = true
+        let recording = composer.dictation == .recording, wasShown = composer.shown
+        let slot = composer.reserveShot()
+        let cut = recording ? Task { await composer.cutDictation(before: slot) } : nil
+        if recording {
+            panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
+            // Shown, not touched: its frame is far wider than its card, and over
+            // it its own arrow beat the overlay's crosshair.
+            panel.ignoresMouseEvents = true
+        } else if wasShown {
+            composer.hide()
+        }
+        Task {
+            defer { composer.capturing = false }
+            var shot: Capture.Shot?
+            var failed: String?
+            do {
+                shot = try await Capture.run()
+            } catch {
+                failed = error.localizedDescription
+            }
+            panel.level = .statusBar
+            panel.ignoresMouseEvents = false
+            if recording { panel.makeKeyAndOrderFront(nil) } else if wasShown { show() } else { place() }
+            if let shot {
+                // Into the open card's rows, or into the notch itself while the panel is away.
+                let f = panel.frame
+                let target = switch (composer.placement, composer.shown) {
+                case (.notch, true): NSPoint(x: f.midX, y: f.maxY - composer.notchHeight - 40)
+                case (.notch, false): NSPoint(x: f.midX, y: f.maxY - composer.notchHeight / 2)
+                case (.bottom, true): NSPoint(x: f.midX, y: f.minY + 60)
+                case (.bottom, false): NSPoint(x: f.midX, y: f.minY)
+                }
+                await Capture.fly(shot.image, from: shot.frame, to: target)
+            }
+            // The cut transcribes while the overlay is up; its words go first.
+            await cut?.value
+            withAnimation(.spring(duration: 0.4, bounce: 0.5)) { composer.fillShot(slot, shot?.path) }
+            // After the row, which retires a notice.
+            if let failed { composer.notice = failed }
         }
     }
 
@@ -288,32 +348,44 @@ final class ModifierTap {
 /// and needs no Accessibility grant. Held only while wanted, so the chord is
 /// every other app's the rest of the time.
 final class HotKey {
-    private static var action: () -> Void = {}
+    private static var actions: [UInt32: () -> Void] = [:]
+    private static var installed = false
+    private let id: UInt32
     private let key: UInt32
     private let mods: UInt32
     private var ref: EventHotKeyRef?
 
-    /// ponytail: one action for the app, since ⌘Esc is the only hot key; a second wants dispatch on the event's id.
     init(key: Int, mods: Int, _ action: @escaping () -> Void) {
+        Self.install()
+        id = UInt32(Self.actions.count + 1)
         self.key = UInt32(key)
         self.mods = UInt32(mods)
-        Self.action = action
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
-            DispatchQueue.main.async { HotKey.action() }
-            return noErr
-        }, 1, &spec, nil, nil)
+        Self.actions[id] = action
     }
 
     var held = false {
         didSet {
             guard held != oldValue else { return }
             if held {
-                RegisterEventHotKey(key, mods, EventHotKeyID(signature: 0x4452_4159, id: 1), GetApplicationEventTarget(), 0, &ref)
+                RegisterEventHotKey(key, mods, EventHotKeyID(signature: 0x4452_4159, id: id), GetApplicationEventTarget(), 0, &ref)
             } else if let ref {
                 UnregisterEventHotKey(ref)
                 self.ref = nil
             }
         }
+    }
+
+    /// One handler for every hot key, told apart by the id each registered with.
+    private static func install() {
+        guard !installed else { return }
+        installed = true
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+            var hit = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hit)
+            let id = hit.id
+            DispatchQueue.main.async { HotKey.actions[id]?() }
+            return noErr
+        }, 1, &spec, nil, nil)
     }
 }

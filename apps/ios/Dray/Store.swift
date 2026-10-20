@@ -297,7 +297,7 @@ final class Store {
     /// `send_msg` finds nothing changed and respawns nothing. They are read
     /// fresh first: another client moving the model broadcasts nothing, and a
     /// held copy sent back would undo its change.
-    func send(_ key: SessionKey, _ text: String) async -> Bool {
+    func send(_ key: SessionKey, _ text: String, attachments: [String] = []) async -> Bool {
         guard let c = connections[key.server] else { return false }
         do {
             let fresh: SessionItem? = try await c.call("get_session_by_id", ["sessionId": .string(key.id), "turns": 0])
@@ -306,7 +306,7 @@ final class Store {
             let outcome: SendOutcome = try await c.call("send_msg", [
                 "sessionId": .string(key.id),
                 "prompt": .string(text),
-                "attachmentPaths": [],
+                "attachmentPaths": .array(attachments.map { .string($0) }),
                 "harness": .string(item.harness),
                 "model": .string(item.model),
                 "effort": JSON(item.effort),

@@ -1,11 +1,16 @@
 import AppKit
 import Observation
 
-/// One line of the message being built, in the order it was said or typed.
+/// One line of the message being built, in the order it was said or typed,
+/// or a file — a marked-up capture or a drop — riding the prompt as an attachment.
 struct Row: Identifiable, Hashable {
     let id = UUID()
     var text: String
     let said: Bool
+    var file: String? = nil
+    /// A screenshot's place, held from the press so speech said meanwhile
+    /// lands around it rather than ahead of it. Drawn as nothing.
+    var pending = false
 }
 
 enum Target: Hashable {
@@ -54,7 +59,15 @@ final class Composer {
     var notice: String? { didSet { retryPath = nil } }
     /// The recording a failed transcription kept, offered beside its notice.
     private(set) var retryPath: String?
+    /// Speech a mid-recording cut could not transcribe, and the screenshot it
+    /// belongs ahead of. Apart from `notice`, which the shot's own row retires:
+    /// those words have already left the recording, so this is their only copy.
+    private(set) var lostCut: (path: String, before: UUID)?
     var sending = false
+    /// A screenshot is in flight; Send waits for its row.
+    var capturing = false
+    /// A lost cut is being transcribed again; Send waits for its words.
+    private(set) var retryingCut = false
     /// Bumped to put focus in the input: every open, and every new task.
     var opens = 0
     /// Drawn open; the window lags it on the way out, so the close can animate.
@@ -113,6 +126,8 @@ final class Composer {
     @ObservationIgnored var pillChanged: () -> Void = {}
     @ObservationIgnored var reposition: () -> Void = {}
     @ObservationIgnored private var asksPending = false
+    /// Hides the panel, runs the screenshot overlay, and opens it again.
+    @ObservationIgnored var capture: () -> Void = {}
     @ObservationIgnored private var lastUsed = UserDefaults.standard.string(forKey: "notch.lastSession")
 
     init(store: Store, server: UUID) {
@@ -211,12 +226,57 @@ final class Composer {
         return nil
     }
 
+    /// Each file stands in the text where it sits in the draft — `[Image 1]`,
+    /// or a file's name — so the model can tell which words are about which
+    /// image when they arrive as blocks of their own.
     var prompt: String {
-        (rows.map(\.text) + [typing])
+        (rows.map { $0.file == nil ? $0.text : "[\(label($0))]" } + [typing])
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-            .joined(separator: "\n\n")
+            .joined(separator: " ")
     }
+
+    /// An image numbered by its place among the draft's images, the order its
+    /// block reaches the model in; any other file by its name, which the model
+    /// sees as a path.
+    func label(_ row: Row) -> String {
+        guard let file = row.file else { return "" }
+        guard Self.isImage(file) else { return URL(fileURLWithPath: file).lastPathComponent }
+        // By row, not by path: one image dropped twice is two blocks on the wire.
+        let before = rows.prefix { $0.id != row.id }.filter { $0.file.map(Self.isImage) == true }
+        return "Image \(before.count + 1)"
+    }
+
+    /// Holds the next screenshot's place at the end of the draft.
+    func reserveShot() -> UUID {
+        let row = Row(text: "", said: false, pending: true)
+        rows.append(row)
+        return row.id
+    }
+
+    /// Puts the shot in its held place, or gives the place up for a cancel.
+    func fillShot(_ id: UUID, _ path: String?) {
+        guard let i = rows.firstIndex(where: { $0.id == id }) else { return }
+        if let path {
+            rows[i].file = path
+            rows[i].pending = false
+        } else {
+            rows.remove(at: i)
+        }
+    }
+
+    /// What Dray sends as pixels (`attachments.rs`): these types, up to 5MB.
+    /// Anything else rides as a path the model opens itself.
+    static func isImage(_ path: String) -> Bool {
+        ["png", "jpg", "jpeg", "gif", "webp"].contains(URL(fileURLWithPath: path).pathExtension.lowercased())
+            && ((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? .max) <= 5 * 1024 * 1024
+    }
+
+    /// Paths for `send_msg`, which reads each and sends an image as pixels, anything else as a path.
+    var attachments: [String] { rows.compactMap(\.file) }
+
+    /// An image alone is a message, as it is in Dray's own composer.
+    var canSend: Bool { !capturing && !retryingCut && (!prompt.isEmpty || !attachments.isEmpty) }
 
     var modelId: String {
         Picks.usableModel(models[harness] ?? [], modelPicks[harness] ?? Picks.defaultModel[harness] ?? "", harness)
@@ -368,8 +428,8 @@ final class Composer {
         // transcription keeps the draft open, its notice and Retry with it.
         if dictation == .recording, !(await stopDictation()) { return false }
         guard dictation == .idle else { return false }
-        let text = prompt
-        guard !text.isEmpty, !sending, let target else { return false }
+        let text = prompt, files = attachments
+        guard canSend, !sending, let target else { return false }
         sending = true
         defer { sending = false }
         // Only what went out is cleared: the draft stays editable while the request runs.
@@ -377,10 +437,10 @@ final class Composer {
         let sent: SessionKey?
         switch target {
         case .session(let k):
-            sent = await store.send(k, text) ? k : nil
+            sent = await store.send(k, text, attachments: files) ? k : nil
             if sent == nil { notice = store.lastError }
         case .new:
-            sent = await create(text)
+            sent = await create(text, files)
         }
         guard let sent else { return false }
         rows.removeAll { sentRows.contains($0.id) }
@@ -399,7 +459,7 @@ final class Composer {
     }
 
     /// `useSessions.ts`'s argument set for a new session, from the bar's picks.
-    private func create(_ text: String) async -> SessionKey? {
+    private func create(_ text: String, _ files: [String]) async -> SessionKey? {
         guard let cwd = projectPath else {
             notice = "Pick a project first."
             return nil
@@ -409,7 +469,7 @@ final class Composer {
             let outcome: SendOutcome = try await store.call(server, "send_msg", [
                 "sessionId": .string(id),
                 "prompt": .string(text),
-                "attachmentPaths": [],
+                "attachmentPaths": .array(files.map { .string($0) }),
                 "harness": .string(harness),
                 "model": .string(modelId),
                 "effort": JSON(effort),
@@ -491,26 +551,71 @@ final class Composer {
         dictation = .transcribing
         defer { dictation = .idle }
         do {
-            let o: Outcome = try await store.call(server, cmd, args, timeout: .seconds(180))
-            switch o.kind {
-            case "text":
-                if let text = o.value?.string, !text.isEmpty {
-                    rows.append(Row(text: text, said: true))
-                    Sound.stop?.play()
-                }
-                return true
-            case "empty":
-                notice = "No words heard."
-                return true
-            case "needsModel": notice = "Pick a dictation model in Dray → Settings → Transcription."
-            case "noAudio": notice = "Dray heard nothing. Check the microphone."
-            default: notice = o.value?["message"]?.string ?? "Dictation failed."
-            }
-            // Set after the notice, whose own setter clears it.
-            retryPath = o.value?["audioPath"]?.string
+            return place(try await store.call(server, cmd, args, timeout: .seconds(180)))
         } catch {
             notice = error.localizedDescription
         }
+        return false
+    }
+
+    /// The words so far, as a row before the screenshot about to join the
+    /// draft; the microphone stays open for what is said about it. Silence
+    /// before the shot is ordinary, so it says nothing.
+    func cutDictation(before shot: UUID) async {
+        guard dictation == .recording else { return }
+        await cut("cut_transcription", [:], before: shot)
+    }
+
+    /// Runs a failed cut's recording again, into the place it was cut from.
+    func retryCut() async {
+        guard let lost = lostCut, !retryingCut else { return }
+        retryingCut = true
+        defer { retryingCut = false }
+        await cut("retry_transcription", ["path": .string(lost.path)], before: lost.before)
+    }
+
+    private func cut(_ cmd: String, _ args: [String: JSON], before shot: UUID) async {
+        do {
+            let o: Outcome = try await store.call(server, cmd, args, timeout: .seconds(180))
+            switch o.kind {
+            case "text":
+                lostCut = nil
+                if let text = o.value?.string, !text.isEmpty {
+                    rows.insert(Row(text: text, said: true), at: rows.firstIndex { $0.id == shot } ?? rows.endIndex)
+                }
+            case "empty", "noAudio":
+                lostCut = nil
+            default:
+                if let path = o.value?["audioPath"]?.string {
+                    lostCut = (path, shot)
+                } else {
+                    notice = o.value?["message"]?.string ?? "Dictation failed."
+                }
+            }
+        } catch {
+            notice = error.localizedDescription
+        }
+    }
+
+    /// Whether the model answered: words become a row, every other outcome a notice.
+    @discardableResult
+    private func place(_ o: Outcome) -> Bool {
+        switch o.kind {
+        case "text":
+            if let text = o.value?.string, !text.isEmpty {
+                rows.append(Row(text: text, said: true))
+                Sound.stop?.play()
+            }
+            return true
+        case "empty":
+            notice = "No words heard."
+            return true
+        case "needsModel": notice = "Pick a dictation model in Dray → Settings → Transcription."
+        case "noAudio": notice = "Dray heard nothing. Check the microphone."
+        default: notice = o.value?["message"]?.string ?? "Dictation failed."
+        }
+        // Set after the notice, whose own setter clears it.
+        retryPath = o.value?["audioPath"]?.string
         return false
     }
 

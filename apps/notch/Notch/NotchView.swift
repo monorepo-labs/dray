@@ -14,6 +14,10 @@ struct NotchView: View {
     /// The card shrinks to what it holds: the orb and clock, or the word Sent.
     private var fits: Bool { recording || composer.sent }
     private var bare: Bool { recording && composer.mode == .expanded }
+    /// A file drag over the card, which says where it lands.
+    @State private var dropping = false
+    /// Mid-recording, the pointer over the card shows what can be done without stopping.
+    @State private var cardHovered = false
     /// The idle orb and the recording one are one orb to the reader, so a start
     /// moves it into place rather than fading a second one in.
     @Namespace private var orbSpace
@@ -47,6 +51,8 @@ struct NotchView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: composer.placement == .notch ? .top : .bottom)
         .padding(.bottom, composer.placement == .bottom ? 12 : 0)
         .animation(.snappy(duration: 0.25), value: fits)
+        // Out here, so the card's fill widens with the camera rather than snapping.
+        .animation(.spring(duration: 0.3, bounce: 0.2), value: cardHovered)
         // Over the whole window, so a dropdown has the room below the cards too.
         .overlayPreferenceValue(MenuAnchors.self) { anchors in
             DropMenus(composer: composer, anchors: anchors, upward: composer.placement == .bottom)
@@ -94,6 +100,31 @@ struct NotchView: View {
                 .padding(.horizontal, composer.placement == .notch ? -NotchShape.ear : 0)
         }
         .shadow(color: .black.opacity(bare ? 0 : 0.35), radius: 12, y: 4)
+        .onHover { cardHovered = $0 }
+        // A file dropped anywhere on the card rides the draft as a capture does.
+        .overlay {
+            if dropping {
+                RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.1))
+                    .allowsHitTesting(false)
+                    .padding(6)
+                    .padding(.top, composer.notchHeight)
+                    .transition(.scale(scale: 0.9).combined(with: .opacity))
+            }
+        }
+        .scaleEffect(dropping ? 1.04 : 1)
+        .animation(.spring(duration: 0.3, bounce: 0.45), value: dropping)
+        .dropDestination(for: URL.self) { urls, _ in
+            // The server skips a folder, so its row would send nothing.
+            let files = urls.filter { $0.isFileURL && (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == false }
+            withAnimation(.spring(duration: 0.4, bounce: 0.5)) {
+                composer.rows += files.map { Row(text: "", said: false, file: $0.path) }
+            }
+            if !files.isEmpty { NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now) }
+            return !files.isEmpty
+        } isTargeted: {
+            if $0, !dropping { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
+            dropping = $0
+        }
         .contextMenu {
             Picker("Position", selection: $composer.placement) {
                 ForEach(Placement.allCases, id: \.self) { Text($0.label).tag($0) }
@@ -120,15 +151,19 @@ struct NotchView: View {
                 VStack(spacing: 6) {
                     MicButton(composer: composer, big: true).matchedGeometryEffect(id: "orb", in: orbSpace)
                     // The card's fill is gone here, so the clock carries its own.
-                    RecordingTimer(since: composer.recordingSince)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(.black, in: Capsule())
+                    HStack(spacing: 8) {
+                        RecordingTimer(since: composer.recordingSince)
+                        if cardHovered { capture.transition(.scale.combined(with: .opacity)) }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(.black, in: Capsule())
                 }
             } else {
                 HStack(spacing: 8) {
                     MicButton(composer: composer, big: false).matchedGeometryEffect(id: "orb", in: orbSpace)
                     RecordingTimer(since: composer.recordingSince)
+                    if cardHovered { capture.padding(.leading, 4).transition(.scale.combined(with: .opacity)) }
                 }
             }
         }
@@ -168,20 +203,63 @@ struct NotchView: View {
                 }
             }
         }
+        if composer.lostCut != nil {
+            HStack(spacing: 8) {
+                Text("Speech before a screenshot didn't transcribe.").font(.caption).foregroundStyle(.secondary)
+                Button("Retry") { Task { await composer.retryCut() } }
+                    .disabled(composer.retryingCut)
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.semibold))
+            }
+        }
     }
 
     private var rowList: some View {
         VStack(spacing: 10) {
-            ForEach($composer.rows) { $row in
-                // The id is read before the removal: read through `row` inside
-                // `removeAll`, it reenters `rows` mid-mutation and Swift aborts.
-                RowView(row: $row) { [id = row.id] in composer.rows.removeAll { $0.id == id } }
-                    .id(row.id)
-                    .draggable(row.id.uuidString)
-                    .dropDestination(for: String.self) { ids, _ in move(ids.first, before: row.id) }
+            ForEach(groups, id: \.first) { ids in
+                if ids.count == 1, let row = composer.rows.first(where: { $0.id == ids[0] }), let file = row.file {
+                    FileRow(path: file, label: composer.label(row)) { remove(ids[0]) }
+                        .id(ids[0])
+                        .reorderable(ids[0], move)
+                        .transition(.scale(scale: 0.8).combined(with: .opacity))
+                } else if composer.rows.first(where: { $0.id == ids[0] })?.file != nil {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 8) {
+                            ForEach(ids, id: \.self) { id in
+                                if let row = composer.rows.first(where: { $0.id == id }), let file = row.file {
+                                    FileTile(path: file, label: composer.label(row)) { remove(id) }
+                                        .reorderable(id, move)
+                                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                                }
+                            }
+                        }
+                    }
+                    .scrollIndicators(.never)
+                    .padding(8)
+                    .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+                } else if let i = composer.rows.firstIndex(where: { $0.id == ids[0] }) {
+                    RowView(row: $composer.rows[i]) { remove(ids[0]) }
+                        .id(ids[0])
+                        .reorderable(ids[0], move)
+                }
             }
         }
     }
+
+    /// Rows in order, files back to back sharing one line, each text row alone.
+    private var groups: [[UUID]] {
+        var out: [[UUID]] = []
+        var lastWasFile = false
+        for row in composer.rows where !row.pending {
+            if row.file != nil, lastWasFile { out[out.count - 1].append(row.id) } else { out.append([row.id]) }
+            lastWasFile = row.file != nil
+        }
+        return out
+    }
+
+    /// The id is taken by value: read through a binding inside `removeAll`, it
+    /// reenters `rows` mid-mutation and Swift aborts.
+    private func remove(_ id: UUID) { composer.rows.removeAll { $0.id == id } }
 
     private var title: String {
         switch composer.target {
@@ -206,6 +284,7 @@ struct NotchView: View {
         HStack(alignment: .center, spacing: 8) {
             if composer.mode == .compact { MicButton(composer: composer, big: false).matchedGeometryEffect(id: "orb", in: orbSpace) }
             field
+            capture
             send
         }
     }
@@ -219,6 +298,18 @@ struct NotchView: View {
             .focused($focus, equals: .input)
     }
 
+    private var capture: some View {
+        Button {
+            // The overlay comes up under the pointer, so the card never hears it leave.
+            cardHovered = false
+            composer.capture()
+        } label: {
+            Image(systemName: "camera.viewfinder").font(.title3).foregroundStyle(.white.opacity(0.6))
+        }
+        .buttonStyle(.plain)
+        .help("Screenshot a region and mark it up")
+    }
+
     private var send: some View {
         Button {
             Task { await composer.send() }
@@ -226,7 +317,7 @@ struct NotchView: View {
             Image(systemName: "arrow.up.circle.fill").font(.title2)
         }
         .buttonStyle(.plain)
-        .disabled(composer.prompt.isEmpty || composer.sending)
+        .disabled(!composer.canSend || composer.sending)
         .help("Send (⏎)")
     }
 
@@ -285,6 +376,81 @@ private struct SessionList: View {
         }
         .background(.black, in: RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+    }
+}
+
+private extension View {
+    /// Dragged by id onto another row to land before it.
+    func reorderable(_ id: UUID, _ move: @escaping (String?, UUID) -> Bool) -> some View {
+        draggable(id.uuidString).dropDestination(for: String.self) { ids, _ in move(ids.first, id) }
+    }
+}
+
+/// A capture or a dropped file alone between text rows: thumbnail and label.
+private struct FileRow: View {
+    let path: String
+    let label: String
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let image = NSImage(contentsOfFile: path) {
+                Image(nsImage: image).resizable().scaledToFit()
+                    .frame(maxHeight: 72, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                Image(systemName: "doc").foregroundStyle(.secondary).frame(width: 16)
+            }
+            Text(label).lineLimit(1).truncationMode(.middle)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: remove) { Image(systemName: "xmark") }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Remove")
+        }
+        .padding(8)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// Files back to back, sharing one line: the image itself, or a page and its name.
+private struct FileTile: View {
+    let path: String
+    let label: String
+    let remove: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Group {
+            if let image = NSImage(contentsOfFile: path) {
+                Image(nsImage: image).resizable().scaledToFill()
+            } else {
+                VStack(spacing: 4) {
+                    Image(systemName: "doc").font(.title3)
+                    Text(label).font(.caption).lineLimit(1).truncationMode(.middle)
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.white.opacity(0.06))
+            }
+        }
+        .frame(width: 96, height: 64)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(alignment: .topTrailing) {
+            if hover {
+                Button(action: remove) {
+                    Image(systemName: "xmark.circle.fill").font(.title3)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .black.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+                .padding(4)
+                .help("Remove")
+            }
+        }
+        .onHover { hover = $0 }
     }
 }
 
