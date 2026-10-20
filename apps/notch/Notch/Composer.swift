@@ -251,8 +251,9 @@ final class Composer {
     // MARK: Sending
 
     func send() async -> Bool {
-        // The words still being spoken belong to this message.
-        if dictation == .recording { await stopDictation() }
+        // The words still being spoken belong to this message, so a failed
+        // transcription keeps the draft open, its notice and Retry with it.
+        if dictation == .recording, !(await stopDictation()) { return false }
         guard dictation == .idle else { return false }
         let text = prompt
         guard !text.isEmpty, !sending, let target else { return false }
@@ -352,9 +353,11 @@ final class Composer {
         }
     }
 
-    func stopDictation() async {
-        guard dictation == .recording else { return }
-        await transcribe("stop_transcription", [:])
+    /// Whether the model answered: words, or a verdict that there were none.
+    @discardableResult
+    func stopDictation() async -> Bool {
+        guard dictation == .recording else { return false }
+        return await transcribe("stop_transcription", [:])
     }
 
     /// Runs the model again over the recording a failed run kept, so the words need not be said twice.
@@ -363,7 +366,8 @@ final class Composer {
         await transcribe("retry_transcription", ["path": .string(path)])
     }
 
-    private func transcribe(_ cmd: String, _ args: [String: JSON]) async {
+    @discardableResult
+    private func transcribe(_ cmd: String, _ args: [String: JSON]) async -> Bool {
         dictation = .transcribing
         defer { dictation = .idle }
         do {
@@ -374,9 +378,12 @@ final class Composer {
                     rows.append(Row(text: text, said: true))
                     Sound.stop?.play()
                 }
+                return true
+            case "empty":
+                notice = "No words heard."
+                return true
             case "needsModel": notice = "Pick a dictation model in Dray → Settings → Transcription."
             case "noAudio": notice = "Dray heard nothing. Check the microphone."
-            case "empty": notice = "No words heard."
             default: notice = o.value?["message"]?.string ?? "Dictation failed."
             }
             // Set after the notice, whose own setter clears it.
@@ -384,6 +391,7 @@ final class Composer {
         } catch {
             notice = error.localizedDescription
         }
+        return false
     }
 
     func toggleDictation() async {
