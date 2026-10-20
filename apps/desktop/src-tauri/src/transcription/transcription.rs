@@ -391,7 +391,11 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
     let state = app.state::<TranscriptionState>();
     let owns = HOST_OWNS.load(SeqCst);
     Some(match cmd {
-        "start_transcription" if state.recording.lock().await.is_some() => Err("Dray is already dictating.".into()),
+        // A Notch recording found here is one the Notch lost — it starts only
+        // when idle, so a restarted Notch would otherwise be locked out for good.
+        "start_transcription" if !owns && state.recording.lock().await.is_some() => {
+            Err("Dray is already dictating.".into())
+        }
         "start_transcription" => {
             let started = start_transcription(state).await;
             if matches!(started, Ok(None)) {

@@ -8,7 +8,14 @@ struct NotchView: View {
     @Bindable var composer: Composer
     @Environment(Store.self) private var store
     @FocusState private var focus: Field?
-    @State private var size = CGSize.zero
+    /// From the press, not from the microphone opening: the start is a round
+    /// trip through Dray, and waiting on it read as the panel hesitating.
+    private var recording: Bool { composer.listening }
+    private var bare: Bool { recording && composer.mode == .expanded }
+    @State private var titleHovered = false
+    /// The idle orb and the recording one are one orb to the reader, so a start
+    /// moves it into place rather than fading a second one in.
+    @Namespace private var orbSpace
 
     var body: some View {
         VStack(spacing: 8) {
@@ -20,85 +27,63 @@ struct NotchView: View {
                 composerCard
             }
         }
-        .frame(width: Composer.width)
-        .fixedSize(horizontal: false, vertical: true)
+        // Recording draws only the orb and the clock, so the card shrinks to them.
+        .frame(width: recording ? nil : Composer.width)
+        .fixedSize(horizontal: recording, vertical: true)
+        // Grows out of the notch, or up out of the Dock's edge.
+        .scaleEffect(composer.shown ? 1 : 0.5, anchor: composer.placement == .notch ? .top : .bottom)
+        .opacity(composer.shown ? 1 : 0)
+        .animation(composer.shown ? .spring(duration: 0.32, bounce: 0.2) : .easeIn(duration: 0.15), value: composer.shown)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: composer.placement == .notch ? .top : .bottom)
+        .padding(.bottom, composer.placement == .bottom ? 12 : 0)
+        .animation(.snappy(duration: 0.25), value: recording)
+        // Over the whole window, so a dropdown has the room below the cards too.
         .overlayPreferenceValue(MenuAnchors.self) { anchors in
             DropMenus(composer: composer, anchors: anchors, upward: composer.placement == .bottom)
         }
         .environment(\.colorScheme, .dark)
-        .onGeometryChange(for: CGSize.self) { $0.size } action: {
-            size = $0
-            composer.resized($0)
-        }
-        // A new placement at the same size moves the window too.
-        .onChange(of: composer.placement) { composer.resized(size) }
+        .onChange(of: composer.placement) { composer.reposition() }
         .onChange(of: composer.opens) { focus = .input }
+        // The input leaves the panel while recording, and its focus with it.
+        .onChange(of: composer.dictation) { if !composer.listening { focus = .input } }
         .onChange(of: composer.searches) {
             composer.listShown = true
             focus = .search
         }
+        .onChange(of: composer.listShown) { if !composer.listShown { focus = .input } }
         .onChange(of: composer.typing) {
             if !composer.typing.isEmpty { composer.listShown = false }
         }
     }
 
-    /// The list, or with it hidden, room for an open dropdown: the window is
-    /// only as big as what it draws, and a menu past its edge is cut off.
     @ViewBuilder private var farSide: some View {
-        if composer.listShown {
-            SessionList(composer: composer, focus: $focus)
-        } else if composer.openMenu != nil {
-            Color.clear.frame(height: 280)
-        }
+        if composer.listShown { SessionList(composer: composer, focus: $focus) }
     }
 
     private var composerCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if !composer.listShown, composer.target != .new {
-                HStack(spacing: 12) {
-                    Button { composer.listShown = true } label: {
-                        Text(title).lineLimit(1)
-                            .font(.system(size: 13, weight: .semibold))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Show tasks")
-                    Text("⌘N new task    ↑↓ tasks").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5)).fixedSize()
-                }
-            }
-            if composer.target == .new { NewSessionBar(composer: composer) }
-            if !composer.rows.isEmpty {
-                // Three rows tall at most, then it scrolls, held at the newest.
-                ViewThatFits(in: .vertical) {
-                    rowList
-                    ScrollView { rowList }.scrollIndicators(.never).defaultScrollAnchor(.bottom)
-                }
-                .frame(maxHeight: 3 * 32 + 2 * 10)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            input
-            if let notice = composer.notice {
-                HStack(spacing: 8) {
-                    Text(notice).font(.caption).foregroundStyle(.secondary)
-                    if composer.retryPath != nil {
-                        Button("Retry") { Task { await composer.retryDictation() } }
-                            .buttonStyle(.plain)
-                            .font(.caption.weight(.semibold))
-                    }
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            if recording {
+                recordingBar
+            } else {
+                draft
             }
         }
-        .padding(14)
+        .padding(12)
         .padding(.top, composer.notchHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.black, in: shape)
+        // Expanded mode records as the orb alone, floating over whatever is beneath;
+        // faded rather than removed, so it animates.
+        .background {
+            shape.fill(.black.opacity(bare ? 0 : 1))
+                .padding(.horizontal, composer.placement == .notch ? -NotchShape.ear : 0)
+        }
+        .shadow(color: .black.opacity(bare ? 0 : 0.35), radius: 12, y: 4)
         .contextMenu {
             Picker("Position", selection: $composer.placement) {
                 ForEach(Placement.allCases, id: \.self) { Text($0.label).tag($0) }
             }
             .pickerStyle(.inline)
-            Picker("Main input", selection: $composer.mode) {
+            Picker("Layout", selection: $composer.mode) {
                 ForEach(InputMode.allCases, id: \.self) { Text($0.label).tag($0) }
             }
             .pickerStyle(.inline)
@@ -108,6 +93,82 @@ struct NotchView: View {
         // A panel opened before the socket was up read nothing; read again once it is.
         .task(id: store.serverState[composer.server] == .connected) {
             if store.serverState[composer.server] == .connected, composer.target == .new { await composer.loadPicks() }
+        }
+    }
+
+    /// Nothing to read while talking: the orb, which stops it, and the clock.
+    /// ⌘Esc throws it away.
+    private var recordingBar: some View {
+        Group {
+            if composer.mode == .expanded {
+                VStack(spacing: 6) {
+                    MicButton(composer: composer, big: true).matchedGeometryEffect(id: "orb", in: orbSpace)
+                    // The card's fill is gone here, so the clock carries its own.
+                    RecordingTimer(since: composer.recordingSince)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(.black, in: Capsule())
+                }
+            } else {
+                HStack(spacing: 8) {
+                    MicButton(composer: composer, big: false).matchedGeometryEffect(id: "orb", in: orbSpace)
+                    RecordingTimer(since: composer.recordingSince)
+                }
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    @ViewBuilder private var draft: some View {
+        if !composer.listShown, composer.target != .new {
+            HStack(spacing: 12) {
+                Button { composer.listShown = true } label: {
+                    Text(title).lineLimit(1)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white.opacity(titleHovered ? 1 : 0.7))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { titleHovered = $0 }
+                .animation(.easeOut(duration: 0.12), value: titleHovered)
+                .help("Show tasks")
+                HStack(spacing: 10) {
+                    Text("⌘N New")
+                    Text("↑↓ Tasks")
+                    Text("Esc")
+                }
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.5))
+                .fixedSize()
+            }
+        }
+        if composer.target == .new { NewSessionBar(composer: composer) }
+        if !composer.rows.isEmpty {
+            // Three rows tall at most, then it scrolls, held at the newest.
+            ViewThatFits(in: .vertical) {
+                rowList
+                ScrollView { rowList }.scrollIndicators(.never).defaultScrollAnchor(.bottom)
+                    // Rows above the cap fade out under the card's black.
+                    .overlay(alignment: .top) {
+                        LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 28)
+                            .allowsHitTesting(false)
+                    }
+            }
+            .frame(maxHeight: 3 * 32 + 2 * 10)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        input
+        if let notice = composer.notice {
+            HStack(spacing: 8) {
+                Text(notice).font(.caption).foregroundStyle(.secondary)
+                if composer.retryPath != nil {
+                    Button("Retry") { Task { await composer.retryDictation() } }
+                        .buttonStyle(.plain)
+                        .font(.caption.weight(.semibold))
+                }
+            }
         }
     }
 
@@ -131,37 +192,28 @@ struct NotchView: View {
         }
     }
 
-    private var shape: UnevenRoundedRectangle {
-        let r: CGFloat = 20
-        return switch composer.placement {
-        case .notch: UnevenRoundedRectangle(bottomLeadingRadius: r, bottomTrailingRadius: r)
-        case .bottom: UnevenRoundedRectangle(topLeadingRadius: r, bottomLeadingRadius: r, bottomTrailingRadius: r, topTrailingRadius: r)
+    private var shape: AnyShape {
+        switch composer.placement {
+        case .notch: AnyShape(NotchShape())
+        case .bottom: AnyShape(RoundedRectangle(cornerRadius: 20))
         }
     }
 
-    /// Dictation mode: the mic alone in the middle, input and send beneath it.
-    /// Text mode: all three in one row.
+    /// Expanded: the orb alone in the middle, input and send beneath it.
+    /// Compact: all three in one row.
     @ViewBuilder private var input: some View {
-        if composer.mode == .dictate {
-            VStack(spacing: 6) {
-                MicButton(composer: composer, big: true)
-                RecordingTimer(since: composer.recordingSince)
-            }
-            .frame(maxWidth: .infinity)
+        if composer.mode == .expanded {
+            MicButton(composer: composer, big: true).matchedGeometryEffect(id: "orb", in: orbSpace).frame(maxWidth: .infinity)
         }
-        // One row in both modes: moved between rows the field is a new view and loses its focus.
         HStack(alignment: .center, spacing: 8) {
-            if composer.mode == .text {
-                MicButton(composer: composer, big: false)
-                RecordingTimer(since: composer.recordingSince)
-            }
+            if composer.mode == .compact { MicButton(composer: composer, big: false).matchedGeometryEffect(id: "orb", in: orbSpace) }
             field
             send
         }
     }
 
     private var field: some View {
-        TextField("⏎ send    ⌘⏎ add to list", text: $composer.typing, axis: .vertical)
+        TextField("⏎ send, ⌘⏎ add to list", text: $composer.typing, axis: .vertical)
             .textFieldStyle(.plain)
             .lineLimit(1...6)
             .focused($focus, equals: .input)
@@ -196,6 +248,29 @@ struct NotchView: View {
 }
 
 /// Search over five visible rows, newest first; ↑/↓ and ⌘F are the panel's keys.
+/// The notch grown downward: its top corners flare out into the menu bar the
+/// way the hardware notch meets the screen edge, its bottom ones round off.
+/// Drawn `ear` wider on each side than the content it backs.
+private struct NotchShape: Shape {
+    static let ear: CGFloat = 12
+    var radius: CGFloat = 20
+
+    func path(in rect: CGRect) -> Path {
+        let e = Self.ear, r = radius
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        p.addQuadCurve(to: CGPoint(x: rect.minX + e, y: rect.minY + e), control: CGPoint(x: rect.minX + e, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.minX + e, y: rect.maxY - r))
+        p.addQuadCurve(to: CGPoint(x: rect.minX + e + r, y: rect.maxY), control: CGPoint(x: rect.minX + e, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.maxX - e - r, y: rect.maxY))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX - e, y: rect.maxY - r), control: CGPoint(x: rect.maxX - e, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.maxX - e, y: rect.minY + e))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY), control: CGPoint(x: rect.maxX - e, y: rect.minY))
+        p.closeSubpath()
+        return p
+    }
+}
+
 private struct SessionList: View {
     let composer: Composer
     var focus: FocusState<Field?>.Binding
@@ -216,7 +291,6 @@ private struct SessionList: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            Divider().opacity(0.5)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 2) {
@@ -229,10 +303,10 @@ private struct SessionList: View {
                                 }
                         }
                     }
-                    .padding(6)
+                    .padding([.horizontal, .bottom], 6)
                 }
                 .scrollIndicators(.never)
-                .frame(height: Self.rowHeight * 5 + 2 * 4 + 12)
+                .frame(height: Self.rowHeight * 5 + 2 * 4 + 6)
                 .overlay {
                     if listed.isEmpty { Text("No tasks").foregroundStyle(.secondary) }
                 }
@@ -242,6 +316,7 @@ private struct SessionList: View {
             }
         }
         .background(.black, in: RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
     }
 }
 

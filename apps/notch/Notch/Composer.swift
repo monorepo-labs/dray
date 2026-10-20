@@ -15,12 +15,13 @@ enum Target: Hashable {
 
 enum Dictation { case idle, starting, recording, transcribing }
 
-/// Which way in takes the middle of the panel: the reader's pick, from the
-/// panel's right-click menu, and never switched for them.
+/// The panel's layout, the reader's pick from its right-click menu and never
+/// switched for them: compact, one row with the orb beside the input, or voice,
+/// the orb alone in the middle.
 enum InputMode: String, CaseIterable {
-    case dictate, text
+    case compact, expanded
 
-    var label: String { self == .dictate ? "Voice" : "Text" }
+    var label: String { self == .expanded ? "Expanded" : "Compact" }
 }
 
 /// The new-session bar's dropdowns.
@@ -40,11 +41,16 @@ final class Composer {
     var dictation = Dictation.idle {
         didSet {
             if dictation == .starting { notice = nil }
-            if dictation != .recording { recordingSince = nil } else if oldValue != .recording { recordingSince = Date() } }
+            if dictation != .recording { recordingSince = nil } else if oldValue != .recording { recordingSince = Date() }
+            if listening != [.starting, .recording].contains(oldValue) { listeningChanged(listening) }
+        }
     }
+    var listening: Bool { dictation == .starting || dictation == .recording }
+    /// For the ⌘Esc hot key, held only while the microphone is open.
+    @ObservationIgnored var listeningChanged: (Bool) -> Void = { _ in }
     /// When the microphone opened, for the timer; `nil` unless recording.
     var recordingSince: Date?
-    var mode = InputMode(rawValue: UserDefaults.standard.string(forKey: "notch.mode") ?? "") ?? .dictate {
+    var mode = InputMode(rawValue: UserDefaults.standard.string(forKey: "notch.mode") ?? "") ?? .compact {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: "notch.mode") }
     }
     var level: Float = 0
@@ -54,6 +60,8 @@ final class Composer {
     var sending = false
     /// Bumped to put focus in the input: every open, and every new task.
     var opens = 0
+    /// Drawn open; the window lags it on the way out, so the close can animate.
+    var shown = false
     var notchHeight: CGFloat = 0
     var placement = Placement(rawValue: UserDefaults.standard.string(forKey: "notch.placement") ?? "") ?? .notch {
         didSet { UserDefaults.standard.set(placement.rawValue, forKey: "notch.placement") }
@@ -93,7 +101,7 @@ final class Composer {
     var searches = 0
 
     @ObservationIgnored var hide: () -> Void = {}
-    @ObservationIgnored var resized: (CGSize) -> Void = { _ in }
+    @ObservationIgnored var reposition: () -> Void = {}
     @ObservationIgnored private var lastUsed = UserDefaults.standard.string(forKey: "notch.lastSession")
 
     init(store: Store, server: UUID) {
@@ -188,12 +196,17 @@ final class Composer {
             openMenu = nil
             return
         }
-        if dictation == .recording || dictation == .starting { Task { await cancelDictation() } }
+        if listShown {
+            listShown = false
+            return
+        }
+        // Mid-sentence Esc does nothing (the key monitor's rule), so a recording never ends here.
         hide()
     }
 
-    /// Throws away what is being said. A start still in flight sees `.idle` on
-    /// landing and cancels itself, since this cancel may reach the server first.
+    /// Throws away what is being said: ⌘Esc, or quitting. A start still in
+    /// flight sees `.idle` on landing and cancels itself, since this cancel may
+    /// reach the server first.
     func cancelDictation() async {
         dictation = .idle
         _ = try? await store.call(server, "cancel_transcription", as: JSON.self)

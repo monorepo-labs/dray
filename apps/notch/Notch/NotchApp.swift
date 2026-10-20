@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import SwiftUI
 
 @main
@@ -84,11 +85,20 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let server = Server(id: UUID(), name: "This Mac", url: "")
         let composer = Composer(store: Store(local: server, read: localServer), server: server.id)
         self.composer = composer
-        composer.hide = { [weak self] in self?.panel?.orderOut(nil) }
-        composer.resized = { [weak self] size in self?.place(size) }
+        composer.hide = { [weak self, weak composer] in
+            composer?.shown = false
+            // After the close animation, and only if nothing reopened it meanwhile.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                if composer?.shown == false { self?.panel?.orderOut(nil) }
+            }
+        }
+        composer.reposition = { [weak self] in self?.place() }
 
+        // One size for good, the cards drawn inside it: SwiftUI can animate a
+        // card growing and shrinking, where a window resized under it jumps.
+        // Its empty, clear part lets clicks through to whatever is beneath.
         let panel = NotchPanel(
-            contentRect: NSRect(x: 0, y: 0, width: Composer.width, height: 120),
+            contentRect: NSRect(origin: .zero, size: Self.size),
             styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
             backing: .buffered, defer: false
         )
@@ -97,15 +107,18 @@ final class Delegate: NSObject, NSApplicationDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        // The cards draw their own; a window shadow would trace the clear window.
+        panel.hasShadow = false
         panel.contentView = NSHostingView(rootView: NotchView(composer: composer).environment(composer.store))
         self.panel = panel
         // The panel's keys, here rather than on views, which answer only
         // while focus sits inside them. Key codes: Escape 53, N 45, F 3, ↓ 125, ↑ 126.
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak composer, weak panel] e in
-            guard panel?.isVisible == true, let composer else { return e }
+            guard panel?.isVisible == true, let composer, composer.shown else { return e }
             let mods = e.modifierFlags.intersection([.command, .shift, .option, .control])
             switch (e.keyCode, mods) {
+            // Throwing away speech takes ⌘Esc, the hot key below: a bare Esc is too easy a slip mid-sentence.
+            case (53, _) where composer.listening: break
             case (53, _): composer.escape()
             case (45, .command): composer.pick(.new)
             case (3, .command): composer.searches += 1
@@ -120,6 +133,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
         }
 
         hotkey = ModifierTap { [weak self] in self?.pressed() }
+        let cancel = CancelHotKey { [weak composer] in Task { await composer?.cancelDictation() } }
+        composer.listeningChanged = { cancel.held = $0 }
         // The tap's twin for other processes: Dray.app, or a script driving the panel.
         DistributedNotificationCenter.default().addObserver(forName: .init("com.yogesh.dray.notch.tap"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.pressed() }
@@ -130,24 +145,29 @@ final class Delegate: NSObject, NSApplicationDelegate {
     /// So a double tap opens it listening, with no timer to wait out.
     private func pressed() {
         guard let panel, let composer else { return }
-        if panel.isVisible {
+        if composer.shown {
             Task { await composer.toggleDictation() }
         } else {
             composer.opened()
-            place(panel.frame.size)
+            place()
             panel.makeKeyAndOrderFront(nil)
+            composer.shown = true
         }
     }
 
+    /// Room for the composer, the task list and an open dropdown, plus shadow.
+    static let size = CGSize(width: Composer.width + 48, height: 680)
+
     /// Anchors the panel to its placement: hanging from the notch, or centred
     /// above the Dock. A notch pick on a display with none falls to top centre.
-    private func place(_ size: CGSize) {
+    private func place() {
         guard let panel, let composer else { return }
         let notched = NSScreen.screens.first { $0.safeAreaInsets.top > 0 }
         let screen = (composer.placement == .notch ? notched : nil) ?? NSScreen.main ?? NSScreen.screens[0]
+        let size = Self.size
         let origin = switch composer.placement {
         case .notch: NSPoint(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - size.height)
-        case .bottom: NSPoint(x: screen.visibleFrame.midX - size.width / 2, y: screen.visibleFrame.minY + 12)
+        case .bottom: NSPoint(x: screen.visibleFrame.midX - size.width / 2, y: screen.visibleFrame.minY)
         }
         composer.notchHeight = composer.placement == .notch ? screen.safeAreaInsets.top : 0
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
@@ -198,6 +218,35 @@ final class ModifierTap {
     private static func inputs() -> UInt32 {
         [CGEventType.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown].reduce(0) {
             $0 &+ CGEventSource.counterForEventType(.combinedSessionState, eventType: $1)
+        }
+    }
+}
+
+/// ⌘Esc, held as a Carbon hot key while recording and given back after. The
+/// panel's own key monitor never sees ⌘Esc, which is taken before AppKit, and
+/// a hot key needs no Accessibility grant.
+final class CancelHotKey {
+    private var ref: EventHotKeyRef?
+    private static var action: () -> Void = {}
+
+    init(_ action: @escaping () -> Void) {
+        Self.action = action
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
+            DispatchQueue.main.async { CancelHotKey.action() }
+            return noErr
+        }, 1, &spec, nil, nil)
+    }
+
+    var held = false {
+        didSet {
+            guard held != oldValue else { return }
+            if held {
+                RegisterEventHotKey(UInt32(kVK_Escape), UInt32(cmdKey), EventHotKeyID(signature: 0x4452_4159, id: 1), GetApplicationEventTarget(), 0, &ref)
+            } else if let ref {
+                UnregisterEventHotKey(ref)
+                self.ref = nil
+            }
         }
     }
 }
