@@ -166,15 +166,7 @@ impl Engine {
         let mut loaded = guard.take().expect("checked above");
 
         let (loaded, result) = tokio::task::spawn_blocking(move || {
-            // Here rather than at the stop, so the parked WAV stays the whole
-            // recording and a retry trims it afresh.
-            let audio = super::audio::trim_silence(audio);
-            let result = loaded
-                .session
-                .run(&audio, &RunOptions::default())
-                .map(|t| t.text)
-                .context("transcription failed");
-
+            let result = run_whole(&mut loaded.session, audio);
             (loaded, result)
         })
         .await
@@ -186,7 +178,39 @@ impl Engine {
         // `?` above leaves the slot empty, which reloads.
         *guard = Some(loaded);
 
-        Ok(result?.trim().to_string())
+        result
+    }
+
+    /// Takes the model out of the slot for a live stream, loading it first.
+    ///
+    /// `None` for a model that cannot stream, which stays in the slot for the
+    /// batch run at the stop — so this is also the warm every press starts.
+    /// The slot is empty while lent, as it is during [`Engine::transcribe`]'s
+    /// own run; [`Engine::give_back`] puts it back.
+    pub async fn lend(&self, token: u64, model_id: &str, path: &Path) -> Option<Session> {
+        self.warm(token, model_id.to_string(), path.to_path_buf()).await;
+
+        let mut guard = self.loaded.lock().await;
+        let streams = guard
+            .as_ref()
+            .is_some_and(|l| l.model_id == model_id && l.session.model().capabilities().supports_streaming);
+        if self.token() != token || !streams {
+            return None;
+        }
+        guard.take().map(|l| l.session)
+    }
+
+    /// Returns a lent model, unless an `unload` since `token` said the reader
+    /// is done with it.
+    pub async fn give_back(&self, token: u64, model_id: &str, session: Session) {
+        let mut guard = self.loaded.lock().await;
+        if self.token() == token && guard.is_none() {
+            *guard = Some(Loaded { model_id: model_id.to_string(), session });
+        }
+        drop(guard);
+        // A recording outlasting the idle window let its sleeper find an empty
+        // slot and leave; this one drops the model it just put back.
+        self.touch();
     }
 
     /// What [`Engine::warm`] must be handed to be allowed to install.
@@ -276,6 +300,24 @@ impl Engine {
 
         *self.loaded.lock().await = None;
     }
+}
+
+/// One run over a whole recording, pauses trimmed. Blocking.
+///
+/// Shared by [`Engine::transcribe`] and the live decoder's fallback, so a
+/// stream that could not answer reads the audio exactly as the batch run does.
+/// The trim happens here rather than at the stop, so the parked WAV stays the
+/// whole recording and a retry trims it afresh.
+pub(super) fn run_whole(session: &mut Session, audio: Vec<f32>) -> Result<String> {
+    if audio.len() < super::audio::TARGET_RATE as usize / 4 {
+        return Ok(String::new());
+    }
+    let audio = super::audio::trim_silence(audio);
+    let text = session
+        .run(&audio, &RunOptions::default())
+        .context("transcription failed")?
+        .text;
+    Ok(text.trim().to_string())
 }
 
 async fn load(path: &Path) -> Result<Session> {
