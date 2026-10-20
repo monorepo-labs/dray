@@ -205,13 +205,21 @@ struct NotchView: View {
                 }
             }
         }
+        if composer.lostCut != nil {
+            HStack(spacing: 8) {
+                Text("Speech before a screenshot didn't transcribe.").font(.caption).foregroundStyle(.secondary)
+                Button("Retry") { Task { await composer.retryCut() } }
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.semibold))
+            }
+        }
     }
 
     private var rowList: some View {
         VStack(spacing: 10) {
             ForEach(groups, id: \.first) { ids in
-                if ids.count == 1, let file = composer.rows.first(where: { $0.id == ids[0] })?.file {
-                    FileRow(path: file, label: composer.label(file)) { remove(ids[0]) }
+                if ids.count == 1, let row = composer.rows.first(where: { $0.id == ids[0] }), let file = row.file {
+                    FileRow(path: file, label: composer.label(row)) { remove(ids[0]) }
                         .id(ids[0])
                         .reorderable(ids[0], move)
                         .transition(.scale(scale: 0.8).combined(with: .opacity))
@@ -219,8 +227,8 @@ struct NotchView: View {
                     ScrollView(.horizontal) {
                         HStack(spacing: 8) {
                             ForEach(ids, id: \.self) { id in
-                                if let file = composer.rows.first(where: { $0.id == id })?.file {
-                                    FileTile(path: file, label: composer.label(file)) { remove(id) }
+                                if let row = composer.rows.first(where: { $0.id == id }), let file = row.file {
+                                    FileTile(path: file, label: composer.label(row)) { remove(id) }
                                         .reorderable(id, move)
                                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                                 }
@@ -243,7 +251,7 @@ struct NotchView: View {
     private var groups: [[UUID]] {
         var out: [[UUID]] = []
         var lastWasFile = false
-        for row in composer.rows {
+        for row in composer.rows where !row.pending {
             if row.file != nil, lastWasFile { out[out.count - 1].append(row.id) } else { out.append([row.id]) }
             lastWasFile = row.file != nil
         }

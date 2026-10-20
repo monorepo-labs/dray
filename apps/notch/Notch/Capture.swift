@@ -14,8 +14,6 @@ enum Capture {
     /// The sound macOS makes for its own screenshots.
     private static let shutter = NSSound(contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif", byReference: true)
 
-    static var running: Bool { overlay != nil }
-
     /// A finished capture: the file the draft sends, and the picture with the
     /// spot on screen it was taken from, for its flight into the notch.
     struct Shot {
@@ -361,6 +359,8 @@ private struct MarkingView: View {
                     picking = CGRect(x: min(start.x, g.location.x), y: min(start.y, g.location.y),
                                      width: abs(g.location.x - start.x), height: abs(g.location.y - start.y))
                 } else if let (i, last) = moving {
+                    // Delete or ⌘Z mid-drag can take the mark away under the pointer.
+                    guard model.marks.indices.contains(i) else { return moving = nil }
                     let dx = g.location.x - last.x, dy = g.location.y - last.y
                     model.marks[i].points = model.marks[i].points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
                     moving = (i, g.location)

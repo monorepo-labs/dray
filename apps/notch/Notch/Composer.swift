@@ -8,6 +8,9 @@ struct Row: Identifiable, Hashable {
     var text: String
     let said: Bool
     var file: String? = nil
+    /// A screenshot's place, held from the press so speech said meanwhile
+    /// lands around it rather than ahead of it. Drawn as nothing.
+    var pending = false
 }
 
 enum Target: Hashable {
@@ -59,7 +62,13 @@ final class Composer {
     var notice: String? { didSet { retryPath = nil } }
     /// The recording a failed transcription kept, offered beside its notice.
     private(set) var retryPath: String?
+    /// Speech a mid-recording cut could not transcribe, and the screenshot it
+    /// belongs ahead of. Apart from `notice`, which the shot's own row retires:
+    /// those words have already left the recording, so this is their only copy.
+    private(set) var lostCut: (path: String, before: UUID)?
     var sending = false
+    /// A screenshot is in flight; Send waits for its row.
+    var capturing = false
     /// Bumped to put focus in the input: every open, and every new task.
     var opens = 0
     /// Drawn open; the window lags it on the way out, so the close can animate.
@@ -122,7 +131,7 @@ final class Composer {
     /// or a file's name — so the model can tell which words are about which
     /// image when they arrive as blocks of their own.
     var prompt: String {
-        (rows.map { $0.file.map { "[\(label($0))]" } ?? $0.text } + [typing])
+        (rows.map { $0.file == nil ? $0.text : "[\(label($0))]" } + [typing])
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
@@ -131,10 +140,30 @@ final class Composer {
     /// An image numbered by its place among the draft's images, the order its
     /// block reaches the model in; any other file by its name, which the model
     /// sees as a path.
-    func label(_ file: String) -> String {
+    func label(_ row: Row) -> String {
+        guard let file = row.file else { return "" }
         guard Self.isImage(file) else { return URL(fileURLWithPath: file).lastPathComponent }
-        let images = rows.compactMap(\.file).filter(Self.isImage)
-        return "Image \((images.firstIndex(of: file) ?? 0) + 1)"
+        // By row, not by path: one image dropped twice is two blocks on the wire.
+        let before = rows.prefix { $0.id != row.id }.filter { $0.file.map(Self.isImage) == true }
+        return "Image \(before.count + 1)"
+    }
+
+    /// Holds the next screenshot's place at the end of the draft.
+    func reserveShot() -> UUID {
+        let row = Row(text: "", said: false, pending: true)
+        rows.append(row)
+        return row.id
+    }
+
+    /// Puts the shot in its held place, or gives the place up for a cancel.
+    func fillShot(_ id: UUID, _ path: String?) {
+        guard let i = rows.firstIndex(where: { $0.id == id }) else { return }
+        if let path {
+            rows[i].file = path
+            rows[i].pending = false
+        } else {
+            rows.remove(at: i)
+        }
     }
 
     /// What Dray sends as pixels (`attachments.rs`): these types, up to 5MB.
@@ -148,7 +177,7 @@ final class Composer {
     var attachments: [String] { rows.compactMap(\.file) }
 
     /// An image alone is a message, as it is in Dray's own composer.
-    var canSend: Bool { !prompt.isEmpty || !attachments.isEmpty }
+    var canSend: Bool { !capturing && (!prompt.isEmpty || !attachments.isEmpty) }
 
     var modelId: String {
         Picks.usableModel(models[harness] ?? [], modelPicks[harness] ?? Picks.defaultModel[harness] ?? "", harness)
@@ -423,25 +452,48 @@ final class Composer {
     /// The words so far, as a row before the screenshot about to join the
     /// draft; the microphone stays open for what is said about it. Silence
     /// before the shot is ordinary, so it says nothing.
-    func cutDictation() async {
+    func cutDictation(before shot: UUID) async {
         guard dictation == .recording else { return }
+        await cut("cut_transcription", [:], before: shot)
+    }
+
+    /// Runs a failed cut's recording again, into the place it was cut from.
+    func retryCut() async {
+        guard let lost = lostCut else { return }
+        await cut("retry_transcription", ["path": .string(lost.path)], before: lost.before)
+    }
+
+    private func cut(_ cmd: String, _ args: [String: JSON], before shot: UUID) async {
         do {
-            let o: Outcome = try await store.call(server, "cut_transcription", timeout: .seconds(180))
-            if o.kind != "empty", o.kind != "noAudio" { place(o, tone: false) }
+            let o: Outcome = try await store.call(server, cmd, args, timeout: .seconds(180))
+            switch o.kind {
+            case "text":
+                lostCut = nil
+                if let text = o.value?.string, !text.isEmpty {
+                    rows.insert(Row(text: text, said: true), at: rows.firstIndex { $0.id == shot } ?? rows.endIndex)
+                }
+            case "empty", "noAudio":
+                lostCut = nil
+            default:
+                if let path = o.value?["audioPath"]?.string {
+                    lostCut = (path, shot)
+                } else {
+                    notice = o.value?["message"]?.string ?? "Dictation failed."
+                }
+            }
         } catch {
             notice = error.localizedDescription
         }
     }
 
-    /// Whether the model answered: words become a row, every other outcome a
-    /// notice. A cut plays no tone, since the microphone is still open.
+    /// Whether the model answered: words become a row, every other outcome a notice.
     @discardableResult
-    private func place(_ o: Outcome, tone: Bool = true) -> Bool {
+    private func place(_ o: Outcome) -> Bool {
         switch o.kind {
         case "text":
             if let text = o.value?.string, !text.isEmpty {
                 rows.append(Row(text: text, said: true))
-                if tone { Sound.stop?.play() }
+                Sound.stop?.play()
             }
             return true
         case "empty":

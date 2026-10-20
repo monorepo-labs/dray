@@ -121,7 +121,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         // while focus sits inside them. Key codes: Escape 53, N 45, F 3, ↓ 125, ↑ 126.
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak composer, weak panel] e in
             // A capture's overlay holds the keys while it runs: Esc there cancels it, not the panel.
-            guard panel?.isVisible == true, let composer, composer.shown, !Capture.running else { return e }
+            guard panel?.isVisible == true, let composer, composer.shown, !composer.capturing else { return e }
             let mods = e.modifierFlags.intersection([.command, .shift, .option, .control])
             switch (e.keyCode, mods) {
             // Throwing away speech takes ⌘Esc, the hot key below: a bare Esc is too easy a slip mid-sentence.
@@ -184,9 +184,13 @@ final class Delegate: NSObject, NSApplicationDelegate {
     /// left open, so speech and shots land in the order they came. Otherwise
     /// the panel steps aside, and comes back only if it was open.
     private func capture() {
-        guard let composer, let panel, !Capture.running, [.idle, .recording].contains(composer.dictation) else { return }
+        // Claimed here, before the first await: a second ⌘⇧2 while the first
+        // is still reading the displays would otherwise start a second overlay.
+        guard let composer, let panel, !composer.capturing, [.idle, .recording].contains(composer.dictation) else { return }
+        composer.capturing = true
         let recording = composer.dictation == .recording, wasShown = composer.shown
-        let cut = recording ? Task { await composer.cutDictation() } : nil
+        let slot = composer.reserveShot()
+        let cut = recording ? Task { await composer.cutDictation(before: slot) } : nil
         if recording {
             panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
             // Shown, not touched: its frame is far wider than its card, and over
@@ -196,6 +200,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             composer.hide()
         }
         Task {
+            defer { composer.capturing = false }
             var shot: Capture.Shot?
             var failed: String?
             do {
@@ -219,11 +224,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             }
             // The cut transcribes while the overlay is up; its words go first.
             await cut?.value
-            if let shot {
-                withAnimation(.spring(duration: 0.4, bounce: 0.5)) {
-                    composer.rows.append(Row(text: "", said: false, file: shot.path))
-                }
-            }
+            withAnimation(.spring(duration: 0.4, bounce: 0.5)) { composer.fillShot(slot, shot?.path) }
             // After the row, which retires a notice.
             if let failed { composer.notice = failed }
         }
