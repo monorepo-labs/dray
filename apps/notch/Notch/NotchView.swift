@@ -136,10 +136,10 @@ struct NotchView: View {
                 HStack(spacing: 10) {
                     Text("⌘N New")
                     Text("↑↓ Tasks")
-                    Text("Esc")
+                    Text("⌥Esc")
                 }
                 .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(.white.opacity(0.3))
                 .fixedSize()
             }
         }
@@ -213,7 +213,7 @@ struct NotchView: View {
     }
 
     private var field: some View {
-        TextField("⏎ send, ⌘⏎ add to list", text: $composer.typing, axis: .vertical)
+        TextField("", text: $composer.typing, prompt: Text("\(ModifierTap.symbol) to speak, ⌘⏎ Queue, ⏎ Send").foregroundStyle(.white.opacity(0.3)), axis: .vertical)
             .textFieldStyle(.plain)
             .lineLimit(1...6)
             .focused($focus, equals: .input)
@@ -283,11 +283,11 @@ private struct SessionList: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search tasks  ⌘F", text: $composer.search)
+                TextField("", text: $composer.search, prompt: Text("Search tasks  ⌘F").foregroundStyle(.white.opacity(0.3)))
                     .textFieldStyle(.plain)
                     .focused(focus, equals: .search)
                     .onSubmit { composer.choose() }
-                Text("↑↓ navigate  ⏎ select").font(.caption).foregroundStyle(.tertiary)
+                Text("↑↓ navigate  ⏎ select").font(.caption).foregroundStyle(.white.opacity(0.3))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)

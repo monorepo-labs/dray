@@ -39,6 +39,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var composer: Composer?
     private var hotkey: ModifierTap?
     private var keys: Any?
+    /// ⌥Esc closes the panel from anywhere: bare Esc only reaches it while it has focus.
+    private var closeKey: HotKey?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         waitForServer()
@@ -87,6 +89,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         self.composer = composer
         composer.hide = { [weak self, weak composer] in
             composer?.shown = false
+            self?.closeKey?.held = false
             // After the close animation, and only if nothing reopened it meanwhile.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 if composer?.shown == false { self?.panel?.orderOut(nil) }
@@ -133,7 +136,13 @@ final class Delegate: NSObject, NSApplicationDelegate {
         }
 
         hotkey = ModifierTap { [weak self] in self?.pressed() }
-        let cancel = CancelHotKey { [weak composer] in Task { await composer?.cancelDictation() } }
+        // ⌘Esc, which AppKit never hands the panel's key monitor.
+        let cancel = HotKey(key: kVK_Escape, mods: cmdKey) { [weak composer] in Task { await composer?.cancelDictation() } }
+        closeKey = HotKey(key: kVK_Escape, mods: optionKey) { [weak composer] in
+            // Mid-sentence it is as inert as bare Esc.
+            guard let composer, !composer.listening else { return }
+            composer.hide()
+        }
         composer.listeningChanged = { cancel.held = $0 }
         // The tap's twin for other processes: Dray.app, or a script driving the panel.
         DistributedNotificationCenter.default().addObserver(forName: .init("com.yogesh.dray.notch.tap"), object: nil, queue: .main) { [weak self] _ in
@@ -152,6 +161,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             place()
             panel.makeKeyAndOrderFront(nil)
             composer.shown = true
+            closeKey?.held = true
         }
     }
 
@@ -193,6 +203,15 @@ final class ModifierTap {
         }
     }
 
+    /// The key's symbol, for the placeholder.
+    static var symbol: String {
+        switch key {
+        case .option: "⌥"
+        case .command: "⌘"
+        default: "⌃"
+        }
+    }
+
     init(_ action: @escaping () -> Void) {
         let handle: (NSEvent) -> Void = { [weak self] e in
             guard let self else { return }
@@ -222,31 +241,48 @@ final class ModifierTap {
     }
 }
 
-/// ⌘Esc, held as a Carbon hot key while recording and given back after. The
-/// panel's own key monitor never sees ⌘Esc, which is taken before AppKit, and
-/// a hot key needs no Accessibility grant.
-final class CancelHotKey {
+/// A Carbon hot key: it reaches the panel whether or not the panel has focus,
+/// and needs no Accessibility grant. Held only while wanted, so the chord is
+/// every other app's the rest of the time.
+final class HotKey {
+    private static var actions: [UInt32: () -> Void] = [:]
+    private static var installed = false
+    private let id: UInt32
+    private let key: UInt32
+    private let mods: UInt32
     private var ref: EventHotKeyRef?
-    private static var action: () -> Void = {}
 
-    init(_ action: @escaping () -> Void) {
-        Self.action = action
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
-            DispatchQueue.main.async { CancelHotKey.action() }
-            return noErr
-        }, 1, &spec, nil, nil)
+    init(key: Int, mods: Int, _ action: @escaping () -> Void) {
+        Self.install()
+        id = UInt32(Self.actions.count + 1)
+        self.key = UInt32(key)
+        self.mods = UInt32(mods)
+        Self.actions[id] = action
     }
 
     var held = false {
         didSet {
             guard held != oldValue else { return }
             if held {
-                RegisterEventHotKey(UInt32(kVK_Escape), UInt32(cmdKey), EventHotKeyID(signature: 0x4452_4159, id: 1), GetApplicationEventTarget(), 0, &ref)
+                RegisterEventHotKey(key, mods, EventHotKeyID(signature: 0x4452_4159, id: id), GetApplicationEventTarget(), 0, &ref)
             } else if let ref {
                 UnregisterEventHotKey(ref)
                 self.ref = nil
             }
         }
+    }
+
+    /// One handler for every hot key, told apart by the id each registered with.
+    private static func install() {
+        guard !installed else { return }
+        installed = true
+        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+            var hit = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hit)
+            let id = hit.id
+            DispatchQueue.main.async { HotKey.actions[id]?() }
+            return noErr
+        }, 1, &spec, nil, nil)
     }
 }
