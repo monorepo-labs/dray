@@ -70,6 +70,18 @@ extension Store {
     }
 }
 
+/// What a dictation leaves behind, per session, outliving the button: a send
+/// made on leaving a session answers into a view that is gone, and its words,
+/// its sentence or its kept file must still be there on the way back.
+@MainActor @Observable
+final class Dictations {
+    static let shared = Dictations()
+    var transcribing: Set<SessionKey> = []
+    var notes: [SessionKey: String] = [:]
+    /// A recording the server never answered for, kept for Retry: the only copy of the speech.
+    var kept: [SessionKey: URL] = [:]
+}
+
 /// Records on the phone, transcribes on the server, appends to the draft.
 /// The mic is drawn only where the server says it can transcribe; a recording
 /// or answer already under way stays on screen through a dropped socket, or
@@ -77,14 +89,21 @@ extension Store {
 struct DictateButton: View {
     @Environment(Store.self) private var store
     let key: SessionKey
+    private let shared = Dictations.shared
     @State private var recorder: AVAudioRecorder?
-    @State private var transcribing = false
-    @State private var note: String?
-    /// A recording the server never answered for, kept for Retry: the only copy of the speech.
-    @State private var kept: URL?
     /// False once the controls are gone, so a start still waiting on the
     /// permission prompt does not open a microphone nothing can stop.
     @State private var shown = false
+
+    private var transcribing: Bool { shared.transcribing.contains(key) }
+    private var note: String? {
+        get { shared.notes[key] }
+        nonmutating set { shared.notes[key] = newValue }
+    }
+    private var kept: URL? {
+        get { shared.kept[key] }
+        nonmutating set { shared.kept[key] = newValue }
+    }
 
     var body: some View {
         let can = store.canDictate(key.server)
@@ -177,8 +196,8 @@ struct DictateButton: View {
     /// The file goes once the server has answered, whatever it said; a send
     /// that never reached it keeps the file for Retry.
     private func send(_ url: URL) async {
-        transcribing = true
-        defer { transcribing = false }
+        shared.transcribing.insert(key)
+        defer { shared.transcribing.remove(key) }
         do {
             let outcome = try await store.transcribe(key.server, wav: url)
             try? FileManager.default.removeItem(at: url)
