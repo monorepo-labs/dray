@@ -404,7 +404,9 @@ pub(super) fn trim_silence(audio: Vec<f32>) -> Vec<f32> {
     for (i, v) in voiced.iter().enumerate() {
         run = if *v { run + 1 } else { 0 };
         if run >= VAD_ONSET {
-            let from = (i + 1 - run).saturating_sub(VAD_PAD);
+            // The run's start and its lead-in once; after that only the new
+            // frame and its tail, or long speech refills a growing slice.
+            let from = if run == VAD_ONSET { (i + 1 - run).saturating_sub(VAD_PAD) } else { i };
             let to = (i + VAD_PAD).min(keep.len() - 1);
             keep[from..=to].fill(true);
         }
@@ -492,10 +494,14 @@ mod tests {
         let audio = super::super::recordings::decode(wav).unwrap();
         let secs = |n: usize| n as f32 / TARGET_RATE as f32;
 
-        let kept = secs(trim_silence(audio.clone()).len());
+        let energy = |a: &[f32]| a.iter().map(|s| s * s).sum::<f32>();
+        let trimmed = trim_silence(audio.clone());
+        let kept = secs(trimmed.len());
 
         assert!(kept < secs(audio.len()) - 1.0, "kept {kept}s of {}s", secs(audio.len()));
-        assert!(kept > 2.0, "kept only {kept}s");
+        // The pause is digital silence, so every bit of energy is speech:
+        // dropping any word drops some of it.
+        assert!(energy(&trimmed) > energy(&audio) * 0.999, "speech was cut");
     }
 
     /// Nothing the detector calls speech is no reason to send nothing.
