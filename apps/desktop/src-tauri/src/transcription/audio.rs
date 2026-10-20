@@ -315,18 +315,30 @@ impl Recording {
     /// the model being broken.
     pub fn finish(self) -> Result<Option<Vec<f32>>> {
         drop(self.stream);
+        Self::shaped(&self.samples, self.channels, self.rate)
+    }
 
-        let captured = self
-            .samples
-            .lock()
-            .map_err(|_| anyhow!("recording buffer was poisoned"))?
-            .clone();
+    /// What has been said so far, taken out of the buffer with the microphone
+    /// left open, so the next stretch starts empty. The Notch cuts here to put
+    /// a screenshot between two stretches of speech without losing a word to a
+    /// stop and a start. Silence answers `None`, as [`Recording::finish`] does.
+    pub fn cut(&self) -> Result<Option<Vec<f32>>> {
+        Self::shaped(&self.samples, self.channels, self.rate)
+    }
+
+    /// Empties the buffer into 16kHz mono, `None` where it held only silence.
+    fn shaped(samples: &Mutex<Vec<f32>>, channels: u16, rate: u32) -> Result<Option<Vec<f32>>> {
+        let captured = std::mem::take(
+            &mut *samples
+                .lock()
+                .map_err(|_| anyhow!("recording buffer was poisoned"))?,
+        );
 
         if captured.iter().all(|s| s.abs() < SILENCE_PEAK) {
             return Ok(None);
         }
 
-        Ok(Some(resample(to_mono(&captured, self.channels), self.rate)))
+        Ok(Some(resample(to_mono(&captured, channels), rate)))
     }
 }
 

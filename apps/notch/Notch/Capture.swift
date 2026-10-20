@@ -2,74 +2,134 @@ import AppKit
 import ScreenCaptureKit
 import SwiftUI
 
-/// A screenshot marked up before it joins the draft. The screen under the
-/// pointer is frozen first, so what is marked cannot move under the pen; the
-/// reader drags a region over it, draws, and Done crops the region with its
-/// marks to an image file — a path, which is all `send_msg` takes.
+/// A screenshot marked up before it joins the draft. The screen stays live
+/// under a clear overlay until the reader lets go of a region drag: that is
+/// the shot, taken then and there with the shutter sound. The region then
+/// holds the still and takes ink; Done writes it with its marks to an image
+/// file — a path, which is all `send_msg` takes.
 @MainActor
 enum Capture {
     private static var overlay: NotchPanel?
     private static var keys: Any?
+    /// The sound macOS makes for its own screenshots.
+    private static let shutter = NSSound(contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif", byReference: true)
 
-    /// The written image's path, or `nil` for a cancel.
-    static func run() async throws -> String? {
-        let mouse = NSEvent.mouseLocation
-        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main
-        else { return nil }
-        let shot = try await snapshot(screen)
-        let marked: CGImage? = await withCheckedContinuation { done in
-            show(shot, on: screen) { done.resume(returning: $0) }
-        }
-        return try marked.map(write)
+    static var running: Bool { overlay != nil }
+
+    /// A finished capture: the file the draft sends, and the picture with the
+    /// spot on screen it was taken from, for its flight into the notch.
+    struct Shot {
+        let path: String
+        let image: CGImage
+        let frame: NSRect
     }
 
-    /// The whole display, minus this app's own windows, so the panel closing
-    /// beside it never lands in the shot.
-    private static func snapshot(_ screen: NSScreen) async throws -> CGImage {
+    /// `nil` for a cancel.
+    static func run() async throws -> Shot? {
         guard CGPreflightScreenCaptureAccess() else {
             _ = CGRequestScreenCaptureAccess()
             throw DrayError("Allow Dray Notch in System Settings → Privacy & Security → Screen Recording, then try again.")
         }
+        let mouse = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main
+        else { return nil }
         let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first(where: { $0.displayID == id }) else { throw DrayError("No display to capture.") }
-        let me = content.applications.filter { $0.processID == getpid() }
-        let config = SCStreamConfiguration()
-        config.width = Int(CGFloat(display.width) * screen.backingScaleFactor)
-        config.height = Int(CGFloat(display.height) * screen.backingScaleFactor)
-        config.showsCursor = false
-        return try await SCScreenshotManager.captureImage(
-            contentFilter: SCContentFilter(display: display, excludingApplications: me, exceptingWindows: []),
-            configuration: config
-        )
+        // This app's windows are left out: the overlay's dimming, and the notch kept up over it.
+        let filter = SCContentFilter(display: display, excludingApplications: content.applications.filter { $0.processID == getpid() }, exceptingWindows: [])
+        let scale = screen.backingScaleFactor
+        let model = Marking(size: screen.frame.size) { rect in
+            let config = SCStreamConfiguration()
+            config.sourceRect = rect
+            config.width = Int(rect.width * scale)
+            config.height = Int(rect.height * scale)
+            config.showsCursor = false
+            let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            if image != nil {
+                shutter?.stop()
+                shutter?.play()
+            }
+            return image
+        }
+        model.notchHeight = screen.safeAreaInsets.top
+        let marked: (CGImage, CGRect)? = await withCheckedContinuation { done in
+            show(model, on: screen) { done.resume(returning: $0) }
+        }
+        guard let (image, region) = marked else { return nil }
+        // The region is top-down within the screen; a window frame is bottom-up across all of them.
+        let frame = NSRect(x: screen.frame.minX + region.minX, y: screen.frame.maxY - region.maxY,
+                           width: region.width, height: region.height)
+        return Shot(path: try write(image), image: image, frame: frame)
     }
 
-    private static func show(_ shot: CGImage, on screen: NSScreen, finish: @escaping (CGImage?) -> Void) {
-        let model = Marking(shot: shot, size: screen.frame.size)
+    /// The picture shrinks from where it was taken into the panel, so the
+    /// reader sees where it went. Done once it lands.
+    static func fly(_ image: CGImage, from: NSRect, to center: NSPoint) async {
+        let window = NSPanel(contentRect: from, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        window.level = .screenSaver
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.ignoresMouseEvents = true
+        let view = NSImageView(image: NSImage(cgImage: image, size: from.size))
+        view.imageScaling = .scaleAxesIndependently
+        view.wantsLayer = true
+        view.layer?.cornerRadius = 10
+        view.layer?.masksToBounds = true
+        window.contentView = view
+        window.orderFrontRegardless()
+        let scale = min(96 / max(from.width, 1), 72 / max(from.height, 1))
+        let size = CGSize(width: from.width * scale, height: from.height * scale)
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.5
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 0, 0.2, 1)
+                window.animator().setFrame(NSRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
+                                                  width: size.width, height: size.height), display: true)
+                window.animator().alphaValue = 0.5
+            } completionHandler: {
+                window.orderOut(nil)
+                done.resume()
+            }
+        }
+    }
+
+    private static func show(_ model: Marking, on screen: NSScreen, finish: @escaping ((CGImage, CGRect)?) -> Void) {
         let panel = NotchPanel(contentRect: screen.frame, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
-        // Over the menu bar and the notch panel both.
+        // Over the menu bar; the notch panel is lifted over this while it runs.
         panel.level = .screenSaver
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        let close = { (image: CGImage?) in
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        // Set outright, or the clear parts of a live screen would pass the drag through.
+        panel.ignoresMouseEvents = false
+        panel.acceptsMouseMovedEvents = true
+        // macOS honours a cursor change from the active app alone, so the
+        // capture takes the front for its run and hands it back after.
+        let previous = NSWorkspace.shared.frontmostApplication
+        let close = { (image: (CGImage, CGRect)?) in
             // A second finish would resume the continuation twice, which traps.
             guard overlay != nil else { return }
             if let keys { NSEvent.removeMonitor(keys) }
             keys = nil
             overlay?.orderOut(nil)
             overlay = nil
+            if previous?.processIdentifier != getpid() { previous?.activate() }
             finish(image)
         }
         model.finish = close
         panel.contentView = NSHostingView(rootView: MarkingView(model: model))
         panel.setFrame(screen.frame, display: true)
         overlay = panel
+        NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
-        // Key codes: Escape 53, Return 36, Z 6.
+        // Key codes: Escape 53, Return 36, Z 6, Delete 51, Forward Delete 117.
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
             switch (e.keyCode, e.modifierFlags.intersection([.command, .shift, .option, .control])) {
             case (53, _): close(nil)
-            case (36, []): model.done()
-            case (6, .command): _ = model.marks.popLast()
+            case (36, []): model.region == nil ? model.wholeScreen() : model.done()
+            case (6, .command): model.undo()
+            case (51, []), (117, []): model.deleteSelected()
             default: return e
             }
             return nil
@@ -107,171 +167,266 @@ enum Capture {
     }
 }
 
+/// One pen stroke.
 struct Mark {
-    enum Tool { case pen, arrow }
-    let tool: Tool
-    /// An arrow keeps two: tail and head.
     var points: [CGPoint]
 }
 
 @MainActor @Observable
 final class Marking {
-    let shot: CGImage
-    /// The screen in points; the shot is the same in pixels.
+    /// The screen in points.
     let size: CGSize
     var region: CGRect?
+    /// The region as it was the moment it was picked; `nil` while that read is out.
+    var still: CGImage?
     var marks: [Mark] = []
-    var tool = Mark.Tool.pen
-    @ObservationIgnored var finish: (CGImage?) -> Void = { _ in }
+    /// The marks before each draw, move or delete, for ⌘Z.
+    var history: [[Mark]] = []
+    /// Clicked or just moved; Delete removes it.
+    var selected: Int?
+    /// How far down the notch reaches, which the toolbar keeps clear of.
+    var notchHeight: CGFloat = 0
+    @ObservationIgnored let grab: (CGRect) async -> CGImage?
+    @ObservationIgnored var finish: ((CGImage, CGRect)?) -> Void = { _ in }
 
-    init(shot: CGImage, size: CGSize) {
-        self.shot = shot
+    init(size: CGSize, grab: @escaping (CGRect) async -> CGImage?) {
         self.size = size
+        self.grab = grab
     }
 
-    /// The region with its marks, at the shot's own resolution. No region is the whole screen.
+    /// The shot: this region off the live screen, now. Ink made on an earlier
+    /// region belonged to that picture, so it goes with it.
+    func take(_ r: CGRect) {
+        region = r
+        still = nil
+        marks = []
+        history = []
+        selected = nil
+        Task {
+            let image = await grab(r)
+            // A newer pick landed first; its read is the one that counts.
+            guard region == r else { return }
+            still = image
+            if image == nil { region = nil }
+        }
+    }
+
+    func wholeScreen() { take(CGRect(origin: .zero, size: size)) }
+
+    func checkpoint() { history.append(marks) }
+
+    func undo() {
+        guard let last = history.popLast() else { return }
+        marks = last
+        selected = nil
+    }
+
+    func deleteSelected() {
+        guard let i = selected, marks.indices.contains(i) else { return }
+        checkpoint()
+        marks.remove(at: i)
+        selected = nil
+    }
+
+    /// The topmost mark within reach of `p`, by any segment of its line.
+    func hit(_ p: CGPoint) -> Int? {
+        marks.indices.last { i in
+            let pts = marks[i].points
+            if pts.count == 1 { return hypot(p.x - pts[0].x, p.y - pts[0].y) <= 10 }
+            return zip(pts, pts.dropFirst()).contains { a, b in
+                let d = CGPoint(x: b.x - a.x, y: b.y - a.y)
+                let t = max(0, min(1, ((p.x - a.x) * d.x + (p.y - a.y) * d.y) / max(d.x * d.x + d.y * d.y, 0.0001)))
+                return hypot(p.x - a.x - t * d.x, p.y - a.y - t * d.y) <= 10
+            }
+        }
+    }
+
+    /// The still with its marks, at the still's own resolution.
     func done() {
-        let r = (region ?? CGRect(origin: .zero, size: size)).intersection(CGRect(origin: .zero, size: size))
-        let scale = CGFloat(shot.width) / size.width
-        guard !r.isEmpty, let cropped = shot.cropping(to: CGRect(x: r.minX * scale, y: r.minY * scale, width: r.width * scale, height: r.height * scale).integral)
-        else { return finish(nil) }
+        guard let r = region, let still else { return }
+        let scale = CGFloat(still.width) / r.width
         let renderer = ImageRenderer(content: ZStack(alignment: .topLeading) {
-            Image(decorative: cropped, scale: scale)
+            Image(decorative: still, scale: scale)
             Strokes(marks: marks).offset(x: -r.minX, y: -r.minY)
         }
         .frame(width: r.width, height: r.height, alignment: .topLeading)
         .clipped())
         renderer.scale = scale
-        finish(renderer.cgImage)
+        finish(renderer.cgImage.map { ($0, r) })
     }
 }
 
-/// Every mark, one red. Drawn the same on screen and into the written image.
+/// Every mark, one red. Drawn the same on screen and into the written image;
+/// a wider white pass under a mark is its hover and selection halo.
 private struct Strokes: View {
     let marks: [Mark]
+    var color = Color.red
+    var width: CGFloat = 4
 
     var body: some View {
         Path { p in
-            for m in marks {
-                switch m.tool {
-                case .pen:
-                    p.addLines(m.points)
-                case .arrow:
-                    guard let a = m.points.first, let b = m.points.last, a != b else { continue }
-                    p.move(to: a)
-                    p.addLine(to: b)
-                    let angle = atan2(b.y - a.y, b.x - a.x)
-                    for side in [CGFloat.pi * 0.8, -CGFloat.pi * 0.8] {
-                        p.move(to: b)
-                        p.addLine(to: CGPoint(x: b.x + 18 * cos(angle + side), y: b.y + 18 * sin(angle + side)))
-                    }
-                }
-            }
+            for m in marks { p.addLines(m.points) }
         }
-        .stroke(.red, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+        .stroke(color, style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
     }
 }
 
-/// The frozen screen, dimmed outside the region. A drag outside the region
-/// picks a new one; inside it, it draws with the current tool.
+/// The live screen under a clear sheet. A drag outside the region picks a new
+/// one; inside it, it draws on the still, and a drag on a mark moves it.
 private struct MarkingView: View {
     @Bindable var model: Marking
-    @State private var selecting: CGPoint?
+    /// A region being dragged out, not yet taken.
+    @State private var picking: CGRect?
+    @State private var pickStart: CGPoint?
     @State private var drawing = false
+    @State private var moving: (index: Int, last: CGPoint)?
+    @State private var hovered: Int?
+    /// Over the picked region, where a drag draws; the dot cursor says so.
+    @State private var overRegion = false
+
+    /// The ink's red in a thin white ring, so it reads over any screen. macOS
+    /// has no dot of its own: its shape pointer is iPad and visionOS only.
+    private static let dot = Image(nsImage: NSImage(size: NSSize(width: 12, height: 12), flipped: false) { rect in
+        NSColor.white.setFill()
+        NSBezierPath(ovalIn: rect).fill()
+        NSColor.systemRed.setFill()
+        NSBezierPath(ovalIn: rect.insetBy(dx: 2, dy: 2)).fill()
+        return true
+    })
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            Image(decorative: model.shot, scale: CGFloat(model.shot.width) / model.size.width)
-            Path { p in
-                p.addRect(CGRect(origin: .zero, size: model.size))
-                if let r = model.region { p.addRect(r) }
-            }
-            .fill(.black.opacity(0.45), style: FillStyle(eoFill: true))
-            if let r = model.region {
+            // Clear to the eye, solid to the mouse. Any fainter rounds to an
+            // alpha of zero, and the cursor goes to whatever app is beneath.
+            Color.black.opacity(0.01)
+            if let r = picking ?? model.region {
+                Path { p in
+                    p.addRect(CGRect(origin: .zero, size: model.size))
+                    p.addRect(r)
+                }
+                .fill(.black.opacity(0.35), style: FillStyle(eoFill: true))
+                if picking == nil, let still = model.still {
+                    Image(decorative: still, scale: CGFloat(still.width) / r.width)
+                        .offset(x: r.minX, y: r.minY)
+                }
                 Rectangle().stroke(.white.opacity(0.8), lineWidth: 1)
                     .frame(width: r.width, height: r.height)
                     .offset(x: r.minX, y: r.minY)
+            }
+            ForEach([model.selected, hovered].compactMap { $0 }.filter { model.marks.indices.contains($0) }, id: \.self) { i in
+                Strokes(marks: [model.marks[i]], color: .white.opacity(i == model.selected ? 0.9 : 0.5), width: 10)
             }
             Strokes(marks: model.marks)
         }
         .frame(width: model.size.width, height: model.size.height, alignment: .topLeading)
         .contentShape(Rectangle())
         .gesture(drag)
-        .pointerStyle(.rectSelection)
-        .overlay(alignment: .topLeading) { toolbar }
+        .onContinuousHover { phase in
+            if case .active(let p) = phase {
+                hovered = model.hit(p)
+                overRegion = model.still != nil && model.region?.contains(p) == true
+            } else {
+                hovered = nil
+            }
+        }
+        .pointerStyle(
+            moving != nil ? .grabActive
+                : hovered != nil ? .grabIdle
+                : overRegion && picking == nil ? .image(Self.dot, hotSpot: .center)
+                : .rectSelection
+        )
+        .overlay(alignment: .topLeading) { chrome }
         .environment(\.colorScheme, .dark)
     }
 
     private var drag: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { g in
-                if selecting == nil, !drawing {
-                    if let r = model.region, r.contains(g.startLocation) {
+                if pickStart == nil, !drawing, moving == nil {
+                    if let i = model.hit(g.startLocation) {
+                        model.checkpoint()
+                        model.selected = i
+                        moving = (i, g.startLocation)
+                    } else if model.still != nil, let r = model.region, r.contains(g.startLocation) {
+                        model.checkpoint()
+                        model.selected = nil
                         drawing = true
-                        model.marks.append(Mark(tool: model.tool, points: [g.startLocation]))
+                        model.marks.append(Mark(points: [g.startLocation]))
                     } else {
-                        selecting = g.startLocation
+                        model.selected = nil
+                        pickStart = g.startLocation
                     }
                 }
-                if let start = selecting {
-                    model.region = CGRect(x: min(start.x, g.location.x), y: min(start.y, g.location.y),
-                                          width: abs(g.location.x - start.x), height: abs(g.location.y - start.y))
+                if let start = pickStart {
+                    picking = CGRect(x: min(start.x, g.location.x), y: min(start.y, g.location.y),
+                                     width: abs(g.location.x - start.x), height: abs(g.location.y - start.y))
+                } else if let (i, last) = moving {
+                    let dx = g.location.x - last.x, dy = g.location.y - last.y
+                    model.marks[i].points = model.marks[i].points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
+                    moving = (i, g.location)
                 } else if let last = model.marks.indices.last {
-                    if model.tool == .arrow {
-                        model.marks[last].points = [g.startLocation, g.location]
-                    } else {
-                        model.marks[last].points.append(g.location)
-                    }
+                    model.marks[last].points.append(g.location)
                 }
             }
-            .onEnded { _ in
-                // A click rather than a drag is no region.
-                if selecting != nil, let r = model.region, r.width < 4 || r.height < 4 { model.region = nil }
-                selecting = nil
+            .onEnded { g in
+                // Letting go is the shot; a click rather than a drag takes none.
+                if let r = picking, r.width >= 4, r.height >= 4 { model.take(r) }
+                // A click on a mark selects it; only a real move is worth an undo step.
+                if moving != nil, g.translation == .zero { _ = model.history.popLast() }
+                picking = nil
+                pickStart = nil
                 drawing = false
+                moving = nil
+                hovered = model.hit(g.location)
             }
     }
 
-    /// Under the region, or over it where the screen runs out; a hint before there is one.
-    @ViewBuilder private var toolbar: some View {
+    /// Before a region: Full screen and Cancel, where macOS's own screenshot
+    /// bar sits. While one is dragged: its size. Once taken: the toolbar,
+    /// under the region, over it, or inside its foot where the screen runs out.
+    @ViewBuilder private var chrome: some View {
         Group {
-            if let r = model.region, selecting == nil {
+            if let r = picking {
+                Text("\(Int(r.width)) × \(Int(r.height))")
+                    .font(.system(size: 13, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 6))
+                    .position(x: min(r.maxX, model.size.width - 50), y: min(r.maxY + 20, model.size.height - 14))
+                    .allowsHitTesting(false)
+            } else if let r = model.region {
                 HStack(spacing: 4) {
-                    tool(.pen, "scribble", "Pen")
-                    tool(.arrow, "arrow.up.right", "Arrow")
-                    Button { _ = model.marks.popLast() } label: { Image(systemName: "arrow.uturn.backward").frame(width: 28, height: 28) }
-                        .disabled(model.marks.isEmpty)
+                    Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward").frame(width: 28, height: 28) }
+                        .disabled(model.history.isEmpty)
                         .help("Undo (⌘Z)")
-                    Divider().frame(height: 16)
                     Button("Cancel") { model.finish(nil) }.padding(.horizontal, 8).help("Esc")
                     Button("Done") { model.done() }.padding(.horizontal, 8).fontWeight(.semibold).help("⏎")
+                        .disabled(model.still == nil)
                 }
                 .padding(4)
                 .background(.black, in: Capsule())
                 .position(
-                    x: min(max(r.midX, 160), model.size.width - 160),
-                    y: r.maxY + 32 < model.size.height ? r.maxY + 24 : max(r.minY - 24, 24)
+                    x: min(max(r.midX, 120), model.size.width - 120),
+                    y: r.maxY + 48 < model.size.height ? r.maxY + 24
+                        : r.minY - 48 > model.notchHeight + 8 ? r.minY - 24
+                        : r.maxY - 32
                 )
-            } else if model.region == nil {
-                Text("Drag to pick a region   ⏎ Whole screen   Esc Cancel")
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.black, in: Capsule())
-                    .position(x: model.size.width / 2, y: model.size.height / 2)
-                    .allowsHitTesting(false)
+            } else {
+                HStack(spacing: 4) {
+                    Button { model.wholeScreen() } label: {
+                        Label("Full screen", systemImage: "macwindow").padding(.horizontal, 10).frame(height: 28)
+                    }
+                    .help("⏎")
+                    Button("Cancel") { model.finish(nil) }.padding(.horizontal, 10).frame(height: 28).help("Esc")
+                }
+                .padding(4)
+                .background(.black, in: Capsule())
+                .position(x: model.size.width / 2, y: model.size.height - 48)
             }
         }
         .buttonStyle(.plain)
         .font(.system(size: 13))
         .foregroundStyle(.white)
-    }
-
-    private func tool(_ t: Mark.Tool, _ symbol: String, _ name: String) -> some View {
-        Button { model.tool = t } label: {
-            Image(systemName: symbol)
-                .frame(width: 28, height: 28)
-                .background(model.tool == t ? .white.opacity(0.18) : .clear, in: Circle())
-        }
-        .help(name)
     }
 }

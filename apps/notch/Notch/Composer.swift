@@ -118,11 +118,30 @@ final class Composer {
         return nil
     }
 
+    /// Each file stands in the text where it sits in the draft — `[Image 1]`,
+    /// or a file's name — so the model can tell which words are about which
+    /// image when they arrive as blocks of their own.
     var prompt: String {
-        (rows.map(\.text) + [typing])
+        (rows.map { $0.file.map { "[\(label($0))]" } ?? $0.text } + [typing])
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-            .joined(separator: "\n\n")
+            .joined(separator: " ")
+    }
+
+    /// An image numbered by its place among the draft's images, the order its
+    /// block reaches the model in; any other file by its name, which the model
+    /// sees as a path.
+    func label(_ file: String) -> String {
+        guard Self.isImage(file) else { return URL(fileURLWithPath: file).lastPathComponent }
+        let images = rows.compactMap(\.file).filter(Self.isImage)
+        return "Image \((images.firstIndex(of: file) ?? 0) + 1)"
+    }
+
+    /// What Dray sends as pixels (`attachments.rs`): these types, up to 5MB.
+    /// Anything else rides as a path the model opens itself.
+    static func isImage(_ path: String) -> Bool {
+        ["png", "jpg", "jpeg", "gif", "webp"].contains(URL(fileURLWithPath: path).pathExtension.lowercased())
+            && ((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? .max) <= 5 * 1024 * 1024
     }
 
     /// Paths for `send_msg`, which reads each and sends an image as pixels, anything else as a path.
@@ -394,26 +413,46 @@ final class Composer {
         dictation = .transcribing
         defer { dictation = .idle }
         do {
-            let o: Outcome = try await store.call(server, cmd, args, timeout: .seconds(180))
-            switch o.kind {
-            case "text":
-                if let text = o.value?.string, !text.isEmpty {
-                    rows.append(Row(text: text, said: true))
-                    Sound.stop?.play()
-                }
-                return true
-            case "empty":
-                notice = "No words heard."
-                return true
-            case "needsModel": notice = "Pick a dictation model in Dray → Settings → Transcription."
-            case "noAudio": notice = "Dray heard nothing. Check the microphone."
-            default: notice = o.value?["message"]?.string ?? "Dictation failed."
-            }
-            // Set after the notice, whose own setter clears it.
-            retryPath = o.value?["audioPath"]?.string
+            return place(try await store.call(server, cmd, args, timeout: .seconds(180)))
         } catch {
             notice = error.localizedDescription
         }
+        return false
+    }
+
+    /// The words so far, as a row before the screenshot about to join the
+    /// draft; the microphone stays open for what is said about it. Silence
+    /// before the shot is ordinary, so it says nothing.
+    func cutDictation() async {
+        guard dictation == .recording else { return }
+        do {
+            let o: Outcome = try await store.call(server, "cut_transcription", timeout: .seconds(180))
+            if o.kind != "empty", o.kind != "noAudio" { place(o, tone: false) }
+        } catch {
+            notice = error.localizedDescription
+        }
+    }
+
+    /// Whether the model answered: words become a row, every other outcome a
+    /// notice. A cut plays no tone, since the microphone is still open.
+    @discardableResult
+    private func place(_ o: Outcome, tone: Bool = true) -> Bool {
+        switch o.kind {
+        case "text":
+            if let text = o.value?.string, !text.isEmpty {
+                rows.append(Row(text: text, said: true))
+                if tone { Sound.stop?.play() }
+            }
+            return true
+        case "empty":
+            notice = "No words heard."
+            return true
+        case "needsModel": notice = "Pick a dictation model in Dray → Settings → Transcription."
+        case "noAudio": notice = "Dray heard nothing. Check the microphone."
+        default: notice = o.value?["message"]?.string ?? "Dictation failed."
+        }
+        // Set after the notice, whose own setter clears it.
+        retryPath = o.value?["audioPath"]?.string
         return false
     }
 

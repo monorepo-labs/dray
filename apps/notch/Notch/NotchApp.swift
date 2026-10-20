@@ -41,6 +41,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var keys: Any?
     /// ⌥Esc closes the panel from anywhere: bare Esc only reaches it while it has focus.
     private var closeKey: HotKey?
+    /// ⌘⇧2, beside macOS's own ⌘⇧3/4/5: a screenshot into the draft from anywhere.
+    private var captureKey: HotKey?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         waitForServer()
@@ -118,7 +120,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
         // The panel's keys, here rather than on views, which answer only
         // while focus sits inside them. Key codes: Escape 53, N 45, F 3, ↓ 125, ↑ 126.
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak composer, weak panel] e in
-            guard panel?.isVisible == true, let composer, composer.shown else { return e }
+            // A capture's overlay holds the keys while it runs: Esc there cancels it, not the panel.
+            guard panel?.isVisible == true, let composer, composer.shown, !Capture.running else { return e }
             let mods = e.modifierFlags.intersection([.command, .shift, .option, .control])
             switch (e.keyCode, mods) {
             // Throwing away speech takes ⌘Esc, the hot key below: a bare Esc is too easy a slip mid-sentence.
@@ -145,6 +148,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
             composer.hide()
         }
         composer.listeningChanged = { cancel.held = $0 }
+        captureKey = HotKey(key: kVK_ANSI_2, mods: cmdKey | shiftKey) { [weak self] in
+            self?.capture()
+        }
+        captureKey?.held = true
         // The tap's twin for other processes: Dray.app, or a script driving the panel.
         DistributedNotificationCenter.default().addObserver(forName: .init("com.yogesh.dray.notch.tap"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.pressed() }
@@ -171,20 +178,54 @@ final class Delegate: NSObject, NSApplicationDelegate {
         closeKey?.held = true
     }
 
-    /// The panel steps aside for the overlay and comes back holding the shot.
+    /// The shot flies into the notch and joins the draft. Mid-recording the
+    /// panel stays up over the overlay, so dictation can be seen running on,
+    /// and the words so far are cut off ahead of the shot with the microphone
+    /// left open, so speech and shots land in the order they came. Otherwise
+    /// the panel steps aside, and comes back only if it was open.
     private func capture() {
-        guard let composer, composer.dictation == .idle else { return }
-        composer.hide()
+        guard let composer, let panel, !Capture.running, [.idle, .recording].contains(composer.dictation) else { return }
+        let recording = composer.dictation == .recording, wasShown = composer.shown
+        let cut = recording ? Task { await composer.cutDictation() } : nil
+        if recording {
+            panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
+            // Shown, not touched: its frame is far wider than its card, and over
+            // it its own arrow beat the overlay's crosshair.
+            panel.ignoresMouseEvents = true
+        } else if wasShown {
+            composer.hide()
+        }
         Task {
+            var shot: Capture.Shot?
             var failed: String?
             do {
-                if let path = try await Capture.run() { composer.rows.append(Row(text: "", said: false, file: path)) }
+                shot = try await Capture.run()
             } catch {
                 failed = error.localizedDescription
             }
-            open()
-            // After the open, which retires any notice.
-            composer.notice = failed
+            panel.level = .statusBar
+            panel.ignoresMouseEvents = false
+            if recording { panel.makeKeyAndOrderFront(nil) } else if wasShown { open() } else { place() }
+            if let shot {
+                // Into the open card's rows, or into the notch itself while the panel is away.
+                let f = panel.frame
+                let target = switch (composer.placement, composer.shown) {
+                case (.notch, true): NSPoint(x: f.midX, y: f.maxY - composer.notchHeight - 40)
+                case (.notch, false): NSPoint(x: f.midX, y: f.maxY - composer.notchHeight / 2)
+                case (.bottom, true): NSPoint(x: f.midX, y: f.minY + 60)
+                case (.bottom, false): NSPoint(x: f.midX, y: f.minY)
+                }
+                await Capture.fly(shot.image, from: shot.frame, to: target)
+            }
+            // The cut transcribes while the overlay is up; its words go first.
+            await cut?.value
+            if let shot {
+                withAnimation(.spring(duration: 0.4, bounce: 0.5)) {
+                    composer.rows.append(Row(text: "", said: false, file: shot.path))
+                }
+            }
+            // After the row, which retires a notice.
+            if let failed { composer.notice = failed }
         }
     }
 

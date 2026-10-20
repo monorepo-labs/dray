@@ -362,8 +362,14 @@ pub async fn start_transcription(
 static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 
 /// The dictation commands the server hands to the app, for [`answer_host`].
-pub const HOSTED: [&str; 5] =
-    ["start_transcription", "stop_transcription", "transcription_level", "cancel_transcription", "retry_transcription"];
+pub const HOSTED: [&str; 6] = [
+    "start_transcription",
+    "stop_transcription",
+    "cut_transcription",
+    "transcription_level",
+    "cancel_transcription",
+    "retry_transcription",
+];
 
 /// Lets [`answer_host`] reach the recorder, which lives in the app's managed state.
 pub fn serve_host(app: &AppHandle) {
@@ -408,6 +414,8 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
             HOST_OWNS.store(false, SeqCst);
             stop_transcription(state).await.and_then(json)
         }
+        "cut_transcription" if !owns => Err("Dictation moved to Dray's window.".into()),
+        "cut_transcription" => cut_transcription(&state).await.and_then(json),
         "transcription_level" if !owns => json(0.0),
         "transcription_level" => transcription_level(state).await.and_then(json),
         "cancel_transcription" if !owns => json(()),
@@ -525,6 +533,30 @@ pub async fn stop_transcription(
     };
 
     Ok(transcribe_audio(&state, audio, saved).await)
+}
+
+/// Transcribes what has been said so far and leaves the microphone open: the
+/// Notch's screenshot, taken mid-sentence, lands between the words before it
+/// and the words after. A stop and a start would lose what was said between
+/// the two. Nothing recording, or only silence, answers `Empty` — a cut with no
+/// words before it is ordinary, not a microphone fault.
+async fn cut_transcription(state: &TranscriptionState) -> Result<TranscribeOutcome, String> {
+    let captured = match state.recording.lock().await.as_ref() {
+        Some(recording) => recording.cut().map_err(|e| e.to_string())?,
+        None => None,
+    };
+    let Some(audio) = captured else {
+        return Ok(TranscribeOutcome::Empty);
+    };
+    let saved = match recordings::save(&audio).await {
+        Ok(path) => Some(path),
+        Err(e) => {
+            eprintln!("[recording save err] {e:#}");
+            None
+        }
+    };
+
+    Ok(transcribe_audio(state, audio, saved).await)
 }
 
 /// Runs a kept recording through the model again.
