@@ -398,9 +398,9 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
         }
         "start_transcription" => {
             let started = start_transcription(state).await;
-            if matches!(started, Ok(None)) {
-                HOST_OWNS.store(true, SeqCst);
-            }
+            // A refused start replaced nothing, so a lost recording it found is
+            // still the Notch's to stop.
+            HOST_OWNS.store(owns || matches!(started, Ok(None)), SeqCst);
             started.and_then(json)
         }
         "stop_transcription" if !owns => Err("Dictation moved to Dray's window.".into()),
