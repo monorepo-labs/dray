@@ -391,7 +391,8 @@ final class Composer {
         self.sent = true
         Task {
             try? await Task.sleep(for: .milliseconds(900))
-            hide()
+            // Reopening clears `sent`, and a recording begun meanwhile is the reader's.
+            if self.sent, !listening { hide() }
         }
         return true
     }

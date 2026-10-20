@@ -13,6 +13,7 @@ struct AskCard: View {
     let composer: Composer
     let key: SessionKey
     let event: AgentEvent
+    @State private var bodyHeight: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -31,11 +32,19 @@ struct AskCard: View {
                 Spacer(minLength: 0)
                 Text("⌘Esc").font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))
             }
-            switch event.payload {
-            case .permissionRequested(let r): PermissionBody(composer: composer, request: r)
-            case .questionsAsked(let r): QuestionsBody(composer: composer, request: r)
-            default: EmptyView()
+            // A long option list scrolls rather than pushing the buttons out of the window.
+            ScrollView {
+                Group {
+                    switch event.payload {
+                    case .permissionRequested(let r): PermissionBody(composer: composer, request: r)
+                    case .questionsAsked(let r): QuestionsBody(composer: composer, request: r)
+                    default: EmptyView()
+                    }
+                }
+                .onGeometryChange(for: CGFloat.self, of: \.size.height) { bodyHeight = $0 }
             }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: min(bodyHeight, 420))
         }
         // Answers typed into one card must not carry over to the next.
         .id(event.id)
