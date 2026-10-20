@@ -1,11 +1,13 @@
 import AppKit
 import Observation
 
-/// One line of the message being built, in the order it was said or typed.
+/// One line of the message being built, in the order it was said or typed,
+/// or a file — a marked-up capture or a drop — riding the prompt as an attachment.
 struct Row: Identifiable, Hashable {
     let id = UUID()
     var text: String
     let said: Bool
+    var file: String? = nil
 }
 
 enum Target: Hashable {
@@ -102,6 +104,8 @@ final class Composer {
 
     @ObservationIgnored var hide: () -> Void = {}
     @ObservationIgnored var reposition: () -> Void = {}
+    /// Hides the panel, runs the screenshot overlay, and opens it again.
+    @ObservationIgnored var capture: () -> Void = {}
     @ObservationIgnored private var lastUsed = UserDefaults.standard.string(forKey: "notch.lastSession")
 
     init(store: Store, server: UUID) {
@@ -120,6 +124,12 @@ final class Composer {
             .filter { !$0.isEmpty }
             .joined(separator: "\n\n")
     }
+
+    /// Paths for `send_msg`, which reads each and sends an image as pixels, anything else as a path.
+    var attachments: [String] { rows.compactMap(\.file) }
+
+    /// An image alone is a message, as it is in Dray's own composer.
+    var canSend: Bool { !prompt.isEmpty || !attachments.isEmpty }
 
     var modelId: String {
         Picks.usableModel(models[harness] ?? [], modelPicks[harness] ?? Picks.defaultModel[harness] ?? "", harness)
@@ -268,8 +278,8 @@ final class Composer {
         // transcription keeps the draft open, its notice and Retry with it.
         if dictation == .recording, !(await stopDictation()) { return false }
         guard dictation == .idle else { return false }
-        let text = prompt
-        guard !text.isEmpty, !sending, let target else { return false }
+        let text = prompt, files = attachments
+        guard canSend, !sending, let target else { return false }
         sending = true
         defer { sending = false }
         // Only what went out is cleared: the draft stays editable while the request runs.
@@ -277,10 +287,10 @@ final class Composer {
         let sent: SessionKey?
         switch target {
         case .session(let k):
-            sent = await store.send(k, text) ? k : nil
+            sent = await store.send(k, text, attachments: files) ? k : nil
             if sent == nil { notice = store.lastError }
         case .new:
-            sent = await create(text)
+            sent = await create(text, files)
         }
         guard let sent else { return false }
         rows.removeAll { sentRows.contains($0.id) }
@@ -292,7 +302,7 @@ final class Composer {
     }
 
     /// `useSessions.ts`'s argument set for a new session, from the bar's picks.
-    private func create(_ text: String) async -> SessionKey? {
+    private func create(_ text: String, _ files: [String]) async -> SessionKey? {
         guard let cwd = projectPath else {
             notice = "Pick a project first."
             return nil
@@ -302,7 +312,7 @@ final class Composer {
             let outcome: SendOutcome = try await store.call(server, "send_msg", [
                 "sessionId": .string(id),
                 "prompt": .string(text),
-                "attachmentPaths": [],
+                "attachmentPaths": .array(files.map { .string($0) }),
                 "harness": .string(harness),
                 "model": .string(modelId),
                 "effort": JSON(effort),

@@ -78,6 +78,12 @@ struct NotchView: View {
                 .padding(.horizontal, composer.placement == .notch ? -NotchShape.ear : 0)
         }
         .shadow(color: .black.opacity(bare ? 0 : 0.35), radius: 12, y: 4)
+        // A file dropped anywhere on the card rides the draft as a capture does.
+        .dropDestination(for: URL.self) { urls, _ in
+            let files = urls.filter(\.isFileURL)
+            composer.rows += files.map { Row(text: "", said: false, file: $0.path) }
+            return !files.isEmpty
+        }
         .contextMenu {
             Picker("Position", selection: $composer.placement) {
                 ForEach(Placement.allCases, id: \.self) { Text($0.label).tag($0) }
@@ -208,6 +214,7 @@ struct NotchView: View {
         HStack(alignment: .center, spacing: 8) {
             if composer.mode == .compact { MicButton(composer: composer, big: false).matchedGeometryEffect(id: "orb", in: orbSpace) }
             field
+            capture
             send
         }
     }
@@ -227,6 +234,14 @@ struct NotchView: View {
             }
     }
 
+    private var capture: some View {
+        Button { composer.capture() } label: {
+            Image(systemName: "camera.viewfinder").font(.title3).foregroundStyle(.white.opacity(0.6))
+        }
+        .buttonStyle(.plain)
+        .help("Screenshot a region and mark it up")
+    }
+
     private var send: some View {
         Button {
             Task { if await composer.send() { composer.hide() } }
@@ -234,7 +249,7 @@ struct NotchView: View {
             Image(systemName: "arrow.up.circle.fill").font(.title2)
         }
         .buttonStyle(.plain)
-        .disabled(composer.prompt.isEmpty || composer.sending)
+        .disabled(!composer.canSend || composer.sending)
         .help("Send (⏎)")
     }
 
@@ -344,18 +359,32 @@ private struct SessionRow: View {
     }
 }
 
-/// One said or typed line, editable, since a model mishears.
+/// One said or typed line, editable, since a model mishears; or a file, an
+/// image drawn as itself.
 private struct RowView: View {
     @Binding var row: Row
     let remove: () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: row.said ? "waveform" : "text.cursor")
-                .foregroundStyle(.secondary)
-                .frame(width: 16)
-            TextField("", text: $row.text, axis: .vertical)
-                .textFieldStyle(.plain)
+        HStack(alignment: row.file == nil ? .firstTextBaseline : .center, spacing: 8) {
+            if let file = row.file {
+                if let image = NSImage(contentsOfFile: file) {
+                    Image(nsImage: image).resizable().scaledToFit()
+                        .frame(maxHeight: 72, alignment: .leading)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                } else {
+                    Image(systemName: "doc").foregroundStyle(.secondary).frame(width: 16)
+                }
+                Text(URL(fileURLWithPath: file).lastPathComponent).lineLimit(1).truncationMode(.middle)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Image(systemName: row.said ? "waveform" : "text.cursor")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                TextField("", text: $row.text, axis: .vertical)
+                    .textFieldStyle(.plain)
+            }
             Button(action: remove) { Image(systemName: "xmark") }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)

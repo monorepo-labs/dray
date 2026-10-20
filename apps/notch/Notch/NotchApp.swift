@@ -96,6 +96,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             }
         }
         composer.reposition = { [weak self] in self?.place() }
+        composer.capture = { [weak self] in self?.capture() }
 
         // One size for good, the cards drawn inside it: SwiftUI can animate a
         // card growing and shrinking, where a window resized under it jumps.
@@ -157,11 +158,33 @@ final class Delegate: NSObject, NSApplicationDelegate {
         if composer.shown {
             Task { await composer.toggleDictation() }
         } else {
-            composer.opened()
-            place()
-            panel.makeKeyAndOrderFront(nil)
-            composer.shown = true
-            closeKey?.held = true
+            open()
+        }
+    }
+
+    private func open() {
+        guard let panel, let composer else { return }
+        composer.opened()
+        place()
+        panel.makeKeyAndOrderFront(nil)
+        composer.shown = true
+        closeKey?.held = true
+    }
+
+    /// The panel steps aside for the overlay and comes back holding the shot.
+    private func capture() {
+        guard let composer, composer.dictation == .idle else { return }
+        composer.hide()
+        Task {
+            var failed: String?
+            do {
+                if let path = try await Capture.run() { composer.rows.append(Row(text: "", said: false, file: path)) }
+            } catch {
+                failed = error.localizedDescription
+            }
+            open()
+            // After the open, which retires any notice.
+            composer.notice = failed
         }
     }
 
