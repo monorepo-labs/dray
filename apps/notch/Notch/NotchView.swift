@@ -209,6 +209,7 @@ struct NotchView: View {
             HStack(spacing: 8) {
                 Text("Speech before a screenshot didn't transcribe.").font(.caption).foregroundStyle(.secondary)
                 Button("Retry") { Task { await composer.retryCut() } }
+                    .disabled(composer.retryingCut)
                     .buttonStyle(.plain)
                     .font(.caption.weight(.semibold))
             }

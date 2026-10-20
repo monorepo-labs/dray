@@ -69,6 +69,8 @@ final class Composer {
     var sending = false
     /// A screenshot is in flight; Send waits for its row.
     var capturing = false
+    /// A lost cut is being transcribed again; Send waits for its words.
+    private(set) var retryingCut = false
     /// Bumped to put focus in the input: every open, and every new task.
     var opens = 0
     /// Drawn open; the window lags it on the way out, so the close can animate.
@@ -177,7 +179,7 @@ final class Composer {
     var attachments: [String] { rows.compactMap(\.file) }
 
     /// An image alone is a message, as it is in Dray's own composer.
-    var canSend: Bool { !capturing && (!prompt.isEmpty || !attachments.isEmpty) }
+    var canSend: Bool { !capturing && !retryingCut && (!prompt.isEmpty || !attachments.isEmpty) }
 
     var modelId: String {
         Picks.usableModel(models[harness] ?? [], modelPicks[harness] ?? Picks.defaultModel[harness] ?? "", harness)
@@ -459,7 +461,9 @@ final class Composer {
 
     /// Runs a failed cut's recording again, into the place it was cut from.
     func retryCut() async {
-        guard let lost = lostCut else { return }
+        guard let lost = lostCut, !retryingCut else { return }
+        retryingCut = true
+        defer { retryingCut = false }
         await cut("retry_transcription", ["path": .string(lost.path)], before: lost.before)
     }
 
