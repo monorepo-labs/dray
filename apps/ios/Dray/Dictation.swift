@@ -52,14 +52,15 @@ extension Connection {
 
 extension Store {
     func canDictate(_ server: UUID) -> Bool {
-        serverState[server] == .connected && connections[server]?.dictation == true
+        serverState[server] == .connected && connection(server)?.dictation == true
     }
 
-    /// Uploads a recording and has the server's model read it.
+    /// Uploads a recording and has the server's model read it. A long
+    /// dictation, on a model loading cold, can outlast the usual minute.
     func transcribe(_ server: UUID, wav: URL) async throws -> TranscribeOutcome {
-        guard let c = connections[server] else { throw DrayError("Not connected") }
+        guard let c = connection(server) else { throw DrayError("Not connected") }
         let path = try await c.upload(wav, name: "dictation.wav")
-        return try await c.call("transcribe_upload", ["path": .string(path)])
+        return try await call(server, "transcribe_upload", ["path": .string(path)], timeout: .seconds(300))
     }
 
     /// `appendToDraft`'s join: a space unless the draft is empty or already ends in one.

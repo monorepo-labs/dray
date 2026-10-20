@@ -150,6 +150,8 @@ struct TitleEvent: Decodable {
 }
 
 struct SendOutcome: Decodable {
+    /// The new index entry, flattened into a snapshot; only on the send that created it.
+    let snapshot: SessionItem?
     let queued: Queued?
 }
 

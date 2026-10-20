@@ -21,6 +21,7 @@ struct RootView: View {
     @State private var selection: SessionKey?
     @State private var showServers = false
     @State private var adding = false
+    @State private var creating = false
     @State private var pairing: PairLink?
     @State private var opening: Task<Void, Never>?
 
@@ -30,6 +31,8 @@ struct RootView: View {
                 .navigationTitle("Dray")
                 .toolbar {
                     Button("Servers", systemImage: "server.rack") { showServers = true }
+                    Button("New session", systemImage: "square.and.pencil") { creating = true }
+                        .disabled(store.servers.isEmpty)
                 }
                 .overlay {
                     if store.servers.isEmpty {
@@ -53,6 +56,7 @@ struct RootView: View {
         }
         .sheet(isPresented: $showServers) { ServersView() }
         .sheet(isPresented: $adding) { AddServerView() }
+        .sheet(isPresented: $creating) { NewSessionView { selection = $0 } }
         // Filled in, not added: a link from anywhere should not add a server unasked.
         .sheet(item: $pairing) { AddServerView(link: $0) }
         .onOpenURL { url in
