@@ -48,8 +48,19 @@ v2: status — a session's state, its last message, notch alerts (glow
 yellow/green and the title when a session wants the reader), and the
 permission and question cards answered from there.
 
-Screenshots, pen marks and file drops shipped (#566). Later, in order: comments
-on a mark, browser element pick.
+Screenshots, pen marks and file drops shipped (#566).
+
+**Drawing on the live screen is part of dictating** (#571), with no mode of
+its own: while the microphone records, a clear overlay lets the mouse through,
+so the page still scrolls and clicks, and holding Shift draws. Strokes made close
+together are one moment: 1.5s after the pen rests, the area around them is
+captured with the ink, the ink fades, and the image takes the row held for it
+at the moment's first stroke, where the speech was cut. "Hold Shift to draw" shows
+in the recording pill until the first stroke, for a reader's first five
+dictations. Screen Recording is asked for at the first moment taken, never for
+dictating alone. It may yet replace the screenshot mode.
+
+Later, in order: comments on a mark, browser element pick.
 
 ## How it talks
 

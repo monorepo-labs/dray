@@ -17,6 +17,7 @@ struct NotchView: View {
     @State private var dropping = false
     /// Mid-recording, the pointer over the card shows what can be done without stopping.
     @State private var cardHovered = false
+    @State private var captureHovered = false
     /// The idle orb and the recording one are one orb to the reader, so a start
     /// moves it into place rather than fading a second one in.
     @Namespace private var orbSpace
@@ -41,6 +42,7 @@ struct NotchView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: composer.placement == .notch ? .top : .bottom)
         .padding(.bottom, composer.placement == .bottom ? 12 : 0)
         .animation(.snappy(duration: 0.25), value: recording)
+        .animation(.snappy(duration: 0.25), value: composer.drawHint)
         // Out here, so the card's fill widens with the camera rather than snapping.
         .animation(.spring(duration: 0.3, bounce: 0.2), value: cardHovered)
         // Over the whole window, so a dropdown has the room below the cards too.
@@ -137,7 +139,7 @@ struct NotchView: View {
                     // The card's fill is gone here, so the clock carries its own.
                     HStack(spacing: 8) {
                         RecordingTimer(since: composer.recordingSince)
-                        if cardHovered { capture.transition(.scale.combined(with: .opacity)) }
+                        tools
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
@@ -147,7 +149,7 @@ struct NotchView: View {
                 HStack(spacing: 8) {
                     MicButton(composer: composer, big: false).matchedGeometryEffect(id: "orb", in: orbSpace)
                     RecordingTimer(since: composer.recordingSince)
-                    if cardHovered { capture.padding(.leading, 4).transition(.scale.combined(with: .opacity)) }
+                    tools.padding(.leading, 4)
                 }
             }
         }
@@ -306,16 +308,37 @@ struct NotchView: View {
             }
     }
 
-    private var capture: some View {
-        Button {
-            // The overlay comes up under the pointer, so the card never hears it leave.
-            cardHovered = false
-            composer.capture()
-        } label: {
-            Image(systemName: "camera.viewfinder").font(.title3).foregroundStyle(.white.opacity(0.6))
+    /// How to draw on the screen, until the reader has, and the screenshot on hover.
+    @ViewBuilder private var tools: some View {
+        if composer.drawHint {
+            Text("Hold Shift to draw").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
+                .transition(.opacity)
         }
-        .buttonStyle(.plain)
-        .help("Screenshot a region and mark it up")
+        if cardHovered {
+            capture.transition(.scale.combined(with: .opacity))
+        }
+    }
+
+    /// The camera, with its shortcut to its left on hover. Not while
+    /// recording, where the pill has no room to spare.
+    private var capture: some View {
+        HStack(spacing: 6) {
+            if captureHovered, !recording {
+                Text("⌘ Shift 2").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
+                    .fixedSize()
+                    .transition(.opacity)
+            }
+            Button {
+                // The overlay comes up under the pointer, so neither hover hears it leave.
+                cardHovered = false
+                captureHovered = false
+                composer.capture()
+            } label: {
+                Image(systemName: "camera.viewfinder").font(.title3).foregroundStyle(.white.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+            .onHover { h in withAnimation(.easeOut(duration: 0.15)) { captureHovered = h } }
+        }
     }
 
     private var send: some View {

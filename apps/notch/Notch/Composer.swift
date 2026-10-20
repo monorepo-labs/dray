@@ -45,14 +45,25 @@ final class Composer {
     var target: Target?
     var dictation = Dictation.idle {
         didSet {
-            if dictation == .starting { notice = nil }
-            if dictation != .recording { recordingSince = nil } else if oldValue != .recording { recordingSince = Date() }
+            // Decided as the pill appears, so the hint arrives with it rather than a beat later.
+            if dictation == .starting { notice = nil; drawHint = UserDefaults.standard.integer(forKey: "notch.drawHints") < Self.drawHints }
+            if !listening { drawHint = false }
+            if (dictation == .recording) != (oldValue == .recording) {
+                recordingSince = dictation == .recording ? Date() : nil
+                recordingChanged(dictation == .recording)
+                // Counted once the microphone is open, so a refused start spends nothing.
+                if dictation == .recording, drawHint {
+                    UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "notch.drawHints") + 1, forKey: "notch.drawHints")
+                }
+            }
             if listening != [.starting, .recording].contains(oldValue) { listeningChanged(listening) }
         }
     }
     var listening: Bool { dictation == .starting || dictation == .recording }
     /// For the ⌘Esc hot key, held only while the microphone is open.
     @ObservationIgnored var listeningChanged: (Bool) -> Void = { _ in }
+    /// For the drawing overlay, up for exactly as long as the microphone records.
+    @ObservationIgnored var recordingChanged: (Bool) -> Void = { _ in }
     /// When the microphone opened, for the timer; `nil` unless recording.
     var recordingSince: Date?
     var mode = InputMode(rawValue: UserDefaults.standard.string(forKey: "notch.mode") ?? "") ?? .compact {
@@ -69,6 +80,9 @@ final class Composer {
     var sending = false
     /// A screenshot is in flight; Send waits for its row.
     var capturing = false
+    /// "Hold Shift to draw", until the first stroke of a dictation, for a reader's first few dictations.
+    var drawHint = false
+    static let drawHints = 5
     /// A lost cut is being transcribed again; Send waits for its words.
     private(set) var retryingCut = false
     /// Bumped to put focus in the input: every open, and every new task.

@@ -18,7 +18,8 @@ struct VoiceOrb: View {
     var body: some View {
         // ponytail: redraws at 30fps whenever it is on screen; pause at rest if it ever shows up in Activity Monitor.
         TimelineView(.animation(minimumInterval: 1 / 30)) { context in
-            let speed = state == .recording ? 1.8 : state == .transcribing ? 1.1 : 0.45
+            // Lively from the press, not from the microphone opening a moment later.
+            let speed = [.starting, .recording].contains(state) ? 1.8 : state == .transcribing ? 1.1 : 0.45
             let t = context.date.timeIntervalSinceReferenceDate * speed
             let swell = state == .recording ? CGFloat(min(level * 4, 1)) * 0.22 : 0
             let breath = state == .transcribing ? CGFloat(sin(t * 3)) * 0.05 : 0
@@ -45,8 +46,8 @@ struct VoiceOrb: View {
     }
 }
 
-/// How long the microphone has been open, mm:ss. Holds its space while the
-/// microphone is shut, so starting a recording moves nothing.
+/// How long the microphone has been open, mm:ss. Dim at 0:00 while it is
+/// still opening, so the pill is whole from the press.
 struct RecordingTimer: View {
     let since: Date?
 
@@ -56,7 +57,7 @@ struct RecordingTimer: View {
             Text(String(format: "%d:%02d", s / 60, s % 60))
                 .font(.system(size: 12, weight: .medium).monospacedDigit())
                 .foregroundStyle(.secondary)
-                .opacity(since == nil ? 0 : 1)
+                .opacity(since == nil ? 0.4 : 1)
         }
     }
 }

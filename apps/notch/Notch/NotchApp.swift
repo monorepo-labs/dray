@@ -43,6 +43,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var closeKey: HotKey?
     /// ⌘⇧2, beside macOS's own ⌘⇧3/4/5: a screenshot into the draft from anywhere.
     private var captureKey: HotKey?
+    private var annotation: Annotation?
+    /// Over a capture's or a drawing's overlay, so dictation stays in sight and in reach.
+    private static let overOverlay = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         waitForServer()
@@ -148,6 +151,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
             composer.hide()
         }
         composer.listeningChanged = { cancel.held = $0 }
+        composer.recordingChanged = { [weak self] recording in
+            if recording { self?.startAnnotation() } else { self?.endAnnotation() }
+        }
         captureKey = HotKey(key: kVK_ANSI_2, mods: cmdKey | shiftKey) { [weak self] in
             self?.capture()
         }
@@ -192,7 +198,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let slot = composer.reserveShot()
         let cut = recording ? Task { await composer.cutDictation(before: slot) } : nil
         if recording {
-            panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
+            panel.level = Self.overOverlay
             // Shown, not touched: its frame is far wider than its card, and over
             // it its own arrow beat the overlay's crosshair.
             panel.ignoresMouseEvents = true
@@ -208,26 +214,48 @@ final class Delegate: NSObject, NSApplicationDelegate {
             } catch {
                 failed = error.localizedDescription
             }
-            panel.level = .statusBar
+            panel.level = annotation == nil ? .statusBar : Self.overOverlay
             panel.ignoresMouseEvents = false
             if recording { panel.makeKeyAndOrderFront(nil) } else if wasShown { open() } else { place() }
-            if let shot {
-                // Into the open card's rows, or into the notch itself while the panel is away.
-                let f = panel.frame
-                let target = switch (composer.placement, composer.shown) {
-                case (.notch, true): NSPoint(x: f.midX, y: f.maxY - composer.notchHeight - 40)
-                case (.notch, false): NSPoint(x: f.midX, y: f.maxY - composer.notchHeight / 2)
-                case (.bottom, true): NSPoint(x: f.midX, y: f.minY + 60)
-                case (.bottom, false): NSPoint(x: f.midX, y: f.minY)
-                }
-                await Capture.fly(shot.image, from: shot.frame, to: target)
-            }
+            if let shot { await Capture.fly(shot.image, from: shot.frame, to: flyTarget()) }
             // The cut transcribes while the overlay is up; its words go first.
             await cut?.value
             withAnimation(.spring(duration: 0.4, bounce: 0.5)) { composer.fillShot(slot, shot?.path) }
             // After the row, which retires a notice.
             if let failed { composer.notice = failed }
         }
+    }
+
+    /// Where a shot flies: into the open card's rows, or into the notch itself
+    /// while the panel is away.
+    private func flyTarget() -> NSPoint {
+        guard let panel, let composer else { return .zero }
+        let f = panel.frame
+        return switch (composer.placement, composer.shown) {
+        case (.notch, true): NSPoint(x: f.midX, y: f.maxY - composer.notchHeight - 40)
+        case (.notch, false): NSPoint(x: f.midX, y: f.maxY - composer.notchHeight / 2)
+        case (.bottom, true): NSPoint(x: f.midX, y: f.minY + 60)
+        case (.bottom, false): NSPoint(x: f.midX, y: f.minY)
+        }
+    }
+
+    /// Drawing on the screen is part of dictating: the overlay is up while the
+    /// microphone records, and holding ⇧ draws on it.
+    private func startAnnotation() {
+        guard let composer, let panel, annotation == nil else { return }
+        annotation = Annotation(composer: composer) { [weak self] shot in
+            guard let self else { return }
+            await Capture.fly(shot.image, from: shot.frame, to: flyTarget())
+        }
+        if annotation != nil { panel.level = Self.overOverlay }
+    }
+
+    /// Takes the moment still being drawn, if any, and puts the screen back.
+    private func endAnnotation() {
+        guard let a = annotation else { return }
+        annotation = nil
+        panel?.level = .statusBar
+        Task { await a.end() }
     }
 
     /// Room for the composer, the task list and an open dropdown, plus shadow.
