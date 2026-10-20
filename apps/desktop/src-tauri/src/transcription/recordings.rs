@@ -131,7 +131,7 @@ pub async fn prune() {
 }
 
 /// Mono 16kHz `f32` to a WAV file.
-fn encode(samples: &[f32]) -> Vec<u8> {
+pub(super) fn encode(samples: &[f32]) -> Vec<u8> {
     let data_len = samples.len() * 2;
     let mut out = Vec::with_capacity(HEADER_LEN + data_len);
 
@@ -167,7 +167,7 @@ fn encode(samples: &[f32]) -> Vec<u8> {
 /// insurance rather than generality — a header read at the wrong offset yields audio
 /// that transcribes to nonsense instead of failing, which is the shape of bug
 /// worth spending fifteen lines to make impossible.
-fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
+pub(super) fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
     if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         bail!("not a WAV file");
     }

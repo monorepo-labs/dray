@@ -166,6 +166,9 @@ impl Engine {
         let mut loaded = guard.take().expect("checked above");
 
         let (loaded, result) = tokio::task::spawn_blocking(move || {
+            // Here rather than at the stop, so the parked WAV stays the whole
+            // recording and a retry trims it afresh.
+            let audio = super::audio::trim_silence(audio);
             let result = loaded
                 .session
                 .run(&audio, &RunOptions::default())
