@@ -80,7 +80,8 @@ struct NotchView: View {
         .shadow(color: .black.opacity(bare ? 0 : 0.35), radius: 12, y: 4)
         // A file dropped anywhere on the card rides the draft as a capture does.
         .dropDestination(for: URL.self) { urls, _ in
-            let files = urls.filter(\.isFileURL)
+            // The server skips a folder, so its row would send nothing.
+            let files = urls.filter { $0.isFileURL && (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == false }
             composer.rows += files.map { Row(text: "", said: false, file: $0.path) }
             return !files.isEmpty
         }

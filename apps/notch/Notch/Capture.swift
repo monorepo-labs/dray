@@ -77,19 +77,33 @@ enum Capture {
     }
 
     /// PNG, unless that passes the API's 5MB image ceiling — over it Dray sends
-    /// the file as a path the model has to open, so a big region goes as JPEG.
+    /// the file as a path the model has to open — so a big region steps down
+    /// through JPEG qualities until it fits.
     private static func write(_ image: CGImage) throws -> String {
+        let cap = 5 * 1024 * 1024
         let rep = NSBitmapImageRep(cgImage: image)
         var (data, ext) = (rep.representation(using: .png, properties: [:]), "png")
-        if (data?.count ?? 0) > 5 * 1024 * 1024 {
-            (data, ext) = (rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85]), "jpg")
+        for quality in [0.85, 0.7, 0.5, 0.3] where (data?.count ?? 0) > cap {
+            (data, ext) = (rep.representation(using: .jpeg, properties: [.compressionFactor: quality]), "jpg")
         }
         guard let data else { throw DrayError("Could not encode the screenshot.") }
         let dir = FileManager.default.temporaryDirectory.appending(path: "dray-notch")
+        sweep(dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appending(path: "Screenshot \(UUID().uuidString.prefix(8)).\(ext)")
         try data.write(to: url)
         return url.path
+    }
+
+    /// Captures a week old, on the next write: a sent one is already copied into
+    /// the session's attachments, and a queued one is copied at its flush, so
+    /// neither can go the moment it leaves. The desktop's rule for pastes.
+    private static func sweep(_ dir: URL) {
+        let old = Date().addingTimeInterval(-7 * 24 * 3600)
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        for f in files where ((try? f.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantFuture) < old {
+            try? FileManager.default.removeItem(at: f)
+        }
     }
 }
 

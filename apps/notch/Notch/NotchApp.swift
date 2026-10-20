@@ -154,7 +154,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     /// A tap opens the panel; a tap on an open one starts or stops dictating.
     /// So a double tap opens it listening, with no timer to wait out.
     private func pressed() {
-        guard let panel, let composer else { return }
+        guard panel != nil, let composer else { return }
         if composer.shown {
             Task { await composer.toggleDictation() }
         } else {
