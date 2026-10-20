@@ -59,6 +59,7 @@ final class NewSessionTests: XCTestCase {
         XCTAssertTrue(search.waitForExistence(timeout: 15))
         search.tap()
         search.typeText(slug)
+        snap(app, "1-searched")
         let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", slug)).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 60), "\(slug) not listed")
         snap(app, "1-repos")
@@ -72,24 +73,24 @@ final class NewSessionTests: XCTestCase {
         snap(app, "3-attached")
     }
 
-    /// Launches, adds the server where none is saved yet, and opens New session.
+    /// Launches with no saved servers, adds the one under test, and opens New
+    /// session — so servers left over from earlier runs cannot change the answer.
     private func openNewSession() throws -> XCUIApplication {
         let env = ProcessInfo.processInfo.environment
         guard let url = env["DRAY_URL"], let token = env["DRAY_TOKEN"] else {
             throw XCTSkip("set TEST_RUNNER_DRAY_URL and TEST_RUNNER_DRAY_TOKEN")
         }
         let app = XCUIApplication()
+        app.launchArguments = ["-servers", ""]
         app.launch()
-        if app.staticTexts["No servers"].waitForExistence(timeout: 2) {
-            app.buttons["Add server"].firstMatch.tap()
-            let address = app.textFields["Address"]
-            address.tap()
-            address.typeText(url)
-            let secret = app.textFields["Token"]
-            secret.tap()
-            secret.typeText(token)
-            app.buttons["Add"].tap()
-        }
+        app.buttons["Add server"].firstMatch.tap()
+        let address = app.textFields["Address"]
+        address.tap()
+        address.typeText(url)
+        let secret = app.textFields["Token"]
+        secret.tap()
+        secret.typeText(token)
+        app.buttons["Add"].tap()
         let start = app.buttons["New session"]
         XCTAssertTrue(start.waitForExistence(timeout: 15))
         start.tap()
