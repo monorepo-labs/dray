@@ -22,6 +22,8 @@ targets:
       - path: ../ios/Dray/Transcript.swift
       - path: ../ios/Dray/Tools.swift
       - path: ../ios/Dray/Picks.swift
+      - path: ../ios/Dray/Sidebar.swift
+      - path: ../ios/Dray/Pr.swift
       - path: ../desktop/src/assets/dictate-start.wav
         buildPhase: resources
       - path: ../desktop/src/assets/dictate-stop.wav

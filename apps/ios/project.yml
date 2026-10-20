@@ -27,6 +27,7 @@ targets:
         INFOPLIST_KEY_NSCameraUsageDescription: Dray scans the QR code a Mac or server shows, to add it.
         INFOPLIST_KEY_CFBundleDisplayName: Dray
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Dray records your dictation and sends it to your Mac, which turns it into text.
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight

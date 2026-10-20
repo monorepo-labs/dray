@@ -12,11 +12,13 @@ final class Connection {
     }
 
     let serverId: UUID
-    private var url: String
-    private var token: String
+    private(set) var url: String
+    private(set) var token: String
     /// Reads the address afresh before each connect, for a server whose port
     /// moves on every restart — the Notch's This Mac. `nil` keeps the first.
     var refresh: (() -> (url: String, token: String)?)?
+    /// Whether the server can transcribe a phone's dictation; its welcome frame says.
+    private(set) var dictation = false
     /// Every event frame, whole, with its name. Decoded by the store, which knows the type.
     var onEvent: (String, Data) -> Void = { _, _ in }
     var onState: (State) -> Void = { _ in }
@@ -75,6 +77,7 @@ final class Connection {
                 throw DrayError(err.message)
             }
             guard gen == generation else { return }
+            dictation = (try? JSONDecoder().decode(Welcome.self, from: welcome))?.dictation ?? false
             connected = true
             retry = 1
             onState(.connected)

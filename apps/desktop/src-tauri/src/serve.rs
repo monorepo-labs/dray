@@ -287,7 +287,10 @@ async fn shut_down(code: i32) -> ! {
     for pid in tree.into_iter().filter(|&p| p != me) {
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
     }
-    std::process::exit(code)
+    // `_exit`, not `process::exit`: once a phone's dictation has loaded a
+    // model, ggml-metal's atexit handler aborts (lib.rs's `RunEvent::Exit`
+    // says how), which would end every stop and restart as 134, not `code`.
+    unsafe { libc::_exit(code) }
 }
 
 /// Removes the browser profiles of deleted and settled sessions, the backlog
@@ -950,12 +953,14 @@ async fn connection(
     };
     // `release` is the CLI release this binary shipped in, which is what the
     // app compares with the newest one out. Set by release-cli.yml alone, so a
-    // local build says none and is never offered an update.
+    // local build says none and is never offered an update. `dictation` is
+    // whether `transcribe_upload` exists here, so a phone knows to draw a mic.
     let welcome = json!({
         "v": PROTOCOL,
         "version": env!("CARGO_PKG_VERSION"),
         "release": option_env!("DRAY_CLI_VERSION"),
         "stale": stale(),
+        "dictation": cfg!(feature = "desktop"),
     });
     write.send(Message::text(welcome.to_string())).await?;
     write.send(Message::text(snapshot)).await?;
@@ -1106,6 +1111,7 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
         remote_access_token() => crate::remote_access::remote_access_token().await;
         remote_access_qr() => crate::remote_access::remote_access_qr().await;
         restart_when_idle() => ok(restart_when_idle().await);
+        transcribe_upload(path: String) => crate::transcription::transcribe_upload(path).await;
     }
 }
 
@@ -1114,7 +1120,15 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
 /// Mac-only modules are not compiled here.
 async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     #[cfg(feature = "desktop")]
-    if matches!(cmd, "get_remote_access" | "set_remote_access" | "remote_access_token" | "remote_access_qr" | "restart_when_idle") {
+    if matches!(
+        cmd,
+        "get_remote_access"
+            | "set_remote_access"
+            | "remote_access_token"
+            | "remote_access_qr"
+            | "restart_when_idle"
+            | "transcribe_upload"
+    ) {
         return dispatch_mac(cmd, args, sink).await;
     }
     // The recorder and model live in the app, so a client with no microphone

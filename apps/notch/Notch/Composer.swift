@@ -128,8 +128,9 @@ final class Composer {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let stale = formatter.string(from: Date().addingTimeInterval(-3 * 24 * 3600))
-        return store.sessions
-            .filter { !($0.item.aside ?? false) && $0.item.modified > stale }
+        return store.items
+            .filter { _, item in item.hidden != true && item.archived != true && item.aside != true && item.modified > stale }
+            .map { (key: $0.key, item: $0.value) }
             .filter { q.isEmpty || $0.item.title.lowercased().contains(q) || $0.item.project.lowercased().contains(q) }
             .sorted { $0.item.modified > $1.item.modified }
     }

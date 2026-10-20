@@ -21,6 +21,7 @@ struct RootView: View {
     @State private var selection: SessionKey?
     @State private var showServers = false
     @State private var adding = false
+    @Environment(\.scenePhase) private var phase
     @State private var creating = false
     @State private var pairing: PairLink?
     @State private var opening: Task<Void, Never>?
@@ -81,15 +82,41 @@ struct RootView: View {
         } message: {
             Text(store.lastError ?? "")
         }
+        // The desktop's 30s open-PR poll, and none while the app is away.
+        .task(id: phase) {
+            guard phase == .active else { return }
+            while !Task.isCancelled {
+                await store.pollMarks()
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
     }
 }
 
 struct SessionList: View {
     @Environment(Store.self) private var store
     @Binding var selection: SessionKey?
+    @State private var project: ProjectKey?
 
     var body: some View {
+        let chips = store.servers.flatMap { s in (store.projects[s.id] ?? []).map { (key: ProjectKey(server: s.id, path: $0.path), name: $0.name) } }
+        // A picked project that left the list narrows nothing.
+        let filter = chips.contains { $0.key == project } ? project : nil
         List(selection: $selection) {
+            // A row of the list rather than an inset over it, so the large title still collapses into the bar.
+            if chips.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        Chip(title: "All", on: filter == nil) { project = nil }
+                        ForEach(chips, id: \.key) { chip in
+                            Chip(title: chip.name, on: filter == chip.key) { project = chip.key }
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            }
             ForEach(store.servers) { s in
                 if case .failed(let reason) = store.serverState[s.id] {
                     Label {
@@ -102,12 +129,36 @@ struct SessionList: View {
                     }
                 }
             }
-            ForEach(store.sessions, id: \.key) { row in
-                SessionRow(key: row.key, item: row.item, showServer: store.servers.count > 1)
-                    .tag(row.key)
+            // One section per run: the gap between them is the whole signal, never a heading.
+            ForEach(store.runs(filter), id: \.stage) { run in
+                Section {
+                    ForEach(run.rows) { row in
+                        SessionRow(key: row.key, item: row.item, showServer: store.servers.count > 1)
+                            .padding(.leading, CGFloat(row.depth) * 16)
+                            .tag(row.key)
+                    }
+                }
             }
         }
+        .listSectionSpacing(.compact)
         .refreshable { await store.refresh() }
+    }
+}
+
+struct Chip: View {
+    let title: String
+    let on: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(title, action: action)
+            .font(.subheadline)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .foregroundStyle(on ? Color(.systemBackground) : .primary)
+            .background(on ? Color.primary : Color(.secondarySystemFill), in: Capsule())
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 
@@ -118,16 +169,22 @@ struct SessionRow: View {
     let showServer: Bool
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            mark.frame(width: 12)
+        let pr = store.prMark(key, item)
+        HStack(spacing: 10) {
+            mark.frame(width: 8)
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.title.isEmpty ? "Untitled" : item.title)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    if let pr { PrGlyph(mark: pr) }
+                    Text(item.title.isEmpty ? "Untitled" : item.title)
+                        .lineLimit(1)
+                }
                 Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            Spacer(minLength: 0)
+            slot(pr)
         }
     }
 
@@ -135,8 +192,6 @@ struct SessionRow: View {
     @ViewBuilder private var mark: some View {
         if store.isAsking(key) {
             Circle().fill(.yellow).frame(width: 8, height: 8)
-        } else if item.busy {
-            ProgressView().controlSize(.mini)
         } else if item.status == "completed" {
             Circle().fill(.green).frame(width: 8, height: 8)
         } else {
@@ -144,22 +199,24 @@ struct SessionRow: View {
         }
     }
 
-    private var subtitle: String {
-        var parts = [item.project]
-        if showServer { parts.append(store.name(of: key.server)) }
-        if let date = parseDate(item.modified) {
-            parts.append(date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
+    /// The timestamp's slot, and what outranks it there: running checks, then
+    /// the orb — "last activity" is the least useful thing to say of a row
+    /// with anything in flight.
+    @ViewBuilder private func slot(_ pr: PrMark?) -> some View {
+        if pr?.state == "OPEN" && pr?.checksState == "RUNNING" {
+            ChecksSpinner()
+        } else if item.busy {
+            Orb()
+        } else if let date = parseDate(item.modified) {
+            Text(date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
-        return parts.joined(separator: " · ")
     }
-}
 
-func parseDate(_ s: String) -> Date? {
-    let f = ISO8601DateFormatter()
-    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let d = f.date(from: s) { return d }
-    f.formatOptions = [.withInternetDateTime]
-    return f.date(from: s)
+    private var subtitle: String {
+        showServer ? "\(item.project) · \(store.name(of: key.server))" : item.project
+    }
 }
 
 struct ServersView: View {

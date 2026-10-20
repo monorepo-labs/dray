@@ -515,6 +515,22 @@ pub async fn retry_transcription(
     Ok(transcribe_audio(&state, audio, Some(path)).await)
 }
 
+/// Transcribes a WAV another machine uploaded through `/upload` — a phone's
+/// dictation, run on the Mac's server.
+///
+/// The server holds its own engine: the app's lives in the app's process,
+/// which may not even be running. The upload is deleted once the model
+/// answers, the recordings' own rule, and [`recordings::read`] refuses any
+/// path outside `attachments/uploads`.
+pub async fn transcribe_upload(path: String) -> Result<TranscribeOutcome, String> {
+    static SERVER: std::sync::LazyLock<TranscriptionState> = std::sync::LazyLock::new(Default::default);
+
+    let path = PathBuf::from(path);
+    let audio = recordings::read(&path).await.map_err(|e| format!("{e:#}"))?;
+
+    Ok(transcribe_audio(&SERVER, audio, Some(path)).await)
+}
+
 /// The loudest sample since this was last asked, 0.0–1.0.
 ///
 /// Polled by the visualizer rather than pushed as an event: the bars redraw at
