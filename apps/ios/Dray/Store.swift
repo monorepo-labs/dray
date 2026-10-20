@@ -99,6 +99,7 @@ final class Store {
     /// A session this phone just created, from the entry `send_msg` answered with.
     func created(_ server: UUID, _ item: SessionItem) {
         store(SessionKey(server: server, id: item.sessionId), item)
+        Task { await loadMarks(server, force: false, only: [item.projectPath]) }
     }
 
     private func save() {
@@ -385,6 +386,7 @@ final class Store {
         case "session_created", "session_changed":
             guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload else { return }
             items[SessionKey(server: server, id: item.sessionId)] = item
+            Task { await loadMarks(server, force: false, only: [item.projectPath]) }
         default:
             break
         }
@@ -399,6 +401,8 @@ final class Store {
         Task {
             await loadIndex(key.server)
             reading.remove(key.server)
+            // A repo joining the list is read once, the desktop's rule; fresh ones are skipped.
+            await loadMarks(key.server, force: false)
         }
     }
 
