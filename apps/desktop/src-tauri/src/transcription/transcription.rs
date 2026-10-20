@@ -327,6 +327,8 @@ pub enum StartRefusal {
 pub async fn start_transcription(
     state: State<'_, TranscriptionState>,
 ) -> Result<Option<StartRefusal>, String> {
+    // Whoever starts last owns the recorder; `answer_host` claims it back after this.
+    HOST_OWNS.store(false, std::sync::atomic::Ordering::SeqCst);
     if ready_model().await.is_none() {
         return Ok(Some(StartRefusal::NeedsModel));
     }
@@ -368,10 +370,16 @@ pub fn serve_host(app: &AppHandle) {
     let _ = APP.set(app.clone());
 }
 
+/// Whether the recorder holds the Notch's recording rather than the app's own.
+/// There is one recorder and two clients, so neither may stop or read the
+/// other's: a start from the app hands it back to the app.
+static HOST_OWNS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Dictation asked for through the server rather than the webview — the
 /// Notch panel's route, since it holds no microphone or model of its own.
 /// `None` where `cmd` is not dictation.
 pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<serde_json::Value, String>> {
+    use std::sync::atomic::Ordering::SeqCst;
     use tauri::Manager;
     fn json(v: impl Serialize) -> Result<serde_json::Value, String> {
         serde_json::to_value(v).map_err(|e| e.to_string())
@@ -381,11 +389,28 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
     }
     let Some(app) = APP.get() else { return Some(Err("Dictation is not ready yet.".into())) };
     let state = app.state::<TranscriptionState>();
+    let owns = HOST_OWNS.load(SeqCst);
     Some(match cmd {
-        "start_transcription" => start_transcription(state).await.and_then(json),
-        "stop_transcription" => stop_transcription(state).await.and_then(json),
+        "start_transcription" if state.recording.lock().await.is_some() => Err("Dray is already dictating.".into()),
+        "start_transcription" => {
+            let started = start_transcription(state).await;
+            if matches!(started, Ok(None)) {
+                HOST_OWNS.store(true, SeqCst);
+            }
+            started.and_then(json)
+        }
+        "stop_transcription" if !owns => Err("Dictation moved to Dray's window.".into()),
+        "stop_transcription" => {
+            HOST_OWNS.store(false, SeqCst);
+            stop_transcription(state).await.and_then(json)
+        }
+        "transcription_level" if !owns => json(0.0),
         "transcription_level" => transcription_level(state).await.and_then(json),
-        "cancel_transcription" => cancel_transcription(state).await.and_then(json),
+        "cancel_transcription" if !owns => json(()),
+        "cancel_transcription" => {
+            HOST_OWNS.store(false, SeqCst);
+            cancel_transcription(state).await.and_then(json)
+        }
         _ => match args["path"].as_str() {
             Some(path) => retry_transcription(state, path.to_string()).await.and_then(json),
             None => Err("retry_transcription wants a path".into()),

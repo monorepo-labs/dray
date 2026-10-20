@@ -8,6 +8,7 @@ struct NotchView: View {
     @Bindable var composer: Composer
     @Environment(Store.self) private var store
     @FocusState private var focus: Field?
+    @State private var size = CGSize.zero
 
     var body: some View {
         VStack(spacing: 8) {
@@ -25,7 +26,12 @@ struct NotchView: View {
             DropMenus(composer: composer, anchors: anchors, upward: composer.placement == .bottom)
         }
         .environment(\.colorScheme, .dark)
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { composer.resized($0) }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: {
+            size = $0
+            composer.resized($0)
+        }
+        // A new placement at the same size moves the window too.
+        .onChange(of: composer.placement) { composer.resized(size) }
         .onChange(of: composer.opens) { focus = .input }
         .onChange(of: composer.searches) {
             composer.listShown = true
@@ -73,7 +79,14 @@ struct NotchView: View {
             }
             input
             if let notice = composer.notice {
-                Text(notice).font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text(notice).font(.caption).foregroundStyle(.secondary)
+                    if composer.retryPath != nil {
+                        Button("Retry") { Task { await composer.retryDictation() } }
+                            .buttonStyle(.plain)
+                            .font(.caption.weight(.semibold))
+                    }
+                }
             }
         }
         .padding(14)

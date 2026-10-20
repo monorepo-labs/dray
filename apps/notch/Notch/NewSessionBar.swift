@@ -35,7 +35,6 @@ struct NewSessionBar: View {
         }
         .font(.system(size: 13, weight: .medium))
         .task(id: composer.harness) { await composer.loadModels() }
-        .task(id: composer.projectPath) { await composer.loadBranches() }
     }
 }
 
@@ -147,8 +146,9 @@ private struct ModelMenu: View {
     let composer: Composer
     let room: CGFloat
     @State private var hovered: String?
+    /// Each row's top as drawn: the list may scroll, so an index says nothing.
+    @State private var rowY: [String: CGFloat] = [:]
     static let row: CGFloat = 26
-    static let track: CGFloat = 36
 
     var body: some View {
         let list = composer.shortlist
@@ -157,6 +157,7 @@ private struct ModelMenu: View {
                 AgentTrack(composer: composer).padding(.bottom, 4)
                 ForEach(list, id: \.id) { m in
                     ModelRow(model: m, effort: effort(of: m), picked: m.id == composer.modelId)
+                        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("modelMenu")).minY } action: { rowY[m.id] = $0 }
                         .onHover { if $0 { hovered = m.id } }
                         .onTapGesture {
                             composer.pickModel(m.id)
@@ -176,10 +177,11 @@ private struct ModelMenu: View {
                         }
                     }
                 }
-                // Level with the row it belongs to.
-                .padding(.top, Self.track + CGFloat(i) * Self.row)
+                // Level with the row it belongs to, and never past the room below.
+                .padding(.top, max(0, min(rowY[m.id] ?? 0, room - CGFloat(m.efforts.count) * Self.row - 8)))
             }
         }
+        .coordinateSpace(.named("modelMenu"))
         .onChange(of: composer.harness) { hovered = nil }
     }
 

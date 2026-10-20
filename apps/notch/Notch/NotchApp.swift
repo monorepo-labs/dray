@@ -44,6 +44,17 @@ final class Delegate: NSObject, NSApplicationDelegate {
         restartWhenReplaced()
     }
 
+    /// The recorder is Dray's, so quitting mid-dictation would leave its
+    /// microphone open; cancel it first. A `pkill` gets past this.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let composer, composer.dictation != .idle else { return .terminateNow }
+        Task {
+            await composer.cancelDictation()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     /// An update swaps the bundle under a running notch, and Dray's `open` only
     /// finds this one still up, so it moves itself onto the new binary — while
     /// hidden, never under the reader's hands.

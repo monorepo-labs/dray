@@ -48,7 +48,9 @@ final class Composer {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: "notch.mode") }
     }
     var level: Float = 0
-    var notice: String?
+    var notice: String? { didSet { retryPath = nil } }
+    /// The recording a failed transcription kept, offered beside its notice.
+    private(set) var retryPath: String?
     var sending = false
     /// Bumped to put focus in the input: every open, and every new task.
     var opens = 0
@@ -80,7 +82,6 @@ final class Composer {
             UserDefaults.standard.set(worktreeByProject, forKey: "notch.worktreeByProject")
         }
     }
-    var branches: BranchList?
     var openMenu: MenuID?
 
     // The session list.
@@ -187,22 +188,31 @@ final class Composer {
             openMenu = nil
             return
         }
-        if dictation == .recording || dictation == .starting {
-            dictation = .idle
-            Task { _ = try? await store.call(server, "cancel_transcription", as: JSON.self) }
-        }
+        if dictation == .recording || dictation == .starting { Task { await cancelDictation() } }
         hide()
+    }
+
+    /// Throws away what is being said. A start still in flight sees `.idle` on
+    /// landing and cancels itself, since this cancel may reach the server first.
+    func cancelDictation() async {
+        dictation = .idle
+        _ = try? await store.call(server, "cancel_transcription", as: JSON.self)
     }
 
     // MARK: New session
 
+    /// Read on every new task: the notch outlives Dray, where projects get attached.
     func loadPicks() async {
         do {
-            if projects.isEmpty {
-                async let p: [Project] = store.call(server, "list_projects")
-                async let a: [AgentAvailability] = store.call(server, "agent_availability")
-                (projects, agents) = try await (p, a)
-                projectPath = projectPath ?? projects.max { $0.lastSelected < $1.lastSelected }?.path
+            async let p: [Project] = store.call(server, "list_projects")
+            async let a: [AgentAvailability] = store.call(server, "agent_availability")
+            (projects, agents) = try await (p, a)
+            if !projects.contains(where: { $0.path == projectPath }) {
+                projectPath = projects.max { $0.lastSelected < $1.lastSelected }?.path
+            }
+            // The track draws the first installed agent for a missing pick, so send that one too.
+            if let first = agents.first(where: \.available), !agents.contains(where: { $0.harness == harness && $0.available }) {
+                harness = first.harness
             }
             await loadModels()
         } catch {
@@ -238,20 +248,18 @@ final class Composer {
         Prefs.set(effortPicks, "efforts")
     }
 
-    func loadBranches() async {
-        branches = nil
-        guard let cwd = projectPath else { return }
-        let read: BranchList? = try? await store.call(server, "list_branches", ["cwd": .string(cwd)])
-        if projectPath == cwd { branches = read }
-    }
-
     // MARK: Sending
 
     func send() async -> Bool {
+        // The words still being spoken belong to this message.
+        if dictation == .recording { await stopDictation() }
+        guard dictation == .idle else { return false }
         let text = prompt
         guard !text.isEmpty, !sending, let target else { return false }
         sending = true
         defer { sending = false }
+        // Only what went out is cleared: the draft stays editable while the request runs.
+        let sentRows = Set(rows.map(\.id)), sentTyping = typing
         let sent: SessionKey?
         switch target {
         case .session(let k):
@@ -261,8 +269,8 @@ final class Composer {
             sent = await create(text)
         }
         guard let sent else { return false }
-        rows = []
-        typing = ""
+        rows.removeAll { sentRows.contains($0.id) }
+        if typing == sentTyping { typing = "" }
         lastUsed = sent.id
         UserDefaults.standard.set(sent.id, forKey: "notch.lastSession")
         self.target = .session(sent)
@@ -287,7 +295,8 @@ final class Composer {
                 "permissionMode": .string(Picks.stanceFor(harness, stance)),
                 "fast": .bool(false),
                 "cwd": .string(cwd),
-                "branch": worktree ? nil : JSON(branches?.current),
+                // No branch picker here, so the server reads the checkout's own at creation.
+                "branch": nil,
                 "useWorktree": .bool(worktree),
                 "worktreeName": nil,
                 "baseRef": nil,
@@ -322,7 +331,10 @@ final class Composer {
         dictation = .starting
         do {
             let refusal: Refusal? = try await store.call(server, "start_transcription")
-            guard dictation == .starting else { return }
+            guard dictation == .starting else {
+                if refusal == nil { _ = try? await store.call(server, "cancel_transcription", as: JSON.self) }
+                return
+            }
             if let refusal {
                 dictation = .idle
                 notice = refusal.kind == "needsModel"
@@ -342,10 +354,20 @@ final class Composer {
 
     func stopDictation() async {
         guard dictation == .recording else { return }
+        await transcribe("stop_transcription", [:])
+    }
+
+    /// Runs the model again over the recording a failed run kept, so the words need not be said twice.
+    func retryDictation() async {
+        guard dictation == .idle, let path = retryPath else { return }
+        await transcribe("retry_transcription", ["path": .string(path)])
+    }
+
+    private func transcribe(_ cmd: String, _ args: [String: JSON]) async {
         dictation = .transcribing
         defer { dictation = .idle }
         do {
-            let o: Outcome = try await store.call(server, "stop_transcription", timeout: .seconds(180))
+            let o: Outcome = try await store.call(server, cmd, args, timeout: .seconds(180))
             switch o.kind {
             case "text":
                 if let text = o.value?.string, !text.isEmpty {
@@ -357,6 +379,8 @@ final class Composer {
             case "empty": notice = "No words heard."
             default: notice = o.value?["message"]?.string ?? "Dictation failed."
             }
+            // Set after the notice, whose own setter clears it.
+            retryPath = o.value?["audioPath"]?.string
         } catch {
             notice = error.localizedDescription
         }

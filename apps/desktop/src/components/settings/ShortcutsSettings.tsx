@@ -247,6 +247,7 @@ export default function ShortcutsSettings() {
     rows: SHORTCUTS.filter((s) => s.group === group && matches(s.label, group)),
     digits: DIGIT_CHORDS.filter((c) => c.group === group && matches(c.label, group)),
   })).filter((g) => g.rows.length + g.digits.length > 0);
+  const notchShown = IS_MAC && matches("Open Dray Notch", "Dray Notch");
 
   return (
     <div className="flex flex-col gap-5">
@@ -266,8 +267,8 @@ export default function ShortcutsSettings() {
         spellCheck={false}
         autoFocus
       />
-      {IS_MAC && matches("Open Dray Notch", "Dray Notch") && <NotchRow />}
-      {shown.length === 0 && <p className="text-ui text-muted-foreground">No shortcut matches.</p>}
+      {notchShown && <NotchRow />}
+      {shown.length === 0 && !notchShown && <p className="text-ui text-muted-foreground">No shortcut matches.</p>}
       {shown.map(({ group, rows, digits }) => (
         <section key={group} className="flex flex-col gap-1.5">
           <h2 className="text-ui font-medium text-foreground">{group}</h2>
