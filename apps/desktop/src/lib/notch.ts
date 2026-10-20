@@ -2,14 +2,14 @@ import { readLocalStorage } from "@/hooks/useLocalStorage";
 import { IS_MAC } from "@/lib/platform";
 import { invoke } from "@/lib/transport";
 
-/// The modifier tapped alone to open Dray Notch, or off.
+/// The modifier tapped alone to open Dray Notch. No key at all is the notch off.
 export type NotchKey = "control" | "option" | "command" | "off";
 
 export const NOTCH_KEYS: { value: NotchKey; label: string }[] = [
   { value: "control", label: "⌃ Control" },
   { value: "option", label: "⌥ Option" },
   { value: "command", label: "⌘ Command" },
-  { value: "off", label: "Off" },
+  { value: "off", label: "None, notch off" },
 ];
 
 export const NOTCH_KEY = "ade.notchKey";

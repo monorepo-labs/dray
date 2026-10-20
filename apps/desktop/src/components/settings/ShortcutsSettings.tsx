@@ -185,7 +185,8 @@ function NotchRow() {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button type="button" size="sm" variant="ghost" className="justify-between">
-              {key === "off" ? "Off" : `Tap ${NOTCH_KEYS.find((k) => k.value === key)?.label}`}
+              {/* The other rows' word for no key, which here also means no notch. */}
+              {key === "off" ? "Not set" : `Tap ${NOTCH_KEYS.find((k) => k.value === key)?.label}`}
               <ChevronDown className="size-3 shrink-0 opacity-60" />
             </Button>
           </DropdownMenuTrigger>
