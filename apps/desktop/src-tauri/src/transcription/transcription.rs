@@ -507,6 +507,9 @@ pub async fn stop_transcription(
         return Ok(TranscribeOutcome::NoAudio);
     };
 
+    // Sent before the save, so the worker finalizes while the file is written.
+    let heard = live.map(|live| live.finish(unpulled));
+
     // Parked before the model is even resolved, at any length. The samples used
     // to travel into the engine by value, so a failed run took them with it and
     // the only cure left was saying the whole thing again.
@@ -522,8 +525,8 @@ pub async fn stop_transcription(
         }
     };
 
-    let heard = match live {
-        Some(live) => live.finish(unpulled).await,
+    let heard = match heard {
+        Some(pending) => pending.heard().await,
         None => None,
     };
 
@@ -536,24 +539,32 @@ pub async fn stop_transcription(
 /// the two. Nothing recording, or only silence, answers `Empty` — a cut with no
 /// words before it is ordinary, not a microphone fault.
 async fn cut_transcription(state: &TranscriptionState) -> Result<TranscribeOutcome, String> {
-    let (captured, unpulled) = match state.recording.lock().await.as_ref() {
-        Some(recording) => recording.cut().map_err(|e| e.to_string())?,
-        None => (None, Vec::new()),
-    };
-    // Told even about a silent stretch, so the next one starts on a fresh stream.
-    let heard = match state.live.lock().await.as_ref() {
-        Some(live) => live.cut(unpulled, captured.is_some()).await,
-        None => None,
+    let (captured, pending) = {
+        let recording = state.recording.lock().await;
+        let Some(recording) = recording.as_ref() else {
+            return Ok(TranscribeOutcome::Empty);
+        };
+        let (captured, unpulled) = recording.cut().map_err(|e| e.to_string())?;
+        // Sent under the recording's lock, so a stop's take — and its message
+        // to the worker — lands after this cut's, never between the two.
+        // Told even about a silent stretch, so the next starts a fresh stream.
+        let pending = state.live.lock().await.as_ref().map(|live| live.cut(unpulled, captured.is_some()));
+        (captured, pending)
     };
     let Some(audio) = captured else {
         return Ok(TranscribeOutcome::Empty);
     };
+    // Parked before the worker is waited on, as the stop does.
     let saved = match recordings::save(&audio).await {
         Ok(path) => Some(path),
         Err(e) => {
             eprintln!("[recording save err] {e:#}");
             None
         }
+    };
+    let heard = match pending {
+        Some(pending) => pending.heard().await,
+        None => None,
     };
 
     Ok(transcribe_audio(state, audio, saved, heard).await)
@@ -715,22 +726,30 @@ mod bench {
         let tap = audio::Tap::new(2, 48_000);
         let live = Live::start(engine.clone(), model, tap.clone());
 
-        let started = Instant::now();
-        let mic = tap.clone();
-        tokio::task::spawn_blocking(move || {
-            // 20ms of stereo at 48kHz per callback, as a device delivers it.
-            for (i, block) in captured.chunks(1920).enumerate() {
-                mic.push(block);
-                let due = std::time::Duration::from_millis(20 * (i as u64 + 1));
-                std::thread::sleep(due.saturating_sub(started.elapsed()));
-            }
-        })
-        .await
-        .unwrap();
+        // 20ms of stereo at 48kHz per callback, as a device delivers it.
+        let play = |audio: Vec<f32>, mic: audio::Tap| {
+            tokio::task::spawn_blocking(move || {
+                let started = Instant::now();
+                for (i, block) in audio.chunks(1920).enumerate() {
+                    mic.push(block);
+                    let due = std::time::Duration::from_millis(20 * (i as u64 + 1));
+                    std::thread::sleep(due.saturating_sub(started.elapsed()));
+                }
+            })
+        };
+
+        // A Notch cut a third of the way in, mid-pause, then the rest.
+        let third = captured.len() / 3 / 1920 * 1920;
+        play(captured[..third].to_vec(), tap.clone()).await.unwrap();
+        let t = Instant::now();
+        let (_, unpulled) = tap.take().unwrap();
+        let cut = live.cut(unpulled, true).heard().await.expect("cut decoded live");
+        eprintln!("cut: {:?}\n  {}", t.elapsed(), cut.text.unwrap());
+        play(captured[third..].to_vec(), tap.clone()).await.unwrap();
 
         let t = Instant::now();
         let (_, unpulled) = tap.take().unwrap();
-        let heard = live.finish(unpulled).await.expect("decoded live");
+        let heard = live.finish(unpulled).heard().await.expect("decoded live");
         let stop = t.elapsed();
         eprintln!("live: stop to text {stop:?}\n  {}", heard.text.unwrap());
 
@@ -742,7 +761,7 @@ mod bench {
         tap.push(&clean.iter().flat_map(|s| [*s; 6]).collect::<Vec<_>>());
         let t = Instant::now();
         let (_, unpulled) = tap.take().unwrap();
-        let heard = live.finish(unpulled).await.expect("decoded in the worker");
+        let heard = live.finish(unpulled).heard().await.expect("decoded in the worker");
         eprintln!("late load: stop to text {:?} (load included)\n  {}", t.elapsed(), heard.text.unwrap());
 
         // ggml-metal aborts at exit with a model still alive, and the idle

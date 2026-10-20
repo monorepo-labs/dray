@@ -15,12 +15,12 @@
 //! Nothing here can change that, which is why there is no accelerator setting.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use transcribe_cpp::{Model, ModelOptions, RunOptions, Session};
 
 /// How long a loaded model outlives its last use.
@@ -62,6 +62,25 @@ pub struct Engine {
     /// load in CI and the slot is empty either way.
     idle_unloads: Arc<AtomicU64>,
     idle_after: Duration,
+    /// Set while [`Engine::lend`] has the model out for a live stream. A load
+    /// finding the slot empty then waits for [`Loan`] to end rather than
+    /// reading the slot as unloaded and pulling a second copy off disk.
+    lent: Arc<AtomicBool>,
+    returned: Arc<Notify>,
+}
+
+/// The live stream's hold on the model. Dropping it, on any path, lets waiting
+/// loads look again — so a worker that panics cannot strand them.
+pub struct Loan {
+    lent: Arc<AtomicBool>,
+    returned: Arc<Notify>,
+}
+
+impl Drop for Loan {
+    fn drop(&mut self) {
+        self.lent.store(false, Ordering::SeqCst);
+        self.returned.notify_waiters();
+    }
 }
 
 impl Default for Engine {
@@ -85,6 +104,8 @@ impl Engine {
             uses: Default::default(),
             idle_unloads: Default::default(),
             idle_after,
+            lent: Default::default(),
+            returned: Default::default(),
         }
     }
 
@@ -185,9 +206,10 @@ impl Engine {
     ///
     /// `None` for a model that cannot stream, which stays in the slot for the
     /// batch run at the stop — so this is also the warm every press starts.
-    /// The slot is empty while lent, as it is during [`Engine::transcribe`]'s
-    /// own run; [`Engine::give_back`] puts it back.
-    pub async fn lend(&self, token: u64, model_id: &str, path: &Path) -> Option<Session> {
+    /// The slot is empty while lent, and any other load waits for the
+    /// [`Loan`] to end — a retry mid-recording runs after the stop rather than
+    /// beside a second copy. [`Engine::give_back`] puts it back.
+    pub async fn lend(&self, token: u64, model_id: &str, path: &Path) -> Option<(Session, Loan)> {
         self.warm(token, model_id.to_string(), path.to_path_buf()).await;
 
         let mut guard = self.loaded.lock().await;
@@ -197,17 +219,21 @@ impl Engine {
         if self.token() != token || !streams {
             return None;
         }
-        guard.take().map(|l| l.session)
+        // Under the slot's lock, which a load checks the flag under too.
+        self.lent.store(true, Ordering::SeqCst);
+        let loan = Loan { lent: Arc::clone(&self.lent), returned: Arc::clone(&self.returned) };
+        guard.take().map(|l| (l.session, loan))
     }
 
     /// Returns a lent model, unless an `unload` since `token` said the reader
     /// is done with it.
-    pub async fn give_back(&self, token: u64, model_id: &str, session: Session) {
+    pub async fn give_back(&self, token: u64, model_id: &str, session: Session, loan: Loan) {
         let mut guard = self.loaded.lock().await;
         if self.token() == token && guard.is_none() {
             *guard = Some(Loaded { model_id: model_id.to_string(), session });
         }
         drop(guard);
+        drop(loan);
         // A recording outlasting the idle window let its sleeper find an empty
         // slot and leave; this one drops the model it just put back.
         self.touch();
@@ -244,8 +270,17 @@ impl Engine {
     /// once however many callers ask for it at the same moment — a warm at
     /// launch and a mic press a second later are the ordinary case.
     async fn ensure_loaded(&self, token: u64, model_id: &str, path: &Path) -> Result<()> {
-        if Self::holds(&*self.loaded.lock().await, model_id) {
-            return Ok(());
+        loop {
+            // Created before the check, so a return landing between the two
+            // still wakes it.
+            let returned = self.returned.notified();
+            if Self::holds(&*self.loaded.lock().await, model_id) {
+                return Ok(());
+            }
+            if !self.lent.load(Ordering::SeqCst) {
+                break;
+            }
+            returned.await;
         }
 
         let _loading = self.loading.lock().await;
@@ -425,6 +460,26 @@ mod tests {
 
         assert_eq!(fired(), 1, "idle engine must unload");
         assert_eq!(engine.token(), token, "idle unload must not move the token");
+    }
+
+    /// A lent model reads as an empty slot. A load must wait for the loan to
+    /// end rather than pull a second copy off disk beside it.
+    #[tokio::test]
+    async fn a_load_waits_while_the_model_is_lent() {
+        let engine = Engine::default();
+        engine.lent.store(true, Ordering::SeqCst);
+        let loan = Loan { lent: Arc::clone(&engine.lent), returned: Arc::clone(&engine.returned) };
+
+        let waiting = engine.clone();
+        let warm = tokio::spawn(async move {
+            waiting.warm(waiting.token(), "whisper-small".into(), PathBuf::from("/nonexistent")).await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!warm.is_finished(), "a load ran while the model was lent");
+
+        drop(loan);
+        tokio::time::timeout(Duration::from_secs(5), warm).await.unwrap().unwrap();
     }
 
     #[tokio::test]

@@ -69,14 +69,14 @@ impl Live {
 
         tauri::async_runtime::spawn(async move {
             let Ok(path) = download::model_path(model).await else { return };
-            let Some(session) = engine.lend(token, model.id, &path).await else { return };
+            let Some((session, loan)) = engine.lend(token, model.id, &path).await else { return };
 
             let decoded = tokio::task::spawn_blocking(move || decode(session, &tap, &rx, model.id)).await;
             let Ok((session, last)) = decoded else { return };
 
             // Back in the slot before the stop hears anything, so whatever it
             // does next finds the model where it expects it.
-            engine.give_back(token, model.id, session).await;
+            engine.give_back(token, model.id, session, loan).await;
             if let Some((reply, heard)) = last {
                 let _ = reply.send(heard);
             }
@@ -85,20 +85,30 @@ impl Live {
         Self { tx }
     }
 
-    /// Closes the stretch a cut just took, answering `None` where nothing was
-    /// decoding live. `transcribe` false throws the stretch away.
-    pub async fn cut(&self, unpulled: Vec<f32>, transcribe: bool) -> Option<Heard> {
+    /// Closes the stretch a cut just took. `transcribe` false throws it away.
+    ///
+    /// Sent now, answered later: the caller sends under the same lock its
+    /// take ran under, so a stop cannot reach the worker ahead of the cut.
+    pub fn cut(&self, unpulled: Vec<f32>, transcribe: bool) -> Pending {
         let (reply, answer) = oneshot::channel();
         let reply = transcribe.then_some(reply);
-        self.tx.send(Ask::Cut { unpulled, reply }).ok()?;
-        answer.await.ok()
+        Pending(self.tx.send(Ask::Cut { unpulled, reply }).ok().map(|_| answer))
     }
 
-    /// Closes the recording, answering `None` where nothing was decoding live.
-    pub async fn finish(self, unpulled: Vec<f32>) -> Option<Heard> {
+    /// Closes the recording.
+    pub fn finish(self, unpulled: Vec<f32>) -> Pending {
         let (reply, answer) = oneshot::channel();
-        self.tx.send(Ask::Finish { unpulled, reply }).ok()?;
-        answer.await.ok()
+        Pending(self.tx.send(Ask::Finish { unpulled, reply }).ok().map(|_| answer))
+    }
+}
+
+/// The worker's answer to a cut or a stop, still on its way.
+pub struct Pending(Option<oneshot::Receiver<Heard>>);
+
+impl Pending {
+    /// `None` where nothing was decoding live.
+    pub async fn heard(self) -> Option<Heard> {
+        self.0?.await.ok()
     }
 }
 
