@@ -20,8 +20,9 @@ const ACCEL: Partial<Mods> = IS_MAC ? { meta: true } : { ctrl: true };
 /// in settings rather than one per digit. `slots` is how many digits it takes:
 /// 9 is 1–9, 10 adds 0 as the tenth.
 export const DIGIT_CHORDS = [
-  // Off Mac, Ctrl is the accelerator `tab.pick` already holds.
-  { id: "session.jump", label: "Jump to session", group: "Sessions", slots: 10, mods: mods(IS_MAC ? { ctrl: true } : { alt: true }) },
+  // ⌥, not ⌃: off Mac ⌃ is the accelerator `tab.pick` holds, and on a Mac a
+  // tap of ⌃ is Dray Notch's default, which held here would flash the badges.
+  { id: "session.jump", label: "Jump to session", group: "Sessions", slots: 10, mods: mods({ alt: true }) },
   { id: "pane.focus", label: "Focus pane", group: "Sessions", slots: 9, mods: mods({ ...ACCEL, alt: true }) },
   // By position in the titlebar's row, the way a browser numbers its tabs; 9
   // is the last tab, not the ninth.

@@ -1117,6 +1117,12 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     if matches!(cmd, "get_remote_access" | "set_remote_access" | "remote_access_token" | "remote_access_qr" | "restart_when_idle") {
         return dispatch_mac(cmd, args, sink).await;
     }
+    // The recorder and model live in the app, so a client with no microphone
+    // of its own — the Notch panel — dictates through the app's.
+    #[cfg(feature = "desktop")]
+    if crate::transcription::HOSTED.contains(&cmd) {
+        return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Open Dray to dictate.")));
+    }
     // A `dray-serve` updates itself; the Mac's server follows the app instead.
     #[cfg(not(feature = "desktop"))]
     if matches!(cmd, "update_server" | "restart_now" | "restart_when_idle") {

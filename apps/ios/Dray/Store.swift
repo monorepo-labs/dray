@@ -42,6 +42,13 @@ final class Store {
         for s in servers { start(s) }
     }
 
+    /// One server, read through `read` at every connect rather than the
+    /// Keychain — the Notch's This Mac, whose port and token are files.
+    init(local s: Server, read: @escaping () -> (url: String, token: String)?) {
+        servers = [s]
+        start(s, read: read)
+    }
+
     // MARK: Servers
 
     func addServer(name: String, url: String, token: String) {
@@ -94,12 +101,13 @@ final class Store {
         UserDefaults.standard.set(try? JSONEncoder().encode(servers), forKey: "servers")
     }
 
-    private func start(_ s: Server) {
-        guard let token = Keychain.get(s.id.uuidString) else {
+    private func start(_ s: Server, read: (() -> (url: String, token: String)?)? = nil) {
+        guard let token = read?()?.token ?? Keychain.get(s.id.uuidString) else {
             serverState[s.id] = .failed("No token saved; remove and add this server again")
             return
         }
         let c = Connection(serverId: s.id, url: s.url, token: token)
+        c.refresh = read
         c.onState = { [weak self] state in
             guard let self else { return }
             serverState[s.id] = state

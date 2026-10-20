@@ -5,6 +5,7 @@ import App from "./App";
 import CrashScreen from "@/components/CrashScreen";
 import { trackActiveDay } from "@/lib/analytics";
 import { onFocusChange } from "@/lib/focus";
+import { applyNotch } from "@/lib/notch";
 import { startSurveys } from "@/lib/surveys";
 import { startAgentUpdateChecks } from "@/hooks/useAgentUpdates";
 import { applyZoom } from "@/lib/zoom";
@@ -22,6 +23,7 @@ onFocusChange((focused) => {
 // It refuses itself where the install has opted out, so this is unconditional.
 void startSurveys();
 startAgentUpdateChecks();
+void applyNotch();
 // The webview opens at 100% whatever the reader left it at.
 applyZoom();
 

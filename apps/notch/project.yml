@@ -1,0 +1,39 @@
+name: DrayNotch
+options:
+  deploymentTarget:
+    macOS: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: 7WYP3LRDL8
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+targets:
+  DrayNotch:
+    type: application
+    platform: macOS
+    sources:
+      - Notch
+      # The iOS app's client of dray-serve, shared by path rather than by package.
+      - path: ../ios/Dray/Wire.swift
+      - path: ../ios/Dray/Connection.swift
+      - path: ../ios/Dray/Store.swift
+      - path: ../ios/Dray/Transcript.swift
+      - path: ../ios/Dray/Tools.swift
+      - path: ../ios/Dray/Picks.swift
+      - path: ../desktop/src/assets/dictate-start.wav
+        buildPhase: resources
+      - path: ../desktop/src/assets/dictate-stop.wav
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: Dray Notch
+        PRODUCT_BUNDLE_IDENTIFIER: com.yogesh.dray.notch
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_LSUIElement: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Dray Notch
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        # A local WebSocket to This Mac's server, and nothing sandboxed can reach ~/.dray.
+        ENABLE_APP_SANDBOX: NO
+        ENABLE_HARDENED_RUNTIME: YES

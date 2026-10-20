@@ -187,6 +187,7 @@ export const APP_COMMANDS = new Set([
   "dismiss_quit",
   "list_open_apps",
   "open_in_app",
+  "configure_notch",
   "open_login_terminal",
   "run_agent_login",
   "update_agent_in_terminal",

@@ -123,6 +123,8 @@ struct SessionItem: Decodable, Hashable {
     let worktreeName: String?
     let worktreeRemoved: Bool?
     let hidden: Bool?
+    /// Set aside by the reader: started, not wanted now.
+    let aside: Bool?
 
     var busy: Bool { status == "in_progress" }
     var project: String { (projectPath as NSString).lastPathComponent }

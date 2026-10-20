@@ -1,8 +1,17 @@
 import { useRef, useState } from "react";
-import { RotateCcw } from "lucide-react";
+import { ChevronDown, RotateCcw } from "lucide-react";
 
 import ShortcutKeys, { DigitKeys } from "@/components/ShortcutKeys";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { applyNotch, NOTCH_KEY, NOTCH_KEYS, type NotchKey } from "@/lib/notch";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -164,6 +173,43 @@ function DigitRow({ id, label, slots }: { id: DigitChordId; label: string; slots
   );
 }
 
+/// The notch opens on a modifier tapped *alone*, which no chord recorder can
+/// spell, so it is a pick out of four rather than a recorder.
+function NotchRow() {
+  const [key, setKey] = useLocalStorage<NotchKey>(NOTCH_KEY, "control");
+  return (
+    <section className="flex flex-col gap-1.5">
+      <h2 className="text-ui font-medium text-foreground">Dray Notch</h2>
+      <div className="-mx-2 flex min-h-7 items-center justify-between gap-4 rounded-md px-2 hover:bg-sidebar-accent/50">
+        <span className="text-ui text-foreground/70">Open Dray Notch, tap again to dictate</span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button type="button" size="sm" variant="ghost" className="justify-between">
+              {key === "off" ? "Off" : `Tap ${NOTCH_KEYS.find((k) => k.value === key)?.label}`}
+              <ChevronDown className="size-3 shrink-0 opacity-60" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuRadioGroup
+              value={key}
+              onValueChange={(next) => {
+                setKey(next as NotchKey);
+                void applyNotch(next as NotchKey);
+              }}
+            >
+              {NOTCH_KEYS.map((k) => (
+                <DropdownMenuRadioItem key={k.value} value={k.value}>
+                  {k.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </section>
+  );
+}
+
 /// Every shortcut, grouped, each rebindable in place.
 ///
 /// Click the caps and the next chord pressed is the binding; Esc backs out. A
@@ -219,6 +265,7 @@ export default function ShortcutsSettings() {
         spellCheck={false}
         autoFocus
       />
+      {IS_MAC && matches("Open Dray Notch", "Dray Notch") && <NotchRow />}
       {shown.length === 0 && <p className="text-ui text-muted-foreground">No shortcut matches.</p>}
       {shown.map(({ group, rows, digits }) => (
         <section key={group} className="flex flex-col gap-1.5">

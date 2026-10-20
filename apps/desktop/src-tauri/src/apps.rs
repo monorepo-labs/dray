@@ -316,6 +316,49 @@ pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
     Err(crate::git::stderr_or(&out, || format!("could not open {path}")))
 }
 
+/// Writes the modifier that opens Dray Notch (`control`, `option`, `command`)
+/// into the notch's own preferences, which it reads at every tap, and starts it
+/// to match — or quits it, for `off`.
+///
+/// Its own defaults domain rather than `settings.json`, since the notch is the
+/// one that reads it. `open` without `-n` is a no-op for a notch already up,
+/// and it outlives Dray on purpose: it talks to the background server, which
+/// does too. A build with no notch inside it (`tauri dev`) only writes the pick.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn configure_notch(key: String) -> Result<(), String> {
+    use tokio::process::Command;
+    if !matches!(key.as_str(), "control" | "option" | "command" | "off") {
+        return Err(format!("unknown notch key {key}"));
+    }
+    async fn run(cmd: &mut Command) -> Result<std::process::Output, String> {
+        cmd.output().await.map_err(|err| format!("could not configure the notch: {err}"))
+    }
+    run(Command::new("defaults").args(["write", "com.yogesh.dray.notch", "notch.key", "-string", &key])).await?;
+    if key == "off" {
+        // Exit 1 is "nothing running", which is what was asked for.
+        run(Command::new("pkill").args(["-x", "Dray Notch"])).await?;
+        return Ok(());
+    }
+    let Some(app) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("Helpers/Dray Notch.app")))
+        .filter(|app| app.exists())
+    else {
+        return Ok(());
+    };
+    let mut open = Command::new("open");
+    open.arg("-g");
+    // The notch finds its server through the home, so a moved one must ride along.
+    if let Some(home) = crate::store::home_override() {
+        open.arg("--env").arg(format!("DRAY_HOME={}", home.display()));
+    }
+    let out = run(open.arg(&app)).await?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(crate::git::stderr_or(&out, || "could not start Dray Notch".into()))
+}
+
 /// Terminal.app, and never the terminal the reader picked in the panel beside
 /// this.
 ///

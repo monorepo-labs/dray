@@ -745,6 +745,7 @@ pub fn run() {
             // last one on disk forever, since nothing else sweeps them and a
             // reader who gives up after one failure writes no more.
             tauri::async_runtime::spawn(transcription::recordings::prune());
+            transcription::serve_host(app.handle());
 
             // Sessions live in the background server launchd runs from this
             // binary, which owns the data, the orchestration socket and
@@ -869,6 +870,7 @@ pub fn run() {
             quit::dismiss_quit,
             apps::list_open_apps,
             apps::open_in_app,
+            apps::configure_notch,
             apps::open_login_terminal,
             accounts::run_agent_login,
             agent_updates::update_agent_in_terminal,

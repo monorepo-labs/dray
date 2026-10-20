@@ -12,8 +12,11 @@ final class Connection {
     }
 
     let serverId: UUID
-    private let url: String
-    private let token: String
+    private var url: String
+    private var token: String
+    /// Reads the address afresh before each connect, for a server whose port
+    /// moves on every restart — the Notch's This Mac. `nil` keeps the first.
+    var refresh: (() -> (url: String, token: String)?)?
     /// Every event frame, whole, with its name. Decoded by the store, which knows the type.
     var onEvent: (String, Data) -> Void = { _, _ in }
     var onState: (State) -> Void = { _ in }
@@ -49,6 +52,7 @@ final class Connection {
         let gen = generation
         task?.cancel(with: .goingAway, reason: nil)
         drop("Reconnecting")
+        if let fresh = refresh?() { (url, token) = fresh }
         guard let address = socketURL(url) else {
             onState(.failed("Not an address: \(url)"))
             return

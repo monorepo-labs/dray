@@ -322,6 +322,9 @@ async fn ask_app(request: Request) -> Result<Response> {
 /// What the Mac's server asks of the app it hosts, answered in the app.
 #[cfg(feature = "desktop")]
 pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
+    if let Some(reply) = crate::transcription::answer_host(cmd, &args).await {
+        return reply;
+    }
     match cmd {
         "request" => {
             let request: Request = serde_json::from_value(args).map_err(|e| e.to_string())?;
