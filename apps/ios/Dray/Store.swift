@@ -24,6 +24,9 @@ final class Store {
     private(set) var transcripts: [SessionKey: Transcript] = [:]
     private(set) var asks: [SessionKey: [AgentEvent]] = [:]
     private(set) var queued: [SessionKey: [Queued]] = [:]
+    private(set) var projects: [UUID: [Project]] = [:]
+    /// Each repo's PR marks by branch, as `pr_marks` last answered.
+    private(set) var marks: [ProjectKey: [String: PrMark]] = [:]
     var drafts: [SessionKey: String] = [:]
     /// gh's latest progress line per clone, by server and slug.
     var cloneProgress: [UUID: [String: String]] = [:]
@@ -33,6 +36,8 @@ final class Store {
     @ObservationIgnored private var reading: Set<UUID> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
     @ObservationIgnored private var connections: [UUID: Connection] = [:]
+    @ObservationIgnored private var marksAt: [ProjectKey: Date] = [:]
+    @ObservationIgnored private var marking: Set<ProjectKey> = []
 
     init() {
         if let data = UserDefaults.standard.data(forKey: "servers"),
@@ -60,6 +65,8 @@ final class Store {
         for key in items.keys where key.server == s.id { items[key] = nil }
         for key in transcripts.keys where key.server == s.id { transcripts[key] = nil }
         for key in asks.keys where key.server == s.id { asks[key] = nil }
+        for key in marks.keys where key.server == s.id { marks[key] = nil }
+        projects[s.id] = nil
         save()
     }
 
@@ -75,7 +82,11 @@ final class Store {
     }
 
     func refresh() async {
-        for s in servers where serverState[s.id] == .connected { await loadIndex(s.id) }
+        for s in servers where serverState[s.id] == .connected {
+            await loadIndex(s.id)
+            await loadProjects(s.id)
+            await loadMarks(s.id, force: true)
+        }
     }
 
     /// A command on one server, for a screen reading what the store does not hold.
@@ -88,6 +99,7 @@ final class Store {
     /// A session this phone just created, from the entry `send_msg` answered with.
     func created(_ server: UUID, _ item: SessionItem) {
         store(SessionKey(server: server, id: item.sessionId), item)
+        Task { await loadMarks(server, force: false, only: [item.projectPath]) }
     }
 
     private func save() {
@@ -115,6 +127,59 @@ final class Store {
     private func connected(_ server: UUID) async {
         await loadIndex(server)
         for key in transcripts.keys where key.server == server { await reload(key) }
+        // After the transcripts: a mark costs a `gh` call per repo, missed messages must not wait on it.
+        await loadProjects(server)
+        await loadMarks(server, force: false)
+    }
+
+    private func loadProjects(_ server: UUID) async {
+        if let list: [Project] = try? await connections[server]?.call("list_projects", [:]) { projects[server] = list }
+    }
+
+    // MARK: PR marks
+
+    /// The repos the list draws sessions from on one server.
+    private func repos(_ server: UUID) -> Set<String> {
+        Set(items.filter { $0.key.server == server && $0.value.hidden != true && $0.value.archived != true }.map(\.value.projectPath))
+    }
+
+    /// One `pr_marks` per repo, the desktop's `usePrMarks`: fresh for two
+    /// minutes unless forced. A failed read changes nothing — no `gh`, no
+    /// GitHub remote, logged out — and the last good marks stay on screen.
+    private func loadMarks(_ server: UUID, force: Bool, only: Set<String>? = nil) async {
+        guard let c = connections[server] else { return }
+        for path in only ?? repos(server) {
+            let key = ProjectKey(server: server, path: path)
+            // ponytail: a forced read landing on one in flight is dropped, not queued
+            // behind it as the desktop does; the next poll or turn end catches up.
+            if marking.contains(key) { continue }
+            if !force, let at = marksAt[key], Date().timeIntervalSince(at) < 120 { continue }
+            marking.insert(key)
+            defer { marking.remove(key) }
+            guard let list: [PrMark] = try? await c.call("pr_marks", ["cwd": .string(path)]) else { continue }
+            marks[key] = Dictionary(grouping: list, by: \.headRefName).compactMapValues(pickMark)
+            marksAt[key] = Date()
+        }
+    }
+
+    /// Re-reads every repo holding an open PR — the only mark that changes on
+    /// its own, as checks report or someone merges. Called every 30s while the
+    /// app is on screen, and once on coming back.
+    func pollMarks() async {
+        for s in servers where serverState[s.id] == .connected {
+            let open = repos(s.id).filter { path in
+                let key = ProjectKey(server: s.id, path: path)
+                return marks[key]?.values.contains { $0.state == "OPEN" } == true
+                    && Date().timeIntervalSince(marksAt[key] ?? .distantPast) >= 30
+            }
+            if !open.isEmpty { await loadMarks(s.id, force: true, only: open) }
+        }
+    }
+
+    func prMark(_ key: SessionKey, _ item: SessionItem) -> PrMark? {
+        // The sidebar's guess: no observed HEAD, which would cost a spawn per row.
+        sessionBranch(branch: item.branch, worktreeName: item.worktreeName, worktreeRemoved: item.worktreeRemoved ?? false, observed: nil)
+            .flatMap { marks[ProjectKey(server: key.server, path: item.projectPath)]?[$0] }
     }
 
     private func loadIndex(_ server: UUID) async {
@@ -141,15 +206,26 @@ final class Store {
 
     // MARK: Sessions
 
-    /// What the list draws: sessions waiting on the reader first, then newest.
-    var sessions: [(key: SessionKey, item: SessionItem)] {
-        items.filter { !($0.value.hidden ?? false) && !($0.value.archived ?? false) }
-            .map { (key: $0.key, item: $0.value) }
-            .sorted { a, b in
-                let wa = isAsking(a.key), wb = isAsking(b.key)
-                if wa != wb { return wa }
-                return a.item.modified > b.item.modified
-            }
+    /// What the list draws, in the desktop sidebar's runs, narrowed to one
+    /// project first when a chip is picked.
+    func runs(_ project: ProjectKey?) -> [(stage: Stage, rows: [ListRow])] {
+        let list = items.filter { key, item in
+            item.hidden != true && item.archived != true
+                && (project.map { $0 == ProjectKey(server: key.server, path: item.projectPath) } ?? true)
+        }.map { (key: $0.key, item: $0.value) }
+        return stageRuns(list) { stage($0.key, $0.item) }
+    }
+
+    /// The desktop's `sessionState`: a merged PR holds its session whatever
+    /// the turn says, and running checks outrank the PR being open.
+    private func stage(_ key: SessionKey, _ item: SessionItem) -> Stage {
+        if isAsking(key) { return .asking }
+        let mark = prMark(key, item)
+        let open = mark?.state == "OPEN" ? mark : nil
+        if open == nil && mark?.state == "MERGED" { return .merged }
+        if item.status == "completed" { return open == nil ? .completed : .unreadPr }
+        guard let open else { return .idle }
+        return open.checksState == "RUNNING" ? .checks : .pr
     }
 
     func isAsking(_ key: SessionKey) -> Bool { !(asks[key]?.isEmpty ?? true) }
@@ -294,6 +370,10 @@ final class Store {
             let key = SessionKey(server: server, id: s.sessionId)
             statuses[key] = s
             notice(key)
+            // A turn ending is when a pull request appears.
+            if items[key]?.busy == true, s.status != "in_progress", let path = items[key]?.projectPath {
+                Task { await loadMarks(server, force: true, only: [path]) }
+            }
             items[key]?.status = s.status
             if let m = s.modified { items[key]?.modified = m }
             if s.status != "in_progress" { strand(key) }
@@ -306,6 +386,7 @@ final class Store {
         case "session_created", "session_changed":
             guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload else { return }
             items[SessionKey(server: server, id: item.sessionId)] = item
+            Task { await loadMarks(server, force: false, only: [item.projectPath]) }
         default:
             break
         }
@@ -320,6 +401,8 @@ final class Store {
         Task {
             await loadIndex(key.server)
             reading.remove(key.server)
+            // A repo joining the list is read once, the desktop's rule; fresh ones are skipped.
+            await loadMarks(key.server, force: false)
         }
     }
 

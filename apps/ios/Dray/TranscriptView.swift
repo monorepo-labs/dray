@@ -18,7 +18,7 @@ struct TranscriptView: View {
                             .frame(maxWidth: .infinity)
                     }
                     if transcript == nil {
-                        ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
+                        Orb().frame(maxWidth: .infinity).padding(.top, 40)
                     }
                     ForEach(turns) { TurnView(turn: $0) }
                     ForEach(store.queued[key] ?? [], id: \.id) { q in

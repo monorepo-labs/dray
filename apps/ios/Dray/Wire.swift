@@ -123,9 +123,21 @@ struct SessionItem: Decodable, Hashable {
     let worktreeName: String?
     let worktreeRemoved: Bool?
     let hidden: Bool?
+    let aside: Bool?
+    let parentSessionId: String?
 
     var busy: Bool { status == "in_progress" }
     var project: String { (projectPath as NSString).lastPathComponent }
+}
+
+/// One branch's pull request, as `pr_marks` answers it. Only `OPEN` and
+/// `MERGED` are asked for; `checksState` is `RUNNING`, `FAILING` or `CLEAR`.
+struct PrMark: Decodable, Hashable {
+    let number: Int
+    let headRefName: String
+    let isDraft: Bool
+    let state: String
+    let checksState: String
 }
 
 struct Snapshot: Decodable {
