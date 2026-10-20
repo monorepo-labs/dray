@@ -1,0 +1,110 @@
+---
+title: Accounts
+description: See which account Claude Code, Codex, pi, fx, Grok Build and gh are signed in as, sign in through Terminal or with an API key, reauthorize, sign out, and hide an agent from the picker.
+sidebar:
+  order: 1
+---
+
+Each agent CLI keeps its own login. The Accounts tab asks each one who it is signed in as, so you can check before a turn fails on an expired login. Dray stores no agent credential: a sign-in lands in the CLI's own store.
+
+## Where it is
+
+Settings → Accounts. Open Settings with the gear in the sidebar or `⌘,`.
+
+There is one block per agent — Claude Code, Codex, pi, fx and Grok Build — and one for GitHub at the bottom. If you have added a server, an **Accounts on** menu at the top picks which machine's accounts you are looking at.
+
+{/* screenshot: the Accounts tab with Claude Code signed in and pi showing two providers */}
+
+## Read a row
+
+Each row is one credential. The dot says its state:
+
+| Dot | Means |
+|---|---|
+| Green | Signed in. The line under the name says how, then who, such as `Claude subscription · you@example.com · max`. |
+| Grey | Not signed in. The line under it says why, when the CLI says. |
+| Yellow | Couldn't tell. The CLI could not be asked, so Dray does not claim you are signed out. Your login may be fine. |
+
+What each agent shows:
+
+| Agent | Rows |
+|---|---|
+| Claude Code | One row, **Anthropic**: email, plan and organization. |
+| Codex | One row, **OpenAI**: Codex's own sentence about the login, and whether it is a ChatGPT subscription or an API key. |
+| pi | One row per provider pi is set up for, such as Anthropic or OpenRouter, with whether it uses OAuth or an API key. |
+| fx | Three rows, always: **Vercel AI Gateway**, **Codex** and **Grok**, signed in or not. |
+| Grok Build | One row, **xAI**: email and name. An `XAI_API_KEY` set in Dray's environment also counts as signed in. |
+| GitHub | One row, **github.com**, with the `gh` user. |
+
+If an agent is not installed, its block says so, with **Copy install** for the install command and **Guide** for the vendor's page. If `gh` is missing, the GitHub block shows `brew install gh`.
+
+## Sign in
+
+A row that is not signed in has a **Sign in** button. A signed-in row has a ⋯ menu instead, with **Change sign-in method** (or **Reauthorize** where there is only one method) and **Sign out**.
+
+<Steps>
+  <Step title="Open the form">
+    Press **Sign in**, or pick an item from the ⋯ menu. The list is replaced by a sign-in form for that agent.
+  </Step>
+  <Step title="Pick the method">
+    Where the agent has more than one way in, pick one under **Method**. The one you already use is marked **in use**.
+  </Step>
+  <Step title="Run it or paste a key">
+    Most methods are a command. Press **Run in Terminal** and Dray opens Terminal running it, in the selected session's folder. Finish the login there, usually in your browser. The command is shown with a copy button if you would rather run it somewhere else.
+
+    A method that takes a key shows a **Key** field instead. Paste the key and press **Save**.
+  </Step>
+  <Step title="Come back">
+    Press the back arrow at the top of the form. The rows read again when you come back to the Dray window, or when you press **Refresh** (the circular arrow next to the tab's title).
+  </Step>
+</Steps>
+
+Terminal sign-ins always open in Terminal.app, whatever terminal you use elsewhere.
+
+### Methods per agent
+
+| Agent | Method | How it signs in |
+|---|---|---|
+| Claude Code | Claude subscription | `claude auth login` |
+| Claude Code | Anthropic Console | `claude auth login --console`. Billed per token against your Console account. |
+| Codex | ChatGPT subscription | `codex login` |
+| Codex | OpenAI API key | Paste the key. Billed per token. Replaces the ChatGPT sign-in until you sign in again. |
+| pi | Sign in with the provider | Opens `pi`. Type `/login` in pi, then pick the provider. Offered only for providers that have OAuth, such as Anthropic, GitHub Copilot, OpenRouter and xAI. |
+| pi | API key | Paste the key. Offered for providers that take one. |
+| fx, Vercel AI Gateway | Vercel account | `fx login vercel` |
+| fx, Vercel AI Gateway | AI Gateway key | `fx setup`, which asks for the key itself. |
+| fx, Codex | Sign in | `fx login codex` |
+| fx, Grok | Sign in | `fx login grok` |
+| Grok Build | Grok account | `grok login` |
+| Grok Build | Device code | `grok login --device-auth`. For a machine with no browser; finish the sign-in elsewhere. |
+| GitHub | — | `gh auth login`, in Terminal, through the web. |
+
+### API keys
+
+Only Codex and pi take a key in Dray. The field says where it goes: a Codex key is handed to Codex's own store, and a pi key is written into pi's own credential file. Dray keeps no copy. pi then checks the key, and a key pi refuses is reported under the form.
+
+## Add a pi provider
+
+pi signs in one provider at a time, so the pi block has **Add an account**. Pick a provider from the list, or pick **Custom…** and type its name as pi spells it, such as `openrouter` or `moonshotai`. pi itself decides whether the name exists. Then pick a method as above.
+
+The other agents have no Add button. Claude Code, Codex and Grok Build each hold one login, so signing in again replaces it. fx already shows all three of its providers as rows.
+
+## Reauthorize
+
+Use **Reauthorize** when a login has gone stale or you want to sign in as someone else on the same method. In the form, picking the method you already use changes the button and title to **Reauthorize**.
+
+## Sign out
+
+Pick **Sign out** in a row's ⋯ menu. The row asks **Sign out?** before it does anything; confirm with **Sign out** or back out with Cancel.
+
+Sign out is offered for Claude Code, Codex, each fx provider and Grok Build. For pi it is offered only on a provider whose key Dray wrote. A Grok login that comes from `XAI_API_KEY` has no sign-out, since that lives in your environment. GitHub has none either: run `gh auth logout` yourself.
+
+## Hide an agent from the picker
+
+The switch beside each agent's name decides whether the composer's agent picker offers it. Off folds that agent's rows away. At least one agent has to stay on.
+
+## Limits
+
+- Dray cannot sign you in without a terminal or a pasted key. Every browser login runs in Terminal.
+- Nothing polls. After a sign-in in Terminal, come back to the window or press Refresh to see it.
+- Accounts are asked in the selected session's folder, since a CLI can read settings from the project it runs in.

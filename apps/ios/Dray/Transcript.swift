@@ -12,53 +12,209 @@ struct Transcript {
     }
 }
 
-/// One drawn line of a transcript.
-enum Row: Identifiable {
-    case user(id: String, text: String, from: String?)
-    case assistant(id: String, text: String)
-    case tool(id: String, line: String, output: String?, state: ToolState)
+enum ToolState { case pending, done, failed }
+
+struct ToolCall: Identifiable {
+    let id: String
+    let name: String
+    let toolType: String
+    let input: JSON
+    let title: String?
+    let output: String?
+    let state: ToolState
+
+    /// What the row names beside its verb — the desktop's `toolSummary`.
+    var summary: String? { title ?? toolSummary(name, toolType, input) }
+}
+
+/// One drawn line of a turn's work.
+enum Item: Identifiable {
+    case text(id: String, text: String)
+    case tool(ToolCall)
+    /// Consecutive calls to one tool, behind one row.
+    case group(id: String, name: String, calls: [ToolCall], targets: Int, target: String?)
+    /// A prompt typed into the running turn: the reader's own words, kept on
+    /// screen through a collapse.
+    case prompt(id: String, text: String, from: String?)
     case failure(id: String, text: String)
 
     var id: String {
         switch self {
-        case .user(let id, _, _), .assistant(let id, _), .tool(let id, _, _, _), .failure(let id, _): id
+        case .text(let id, _), .group(let id, _, _, _, _), .prompt(let id, _, _), .failure(let id, _): id
+        case .tool(let call): call.id
         }
+    }
+
+    /// Moves whenever the row grows: a group keeps its first call's id but gains calls.
+    var newestId: String {
+        if case .group(_, _, let calls, _, _) = self, let last = calls.last { return last.id }
+        return id
+    }
+
+    var isPrompt: Bool { if case .prompt = self { true } else { false } }
+}
+
+/// A user prompt to the `turn_completed` that closes it.
+struct Turn: Identifiable {
+    let id: String
+    var prompt: (text: String, from: String?)?
+    var work: [Item] = []
+    var completed = false
+    /// The red row a failed turn closes on.
+    var failure: String?
+    /// The turn's last message, which a collapsed turn keeps on screen.
+    var finalText: String?
+    /// `finalText` was the last row of `work` and is dropped from it, so it
+    /// draws in the same place whether the fold is open or not.
+    var finalLifted = false
+
+    var running: Bool { !completed }
+    /// Rows a collapse would hide: queued prompts stay on screen.
+    var rows: Int { work.filter { !$0.isPrompt }.count }
+}
+
+/// A stretch of a turn between queued prompts, each folding on its own so a
+/// prompt stays where it was typed.
+struct Segment {
+    var items: [Item]
+    var prompt: Item?
+}
+
+extension Turn {
+    var segments: [Segment] {
+        var out: [Segment] = []
+        var items: [Item] = []
+        for item in work {
+            if item.isPrompt {
+                out.append(Segment(items: items, prompt: item))
+                items = []
+            } else {
+                items.append(item)
+            }
+        }
+        out.append(Segment(items: items, prompt: nil))
+        return out
     }
 }
 
-enum ToolState { case pending, done, failed }
+/// "3 tool calls · 1 message", the desktop's summary line.
+func summaryLabel(_ items: [Item]) -> String {
+    var calls = 0, messages = 0
+    for item in items {
+        switch item {
+        case .tool: calls += 1
+        case .group(_, _, let c, _, _): calls += c.count
+        case .text: messages += 1
+        default: break
+        }
+    }
+    var parts: [String] = []
+    if calls > 0 { parts.append(plural(calls, "tool call")) }
+    if messages > 0 { parts.append(plural(messages, "message")) }
+    return parts.isEmpty ? plural(items.count, "step") : parts.joined(separator: " · ")
+}
 
-/// The desktop's transcript rules, cut down: subagents' own events are not
-/// drawn, a tool call joins its result on `callId`, and a call with no result
-/// is pending only while a turn could still produce one.
-func buildRows(_ events: [AgentEvent], busy: Bool) -> [Row] {
+func plural(_ n: Int, _ word: String) -> String { "\(n) \(word)\(n == 1 ? "" : "s")" }
+
+/// The desktop's `buildTranscript`, cut down to what the phone draws:
+/// subagents' own events are skipped, a call joins its result on `callId` and
+/// is pending only while the session is busy, and runs of one tool group.
+func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
+    let main = events.filter { $0.subagent == nil }
     var results: [String: ToolResult] = [:]
-    for e in events where e.subagent == nil {
+    for e in main {
         if case .toolCompleted(let id, let r) = e.payload { results[id] = r }
     }
-    var rows: [Row] = []
-    for e in events where e.subagent == nil {
+    // A prompt abandons every call still open before it: no result is coming.
+    var abandoned: Set<String> = []
+    var open: [String] = []
+    for e in main {
         switch e.payload {
-        case .userMessage(let text, let fromTitle, let fromId):
-            rows.append(.user(id: e.id, text: stripSender(text, title: fromTitle, id: fromId), from: fromTitle))
+        case .toolStarted(let callId, _, _, _, _) where results[callId] == nil: open.append(callId)
+        case .userMessage(_, _, _, false): abandoned.formUnion(open); open = []
+        default: break
+        }
+    }
+
+    var turns: [Turn] = []
+    var current: Turn?
+    var calls: [ToolCall] = []
+
+    func flushCalls() {
+        guard !calls.isEmpty else { return }
+        if calls.count >= 2 {
+            let names = calls.map { $0.summary ?? "\u{0}\($0.id)" }
+            let distinct = Set(names)
+            let only = distinct.count == 1 ? calls[0].summary : nil
+            current?.work.append(.group(id: "group-\(calls[0].id)", name: calls[0].name,
+                                        calls: calls, targets: distinct.count, target: only))
+        } else {
+            current?.work.append(.tool(calls[0]))
+        }
+        calls = []
+    }
+
+    func close() {
+        flushCalls()
+        guard var turn = current else { return }
+        current = nil
+        // The harness says a failure twice; the red row wins.
+        if let failure = turn.failure, case .text(_, let last)? = turn.work.last,
+           last.trimmingCharacters(in: .whitespacesAndNewlines) == failure.trimmingCharacters(in: .whitespacesAndNewlines) {
+            turn.work.removeLast()
+        }
+        if turn.completed, case .text(_, let last)? = turn.work.last {
+            turn.finalText = last
+            turn.finalLifted = true
+            turn.work.removeLast()
+        } else if turn.completed {
+            // Cut short with a call after its last message: that message still ends the fold.
+            for case .text(_, let text) in turn.work.reversed() { turn.finalText = text; break }
+        }
+        turns.append(turn)
+    }
+
+    for e in main {
+        switch e.payload {
+        case .userMessage(let text, let fromTitle, let fromId, let queued):
+            let shown = stripSender(text, title: fromTitle, id: fromId)
+            if queued, current != nil {
+                flushCalls()
+                current?.work.append(.prompt(id: e.id, text: shown, from: fromTitle))
+            } else {
+                close()
+                current = Turn(id: e.id, prompt: (shown, fromTitle))
+            }
         case .assistantText(let text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
-            rows.append(.assistant(id: e.id, text: text))
-        case .toolStarted(let callId, let name, let input, let title):
+            if current == nil { current = Turn(id: "head-\(e.id)") }
+            flushCalls()
+            current?.work.append(.text(id: e.id, text: text))
+        case .toolStarted(let callId, let name, let toolType, let input, let title):
+            if current == nil { current = Turn(id: "head-\(e.id)") }
             let r = results[callId]
-            let state: ToolState = r.map { $0.isError ? .failed : .done } ?? (busy ? .pending : .done)
-            rows.append(.tool(id: e.id, line: title ?? toolLine(name, input), output: r?.text, state: state))
-        case .turnCompleted(true, let finalText):
-            let text = finalText ?? "Turn failed"
-            // The harness says the failure twice; the red row wins.
-            if case .assistant(_, let last)? = rows.last, last == text { rows.removeLast() }
-            rows.append(.failure(id: e.id, text: text))
+            let state: ToolState = r.map { $0.isError ? .failed : .done }
+                ?? (busy && !abandoned.contains(callId) ? .pending : .done)
+            let call = ToolCall(id: e.id, name: name, toolType: toolType, input: input,
+                                title: title, output: r?.text, state: state)
+            // A delegated run keeps its own row, as the desktop's panel link does.
+            if let last = calls.last, last.name != name || toolType == "subagent_spawn" { flushCalls() }
+            calls.append(call)
+            if toolType == "subagent_spawn" { flushCalls() }
         case .error(let message):
-            rows.append(.failure(id: e.id, text: message))
+            if current == nil { current = Turn(id: "head-\(e.id)") }
+            flushCalls()
+            current?.work.append(.failure(id: e.id, text: message))
+        case .turnCompleted(let failed, let finalText):
+            if current == nil { current = Turn(id: "head-\(e.id)") }
+            current?.completed = true
+            if failed { current?.failure = finalText ?? "Turn failed" }
+            close()
         default:
             break
         }
     }
-    return rows
+    close()
+    return turns
 }
 
 /// A relayed prompt opens with a line for the receiving agent; the bubble
@@ -67,14 +223,4 @@ func stripSender(_ text: String, title: String?, id: String?) -> String {
     guard let title, let id else { return text }
     let prefix = "[message from the Dray session \"\(title)\" (\(id))]\n\n"
     return text.hasPrefix(prefix) ? String(text.dropFirst(prefix.count)) : text
-}
-
-/// "Edit Store.swift", "Bash pnpm test": the tool and what it acted on.
-func toolLine(_ name: String, _ input: JSON) -> String {
-    for field in ["file_path", "path", "command", "pattern", "url", "query", "description"] {
-        guard let value = input[field]?.string, !value.isEmpty else { continue }
-        let target = field.hasSuffix("path") ? (value as NSString).lastPathComponent : value
-        return "\(name) \(target.split(separator: "\n").first ?? "")"
-    }
-    return name
 }

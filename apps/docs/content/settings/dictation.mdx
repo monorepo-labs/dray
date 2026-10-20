@@ -1,0 +1,82 @@
+---
+title: Dictation
+description: Download a speech model, pick a microphone, and dictate into the composer with ⌘D. Transcription runs on your Mac; audio never leaves it.
+sidebar:
+  order: 3
+---
+
+You can speak a prompt instead of typing it. Dray turns your voice into text on your own Mac, with a model you download once, and adds the words to the composer. Nothing is sent anywhere.
+
+## Set it up
+
+Settings → Transcription. Open Settings with the gear in the sidebar or `⌘,`. If you press the mic before any model is downloaded, Dray opens this tab for you.
+
+{/* screenshot: the Transcription tab with Parakeet downloaded and selected, Canary downloading */}
+
+### Pick and download a model
+
+No model ships with Dray. Each row shows the model's languages, its size, and two bars, **Speed** and **Accuracy**, comparing it with the others. One is marked **Recommended** for your Mac.
+
+| Model | Languages | Size |
+|---|---|---|
+| Parakeet Unified EN 0.6B | English | 731 MB |
+| Nemotron Streaming 3.5 | 28 languages | 751 MB |
+| Canary 180M Flash | English, German, Spanish, French | 218 MB |
+| Whisper Small | 99 languages | 270 MB |
+| Whisper Large v3 Turbo | 100 languages | 886 MB |
+
+Parakeet is recommended on Apple Silicon, Canary 180M Flash on an Intel Mac. Any model can be used on either.
+
+- Press a row's download arrow to fetch it. The row shows the percentage; the cross cancels. The download keeps going if you leave Settings.
+- Your first finished download is selected for you. After that, click a downloaded row to use it instead. The selected row has a tick.
+- To free the space, press a downloaded model's bin, then confirm.
+
+Click a "28 languages" style count to see the full list on the model's Hugging Face page.
+
+### Microphone
+
+Under **Input**, **Microphone** picks the device. **System default** follows whatever macOS uses. If the device you picked is unplugged, Dray records from the system default instead.
+
+### Mute while recording
+
+On by default. It mutes your Mac's sound output while you talk, so music or a video doesn't end up in the transcript, and puts it back as soon as recording stops. If your Mac was already muted, it stays muted.
+
+## Dictate
+
+<Steps>
+  <Step title="Start">
+    Press `⌘D`, or click the mic in the composer. The first time, macOS asks for microphone access; allow it. A short tone plays and a level meter shows Dray hears you.
+  </Step>
+  <Step title="Stop">
+    Press `⌘D` again, or the tick (**Stop and transcribe**). A spinner shows while the model works, then the words are added to the end of your draft and a second tone plays.
+  </Step>
+</Steps>
+
+To throw a recording away instead, press `Escape` or the cross (**Discard**). Nothing is transcribed.
+
+The words go to the session you started recording in, even if you switch sessions while talking. If you are still on that session when they land, the composer takes focus.
+
+If **Mute while recording** is on, the start tone is muted too.
+
+## When it fails
+
+| Message | What to do |
+|---|---|
+| Dray needs microphone access. | Turn it on in System Settings › Privacy & Security › Microphone. |
+| No sound was recorded. | The microphone gave only silence. This is what denied microphone access looks like; check the same setting. |
+| Nothing was said. | The model heard no words. Try again. |
+| Transcription failed: … | The model could not run. Your audio was kept, see below. |
+
+When a run fails, or you dictated before downloading a model, the audio is kept. Two buttons appear beside the mic:
+
+- **Transcribe again** (circular arrow) runs the saved recording through the model again, for example after you download one.
+- **Show the recording** (folder) reveals the audio file in Finder.
+
+Kept recordings live in `~/.dray/recordings/`. A recording is deleted as soon as a model has answered for it. Ones nobody comes back for are removed after 7 days.
+
+## Limits
+
+- The model loads when you start dictating and unloads after ten minutes unused, so the first dictation after a break can take a few seconds longer.
+- One recording at a time, across all sessions.
+- If Dray quits unexpectedly mid-recording, your Mac's sound can stay muted. Unmute it by hand.
+- `⌘D` can be changed in Settings → Shortcuts.

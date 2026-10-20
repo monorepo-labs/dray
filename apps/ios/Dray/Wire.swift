@@ -119,6 +119,9 @@ struct SessionItem: Decodable, Hashable {
     var status: String
     var modified: String
     let archived: Bool?
+    let branch: String?
+    let worktreeName: String?
+    let worktreeRemoved: Bool?
     let hidden: Bool?
 
     var busy: Bool { status == "in_progress" }
@@ -209,9 +212,10 @@ struct ToolResult: Decodable {
 
 enum Payload: Decodable {
     case turnCompleted(failed: Bool, finalText: String?)
-    case userMessage(text: String, fromTitle: String?, fromId: String?)
+    /// `queued` is a prompt typed into a running turn, which answers it inside that turn.
+    case userMessage(text: String, fromTitle: String?, fromId: String?, queued: Bool)
     case assistantText(String)
-    case toolStarted(callId: String, name: String, input: JSON, title: String?)
+    case toolStarted(callId: String, name: String, toolType: String, input: JSON, title: String?)
     case toolCompleted(callId: String, result: ToolResult)
     case permissionRequested(PermissionRequest)
     case questionsAsked(QuestionsRequest)
@@ -237,13 +241,15 @@ enum Payload: Decodable {
                 let from = try c.decodeIfPresent([String: String].self, forKey: "from")
                 self = .userMessage(
                     text: try c.decode(String.self, forKey: "text"),
-                    fromTitle: from?["title"], fromId: from?["sessionId"])
+                    fromTitle: from?["title"], fromId: from?["sessionId"],
+                    queued: (try? c.decode(Bool.self, forKey: "queued")) ?? false)
             case "assistant_text":
                 self = .assistantText(try c.decode(String.self, forKey: "text"))
             case "tool_call_started":
                 self = .toolStarted(
                     callId: try c.decode(String.self, forKey: "callId"),
                     name: try c.decode(String.self, forKey: "name"),
+                    toolType: (try? c.decode(String.self, forKey: "toolType")) ?? "other",
                     input: (try? c.decode(JSON.self, forKey: "input")) ?? .null,
                     title: try c.decodeIfPresent(String.self, forKey: "title"))
             case "tool_call_completed":

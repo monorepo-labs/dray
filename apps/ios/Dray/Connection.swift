@@ -127,6 +127,7 @@ final class Connection {
     }
 
     /// Calls a server command, with arguments named as the desktop's `invoke` names them.
+    /// `timeout` is how long a silent socket may hold the call.
     func call<T: Decodable>(_ cmd: String, _ args: [String: JSON] = [:], as: T.Type = T.self, timeout: Duration = .seconds(60)) async throws -> T {
         guard connected, let t = task else { throw DrayError("Not connected") }
         let id = nextId

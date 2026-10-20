@@ -1,0 +1,125 @@
+---
+title: The dray command
+description: Install the dray CLI, keep it up to date, and see every command it has for sessions, drafts, issues, the browser, sharing and servers.
+sidebar:
+  order: 1
+---
+
+`dray` is Dray's command line. It lets you, and the agents running inside Dray, do from a terminal what you would otherwise do in the app: start sessions, list them, message them, save drafts, tag issues, drive a session's browser, share a dev server, and set up a server. Its main use is letting one agent fan work out into several sessions, each with its own worktree and its own row in the sidebar.
+
+Every command talks to the Dray app on the same machine, so the app has to be running. On a Linux server, it talks to the Dray server instead. See [Connect a server](/server).
+
+## Install
+
+```bash
+curl -fsSL https://www.drayhq.com/install.sh | sh
+```
+
+This puts `dray` (and `dray-serve`, the server) in `~/.local/bin`. Set `DRAY_INSTALL_DIR` to put them somewhere else. If that directory is not on your `PATH`, the installer says so and prints the line to add.
+
+It also installs the skill that teaches your agents to use `dray`. See [The skill](#the-skill).
+
+On a Mac with the Dray app, that is the whole install. On a machine without the app, a first install goes on to `dray server install`, which makes the machine a Dray server. See [Servers](/cli/servers).
+
+Check what you have:
+
+```bash
+dray --version
+```
+
+## Update
+
+```bash
+dray update
+```
+
+This finds the newest release and stops if you already have it, so it is safe to run often. Otherwise it installs the new binary over the one you ran, in the same directory, and rewrites the skill.
+
+| Flag | What it does |
+|---|---|
+| `--channel stable` or `--channel beta` | Which releases to take. Beta takes stable releases too. Defaults to the channel this binary came from, so a beta install stays on beta. |
+| `--force` | Install the newest release even if it is the one you have. Repairs a damaged binary. |
+
+Leaving beta does not downgrade you: a beta build stays until a stable release is newer than it. To install one exact release, set `DRAY_VERSION` to its tag, like `DRAY_VERSION=cli-v0.12.1 dray update --force`.
+
+The Mac app also updates the CLI for you. On the first launch of each new app version, it runs `dray update` on the CLI you have, on the app's own channel. It installs nothing if you have no CLI.
+
+If a background server is installed on this machine, `dray update` does not restart it, since that stops every running agent. It prints the command that does.
+
+## How it reaches the app
+
+Every command connects to a socket in `~/.dray`: `~/.dray/dray.sock`. Nothing on the network can reach it. Set `DRAY_ENDPOINT` to a socket path to talk to a different one.
+
+Sessions Dray starts get two things in their environment: `DRAY_SESSION_ID`, naming the session, and `DRAY_ENDPOINT`, naming the app that started it. That is how `dray` knows which session is calling. From inside a session, a new session is nested under the caller, and `dray browser` drives the caller's own browser. From your own terminal there is no calling session, so commands that need one take `--session <id>`.
+
+## The skill
+
+```bash
+dray skill install
+```
+
+Writes the skill to:
+
+- `~/.claude/skills/dray/SKILL.md`, for Claude Code
+- `~/.codex/skills/dray/SKILL.md`, for Codex
+- `~/.agents/skills/dray/SKILL.md`, for pi
+
+The skill is built into the binary, so it always describes the `dray` you have. The installer and `dray update` both run `dray skill install`, so you only need it by hand if a skill file was deleted.
+
+## Shell completion
+
+```bash
+dray completion zsh > ~/.zfunc/_dray
+```
+
+Prints a completion script for `bash`, `zsh`, `fish`, `elvish` or `powershell`.
+
+## Commands
+
+| Command | What it does | Page |
+|---|---|---|
+| `dray session` | Start, list, message, rename, stop, settle and set aside sessions | [Sessions](/cli/sessions) |
+| `dray draft` | Save a task for later, list drafts, start or remove one | [Drafts](/cli/drafts) |
+| `dray issue` | Tag a session with the issues its work is against | [Issues](/cli/issues) |
+| `dray browser` | Drive a session's browser: open, read, click, type, screenshot, record | [Browser](/cli/browser) |
+| `dray share` | Publish a session's dev server as a public link | [Share](/cli/share) |
+| `dray server` | Make this machine a Dray server | [Servers](/cli/servers) |
+| `dray machine` | The list of servers the app connects to | [Servers](/cli/servers) |
+| `dray update` | Install the newest release | above |
+| `dray skill install` | Write the skill for your agents | above |
+| `dray completion` | Print a shell completion script | above |
+
+For how the session commands fit together, see [Orchestration](/cli/orchestration).
+
+A command group run on its own, like `dray session`, prints its help. Every command takes `--help`.
+
+Older spellings still work, so scripts and agents with an older skill keep running: `dray new`, `dray ls` and `dray send` are `dray session new`, `ls` and `send`; `dray setup` is `dray server install`; `dray serve` is `dray server run`; `dray share <port>` is `dray share start <port>`.
+
+## Output and exit codes
+
+Commands that make something print its id alone on standard output, and a sentence for you on standard error. So `id=$(dray session new "…")` captures the id.
+
+A failure prints `dray: <reason>` and exits with 1. A command typed wrong exits with 2 and prints usage.
+
+## When the app and the CLI disagree
+
+The app and the CLI ship separately, so they can drift apart. When the two speak different versions, the app refuses the command and the message names which side is behind:
+
+- "this dray CLI speaks protocol vN, the app speaks vM — run \`dray update\`" means the CLI is behind. Run `dray update` and try again.
+- "… — update the Dray app" means the app is behind. Update the app.
+
+Nothing was created or sent, so retrying after the fix is safe. Updating the app first is the smoother order: the app's next launch updates the CLI too.
+
+## When it cannot reach the app
+
+Three messages, and only the second means the app is closed:
+
+- **`permission denied reaching Dray at …`** — the app may well be running. A sandbox, or the permissions on the socket's path, blocked the connection. If the command ran inside a sandbox, run it again with that sandbox lifted for this one command.
+- **`Dray isn't running. Start the app and try again.`** — the app is closed. Open it.
+- **`could not connect to Dray at …`** — something else went wrong, and the line says what. It says nothing about whether the app is up.
+
+## Limits
+
+- `dray` needs the app, or a Dray server, running on the same machine. It does not reach a remote server.
+- You cannot read another session's transcript from the CLI. See [Orchestration](/cli/orchestration#limits).
+- `dray` never writes to your issue tracker. See [Issues](/cli/issues).

@@ -411,6 +411,7 @@ dray server start        # in the background, surviving reboot
 dray server run          # in this terminal instead
 dray server status       # running or not, and its tunnel address
 dray server tunnel on    # a public address in front of it, the same across restarts; off takes it down
+dray server pair         # a QR code the Dray iPhone app scans to add this server
 dray server stop         # stop it and remove it from the background
 ```
 

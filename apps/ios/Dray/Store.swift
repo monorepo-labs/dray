@@ -63,6 +63,8 @@ final class Store {
         save()
     }
 
+    func connection(_ server: UUID) -> Connection? { connections[server] }
+
     func name(of server: UUID) -> String {
         servers.first { $0.id == server }?.name ?? "Server"
     }
@@ -76,7 +78,7 @@ final class Store {
         for s in servers where serverState[s.id] == .connected { await loadIndex(s.id) }
     }
 
-    /// A command on one server, for screens that read lists the store does not hold.
+    /// A command on one server, for a screen reading what the store does not hold.
     func call<T: Decodable>(_ server: UUID, _ cmd: String, _ args: [String: JSON] = [:], as: T.Type = T.self,
                             timeout: Duration = .seconds(60)) async throws -> T {
         guard let c = connections[server] else { throw DrayError("Not connected") }
@@ -333,7 +335,7 @@ final class Store {
         case .backgroundTasks(let n):
             tasks[key] = n
             if n == 0 && items[key]?.busy != true { strand(key) }
-        case .userMessage(let text, _, _):
+        case .userMessage(let text, _, _, _):
             queued[key]?.removeAll { $0.text == text }
         default:
             break

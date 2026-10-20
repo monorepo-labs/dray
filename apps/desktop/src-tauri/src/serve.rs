@@ -1104,6 +1104,7 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
         get_remote_access() => ok(crate::remote_access::get_remote_access());
         set_remote_access(on: bool) => crate::remote_access::set_remote_access(sink, on).await;
         remote_access_token() => crate::remote_access::remote_access_token().await;
+        remote_access_qr() => crate::remote_access::remote_access_qr().await;
         restart_when_idle() => ok(restart_when_idle().await);
     }
 }
@@ -1113,7 +1114,7 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
 /// Mac-only modules are not compiled here.
 async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     #[cfg(feature = "desktop")]
-    if matches!(cmd, "get_remote_access" | "set_remote_access" | "remote_access_token" | "restart_when_idle") {
+    if matches!(cmd, "get_remote_access" | "set_remote_access" | "remote_access_token" | "remote_access_qr" | "restart_when_idle") {
         return dispatch_mac(cmd, args, sink).await;
     }
     // A `dray-serve` updates itself; the Mac's server follows the app instead.

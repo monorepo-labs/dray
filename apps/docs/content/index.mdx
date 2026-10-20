@@ -1,12 +1,39 @@
 ---
 title: Introduction
-description: Dray is a Mac app that runs coding agents in one window, many at a time.
+description: Dray is a Mac app that runs coding agents in one window, many at a time. Start here to see what it does and where to read next.
 ---
 
-Dray runs the coding agent CLIs you already use (Claude Code, Codex, pi, fx and Grok Build) in one chat window. It is free and open source, and runs on the subscriptions you already have.
+Dray runs the coding agent CLIs you already use (Claude Code, Codex, pi, fx and Grok Build) in one chat window. It is free and open source, and runs on the subscriptions you already have. Dray installs no agent and stores no agent login: each agent keeps its own.
+
+## What you can do
+
+- **Run many agents at once.** Each conversation is a session in the sidebar. Sessions keep running when you switch away, and when you quit the app.
+- **Give each task its own checkout.** A session can work in its own git worktree, so two agents never edit the same files.
+- **Steer the agent as it works.** Change the model, effort, fast mode and permission mode from the composer. Answer permission and question cards in the transcript.
+- **Write prompts with context.** Slash commands, `@` file mentions, `#` issue tags, images and files, and local dictation.
+- **Let agents fan out.** The `dray` command line lets an agent start sessions of its own, message them, link issues, and drive a browser.
+- **Work from issues.** Connect Linear or GitHub, browse your issues, and tag them in a prompt.
+- **Connect a server.** Add a Linux box over SSH and run your agents there, driven from the Mac app.
+
+## Where to start
 
 <CardGroup cols={2}>
-  <Card title="Run on a server" href="/server" icon="server">
-    Run Dray on Linux and drive it from the Mac app.
+  <Card title="Install Dray" href="/get-started/install" icon="download">
+    What you need, and the first launch.
+  </Card>
+  <Card title="Your first session" href="/get-started/first-session" icon="message-square">
+    Attach a project, pick an agent, send a prompt.
+  </Card>
+  <Card title="Agents" href="/using-dray/agents" icon="bot">
+    What each agent supports, side by side.
+  </Card>
+  <Card title="The composer" href="/using-dray/composer" icon="pencil">
+    Models, effort, fast mode and permission modes.
+  </Card>
+  <Card title="dray CLI" href="/cli" icon="terminal">
+    Every command, and how agents use it.
+  </Card>
+  <Card title="Connect a server" href="/server" icon="server">
+    Connect a Linux server and drive its agents from the Mac app.
   </Card>
 </CardGroup>
