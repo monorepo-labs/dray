@@ -11,8 +11,9 @@ struct NotchView: View {
     /// From the press, not from the microphone opening: the start is a round
     /// trip through Dray, and waiting on it read as the panel hesitating.
     private var recording: Bool { composer.listening }
+    /// The card shrinks to what it holds: the orb and clock, or the word Sent.
+    private var fits: Bool { recording || composer.sent }
     private var bare: Bool { recording && composer.mode == .expanded }
-    @State private var titleHovered = false
     /// The idle orb and the recording one are one orb to the reader, so a start
     /// moves it into place rather than fading a second one in.
     @Namespace private var orbSpace
@@ -21,22 +22,31 @@ struct NotchView: View {
         VStack(spacing: 8) {
             if composer.placement == .notch {
                 composerCard
-                farSide
+                if composer.ask == nil { farSide }
             } else {
-                farSide
+                if composer.ask == nil { farSide }
                 composerCard
             }
         }
         // Recording draws only the orb and the clock, so the card shrinks to them.
-        .frame(width: recording ? nil : Composer.width)
-        .fixedSize(horizontal: recording, vertical: true)
+        .frame(width: fits ? nil : Composer.width)
+        .fixedSize(horizontal: fits, vertical: true)
         // Grows out of the notch, or up out of the Dock's edge.
         .scaleEffect(composer.shown ? 1 : 0.5, anchor: composer.placement == .notch ? .top : .bottom)
         .opacity(composer.shown ? 1 : 0)
         .animation(composer.shown ? .spring(duration: 0.32, bounce: 0.2) : .easeIn(duration: 0.15), value: composer.shown)
+        .allowsHitTesting(composer.shown)
+        .overlay(alignment: composer.placement == .notch ? .top : .bottom) {
+            if !composer.shown, !composer.attention.isEmpty {
+                AttentionPill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
+                              count: composer.attention.count) { composer.present() }
+                    .transition(.scale(scale: 0.5, anchor: composer.placement == .notch ? .top : .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(duration: 0.32, bounce: 0.2), value: composer.attention.count)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: composer.placement == .notch ? .top : .bottom)
         .padding(.bottom, composer.placement == .bottom ? 12 : 0)
-        .animation(.snappy(duration: 0.25), value: recording)
+        .animation(.snappy(duration: 0.25), value: fits)
         // Over the whole window, so a dropdown has the room below the cards too.
         .overlayPreferenceValue(MenuAnchors.self) { anchors in
             DropMenus(composer: composer, anchors: anchors, upward: composer.placement == .bottom)
@@ -50,6 +60,8 @@ struct NotchView: View {
             composer.listShown = true
             focus = .search
         }
+        // A card opens with no field focused, so its keys are the card's; the input takes them back after.
+        .onChange(of: composer.ask?.event.id) { focus = composer.ask == nil ? .input : nil }
         .onChange(of: composer.listShown) { if !composer.listShown { focus = .input } }
         .onChange(of: composer.typing) {
             if !composer.typing.isEmpty { composer.listShown = false }
@@ -64,6 +76,10 @@ struct NotchView: View {
         VStack(alignment: .leading, spacing: 8) {
             if recording {
                 recordingBar
+            } else if composer.sent {
+                Label("Sent", systemImage: "checkmark").font(.system(size: 13, weight: .semibold)).padding(.horizontal, 4)
+            } else if let ask = composer.ask {
+                AskCard(composer: composer, key: ask.key, event: ask.event)
             } else {
                 draft
             }
@@ -120,27 +136,9 @@ struct NotchView: View {
     }
 
     @ViewBuilder private var draft: some View {
-        if !composer.listShown, composer.target != .new {
-            HStack(spacing: 12) {
-                Button { composer.listShown = true } label: {
-                    Text(title).lineLimit(1)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white.opacity(titleHovered ? 1 : 0.7))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .onHover { titleHovered = $0 }
-                .animation(.easeOut(duration: 0.12), value: titleHovered)
-                .help("Show tasks")
-                HStack(spacing: 10) {
-                    Text("⌘N New")
-                    Text("↑↓ Tasks")
-                    Text("⌥Esc")
-                }
-                .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.3))
-                .fixedSize()
+        if !composer.listShown, let key = composer.key {
+            TitleRow(title: title) {
+                Task { await composer.showInApp(key) }
             }
         }
         if composer.target == .new { NewSessionBar(composer: composer) }
@@ -216,20 +214,14 @@ struct NotchView: View {
         TextField("", text: $composer.typing, prompt: Text("\(ModifierTap.symbol) to speak, ⌘⏎ Queue, ⏎ Send").foregroundStyle(.white.opacity(0.3)), axis: .vertical)
             .textFieldStyle(.plain)
             .lineLimit(1...6)
+            // Return sends from the panel's key monitor, never `onSubmit`: a text
+            // field handed Return selects all its text when it ends editing.
             .focused($focus, equals: .input)
-            .onSubmit {
-                // ⌘⏎ adds the text as a row, in the panel's key monitor.
-                if composer.listShown {
-                    composer.choose()
-                } else {
-                    Task { if await composer.send() { composer.hide() } }
-                }
-            }
     }
 
     private var send: some View {
         Button {
-            Task { if await composer.send() { composer.hide() } }
+            Task { await composer.send() }
         } label: {
             Image(systemName: "arrow.up.circle.fill").font(.title2)
         }
@@ -248,34 +240,11 @@ struct NotchView: View {
 }
 
 /// Search over five visible rows, newest first; ↑/↓ and ⌘F are the panel's keys.
-/// The notch grown downward: its top corners flare out into the menu bar the
-/// way the hardware notch meets the screen edge, its bottom ones round off.
-/// Drawn `ear` wider on each side than the content it backs.
-private struct NotchShape: Shape {
-    static let ear: CGFloat = 12
-    var radius: CGFloat = 20
-
-    func path(in rect: CGRect) -> Path {
-        let e = Self.ear, r = radius
-        var p = Path()
-        p.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        p.addQuadCurve(to: CGPoint(x: rect.minX + e, y: rect.minY + e), control: CGPoint(x: rect.minX + e, y: rect.minY))
-        p.addLine(to: CGPoint(x: rect.minX + e, y: rect.maxY - r))
-        p.addQuadCurve(to: CGPoint(x: rect.minX + e + r, y: rect.maxY), control: CGPoint(x: rect.minX + e, y: rect.maxY))
-        p.addLine(to: CGPoint(x: rect.maxX - e - r, y: rect.maxY))
-        p.addQuadCurve(to: CGPoint(x: rect.maxX - e, y: rect.maxY - r), control: CGPoint(x: rect.maxX - e, y: rect.maxY))
-        p.addLine(to: CGPoint(x: rect.maxX - e, y: rect.minY + e))
-        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY), control: CGPoint(x: rect.maxX - e, y: rect.minY))
-        p.closeSubpath()
-        return p
-    }
-}
-
 private struct SessionList: View {
     let composer: Composer
     var focus: FocusState<Field?>.Binding
     @Environment(Store.self) private var store
-    static let rowHeight: CGFloat = 32
+    static let rowHeight = SessionRow.height
 
     var body: some View {
         @Bindable var composer = composer
@@ -286,7 +255,6 @@ private struct SessionList: View {
                 TextField("", text: $composer.search, prompt: Text("Search tasks  ⌘F").foregroundStyle(.white.opacity(0.3)))
                     .textFieldStyle(.plain)
                     .focused(focus, equals: .search)
-                    .onSubmit { composer.choose() }
                 Text("↑↓ navigate  ⏎ select").font(.caption).foregroundStyle(.white.opacity(0.3))
             }
             .padding(.horizontal, 12)
@@ -295,7 +263,7 @@ private struct SessionList: View {
                 ScrollView {
                     LazyVStack(spacing: 2) {
                         ForEach(listed, id: \.key) { s in
-                            SessionRow(item: s.item, asking: store.isAsking(s.key), selected: composer.key == s.key)
+                            SessionRow(title: s.item.title, project: s.item.project, marks: store.marks(s.key), selected: composer.key == s.key)
                                 .id(s.key)
                                 .onTapGesture {
                                     composer.pick(.session(s.key))
@@ -317,30 +285,6 @@ private struct SessionList: View {
         }
         .background(.black, in: RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
-    }
-}
-
-private struct SessionRow: View {
-    let item: SessionItem
-    let asking: Bool
-    let selected: Bool
-    @State private var hover = false
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(asking ? Color.yellow : item.status == "completed" ? .green : .clear)
-                .frame(width: 6, height: 6)
-            Text(item.title).lineLimit(1)
-            Spacer(minLength: 8)
-            Text(item.project).lineLimit(1).foregroundStyle(.secondary)
-        }
-        .font(.system(size: 13))
-        .padding(.horizontal, 8)
-        .frame(height: SessionList.rowHeight)
-        .background(selected ? .white.opacity(0.12) : hover ? .white.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 8))
-        .contentShape(Rectangle())
-        .onHover { hover = $0 }
     }
 }
 

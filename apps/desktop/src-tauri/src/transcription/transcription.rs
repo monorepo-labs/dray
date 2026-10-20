@@ -370,6 +370,11 @@ pub fn serve_host(app: &AppHandle) {
     let _ = APP.set(app.clone());
 }
 
+/// The app, for a host call that needs its window rather than the recorder.
+pub fn app() -> Option<&'static AppHandle> {
+    APP.get()
+}
+
 /// Whether the recorder holds the Notch's recording rather than the app's own.
 /// There is one recorder and two clients, so neither may stop or read the
 /// other's: a start from the app hands it back to the app.

@@ -213,7 +213,7 @@ async fn send_msg(
         _ => None,
     };
 
-    Ok(manager()
+    let outcome = manager()
         .send_msg(
             session_id,
             prompt,
@@ -247,7 +247,14 @@ async fn send_msg(
             None,
             &sink,
         )
-        .await?)
+        .await?;
+    // The new entry rides back to the caller alone, so every other client — the
+    // app beside a Notch or a phone that started it — hears of it as `dray new`'s
+    // sessions are heard of. The caller's own copy replaces itself.
+    if let Some(snap) = &outcome.snapshot {
+        sink.emit(orchestration::SESSION_CREATED, &snap.index_item).ok();
+    }
+    Ok(outcome)
 }
 
 /// Which agents can actually be run on this machine, and what to say about

@@ -9,10 +9,16 @@ settings:
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: 1
+packages:
+  ThinkingOrbs:
+    url: https://github.com/yogesharc/thinking-orbs
+    from: 0.1.2
 targets:
   DrayNotch:
     type: application
     platform: macOS
+    dependencies:
+      - package: ThinkingOrbs
     sources:
       - Notch
       # The iOS app's client of dray-serve, shared by path rather than by package.
@@ -24,9 +30,12 @@ targets:
       - path: ../ios/Dray/Picks.swift
       - path: ../ios/Dray/Sidebar.swift
       - path: ../ios/Dray/Pr.swift
+      - path: ../ios/Dray/PrGlyph.swift
       - path: ../desktop/src/assets/dictate-start.wav
         buildPhase: resources
       - path: ../desktop/src/assets/dictate-stop.wav
+        buildPhase: resources
+      - path: ../desktop/public/notification.wav
         buildPhase: resources
     settings:
       base:
@@ -39,3 +48,22 @@ targets:
         # A local WebSocket to This Mac's server, and nothing sandboxed can reach ~/.dray.
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: YES
+  # The task list's marks, one made-up session per state. Kept, so the
+  # question can be looked at again.
+  NotchStatusDemo:
+    type: application
+    platform: macOS
+    dependencies:
+      - package: ThinkingOrbs
+    sources:
+      - Demo
+      - path: Notch/Marks.swift
+      - path: Notch/NotchShape.swift
+      - path: ../ios/Dray/Wire.swift
+      - path: ../ios/Dray/PrGlyph.swift
+    settings:
+      base:
+        PRODUCT_NAME: Notch Status Demo
+        PRODUCT_BUNDLE_IDENTIFIER: com.yogesh.dray.notch.statusdemo
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_APP_SANDBOX: NO

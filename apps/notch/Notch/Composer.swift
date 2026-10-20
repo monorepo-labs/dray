@@ -42,12 +42,9 @@ final class Composer {
         didSet {
             if dictation == .starting { notice = nil }
             if dictation != .recording { recordingSince = nil } else if oldValue != .recording { recordingSince = Date() }
-            if listening != [.starting, .recording].contains(oldValue) { listeningChanged(listening) }
         }
     }
     var listening: Bool { dictation == .starting || dictation == .recording }
-    /// For the ⌘Esc hot key, held only while the microphone is open.
-    @ObservationIgnored var listeningChanged: (Bool) -> Void = { _ in }
     /// When the microphone opened, for the timer; `nil` unless recording.
     var recordingSince: Date?
     var mode = InputMode(rawValue: UserDefaults.standard.string(forKey: "notch.mode") ?? "") ?? .compact {
@@ -100,13 +97,113 @@ final class Composer {
     /// Bumped by ⌘F, so the view can focus the search field.
     var searches = 0
 
+    /// Set for the moment between a send landing and the panel closing, which says it went.
+    private(set) var sent = false
+    /// Return and number keys on a questions card, whose answers live in its view.
+    var submits = 0
+    var digits = 0
+    private(set) var digit = 0
+    /// The session whose card is up, picked from the tabs; the oldest when unpicked.
+    var askTab: SessionKey?
+    /// Every ask's id in the order it arrived, which is the order the tabs are in.
+    private var askOrder: [String] = []
+
     @ObservationIgnored var hide: () -> Void = {}
+    @ObservationIgnored var present: () -> Void = {}
+    @ObservationIgnored var pillChanged: () -> Void = {}
     @ObservationIgnored var reposition: () -> Void = {}
+    @ObservationIgnored private var asksPending = false
     @ObservationIgnored private var lastUsed = UserDefaults.standard.string(forKey: "notch.lastSession")
 
     init(store: Store, server: UUID) {
         self.store = store
         self.server = server
+        store.asksChanged = { [weak self] in self?.asksChanged() }
+    }
+
+    // MARK: Cards and alerts
+
+    /// The sessions waiting on the reader, oldest ask first: the tabs over the card.
+    var attention: [SessionKey] {
+        func first(_ asks: [AgentEvent]) -> Int {
+            asks.compactMap { $0.payload.askId.flatMap(askOrder.firstIndex) }.min() ?? .max
+        }
+        return store.asks.filter { !$0.value.isEmpty }
+            .sorted { (first($0.value), $0.key.id) < (first($1.value), $1.key.id) }
+            .map(\.key)
+    }
+
+    /// The card the panel draws in place of the draft: the picked tab's oldest
+    /// ask, so answering one moves to the next.
+    var ask: (key: SessionKey, event: AgentEvent)? {
+        let keys = attention
+        guard let key = askTab.flatMap({ keys.contains($0) ? $0 : nil }) ?? keys.first,
+              let event = store.asks[key]?.first else { return nil }
+        return (key, event)
+    }
+
+    /// A reconnect empties and refills the asks one session at a time, so the
+    /// change is read once the burst has landed, not at every step of it.
+    /// Nothing opens on its own: a new ask chimes and the pill says how many wait.
+    private func asksChanged() {
+        guard !asksPending else { return }
+        asksPending = true
+        DispatchQueue.main.async { [self] in
+            asksPending = false
+            let ids = store.asks.values.flatMap { $0.compactMap(\.payload.askId) }
+            let fresh = ids.filter { !askOrder.contains($0) }
+            let hadCards = !askOrder.isEmpty
+            askOrder = askOrder.filter(ids.contains) + fresh
+            if !fresh.isEmpty, !shown { Sound.done?.play() }
+            // The last card answered is the panel's job done.
+            if ids.isEmpty, hadCards, shown, !listening { hide() }
+            pillChanged()
+        }
+    }
+
+    var isQuestions: Bool { if case .questionsAsked = ask?.event.payload { true } else { false } }
+
+    /// A number key on a card: a permission's option outright, a question's toggled.
+    func pickOption(_ i: Int) {
+        switch ask?.event.payload {
+        case .permissionRequested(let r)? where r.options.indices.contains(i):
+            Task { await respond(r.options[i].id) }
+        case .questionsAsked?:
+            digit = i
+            digits += 1
+        default:
+            break
+        }
+    }
+
+    /// The title clicked: Dray's window, on this session. A closed app is
+    /// launched and asked again once its window can answer.
+    func showInApp(_ key: SessionKey) async {
+        let args: [String: JSON] = ["sessionId": .string(key.id)]
+        for attempt in 0..<16 {
+            if (try? await store.call(server, "show_session", args, as: JSON.self)) != nil {
+                hide()
+                return
+            }
+            if attempt == 0 {
+                // Bundled, the notch sits at Dray.app/Contents/Helpers; in a dev build there is no Dray around it.
+                let host = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                let app = host.pathExtension == "app" ? host : NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.yogesh.dray")
+                if let app { _ = try? await NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration()) }
+            }
+            try? await Task.sleep(for: .seconds(1))
+        }
+        notice = "Couldn't open Dray."
+    }
+
+    func respond(_ optionId: String) async {
+        guard let (key, e) = ask, case .permissionRequested(let r) = e.payload else { return }
+        await store.respond(key, requestId: r.requestId, optionId: optionId)
+    }
+
+    func answer(_ answers: [String: String]) async {
+        guard let (key, e) = ask, case .questionsAsked(let r) = e.payload else { return }
+        await store.answer(key, requestId: r.requestId, answers: answers)
     }
 
     var key: SessionKey? {
@@ -148,6 +245,8 @@ final class Composer {
 
     /// With nothing picked, the last session picked, else the newest.
     func opened() {
+        // Cleared here rather than at the close, which would flash the draft back mid-shrink.
+        sent = false
         opens += 1
         notice = nil
         listShown = false
@@ -263,6 +362,7 @@ final class Composer {
 
     // MARK: Sending
 
+    @discardableResult
     func send() async -> Bool {
         // The words still being spoken belong to this message, so a failed
         // transcription keeps the draft open, its notice and Retry with it.
@@ -288,6 +388,11 @@ final class Composer {
         lastUsed = sent.id
         UserDefaults.standard.set(sent.id, forKey: "notch.lastSession")
         self.target = .session(sent)
+        self.sent = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(900))
+            hide()
+        }
         return true
     }
 
@@ -425,4 +530,5 @@ final class Composer {
 enum Sound {
     static let start = NSSound(named: "dictate-start")
     static let stop = NSSound(named: "dictate-stop")
+    static let done = NSSound(named: "notification")
 }

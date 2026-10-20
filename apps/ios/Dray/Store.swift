@@ -22,7 +22,7 @@ final class Store {
     private(set) var serverState: [UUID: Connection.State] = [:]
     private(set) var items: [SessionKey: SessionItem] = [:]
     private(set) var transcripts: [SessionKey: Transcript] = [:]
-    private(set) var asks: [SessionKey: [AgentEvent]] = [:]
+    private(set) var asks: [SessionKey: [AgentEvent]] = [:] { didSet { asksChanged() } }
     private(set) var queued: [SessionKey: [Queued]] = [:]
     private(set) var projects: [UUID: [Project]] = [:]
     /// Each repo's PR marks by branch, as `pr_marks` last answered.
@@ -32,6 +32,8 @@ final class Store {
     var cloneProgress: [UUID: [String: String]] = [:]
     var lastError: String?
 
+    /// For a client that reacts beside drawing: the Notch opens itself on a card.
+    @ObservationIgnored var asksChanged: () -> Void = {}
     @ObservationIgnored private var tasks: [SessionKey: Int] = [:]
     @ObservationIgnored private var reading: Set<UUID> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
@@ -239,11 +241,16 @@ final class Store {
     func isAsking(_ key: SessionKey) -> Bool { !(asks[key]?.isEmpty ?? true) }
 
     func open(_ key: SessionKey) async {
-        if transcripts[key] == nil { await reload(key) }
+        await load(key)
         if items[key]?.status == "completed" {
             items[key]?.status = "idle"
             _ = try? await connections[key.server]?.call("mark_session_read", ["sessionId": .string(key.id), "read": true], as: JSON.self)
         }
+    }
+
+    /// Starts following a transcript without marking the session read.
+    func load(_ key: SessionKey) async {
+        if transcripts[key] == nil { await reload(key) }
     }
 
     /// Re-reads the newest turns and lays them over what is held: older pages

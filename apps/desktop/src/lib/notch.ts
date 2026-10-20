@@ -25,3 +25,7 @@ export async function applyNotch(key: NotchKey = readLocalStorage<NotchKey>(NOTC
     console.warn("[notch]", err);
   }
 }
+
+/// Whether Dray Notch is running to take permission and question cards, read at
+/// the event so a change in Settings lands without a reload.
+export const notchOn = () => IS_MAC && readLocalStorage<NotchKey>(NOTCH_KEY, "control") !== "off";
