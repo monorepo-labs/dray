@@ -254,7 +254,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private func endAnnotation() {
         guard let a = annotation else { return }
         annotation = nil
-        panel?.level = .statusBar
+        // A screenshot still open keeps the notch over its overlay; it puts the level back itself.
+        if composer?.capturing != true { panel?.level = .statusBar }
         Task { await a.end() }
     }
 

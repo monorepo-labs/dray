@@ -193,7 +193,7 @@ final class Composer {
     var attachments: [String] { rows.compactMap(\.file) }
 
     /// An image alone is a message, as it is in Dray's own composer.
-    var canSend: Bool { !capturing && !retryingCut && (!prompt.isEmpty || !attachments.isEmpty) }
+    var canSend: Bool { !capturing && !retryingCut && !rows.contains(where: \.pending) && (!prompt.isEmpty || !attachments.isEmpty) }
 
     var modelId: String {
         Picks.usableModel(models[harness] ?? [], modelPicks[harness] ?? Picks.defaultModel[harness] ?? "", harness)
@@ -342,6 +342,13 @@ final class Composer {
         // transcription keeps the draft open, its notice and Retry with it.
         if dictation == .recording, !(await stopDictation()) { return false }
         guard dictation == .idle else { return false }
+        // Closing the microphone takes the drawing still on screen; its image lands a moment later.
+        // ponytail: polls for up to 30s; an awaitable per held row if this ever needs to be exact.
+        var waited = 0
+        while rows.contains(where: \.pending), waited < 300 {
+            try? await Task.sleep(for: .milliseconds(100))
+            waited += 1
+        }
         let text = prompt, files = attachments
         guard canSend, !sending, let target else { return false }
         sending = true

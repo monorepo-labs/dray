@@ -26,6 +26,9 @@ final class Annotation {
     private var rest: Task<Void, Never>?
     /// The moment being drawn: its held row, and the cut placing the words said before it.
     private var moment: (slot: UUID, cut: Task<Void, Never>)?
+    /// Marks a taken moment still holds on screen while it captures and fades;
+    /// the next moment leaves them out.
+    private var claimed: Set<UUID> = []
 
     init?(composer: Composer, land: @escaping (Capture.Shot) async -> Void) {
         guard let screen = Capture.screenUnderPointer() else { return nil }
@@ -49,15 +52,17 @@ final class Annotation {
         ink.began = { [weak self] in self?.strokeBegan() }
         ink.ended = { [weak self] in self?.strokeEnded() }
         // ⇧ alone arms the pen. Modifier changes need no grant to watch, where keys would.
-        let handle: (NSEvent) -> Void = { [weak self] e in
+        let arm: (NSEvent.ModifierFlags) -> Void = { [weak self] flags in
             guard let self else { return }
-            ink.armed = e.modifierFlags.intersection([.shift, .command, .option, .control]) == .shift
+            ink.armed = flags.intersection([.shift, .command, .option, .control]) == .shift
             // A stroke in progress keeps the mouse until it lets go.
             if !ink.drawing { window.ignoresMouseEvents = !ink.armed }
         }
+        // ⇧ may already be down from before the microphone opened.
+        arm(NSEvent.modifierFlags)
         monitors = [
-            NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: handle) as Any,
-            NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { handle($0); return $0 } as Any,
+            NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { arm($0.modifierFlags) } as Any,
+            NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { arm($0.modifierFlags); return $0 } as Any,
         ]
     }
 
@@ -93,7 +98,9 @@ final class Annotation {
     private func take() async {
         guard let m = moment else { return }
         moment = nil
-        let marks = ink.marks
+        let marks = ink.marks.filter { !claimed.contains($0.id) }
+        let taken = Set(marks.map(\.id))
+        claimed.formUnion(taken)
         let bounds = CGRect(origin: .zero, size: screen.frame.size)
         let region = marks.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
             .insetBy(dx: -Self.padding, dy: -Self.padding)
@@ -111,8 +118,8 @@ final class Annotation {
                 failed = error.localizedDescription
             }
         }
-        let taken = Set(marks.map(\.id))
         withAnimation(.easeOut(duration: 0.4)) { ink.marks.removeAll { taken.contains($0.id) } }
+        claimed.subtract(taken)
         if let shot { await land(shot) }
         await m.cut.value
         withAnimation(.spring(duration: 0.4, bounce: 0.5)) { composer.fillShot(m.slot, shot?.path) }
