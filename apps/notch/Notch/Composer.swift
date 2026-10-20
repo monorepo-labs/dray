@@ -389,10 +389,11 @@ final class Composer {
         UserDefaults.standard.set(sent.id, forKey: "notch.lastSession")
         self.target = .session(sent)
         self.sent = true
+        let visit = opens
         Task {
             try? await Task.sleep(for: .milliseconds(900))
-            // Reopening clears `sent`, and a recording begun meanwhile is the reader's.
-            if self.sent, !listening { hide() }
+            // A reopened panel is another visit, and a recording begun meanwhile is the reader's.
+            if opens == visit, !listening { hide() }
         }
         return true
     }
