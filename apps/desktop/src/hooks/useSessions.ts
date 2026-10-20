@@ -2711,7 +2711,10 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
     // A card is the notch's to raise while it runs: its pill counts what waits
     // and answers it in place, so a banner beside it says the same thing twice.
     // The notch watches This Mac alone, so a remote session keeps its banner.
-    if (kind === "asking" && notchOn() && serverOfSession(sessionId) === LOCAL) return false;
+    if (kind === "asking" && serverOfSession(sessionId) === LOCAL) {
+      void notchOn().then((on) => on || notifyOS(sessionId, kind, label, item?.title ?? ""));
+      return false;
+    }
     // Same order as the card: the verb first, because *what is wanted* is the
     // one thing not on screen anywhere else. The session title follows as the
     // body — a banner lands in a stack beside every other app's, so it has to

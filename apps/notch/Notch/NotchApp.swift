@@ -260,8 +260,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
     /// nothing reopened it or put a pill up meanwhile.
     private func settle() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let self, let composer, !composer.shown, composer.attention.isEmpty else { return }
-            panel?.orderOut(nil)
+            guard let self, let panel, let composer, !composer.shown else { return }
+            // Ordered out even with a pill to draw, since that is what hands the keys back.
+            panel.orderOut(nil)
+            if !composer.attention.isEmpty { panel.orderFrontRegardless() }
         }
     }
 

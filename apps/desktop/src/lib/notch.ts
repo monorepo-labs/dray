@@ -26,6 +26,10 @@ export async function applyNotch(key: NotchKey = readLocalStorage<NotchKey>(NOTC
   }
 }
 
-/// Whether Dray Notch is running to take permission and question cards, read at
-/// the event so a change in Settings lands without a reload.
-export const notchOn = () => IS_MAC && readLocalStorage<NotchKey>(NOTCH_KEY, "control") !== "off";
+/// Whether Dray Notch is up to take permission and question cards: asked of the
+/// process, since the pick says nothing about a notch the reader quit. A failed
+/// ask reads as no notch, so the banner is the one lost to doubt never.
+export async function notchOn(): Promise<boolean> {
+  if (!IS_MAC || readLocalStorage<NotchKey>(NOTCH_KEY, "control") === "off") return false;
+  return invoke<boolean>("notch_running").catch(() => false);
+}

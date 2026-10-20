@@ -359,6 +359,17 @@ pub async fn configure_notch(key: String) -> Result<(), String> {
     Err(crate::git::stderr_or(&out, || "could not start Dray Notch".into()))
 }
 
+/// Whether Dray Notch is running, asked at each permission or question so a
+/// notch the reader quit never swallows the banner that would have replaced it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn notch_running() -> bool {
+    tokio::process::Command::new("pgrep")
+        .args(["-x", "Dray Notch"])
+        .output()
+        .await
+        .is_ok_and(|out| out.status.success())
+}
+
 /// Terminal.app, and never the terminal the reader picked in the panel beside
 /// this.
 ///

@@ -46,7 +46,8 @@ final class Composer {
     var dictation = Dictation.idle {
         didSet {
             // Decided as the pill appears, so the hint arrives with it rather than a beat later.
-            if dictation == .starting { notice = nil; drawHint = UserDefaults.standard.integer(forKey: "notch.drawHints") < Self.drawHints }
+            // A recording begun under Sent is new work: the draft comes back and the panel stays.
+            if dictation == .starting { sent = false; notice = nil; drawHint = UserDefaults.standard.integer(forKey: "notch.drawHints") < Self.drawHints }
             if !listening { drawHint = false }
             if (dictation == .recording) != (oldValue == .recording) {
                 recordingSince = dictation == .recording ? Date() : nil
@@ -475,7 +476,7 @@ final class Composer {
         Task {
             try? await Task.sleep(for: .milliseconds(900))
             // A reopened panel is another visit, and a recording begun meanwhile is the reader's.
-            if opens == visit, !listening { hide() }
+            if opens == visit, self.sent, !listening { hide() }
         }
         return true
     }

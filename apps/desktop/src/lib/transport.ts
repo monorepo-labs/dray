@@ -188,6 +188,7 @@ export const APP_COMMANDS = new Set([
   "list_open_apps",
   "open_in_app",
   "configure_notch",
+  "notch_running",
   "open_login_terminal",
   "run_agent_login",
   "update_agent_in_terminal",
