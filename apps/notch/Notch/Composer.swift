@@ -341,7 +341,6 @@ final class Composer {
         // The words still being spoken belong to this message, so a failed
         // transcription keeps the draft open, its notice and Retry with it.
         if dictation == .recording, !(await stopDictation()) { return false }
-        guard dictation == .idle else { return false }
         // Closing the microphone takes the drawing still on screen; its image lands a moment later.
         // ponytail: polls for up to 30s; an awaitable per held row if this ever needs to be exact.
         var waited = 0
@@ -349,6 +348,8 @@ final class Composer {
             try? await Task.sleep(for: .milliseconds(100))
             waited += 1
         }
+        // After the wait: a dictation started meanwhile holds words this send would leave behind.
+        guard dictation == .idle else { return false }
         let text = prompt, files = attachments
         guard canSend, !sending, let target else { return false }
         sending = true

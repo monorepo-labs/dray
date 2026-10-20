@@ -206,7 +206,11 @@ final class Delegate: NSObject, NSApplicationDelegate {
             composer.hide()
         }
         Task {
-            defer { composer.capturing = false }
+            defer {
+                composer.capturing = false
+                // Dictation may have stopped during the flight or the cut, where `endAnnotation` left the level to this.
+                panel.level = annotation == nil ? .statusBar : Self.overOverlay
+            }
             var shot: Capture.Shot?
             var failed: String?
             do {
