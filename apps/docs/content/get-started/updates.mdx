@@ -1,0 +1,63 @@
+---
+title: Updates and channels
+description: How Dray updates itself, how to join the beta channel, check for updates by hand, read the changelog, and keep the dray CLI and your agents current.
+sidebar:
+  order: 3
+---
+
+Dray checks for a new version when it starts and every six hours after that. When it finds one, it downloads it in the background. You choose when to restart onto it.
+
+## Install an update
+
+When an update has downloaded, the bottom of the sidebar shows **Restart to update** with the new version number. Click it. Dray installs the update and opens again.
+
+While any session is mid-turn, the button waits. It is dimmed, and hovering it says "Waiting for the running turn to finish." Restarting would cut those turns off, so it is not offered until they end.
+
+Sessions survive the restart. The background process that runs them moves onto the new version on its own, once no turn is running.
+
+If the install fails, the sidebar says "Couldn't install the update." If the update installed but Dray could not reopen itself, it says "Update installed. Quit and open Dray again."
+
+## Check for updates by hand
+
+Two places do the same thing:
+
+- The menu bar: **Dray → Check for Updates…**
+- Settings → About → **Updates**, with the **Check for updates** button.
+
+The answer shows for a few seconds: "Up to date", the download's progress, or "Couldn't check for updates". If a new version is ready, Settings shows **Restart to update** on the same button.
+
+## Stable and beta
+
+There are two channels. Stable is the default. Beta gets new versions early, before they are fully tested.
+
+To switch, open Settings → About → **Beta updates**, click **Turn on** (or **Turn off**), then **Confirm**. Dray checks the new channel straight away.
+
+- On beta you still get every stable release, since a stable release is newer than the betas before it.
+- Leaving beta does not move you back to an older version. You stay on the beta you have until a stable release passes it.
+
+## What's new
+
+After an update with something worth showing, a **What's new in Dray** card appears in the bottom-left corner, listing the first few changes. Click **View all** for the full list, or **Dismiss**. It comes back each launch until you press one of the two.
+
+The full changelog is in Settings → **Changelog**, newest first. Settings → About → **What's new** → **View changelog** goes there too. On the beta channel the list includes beta releases. The same list is at [drayhq.com/changelog](https://www.drayhq.com/changelog).
+
+## The `dray` CLI updates with the app
+
+If the [`dray` command line](/cli) is installed, Dray updates it for you. The first time a new version of the app starts, it runs `dray update`, on the same channel as the app. You can also run it yourself:
+
+```bash
+dray update
+```
+
+Dray never installs the CLI on its own. It only keeps an installed one current.
+
+## Your agents
+
+Each agent CLI has its own version, apart from Dray's. When an agent you use has a newer version out, the new-task composer shows a line under it, like "Codex update available", with an **Update** button. That runs the agent's own updater.
+
+For pi and fx, the update waits while one of their sessions is mid-turn. If an update fails, the line shows why and offers **Run in Terminal**.
+
+## Limits
+
+- The app does not restart itself onto an update. You click **Restart to update** when it suits you.
+- If you check for updates from the menu while the sidebar is hidden, the answer is drawn nowhere. Use Settings → About instead.

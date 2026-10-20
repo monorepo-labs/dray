@@ -1,0 +1,77 @@
+---
+title: Worktrees
+description: Run a session in its own copy of the repository, see where it lives and what it starts from, and delete it when the work is done.
+sidebar:
+  order: 4
+---
+
+A worktree session runs in its own checkout of your repository, on its own branch. Two agents in one checkout overwrite each other's files; two agents in two worktrees do not. Use one whenever you run more than one session on a project, or want the agent's changes kept off the branch you are working on.
+
+## Start a worktree session
+
+<Steps>
+  <Step title="Open a new task">
+    Press `⌘N`, then pick a project in the composer.
+  </Step>
+  <Step title="Turn on Worktree">
+    Flip the **Worktree** switch in the composer's control row, or press `⌘⇧T`. The branch picker gives way to the base, for example "from origin/main".
+  </Step>
+  <Step title="Send">
+    Dray creates the worktree and the agent starts inside it.
+  </Step>
+</Steps>
+
+Worktree is a choice at creation. An existing session cannot move into or out of one.
+
+Sessions an agent starts with the `dray` command line always get a worktree.
+
+## Where it lives
+
+| | |
+|---|---|
+| Folder | `<project>/.claude/worktrees/<name>` |
+| Branch | `worktree-<name>` |
+
+The name is three random words, like `calm-navy-beacon`. Dray never reuses a name a session, a pending fork or an existing branch holds.
+
+The session's Changes, Files and PR tabs all read the worktree, not the project's main checkout.
+
+## What it starts from
+
+A new worktree starts from your remote's default branch, `origin/main` or whatever `origin` names as default, not from the branch you have checked out. Uncommitted work and local commits in your main checkout are not in it.
+
+- **Claude Code** fetches first, so the base is the latest `origin/main`. If the fetch fails, it starts from your local `HEAD`.
+- **Codex, pi, fx and Grok** start from `origin/main` as your clone last fetched it; Dray does not fetch. A repo with no remote starts from `HEAD`.
+
+## Delete a worktree
+
+Nothing deletes worktrees on its own, so Dray offers to whenever you are done with one. There are three ways.
+
+**When you settle the session.** Settling a worktree session raises a card: **Delete worktree?**, with a line saying what would be lost. Click **Delete**, or press `⌘⇧D`. If you do nothing, the card times out and the worktree stays.
+
+**From the settled session.** Open a settled worktree session. Its composer is replaced by a bar with **Delete worktree** and **Unsettle**. **Delete worktree** asks first:
+
+- If nothing is at risk: "Deletes `<name>` and its branch. Nothing unsaved is in it." Buttons: **Keep it** and **Delete worktree**.
+- If something is: it names the count, like "3 uncommitted files and 2 commits on no other branch will be deleted…". Buttons: **Keep it** and **Delete anyway**.
+
+**By deleting the session.** Deleting a session from the sidebar takes its worktree with it, with no second question.
+
+"On no other branch" means the commits are not reachable from any other local branch, remote branch or tag. A branch whose pull request was squash-merged still counts as unpushed, so the warning can show when the work is in fact safe.
+
+### When Dray refuses
+
+If another agent process is still working in that directory, Dray refuses with "that worktree is in use by another session". If any step fails, a **Worktree cleanup failed** card names the reason; **View** takes you back to the session, where **Delete worktree** tries again.
+
+Dray only deletes worktrees under `<project>/.claude/worktrees/`. A worktree you made elsewhere is left alone.
+
+## The session survives
+
+Deleting a worktree keeps the session and its whole conversation. The session moves to the project's main folder, and an unsettled session resumes from there. Its branch name is kept, so the PR tab still finds the pull request the work landed in.
+
+If you remove a worktree outside Dray, Dray notices at its next launch and points the session back at the project folder.
+
+## Limits
+
+- From the app, the base is always the remote's default branch. Only `dray` started with a base can begin a worktree from other work (see the CLI docs).
+- A deletion that fails while deleting the whole session leaves the folder behind. Remove it with `git worktree remove <path>`.
+- `⌘⇧T` and `⌘⇧D` can be changed in Settings → Shortcuts.

@@ -102,6 +102,17 @@ pub async fn remote_access_token() -> Result<String, String> {
     Ok(token)
 }
 
+/// The phone's pairing QR, as SVG: [`dray_proto::pair_link`] for this
+/// address. It carries the token, so it is asked for when the reader opens it,
+/// the same as Copy.
+pub async fn remote_access_qr() -> Result<String, String> {
+    let address = get_remote_access().address.ok_or("Remote access has no address yet")?;
+    let token = remote_access_token().await?;
+    let name = tokio::task::spawn_blocking(dray_proto::machine_name).await.map_err(|e| e.to_string())?;
+    let code = qrcode::QrCode::new(dray_proto::pair_link(&address, &token, &name)).map_err(|e| e.to_string())?;
+    Ok(code.render::<qrcode::render::svg::Color>().min_dimensions(176, 176).build())
+}
+
 /// Stops whatever is serving and, if `on`, starts afresh. Dropping the task
 /// drops the listener and every connection it holds. Callers hold
 /// [`SWITCHING`].

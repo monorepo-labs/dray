@@ -1,0 +1,168 @@
+---
+title: The composer
+description: Pick an agent, model, effort, fast mode and permission mode, send while a turn runs, stop a turn, and read how full the context is.
+sidebar:
+  order: 1
+---
+
+The composer is the box at the bottom of the window where you write to the agent. Its control row sets who does the work and how: the agent, the model, the effort, fast mode and the permission mode. Some of these can change mid-session and some are fixed once the session starts.
+
+{/* screenshot: the in-session composer with the control row under it */}
+
+## New task and follow-up
+
+The composer has two shapes.
+
+- **New task.** Press `⌘N` or click **New Task** in the sidebar. The composer sits alone in the middle of the window, with its controls above the text. The placeholder reads "Describe a task." You press `⏎` to send; there is no send button. `⌘S` saves the text as a draft instead (see [Prompts](/using-dray/prompts#drafts)).
+- **Follow-up.** Once a session exists, the composer sits under the transcript with its controls below the text. The placeholder reads "Follow-up." and a round send button sits on the right.
+
+`⏎` sends. `Shift+⏎` adds a new line. A new line inside a list carries the list marker with it.
+
+## Pick where a new task runs
+
+These three controls appear on a new task only. Once the session starts they are gone, and the session header shows the project and branch instead.
+
+| Control | What it does |
+|---|---|
+| Project (folder icon) | Picks the project. **Attach project…** at the bottom adds a folder. `⌘⇧P` steps to the next project. |
+| **Worktree** switch | Runs the session in its own copy of the repo. `⌘⇧T` flips it. See [Worktrees](/using-dray/worktrees). |
+| Branch (branch icon) | Which branch the project is on. Hidden while Worktree is on, where the row says "from origin/main" (or your default branch) instead. |
+
+Picking a branch checks it out in the project for real. If the project has uncommitted files, Dray asks first:
+
+- **Stash changes**: the changes stay on the current branch, saved for later.
+- **Bring changes**: the changes move to the new branch with you.
+- **Cancel**.
+
+## Agent and model
+
+The model button shows the agent's mark, the model name, and the effort beside it. Click it to open the model menu.
+
+- **Agent.** On a new task, a row of agent marks sits at the top of the menu: Claude Code, Codex, pi, fx and Grok. `⌘⇧A` cycles them. An agent that is not installed carries a red dot; picking it shows how to install it under the composer. The agent is fixed once the session starts.
+- **Model.** Click a model to pick it. Hover a model with effort levels to open its effort submenu.
+- **fx provider.** On fx, the top row also holds fx's providers. This one can change mid-session, but not while a turn runs ("Provider can't be changed mid-stream"). It also changes fx's own default provider on your machine.
+
+`Shift+Tab` cycles through the models in the menu, wherever focus is.
+
+### Shortlist models
+
+The menu shows a shortlist, not every model an agent offers. To change it, click **Shortlist models** at the bottom of the menu. The **Models** dialog lists everything the agent reports; turn on the ones you work with. Only those show in the picker and in the `Shift+Tab` cycle. The session's current model is always shown, shortlisted or not.
+
+Each agent starts with a default shortlist the first time its list loads. pi starts empty, so you pick your own. The **Refresh** button in the dialog reads the list again, for example after you log in to a new provider.
+
+## Effort
+
+Effort is how hard the model thinks. Levels are **Low**, **Medium**, **High**, **Extra High**, **Max** and **Ultra**, but each model offers only the levels it supports, and some offer none.
+
+- Pick a level from the model's effort submenu.
+- `⌘⇧E` steps to the next level. It skips Low; pick Low from the menu.
+- Each model remembers its own default. Switching models uses that model's level, not the one you had.
+
+## Fast mode
+
+Fast mode runs the model at its faster tier. The **Fast mode** switch sits in the model menu under the models, and appears only where the agent and the model both have one. When it is on, the model button reads "Fast" after the effort. `⌘⇧F` toggles it.
+
+| Agent | Fast mode |
+|---|---|
+| Claude Code | Opus models. Changes in place, even mid-turn. |
+| Codex | Models that report a fast tier. A change restarts the agent process at the next send. |
+| fx | New tasks only. It cannot change after the session starts. It also sets fx's own default on your machine. |
+| Grok | Grok 4.7 only. |
+| pi | None. |
+
+If the agent refuses fast mode, its own sentence shows under the switch, for example "Fast mode disabled · usage credits exhausted". The switch stays as you set it. The note clears once a turn runs fast again, and shows only while the switch is on.
+
+## Permission mode
+
+The permission mode is the button furthest right among the pickers, for example **Auto**. It decides how much the agent may do without asking you.
+
+| Mode | Meaning |
+|---|---|
+| **Ask every time** | The agent asks before each action that needs permission. |
+| **Auto** | The default. The agent runs routine work without asking. On Claude Code this is its own auto mode: a built-in safety check approves routine actions and blocks risky ones, so cards are rare. On Codex it asks only to go beyond the project folder. On Grok it never raises a card; a blocked action fails with its reason instead. |
+| **Plan** | The agent plans without changing anything. |
+| **Bypass permissions** | Shown in red. Every permission check is off. |
+
+Each agent offers only the modes it can honour:
+
+| Agent | Modes offered |
+|---|---|
+| Claude Code | All four. |
+| Codex | Ask every time, Auto, Bypass permissions. |
+| Grok | Ask every time, Auto, Bypass permissions. Grok has a plan mode of its own; see [Permissions](/using-dray/permissions#approve-a-plan). |
+| fx | Ask every time, Auto. |
+| pi | No picker. pi has no permission system of its own; an extension you install decides. |
+
+When the agent asks, a card appears in the transcript. See [Permissions](/using-dray/permissions).
+
+## What locks while a turn runs
+
+Some agents cannot take a change in the middle of a turn. There, the control dims and its tooltip says why, for example "Model can't be changed mid-turn". It unlocks when the turn ends.
+
+| Agent | Locked while a turn runs |
+|---|---|
+| Claude Code | Effort |
+| Codex | Model, effort, permission mode, fast mode |
+| Grok | Permission mode |
+| fx | Provider. Model, effort and permission mode stay open and apply to the next turn. |
+| pi | Nothing |
+
+## Send while a turn runs
+
+You do not have to wait. Type and press `⏎` during a turn, and the prompt is queued. It shows dimmed at the bottom of the transcript until the agent takes it. The send button's tooltip says "Send — queued onto this turn".
+
+- **Claude Code, Codex, pi and Grok** take the queued prompt into the running turn, usually at the next tool call.
+- **fx** takes one prompt per turn, so queued prompts wait for the turn to end and then go together as the next turn. Under the newest one, **Now** stops the running turn so they go at once. `⌘⏎` does the same.
+
+**Esc** takes back the newest queued prompt and puts its text back in the box. The hint "Esc to cancel" sits under it.
+
+## Stop a turn
+
+While a turn runs and the box is empty, the send button turns into a square **Stop** button. It stops the turn. Background tasks the agent started, such as a dev server, keep running. While any run, the transcript shows a count like "2 Background Tasks". Click it to open the list in the right panel's **More** tab, where the square button on a row stops that task and **Stop all** stops every one. Settling the session stops them all.
+
+## Escape
+
+`Esc` does the first of these that applies, wherever focus is:
+
+1. Throws away a dictation that is recording.
+2. Closes an open picker (`/`, `@`, `#`, `&`) and keeps what you typed.
+3. Takes back the newest queued prompt.
+
+## The context ring
+
+After the first turn, a small ring at the right end of the control row shows how full the model's context is. Hover it for the numbers, like "41k / 200k · 21% used". It turns red at 80%. When the context fills, the agent compacts it, and "Compacting context" shows in the transcript while it does.
+
+## Hand work back
+
+In a session, a thin row of buttons hides behind the top edge of the composer and opens when you hover it. Each sends a short prompt:
+
+- **Commit**, when the working tree has changes.
+- **Create PR**, when the branch has new work, has no pull request yet, and is not the default branch.
+- **Run server**, which asks the agent to start the dev server in the background.
+
+They are suggestions to the agent, not commands Dray runs itself.
+
+## Shortcuts
+
+| Shortcut | Does |
+|---|---|
+| `⏎` | Send |
+| `Shift+⏎` | New line |
+| `⌘N` | New task |
+| `Shift+Tab` | Next model |
+| `⌘⇧E` | Next effort level |
+| `⌘⇧F` | Toggle fast mode |
+| `⌘⇧A` | Next agent (new task) |
+| `⌘⇧P` | Next project (new task) |
+| `⌘⇧T` | Toggle worktree (new task) |
+| `⌘⏎` | Send queued prompts now (fx) |
+| `⌘S` | Save as draft (new task) |
+
+You can change any of these in Settings → Shortcuts.
+
+## Limits
+
+- Agent, project, branch and worktree are set at creation and cannot change later.
+- On Codex, changing the model or effort applies at the next send by restarting the agent process.
+- On Claude Code, changing effort restarts the agent process at the next send.
+- fx's fast mode and provider are fx's own machine-wide settings, so changing them also changes fx in your terminal.

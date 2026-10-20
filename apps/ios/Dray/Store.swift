@@ -61,6 +61,8 @@ final class Store {
         save()
     }
 
+    func connection(_ server: UUID) -> Connection? { connections[server] }
+
     func name(of server: UUID) -> String {
         servers.first { $0.id == server }?.name ?? "Server"
     }
@@ -220,6 +222,12 @@ final class Store {
         }
     }
 
+    /// A command on a session's own server, for a view reading beside the transcript.
+    func call<T: Decodable>(_ server: UUID, _ cmd: String, _ args: [String: JSON]) async throws -> T {
+        guard let c = connections[server] else { throw DrayError("Not connected") }
+        return try await c.call(cmd, args)
+    }
+
     func interrupt(_ key: SessionKey) async {
         do {
             _ = try await connections[key.server]?.call("interrupt_session", ["sessionId": .string(key.id)], as: JSON.self)
@@ -316,7 +324,7 @@ final class Store {
         case .backgroundTasks(let n):
             tasks[key] = n
             if n == 0 && items[key]?.busy != true { strand(key) }
-        case .userMessage(let text, _, _):
+        case .userMessage(let text, _, _, _):
             queued[key]?.removeAll { $0.text == text }
         default:
             break

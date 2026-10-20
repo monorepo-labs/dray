@@ -99,7 +99,7 @@ export default function PermissionRequest({
           <Markdown>{description}</Markdown>
         </div>
       ) : (
-        <p className="text-chat leading-snug">{description}</p>
+        <p className="text-chat leading-snug wrap-anywhere">{description}</p>
       )}
 
       {/* One row, wrapping. It was a column under `@max-sm` for a while, and
@@ -132,7 +132,7 @@ export default function PermissionRequest({
               // comment above promises. Wrapping inside the button is what
               // keeps the subject readable; truncating would hide the half of
               // the label that says what is being granted.
-              className="h-auto min-h-7 max-w-full py-1 text-left break-words whitespace-normal"
+              className="h-auto min-h-7 max-w-full py-1 text-left wrap-anywhere whitespace-normal"
               variant={optionVariant(option.kind)}
               disabled={sent !== null}
               onClick={() => {

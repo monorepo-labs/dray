@@ -1,0 +1,144 @@
+---
+title: Sessions and the sidebar
+description: Find sessions in the sidebar, read its marks and groups, pin, settle, set aside, fork, rename and delete sessions, and move between them from the keyboard.
+sidebar:
+  order: 5
+---
+
+Every conversation with an agent is a session, and the sidebar lists them. Dray calls them tasks on screen: **New Task**, "No tasks yet". The sidebar is ordered by what each session needs from you, so the ones waiting on you are at the top.
+
+{/* screenshot: the sidebar with a yellow-marked row, a green-marked row and a pinned group */}
+
+## The sidebar
+
+From the top:
+
+- **New Task** (`⌘N`) opens the new-task composer.
+- **Issues** (`⌘I`) opens the issues page.
+- **Search** (`⌘F`) filters the list by title. `Esc` clears it.
+- The **project filter** names the project the list shows, starting at **All Projects**. Click it to step to the next project, or swipe on the sidebar. `⌘⌥←` and `⌘⌥→` step it too.
+- Two buttons beside the filter switch the list: **Show drafts** (dashed circle) and **Show settled** (double tick). Each turns into **Show active** while its view is up.
+
+`⌘B` hides and shows the sidebar.
+
+## Read a row
+
+Each row shows the session's title and, on the right, when it last changed. A mark on the left edge says it wants you:
+
+| Mark | Means | Clears when |
+|---|---|---|
+| **Yellow** | The agent is waiting on you: a permission request or a question. | You answer it. |
+| **Green** | The turn finished and you have not read it. | You open the session. |
+
+Yellow wins when both apply. Other things the row can show:
+
+- **Working orb** in place of the time: a turn is running.
+- **Pull request glyph** before the title: green open, grey draft, purple merged, red when checks failed on an open one. Hover for the number and state.
+- **Spinning dashed circle** in place of the time: the pull request's checks are running.
+- **Faded**: the session is set aside, or, in the settled view, last changed before today.
+- **Indented under another row**: a session another session started, for example with `dray new`.
+
+Hover a row for **Settle** (tick) and **More** (⋯), which opens the same menu as right-clicking.
+
+## How the list is ordered
+
+The active list is grouped by stage across all projects, with a small gap between groups and no headings. From the top:
+
+1. **Pinned**, under its own heading.
+2. Waiting on you (yellow).
+3. Finished and unread (green).
+4. Idle.
+5. Unread, with an open pull request.
+6. Open or draft pull request.
+7. Pull request checks running.
+8. Pull request merged.
+9. Set aside.
+
+A session that is working stays where it would sit at rest. A parent moves with the strongest stage of anything under it, so a child waiting on you pulls its parent up. Newest first within each group. A list of fewer than three sessions is not split at all.
+
+## Pin a session
+
+Right-click a row and choose **Pin**. Pinned sessions sit at the top under **Pinned**, across projects, with the sessions they started. **Unpin** puts it back.
+
+## Set a session aside
+
+Right-click and choose **Set aside** to move a session to the bottom of the list, faded, without settling it. **Bring back** returns it. A session untouched for three days is set aside on its own, and comes back when it next changes.
+
+## Mark unread
+
+Right-click a finished, read session and choose **Mark unread** to put its green mark back.
+
+## Settle a session
+
+Settle when you are done with a session: hover its row and click the tick (**Settle**).
+
+Settling stops the session's agent and everything it started, such as background shells and dev servers, and closes its browser tabs. The session's browser profile is deleted, so its sign-ins are gone. The transcript stays. You cannot settle a session mid-turn; the button is hidden until the turn ends.
+
+A settled session moves to the settled view. Its composer is replaced by "Unsettle this task to send a follow-up." with an **Unsettle** button. If it ran in a worktree, settling offers to delete the worktree; see [Worktrees](/using-dray/worktrees#delete-a-worktree).
+
+### The settled view
+
+Click **Show settled**. Settled sessions are grouped under their project's heading. Sessions last changed before today are faded. Click a project heading to start a new task there.
+
+### Unsettle
+
+Click **Unsettle** on the settled session's bar, or hover its row and click the undo arrow. The session goes back to the active list and resumes the next time you send.
+
+## Drafts
+
+Click **Show drafts** to see tasks you saved with `⌘S` from the new-task composer. Click one to open it. See [Prompts](/using-dray/prompts#drafts).
+
+## Fork a session
+
+A fork copies a whole conversation into a new session, so you can try a different direction without losing the first. Right-click a row, open **Fork**, and pick:
+
+- **Fork in new worktree** (`1`): the copy runs in a new worktree. The worktree starts from your remote's default branch, so it does not have the original session's file changes, only its conversation.
+- **Fork here** (`2`): the copy runs in the same folder as the original.
+
+The fork opens selected. It shows the copied conversation at once and starts its agent at your first send. It sits beside the original in the sidebar.
+
+| Agent | Fork |
+|---|---|
+| Claude Code | Yes |
+| pi | Yes |
+| Grok | Yes |
+| Codex | No |
+| fx | No |
+
+Fork is disabled while the session's turn is running. If the original takes another turn before you send to the fork, the fork carries that turn too, though its transcript does not show it.
+
+## Rename a session
+
+Dray titles a session from its first prompt, then replaces that with a short title the agent's cheapest model writes. Grok titles its own sessions.
+
+To rename, double-click the session's title in the tab row above the transcript, or press `⏎` on it. `⏎` saves, `Esc` cancels.
+
+## Delete a session
+
+Right-click and choose **Delete**, then **Delete** again at "Are you sure?". This stops the agent and removes the transcript, its attached images and its worktree. It cannot be undone.
+
+**Detach from parent** on a nested row moves it to the top level.
+
+## Move between sessions
+
+| Shortcut | Does |
+|---|---|
+| `⌘N` | New task |
+| `⌘⇧↑` / `⌘⇧↓` | Previous / next session, in the order the sidebar draws |
+| `⌃1` … `⌃0` | Jump to a session; hold `⌃` to see each row's number |
+| `⌘⌥↑` / `⌘⌥↓` | Jump to the previous / next group |
+| `⌘⌥←` / `⌘⌥→` | Previous / next project filter |
+| `⌘F` | Search sessions |
+| `⌘B` | Toggle sidebar |
+
+You can change any of these in Settings → Shortcuts.
+
+## The Dock badge
+
+The number on Dray's Dock icon counts sessions waiting on you plus sessions finished and unread: the yellow and green marks, in every space. It clears as you deal with them.
+
+## Limits
+
+- A fork copies the whole conversation; there is no fork from a chosen message.
+- Codex and fx sessions cannot be forked.
+- Unsettling does not bring back a deleted worktree or browser profile.

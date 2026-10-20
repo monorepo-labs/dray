@@ -1,0 +1,135 @@
+---
+title: Agents
+description: The five agent CLIs Dray runs (Claude Code, Codex, pi, fx and Grok Build), what each supports side by side, how to sign in to each, and what is particular to each one.
+sidebar:
+  order: 0
+---
+
+Dray does not have a model of its own. It runs a coding agent CLI that you install and sign in to, and draws its work in the chat window. Each session runs one agent, picked when you start it.
+
+You pick the agent in the composer's model picker, in the row of marks at its top. `⌘⇧A` steps to the next one. The row is only there on a new task: a session keeps the agent it started with. To hide an agent you don't use, switch it off in [Settings → Accounts](/settings/accounts).
+
+Dray installs no agent and stores no agent login. Each agent keeps its own, exactly as in your terminal: if an agent works there, it works in Dray. Install commands are in [Install Dray](/get-started/install#install-an-agent).
+
+## What each one supports
+
+| | Claude Code | Codex | pi | fx | Grok Build |
+|---|---|---|---|---|---|
+| Models | Fable, Opus, Sonnet, Haiku | Read from Codex | Read from pi | Read from fx, per provider | Read from Grok Build |
+| Effort levels | Low to Max | Low to Max, plus Ultra on some models | pi's levels for each model | The levels each model takes | Low to Extra High |
+| Fast mode | Opus models | Models that offer it | No | New sessions only | Grok 4.7 |
+| Permission modes | Ask every time, Plan, Auto, Bypass permissions | Ask every time, Auto, Bypass permissions | None | Ask every time, Auto | Ask every time, Auto, Bypass permissions |
+| Slash commands | Claude Code's commands and skills | Skills | pi's commands | Skills | Grok Build's commands and skills |
+| Images in prompts | Yes | No | Yes, if the model takes them | No | No |
+| Fork a session | Yes | No | Yes | No | Yes |
+| Worktrees | Yes | Yes | Yes | Yes | Yes |
+| Change during a turn | Model, permission mode, fast mode | Nothing | Model, effort | Model, effort, permission mode, for the next turn | Model, effort, fast mode |
+| A prompt sent during a turn | Joins the running turn | Joins the running turn | Joins at the next tool call | Waits for the turn to end | Joins at the next step |
+
+What the rows mean:
+
+- **Change during a turn**: these controls stay live while the agent works, and your change applies to the next thing the agent does. The rest are locked until the turn ends, with a tooltip saying so. Between turns you can change all of them; where the agent cannot take a change in place, Dray restarts it behind the session and the conversation carries on.
+- **A prompt sent during a turn**: it waits under the transcript, and most agents read it before the turn ends.
+- **Worktrees**: Claude Code makes its own worktree. For the others Dray makes it before the agent starts. Either way it starts from your remote's default branch, like `origin/main`. See [Worktrees](/using-dray/worktrees).
+
+Models, effort, fast mode and permission modes are covered in [The composer](/using-dray/composer). Forks are in [Sessions](/using-dray/sessions).
+
+## Signing in
+
+| Agent | Sign in from a terminal | Other ways, in Settings → Accounts |
+|---|---|---|
+| Claude Code | `claude auth login` | Claude subscription, or an Anthropic Console account (billed per token) |
+| Codex | `codex login` | ChatGPT subscription, or paste an OpenAI API key |
+| pi | Run `pi`, type `/login`, pick a provider | Sign in to a provider, paste a provider's API key, or **Add an account** |
+| fx | `fx login`, or `fx login vercel`, `fx login codex`, `fx login grok` | Vercel account, or an AI Gateway key |
+| Grok Build | `grok login`, or `grok login --device-auth` with no browser | Grok account, or Device code |
+
+If a turn fails because the agent is logged out, the composer says so, like "Codex isn't logged in", and offers **Log in**, which runs the login in Terminal, and **Copy command**. [Settings → Accounts](/settings/accounts) shows who each agent runs as.
+
+## Claude Code
+
+Anthropic's agent, and the one Dray supports most fully.
+
+- **Models.** Fable 5.1, Opus 5.5 and Sonnet 5 follow the latest model of their family, so a session moves up when Claude Code does. Fable 5 and Opus 5 are pinned, for when you want that exact generation. A new session starts on Opus 5.5. Haiku 4.5 has no effort levels.
+- **Effort** is locked during a turn. A change applies from your next message.
+- **Slash commands.** Type `/` for Claude Code's built-in commands, your own and the project's, plugin commands and skills. `/clear`, `/fast`, `/model` and `/rename` are hidden, because Dray has its own controls for them and would not follow their effect. Typed by hand they still run, so avoid them.
+- **MCP servers** come from Claude Code's own configuration, the same as in your terminal. Dray adds none. It does let the agent run `dray` itself without a permission card, so it can [start and message other sessions](/cli).
+
+Limits:
+
+- An effort change waits while a background task the agent started (a dev server, a watcher) is still running, and nothing says so. Stop the task first: open the right panel (`⌘E`), pick **More**, and stop it, or press **Stop all**.
+- A command, skill or plugin you add while Dray runs appears in the `/` picker only after you quit with **Quit completely** and open Dray again.
+
+## Codex
+
+OpenAI's agent. Dray asks Codex which models it has, so a model OpenAI ships appears in the picker without a Dray update. A new session starts on 6 Sol, or 6 Astra if your Codex does not list 6 Sol.
+
+- **Effort.** Max is the deepest reasoning. **Ultra**, on the models that offer it, is the deepest reasoning plus Codex handing parts of the task to helpers on its own. Every model starts on Medium.
+- **Permission modes.** Codex has two settings where most agents have one: when it asks, and what its commands may touch. Commands run in a sandbox the operating system enforces, so a write outside the allowed area fails whether or not anyone was asked.
+
+  | Dray | Codex | What happens |
+  |---|---|---|
+  | **Ask every time** | Ask for approval | Asks before acting. Commands can write in the project. |
+  | **Auto** | Approve for me | Works freely in the project. Asks only to step outside it. The default. |
+  | **Bypass permissions** | Full access | Never asks. No sandbox. |
+
+- **Skills.** `/` lists your Codex skills. Codex's own menu commands, like `/model` or `/new`, are not listed.
+- **MCP servers** come from Codex's own configuration. Dray adds none.
+
+Limits:
+
+- Dray needs a recent Codex. An old one reads as not installed: run the installer again.
+- Nothing changes during a turn. Settings wait for the turn to end.
+- Images you attach are not sent. Only the text goes.
+- Codex sessions cannot be forked.
+
+## pi
+
+An open-source agent from [pi.dev](https://pi.dev) that works with many model providers.
+
+- **Models** are whatever your signed-in providers serve, grouped by provider in the picker and read fresh every couple of minutes. The shortlist starts empty, so the picker first says "No models shortlisted yet": choose **Shortlist models** and star the ones you want. Until you pick one, pi uses its own default.
+- **Effort** is pi's thinking levels for each model. Off and Minimal are not offered.
+- **Permissions.** pi has none of its own and runs what the model asks for, so there is no permission picker. A pi extension that gates tools can still ask, and its questions show as cards.
+- **Images** are sent. If the model takes text only, the composer warns you that the provider may refuse it.
+- **MCP servers.** Dray hands pi none. pi's own setup and extensions decide what tools it has.
+
+## fx
+
+Vercel's agent, from [fx.sh](https://fx.sh). It runs models through one of three providers: the Vercel AI Gateway, a Codex subscription or a Grok subscription. A Codex login elsewhere on your Mac does not count for fx.
+
+- **Providers.** In the model picker, the three marks after fx's are the providers. Click one and the list changes to its models. It works on a running session too, moving it at your next message, but not during a turn. It also changes fx's default provider in your terminal.
+- **Fast mode** is set when a session is created and cannot change after. It is fx's own setting, so it changes your terminal's default too. On the AI Gateway the separate "fast" model ids are hidden; the switch is how you reach them.
+- **Effort** is per model. If fx refuses a level, the turn still runs without it and the transcript says which levels the model takes.
+- **Prompts sent during a turn** wait and go together as one turn when it ends, each in its own bubble. **Now** under the last one, or `⌘⏎`, stops the turn and sends them at once. `Esc` takes the newest back into the composer.
+- **Skills.** `/` lists skills from the same folders fx reads: `.fx/skills`, `skills`, `.opencode/skills`, `.codex/skills`, `.claude/skills`, `.agents/skills` and `.claw/skills` in the project, and `~/.fx/skills`, `~/.config/opencode/skills`, `~/.codex/skills`, `~/.claude/skills`, `~/.agents/skills` and `~/.claw/skills` at home. A skill is a folder holding a `SKILL.md`.
+- **MCP servers.** Under Dray, fx does not read your MCP servers itself, so Dray passes it every server in `~/.fx/mcp.json` (the file `fx mcp add` writes). For a server that needs a token, set `bearer_token_env` in that file to an environment variable holding it, and export the variable in your shell profile, like `~/.zprofile`. Dray does not pass a server you signed in to with `fx mcp auth`, a server that fails to start, or servers from a project's own `.mcp.json`.
+- **Session titles.** Dray names fx sessions itself, and turns off fx's own titles in `~/.fx/settings.json` to avoid a delay after the first turn. That applies to fx in your terminal too.
+
+Limits:
+
+- Images you attach are not sent. fx sessions cannot be forked.
+- Provider and fast mode are fx's global settings, shared with your terminal.
+- fx shortens what a tool returns, so a long result shows only its start.
+- A subagent fx starts has no stop button. Stop the whole turn instead.
+- Dray adds its own instructions to the first prompt of each new fx session. They are not shown in the transcript.
+
+## Grok Build
+
+xAI's agent. It reads much of the same setup Claude Code does, like `CLAUDE.md`, `~/.claude/skills` and your MCP servers. A new session starts on Grok 4.7; Grok 4.5 stops at High effort.
+
+- **Fast mode.** Grok 4.7 has a fast version. The switch is how you reach it; it is not listed as a model of its own.
+- **Permission modes.** Permission mode is locked during a turn. **Auto** never shows a card: Grok Build judges each action itself, and a blocked action fails with its reason given to the agent.
+
+  :::warning
+  Grok Build's Auto blocks less than you might expect. In testing it blocked deleting a folder inside the project, but let through deleting one outside it, a `git push`, and a web request that sends data. Use **Ask every time** when that matters.
+  :::
+
+- **Plan mode** is not in the picker, because only Grok Build can enter it. Type `/plan` in a prompt. When the plan is ready a card asks you to **Approve plan** or **Keep planning**, and **View plan** opens it in the right panel's **Plan** tab. See [Permissions](/using-dray/permissions#approve-a-plan).
+- **Slash commands.** `/` lists Grok Build's commands and skills, but only once a Grok Build session has run in that folder. Until then the picker stays closed.
+- **MCP servers.** Grok Build reads its own config in `~/.grok` and your Claude and Cursor settings, and signs in to them itself. A broken server in any of them slows every Grok Build session's start.
+
+Limits:
+
+- Images are not supported.
+- A subagent or background task Grok Build starts has no stop button. A background task keeps running after you stop the turn, until you settle or delete the session.
+- Under **Ask every time**, the agent's own `dray` commands raise a permission card too.

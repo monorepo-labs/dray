@@ -1,0 +1,73 @@
+---
+title: Your first session
+description: Attach a project, pick an agent, choose a worktree or your own checkout, send a prompt, and follow the agent's work.
+sidebar:
+  order: 2
+---
+
+A session is one conversation with one agent, in one project. You start it from the composer on a new task, and it lives in the sidebar from then on.
+
+Click **New Task** at the top of the sidebar, or press `⌘N`. The composer sits in the middle of the window, with a row of controls above it.
+
+{/* screenshot: the new-task composer with its control row: attach, model picker, project, Worktree switch, branch, permission */}
+
+<Steps>
+  <Step title="Attach a project">
+    Click **Attach project** in the control row. The dialog lists your GitHub repositories, read through `gh`. Pick one and click **Attach**: Dray clones it into `~/dray`. A repository you have already cloned is marked **Cloned**; one already attached is marked **Attached**.
+
+    For a folder already on your Mac, click **Select folder**, or **Enter path** and type it, like `~/code/project`.
+
+    Once you have projects, the same control is a menu. Pick a project, or choose **Attach project…** to add another. `⌘⇧P` steps to the next one.
+  </Step>
+  <Step title="Pick an agent and a model">
+    Open the model picker, the control showing an agent mark and a model name. The row of marks at the top is the agent: Claude Code, Codex, pi, fx and Grok Build. Click one, then pick a model from the list below it. `⌘⇧A` steps to the next agent, and `⇧Tab` to the next model.
+
+    A model with effort levels opens a submenu when you hover it. **Fast mode** sits under the models where the agent and model have one. See [Agents](/using-dray/agents) for what each one offers.
+  </Step>
+  <Step title="Choose where it runs">
+    Turn on **Worktree** to give the session its own checkout. Dray makes a new git worktree under `<project>/.claude/worktrees/`, on a branch named `worktree-<name>`. The line beside the switch shows where it starts, like `from origin/main`. Your own checkout is left alone, so several agents can work in one project at once. `⌘⇧T` toggles it. See [Worktrees](/using-dray/worktrees).
+
+    Leave it off to run in the project's own folder. Then the branch picker shows the branch checked out there. Picking another branch checks it out for real. If you have uncommitted files, Dray asks first:
+
+    - **Stash changes**: they stay on the current branch, saved for later.
+    - **Bring changes**: they move to the new branch with you.
+    - **Cancel**: nothing changes.
+  </Step>
+  <Step title="Pick a permission mode">
+    The last control sets when the agent asks before it acts. **Auto** is the default. See [Permissions](/using-dray/permissions).
+  </Step>
+  <Step title="Send a prompt">
+    Type what you want done and press `⏎`. `⇧⏎` adds a new line. In the prompt you can mention files with `@`, run commands and skills with `/`, and attach images and files with `⌘⌥O` or by dropping them on the window. See [The composer](/using-dray/composer).
+  </Step>
+</Steps>
+
+Project, branch, worktree and agent are fixed once the session starts, so those controls go away. Model, effort, fast mode and permission mode stay, and you can change them between turns. Some agents take a change during a turn too: see [Agents](/using-dray/agents).
+
+## What the transcript shows
+
+- Your prompt, then the agent's reply as it streams in.
+- Each tool the agent uses as one row: a file read, an edit, a shell command, a search. Click a row to see its detail, like the diff of an edit or the output of a command.
+- A permission card when the agent wants to do something your permission mode does not allow on its own. Choose an option to let the turn go on.
+- A question card when the agent asks you to choose between options. You can also type your own answer.
+- A red row with the agent's own words if a turn fails.
+
+To see everything the session changed in files, open the right panel with `⌘E` and pick **Changes**.
+
+## Stop a turn
+
+While the agent works, the send button turns into Stop. Click it to end the turn. The conversation stays, and you can send another prompt.
+
+If you type while the agent works, the button sends instead. Your prompt waits under the transcript and the agent picks it up during the turn or right after it, depending on the agent. Press `Esc` to take the newest waiting prompt back into the composer.
+
+## The session in the sidebar
+
+The session appears in the sidebar as soon as you send. Its row shows a title, and shows that the agent is working. When the turn ends, the row gets a green mark until you look at it. A yellow mark means the agent is waiting on you: a permission or a question.
+
+You can switch to other sessions while this one runs. It keeps going, and keeps going after you quit Dray. See [Sessions](/using-dray/sessions).
+
+Shortcuts here are the defaults. You can change any of them in Settings → Shortcuts.
+
+## Limits
+
+- One agent per session. To try another agent on the same work, start a new session.
+- A project's branch picker only appears for a git repository.
