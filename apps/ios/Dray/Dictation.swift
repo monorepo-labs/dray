@@ -71,7 +71,9 @@ extension Store {
 }
 
 /// Records on the phone, transcribes on the server, appends to the draft.
-/// Drawn only where the server says it can transcribe.
+/// The mic is drawn only where the server says it can transcribe; a recording
+/// or answer already under way stays on screen through a dropped socket, or
+/// the words spoken so far would go with it.
 struct DictateButton: View {
     @Environment(Store.self) private var store
     let key: SessionKey
@@ -85,7 +87,8 @@ struct DictateButton: View {
     @State private var shown = false
 
     var body: some View {
-        if store.canDictate(key.server) {
+        let can = store.canDictate(key.server)
+        if can || recorder != nil || transcribing || note != nil {
             HStack(spacing: 8) {
                 if transcribing {
                     Orb().frame(width: 30, height: 30)
@@ -101,7 +104,7 @@ struct DictateButton: View {
                     }
                     .tint(.red)
                     .accessibilityLabel("Stop dictation")
-                } else {
+                } else if can {
                     Button { Task { await start() } } label: {
                         Image(systemName: "mic.circle.fill").font(.title)
                     }
@@ -124,9 +127,11 @@ struct DictateButton: View {
                 .presentationCompactAdaptation(.popover)
             }
             .onAppear { shown = true }
+            // Leaving the session mid-recording sends what was said, which
+            // lands in the draft it was spoken into, the desktop's rule.
             .onDisappear {
                 shown = false
-                cancel()
+                if recorder != nil { Task { await stop() } }
             }
         }
     }
