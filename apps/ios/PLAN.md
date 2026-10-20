@@ -79,7 +79,14 @@ Commands used: `list_session_index_items`, `get_session_by_id`,
 `get_session_page`, `send_msg`, `interrupt_session`, `respond_permission`,
 `answer_questions`, `list_projects`, `agent_availability`, `list_models`,
 `list_branches`, `checkout_branch`, `mark_session_read`, `work_status`,
-`prs_for_branch`, `merge_pr`, `mark_pr_ready`, `reopen_pr`, `pr_marks`.
+`prs_for_branch`, `merge_pr`, `mark_pr_ready`, `reopen_pr`, `set_last_selected_project`,
+`add_project`, `github_repos`, `clone_github_repo`, `recheck_gh`, `pr_marks`.
+
+**New session restates the desktop composer's rules** (`Picks` in
+`NewSessionView.swift`): which stances each harness honours (`permission.ts`),
+fast mode only where the harness has a route and the model a faster tier
+(`fastMode.ts`), the effort ladder per model and the model fallback
+(`model.ts`). Change one there, change it here.
 
 **Types are hand-written `Codable`, and every decode is lenient.** An unknown
 event `type` decodes as `.unrecognized`, an unknown enum value as its raw

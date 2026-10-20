@@ -130,11 +130,6 @@ struct SessionItem: Decodable, Hashable {
     var project: String { (projectPath as NSString).lastPathComponent }
 }
 
-struct Project: Decodable, Hashable {
-    let path: String
-    let name: String
-}
-
 /// One branch's pull request, as `pr_marks` answers it. Only `OPEN` and
 /// `MERGED` are asked for; `checksState` is `RUNNING`, `FAILING` or `CLEAR`.
 struct PrMark: Decodable, Hashable {
@@ -167,6 +162,8 @@ struct TitleEvent: Decodable {
 }
 
 struct SendOutcome: Decodable {
+    /// The new index entry, flattened into a snapshot; only on the send that created it.
+    let snapshot: SessionItem?
     let queued: Queued?
 }
 
