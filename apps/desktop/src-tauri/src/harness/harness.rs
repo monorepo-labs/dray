@@ -22,6 +22,9 @@ pub mod rpc;
 
 pub mod acp;
 
+#[path = "agents/agents.rs"]
+pub mod agents;
+
 use serde::{Deserialize, Serialize};
 
 /// Reads `null` as the type's default, which `#[serde(default)]` alone will not:
@@ -285,6 +288,30 @@ mod wire_tests {
         }
     }
 
+    /// An ACP agent carries its id in the spelling and writes it back whole,
+    /// and a bare prefix names no agent at all.
+    #[test]
+    fn an_acp_agent_round_trips_by_id() {
+        let devin: Harness = serde_json::from_str(r#""acp:devin""#).unwrap();
+        assert_eq!(devin, Harness::Acp("devin"));
+        assert_eq!(serde_json::to_string(&devin).unwrap(), r#""acp:devin""#);
+
+        let bare: Harness = serde_json::from_str(r#""acp:""#).unwrap();
+        assert_eq!(bare, Harness::Other("acp:"));
+    }
+
+    /// The hand-written TS type has to name every native harness, or the
+    /// frontend's tables quietly stop covering one.
+    #[test]
+    fn the_ts_type_names_every_harness() {
+        use ts_rs::TS;
+        let ts = Harness::inline(&ts_rs::Config::default());
+        for harness in Harness::ALL {
+            assert!(ts.contains(&format!("\"{}\"", harness.wire_name())), "{ts} misses {harness:?}");
+        }
+        assert!(ts.contains("`acp:${string}`"));
+    }
+
     /// Interning is what lets [`Harness::Other`] stay `Copy`, and it is only
     /// safe because the same name is the same pointer — otherwise every read of
     /// a session index would leak another copy of it.
@@ -494,13 +521,22 @@ use ts_rs::TS;
 /// [`SessionIndexItem.unknown`]: crate::store::SessionIndexItem
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
-#[serde(rename_all = "snake_case", into = "String")]
+// Written out because `Acp` carries its id in the spelling, which no variant
+// list can say. `the_ts_type_names_every_harness` holds it to `ALL`.
+#[ts(type = r#""claude_code" | "codex" | "pi" | "fx" | "grok" | `acp:${string}`"#)]
+#[serde(into = "String")]
 pub enum Harness {
     ClaudeCode,
     Codex,
     Pi,
     Fx,
     Grok,
+    /// An agent run through the generic ACP harness, by its registry or
+    /// custom id. Spelled `acp:<id>`, interned like [`Harness::Other`] so this
+    /// type stays `Copy`. An older build reads the spelling as `Other` and
+    /// writes it back unchanged.
+    #[serde(skip)]
+    Acp(&'static str),
     /// A harness some other build named and this one has never heard of, with
     /// its spelling kept so a round trip does not lose it.
     ///
@@ -522,7 +558,7 @@ pub enum Harness {
 static UNKNOWN_NAMES: std::sync::Mutex<Option<std::collections::HashSet<&'static str>>> =
     std::sync::Mutex::new(None);
 
-fn intern(name: &str) -> &'static str {
+pub(crate) fn intern(name: &str) -> &'static str {
     let mut guard = UNKNOWN_NAMES.lock().unwrap_or_else(|e| e.into_inner());
     let names = guard.get_or_insert_with(Default::default);
 
@@ -548,6 +584,9 @@ impl From<Harness> for String {
         harness.wire_name()
     }
 }
+
+/// What opens an ACP agent's wire name.
+pub const ACP_PREFIX: &str = "acp:";
 
 impl Harness {
     /// Every harness this build offers.
@@ -581,12 +620,16 @@ impl Harness {
             Harness::Pi => "pi".to_string(),
             Harness::Fx => "fx".to_string(),
             Harness::Grok => "grok".to_string(),
+            Harness::Acp(id) => format!("{ACP_PREFIX}{id}"),
             Harness::Other(name) => name.to_string(),
         }
     }
 
     /// The harness that spelling names, if this build has one.
     pub fn from_wire_name(name: &str) -> Option<Harness> {
+        if let Some(id) = name.strip_prefix(ACP_PREFIX).filter(|id| !id.is_empty()) {
+            return Some(Harness::Acp(intern(id)));
+        }
         Harness::ALL.into_iter().find(|h| h.wire_name() == name)
     }
 
@@ -834,6 +877,20 @@ impl Harness {
                 forkable: true,
                 fork_needs_cli: true,
             },
+            // Standard ACP and nothing else. `session/set_config_option` moves
+            // model, effort and mode on a live session (measured on Devin, which
+            // restates the whole list in its reply). The protocol has no fork, no
+            // fast tier and no worktree flag, so Dray makes the tree.
+            Harness::Acp(_) => Capabilities {
+                creates_own_worktree: false,
+                applies_model_in_place: true,
+                applies_effort_in_place: true,
+                applies_permission_in_place: true,
+                fast_mode: FastMode::Unsupported,
+                expands_at_mentions: false,
+                forkable: false,
+                fork_needs_cli: false,
+            },
             // A session some other build wrote and this one cannot run. `false`
             // throughout: the row still draws, so the reader can see the session
             // is there and read its transcript, and `names_a_cli` is what stops
@@ -861,6 +918,7 @@ impl Harness {
             // xAI's own name for the product, which is what its docs and its
             // installer call it — `grok` alone is the chat assistant.
             Harness::Grok => "Grok Build",
+            Harness::Acp(id) => agents::catalog::name_of(id),
             // Its own spelling, the only thing known about it — and the honest
             // thing to put in a sentence, since the name a newer build wrote is
             // the one its reader will recognise.
@@ -891,6 +949,9 @@ impl Harness {
             // Vercel's own installer, off fx.sh/docs/getting-started/installation.
             Harness::Fx => "curl -fsSL https://fx.sh/setup.sh | bash",
             Harness::Grok => "curl -fsSL https://x.ai/cli/install.sh | bash",
+            // The registry names an archive, not an installer; the agent's own
+            // page is the cure, read where the notice is built.
+            Harness::Acp(_) => "",
             // Empty, because there is nothing to install: the CLI is not what
             // is missing, this build is. A command guessed from the name would
             // be the one thing worse than no command.
@@ -909,6 +970,7 @@ impl Harness {
             Harness::Pi => "https://pi.dev/docs/latest",
             Harness::Fx => "https://fx.sh/docs/getting-started/installation",
             Harness::Grok => "https://docs.x.ai/build/quickstart",
+            Harness::Acp(_) => "",
             // Empty, so the notice draws no link rather than a wrong one: the
             // cure here is a newer Dray, not a CLI to install.
             Harness::Other(_) => "",
@@ -939,6 +1001,8 @@ impl Harness {
             // A browser flow against `auth.x.ai`, or `--device-auth` where
             // there is no browser to open. The plain form is the one to name.
             Harness::Grok => "grok login",
+            // Signed in over ACP's own `authenticate`, not a command.
+            Harness::Acp(_) => "",
             // Nothing to log in to, for the same reason there is nothing to
             // install: this build cannot name the CLI, let alone drive it.
             Harness::Other(_) => "",
@@ -959,6 +1023,7 @@ impl Harness {
             Harness::Pi => &[],
             Harness::Fx => &["login"],
             Harness::Grok => &["login"],
+            Harness::Acp(_) => &[],
             Harness::Other(_) => &[],
         }
     }
@@ -982,7 +1047,7 @@ impl Harness {
             // Per provider too, and the command asks which. A working Codex
             // login says nothing about fx: it keeps its own store.
             Harness::Fx => Some("and pick the provider it asks for"),
-            Harness::ClaudeCode | Harness::Codex | Harness::Grok | Harness::Other(_) => None,
+            Harness::ClaudeCode | Harness::Codex | Harness::Grok | Harness::Acp(_) | Harness::Other(_) => None,
         }
     }
 }

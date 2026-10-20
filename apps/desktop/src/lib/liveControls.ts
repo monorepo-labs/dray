@@ -19,9 +19,13 @@ const LIVE: Record<Harness, readonly Control[]> = {
   codex: [],
 };
 
+/// An ACP agent is unmeasured, and fx — the one ACP agent that was — refuses
+/// every change mid-prompt, so nothing moves while a turn runs.
+const ACP_LIVE: readonly Control[] = [];
+
 /// Locked while a turn runs where the harness cannot apply the control to the
 /// next prompt — moved anyway, it would skip that prompt and land on the one
 /// after, with nothing on screen saying so.
 export function lockedMidTurn(harness: Harness, control: Control, busy: boolean): boolean {
-  return busy && !LIVE[harness].includes(control);
+  return busy && !(LIVE[harness] ?? ACP_LIVE).includes(control);
 }

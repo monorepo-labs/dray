@@ -645,7 +645,7 @@ export default function AccountsSettings({
   const [confirming, setConfirming] = useState<string | null>(null);
 
   const agent = agents?.find((a) => a.harness === signingIn?.harness) ?? null;
-  const enabledAgents = useEnabledAgents();
+  const enabledAgents = useEnabledAgents(server);
   const formOpen = signingIn !== null;
   useEffect(() => {
     onFormOpen?.(formOpen);
@@ -776,7 +776,7 @@ export default function AccountsSettings({
                         aria-label={`Show ${agent.label} in the agent picker`}
                         checked={on}
                         disabled={on && enabledAgents.length === 1}
-                        onCheckedChange={(next) => setAgentEnabled(agent.harness, next)}
+                        onCheckedChange={(next) => setAgentEnabled(agent.harness, next, server)}
                       />
                     </span>
                   </TooltipTrigger>
@@ -961,18 +961,20 @@ function useGithub(server: ServerId) {
 }
 
 /// Which machine the tab is about, drawn only once a remote server exists.
-function ServerPicker({
+export function ServerPicker({
+  label = "Accounts on",
   value,
   options,
   onPick,
 }: {
+  label?: string;
   value: ServerId;
   options: ServerId[];
   onPick: (server: ServerId) => void;
 }) {
   return (
     <div className="flex items-center gap-3">
-      <span className="text-ui text-muted-foreground">Accounts on</span>
+      <span className="text-ui text-muted-foreground">{label}</span>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm">

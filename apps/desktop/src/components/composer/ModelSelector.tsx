@@ -36,6 +36,7 @@ import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { FX_PROVIDERS, isUnsetModel } from "@/lib/model";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
+import { acpLabel } from "@/lib/acpAgents";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
 const EFFORT_LABELS: Record<Effort, string> = {
@@ -314,8 +315,8 @@ export default function ModelSelector({
   const providerGroups = useMemo(() => byProvider(listed), [listed]);
 
   const selected = models.find((m) => m.id === modelId) ?? null;
-  const enabledAgents = useEnabledAgents();
-  const agents = enabledAgents.map((id) => ({ id, label: AGENT_LABELS[id] }));
+  const enabledAgents = useEnabledAgents(server);
+  const agents = enabledAgents.map((id) => ({ id, label: AGENT_LABELS[id] ?? acpLabel(id, server) }));
   const activeAgent = agents.findIndex((a) => a.id === harness);
   // fx lists one provider at a time, so every row shares its provider — the
   // active one, which is what the segmented control marks. A pending switch
@@ -482,7 +483,7 @@ export default function ModelSelector({
               aria-disabled={modelLocked}
               className="gap-1 px-1.5 text-ui text-muted-foreground aria-disabled:opacity-50"
             >
-              <AgentIcon harness={harness} brand className="size-3.5" />
+              <AgentIcon harness={harness} server={server} brand className="size-3.5" />
               {/* Effort is a qualifier on the model, not part of its name, so it's
                   held back a step rather than reading as one long label. */}
               {/* The unset sentinel is not a name and there is no name to
@@ -581,7 +582,7 @@ export default function ModelSelector({
                       onClick={() => onHarnessChange(agent.id)}
                       className="relative flex size-6 items-center justify-center rounded-sm opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
                     >
-                      <AgentIcon harness={agent.id} brand className="size-3.5" />
+                      <AgentIcon harness={agent.id} server={server} brand className="size-3.5" />
                       {/* Marked, not disabled. Disabling leaves nowhere to say
                           why — a tooltip is the only slot left, and the cure is
                           two lines and two buttons. Picking it is what draws the

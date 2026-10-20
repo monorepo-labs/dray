@@ -845,7 +845,7 @@ async fn read_stdout(
                 // silence stalls the session exactly as an unanswered
                 // `can_use_tool` does.
                 Incoming::Request { id, method, params } => {
-                    if let Err(err) = raise_request(&handles, &mut mapper, id, &method, params).await
+                    if let Err(err) = raise_request(&handles, &mut mapper, id.clone(), &method, params).await
                     {
                         record_failure(
                             Grok,
@@ -1028,7 +1028,7 @@ fn prompt_answer(session: &GrokSession, line: &str) -> Option<parser::GrokEvent>
 async fn raise_request(
     handles: &ReaderHandles,
     mapper: &mut mapper::Mapper,
-    rpc_id: i64,
+    rpc_id: crate::harness::codex::rpc::RequestId,
     method: &str,
     params: Value,
 ) -> Result<()> {

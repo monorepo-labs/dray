@@ -1,11 +1,15 @@
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
+import { isAcp, setAcpAgentEnabled, useAcpAgents } from "@/lib/acpAgents";
 import { channel } from "@/lib/channel";
+import { LOCAL, type ServerId } from "@/lib/transport";
 import { HARNESS_ORDER } from "@/lib/model";
 import type { Harness } from "@/types/events";
 
 /// Stores the agents turned *off*, so an agent a later build adds starts on.
+/// ACP agents are the other way round — opt in, held in Rust — since the
+/// registry lists dozens nobody asked for.
 const KEY = "ade.disabledAgents";
 
 /// A module store rather than `useLocalStorage`: Settings writes it while the
@@ -23,8 +27,12 @@ function read(): Harness[] {
 }
 
 /// Turns one agent on or off in the composer's picker. Refuses to turn off the
-/// last one standing.
-export function setAgentEnabled(harness: Harness, on: boolean) {
+/// last native one standing.
+export function setAgentEnabled(harness: Harness, on: boolean, server: ServerId = LOCAL) {
+  if (isAcp(harness)) {
+    void setAcpAgentEnabled(harness, on, server);
+    return;
+  }
   const next = on
     ? HARNESS_ORDER.filter((h) => h === harness || enabled.includes(h))
     : enabled.filter((h) => h !== harness);
@@ -34,8 +42,14 @@ export function setAgentEnabled(harness: Harness, on: boolean) {
   changed.emit();
 }
 
-/// The agents the picker offers and ⌘⇧A steps through, in picker order.
+/// The agents the picker offers and ⌘⇧A steps through, in picker order —
+/// native ones first, then the ACP agents the reader turned on on `server`.
 /// Sessions already running on a disabled agent are untouched.
-export function useEnabledAgents(): Harness[] {
-  return useSyncExternalStore(changed.subscribe, () => enabled, () => enabled);
+export function useEnabledAgents(server: ServerId = LOCAL): Harness[] {
+  const native = useSyncExternalStore(changed.subscribe, () => enabled, () => enabled);
+  const acp = useAcpAgents(server);
+  return useMemo(
+    () => [...native, ...acp.filter((a) => a.enabled).map((a) => a.harness)],
+    [native, acp],
+  );
 }
