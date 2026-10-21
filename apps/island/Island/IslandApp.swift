@@ -2,11 +2,14 @@ import AppKit
 import Carbon
 import SwiftUI
 
+// The status demo compiles the island's views with a `@main` of its own.
+#if !ISLAND_DEMO
 @main
 struct IslandApp: App {
     @NSApplicationDelegateAdaptor(Delegate.self) private var delegate
     var body: some Scene { Settings { EmptyView() } }
 }
+#endif
 
 /// This Mac's server, as `serve-port` and `serve-token` in Dray's home name it.
 /// Read at every connect, since a restarted server listens on a fresh port.
@@ -116,7 +119,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         composer.present = { [weak self] in self?.show() }
         composer.pillChanged = { [weak self] in
             guard let self, let composer = self.composer, !composer.shown else { return }
-            if !composer.attention.isEmpty {
+            if composer.hasPill {
                 place()
                 // Drawn, never key: the pill must not take keys from the app being typed in.
                 self.panel?.orderFrontRegardless()
@@ -149,7 +152,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { composer?.keyed = false }
         }
         // The panel's keys, here rather than on views, which answer only
-        // while focus sits inside them. Key codes: Escape 53, N 45, F 3, ↓ 125, ↑ 126.
+        // while focus sits inside them. Key codes: Escape 53, N 45, F 3, ↓ 125, ↑ 126, A 0, E 14, T 17, P 35, Tab 48.
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak composer, weak panel] e in
             // A capture's overlay holds the keys while it runs: Esc there cancels it, not the panel.
             guard panel?.isVisible == true, let composer, composer.shown, !composer.capturing else { return e }
@@ -168,6 +171,13 @@ final class Delegate: NSObject, NSApplicationDelegate {
             case (45, .command): composer.pick(.new)
             case (3, .command): composer.searches += 1
             case (36, .command): composer.addTyped()
+            case (1, .command) where composer.ask == nil: Task { await composer.saveDraft() }
+            // The app's composer chords, only where the bar they drive is drawn.
+            case (0, [.command, .shift]) where composer.target == .new: composer.nextAgent()
+            case (14, [.command, .shift]) where composer.target == .new: composer.nextEffort()
+            case (17, [.command, .shift]) where composer.target == .new: composer.worktree.toggle()
+            case (35, [.command, .shift]) where composer.target == .new: composer.nextProject()
+            case (48, .shift) where composer.target == .new: composer.nextModel()
             // A closed list opens on an arrow only over an empty input; over
             // text, the arrows belong to the caret.
             case (125, []) where composer.openMenu == nil && (composer.listShown || composer.typing.isEmpty): composer.move(1)
@@ -205,10 +215,25 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 }
             }
         }, "com.yogesh.dray.island.show" as CFString, nil, .deliverImmediately)
+        // A session finished where Dray would have posted its banner. The ids
+        // queue under `island.done`, since a Darwin notification carries none.
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), nil, { _, _, _, _, _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { Delegate.shared?.sessionsDone() }
+            }
+        }, "com.yogesh.dray.island.done" as CFString, nil, .deliverImmediately)
         // The tap's twin for other processes: Dray.app, or a script driving the panel.
         DistributedNotificationCenter.default().addObserver(forName: .init("com.yogesh.dray.island.tap"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.pressed() }
         }
+    }
+
+    /// Takes the finished sessions Dray queued and clears the queue.
+    func sessionsDone() {
+        let d = UserDefaults.standard
+        let ids = d.stringArray(forKey: "island.done") ?? []
+        d.removeObject(forKey: "island.done")
+        for id in ids { composer?.finished(id) }
     }
 
     /// The screenshot chord Settings picked: a Carbon key code and modifier
@@ -242,7 +267,12 @@ final class Delegate: NSObject, NSApplicationDelegate {
     /// at every press like the key, so a stray tap never puts the panel up.
     private func pressed() {
         guard let composer else { return }
-        if composer.shown {
+        if composer.shown, composer.sent {
+            // Under Sent the panel is on its way out, so a tap opens it afresh
+            // rather than dictating; the new visit cancels the pending close.
+            composer.opened()
+            panel?.makeKeyAndOrderFront(nil)
+        } else if composer.shown {
             Task { await composer.toggleDictation() }
         } else if UserDefaults.standard.string(forKey: "island.tap") == "double",
                   lastTap.map({ Date().timeIntervalSince($0) > 0.4 }) ?? true {
@@ -315,7 +345,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             guard let self, let panel, let composer, !composer.shown else { return }
             // Ordered out even with a pill to draw, since that is what hands the keys back.
             panel.orderOut(nil)
-            if !composer.attention.isEmpty { panel.orderFrontRegardless() }
+            if composer.hasPill { panel.orderFrontRegardless() }
         }
     }
 

@@ -701,8 +701,23 @@ async fn answer_questions(
 async fn mark_session_read(
     session_id: &str,
     read: bool,
+    sink: Sink,
 ) -> Result<Option<SessionStatus>, Fail> {
-    Ok(manager().mark_read(session_id, read).await?)
+    let next = manager().mark_read(session_id, read).await?;
+    // The island and the phone keep their own unread marks and hear of a read
+    // only here. Unread is not echoed: the app's listener reads `completed` as a
+    // turn finishing and would announce it.
+    if next == Some(SessionStatus::Idle) {
+        let event = session::SessionStatusEvent {
+            session_id: session_id.to_string(),
+            status: SessionStatus::Idle,
+            modified: None,
+        };
+        if let Err(e) = sink.emit("session_status", &event) {
+            eprintln!("[status emit err] {e}");
+        }
+    }
+    Ok(next)
 }
 
 #[cfg(feature = "desktop")]
@@ -879,6 +894,7 @@ pub fn run() {
             apps::open_in_app,
             apps::configure_island,
             apps::island_running,
+            apps::island_done,
             apps::island_prefs,
             apps::set_island_pref,
             apps::open_login_terminal,

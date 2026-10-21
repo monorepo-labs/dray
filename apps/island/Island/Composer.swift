@@ -86,7 +86,7 @@ final class Composer {
     /// Bumped to put focus in the input: every open, and every new task.
     var opens = 0
     /// Drawn open; the window lags it on the way out, so the close can animate.
-    var shown = false
+    var shown = false { didSet { if oldValue, !shown { released() } } }
     /// Whether the panel has held the keys since it opened, which is when a bare Esc reaches it.
     var keyed = false
     var closeHint: String { keyed ? "Esc" : "⌘Esc" }
@@ -137,6 +137,8 @@ final class Composer {
 
     /// Set for the moment between a send landing and the panel closing, which says it went.
     private(set) var sent = false
+    /// What that moment says: Sent, or Saved as draft.
+    private(set) var sentLabel = "Sent"
     /// Return and number keys on a questions card, whose answers live in its view.
     var submits = 0
     var digits = 0
@@ -174,13 +176,25 @@ final class Composer {
     }
 
     /// The card the panel draws in place of the draft: the picked tab's oldest
-    /// ask, so answering one moves to the next.
+    /// ask, so answering one moves to the next. Held back while the reader is
+    /// busy in the panel, unless they came for the cards.
     var ask: (key: SessionKey, event: AgentEvent)? {
+        guard cardsFirst || !busy else { return nil }
         let keys = attention
         guard let key = askTab.flatMap({ keys.contains($0) ? $0 : nil }) ?? keys.first,
               let event = store.asks[key]?.first else { return nil }
         return (key, event)
     }
+
+    /// Something under way in the panel that news must not interrupt: words
+    /// being said, a draft not yet sent, the list or a menu open.
+    var busy: Bool { dictation != .idle || !rows.isEmpty || !typing.isEmpty || listShown || openMenu != nil }
+    /// Set by the attention pill, whose whole point is the cards.
+    @ObservationIgnored var cardsFirst = false
+    /// News that landed while the reader was busy in the panel, so nothing
+    /// sounded; it sounds once, when it can first be seen.
+    @ObservationIgnored private var heldAsk = false
+    @ObservationIgnored private var heldDone = false
 
     /// A reconnect empties and refills the asks one session at a time, so the
     /// change is read once the burst has landed, not at every step of it.
@@ -194,14 +208,89 @@ final class Composer {
             let fresh = ids.filter { !askOrder.contains($0) }
             let hadCards = !askOrder.isEmpty
             askOrder = askOrder.filter(ids.contains) + fresh
-            if !fresh.isEmpty, !shown { Sound.done?.play() }
+            if !fresh.isEmpty {
+                // An idle open panel draws the card at once, which says enough.
+                if !shown { chime() } else if busy || sent { heldAsk = true }
+            }
             // The last card answered is the panel's job done.
             if ids.isEmpty, hadCards, shown, !listening { hide() }
             pillChanged()
         }
     }
 
+    /// Dray in front sounds its own notice, so a chime here would double it.
+    private func chime() {
+        if !Self.drayInFront { Sound.done?.play() }
+    }
+
+    /// The panel shut: what was held is shown now, as the pill, with its one sound.
+    private func released() {
+        cardsFirst = false
+        let ask = heldAsk && !attention.isEmpty, finished = heldDone && !done.isEmpty
+        heldAsk = false
+        heldDone = false
+        if ask || finished { chime() }
+        if finished { startDoneClock() }
+    }
+
+    /// A held card came into view once the reader was free: its sound now.
+    func cardShown() {
+        guard heldAsk, shown else { return }
+        heldAsk = false
+        chime()
+    }
+
+    /// The attention pill: the panel, on the cards, whatever the draft holds.
+    func openCards() {
+        cardsFirst = true
+        present()
+    }
+
+    /// A dev build shares the release identifier, so this answers for both.
+    static var drayInFront: Bool { NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.yogesh.dray" }
+
     var isQuestions: Bool { if case .questionsAsked = ask?.event.payload { true } else { false } }
+
+    /// Sessions that finished while Dray was out of sight, newest last: the
+    /// done pill, in place of Dray's banner, until its clock runs out.
+    var done: [SessionKey] = [] { didSet { pillChanged() } }
+    /// Held while the pointer is on the pill, so it never goes from under a click.
+    var doneHovered = false { didSet { if !doneHovered { startDoneClock() } } }
+    @ObservationIgnored private var doneClock = 0
+    static let doneFor: Duration = .seconds(6)
+
+    /// Something to draw while the panel is shut: a card waiting outranks news.
+    var hasPill: Bool { !attention.isEmpty || !done.isEmpty }
+
+    /// Dray says a session finished where its banner would have.
+    func finished(_ id: String) {
+        let key = SessionKey(server: server, id: id)
+        done.removeAll { $0 == key }
+        done.append(key)
+        // Its pill only hangs while the panel is shut, so its clock starts then.
+        if shown {
+            heldDone = true
+        } else {
+            chime()
+            startDoneClock()
+        }
+    }
+
+    private func startDoneClock() {
+        doneClock += 1
+        let clock = doneClock
+        Task {
+            try? await Task.sleep(for: Self.doneFor)
+            if clock == doneClock, !doneHovered { done = [] }
+        }
+    }
+
+    /// A finished session's title clicked: the island opens on it, and the news is spent.
+    func openDone(_ key: SessionKey) {
+        done = []
+        pick(.session(key))
+        present()
+    }
 
     /// A number key on a card: a permission's option outright, a question's toggled.
     func pickOption(_ i: Int) {
@@ -360,12 +449,14 @@ final class Composer {
 
     /// ↑/↓ through the list; from a new session, ↓ lands on the first row.
     func move(_ delta: Int) {
+        let opening = !listShown
         listShown = true
         let list = listed
         guard !list.isEmpty else { return }
-        let at = key.flatMap { k in list.firstIndex { $0.key == k } }
-        let next = at.map { min(max($0 + delta, 0), list.count - 1) } ?? (delta > 0 ? 0 : nil)
-        if let next { pick(.session(list[next].key)) }
+        // Opening the list, either arrow lands on its top row, wherever the panel was.
+        let at = opening ? nil : key.flatMap { k in list.firstIndex { $0.key == k } }
+        let next = at.map { min(max($0 + delta, 0), list.count - 1) } ?? 0
+        pick(.session(list[next].key))
     }
 
     /// Return in the list: the highlighted row, else the search's best match, then back to the input.
@@ -441,6 +532,21 @@ final class Composer {
         (models[harness] ?? []).filter { !($0.secondary ?? false) || $0.id == modelId }
     }
 
+    /// The desktop composer's chords on the new-session bar: ⌘⇧A, ⇧Tab, ⌘⇧E and ⌘⇧P
+    /// step agent, model, effort and project the way the app's do; ⌘⇧T is the worktree switch.
+    func nextAgent() { harness = after(agents.filter(\.available).map(\.harness), harness) ?? harness }
+    func nextModel() { if let id = after(shortlist.map(\.id), modelId) { pickModel(id) } }
+    func nextEffort() {
+        if let m = model, let level = after(m.efforts, effort) { pickEffort(level, for: m.id) }
+    }
+    func nextProject() { projectPath = after(projects.map(\.path), projectPath) ?? projectPath }
+
+    private func after<T: Equatable>(_ list: [T], _ current: T?) -> T? {
+        guard !list.isEmpty else { return nil }
+        let i = current.flatMap { list.firstIndex(of: $0) } ?? -1
+        return list[(i + 1) % list.count]
+    }
+
     func pickEffort(_ level: String, for model: String) {
         effortPicks[model] = level
         Prefs.set(effortPicks, "efforts")
@@ -482,14 +588,80 @@ final class Composer {
         lastUsed = sent.id
         UserDefaults.standard.set(sent.id, forKey: "island.lastSession")
         self.target = .session(sent)
-        self.sent = true
+        flash("Sent")
+        return true
+    }
+
+    /// Says it went, then closes the panel, or turns to a card held while the
+    /// reader was writing, since they are already here.
+    private func flash(_ label: String) {
+        sentLabel = label
+        sent = true
         let visit = opens
         Task {
             try? await Task.sleep(for: .milliseconds(900))
             // A reopened panel is another visit, and a recording begun meanwhile is the reader's.
-            if opens == visit, self.sent, !listening { hide() }
+            guard opens == visit, self.sent, !listening else { return }
+            if attention.isEmpty { hide() } else { sent = false }
         }
-        return true
+    }
+
+    /// The app's `toISOString`, which the drafts list orders by.
+    private static let stamp = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    /// ⌘S: the text becomes a draft in Dray's sidebar, a new task on the bar's
+    /// picks, or on the pinned session's own settings when one is up. Drafts hold
+    /// text alone, so a draft with an image in it is refused rather than half kept.
+    func saveDraft() async {
+        let text = prompt
+        guard dictation == .idle, !sending, !rows.contains(where: \.pending),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let target else { return }
+        guard attachments.isEmpty else {
+            notice = "Drafts hold text only. Remove the images to save one."
+            return
+        }
+        var draft: [String: JSON] = [
+            "id": .string(UUID().uuidString.lowercased()),
+            "prompt": .string(text),
+            "created": .string(Self.stamp.string(from: Date())),
+        ]
+        switch target {
+        case .session(let k):
+            guard let item = store.items[k] else { return }
+            draft["projectPath"] = .string(item.projectPath)
+            draft["harness"] = .string(item.harness)
+            draft["model"] = .string(item.model)
+            draft["effort"] = JSON(item.effort)
+            draft["permissionMode"] = .string(item.permissionMode)
+            draft["fast"] = .bool(item.fast ?? false)
+            draft["useWorktree"] = .bool(item.worktreeName != nil || item.worktreeRemoved == true)
+        case .new:
+            guard let projectPath else {
+                notice = "Pick a project first."
+                return
+            }
+            draft["projectPath"] = .string(projectPath)
+            draft["harness"] = .string(harness)
+            draft["model"] = .string(modelId)
+            draft["effort"] = JSON(effort)
+            draft["permissionMode"] = .string(Picks.stanceFor(harness, stance))
+            draft["fast"] = .bool(false)
+            draft["useWorktree"] = .bool(worktree)
+        }
+        let savedRows = Set(rows.map(\.id)), savedTyping = typing
+        do {
+            let _: JSON = try await store.call(server, "create_draft", ["draft": .object(draft)])
+        } catch {
+            notice = error.localizedDescription
+            return
+        }
+        rows.removeAll { savedRows.contains($0.id) }
+        if typing == savedTyping { typing = "" }
+        flash("Saved as draft")
     }
 
     /// `useSessions.ts`'s argument set for a new session, from the bar's picks.

@@ -370,6 +370,24 @@ pub async fn island_running() -> bool {
         .is_ok_and(|out| out.status.success())
 }
 
+/// Hands a finished session to Dray Island, which shows it in place of the
+/// banner. Queued under `island.done`, since a Darwin notification carries no
+/// payload, and `-array-add` so two finishing together are both kept.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn island_done(session_id: String) -> Result<(), String> {
+    use tokio::process::Command;
+    let out = Command::new("defaults")
+        .args(["write", "com.yogesh.dray.island", "island.done", "-array-add", &session_id])
+        .output()
+        .await
+        .map_err(|err| format!("could not reach the island: {err}"))?;
+    if !out.status.success() {
+        return Err(crate::git::stderr_or(&out, || "could not reach the island".into()));
+    }
+    Command::new("notifyutil").args(["-p", "com.yogesh.dray.island.done"]).output().await.ok();
+    Ok(())
+}
+
 /// The island preferences Settings draws. The island's own right-click menu
 /// writes the first two as well, so they are read back rather than kept here,
 /// and `captureTaken` is the island's alone: the chord it could not register.

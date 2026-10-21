@@ -9,7 +9,7 @@ Dray tells you when a session hands work back to you. It picks one way to tell y
 
 ## What Dray tells you about
 
-- **Task finished** — a session's turn ended.
+- **Done** — a session's turn ended.
 - **Needs permission** — a session wants your approval before it runs a tool.
 - **Needs an answer** — a session asked you a question.
 - **Ready to merge** — a session's pull request has turned ready.
@@ -34,7 +34,7 @@ Each card names what is wanted and offers a button:
 
 | Card | Button | Goes to | Stays for |
 |---|---|---|---|
-| Task finished | View | The session | 10 seconds |
+| Done | View | The session | 10 seconds |
 | Needs permission, Needs an answer | Answer | The session, where the card to answer is | 15 seconds |
 | Ready to merge | Review | The session with its PR tab open | 10 seconds |
 | Delete worktree? | Delete or Skip | Delete removes the worktree of a session you just settled. Skip keeps it. | 15 seconds |
@@ -76,5 +76,5 @@ macOS asks whether Dray may send notifications the first time it posts a banner.
 ## Limits
 
 - A banner disappears after a minute if you don't click it.
-- A background subagent that reports back after its turn can raise a second **Task finished** for the same session.
+- A background subagent that reports back after its turn can raise a second **Done** for the same session.
 - Shortcuts here can be changed in Settings → Shortcuts.

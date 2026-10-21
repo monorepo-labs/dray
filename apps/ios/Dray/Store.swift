@@ -135,6 +135,9 @@ final class Store {
     /// A fresh connection re-reads the index and the tail of every open
     /// transcript, so nothing that happened while it was down is missed.
     private func connected(_ server: UUID) async {
+        // Heard on the old socket, so older than the read below — and a read
+        // never moves `modified`, so a stale `completed` would win the tie.
+        for key in statuses.keys where key.server == server { statuses[key] = nil }
         await loadIndex(server)
         for key in transcripts.keys where key.server == server { await reload(key) }
         // After the transcripts: a mark costs a `gh` call per repo, missed messages must not wait on it.
@@ -479,3 +482,15 @@ enum Keychain {
         SecItemDelete(query(account) as CFDictionary)
     }
 }
+
+#if ISLAND_DEMO
+extension Store {
+    /// The island demo's cases: sessions and the cards they wait on, with no
+    /// server behind them. In this file, since both maps are `private(set)`.
+    func seed(_ server: UUID, items: [SessionItem], asks: [AgentEvent], prs: [String: [String: PrMark]] = [:]) {
+        for item in items { self.items[SessionKey(server: server, id: item.sessionId)] = item }
+        for ask in asks { self.asks[SessionKey(server: server, id: ask.sessionId), default: []].append(ask) }
+        for (path, byBranch) in prs { marks[ProjectKey(server: server, path: path)] = byBranch }
+    }
+}
+#endif

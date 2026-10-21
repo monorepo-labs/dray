@@ -42,13 +42,26 @@ struct IslandView: View {
         .animation(composer.shown ? .spring(duration: 0.32, bounce: 0.2) : .easeIn(duration: 0.15), value: composer.shown)
         .allowsHitTesting(composer.shown)
         .overlay(alignment: composer.placement == .notch ? .top : .bottom) {
+            let anchor: UnitPoint = composer.placement == .notch ? .top : .bottom
             if !composer.shown, !composer.attention.isEmpty {
                 AttentionPill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
-                              count: composer.attention.count) { composer.present() }
-                    .transition(.scale(scale: 0.5, anchor: composer.placement == .notch ? .top : .bottom).combined(with: .opacity))
+                              count: composer.attention.count) { composer.openCards() }
+                    .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
+            } else if !composer.shown, !composer.done.isEmpty {
+                DonePill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
+                         items: composer.done.reversed().map { ($0, store.items[$0]?.title ?? "") },
+                         open: { composer.openDone($0) },
+                         openInApp: { key in
+                             // Dray comes forward, and its sidebar already marks the rest unread.
+                             composer.done = []
+                             Task { await composer.showInApp(key) }
+                         },
+                         hover: { composer.doneHovered = $0 })
+                    .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
             }
         }
         .animation(.spring(duration: 0.32, bounce: 0.2), value: composer.attention.count)
+        .animation(.spring(duration: 0.32, bounce: 0.2), value: composer.done.count)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: composer.placement == .notch ? .top : .bottom)
         .padding(.bottom, composer.placement == .bottom ? 12 : 0)
         .animation(.snappy(duration: 0.25), value: fits)
@@ -85,9 +98,10 @@ struct IslandView: View {
             if recording {
                 recordingBar
             } else if composer.sent {
-                Label("Sent", systemImage: "checkmark").font(.system(size: 13, weight: .semibold)).padding(.horizontal, 4)
+                Label(composer.sentLabel, systemImage: "checkmark").font(.system(size: 13, weight: .semibold)).padding(.horizontal, 4)
             } else if let ask = composer.ask {
                 AskCard(composer: composer, key: ask.key, event: ask.event)
+                    .onAppear { composer.cardShown() }
             } else {
                 draft
             }
@@ -174,7 +188,7 @@ struct IslandView: View {
 
     @ViewBuilder private var draft: some View {
         if !composer.listShown, let key = composer.key {
-            TitleRow(title: title, close: composer.closeHint) {
+            TitleRow(title: title, marks: store.marks(key), close: composer.closeHint) {
                 Task { await composer.showInApp(key) }
             }
         }

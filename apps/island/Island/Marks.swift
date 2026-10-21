@@ -12,34 +12,52 @@ struct Marks: Equatable {
     var checksRunning: Bool { pr?.state == "OPEN" && pr?.checksState == "RUNNING" }
 }
 
-/// Yellow waits on the reader, green is finished and unread.
+/// The sidebar's rail mark: yellow waits on the reader, green is finished and
+/// unread. Dark mode's `--accent-command` and `--accent-add`, since the panel is always dark.
 struct StatusDot: View {
     let marks: Marks
+    static let waiting = Color(red: 0.897, green: 0.753, blue: 0.34)
+    static let unread = Color(red: 0.036, green: 0.732, blue: 0.514)
 
     var body: some View {
-        Circle()
-            .fill(marks.asking ? Color.yellow : marks.unread ? .green : .clear)
-            .frame(width: 6, height: 6)
+        Rail(color: marks.asking ? Self.waiting : marks.unread ? Self.unread : .clear)
     }
 }
 
-/// What is in flight, where the sidebar puts it: running checks outrank the turn.
-struct FlightMark: View {
+/// A 2×6 bar in a fixed 8pt slot, so the title never moves when it comes and goes.
+struct Rail: View {
+    let color: Color
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 1).fill(color)
+            .frame(width: 2, height: 6)
+            .frame(width: 8)
+    }
+}
+
+/// The one mark ahead of a title: running checks, else the turn working, else
+/// the pull request. Each at its own width, so the title sits close behind it.
+struct LeadMark: View {
     let marks: Marks
 
     var body: some View {
         if marks.checksRunning {
             ChecksSpinner()
         } else if marks.busy {
-            Orb(state: .working, size: 18).foregroundStyle(.white.opacity(0.7))
+            Orb(state: .working, size: 16).foregroundStyle(.white.opacity(0.7))
+        } else if let pr = marks.pr {
+            PrGlyph(mark: pr, size: 13)
         }
     }
+
+    var shown: Bool { marks.checksRunning || marks.busy || marks.pr != nil }
 }
 
-/// The selected session's title row: the title opens it in Dray, the hints
-/// teach the keys. Where it stands is the list's to say, not this row's.
+/// The selected session's title row: the title opens it in Dray behind its
+/// lead mark, and the hints teach the keys.
 struct TitleRow: View {
     let title: String
+    let marks: Marks
     let close: String
     let open: () -> Void
     @State private var hovered = false
@@ -47,11 +65,15 @@ struct TitleRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Button(action: open) {
-                Text(title).lineLimit(1)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(hovered ? 1 : 0.7))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+                HStack(spacing: 4) {
+                    let lead = LeadMark(marks: marks)
+                    if lead.shown { lead }
+                    Text(title).lineLimit(1)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white.opacity(hovered ? 1 : 0.7))
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .onHover { hovered = $0 }
@@ -90,16 +112,17 @@ struct SessionRow: View {
     static let height: CGFloat = 32
 
     var body: some View {
-        HStack(spacing: 8) {
-            StatusDot(marks: marks)
-            if let pr = marks.pr { PrGlyph(mark: pr, size: 13) }
+        HStack(spacing: 4) {
+            let lead = LeadMark(marks: marks)
+            if lead.shown { lead }
             Text(title.isEmpty ? "Untitled" : title).lineLimit(1)
             Spacer(minLength: 8)
-            FlightMark(marks: marks)
             Text(project).lineLimit(1).foregroundStyle(.secondary)
         }
         .font(.system(size: 13))
         .padding(.horizontal, 8)
+        // In the padding at the row's edge, the sidebar's place, so the slot costs the title nothing.
+        .overlay(alignment: .leading) { StatusDot(marks: marks) }
         .frame(height: Self.height)
         .background(selected ? .white.opacity(0.12) : hover ? .white.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
@@ -155,33 +178,186 @@ struct AskTab: View {
 }
 
 /// Hangs from the notch while the panel is shut and sessions wait on the
-/// reader, until every one is answered. A click opens the panel on the cards.
-/// A finished session says so in Dray's own banner, which can open it there.
+/// reader, until every one is answered. Resting the pointer on it opens the
+/// panel on the cards; a short dwell keeps a pointer passing by from doing so.
 struct AttentionPill: View {
     let notch: Bool
     let notchHeight: CGFloat
     let count: Int
     let action: () -> Void
+    @State private var dwell: Task<Void, Never>?
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Circle().fill(.yellow).frame(width: 6, height: 6)
-                Text("\(count) \(count == 1 ? "task needs" : "tasks need") attention")
-                    .font(.system(size: 13, weight: .semibold)).lineLimit(1)
+            PillShell(notch: notch, notchHeight: notchHeight, glow: StatusDot.waiting, glowKey: count) {
+                HStack(spacing: 8) {
+                    Circle().fill(StatusDot.waiting).frame(width: 6, height: 6)
+                    Text("\(count) \(count == 1 ? "task needs" : "tasks need") attention")
+                        .font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                }
             }
+        }
+        .buttonStyle(.plain)
+        .onHover { inside in
+            dwell?.cancel()
+            guard inside else { return }
+            dwell = Task {
+                try? await Task.sleep(for: .milliseconds(150))
+                if !Task.isCancelled { action() }
+            }
+        }
+    }
+}
+
+/// Sessions finished, in place of Dray's banner, newest first. One names
+/// itself and offers Open in app; several are a count that, under the pointer,
+/// grows a row each, five tall and then scrolling. A title opens the island on it.
+struct DonePill: View {
+    let notch: Bool
+    let notchHeight: CGFloat
+    let items: [(key: SessionKey, title: String)]
+    let open: (SessionKey) -> Void
+    let openInApp: (SessionKey) -> Void
+    var hover: (Bool) -> Void = { _ in }
+    @State private var expanded = false
+    @State private var collapse: Task<Void, Never>?
+    private static let row: CGFloat = 26
+
+    var body: some View {
+        PillShell(notch: notch, notchHeight: notchHeight, glow: StatusDot.unread, glowKey: items.count) {
+            // One structure, open or shut, so the pill grows rather than swapping layouts.
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Circle().fill(StatusDot.unread).frame(width: 6, height: 6)
+                    Text(items.count == 1 ? "Done" : "\(items.count) tasks done").font(.system(size: 13, weight: .semibold))
+                    // Several are a count alone; their titles wait for the pointer.
+                    if items.count == 1, let first = items.first {
+                        DoneTitle(title: first.title, cap: 240)
+                        OpenInAppButton { openInApp(first.key) }
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { if let first = items.first { open(first.key) } }
+                if expanded {
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(items, id: \.key) { item in
+                                HStack(spacing: 8) {
+                                    Button { open(item.key) } label: { DoneTitle(title: item.title, cap: 240) }
+                                        .buttonStyle(.plain)
+                                    Spacer(minLength: 0)
+                                    OpenInAppButton { openInApp(item.key) }
+                                }
+                                .frame(height: Self.row)
+                            }
+                        }
+                    }
+                    .scrollIndicators(.never)
+                    .frame(height: CGFloat(min(items.count, 5)) * Self.row)
+                    .transition(.opacity)
+                }
+            }
+            .frame(width: expanded ? 360 : nil, alignment: .leading)
+        }
+        .onHover { inside in
+            hover(inside)
+            collapse?.cancel()
+            guard items.count > 1 else { return }
+            if inside {
+                withAnimation(.spring(duration: 0.3, bounce: 0.12)) { expanded = true }
+            } else {
+                // A beat before shutting, so a pointer grazing the edge it just grew past does not flicker it.
+                collapse = Task {
+                    try? await Task.sleep(for: .milliseconds(150))
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.spring(duration: 0.25, bounce: 0)) { expanded = false }
+                }
+            }
+        }
+    }
+}
+
+private struct DoneTitle: View {
+    let title: String
+    let cap: CGFloat
+    @State private var hover = false
+
+    var body: some View {
+        // Brightens under the pointer, since a click opens the island on it.
+        Text(title.isEmpty ? "Untitled" : title).lineLimit(1)
+            .font(.system(size: 13))
+            .foregroundStyle(.white.opacity(hover ? 0.95 : 0.55))
+            // A cap, not a fill: its own width up to the cap, then truncated.
+            .frame(maxWidth: cap, alignment: .leading)
+            .fixedSize(horizontal: true, vertical: false)
+            .onHover { hover = $0 }
+            .animation(.easeOut(duration: 0.12), value: hover)
+    }
+}
+
+private struct OpenInAppButton: View {
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Text("Open in app").font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 10)
+                .frame(height: 22)
+                .background(.white.opacity(hover ? 0.22 : 0.12), in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: hover)
+    }
+}
+
+/// The shape every pill hangs in: from the notch, or a capsule above the Dock.
+struct PillShell<Content: View>: View {
+    let notch: Bool
+    let notchHeight: CGFloat
+    /// A soft edge in this colour marks news arriving, then fades, leaving the dot to say what kind.
+    var glow: Color? = nil
+    /// A change lights the glow again, so a second arrival is noticed too.
+    var glowKey = 0
+    @ViewBuilder let content: Content
+    @State private var glowing = true
+
+    var body: some View {
+        pill(glowing ? glow : nil)
+            .task(id: glowKey) {
+                withAnimation(.easeOut(duration: 0.2)) { glowing = true }
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.6)) { glowing = false }
+            }
+    }
+
+    private func pill(_ glow: Color?) -> some View {
+        content
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .padding(.top, notchHeight)
-            .frame(minWidth: 200, maxWidth: 360)
+            // A floor to clear the notch, and no ceiling, so it hugs its words. Above the Dock there is nothing to clear.
+            .frame(minWidth: notch ? 200 : 0)
+            // Its own size, whatever the card it hangs from proposes; a narrower proposal centred the words in a clipped 200pt slot.
+            .fixedSize()
+            // Rows growing in stay inside the edge while it moves.
+            .clipped()
             .background {
                 Group {
-                    if notch { NotchShape(radius: 16).fill(.black) } else { Capsule().fill(.black) }
+                    if notch {
+                        NotchShape(radius: 16).fill(.black)
+                            .overlay { if let glow { NotchShape(radius: 16, closed: false).stroke(glow.opacity(0.25), lineWidth: 1) } }
+                    } else {
+                        RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.black)
+                            .overlay { if let glow { RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(glow.opacity(0.25), lineWidth: 1) } }
+                    }
                 }
+                .shadow(color: glow?.opacity(0.45) ?? .clear, radius: 12)
                 .padding(.horizontal, notch ? -NotchShape.ear : 0)
             }
             .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }

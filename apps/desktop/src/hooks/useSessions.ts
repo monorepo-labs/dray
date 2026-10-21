@@ -2715,6 +2715,17 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
       void islandOn().then((on) => on || notifyOS(sessionId, kind, label, item?.title ?? ""));
       return false;
     }
+    // A finished turn is the island's done pill, which names the session and
+    // offers Open in app, so the banner would say it twice. A failed hand-off
+    // falls back to the banner rather than saying nothing.
+    if (kind === "completed" && serverOfSession(sessionId) === LOCAL) {
+      void islandOn().then((on) =>
+        on
+          ? invoke("island_done", { sessionId }).catch(() => notifyOS(sessionId, kind, label, item?.title ?? ""))
+          : notifyOS(sessionId, kind, label, item?.title ?? ""),
+      );
+      return false;
+    }
     // Same order as the card: the verb first, because *what is wanted* is the
     // one thing not on screen anywhere else. The session title follows as the
     // body — a banner lands in a stack beside every other app's, so it has to
@@ -2804,7 +2815,7 @@ useEffect(() => {
 
     // Finishing in front of the reader is read the moment it does; everything
     // else is announced.
-    if (status === "completed" && announce(sessionId, "completed", "Task finished")) {
+    if (status === "completed" && announce(sessionId, "completed", "Done")) {
       markSessionRead(sessionId);
       return;
     }

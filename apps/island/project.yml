@@ -48,8 +48,8 @@ targets:
         # A local WebSocket to This Mac's server, and nothing sandboxed can reach ~/.dray.
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: YES
-  # The task list's marks, one made-up session per state. Kept, so the
-  # question can be looked at again.
+  # The island itself, every state it can be in, on seeded sessions with no
+  # server behind them. Kept, so the question can be looked at again.
   IslandStatusDemo:
     type: application
     platform: macOS
@@ -57,9 +57,15 @@ targets:
       - package: ThinkingOrbs
     sources:
       - Demo
-      - path: Island/Marks.swift
-      - path: Island/NotchShape.swift
+      - Island
       - path: ../ios/Dray/Wire.swift
+      - path: ../ios/Dray/Connection.swift
+      - path: ../ios/Dray/Store.swift
+      - path: ../ios/Dray/Transcript.swift
+      - path: ../ios/Dray/Tools.swift
+      - path: ../ios/Dray/Picks.swift
+      - path: ../ios/Dray/Sidebar.swift
+      - path: ../ios/Dray/Pr.swift
       - path: ../ios/Dray/PrGlyph.swift
     settings:
       base:
@@ -67,6 +73,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.yogesh.dray.island.statusdemo
         GENERATE_INFOPLIST_FILE: YES
         ENABLE_APP_SANDBOX: NO
+        # Leaves out the island's own `@main`, and lets the demo seed a Store.
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) ISLAND_DEMO
   # A demo, kept: every candidate dictation orb side by side, live (#568).
   OrbLab:
     type: application

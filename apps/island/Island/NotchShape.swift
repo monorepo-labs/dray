@@ -6,6 +6,8 @@ import SwiftUI
 struct NotchShape: Shape {
     static let ear: CGFloat = 12
     var radius: CGFloat = 20
+    /// Off for a stroke: the top edge is the screen's, and a line along it reads as a border on the menu bar.
+    var closed = true
 
     func path(in rect: CGRect) -> Path {
         let e = Self.ear, r = radius
@@ -18,7 +20,7 @@ struct NotchShape: Shape {
         p.addQuadCurve(to: CGPoint(x: rect.maxX - e, y: rect.maxY - r), control: CGPoint(x: rect.maxX - e, y: rect.maxY))
         p.addLine(to: CGPoint(x: rect.maxX - e, y: rect.minY + e))
         p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY), control: CGPoint(x: rect.maxX - e, y: rect.minY))
-        p.closeSubpath()
+        if closed { p.closeSubpath() }
         return p
     }
 }

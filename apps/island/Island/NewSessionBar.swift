@@ -93,7 +93,7 @@ struct DropMenus: View {
                     // Never taller than the room between the control and the window's edge.
                     let room = (upward ? r.minY : proxy.size.height - r.maxY) - 12
                     Group {
-                        if id == .model { ModelMenu(composer: composer, room: room) }
+                        if id == .model { ModelMenu(composer: composer, room: room, upward: upward) }
                         else { MenuCard(width: Self.width, room: room) { items(id) } }
                     }
                         .offset(
@@ -156,27 +156,33 @@ private struct MenuCard<Content: View>: View {
 private struct ModelMenu: View {
     let composer: Composer
     let room: CGFloat
+    let upward: Bool
     @State private var hovered: String?
+    @State private var height: CGFloat = 0
     /// Each row's top as drawn: the list may scroll, so an index says nothing.
     @State private var rowY: [String: CGFloat] = [:]
     static let row: CGFloat = 26
 
     var body: some View {
         let list = composer.shortlist
-        HStack(alignment: .top, spacing: 4) {
-            MenuCard(width: 232, room: room) {
-                AgentTrack(composer: composer).padding(.bottom, 4)
-                ForEach(list, id: \.id) { m in
-                    ModelRow(model: m, effort: effort(of: m), picked: m.id == composer.modelId)
-                        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("modelMenu")).minY } action: { rowY[m.id] = $0 }
-                        .onHover { if $0 { hovered = m.id } }
-                        .onTapGesture {
-                            composer.pickModel(m.id)
-                            composer.openMenu = nil
-                        }
-                }
-                if list.isEmpty { Text("No models").foregroundStyle(.secondary).padding(8) }
+        MenuCard(width: 232, room: room) {
+            AgentTrack(composer: composer).padding(.bottom, 4)
+            ForEach(list, id: \.id) { m in
+                ModelRow(model: m, effort: effort(of: m), picked: m.id == composer.modelId)
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("modelMenu")).minY } action: { rowY[m.id] = $0 }
+                    .onHover { if $0 { hovered = m.id } }
+                    .onTapGesture {
+                        composer.pickModel(m.id)
+                        composer.openMenu = nil
+                    }
             }
+            if list.isEmpty { Text("No models").foregroundStyle(.secondary).padding(8) }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+        .coordinateSpace(.named("modelMenu"))
+        // An overlay, so opening it never resizes the menu: pinned by its bottom
+        // above a docked island, a taller stack pushed the model list off the bar.
+        .overlay(alignment: .topLeading) {
             if let i = list.firstIndex(where: { $0.id == hovered }), !list[i].efforts.isEmpty {
                 let m = list[i]
                 MenuCard(width: 140, room: room) {
@@ -188,11 +194,11 @@ private struct ModelMenu: View {
                         }
                     }
                 }
-                // Level with the row it belongs to, and never past the room below.
-                .padding(.top, max(0, min(rowY[m.id] ?? 0, room - CGFloat(m.efforts.count) * Self.row - 8)))
+                // Level with its row, and kept off the bar: no lower than the menu's
+                // own bottom when it opens upward, than the room below when not.
+                .offset(x: 236, y: min(rowY[m.id] ?? 0, (upward ? height : room) - CGFloat(m.efforts.count) * Self.row - 8))
             }
         }
-        .coordinateSpace(.named("modelMenu"))
         .onChange(of: composer.harness) { hovered = nil }
     }
 
@@ -291,13 +297,25 @@ struct AgentGlyph: View {
     let harness: String
 
     var body: some View {
-        switch harness {
-        case "claude_code":
-            Image(systemName: "asterisk").fontWeight(.bold).foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
-        default:
-            let symbol = ["codex": "circle.hexagonpath", "pi": "pi", "fx": "bolt.fill", "grok": "sparkle"][harness] ?? "circle"
-            Image(systemName: symbol).foregroundStyle(.secondary)
-        }
+        Image(nsImage: Self.image(harness))
+            .resizable()
+            .renderingMode(.template)
+            .frame(width: 14, height: 14)
+            // Claude's rust is the one saturated mark, as in the app.
+            .foregroundStyle(harness == "claude_code" ? Color(red: 0.851, green: 0.467, blue: 0.341) : .secondary)
+    }
+
+    /// Parsed once per agent; AppKit draws SVG natively.
+    @MainActor private static var cache: [String: NSImage] = [:]
+    @MainActor private static func image(_ harness: String) -> NSImage {
+        if let hit = cache[harness] { return hit }
+        let (box, rule, paths) = AgentMarks.svg[harness] ?? AgentMarks.svg["claude_code"]!
+        let body = paths.map { #"<path fill-rule="\#(rule)" d="\#($0)"/>"# }.joined()
+        let svg = #"<svg xmlns="http://www.w3.org/2000/svg" viewBox="\#(box)">\#(body)</svg>"#
+        let image = NSImage(data: Data(svg.utf8)) ?? NSImage()
+        image.isTemplate = true
+        cache[harness] = image
+        return image
     }
 }
 

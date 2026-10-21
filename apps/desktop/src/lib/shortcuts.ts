@@ -29,8 +29,8 @@ export type ShortcutGroup = "General" | "Sessions" | "Panels and views" | "Compo
 /// would let the next collision in silently.
 ///
 /// `doc.save` and `composer.draft` share ⌘S on the same terms: one is bound
-/// only while a session's docs tab is on screen, the other only on the new-task
-/// composer, which has no session and so no docs.
+/// only while a session's docs tab is on screen, the other on every composer
+/// whenever that tab is not.
 ///
 /// [`IssuesView`]: ../components/IssuesView.tsx
 export const SHARED_CHORDS: [string, string][] = [

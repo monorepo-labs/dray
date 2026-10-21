@@ -1175,7 +1175,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             crate::respond_permission(&session_id, &request_id, &option_id, sink).await;
         answer_questions(session_id: String, request_id: String, answers: HashMap<String, String>) =>
             crate::answer_questions(&session_id, &request_id, answers, sink).await;
-        mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read).await;
+        mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read, sink).await;
         set_session_flags(session_id: String, archived: Option<bool>, pinned: Option<bool>, hidden: Option<bool>, aside: Option<bool>) =>
             crate::set_session_flags(&session_id, archived, pinned, hidden, aside).await;
         rename_session(session_id: String, title: String) => crate::rename_session(session_id, title, sink).await;
@@ -1248,6 +1248,15 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         read_attachments(paths: Vec<String>) => ok(crate::attachments::read_attachments(paths).await);
         list_drafts() => crate::drafts::list_drafts().await;
         save_draft(draft: Value) => crate::drafts::save_draft(draft).await;
+        // The island's ⌘S. Unlike `save_draft`, which the app's own autosave
+        // calls on every pause in typing, it says so: nothing else tells the app.
+        create_draft(draft: Value) => {
+            let saved = crate::drafts::save_draft(draft).await;
+            if saved.is_ok() {
+                sink.emit(crate::drafts::DRAFTS_CHANGED, ()).ok();
+            }
+            saved
+        };
         delete_draft(id: String) => crate::drafts::delete_draft(id).await;
         read_doc(path: String) => crate::docs::read_doc(path).await;
         save_doc(path: String, text: String, expect: Option<String>) => crate::docs::save_doc(path, text, expect).await;

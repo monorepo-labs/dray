@@ -74,7 +74,7 @@ struct OrbDriver<Content: View>: View {
     @ViewBuilder let draw: (OrbFrame) -> Content
 
     var body: some View {
-        let voice = state == .recording ? min(1, Double(level) * 4) : 0
+        let voice = state == .recording ? loudness(level) : 0
         // Lively from the press, not from the microphone opening a moment later.
         let rec = [.starting, .recording].contains(state) ? 1.0 : 0
         let work = state == .transcribing ? 1.0 : 0
@@ -97,6 +97,14 @@ struct OrbDriver<Content: View>: View {
         }
         .frame(width: size, height: size)
     }
+}
+
+/// A raw sample peak as 0…1 on a decibel scale. Linear, conversational speech
+/// on a laptop mic (peaks of −34 to −20 dBFS) barely moved the orb; here a quiet
+/// room (−50) reads as nothing and ordinary speech fills most of the range.
+func loudness(_ peak: Float) -> Double {
+    let db = 20 * log10(max(Double(peak), 1e-6))
+    return min(1, max(0, (db + 50) / 32))
 }
 
 /// A phase that runs at a variable rate, so speeding up never jumps. One for
@@ -124,7 +132,9 @@ enum OrbClock {
                 spin += dt * 2.6 * curl
             } else if winding {
                 let home = (spin / (2 * .pi)).rounded(.up) * 2 * .pi
-                spin += dt * min(2.6, max(0.4, 3 * (home - spin)))
+                // Quick and easing in: at the working pace, a transcription that took
+                // 0.3s left most of a lap, and the orb read as busy for seconds after the words landed.
+                spin = min(home, spin + dt * max(4, 8 * (home - spin)))
                 if spin >= home - 0.002 { spin = 0 }
             }
         }

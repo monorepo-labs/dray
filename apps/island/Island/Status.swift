@@ -24,10 +24,9 @@ struct AskCard: View {
                         composer.askTab = keys[$0]
                     }
                 } else {
-                    Circle().fill(.yellow).frame(width: 6, height: 6)
                     Text(store.items[key]?.title ?? "Session").lineLimit(1)
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(.white.opacity(0.45))
                 }
                 Spacer(minLength: 0)
                 Text(composer.closeHint).font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))
@@ -63,10 +62,9 @@ private struct PermissionBody: View {
                 + Text(request.description.map { "  \($0)" } ?? "").font(.system(size: 12)).foregroundColor(.white.opacity(0.5)))
                 .lineLimit(2)
             if let line = request.input.flatMap(toolArgument) {
-                Text(line).font(.system(size: 11).monospaced()).lineLimit(3)
-                    .padding(8)
+                Text(line).font(.system(size: 11, weight: .regular).monospaced()).lineLimit(2)
+                    .foregroundStyle(.white.opacity(0.5))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
             }
             ForEach(Array(request.options.enumerated()), id: \.element.id) { i, option in
                 Button {
@@ -85,7 +83,7 @@ private struct PermissionBody: View {
                     .font(.system(size: 13))
                     .padding(.horizontal, 10)
                     .frame(height: 30)
-                    .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    .itemFill()
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -138,22 +136,25 @@ private struct QuestionsBody: View {
                     .font(.system(size: 13))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
-                    .background(.white.opacity(on ? 0.1 : 0), in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(on ? 0.5 : 0.12)))
+                    .itemFill(on: on)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
             if q.freeText != false {
                 if editing {
-                    TextField("", text: Binding(get: { typed[q.question] ?? "" }, set: { typed[q.question] = $0 }),
+                    // Typed text is the answer once there is any, so the pick lets go.
+                    TextField("", text: Binding(get: { typed[q.question] ?? "" }, set: {
+                        typed[q.question] = $0
+                        if !$0.isEmpty { picks[q.question] = nil }
+                    }),
                               prompt: Text("Something else…").foregroundStyle(.white.opacity(0.3)))
                         .textFieldStyle(.plain)
                         .font(.system(size: 13))
                         .focused($boxFocused)
                         .padding(.horizontal, 10)
                         .frame(height: 32)
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.3)))
+                        .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
                         .onAppear { boxFocused = true }
                 } else {
                     Button { editing = true } label: {
@@ -163,7 +164,7 @@ private struct QuestionsBody: View {
                             .lineLimit(1)
                             .padding(.horizontal, 10)
                             .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.12)))
+                            .itemFill()
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -194,6 +195,9 @@ private struct QuestionsBody: View {
     }
 
     private func toggle(_ label: String) {
+        // And the other way: a pick is the answer, which typed text would otherwise outrank unseen.
+        typed[q.question] = nil
+        editing = false
         var set = picks[q.question, default: []]
         if set.contains(label) { set.remove(label) } else if q.multiSelect { set.insert(label) } else { set = [label] }
         picks[q.question] = set
@@ -232,4 +236,21 @@ private struct QuestionsBody: View {
             busy = false
         }
     }
+}
+
+/// A card's pickable row: a fill that lifts under the pointer and holds brighter once picked.
+private struct ItemFill: ViewModifier {
+    var on: Bool
+    @State private var hover = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(.white.opacity(on ? 0.2 : hover ? 0.13 : 0.08), in: RoundedRectangle(cornerRadius: 8))
+            .onHover { hover = $0 }
+            .animation(.easeOut(duration: 0.12), value: hover)
+    }
+}
+
+private extension View {
+    func itemFill(on: Bool = false) -> some View { modifier(ItemFill(on: on)) }
 }
