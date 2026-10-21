@@ -385,8 +385,14 @@ impl Recording {
     ///
     /// The raw samples beside it are the ones the live decoder has not read yet.
     pub fn finish(self) -> Result<(Option<Vec<f32>>, Vec<f32>)> {
+        self.close().take()
+    }
+
+    /// Closes the microphone and hands back the buffer, for a caller that
+    /// cannot wait for the resample [`Tap::take`] runs.
+    pub fn close(self) -> Tap {
         drop(self.stream);
-        self.tap.take()
+        self.tap
     }
 
     /// What has been said so far, taken out of the buffer with the microphone

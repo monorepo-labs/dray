@@ -303,6 +303,17 @@ pub enum StartRefusal {
 pub async fn start_transcription(
     state: State<'_, TranscriptionState>,
 ) -> Result<Option<StartRefusal>, String> {
+    // Refused rather than taken over, as the Island refuses the window's: the
+    // Island would go on drawing a recording that had been moved out from under it.
+    if HOST_OWNS.load(std::sync::atomic::Ordering::SeqCst) && state.recording.lock().await.is_some() {
+        return Err("The Island is dictating. Stop it there first.".into());
+    }
+    open_recorder(state).await
+}
+
+async fn open_recorder(
+    state: State<'_, TranscriptionState>,
+) -> Result<Option<StartRefusal>, String> {
     // Whoever starts last owns the recorder; `answer_host` claims it back after this.
     HOST_OWNS.store(false, std::sync::atomic::Ordering::SeqCst);
     let Some(model) = ready_model().await else {
@@ -314,7 +325,9 @@ pub async fn start_transcription(
     }
 
     let stored = settings::read().await.transcription;
-    let recording = Recording::start(stored.device.as_deref()).map_err(|e| e.to_string())?;
+    // `{:#}`, or the reader sees "could not open the microphone" with the
+    // CoreAudio reason that would say why cut off behind it.
+    let recording = Recording::start(stored.device.as_deref()).map_err(|e| format!("{e:#}"))?;
 
     // The load starts here and runs under the reader's own talking; a model
     // that streams then decodes while they talk. It used to start at launch
@@ -389,7 +402,7 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
             Err("Dray is already dictating.".into())
         }
         "start_transcription" => {
-            let started = start_transcription(state).await;
+            let started = open_recorder(state).await;
             // A refused start replaced nothing, so a lost recording it found is
             // still the Island's to stop.
             HOST_OWNS.store(owns || matches!(started, Ok(None)), SeqCst);
@@ -631,6 +644,67 @@ pub async fn cancel_transcription(state: State<'_, TranscriptionState>) -> Resul
     restore_other_audio().await;
 
     Ok(())
+}
+
+/// A recording the Mac's sleep closed, and where its audio was parked.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Interrupted {
+    audio_path: Option<String>,
+}
+
+/// Closes a recording when the Mac goes to sleep, and parks what was said.
+///
+/// A recording left open across sleeps once held the built-in mic for thirteen
+/// hours, and closing it then crashed coreaudiod's mic: no app could record until
+/// coreaudiod was restarted (#582). Nobody dictates through a sleep, so the
+/// stream closes inside the notification, before the machine goes down; the
+/// resample and the save follow on a task, and the window offers Retry.
+#[cfg(target_os = "macos")]
+pub fn stop_on_sleep(app: &AppHandle) {
+    use std::ptr::NonNull;
+
+    use block2::RcBlock;
+    use objc2_app_kit::{NSWorkspace, NSWorkspaceWillSleepNotification};
+    use objc2_foundation::NSNotification;
+    use tauri::{Emitter, Manager};
+
+    let app = app.clone();
+    let block = RcBlock::new(move |_: NonNull<NSNotification>| {
+        let state = app.state::<TranscriptionState>();
+        // The main thread is outside the runtime, so blocking on the lock is allowed.
+        let Some(recording) = state.recording.blocking_lock().take() else { return };
+        let tap = recording.close();
+        let live = state.live.blocking_lock().take();
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            drop(live);
+            restore_other_audio().await;
+            let audio = tauri::async_runtime::spawn_blocking(move || tap.take()).await;
+            let audio_path = match audio {
+                Ok(Ok((Some(audio), _))) => recordings::save(&audio)
+                    .await
+                    .ok()
+                    .map(|p| p.to_string_lossy().into_owned()),
+                _ => None,
+            };
+            let _ = app.emit("transcription_interrupted", Interrupted { audio_path });
+        });
+    });
+    let center = NSWorkspace::sharedWorkspace().notificationCenter();
+    // SAFETY: the name is AppKit's own constant, no object filter, and a nil
+    // queue runs the block on the posting thread, which for workspace
+    // notifications is the main thread.
+    let observer = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(NSWorkspaceWillSleepNotification),
+            None,
+            None,
+            &block,
+        )
+    };
+    // Lives as long as the app; nothing ever removes it.
+    std::mem::forget(observer);
 }
 
 /// Both halves of the muting run `osascript`, which is a spawn and a wait —

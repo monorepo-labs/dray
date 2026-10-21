@@ -235,6 +235,26 @@ export function useRecorder<T>({
     };
   }, [state]);
 
+  // The Mac going to sleep closes the microphone under a recording. Only one
+  // this window drew is its to report; the Island's never set `recording` here.
+  const recording = useRef(false);
+  recording.current = state === "recording";
+  useEffect(() => {
+    const unlisten = listen<{ audioPath: string | null }>("transcription_interrupted", (e) => {
+      if (!recording.current) return;
+      setState("idle");
+      setSavedAudio(e.payload.audioPath);
+      handlers.current.onMessage(
+        e.payload.audioPath
+          ? "Dictation stopped when the Mac went to sleep. Retry to transcribe what you said."
+          : "Dictation stopped when the Mac went to sleep.",
+      );
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, []);
+
   const start = useCallback(async () => {
     if (inFlight.current) return;
     inFlight.current = true;
