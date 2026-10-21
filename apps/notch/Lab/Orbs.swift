@@ -36,13 +36,14 @@ struct LabOrb: View {
 }
 
 enum OrbStyle: String, CaseIterable, Identifiable {
-    case clearPrism, prism, glass, nebula
+    case clearPrism, lightPrism, prism, glass, nebula
 
     var id: String { rawValue }
 
     var name: String {
         switch self {
         case .clearPrism: "Prism, clear (ships)"
+        case .lightPrism: "Prism, light frost"
         case .prism: "Prism, frosted"
         case .glass: "Iridescent glass"
         case .nebula: "Nebula"
@@ -53,6 +54,7 @@ enum OrbStyle: String, CaseIterable, Identifiable {
     var note: String {
         switch self {
         case .clearPrism: "Caught light in clear dark glass; a wave flows through it, swelling with the voice, and curls into an orbiting arc while transcribing."
+        case .lightPrism: "The same light in dark glass with a light frost."
         case .prism: "The same light in frosted glass."
         case .glass: "Thin-film bubble churning inside; the voice stirs it, ripples it and lifts a glow. The highlight circles with a trail while transcribing."
         case .nebula: "Warped noise; the voice churns it and lights the core."
@@ -64,7 +66,7 @@ enum OrbStyle: String, CaseIterable, Identifiable {
         switch self {
         case .nebula: "One colorEffect pass, 12 noise lookups a pixel; under 10k pixels at 48pt @2x, negligible."
         case .glass: "One colorEffect pass, a few noise lookups and nine highlights a pixel; negligible."
-        case .prism, .clearPrism: "One colorEffect pass, a handful of noise lookups a pixel; negligible."
+        case .prism, .lightPrism, .clearPrism: "One colorEffect pass, a handful of noise lookups a pixel; negligible."
         }
     }
 
@@ -72,7 +74,8 @@ enum OrbStyle: String, CaseIterable, Identifiable {
     func draw(_ f: OrbFrame, palette: OrbPalette) -> some View {
         switch self {
         case .clearPrism: PrismOrb(frame: f, colors: palette.colors, spectral: palette.spectral)
-        case .prism: PrismOrb(frame: f, colors: palette.colors, frosted: true, spectral: palette.spectral)
+        case .lightPrism: PrismOrb(frame: f, colors: palette.colors, frost: 0.3, spectral: palette.spectral)
+        case .prism: PrismOrb(frame: f, colors: palette.colors, frost: 1, spectral: palette.spectral)
         case .glass: shader(ShaderLibrary.default.glass, f, palette, extras: [palette.spectral ? 1 : 0, Float(f.spin)])
         case .nebula: shader(ShaderLibrary.default.nebula, f, palette)
         }

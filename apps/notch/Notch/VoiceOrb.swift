@@ -20,7 +20,8 @@ struct VoiceOrb: View {
 struct PrismOrb: View {
     let frame: OrbFrame
     var colors: [Color] = Self.rainbow
-    var frosted = false
+    /// 0 clear dark glass to 1 frosted.
+    var frost = 0.0
     /// The real rainbow, rather than `colors` in order.
     var spectral = true
 
@@ -29,7 +30,7 @@ struct PrismOrb: View {
                           Color(red: 0.3, green: 0.85, blue: 1), Color(red: 0.55, green: 0.4, blue: 1)]
 
     var body: some View {
-        let extras: [Shader.Argument] = [.float(frosted ? 1 : 0), .float(spectral ? 1 : 0),
+        let extras: [Shader.Argument] = [.float(Float(frost)), .float(spectral ? 1 : 0),
                                          .float(Float(frame.spin)), .float(Float(frame.curl))]
         Rectangle()
             .colorEffect(Shader(function: ShaderLibrary.default.prism,

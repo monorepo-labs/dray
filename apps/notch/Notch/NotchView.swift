@@ -509,7 +509,7 @@ private struct MicButton: View {
         Button {
             Task { await composer.toggleDictation() }
         } label: {
-            VoiceOrb(size: big ? 48 : 22, level: composer.level, state: composer.dictation)
+            VoiceOrb(size: big ? 48 : 24, level: composer.level, state: composer.dictation)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
