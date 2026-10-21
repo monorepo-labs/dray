@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/notchCapture";
+import { captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/islandCapture";
 
 const press = (code: string, mods: Partial<Record<"metaKey" | "ctrlKey" | "altKey" | "shiftKey", boolean>>) => ({
   code,
@@ -11,8 +11,8 @@ const press = (code: string, mods: Partial<Record<"metaKey" | "ctrlKey" | "altKe
   ...mods,
 });
 
-describe("notch capture key", () => {
-  it("spells the default the way the notch registered it", () => {
+describe("island capture key", () => {
+  it("spells the default the way the island registered it", () => {
     // kVK_ANSI_2, cmdKey | shiftKey.
     expect(encodeCapture(DEFAULT_CAPTURE)).toBe("19 768");
   });

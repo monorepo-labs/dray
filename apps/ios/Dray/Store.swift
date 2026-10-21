@@ -32,7 +32,7 @@ final class Store {
     var cloneProgress: [UUID: [String: String]] = [:]
     var lastError: String?
 
-    /// For a client that reacts beside drawing: the Notch opens itself on a card.
+    /// For a client that reacts beside drawing: the Island opens itself on a card.
     @ObservationIgnored var asksChanged: () -> Void = {}
     @ObservationIgnored private var tasks: [SessionKey: Int] = [:]
     @ObservationIgnored private var reading: Set<UUID> = []
@@ -50,7 +50,7 @@ final class Store {
     }
 
     /// One server, read through `read` at every connect rather than the
-    /// Keychain — the Notch's This Mac, whose port and token are files.
+    /// Keychain — the Island's This Mac, whose port and token are files.
     init(local s: Server, read: @escaping () -> (url: String, token: String)?) {
         servers = [s]
         start(s, read: read)

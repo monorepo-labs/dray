@@ -15,7 +15,7 @@ final class Connection {
     private(set) var url: String
     private(set) var token: String
     /// Reads the address afresh before each connect, for a server whose port
-    /// moves on every restart — the Notch's This Mac. `nil` keeps the first.
+    /// moves on every restart — the Island's This Mac. `nil` keeps the first.
     var refresh: (() -> (url: String, token: String)?)?
     /// Whether the server can transcribe a phone's dictation; its welcome frame says.
     private(set) var dictation = false

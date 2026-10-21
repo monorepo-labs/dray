@@ -1,7 +1,7 @@
 import { modCaps, type Mods } from "@/lib/digitChords";
 
-/// The notch's screenshot chord, as it rides `notch.captureKey`: a Carbon key
-/// code and modifier mask, since the notch registers it with
+/// The island's screenshot chord, as it rides `island.captureKey`: a Carbon key
+/// code and modifier mask, since the island registers it with
 /// `RegisterEventHotKey`, which speaks nothing else. `null` is no chord at all.
 export type CaptureKey = { code: string; mods: Mods } | null;
 
@@ -36,7 +36,7 @@ export function encodeCapture(k: CaptureKey): string {
   return `${KEYS[k.code][0]} ${mask}`;
 }
 
-/// An absent or unreadable value is the default, which is what the notch does with it.
+/// An absent or unreadable value is the default, which is what the island does with it.
 export function decodeCapture(value: string | undefined): CaptureKey {
   if (value === "none") return null;
   const [key, mask] = (value ?? "").split(" ").map(Number);

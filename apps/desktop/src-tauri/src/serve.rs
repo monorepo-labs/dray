@@ -1132,12 +1132,12 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         return dispatch_mac(cmd, args, sink).await;
     }
     // The recorder and model live in the app, so a client with no microphone
-    // of its own — the Notch panel — dictates through the app's.
+    // of its own — the Island — dictates through the app's.
     #[cfg(feature = "desktop")]
     if crate::transcription::HOSTED.contains(&cmd) {
         return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Open Dray to dictate.")));
     }
-    // The Notch's title opens its session in the app's window, which only the app can raise.
+    // The Island's title opens its session in the app's window, which only the app can raise.
     #[cfg(feature = "desktop")]
     if cmd == "show_session" {
         return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Dray's window is closed.")));

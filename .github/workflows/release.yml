@@ -112,14 +112,14 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
-      # Dray Notch, the Swift panel shipped inside the bundle. Built and signed
+      # Dray Island, the Swift panel shipped inside the bundle. Built and signed
       # ahead of the bundler for the helpers' reason above.
-      - name: Build Dray Notch
+      - name: Build Dray Island
         env:
           SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           brew install xcodegen
-          apps/notch/build.sh apps/desktop/src-tauri/target/notch
+          apps/island/build.sh apps/desktop/src-tauri/target/island
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -154,8 +154,8 @@ jobs:
           # entry into per-arch keys in `latest.json`, so a client asking for
           # `darwin-aarch64` finds it. `cef` turns the browser on, and the
           # overlay config puts the helper apps in Contents/Frameworks; the
-          # notch one puts Dray Notch in Contents/Helpers.
-          args: --target universal-apple-darwin --features cef --config src-tauri/tauri.cef.conf.json --config src-tauri/tauri.notch.conf.json
+          # island one puts Dray Island in Contents/Helpers.
+          args: --target universal-apple-darwin --features cef --config src-tauri/tauri.cef.conf.json --config src-tauri/tauri.island.conf.json
 
       # The bundler *warns* and carries on when notarization credentials are
       # missing or rejected — only an absent team id is fatal. So a release
@@ -182,7 +182,7 @@ jobs:
             codesign -d --entitlements - "$HELPER" 2>&1 | grep -q disable-library-validation
           done
           codesign -d --entitlements - "$APP" 2>&1 | grep -q disable-library-validation
-          codesign --verify --strict "$APP/Contents/Helpers/Dray Notch.app"
+          codesign --verify --strict "$APP/Contents/Helpers/Dray Island.app"
 
       # Downloads are served from R2, not the release: GitHub's asset CDN has
       # had whole afternoons of a 42MB dmg taking 45 minutes. Versioned keys

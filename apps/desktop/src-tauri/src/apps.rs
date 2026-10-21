@@ -316,39 +316,39 @@ pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
     Err(crate::git::stderr_or(&out, || format!("could not open {path}")))
 }
 
-/// Writes the modifier that opens Dray Notch (`control`, `option`, `command`)
-/// into the notch's own preferences, which it reads at every tap, and starts it
+/// Writes the modifier that opens Dray Island (`control`, `option`, `command`)
+/// into the island's own preferences, which it reads at every tap, and starts it
 /// to match — or quits it, for `off`.
 ///
-/// Its own defaults domain rather than `settings.json`, since the notch is the
-/// one that reads it. `open` without `-n` is a no-op for a notch already up,
+/// Its own defaults domain rather than `settings.json`, since the island is the
+/// one that reads it. `open` without `-n` is a no-op for an island already up,
 /// and it outlives Dray on purpose: it talks to the background server, which
-/// does too. A build with no notch inside it (`tauri dev`) only writes the pick.
+/// does too. A build with no island inside it (`tauri dev`) only writes the pick.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn configure_notch(key: String) -> Result<(), String> {
+pub async fn configure_island(key: String) -> Result<(), String> {
     use tokio::process::Command;
     if !matches!(key.as_str(), "control" | "option" | "command" | "off") {
-        return Err(format!("unknown notch key {key}"));
+        return Err(format!("unknown island key {key}"));
     }
     async fn run(cmd: &mut Command) -> Result<std::process::Output, String> {
-        cmd.output().await.map_err(|err| format!("could not configure the notch: {err}"))
+        cmd.output().await.map_err(|err| format!("could not configure the island: {err}"))
     }
-    run(Command::new("defaults").args(["write", "com.yogesh.dray.notch", "notch.key", "-string", &key])).await?;
+    run(Command::new("defaults").args(["write", "com.yogesh.dray.island", "island.key", "-string", &key])).await?;
     if key == "off" {
         // Exit 1 is "nothing running", which is what was asked for.
-        run(Command::new("pkill").args(["-x", "Dray Notch"])).await?;
+        run(Command::new("pkill").args(["-x", "Dray Island"])).await?;
         return Ok(());
     }
     let Some(app) = std::env::current_exe()
         .ok()
-        .and_then(|exe| Some(exe.parent()?.parent()?.join("Helpers/Dray Notch.app")))
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("Helpers/Dray Island.app")))
         .filter(|app| app.exists())
     else {
         return Ok(());
     };
     let mut open = Command::new("open");
     open.arg("-g");
-    // The notch finds its server through the home, so a moved one must ride along.
+    // The island finds its server through the home, so a moved one must ride along.
     if let Some(home) = crate::store::home_override() {
         open.arg("--env").arg(format!("DRAY_HOME={}", home.display()));
     }
@@ -356,44 +356,44 @@ pub async fn configure_notch(key: String) -> Result<(), String> {
     if out.status.success() {
         return Ok(());
     }
-    Err(crate::git::stderr_or(&out, || "could not start Dray Notch".into()))
+    Err(crate::git::stderr_or(&out, || "could not start Dray Island".into()))
 }
 
-/// Whether Dray Notch is running, asked at each permission or question so a
-/// notch the reader quit never swallows the banner that would have replaced it.
+/// Whether Dray Island is running, asked at each permission or question so a
+/// island the reader quit never swallows the banner that would have replaced it.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn notch_running() -> bool {
+pub async fn island_running() -> bool {
     tokio::process::Command::new("pgrep")
-        .args(["-x", "Dray Notch"])
+        .args(["-x", "Dray Island"])
         .output()
         .await
         .is_ok_and(|out| out.status.success())
 }
 
-/// The notch preferences Settings draws. The notch's own right-click menu
+/// The island preferences Settings draws. The island's own right-click menu
 /// writes the first two as well, so they are read back rather than kept here,
-/// and `captureTaken` is the notch's alone: the chord it could not register.
-const NOTCH_PREFS: [&str; 5] = ["notch.placement", "notch.mode", "notch.tap", "notch.captureKey", "notch.captureTaken"];
+/// and `captureTaken` is the island's alone: the chord it could not register.
+const ISLAND_PREFS: [&str; 5] = ["island.placement", "island.mode", "island.tap", "island.captureKey", "island.captureTaken"];
 
-fn notch_pref_valid(name: &str, value: &str) -> bool {
+fn island_pref_valid(name: &str, value: &str) -> bool {
     match name {
-        "notch.placement" => matches!(value, "notch" | "bottom"),
-        "notch.mode" => matches!(value, "compact" | "expanded"),
-        "notch.tap" => matches!(value, "single" | "double"),
+        "island.placement" => matches!(value, "notch" | "bottom"),
+        "island.mode" => matches!(value, "compact" | "expanded"),
+        "island.tap" => matches!(value, "single" | "double"),
         // A Carbon key code and modifier mask, or none.
-        "notch.captureKey" => {
+        "island.captureKey" => {
             value == "none" || matches!(value.split_once(' '), Some((k, m)) if k.parse::<u32>().is_ok() && m.parse::<u32>().is_ok())
         }
         _ => false,
     }
 }
 
-/// The notch's stored picks, by name; an absent one is the notch's default.
+/// The island's stored picks, by name; an absent one is the island's default.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn notch_prefs() -> std::collections::HashMap<String, String> {
-    let reads = NOTCH_PREFS.map(|name| async move {
+pub async fn island_prefs() -> std::collections::HashMap<String, String> {
+    let reads = ISLAND_PREFS.map(|name| async move {
         let out = tokio::process::Command::new("defaults")
-            .args(["read", "com.yogesh.dray.notch", name])
+            .args(["read", "com.yogesh.dray.island", name])
             .output()
             .await
             .ok()
@@ -403,45 +403,45 @@ pub async fn notch_prefs() -> std::collections::HashMap<String, String> {
     futures_util::future::join_all(reads).await.into_iter().flatten().collect()
 }
 
-/// Writes one notch pick and tells a running notch to read it again, through a
+/// Writes one island pick and tells a running island to read it again, through a
 /// Darwin notification: it caches the picks, and holds its capture key.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn set_notch_pref(name: String, value: String) -> Result<(), String> {
+pub async fn set_island_pref(name: String, value: String) -> Result<(), String> {
     use tokio::process::Command;
-    if !notch_pref_valid(&name, &value) {
-        return Err(format!("not a notch setting: {name} = {value}"));
+    if !island_pref_valid(&name, &value) {
+        return Err(format!("not an island setting: {name} = {value}"));
     }
     let out = Command::new("defaults")
-        .args(["write", "com.yogesh.dray.notch", &name, "-string", &value])
+        .args(["write", "com.yogesh.dray.island", &name, "-string", &value])
         .output()
         .await
-        .map_err(|err| format!("could not save the notch setting: {err}"))?;
+        .map_err(|err| format!("could not save the island setting: {err}"))?;
     if !out.status.success() {
-        return Err(crate::git::stderr_or(&out, || "could not save the notch setting".into()));
+        return Err(crate::git::stderr_or(&out, || "could not save the island setting".into()));
     }
-    // A notch that is not running reads the file when it starts. Position and
+    // An island that is not running reads the file when it starts. Position and
     // layout are only judged on screen, so those open the panel to show them.
     let ping = match name.as_str() {
-        "notch.placement" | "notch.mode" => "com.yogesh.dray.notch.show",
-        _ => "com.yogesh.dray.notch.prefs",
+        "island.placement" | "island.mode" => "com.yogesh.dray.island.show",
+        _ => "com.yogesh.dray.island.prefs",
     };
     Command::new("notifyutil").args(["-p", ping]).output().await.ok();
     Ok(())
 }
 
 #[cfg(test)]
-mod notch_pref_tests {
-    use super::notch_pref_valid;
+mod island_pref_tests {
+    use super::island_pref_valid;
 
     #[test]
-    fn takes_only_what_the_notch_can_read() {
-        assert!(notch_pref_valid("notch.placement", "bottom"));
-        assert!(notch_pref_valid("notch.captureKey", "19 768"));
-        assert!(notch_pref_valid("notch.captureKey", "none"));
-        assert!(!notch_pref_valid("notch.captureKey", "19"));
-        assert!(!notch_pref_valid("notch.mode", "voice"));
-        assert!(!notch_pref_valid("notch.tap", "triple"));
-        assert!(!notch_pref_valid("notch.key", "control"));
+    fn takes_only_what_the_island_can_read() {
+        assert!(island_pref_valid("island.placement", "bottom"));
+        assert!(island_pref_valid("island.captureKey", "19 768"));
+        assert!(island_pref_valid("island.captureKey", "none"));
+        assert!(!island_pref_valid("island.captureKey", "19"));
+        assert!(!island_pref_valid("island.mode", "voice"));
+        assert!(!island_pref_valid("island.tap", "triple"));
+        assert!(!island_pref_valid("island.key", "control"));
     }
 }
 

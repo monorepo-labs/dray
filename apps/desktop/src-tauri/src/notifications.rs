@@ -124,7 +124,7 @@ fn request_auth_once() {
 ///
 /// Both halves are needed and neither implies the other: the OS raises the app
 /// on its own, but nothing about being frontmost selects a session.
-/// Also the Notch's way into a session, through the server's `show_session`.
+/// Also the Island's way into a session, through the server's `show_session`.
 #[cfg(target_os = "macos")]
 pub fn activate(app: &AppHandle, session_id: &str) {
     if let Some(window) = app.get_webview_window("main") {

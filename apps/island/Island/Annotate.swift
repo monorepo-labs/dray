@@ -20,7 +20,7 @@ final class Annotation {
     private var grab: ((CGRect) async -> CGImage?)?
     /// Where a taken moment goes on screen: its flight into the notch.
     private let land: (Capture.Shot) async -> Void
-    private let window: NotchPanel
+    private let window: IslandPanel
     private let ink = Ink()
     private var monitors: [Any] = []
     private var rest: Task<Void, Never>?
@@ -35,7 +35,7 @@ final class Annotation {
         self.composer = composer
         self.screen = screen
         self.land = land
-        window = NotchPanel(contentRect: screen.frame, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
+        window = IslandPanel(contentRect: screen.frame, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
         window.level = .screenSaver
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isOpaque = false

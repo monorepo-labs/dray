@@ -1,4 +1,4 @@
-name: DrayNotch
+name: DrayIsland
 options:
   deploymentTarget:
     macOS: "15.0"
@@ -14,13 +14,13 @@ packages:
     url: https://github.com/yogesharc/thinking-orbs
     from: 0.1.2
 targets:
-  DrayNotch:
+  DrayIsland:
     type: application
     platform: macOS
     dependencies:
       - package: ThinkingOrbs
     sources:
-      - Notch
+      - Island
       # The iOS app's client of dray-serve, shared by path rather than by package.
       - path: ../ios/Dray/Wire.swift
       - path: ../ios/Dray/Connection.swift
@@ -39,32 +39,32 @@ targets:
         buildPhase: resources
     settings:
       base:
-        PRODUCT_NAME: Dray Notch
-        PRODUCT_BUNDLE_IDENTIFIER: com.yogesh.dray.notch
+        PRODUCT_NAME: Dray Island
+        PRODUCT_BUNDLE_IDENTIFIER: com.yogesh.dray.island
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Dray Notch
+        INFOPLIST_KEY_CFBundleDisplayName: Dray Island
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         # A local WebSocket to This Mac's server, and nothing sandboxed can reach ~/.dray.
         ENABLE_APP_SANDBOX: NO
         ENABLE_HARDENED_RUNTIME: YES
   # The task list's marks, one made-up session per state. Kept, so the
   # question can be looked at again.
-  NotchStatusDemo:
+  IslandStatusDemo:
     type: application
     platform: macOS
     dependencies:
       - package: ThinkingOrbs
     sources:
       - Demo
-      - path: Notch/Marks.swift
-      - path: Notch/NotchShape.swift
+      - path: Island/Marks.swift
+      - path: Island/NotchShape.swift
       - path: ../ios/Dray/Wire.swift
       - path: ../ios/Dray/PrGlyph.swift
     settings:
       base:
-        PRODUCT_NAME: Notch Status Demo
-        PRODUCT_BUNDLE_IDENTIFIER: com.yogesh.dray.notch.statusdemo
+        PRODUCT_NAME: Island Status Demo
+        PRODUCT_BUNDLE_IDENTIFIER: com.yogesh.dray.island.statusdemo
         GENERATE_INFOPLIST_FILE: YES
         ENABLE_APP_SANDBOX: NO
   # A demo, kept: every candidate dictation orb side by side, live (#568).
@@ -73,8 +73,8 @@ targets:
     platform: macOS
     sources:
       - Lab
-      - path: Notch/VoiceOrb.swift
-      - path: Notch/VoiceOrb.metal
+      - path: Island/VoiceOrb.swift
+      - path: Island/VoiceOrb.metal
     settings:
       base:
         PRODUCT_NAME: OrbLab

@@ -1,4 +1,4 @@
-# Dray Notch
+# Dray Island
 
 A native macOS panel, always on top, that hangs from the notch or docks to a
 screen edge. Start a session, reply to one, answer its cards — by dictation
@@ -11,13 +11,13 @@ the sessions live in `dray --serve` now, not in the window.
   from the notch, or centred above the Dock. A notch pick on a display with
   none falls to top centre.
 - **Ships inside Dray.app** at `Contents/Helpers`, built and signed by
-  `build.sh` in the release job and copied in by `tauri.notch.conf.json`. On by
-  default: every app launch runs `configure_notch`, which `open`s it. It
+  `build.sh` in the release job and copied in by `tauri.island.conf.json`. On by
+  default: every app launch runs `configure_island`, which `open`s it. It
   outlives Dray, since it talks to the background server, and restarts itself
   onto a new binary once an update has swapped the bundle under it.
 - **Summoned by tapping one modifier alone**, Control unless Settings →
-  Shortcuts says Option, Command or Off. The pick is the notch's own
-  `notch.key` default, read at every tap. A tap opens it; a tap on an open
+  Shortcuts says Option, Command or Off. The pick is the island's own
+  `island.key` default, read at every tap. A tap opens it; a tap on an open
   panel starts or stops dictating, so a double tap opens it listening. Send
   is ⏎, ⌘⏎ adds the text as a row. A bare modifier is no Carbon hot key, so it
   watches modifier changes globally, which needs no grant, and reads the
@@ -48,7 +48,7 @@ v2 (#565): status, across every live session.
 - A permission or question card never opens the panel: a pill hangs from the
   notch saying how many tasks need attention, until they are answered. Opening
   draws the cards as tabs, oldest first; the last answer closes the panel.
-- A finished session is Dray's own banner and not the notch's: where the reader
+- A finished session is Dray's own banner and not the island's: where the reader
   works decides which one they see, and only the banner opens the session.
 - The task list carries the sidebar's marks; the title opens its session in Dray.
 - A send says Sent and closes the panel.
@@ -66,22 +66,22 @@ dictations. Screen Recording is asked for at the first moment taken, never for
 dictating alone. It may yet replace the screenshot mode.
 
 Later, in order: comments on a mark, browser element pick.
-Settings has a Notch tab (#576): an on switch, the key and single or double tap
+Settings has an Island tab (#576): an on switch, the key and single or double tap
 to open, the screenshot key, and position and layout drawn as pictures. Position
-and layout are the notch's own preferences, which its right-click menu writes too;
-Settings writes them with `defaults` and pings `com.yogesh.dray.notch.prefs` (or
-`.show`, which also opens the panel) through `notifyutil`. Renaming it Dray
-Island is next, in its own PR.
+and layout are the island's own preferences, which its right-click menu writes too;
+Settings writes them with `defaults` and pings `com.yogesh.dray.island.prefs` (or
+`.show`, which also opens the panel) through `notifyutil`. It was Dray Notch
+until #580, renamed since it sits above the Dock as often as at the notch.
 
 ## How it talks
 
 - **Sessions: the background server, as the iOS app does.** It connects to
   This Mac's `dray --serve`, address and token read from `serve-port` /
   `serve-token` in the home Dray.app hands it on launch (`DRAY_HOME`), so a dev
-  build's notch talks to the dev server. Shares `Wire.swift` and
+  build's island talks to the dev server. Shares `Wire.swift` and
   `Connection.swift` with `apps/ios` by path, not by package.
 - **Dictation: Dray's own Parakeet, through the server to the app.** The
-  transcription commands are the app's (`APP_COMMANDS`), so the notch sends
+  transcription commands are the app's (`APP_COMMANDS`), so the island sends
   them to the server and the server forwards them over `host_call` — the
   channel `dray browser` already rides — to `answer_host`. One place sets up
   dictation: model, mic, mute. A server with no app connected answers "Open
@@ -92,4 +92,4 @@ Island is next, in its own PR.
 
 SwiftUI in an `NSPanel` (`.nonactivatingPanel`, `.statusBar` level, joins all
 spaces), macOS 26. No dependencies. XcodeGen `project.yml`, like `apps/ios`.
-Bundle id `com.yogesh.dray.notch`, `LSUIElement`.
+Bundle id `com.yogesh.dray.island`, `LSUIElement`.

@@ -3,14 +3,14 @@ import Carbon
 import SwiftUI
 
 @main
-struct NotchApp: App {
+struct IslandApp: App {
     @NSApplicationDelegateAdaptor(Delegate.self) private var delegate
     var body: some Scene { Settings { EmptyView() } }
 }
 
 /// This Mac's server, as `serve-port` and `serve-token` in Dray's home name it.
 /// Read at every connect, since a restarted server listens on a fresh port.
-/// Dray hands its home over as `DRAY_HOME`, so a dev build's notch reaches the dev server.
+/// Dray hands its home over as `DRAY_HOME`, so a dev build's island reaches the dev server.
 func localServer() -> (url: String, token: String)? {
     let home = ProcessInfo.processInfo.environment["DRAY_HOME"].map { URL(fileURLWithPath: $0) }
         ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".dray")
@@ -32,15 +32,15 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
-/// A panel that takes keys without making Dray Notch the active app, so the
+/// A panel that takes keys without making Dray Island the active app, so the
 /// app the reader is working in keeps its place in the window order.
-final class NotchPanel: NSPanel {
+final class IslandPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
 @MainActor
 final class Delegate: NSObject, NSApplicationDelegate {
-    private var panel: NotchPanel?
+    private var panel: IslandPanel?
     private var composer: Composer?
     private var hotkey: ModifierTap?
     private var keys: Any?
@@ -79,7 +79,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         return .terminateLater
     }
 
-    /// An update swaps the bundle under a running notch, and Dray's `open` only
+    /// An update swaps the bundle under a running island, and Dray's `open` only
     /// finds this one still up, so it moves itself onto the new binary — while
     /// hidden, never under the reader's hands.
     private func restartWhenReplaced() {
@@ -130,7 +130,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         // One size for good, the cards drawn inside it: SwiftUI can animate a
         // card growing and shrinking, where a window resized under it jumps.
         // Its empty, clear part lets clicks through to whatever is beneath.
-        let panel = NotchPanel(
+        let panel = IslandPanel(
             contentRect: NSRect(origin: .zero, size: Self.size),
             styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
             backing: .buffered, defer: false
@@ -142,7 +142,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         panel.backgroundColor = .clear
         // The cards draw their own; a window shadow would trace the clear window.
         panel.hasShadow = false
-        panel.contentView = FirstClickHostingView(rootView: NotchView(composer: composer).environment(composer.store))
+        panel.contentView = FirstClickHostingView(rootView: IslandView(composer: composer).environment(composer.store))
         self.panel = panel
         // Only losing the keys moves the hint; getting them back waits for the next open, so it never flickers.
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak composer] _ in
@@ -196,7 +196,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { Delegate.shared?.prefsChanged() }
             }
-        }, "com.yogesh.dray.notch.prefs" as CFString, nil, .deliverImmediately)
+        }, "com.yogesh.dray.island.prefs" as CFString, nil, .deliverImmediately)
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), nil, { _, _, _, _, _ in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -204,9 +204,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
                     Delegate.shared?.show()
                 }
             }
-        }, "com.yogesh.dray.notch.show" as CFString, nil, .deliverImmediately)
+        }, "com.yogesh.dray.island.show" as CFString, nil, .deliverImmediately)
         // The tap's twin for other processes: Dray.app, or a script driving the panel.
-        DistributedNotificationCenter.default().addObserver(forName: .init("com.yogesh.dray.notch.tap"), object: nil, queue: .main) { [weak self] _ in
+        DistributedNotificationCenter.default().addObserver(forName: .init("com.yogesh.dray.island.tap"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.pressed() }
         }
     }
@@ -216,9 +216,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private func registerCapture() {
         captureKey?.held = false
         captureKey = nil
-        let stored = UserDefaults.standard.string(forKey: "notch.captureKey")
+        let stored = UserDefaults.standard.string(forKey: "island.captureKey")
         guard stored != "none" else {
-            UserDefaults.standard.set(false, forKey: "notch.captureTaken")
+            UserDefaults.standard.set(false, forKey: "island.captureTaken")
             return
         }
         let parts = (stored ?? "").split(separator: " ").compactMap { Int($0) }
@@ -227,7 +227,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         hotKey.held = true
         captureKey = hotKey
         // Settings reads this back to say the chord does nothing.
-        UserDefaults.standard.set(!hotKey.registered, forKey: "notch.captureTaken")
+        UserDefaults.standard.set(!hotKey.registered, forKey: "island.captureTaken")
     }
 
     func prefsChanged() {
@@ -244,7 +244,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         guard let composer else { return }
         if composer.shown {
             Task { await composer.toggleDictation() }
-        } else if UserDefaults.standard.string(forKey: "notch.tap") == "double",
+        } else if UserDefaults.standard.string(forKey: "island.tap") == "double",
                   lastTap.map({ Date().timeIntervalSince($0) > 0.4 }) ?? true {
             lastTap = Date()
         } else {
@@ -350,7 +350,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private func endAnnotation() {
         guard let a = annotation else { return }
         annotation = nil
-        // A screenshot still open keeps the notch over its overlay; it puts the level back itself.
+        // A screenshot still open keeps the island over its overlay; it puts the level back itself.
         if composer?.capturing != true { panel?.level = .statusBar }
         Task { await a.end() }
     }
@@ -399,9 +399,9 @@ final class ModifierTap {
     private var inputsAtDown: UInt32 = 0
     private var monitors: [Any] = []
 
-    /// Dray's Settings writes `notch.key`; read at every press, so a change lands without a restart.
+    /// Dray's Settings writes `island.key`; read at every press, so a change lands without a restart.
     private static var key: NSEvent.ModifierFlags {
-        switch UserDefaults.standard.string(forKey: "notch.key") {
+        switch UserDefaults.standard.string(forKey: "island.key") {
         case "option": .option
         case "command": .command
         default: .control

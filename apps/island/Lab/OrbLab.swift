@@ -281,7 +281,7 @@ private struct Detail: View {
     }
 }
 
-/// The notch panel's compact layout, which stays compact while dictating:
+/// The island's compact layout, which stays compact while dictating:
 /// the orb beside the input, the input saying what the microphone is doing.
 private struct PanelMock: View {
     let style: OrbStyle

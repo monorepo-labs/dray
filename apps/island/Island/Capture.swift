@@ -9,7 +9,7 @@ import SwiftUI
 /// file — a path, which is all `send_msg` takes.
 @MainActor
 enum Capture {
-    private static var overlay: NotchPanel?
+    private static var overlay: IslandPanel?
     private static var keys: Any?
     /// The sound macOS makes for its own screenshots.
     private static let shutter = NSSound(contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif", byReference: true)
@@ -49,11 +49,11 @@ enum Capture {
 
     /// A reader of any region of `screen` as it is right now, in its top-down
     /// points. This app's windows are left out: an overlay's dimming, its ink,
-    /// and the notch kept up over it.
+    /// and the island kept up over it.
     static func reader(of screen: NSScreen) async throws -> (CGRect) async -> CGImage? {
         guard CGPreflightScreenCaptureAccess() else {
             _ = CGRequestScreenCaptureAccess()
-            throw DrayError("Allow Dray Notch in System Settings → Privacy & Security → Screen Recording, then try again.")
+            throw DrayError("Allow Dray Island in System Settings → Privacy & Security → Screen Recording, then try again.")
         }
         let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -122,8 +122,8 @@ enum Capture {
     }
 
     private static func show(_ model: Marking, on screen: NSScreen, finish: @escaping ((CGImage, CGRect)?) -> Void) {
-        let panel = NotchPanel(contentRect: screen.frame, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
-        // Over the menu bar; the notch panel is lifted over this while it runs.
+        let panel = IslandPanel(contentRect: screen.frame, styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
+        // Over the menu bar; the island is lifted over this while it runs.
         panel.level = .screenSaver
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isOpaque = false
@@ -174,7 +174,7 @@ enum Capture {
             (data, ext) = (rep.representation(using: .jpeg, properties: [.compressionFactor: quality]), "jpg")
         }
         guard let data else { throw DrayError("Could not encode the screenshot.") }
-        let dir = FileManager.default.temporaryDirectory.appending(path: "dray-notch")
+        let dir = FileManager.default.temporaryDirectory.appending(path: "dray-island")
         sweep(dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appending(path: "Screenshot \(UUID().uuidString.prefix(8)).\(ext)")

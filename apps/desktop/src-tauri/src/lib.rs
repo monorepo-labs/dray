@@ -249,7 +249,7 @@ async fn send_msg(
         )
         .await?;
     // The new entry rides back to the caller alone, so every other client — the
-    // app beside a Notch or a phone that started it — hears of it as `dray new`'s
+    // app beside an Island or a phone that started it — hears of it as `dray new`'s
     // sessions are heard of. The caller's own copy replaces itself.
     if let Some(snap) = &outcome.snapshot {
         sink.emit(orchestration::SESSION_CREATED, &snap.index_item).ok();
@@ -877,10 +877,10 @@ pub fn run() {
             quit::dismiss_quit,
             apps::list_open_apps,
             apps::open_in_app,
-            apps::configure_notch,
-            apps::notch_running,
-            apps::notch_prefs,
-            apps::set_notch_pref,
+            apps::configure_island,
+            apps::island_running,
+            apps::island_prefs,
+            apps::set_island_pref,
             apps::open_login_terminal,
             accounts::run_agent_login,
             agent_updates::update_agent_in_terminal,

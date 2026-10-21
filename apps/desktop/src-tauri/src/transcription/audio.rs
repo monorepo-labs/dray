@@ -390,7 +390,7 @@ impl Recording {
     }
 
     /// What has been said so far, taken out of the buffer with the microphone
-    /// left open, so the next stretch starts empty. The Notch cuts here to put
+    /// left open, so the next stretch starts empty. The Island cuts here to put
     /// a screenshot between two stretches of speech without losing a word to a
     /// stop and a start. Silence answers `None`, as [`Recording::finish`] does.
     pub fn cut(&self) -> Result<(Option<Vec<f32>>, Vec<f32>)> {

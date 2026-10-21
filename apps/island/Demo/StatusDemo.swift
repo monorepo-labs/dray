@@ -5,7 +5,7 @@ import SwiftUI
 @main
 struct StatusDemo: App {
     var body: some Scene {
-        WindowGroup("Notch status") {
+        WindowGroup("Island status") {
             DemoPage().frame(minWidth: 600, minHeight: 760)
         }
     }
@@ -58,7 +58,7 @@ private struct DemoPage: View {
 private struct ListMock: View {
     private let rows: [(String, String, Marks)] = [
         ("Fix the login redirect", "dray", marks(.asking, .none)),
-        ("Notch status in the task list", "dray", marks(.working, .checks)),
+        ("Island status in the task list", "dray", marks(.working, .checks)),
         ("Paste images into the composer", "dray", marks(.done, .open)),
         ("Theme swatches in settings", "dray", marks(.idle, .failing)),
         ("Orb lab", "dray", marks(.working, .none)),
@@ -84,7 +84,7 @@ private struct TabsMock: View {
     let count: Int
     @State private var active = 0
     private static let titles = [
-        "Fix the login redirect loop", "Notch status in the task list", "Paste images into the composer",
+        "Fix the login redirect loop", "Island status in the task list", "Paste images into the composer",
         "Theme swatches in settings", "Orb lab", "Docs for remote access", "Changelog for 0.12", "Spike: CEF memory",
     ]
 

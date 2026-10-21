@@ -21,7 +21,7 @@ import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
-import { notchOn } from "@/lib/notch";
+import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
 import { setOlderLoader } from "@/lib/olderPages";
 import { stanceFor } from "@/lib/permission";
@@ -2708,11 +2708,11 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
   if (!canAnnounce(sessionId)) return false;
 
   if (!isWindowFocused()) {
-    // A card is the notch's to raise while it runs: its pill counts what waits
+    // A card is the island's to raise while it runs: its pill counts what waits
     // and answers it in place, so a banner beside it says the same thing twice.
-    // The notch watches This Mac alone, so a remote session keeps its banner.
+    // The island watches This Mac alone, so a remote session keeps its banner.
     if (kind === "asking" && serverOfSession(sessionId) === LOCAL) {
-      void notchOn().then((on) => on || notifyOS(sessionId, kind, label, item?.title ?? ""));
+      void islandOn().then((on) => on || notifyOS(sessionId, kind, label, item?.title ?? ""));
       return false;
     }
     // Same order as the card: the verb first, because *what is wanted* is the

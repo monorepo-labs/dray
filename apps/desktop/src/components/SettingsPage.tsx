@@ -62,8 +62,8 @@ import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
 import { useTranscriptionSettings } from "@/hooks/useTranscription";
 import { IS_MAC } from "@/lib/platform";
-import { applyNotch, NOTCH_ENABLED, NOTCH_KEY, NOTCH_KEYS, type NotchKey } from "@/lib/notch";
-import { captureCaps, captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/notchCapture";
+import { applyIsland, ISLAND_ENABLED, ISLAND_KEY, ISLAND_KEYS, type IslandKey } from "@/lib/island";
+import { captureCaps, captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/islandCapture";
 import { useWindowFocused } from "@/lib/focus";
 import { invoke } from "@/lib/transport";
 import { hasLightMode, modeFor, type ThemeMode } from "@/lib/theme";
@@ -202,8 +202,8 @@ export default function SettingsPage({
             </Section>
           </>
         ),
-        shortcuts: <ShortcutsSettings onOpenNotch={() => goTo("notch")} />,
-        notch: <NotchSettings />,
+        shortcuts: <ShortcutsSettings onOpenIsland={() => goTo("island")} />,
+        island: <IslandSettings />,
         spaces: (
           <SpacesSettings
             projects={projects}
@@ -1055,60 +1055,60 @@ function SupportBlock() {
 /// Untitled it is still worth being: the tab panel spaces its groups apart at
 /// `gap-7` and this holds rows together at `gap-4`, which is the whole of how a
 /// heading ends up nearer what it names than what it follows.
-/// Dray Notch's picks. The switch and the key are Dray's to keep, in local
-/// storage, and handed to the notch at every launch; the rest are the notch's
+/// Dray Island's picks. The switch and the key are Dray's to keep, in local
+/// storage, and handed to the island at every launch; the rest are the island's
 /// own preferences, which its right-click menu writes too, so they are read
 /// back from it — on arrival and every few seconds while the window is in
-/// front, since a pick made in the notch's menu moves no focus here. Every row
-/// works while the notch is off, so it opens the way the reader left it.
-const NOTCH_TAPS = [
+/// front, since a pick made in the island's menu moves no focus here. Every row
+/// works while the island is off, so it opens the way the reader left it.
+const ISLAND_TAPS = [
   { id: "single", label: "Single tap" },
   { id: "double", label: "Double tap" },
 ] as const;
 
-function NotchSettings() {
-  const [on, setOn] = useLocalStorage<boolean>(NOTCH_ENABLED, true);
-  const [key, setKey] = useLocalStorage<NotchKey>(NOTCH_KEY, "control");
+function IslandSettings() {
+  const [on, setOn] = useLocalStorage<boolean>(ISLAND_ENABLED, true);
+  const [key, setKey] = useLocalStorage<IslandKey>(ISLAND_KEY, "control");
   const [prefs, setPrefs] = useState<Record<string, string>>({});
   const focused = useWindowFocused();
   useEffect(() => {
     if (!focused) return;
-    const read = () => void invoke<Record<string, string>>("notch_prefs").then(setPrefs).catch(() => {});
+    const read = () => void invoke<Record<string, string>>("island_prefs").then(setPrefs).catch(() => {});
     read();
     const timer = setInterval(read, 3000);
     return () => clearInterval(timer);
   }, [focused]);
   const save = (name: string, value: string) => {
     setPrefs((p) => ({ ...p, [name]: value }));
-    invoke("set_notch_pref", { name, value }).catch((err) => console.warn("[notch]", err));
+    invoke("set_island_pref", { name, value }).catch((err) => console.warn("[island]", err));
   };
   const onId = useId();
   const keyId = useId();
   const tapId = useId();
   const placeId = useId();
   const layoutId = useId();
-  const double = prefs["notch.tap"] === "double";
+  const double = prefs["island.tap"] === "double";
 
   return (
     <>
       <Section>
-        <SettingRow id={onId} label="Dray Notch" description="A composer that floats over every app, for prompts, dictation and answering cards.">
+        <SettingRow id={onId} label="Dray Island" description="A composer that floats over every app, for prompts, dictation and answering cards.">
           <Switch
             id={onId}
             checked={on}
             onCheckedChange={(next) => {
               setOn(next);
-              void applyNotch({ on: next, key });
+              void applyIsland({ on: next, key });
             }}
           />
         </SettingRow>
       </Section>
       <Section>
-        <SettingRow id={keyId} label="Shortcut" description="Press and let go of this key on its own to open Dray Notch. Do it again while it is open to dictate.">
+        <SettingRow id={keyId} label="Shortcut" description="Press and let go of this key on its own to open Dray Island. Do it again while it is open to dictate.">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button id={keyId} type="button" size="sm" variant="ghost" className="justify-between">
-                {NOTCH_KEYS.find((k) => k.value === key)?.label}
+                {ISLAND_KEYS.find((k) => k.value === key)?.label}
                 <ChevronDown className="size-3 shrink-0 opacity-60" />
               </Button>
             </DropdownMenuTrigger>
@@ -1116,11 +1116,11 @@ function NotchSettings() {
               <DropdownMenuRadioGroup
                 value={key}
                 onValueChange={(next) => {
-                  setKey(next as NotchKey);
-                  void applyNotch({ on, key: next as NotchKey });
+                  setKey(next as IslandKey);
+                  void applyIsland({ on, key: next as IslandKey });
                 }}
               >
-                {NOTCH_KEYS.map((k) => (
+                {ISLAND_KEYS.map((k) => (
                   <DropdownMenuRadioItem key={k.value} value={k.value}>
                     {k.label}
                   </DropdownMenuRadioItem>
@@ -1140,32 +1140,32 @@ function NotchSettings() {
           }
         >
           <SegmentedRadio
-            options={NOTCH_TAPS}
+            options={ISLAND_TAPS}
             value={double ? "double" : "single"}
-            onPick={(v) => save("notch.tap", v)}
+            onPick={(v) => save("island.tap", v)}
             labelledBy={tapId}
           />
         </SettingRow>
         <CaptureKeyRow
-          value={prefs["notch.captureKey"]}
-          taken={on && prefs["notch.captureTaken"] === "1"}
-          onChange={(v) => save("notch.captureKey", v)}
+          value={prefs["island.captureKey"]}
+          taken={on && prefs["island.captureTaken"] === "1"}
+          onChange={(v) => save("island.captureKey", v)}
         />
       </Section>
       <Section>
         <SettingRow id={placeId} asGroup stacked label="Position">
           <PictureRadio
-            options={NOTCH_PLACEMENTS}
-            value={prefs["notch.placement"] === "bottom" ? "bottom" : "notch"}
-            onPick={(v) => save("notch.placement", v)}
+            options={ISLAND_PLACEMENTS}
+            value={prefs["island.placement"] === "bottom" ? "bottom" : "notch"}
+            onPick={(v) => save("island.placement", v)}
             labelledBy={placeId}
           />
         </SettingRow>
         <SettingRow id={layoutId} asGroup stacked label="Layout">
           <PictureRadio
-            options={NOTCH_LAYOUTS}
-            value={prefs["notch.mode"] === "expanded" ? "expanded" : "compact"}
-            onPick={(v) => save("notch.mode", v)}
+            options={ISLAND_LAYOUTS}
+            value={prefs["island.mode"] === "expanded" ? "expanded" : "compact"}
+            onPick={(v) => save("island.mode", v)}
             labelledBy={layoutId}
           />
         </SettingRow>
@@ -1175,7 +1175,7 @@ function NotchSettings() {
 }
 
 /// A pick drawn as pictures rather than words, since "Compact" or "Bottom"
-/// says little until it is seen. The notch is drawn in its own black whatever
+/// says little until it is seen. The island is drawn in its own black whatever
 /// the theme, which is how it looks on screen.
 function PictureRadio<T extends string>({
   options,
@@ -1271,11 +1271,11 @@ function PositionPicture({ bottom }: { bottom: boolean }) {
   );
 }
 
-const NOTCH_PLACEMENTS = [
+const ISLAND_PLACEMENTS = [
   { id: "notch", label: "Notch", hint: "Hanging from the notch.", picture: <PositionPicture bottom={false} /> },
   { id: "bottom", label: "Bottom", hint: "Above the Dock.", picture: <PositionPicture bottom /> },
 ] as const;
-const NOTCH_LAYOUTS = [
+const ISLAND_LAYOUTS = [
   { id: "compact", label: "Compact", hint: "The orb beside the input.", picture: <LayoutPicture expanded={false} /> },
   { id: "expanded", label: "Expanded", hint: "The orb alone, the input under it.", picture: <LayoutPicture expanded /> },
 ] as const;
@@ -1289,7 +1289,7 @@ function CaptureKeyRow({
   onChange,
 }: {
   value: string | undefined;
-  /// The notch could not register the chord, so pressing it does nothing.
+  /// The island could not register the chord, so pressing it does nothing.
   taken: boolean;
   onChange: (next: string) => void;
 }) {
@@ -1387,15 +1387,15 @@ const ALL_TABS = [
   { id: "transcription", label: "Transcription", Icon: MicrophoneIcon },
   { id: "integrations", label: "Integrations", Icon: PuzzlePieceIcon },
   { id: "shortcuts", label: "Shortcuts", Icon: BoltIcon },
-  { id: "notch", label: "Notch", Icon: ComputerDesktopIcon },
+  { id: "island", label: "Island", Icon: ComputerDesktopIcon },
   { id: "changelog", label: "Changelog", Icon: NewspaperIcon },
   { id: "about", label: "About", Icon: InformationCircleIcon },
 ] as const;
 
 export type SettingsTab = (typeof ALL_TABS)[number]["id"];
 
-/// Dray Notch is a Mac app, so elsewhere its tab would be a page of controls for nothing.
-const SETTINGS_TABS = ALL_TABS.filter((t) => IS_MAC || t.id !== "notch");
+/// Dray Island is a Mac app, so elsewhere its tab would be a page of controls for nothing.
+const SETTINGS_TABS = ALL_TABS.filter((t) => IS_MAC || t.id !== "island");
 
 /// A line under a tab's title saying what the tab is for. Accounts has one
 /// because its harness switches change what the composer's picker offers,

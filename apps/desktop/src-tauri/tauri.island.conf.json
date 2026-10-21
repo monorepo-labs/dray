@@ -3,7 +3,7 @@
   "bundle": {
     "macOS": {
       "files": {
-        "Helpers/Dray Notch.app": "target/notch/Dray Notch.app"
+        "Helpers/Dray Island.app": "target/island/Dray Island.app"
       }
     }
   }

@@ -47,14 +47,14 @@ final class Composer {
         didSet {
             // Decided as the pill appears, so the hint arrives with it rather than a beat later.
             // A recording begun under Sent is new work: the draft comes back and the panel stays.
-            if dictation == .starting { sent = false; notice = nil; drawHint = UserDefaults.standard.integer(forKey: "notch.drawHints") < Self.drawHints }
+            if dictation == .starting { sent = false; notice = nil; drawHint = UserDefaults.standard.integer(forKey: "island.drawHints") < Self.drawHints }
             if !listening { drawHint = false }
             if (dictation == .recording) != (oldValue == .recording) {
                 recordingSince = dictation == .recording ? Date() : nil
                 recordingChanged(dictation == .recording)
                 // Counted once the microphone is open, so a refused start spends nothing.
                 if dictation == .recording, drawHint {
-                    UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "notch.drawHints") + 1, forKey: "notch.drawHints")
+                    UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "island.drawHints") + 1, forKey: "island.drawHints")
                 }
             }
         }
@@ -64,8 +64,8 @@ final class Composer {
     @ObservationIgnored var recordingChanged: (Bool) -> Void = { _ in }
     /// When the microphone opened, for the timer; `nil` unless recording.
     var recordingSince: Date?
-    var mode = InputMode(rawValue: UserDefaults.standard.string(forKey: "notch.mode") ?? "") ?? .compact {
-        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "notch.mode") }
+    var mode = InputMode(rawValue: UserDefaults.standard.string(forKey: "island.mode") ?? "") ?? .compact {
+        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "island.mode") }
     }
     var level: Float = 0
     var notice: String? { didSet { retryPath = nil } }
@@ -91,15 +91,15 @@ final class Composer {
     var keyed = false
     var closeHint: String { keyed ? "Esc" : "⌘Esc" }
     var notchHeight: CGFloat = 0
-    var placement = Placement(rawValue: UserDefaults.standard.string(forKey: "notch.placement") ?? "") ?? .notch {
-        didSet { UserDefaults.standard.set(placement.rawValue, forKey: "notch.placement") }
+    var placement = Placement(rawValue: UserDefaults.standard.string(forKey: "island.placement") ?? "") ?? .notch {
+        didSet { UserDefaults.standard.set(placement.rawValue, forKey: "island.placement") }
     }
 
     /// Takes what Dray's Settings wrote. Assigned only where it moved, or the write-back would bump the menu for nothing.
     func reloadPrefs() {
         let d = UserDefaults.standard
-        if let p = Placement(rawValue: d.string(forKey: "notch.placement") ?? ""), p != placement { placement = p }
-        if let m = InputMode(rawValue: d.string(forKey: "notch.mode") ?? ""), m != mode { mode = m }
+        if let p = Placement(rawValue: d.string(forKey: "island.placement") ?? ""), p != placement { placement = p }
+        if let m = InputMode(rawValue: d.string(forKey: "island.mode") ?? ""), m != mode { mode = m }
     }
 
     // A new session's picks.
@@ -107,22 +107,22 @@ final class Composer {
     var projectPath: String?
     var agents: [AgentAvailability] = []
     var models: [String: [Model]] = [:]
-    var harness = UserDefaults.standard.string(forKey: "notch.harness") ?? "claude_code" {
-        didSet { UserDefaults.standard.set(harness, forKey: "notch.harness") }
+    var harness = UserDefaults.standard.string(forKey: "island.harness") ?? "claude_code" {
+        didSet { UserDefaults.standard.set(harness, forKey: "island.harness") }
     }
     var modelPicks = Prefs.map("models")
     var effortPicks = Prefs.map("efforts")
-    var stance = UserDefaults.standard.string(forKey: "notch.stance") ?? "auto" {
-        didSet { UserDefaults.standard.set(stance, forKey: "notch.stance") }
+    var stance = UserDefaults.standard.string(forKey: "island.stance") ?? "auto" {
+        didSet { UserDefaults.standard.set(stance, forKey: "island.stance") }
     }
     /// The reader's worktree pick per project; a project never toggled takes one.
-    private var worktreeByProject = UserDefaults.standard.dictionary(forKey: "notch.worktreeByProject") as? [String: Bool] ?? [:]
+    private var worktreeByProject = UserDefaults.standard.dictionary(forKey: "island.worktreeByProject") as? [String: Bool] ?? [:]
     var worktree: Bool {
         get { projectPath.flatMap { worktreeByProject[$0] } ?? true }
         set {
             guard let projectPath else { return }
             worktreeByProject[projectPath] = newValue
-            UserDefaults.standard.set(worktreeByProject, forKey: "notch.worktreeByProject")
+            UserDefaults.standard.set(worktreeByProject, forKey: "island.worktreeByProject")
         }
     }
     var openMenu: MenuID?
@@ -153,7 +153,7 @@ final class Composer {
     @ObservationIgnored private var asksPending = false
     /// Hides the panel, runs the screenshot overlay, and opens it again.
     @ObservationIgnored var capture: () -> Void = {}
-    @ObservationIgnored private var lastUsed = UserDefaults.standard.string(forKey: "notch.lastSession")
+    @ObservationIgnored private var lastUsed = UserDefaults.standard.string(forKey: "island.lastSession")
 
     init(store: Store, server: UUID) {
         self.store = store
@@ -226,7 +226,7 @@ final class Composer {
                 return
             }
             if attempt == 0 {
-                // Bundled, the notch sits at Dray.app/Contents/Helpers; in a dev build there is no Dray around it.
+                // Bundled, the island sits at Dray.app/Contents/Helpers; in a dev build there is no Dray around it.
                 let host = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
                 let app = host.pathExtension == "app" ? host : NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.yogesh.dray")
                 if let app { _ = try? await NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration()) }
@@ -354,7 +354,7 @@ final class Composer {
             Task { await loadPicks() }
         case .session(let k):
             lastUsed = k.id
-            UserDefaults.standard.set(k.id, forKey: "notch.lastSession")
+            UserDefaults.standard.set(k.id, forKey: "island.lastSession")
         }
     }
 
@@ -399,7 +399,7 @@ final class Composer {
 
     // MARK: New session
 
-    /// Read on every new task: the notch outlives Dray, where projects get attached.
+    /// Read on every new task: the island outlives Dray, where projects get attached.
     func loadPicks() async {
         do {
             async let p: [Project] = store.call(server, "list_projects")
@@ -480,7 +480,7 @@ final class Composer {
         rows.removeAll { sentRows.contains($0.id) }
         if typing == sentTyping { typing = "" }
         lastUsed = sent.id
-        UserDefaults.standard.set(sent.id, forKey: "notch.lastSession")
+        UserDefaults.standard.set(sent.id, forKey: "island.lastSession")
         self.target = .session(sent)
         self.sent = true
         let visit = opens

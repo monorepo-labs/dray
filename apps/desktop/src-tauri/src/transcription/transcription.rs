@@ -362,13 +362,13 @@ pub fn app() -> Option<&'static AppHandle> {
     APP.get()
 }
 
-/// Whether the recorder holds the Notch's recording rather than the app's own.
+/// Whether the recorder holds the Island's recording rather than the app's own.
 /// There is one recorder and two clients, so neither may stop or read the
 /// other's: a start from the app hands it back to the app.
 static HOST_OWNS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Dictation asked for through the server rather than the webview — the
-/// Notch panel's route, since it holds no microphone or model of its own.
+/// Island's route, since it holds no microphone or model of its own.
 /// `None` where `cmd` is not dictation.
 pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<serde_json::Value, String>> {
     use std::sync::atomic::Ordering::SeqCst;
@@ -383,15 +383,15 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
     let state = app.state::<TranscriptionState>();
     let owns = HOST_OWNS.load(SeqCst);
     Some(match cmd {
-        // A Notch recording found here is one the Notch lost — it starts only
-        // when idle, so a restarted Notch would otherwise be locked out for good.
+        // An Island recording found here is one the Island lost — it starts only
+        // when idle, so a restarted Island would otherwise be locked out for good.
         "start_transcription" if !owns && state.recording.lock().await.is_some() => {
             Err("Dray is already dictating.".into())
         }
         "start_transcription" => {
             let started = start_transcription(state).await;
             // A refused start replaced nothing, so a lost recording it found is
-            // still the Notch's to stop.
+            // still the Island's to stop.
             HOST_OWNS.store(owns || matches!(started, Ok(None)), SeqCst);
             started.and_then(json)
         }
@@ -539,7 +539,7 @@ pub async fn stop_transcription(
 }
 
 /// Transcribes what has been said so far and leaves the microphone open: the
-/// Notch's screenshot, taken mid-sentence, lands between the words before it
+/// Island's screenshot, taken mid-sentence, lands between the words before it
 /// and the words after. A stop and a start would lose what was said between
 /// the two. Nothing recording, or only silence, answers `Empty` — a cut with no
 /// words before it is ordinary, not a microphone fault.
@@ -743,7 +743,7 @@ mod bench {
             })
         };
 
-        // A Notch cut a third of the way in, mid-pause, then the rest.
+        // An Island cut a third of the way in, mid-pause, then the rest.
         let third = captured.len() / 3 / 1920 * 1920;
         play(captured[..third].to_vec(), tap.clone()).await.unwrap();
         let t = Instant::now();
