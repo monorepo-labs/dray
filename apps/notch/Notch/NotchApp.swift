@@ -49,6 +49,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var closeKey: HotKey?
     /// ⌘⇧2, beside macOS's own ⌘⇧3/4/5: a screenshot into the draft from anywhere.
     private var captureKey: HotKey?
+    private static weak var shared: Delegate?
+    /// The first of a double tap, while the panel is shut.
+    private var lastTap: Date?
     private var annotation: Annotation?
     /// Over a capture's or a drawing's overlay, so dictation stays in sight and in reach.
     private static let overOverlay = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
@@ -141,6 +144,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
         panel.hasShadow = false
         panel.contentView = FirstClickHostingView(rootView: NotchView(composer: composer).environment(composer.store))
         self.panel = panel
+        // Only losing the keys moves the hint; getting them back waits for the next open, so it never flickers.
+        NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak composer] _ in
+            MainActor.assumeIsolated { composer?.keyed = false }
+        }
         // The panel's keys, here rather than on views, which answer only
         // while focus sits inside them. Key codes: Escape 53, N 45, F 3, ↓ 125, ↑ 126.
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak composer, weak panel] e in
@@ -180,23 +187,62 @@ final class Delegate: NSObject, NSApplicationDelegate {
         composer.recordingChanged = { [weak self] recording in
             if recording { self?.startAnnotation() } else { self?.endAnnotation() }
         }
-        captureKey = HotKey(key: kVK_ANSI_2, mods: cmdKey | shiftKey) { [weak self] in
-            self?.capture()
-        }
-        captureKey?.held = true
+        registerCapture()
+        // Dray's Settings writes the picks and then says so, through `notifyutil -p`.
+        // A C callback captures nothing, so it finds the delegate through a static;
+        // `NSApp.delegate` is SwiftUI's adaptor, not this.
+        Self.shared = self
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), nil, { _, _, _, _, _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { Delegate.shared?.prefsChanged() }
+            }
+        }, "com.yogesh.dray.notch.prefs" as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), nil, { _, _, _, _, _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    Delegate.shared?.prefsChanged()
+                    Delegate.shared?.show()
+                }
+            }
+        }, "com.yogesh.dray.notch.show" as CFString, nil, .deliverImmediately)
         // The tap's twin for other processes: Dray.app, or a script driving the panel.
         DistributedNotificationCenter.default().addObserver(forName: .init("com.yogesh.dray.notch.tap"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.pressed() }
         }
     }
 
+    /// The screenshot chord Settings picked: a Carbon key code and modifier
+    /// mask, `none` for no chord, ⌘⇧2 when nothing is stored.
+    private func registerCapture() {
+        captureKey?.held = false
+        captureKey = nil
+        let stored = UserDefaults.standard.string(forKey: "notch.captureKey")
+        guard stored != "none" else { return }
+        let parts = (stored ?? "").split(separator: " ").compactMap { Int($0) }
+        let (key, mods) = parts.count == 2 ? (parts[0], parts[1]) : (kVK_ANSI_2, cmdKey | shiftKey)
+        captureKey = HotKey(key: key, mods: mods) { [weak self] in self?.capture() }
+        captureKey?.held = true
+    }
+
+    func prefsChanged() {
+        composer?.reloadPrefs()
+        registerCapture()
+        place()
+    }
+
     /// A tap opens the panel; a tap on an open one starts or stops dictating.
-    /// So a double tap opens it listening, with no timer to wait out.
+    /// So a double tap opens it listening, with no timer to wait out. Settings'
+    /// double-tap pick opens only on a second tap close behind the first, read
+    /// at every press like the key, so a stray tap never puts the panel up.
     private func pressed() {
         guard let composer else { return }
         if composer.shown {
             Task { await composer.toggleDictation() }
+        } else if UserDefaults.standard.string(forKey: "notch.tap") == "double",
+                  lastTap.map({ Date().timeIntervalSince($0) > 0.4 }) ?? true {
+            lastTap = Date()
         } else {
+            lastTap = nil
             show()
         }
     }
@@ -247,7 +293,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func show() {
+    func show() {
         guard let panel, let composer, !composer.shown else { return }
         composer.opened()
         place()
@@ -315,10 +361,25 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let size = Self.size
         let origin = switch composer.placement {
         case .notch: NSPoint(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - size.height)
-        case .bottom: NSPoint(x: screen.visibleFrame.midX - size.width / 2, y: screen.visibleFrame.minY)
+        case .bottom: NSPoint(x: screen.visibleFrame.midX - size.width / 2, y: screen.visibleFrame.minY + Self.hiddenDock(screen))
         }
         composer.notchHeight = composer.placement == .notch ? screen.safeAreaInsets.top : 0
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
+    }
+
+    /// A Dock that hides itself reserves nothing in `visibleFrame`, so the panel
+    /// sat on the screen's edge and the Dock slid up over it. Its height is
+    /// read off its own icon size.
+    /// ponytail: tile size plus the Dock's margins, measured at 63pt; magnification
+    /// and a Dock on another display are not read.
+    private static func hiddenDock(_ screen: NSScreen) -> CGFloat {
+        let dock = "com.apple.dock" as CFString
+        guard screen.visibleFrame.minY == screen.frame.minY,
+              CFPreferencesCopyAppValue("autohide" as CFString, dock) as? Bool == true,
+              (CFPreferencesCopyAppValue("orientation" as CFString, dock) as? String ?? "bottom") == "bottom"
+        else { return 0 }
+        let tile = CFPreferencesCopyAppValue("tilesize" as CFString, dock) as? CGFloat ?? 48
+        return tile + 20
     }
 }
 

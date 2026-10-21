@@ -32,6 +32,8 @@ struct NewSessionBar: View {
                     Text(Picks.stances.first { $0.0 == Picks.stanceFor(composer.harness, composer.stance) }?.1 ?? "Auto")
                 }
             }
+            Spacer(minLength: 0)
+            KeyHints(new: false, close: composer.closeHint)
         }
         .font(.system(size: 13, weight: .medium))
         .task(id: composer.harness) { await composer.loadModels() }

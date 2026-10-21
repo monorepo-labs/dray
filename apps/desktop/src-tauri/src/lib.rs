@@ -879,6 +879,8 @@ pub fn run() {
             apps::open_in_app,
             apps::configure_notch,
             apps::notch_running,
+            apps::notch_prefs,
+            apps::set_notch_pref,
             apps::open_login_terminal,
             accounts::run_agent_login,
             agent_updates::update_agent_in_terminal,

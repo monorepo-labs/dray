@@ -87,9 +87,19 @@ final class Composer {
     var opens = 0
     /// Drawn open; the window lags it on the way out, so the close can animate.
     var shown = false
+    /// Whether the panel has held the keys since it opened, which is when a bare Esc reaches it.
+    var keyed = false
+    var closeHint: String { keyed ? "Esc" : "⌘Esc" }
     var notchHeight: CGFloat = 0
     var placement = Placement(rawValue: UserDefaults.standard.string(forKey: "notch.placement") ?? "") ?? .notch {
         didSet { UserDefaults.standard.set(placement.rawValue, forKey: "notch.placement") }
+    }
+
+    /// Takes what Dray's Settings wrote. Assigned only where it moved, or the write-back would bump the menu for nothing.
+    func reloadPrefs() {
+        let d = UserDefaults.standard
+        if let p = Placement(rawValue: d.string(forKey: "notch.placement") ?? ""), p != placement { placement = p }
+        if let m = InputMode(rawValue: d.string(forKey: "notch.mode") ?? ""), m != mode { mode = m }
     }
 
     // A new session's picks.
@@ -322,6 +332,7 @@ final class Composer {
     func opened() {
         // Cleared here rather than at the close, which would flash the draft back mid-shrink.
         sent = false
+        keyed = true
         opens += 1
         notice = nil
         listShown = false

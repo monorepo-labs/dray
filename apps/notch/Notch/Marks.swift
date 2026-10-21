@@ -40,6 +40,7 @@ struct FlightMark: View {
 /// teach the keys. Where it stands is the list's to say, not this row's.
 struct TitleRow: View {
     let title: String
+    let close: String
     let open: () -> Void
     @State private var hovered = false
 
@@ -56,15 +57,26 @@ struct TitleRow: View {
             .onHover { hovered = $0 }
             .animation(.easeOut(duration: 0.12), value: hovered)
             .help("Open in Dray")
-            HStack(spacing: 10) {
-                Text("⌘N New")
-                Text("↑↓ Tasks")
-                Text("⌘Esc")
-            }
-            .font(.system(size: 12))
-            .foregroundStyle(.white.opacity(0.3))
-            .fixedSize()
+            KeyHints(new: true, close: close)
         }
+    }
+}
+
+/// The panel's keys, dimmed. `close` is the composer's `closeHint`, since Esc
+/// only reaches a panel holding the keys.
+struct KeyHints: View {
+    let new: Bool
+    let close: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if new { Text("⌘N New") }
+            Text("↑↓ Tasks")
+            Text(close)
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(.white.opacity(0.3))
+        .fixedSize()
     }
 }
 
