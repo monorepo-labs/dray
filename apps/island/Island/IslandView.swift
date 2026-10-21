@@ -523,11 +523,12 @@ struct PillsView: View {
         ZStack {
             if !composer.shown, !composer.attention.isEmpty {
                 AttentionPill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
-                              count: composer.attention.count) { composer.openCards() }
+                              count: composer.attention.count, glowing: composer.glowing) { composer.openCards() }
                     .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
             } else if !composer.shown, !composer.done.isEmpty {
                 DonePill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
                          items: composer.done.reversed().map { ($0, store.items[$0]?.title ?? "") },
+                         glowing: composer.glowing,
                          open: { composer.openDone($0) },
                          openInApp: { key in
                              // Dray comes forward, and its sidebar already marks the rest unread.
@@ -541,6 +542,7 @@ struct PillsView: View {
         .animation(.spring(duration: 0.32, bounce: 0.2), value: composer.attention.count)
         .animation(.spring(duration: 0.32, bounce: 0.2), value: composer.done.count)
         .animation(.easeIn(duration: 0.15), value: composer.shown)
+        .animation(.easeOut(duration: composer.glowing ? 0.2 : 0.6), value: composer.glowing)
         // Where the card hangs from: the panel's top edge, or just above the Dock.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: anchor == .top ? .top : .bottom)
         .padding(.bottom, composer.placement == .bottom ? 12 : 0)

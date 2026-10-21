@@ -184,12 +184,13 @@ struct AttentionPill: View {
     let notch: Bool
     let notchHeight: CGFloat
     let count: Int
+    var glowing = false
     let action: () -> Void
     @State private var dwell: Task<Void, Never>?
 
     var body: some View {
         Button(action: action) {
-            PillShell(notch: notch, notchHeight: notchHeight, glow: StatusDot.waiting, glowKey: count) {
+            PillShell(notch: notch, notchHeight: notchHeight, glow: glowing ? StatusDot.waiting : nil) {
                 HStack(spacing: 8) {
                     Circle().fill(StatusDot.waiting).frame(width: 6, height: 6)
                     Text("\(count) \(count == 1 ? "task needs" : "tasks need") attention")
@@ -216,6 +217,7 @@ struct DonePill: View {
     let notch: Bool
     let notchHeight: CGFloat
     let items: [(key: SessionKey, title: String)]
+    var glowing = false
     let open: (SessionKey) -> Void
     let openInApp: (SessionKey) -> Void
     var hover: (Bool) -> Void = { _ in }
@@ -224,7 +226,7 @@ struct DonePill: View {
     private static let row: CGFloat = 26
 
     var body: some View {
-        PillShell(notch: notch, notchHeight: notchHeight, glow: StatusDot.unread, glowKey: items.count) {
+        PillShell(notch: notch, notchHeight: notchHeight, glow: glowing ? StatusDot.unread : nil) {
             // One structure, open or shut, so the pill grows rather than swapping layouts.
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
@@ -317,24 +319,11 @@ private struct OpenInAppButton: View {
 struct PillShell<Content: View>: View {
     let notch: Bool
     let notchHeight: CGFloat
-    /// A soft edge in this colour marks news arriving, then fades, leaving the dot to say what kind.
+    /// A soft edge in this colour while news is fresh; `Composer.glowing` says when.
     var glow: Color? = nil
-    /// A change lights the glow again, so a second arrival is noticed too.
-    var glowKey = 0
     @ViewBuilder let content: Content
-    @State private var glowing = true
 
     var body: some View {
-        pill(glowing ? glow : nil)
-            .task(id: glowKey) {
-                withAnimation(.easeOut(duration: 0.2)) { glowing = true }
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeOut(duration: 0.6)) { glowing = false }
-            }
-    }
-
-    private func pill(_ glow: Color?) -> some View {
         content
             .padding(.horizontal, 16)
             .padding(.vertical, 10)

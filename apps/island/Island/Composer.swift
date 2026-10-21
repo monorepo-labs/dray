@@ -212,12 +212,34 @@ final class Composer {
             askOrder = askOrder.filter(ids.contains) + fresh
             if !fresh.isEmpty {
                 // An idle open panel draws the card at once, which says enough.
-                if !shown { chime() } else if busy || sent { heldAsk = true }
+                if !shown { announce() } else if busy || sent { heldAsk = true }
+                // The attention pill covers the done one, so its clock stops until it is seen again.
+                doneClock += 1
             }
             // The last card answered is the panel's job done.
             // Not while the reader is busy: a card answered elsewhere leaves them their draft.
             if ids.isEmpty, hadCards, shown, !busy { hide() }
+            // Answered elsewhere with the panel shut: the done pill is back in view, its clock with it.
+            if ids.isEmpty, hadCards, !shown, !done.isEmpty { startDoneClock() }
             pillChanged()
+        }
+    }
+
+    /// The pill's edge lit for news, for a moment: kept here rather than in
+    /// the pill, which is drawn afresh on every close and lit again with it.
+    var glowing = false
+    @ObservationIgnored private var glowClock = 0
+
+    /// News reaching a shut panel: the sound and the glow, once.
+    func announce(sound: Bool = true) {
+        if sound { chime() }
+        glowClock += 1
+        let clock = glowClock
+        glowing = true
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard clock == glowClock else { return }
+            glowing = false
         }
     }
 
@@ -232,7 +254,7 @@ final class Composer {
         let ask = heldAsk && !attention.isEmpty, finished = heldDone && !done.isEmpty
         heldAsk = false
         heldDone = false
-        if ask || finished { chime() }
+        if ask || finished { announce() }
         // Expiry waits while the panel is open, so any pill left gets its clock back here.
         if !done.isEmpty { startDoneClock() }
     }
@@ -277,7 +299,7 @@ final class Composer {
             heldDone = true
             doneClock += 1
         } else {
-            chime()
+            announce()
             startDoneClock()
         }
     }
@@ -287,7 +309,8 @@ final class Composer {
         let clock = doneClock
         Task {
             try? await Task.sleep(for: Self.doneFor)
-            if clock == doneClock, !doneHovered, !shown { done = [] }
+            // Only a pill on screen runs out; one under the panel or the attention pill waits.
+            if clock == doneClock, !doneHovered, !shown, attention.isEmpty { done = [] }
         }
     }
 

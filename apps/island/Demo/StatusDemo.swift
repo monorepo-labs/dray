@@ -281,6 +281,8 @@ private struct CaseStage: View {
                alignment: placement == .notch ? .top : .bottom)
         .background(Color(white: 0.22), in: RoundedRectangle(cornerRadius: 12))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        // Each case is news arriving; a page of them chiming at once would say nothing.
+        .onAppear { composer.announce(sound: false) }
     }
 }
 
