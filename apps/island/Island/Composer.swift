@@ -88,7 +88,7 @@ final class Composer {
     /// Bumped to put focus in the input: every open, and every new task.
     var opens = 0
     /// Drawn open; the window lags it on the way out, so the close can animate.
-    var shown = false { didSet { if oldValue, !shown { released() } } }
+    var shown = false { didSet { if oldValue, !shown { released() } else if !oldValue, shown { coverDone() } } }
     /// Whether the panel has held the keys since it opened, which is when a bare Esc reaches it.
     var keyed = false
     var closeHint: String { keyed ? "Esc" : "⌘Esc" }
@@ -213,14 +213,18 @@ final class Composer {
             if !fresh.isEmpty {
                 // An idle open panel draws the card at once, which says enough.
                 if !shown { announce() } else if busy || sent { heldAsk = true }
-                // The attention pill covers the done one, so its clock stops until it is seen again.
+                coverDone()
+                // Any still unseen waits, its clock stopped until it is.
                 doneClock += 1
             }
             // The last card answered is the panel's job done.
             // Not while the reader is busy: a card answered elsewhere leaves them their draft.
             if ids.isEmpty, hadCards, shown, !busy { hide() }
             // Answered elsewhere with the panel shut: the done pill is back in view, its clock with it.
-            if ids.isEmpty, hadCards, !shown, !done.isEmpty { startDoneClock() }
+            if ids.isEmpty, hadCards, !shown {
+                unseenDone = []
+                if !done.isEmpty { startDoneClock() }
+            }
             pillChanged()
         }
     }
@@ -255,6 +259,7 @@ final class Composer {
         heldAsk = false
         heldDone = false
         if ask || finished { announce() }
+        if attention.isEmpty { unseenDone = [] }
         // Expiry waits while the panel is open, so any pill left gets its clock back here.
         if !done.isEmpty { startDoneClock() }
     }
@@ -283,6 +288,9 @@ final class Composer {
     /// Held while the pointer is on the pill, so it never goes from under a click.
     var doneHovered = false { didSet { if !doneHovered { startDoneClock() } } }
     @ObservationIgnored private var doneClock = 0
+    /// Finished while the panel or the attention pill covered the done pill,
+    /// so never seen; only these come back once it is uncovered.
+    @ObservationIgnored private var unseenDone: Set<SessionKey> = []
     static let doneFor: Duration = .seconds(6)
 
     /// Something to draw while the panel is shut: a card waiting outranks news.
@@ -293,6 +301,7 @@ final class Composer {
         let key = SessionKey(server: server, id: id)
         done.removeAll { $0 == key }
         done.append(key)
+        if shown || !attention.isEmpty { unseenDone.insert(key) } else { unseenDone.remove(key) }
         // Its pill only hangs while the panel is shut, so its clock starts then,
         // and one already running must not clear this with what it was timing.
         if shown {
@@ -302,6 +311,12 @@ final class Composer {
             announce()
             startDoneClock()
         }
+    }
+
+    /// The panel or the attention pill now covers the done pill: what it
+    /// already showed is spent, not brought back when it is uncovered.
+    private func coverDone() {
+        if done.contains(where: { !unseenDone.contains($0) }) { done.removeAll { !unseenDone.contains($0) } }
     }
 
     private func startDoneClock() {
