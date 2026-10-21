@@ -44,6 +44,8 @@ final class IslandPanel: NSPanel {
 @MainActor
 final class Delegate: NSObject, NSApplicationDelegate {
     private var panel: IslandPanel?
+    /// The pills' own window, beside the panel and never key; see `PillsView`.
+    private var pills: NSPanel?
     private var composer: Composer?
     private var hotkey: ModifierTap?
     private var keys: Any?
@@ -114,18 +116,14 @@ final class Delegate: NSObject, NSApplicationDelegate {
         composer.hide = { [weak self, weak composer] in
             composer?.shown = false
             self?.closeKey?.held = false
+            self?.showPills()
             self?.settle()
         }
         composer.present = { [weak self] in self?.show() }
         composer.pillChanged = { [weak self] in
             guard let self, let composer = self.composer, !composer.shown else { return }
-            if composer.hasPill {
-                place()
-                // Drawn, never key: the pill must not take keys from the app being typed in.
-                self.panel?.orderFrontRegardless()
-            } else {
-                settle()
-            }
+            if composer.hasPill { place() }
+            showPills()
         }
         composer.reposition = { [weak self] in self?.place() }
         composer.capture = { [weak self] in self?.capture() }
@@ -147,6 +145,17 @@ final class Delegate: NSObject, NSApplicationDelegate {
         panel.hasShadow = false
         panel.contentView = FirstClickHostingView(rootView: IslandView(composer: composer).environment(composer.store))
         self.panel = panel
+        // A plain borderless panel cannot become key, which is the point of it.
+        let pills = NSPanel(contentRect: NSRect(origin: .zero, size: Self.size),
+                            styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
+                            backing: .buffered, defer: false)
+        pills.level = .statusBar
+        pills.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        pills.isOpaque = false
+        pills.backgroundColor = .clear
+        pills.hasShadow = false
+        pills.contentView = FirstClickHostingView(rootView: PillsView(composer: composer).environment(composer.store))
+        self.pills = pills
         // Only losing the keys moves the hint; getting them back waits for the next open, so it never flickers.
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak composer] _ in
             MainActor.assumeIsolated { composer?.keyed = false }
@@ -346,14 +355,27 @@ final class Delegate: NSObject, NSApplicationDelegate {
         closeKey?.held = true
     }
 
-    /// Takes the window down once the close animation has run, and only if
-    /// nothing reopened it or put a pill up meanwhile.
+    /// Takes the window down once the close animation has run, unless
+    /// something reopened it meanwhile; leaving is what hands the keys back.
     private func settle() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self, let panel, let composer, !composer.shown else { return }
-            // Ordered out even with a pill to draw, since that is what hands the keys back.
             panel.orderOut(nil)
-            if composer.hasPill { panel.orderFrontRegardless() }
+        }
+    }
+
+    /// The pill window up while there is a pill to draw, and away otherwise.
+    /// Drawn, never key: a pill must not take keys from the app being typed in.
+    private func showPills() {
+        guard let pills, let composer else { return }
+        if composer.hasPill {
+            pills.orderFrontRegardless()
+        } else {
+            // After the pill's own exit, which the view animates.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                guard let self, let composer = self.composer, !composer.hasPill else { return }
+                self.pills?.orderOut(nil)
+            }
         }
     }
 
@@ -409,6 +431,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         }
         composer.notchHeight = composer.placement == .notch ? screen.safeAreaInsets.top : 0
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        pills?.setFrame(NSRect(origin: origin, size: size), display: true)
     }
 
     /// A Dock that hides itself reserves nothing in `visibleFrame`, so the panel

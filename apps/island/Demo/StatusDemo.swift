@@ -272,6 +272,10 @@ private struct CaseStage: View {
             IslandView(composer: composer)
                 .environment(composer.store)
                 .frame(width: Composer.width + 48, height: 680)
+            // The app draws these in a window of their own, laid over the panel's.
+            PillsView(composer: composer)
+                .environment(composer.store)
+                .frame(width: Composer.width + 48, height: 680)
         }
         .frame(width: Composer.width + 48, height: composer.shown ? 680 : 150,
                alignment: placement == .notch ? .top : .bottom)

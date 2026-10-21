@@ -41,27 +41,6 @@ struct IslandView: View {
         .opacity(composer.shown ? 1 : 0)
         .animation(composer.shown ? .spring(duration: 0.32, bounce: 0.2) : .easeIn(duration: 0.15), value: composer.shown)
         .allowsHitTesting(composer.shown)
-        .overlay(alignment: composer.placement == .notch ? .top : .bottom) {
-            let anchor: UnitPoint = composer.placement == .notch ? .top : .bottom
-            if !composer.shown, !composer.attention.isEmpty {
-                AttentionPill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
-                              count: composer.attention.count) { composer.openCards() }
-                    .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
-            } else if !composer.shown, !composer.done.isEmpty {
-                DonePill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
-                         items: composer.done.reversed().map { ($0, store.items[$0]?.title ?? "") },
-                         open: { composer.openDone($0) },
-                         openInApp: { key in
-                             // Dray comes forward, and its sidebar already marks the rest unread.
-                             composer.done = []
-                             Task { await composer.showInApp(key) }
-                         },
-                         hover: { composer.doneHovered = $0 })
-                    .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
-            }
-        }
-        .animation(.spring(duration: 0.32, bounce: 0.2), value: composer.attention.count)
-        .animation(.spring(duration: 0.32, bounce: 0.2), value: composer.done.count)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: composer.placement == .notch ? .top : .bottom)
         .padding(.bottom, composer.placement == .bottom ? 12 : 0)
         .animation(.snappy(duration: 0.25), value: fits)
@@ -529,5 +508,41 @@ private struct MicButton: View {
         .buttonStyle(.plain)
         .disabled(composer.dictation == .transcribing)
         .help(composer.dictation == .recording ? "Stop dictating" : "Dictate")
+    }
+}
+
+/// The pills, drawn in a window of their own that never takes the keys: the
+/// panel hands the keys back by leaving the screen, and a pill drawn in it
+/// blinked out with it for a moment on every close.
+struct PillsView: View {
+    @Bindable var composer: Composer
+    @Environment(Store.self) private var store
+
+    var body: some View {
+        let anchor: UnitPoint = composer.placement == .notch ? .top : .bottom
+        ZStack {
+            if !composer.shown, !composer.attention.isEmpty {
+                AttentionPill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
+                              count: composer.attention.count) { composer.openCards() }
+                    .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
+            } else if !composer.shown, !composer.done.isEmpty {
+                DonePill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
+                         items: composer.done.reversed().map { ($0, store.items[$0]?.title ?? "") },
+                         open: { composer.openDone($0) },
+                         openInApp: { key in
+                             // Dray comes forward, and its sidebar already marks the rest unread.
+                             composer.done = []
+                             Task { await composer.showInApp(key) }
+                         },
+                         hover: { composer.doneHovered = $0 })
+                    .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(duration: 0.32, bounce: 0.2), value: composer.attention.count)
+        .animation(.spring(duration: 0.32, bounce: 0.2), value: composer.done.count)
+        .animation(.easeIn(duration: 0.15), value: composer.shown)
+        // Where the card hangs from: the panel's top edge, or just above the Dock.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: anchor == .top ? .top : .bottom)
+        .padding(.bottom, composer.placement == .bottom ? 12 : 0)
     }
 }
