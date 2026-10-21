@@ -228,12 +228,20 @@ final class Delegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Takes the finished sessions Dray queued and clears the queue.
+    /// Dray's inbox of finished sessions, one empty file each; `island_done_dir` in apps.rs names it too.
+    static let doneDir = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Caches/com.yogesh.dray.island/done")
+
+    /// Takes the finished sessions Dray dropped, oldest first, deleting only
+    /// the files read, so one landing meanwhile waits for its own notification.
     func sessionsDone() {
-        let d = UserDefaults.standard
-        let ids = d.stringArray(forKey: "island.done") ?? []
-        d.removeObject(forKey: "island.done")
-        for id in ids { composer?.finished(id) }
+        let fm = FileManager.default
+        let files = (try? fm.contentsOfDirectory(at: Self.doneDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        func stamp(_ url: URL) -> Date { (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast }
+        for file in files.sorted(by: { stamp($0) < stamp($1) }) {
+            try? fm.removeItem(at: file)
+            composer?.finished(file.lastPathComponent)
+        }
     }
 
     /// The screenshot chord Settings picked: a Carbon key code and modifier

@@ -76,6 +76,8 @@ final class Composer {
     /// those words have already left the recording, so this is their only copy.
     private(set) var lostCut: (path: String, before: UUID)?
     var sending = false
+    /// A ⌘S on its way; a second press meanwhile would save the same words twice.
+    @ObservationIgnored private var saving = false
     /// A screenshot is in flight; Send waits for its row.
     var capturing = false
     /// "Hold Shift to draw", until the first stroke of a dictation, for a reader's first few dictations.
@@ -213,7 +215,8 @@ final class Composer {
                 if !shown { chime() } else if busy || sent { heldAsk = true }
             }
             // The last card answered is the panel's job done.
-            if ids.isEmpty, hadCards, shown, !listening { hide() }
+            // Not while the reader is busy: a card answered elsewhere leaves them their draft.
+            if ids.isEmpty, hadCards, shown, !busy { hide() }
             pillChanged()
         }
     }
@@ -230,7 +233,8 @@ final class Composer {
         heldAsk = false
         heldDone = false
         if ask || finished { chime() }
-        if finished { startDoneClock() }
+        // Expiry waits while the panel is open, so any pill left gets its clock back here.
+        if !done.isEmpty { startDoneClock() }
     }
 
     /// A held card came into view once the reader was free: its sound now.
@@ -267,9 +271,11 @@ final class Composer {
         let key = SessionKey(server: server, id: id)
         done.removeAll { $0 == key }
         done.append(key)
-        // Its pill only hangs while the panel is shut, so its clock starts then.
+        // Its pill only hangs while the panel is shut, so its clock starts then,
+        // and one already running must not clear this with what it was timing.
         if shown {
             heldDone = true
+            doneClock += 1
         } else {
             chime()
             startDoneClock()
@@ -281,7 +287,7 @@ final class Composer {
         let clock = doneClock
         Task {
             try? await Task.sleep(for: Self.doneFor)
-            if clock == doneClock, !doneHovered { done = [] }
+            if clock == doneClock, !doneHovered, !shown { done = [] }
         }
     }
 
@@ -569,7 +575,7 @@ final class Composer {
         // After the wait: a dictation started meanwhile holds words this send would leave behind.
         guard dictation == .idle else { return false }
         let text = prompt, files = attachments
-        guard canSend, !sending, let target else { return false }
+        guard canSend, !sending, !saving, let target else { return false }
         sending = true
         defer { sending = false }
         // Only what went out is cleared: the draft stays editable while the request runs.
@@ -618,12 +624,14 @@ final class Composer {
     /// text alone, so a draft with an image in it is refused rather than half kept.
     func saveDraft() async {
         let text = prompt
-        guard dictation == .idle, !sending, !rows.contains(where: \.pending),
+        guard dictation == .idle, !sending, !saving, !rows.contains(where: \.pending),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let target else { return }
         guard attachments.isEmpty else {
             notice = "Drafts hold text only. Remove the images to save one."
             return
         }
+        saving = true
+        defer { saving = false }
         var draft: [String: JSON] = [
             "id": .string(UUID().uuidString.lowercased()),
             "prompt": .string(text),
