@@ -1098,7 +1098,7 @@ function NotchSettings() {
             checked={on}
             onCheckedChange={(next) => {
               setOn(next);
-              void applyNotch();
+              void applyNotch({ on: next, key });
             }}
           />
         </SettingRow>
@@ -1117,7 +1117,7 @@ function NotchSettings() {
                 value={key}
                 onValueChange={(next) => {
                   setKey(next as NotchKey);
-                  void applyNotch();
+                  void applyNotch({ on, key: next as NotchKey });
                 }}
               >
                 {NOTCH_KEYS.map((k) => (
@@ -1146,7 +1146,11 @@ function NotchSettings() {
             labelledBy={tapId}
           />
         </SettingRow>
-        <CaptureKeyRow value={prefs["notch.captureKey"]} onChange={(v) => save("notch.captureKey", v)} />
+        <CaptureKeyRow
+          value={prefs["notch.captureKey"]}
+          taken={on && prefs["notch.captureTaken"] === "1"}
+          onChange={(v) => save("notch.captureKey", v)}
+        />
       </Section>
       <Section>
         <SettingRow id={placeId} asGroup stacked label="Position">
@@ -1279,7 +1283,16 @@ const NOTCH_LAYOUTS = [
 /// A global chord, since a screenshot is taken from whatever app is in front.
 /// Recorded like the Shortcuts tab's: click, press, Escape backs out and
 /// Backspace leaves no chord at all.
-function CaptureKeyRow({ value, onChange }: { value: string | undefined; onChange: (next: string) => void }) {
+function CaptureKeyRow({
+  value,
+  taken,
+  onChange,
+}: {
+  value: string | undefined;
+  /// The notch could not register the chord, so pressing it does nothing.
+  taken: boolean;
+  onChange: (next: string) => void;
+}) {
   const id = useId();
   const [recording, setRecording] = useState(false);
   const [refused, setRefused] = useState<string | null>(null);
@@ -1347,7 +1360,9 @@ function CaptureKeyRow({ value, onChange }: { value: string | undefined; onChang
           </button>
         </span>
       </SettingRow>
-      {refused && <p className="text-ui text-destructive">{refused}</p>}
+      {(refused || taken) && (
+        <p className="text-ui text-destructive">{refused ?? "Another app already uses this shortcut. Pick another."}</p>
+      )}
     </div>
   );
 }

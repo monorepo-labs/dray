@@ -26,11 +26,14 @@ const enabled = () => readLocalStorage<boolean>(NOTCH_ENABLED, true);
 
 /// Hands the key to the notch and starts or stops it to match the switch. Every
 /// launch does this, which is what starts the notch at all; failures are logged,
-/// since a notch that will not start must not take the app down with it.
-export async function applyNotch() {
+/// since a notch that will not start must not take the app down with it. A pick
+/// just made is passed in, since storage is written inside a state updater
+/// React may not have run yet.
+export async function applyNotch(pick: { on?: boolean; key?: NotchKey } = {}) {
   if (!IS_MAC) return;
   migrateOff();
-  const key = enabled() ? readLocalStorage<NotchKey>(NOTCH_KEY, "control") : "off";
+  const on = pick.on ?? enabled();
+  const key = on ? (pick.key ?? readLocalStorage<NotchKey>(NOTCH_KEY, "control")) : "off";
   try {
     await invoke("configure_notch", { key });
   } catch (err) {

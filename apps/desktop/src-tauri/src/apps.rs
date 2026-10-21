@@ -370,10 +370,10 @@ pub async fn notch_running() -> bool {
         .is_ok_and(|out| out.status.success())
 }
 
-/// The notch preferences Settings draws, and what each may hold. The notch's
-/// own right-click menu writes the first two as well, so they are read back
-/// rather than kept here.
-const NOTCH_PREFS: [&str; 4] = ["notch.placement", "notch.mode", "notch.tap", "notch.captureKey"];
+/// The notch preferences Settings draws. The notch's own right-click menu
+/// writes the first two as well, so they are read back rather than kept here,
+/// and `captureTaken` is the notch's alone: the chord it could not register.
+const NOTCH_PREFS: [&str; 5] = ["notch.placement", "notch.mode", "notch.tap", "notch.captureKey", "notch.captureTaken"];
 
 fn notch_pref_valid(name: &str, value: &str) -> bool {
     match name {

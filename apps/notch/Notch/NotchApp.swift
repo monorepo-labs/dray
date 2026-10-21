@@ -217,11 +217,17 @@ final class Delegate: NSObject, NSApplicationDelegate {
         captureKey?.held = false
         captureKey = nil
         let stored = UserDefaults.standard.string(forKey: "notch.captureKey")
-        guard stored != "none" else { return }
+        guard stored != "none" else {
+            UserDefaults.standard.set(false, forKey: "notch.captureTaken")
+            return
+        }
         let parts = (stored ?? "").split(separator: " ").compactMap { Int($0) }
         let (key, mods) = parts.count == 2 ? (parts[0], parts[1]) : (kVK_ANSI_2, cmdKey | shiftKey)
-        captureKey = HotKey(key: key, mods: mods) { [weak self] in self?.capture() }
-        captureKey?.held = true
+        let hotKey = HotKey(key: key, mods: mods) { [weak self] in self?.capture() }
+        hotKey.held = true
+        captureKey = hotKey
+        // Settings reads this back to say the chord does nothing.
+        UserDefaults.standard.set(!hotKey.registered, forKey: "notch.captureTaken")
     }
 
     func prefsChanged() {
@@ -459,11 +465,14 @@ final class HotKey {
         Self.actions[id] = action
     }
 
+    /// Whether the system took the chord; another app's hot key can hold it.
+    private(set) var registered = false
+
     var held = false {
         didSet {
             guard held != oldValue else { return }
             if held {
-                RegisterEventHotKey(key, mods, EventHotKeyID(signature: 0x4452_4159, id: id), GetApplicationEventTarget(), 0, &ref)
+                registered = RegisterEventHotKey(key, mods, EventHotKeyID(signature: 0x4452_4159, id: id), GetApplicationEventTarget(), 0, &ref) == noErr
             } else if let ref {
                 UnregisterEventHotKey(ref)
                 self.ref = nil
