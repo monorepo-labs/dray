@@ -370,6 +370,81 @@ pub async fn notch_running() -> bool {
         .is_ok_and(|out| out.status.success())
 }
 
+/// The notch preferences Settings draws. The notch's own right-click menu
+/// writes the first two as well, so they are read back rather than kept here,
+/// and `captureTaken` is the notch's alone: the chord it could not register.
+const NOTCH_PREFS: [&str; 5] = ["notch.placement", "notch.mode", "notch.tap", "notch.captureKey", "notch.captureTaken"];
+
+fn notch_pref_valid(name: &str, value: &str) -> bool {
+    match name {
+        "notch.placement" => matches!(value, "notch" | "bottom"),
+        "notch.mode" => matches!(value, "compact" | "expanded"),
+        "notch.tap" => matches!(value, "single" | "double"),
+        // A Carbon key code and modifier mask, or none.
+        "notch.captureKey" => {
+            value == "none" || matches!(value.split_once(' '), Some((k, m)) if k.parse::<u32>().is_ok() && m.parse::<u32>().is_ok())
+        }
+        _ => false,
+    }
+}
+
+/// The notch's stored picks, by name; an absent one is the notch's default.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn notch_prefs() -> std::collections::HashMap<String, String> {
+    let reads = NOTCH_PREFS.map(|name| async move {
+        let out = tokio::process::Command::new("defaults")
+            .args(["read", "com.yogesh.dray.notch", name])
+            .output()
+            .await
+            .ok()
+            .filter(|out| out.status.success())?;
+        Some((name.to_string(), String::from_utf8_lossy(&out.stdout).trim().to_string()))
+    });
+    futures_util::future::join_all(reads).await.into_iter().flatten().collect()
+}
+
+/// Writes one notch pick and tells a running notch to read it again, through a
+/// Darwin notification: it caches the picks, and holds its capture key.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn set_notch_pref(name: String, value: String) -> Result<(), String> {
+    use tokio::process::Command;
+    if !notch_pref_valid(&name, &value) {
+        return Err(format!("not a notch setting: {name} = {value}"));
+    }
+    let out = Command::new("defaults")
+        .args(["write", "com.yogesh.dray.notch", &name, "-string", &value])
+        .output()
+        .await
+        .map_err(|err| format!("could not save the notch setting: {err}"))?;
+    if !out.status.success() {
+        return Err(crate::git::stderr_or(&out, || "could not save the notch setting".into()));
+    }
+    // A notch that is not running reads the file when it starts. Position and
+    // layout are only judged on screen, so those open the panel to show them.
+    let ping = match name.as_str() {
+        "notch.placement" | "notch.mode" => "com.yogesh.dray.notch.show",
+        _ => "com.yogesh.dray.notch.prefs",
+    };
+    Command::new("notifyutil").args(["-p", ping]).output().await.ok();
+    Ok(())
+}
+
+#[cfg(test)]
+mod notch_pref_tests {
+    use super::notch_pref_valid;
+
+    #[test]
+    fn takes_only_what_the_notch_can_read() {
+        assert!(notch_pref_valid("notch.placement", "bottom"));
+        assert!(notch_pref_valid("notch.captureKey", "19 768"));
+        assert!(notch_pref_valid("notch.captureKey", "none"));
+        assert!(!notch_pref_valid("notch.captureKey", "19"));
+        assert!(!notch_pref_valid("notch.mode", "voice"));
+        assert!(!notch_pref_valid("notch.tap", "triple"));
+        assert!(!notch_pref_valid("notch.key", "control"));
+    }
+}
+
 /// Terminal.app, and never the terminal the reader picked in the panel beside
 /// this.
 ///

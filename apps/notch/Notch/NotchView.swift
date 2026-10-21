@@ -174,7 +174,7 @@ struct NotchView: View {
 
     @ViewBuilder private var draft: some View {
         if !composer.listShown, let key = composer.key {
-            TitleRow(title: title) {
+            TitleRow(title: title, close: composer.closeHint) {
                 Task { await composer.showInApp(key) }
             }
         }
@@ -369,7 +369,7 @@ private struct SessionList: View {
                 TextField("", text: $composer.search, prompt: Text("Search tasks  ⌘F").foregroundStyle(.white.opacity(0.3)))
                     .textFieldStyle(.plain)
                     .focused(focus, equals: .search)
-                Text("↑↓ navigate  ⏎ select").font(.caption).foregroundStyle(.white.opacity(0.3))
+                Text("↑↓ navigate  ⏎ select").font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)

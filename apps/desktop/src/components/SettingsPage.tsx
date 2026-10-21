@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import {
   BoltIcon,
+  ComputerDesktopIcon,
   InformationCircleIcon,
   MicrophoneIcon,
   PuzzlePieceIcon,
@@ -10,7 +11,7 @@ import {
   NewspaperIcon,
   ServerStackIcon,
 } from "@heroicons/react/16/solid";
-import { ArrowLeft, Check, ChevronDown, Heart, Star } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Heart, RotateCcw, Star } from "lucide-react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -28,10 +29,12 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Kbd } from "@/components/ui/kbd";
+import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -59,6 +62,10 @@ import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
 import { useTranscriptionSettings } from "@/hooks/useTranscription";
 import { IS_MAC } from "@/lib/platform";
+import { applyNotch, NOTCH_ENABLED, NOTCH_KEY, NOTCH_KEYS, type NotchKey } from "@/lib/notch";
+import { captureCaps, captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/notchCapture";
+import { useWindowFocused } from "@/lib/focus";
+import { invoke } from "@/lib/transport";
 import { hasLightMode, modeFor, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import type {
@@ -195,7 +202,8 @@ export default function SettingsPage({
             </Section>
           </>
         ),
-        shortcuts: <ShortcutsSettings />,
+        shortcuts: <ShortcutsSettings onOpenNotch={() => goTo("notch")} />,
+        notch: <NotchSettings />,
         spaces: (
           <SpacesSettings
             projects={projects}
@@ -1047,6 +1055,318 @@ function SupportBlock() {
 /// Untitled it is still worth being: the tab panel spaces its groups apart at
 /// `gap-7` and this holds rows together at `gap-4`, which is the whole of how a
 /// heading ends up nearer what it names than what it follows.
+/// Dray Notch's picks. The switch and the key are Dray's to keep, in local
+/// storage, and handed to the notch at every launch; the rest are the notch's
+/// own preferences, which its right-click menu writes too, so they are read
+/// back from it — on arrival and every few seconds while the window is in
+/// front, since a pick made in the notch's menu moves no focus here. Every row
+/// works while the notch is off, so it opens the way the reader left it.
+const NOTCH_TAPS = [
+  { id: "single", label: "Single tap" },
+  { id: "double", label: "Double tap" },
+] as const;
+
+function NotchSettings() {
+  const [on, setOn] = useLocalStorage<boolean>(NOTCH_ENABLED, true);
+  const [key, setKey] = useLocalStorage<NotchKey>(NOTCH_KEY, "control");
+  const [prefs, setPrefs] = useState<Record<string, string>>({});
+  const focused = useWindowFocused();
+  useEffect(() => {
+    if (!focused) return;
+    const read = () => void invoke<Record<string, string>>("notch_prefs").then(setPrefs).catch(() => {});
+    read();
+    const timer = setInterval(read, 3000);
+    return () => clearInterval(timer);
+  }, [focused]);
+  const save = (name: string, value: string) => {
+    setPrefs((p) => ({ ...p, [name]: value }));
+    invoke("set_notch_pref", { name, value }).catch((err) => console.warn("[notch]", err));
+  };
+  const onId = useId();
+  const keyId = useId();
+  const tapId = useId();
+  const placeId = useId();
+  const layoutId = useId();
+  const double = prefs["notch.tap"] === "double";
+
+  return (
+    <>
+      <Section>
+        <SettingRow id={onId} label="Dray Notch" description="A composer that floats over every app, for prompts, dictation and answering cards.">
+          <Switch
+            id={onId}
+            checked={on}
+            onCheckedChange={(next) => {
+              setOn(next);
+              void applyNotch({ on: next, key });
+            }}
+          />
+        </SettingRow>
+      </Section>
+      <Section>
+        <SettingRow id={keyId} label="Shortcut" description="Press and let go of this key on its own to open Dray Notch. Do it again while it is open to dictate.">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button id={keyId} type="button" size="sm" variant="ghost" className="justify-between">
+                {NOTCH_KEYS.find((k) => k.value === key)?.label}
+                <ChevronDown className="size-3 shrink-0 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuRadioGroup
+                value={key}
+                onValueChange={(next) => {
+                  setKey(next as NotchKey);
+                  void applyNotch({ on, key: next as NotchKey });
+                }}
+              >
+                {NOTCH_KEYS.map((k) => (
+                  <DropdownMenuRadioItem key={k.value} value={k.value}>
+                    {k.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </SettingRow>
+        <SettingRow
+          id={tapId}
+          asGroup
+          label="Open with"
+          description={
+            double
+              ? "Two quick taps open it, so a stray tap never does. One tap in the open panel dictates."
+              : "One tap opens it. Two quick taps open it listening."
+          }
+        >
+          <SegmentedRadio
+            options={NOTCH_TAPS}
+            value={double ? "double" : "single"}
+            onPick={(v) => save("notch.tap", v)}
+            labelledBy={tapId}
+          />
+        </SettingRow>
+        <CaptureKeyRow
+          value={prefs["notch.captureKey"]}
+          taken={on && prefs["notch.captureTaken"] === "1"}
+          onChange={(v) => save("notch.captureKey", v)}
+        />
+      </Section>
+      <Section>
+        <SettingRow id={placeId} asGroup stacked label="Position">
+          <PictureRadio
+            options={NOTCH_PLACEMENTS}
+            value={prefs["notch.placement"] === "bottom" ? "bottom" : "notch"}
+            onPick={(v) => save("notch.placement", v)}
+            labelledBy={placeId}
+          />
+        </SettingRow>
+        <SettingRow id={layoutId} asGroup stacked label="Layout">
+          <PictureRadio
+            options={NOTCH_LAYOUTS}
+            value={prefs["notch.mode"] === "expanded" ? "expanded" : "compact"}
+            onPick={(v) => save("notch.mode", v)}
+            labelledBy={layoutId}
+          />
+        </SettingRow>
+      </Section>
+    </>
+  );
+}
+
+/// A pick drawn as pictures rather than words, since "Compact" or "Bottom"
+/// says little until it is seen. The notch is drawn in its own black whatever
+/// the theme, which is how it looks on screen.
+function PictureRadio<T extends string>({
+  options,
+  value,
+  onPick,
+  labelledBy,
+}: {
+  options: readonly { id: T; label: string; hint: string; picture: ReactNode }[];
+  value: T;
+  onPick: (next: T) => void;
+  labelledBy: string;
+}) {
+  const index = options.findIndex((o) => o.id === value);
+  const { refs, onKeyDown } = useRovingGroup(options.length, index, (next) => onPick(options[next].id));
+
+  return (
+    <div role="radiogroup" aria-labelledby={labelledBy} onKeyDown={onKeyDown} className="grid grid-cols-2 gap-3">
+      {options.map(({ id, label, hint, picture }, i) => (
+        <button
+          key={id}
+          ref={(el) => {
+            refs.current[i] = el;
+          }}
+          type="button"
+          role="radio"
+          aria-checked={value === id}
+          tabIndex={value === id ? 0 : -1}
+          onClick={() => onPick(id)}
+          className={cn(
+            "flex cursor-pointer flex-col gap-2 rounded-lg p-2 text-left outline-offset-2 transition-colors",
+            "focus-visible:outline-2 focus-visible:outline-ring",
+            value === id ? "outline-2 outline-ring" : "outline-1 outline-border hover:bg-sidebar-accent/50",
+          )}
+        >
+          {picture}
+          <div className="flex flex-col gap-0.5 px-0.5">
+            <span className="text-ui font-medium">{label}</span>
+            <span className="text-ui text-muted-foreground">{hint}</span>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const orb = (size: string) => <span className={cn("shrink-0 rounded-full bg-gradient-to-br from-sky-300 to-violet-500", size)} />;
+const inputLine = (
+  <>
+    <span className="h-1.5 flex-1 rounded-full bg-white/20" />
+    <span className="size-3 shrink-0 rounded-full bg-white/80" />
+  </>
+);
+
+/// The open panel, with the orb beside the input or alone above it.
+function LayoutPicture({ expanded }: { expanded: boolean }) {
+  return (
+    <div className="flex h-24 flex-col justify-center gap-3 rounded-[18px] bg-black px-4">
+      {expanded && <span className="mx-auto">{orb("block size-8")}</span>}
+      <div className="flex items-center gap-2">
+        {!expanded && orb("size-4")}
+        {inputLine}
+      </div>
+    </div>
+  );
+}
+
+/// A screen with the panel on it: hanging from the notch, or sitting on the Dock.
+function PositionPicture({ bottom }: { bottom: boolean }) {
+  const panel = (
+    <div className={cn("flex w-3/5 items-center gap-1.5 bg-black px-2", bottom ? "h-6 rounded-lg" : "h-7 rounded-b-lg")}>
+      {orb("size-2.5")}
+      <span className="h-1 flex-1 rounded-full bg-white/20" />
+    </div>
+  );
+  return (
+    <div className={cn("flex h-24 flex-col items-center overflow-hidden rounded-lg bg-muted ring-1 ring-border", bottom ? "justify-end gap-1 pb-1.5" : "justify-start")}>
+      {bottom ? (
+        <>
+          {panel}
+          <div className="flex h-3 items-center gap-1 rounded-md bg-foreground/10 px-1.5">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <span key={i} className="size-1.5 rounded-sm bg-foreground/25" />
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="flex w-full flex-col items-center">
+          <span className="h-1.5 w-full bg-foreground/10" />
+          <div className="-mt-1.5 flex w-full justify-center">{panel}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const NOTCH_PLACEMENTS = [
+  { id: "notch", label: "Notch", hint: "Hanging from the notch.", picture: <PositionPicture bottom={false} /> },
+  { id: "bottom", label: "Bottom", hint: "Above the Dock.", picture: <PositionPicture bottom /> },
+] as const;
+const NOTCH_LAYOUTS = [
+  { id: "compact", label: "Compact", hint: "The orb beside the input.", picture: <LayoutPicture expanded={false} /> },
+  { id: "expanded", label: "Expanded", hint: "The orb alone, the input under it.", picture: <LayoutPicture expanded /> },
+] as const;
+
+/// A global chord, since a screenshot is taken from whatever app is in front.
+/// Recorded like the Shortcuts tab's: click, press, Escape backs out and
+/// Backspace leaves no chord at all.
+function CaptureKeyRow({
+  value,
+  taken,
+  onChange,
+}: {
+  value: string | undefined;
+  /// The notch could not register the chord, so pressing it does nothing.
+  taken: boolean;
+  onChange: (next: string) => void;
+}) {
+  const id = useId();
+  const [recording, setRecording] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
+  const capture = decodeCapture(value);
+  const fallback = encodeCapture(DEFAULT_CAPTURE);
+  const isDefault = value === undefined || encodeCapture(capture) === fallback;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <SettingRow id={id} label="Screenshot key" description="Take a screenshot into the draft from any app.">
+        <span className="flex items-center gap-0.5">
+          {!isDefault && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon-xs" aria-label="Reset to default" onClick={() => onChange(fallback)}>
+                  <RotateCcw />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="left">Reset to default</TooltipContent>
+            </Tooltip>
+          )}
+          <button
+            id={id}
+            type="button"
+            className={cn(
+              "flex h-6 cursor-pointer items-center rounded-md px-1 outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+              recording && "bg-muted",
+            )}
+            onClick={(e) => {
+              e.currentTarget.focus();
+              setRecording(true);
+              setRefused(null);
+            }}
+            onBlur={() => setRecording(false)}
+            onKeyDown={(e) => {
+              if (!recording) return;
+              // Stopped here, or the page's Escape listener leaves Settings.
+              e.preventDefault();
+              e.stopPropagation();
+              if (e.key === "Escape") return setRecording(false);
+              if (e.key === "Backspace") {
+                onChange("none");
+                setRecording(false);
+                return;
+              }
+              if (["Meta", "Control", "Alt", "Shift"].includes(e.key)) return;
+              const got = captureFrom(e.nativeEvent);
+              if ("refused" in got) return setRefused(got.refused);
+              onChange(encodeCapture(got.key));
+              setRefused(null);
+              setRecording(false);
+            }}
+          >
+            {recording ? (
+              <span className="text-ui text-muted-foreground">Press a shortcut, ⌫ for none…</span>
+            ) : capture ? (
+              <KbdGroup>
+                {captureCaps(capture).map((cap) => (
+                  <Kbd key={cap}>{cap}</Kbd>
+                ))}
+              </KbdGroup>
+            ) : (
+              <span className="text-ui text-muted-foreground">Not set</span>
+            )}
+          </button>
+        </span>
+      </SettingRow>
+      {(refused || taken) && (
+        <p className="text-ui text-destructive">{refused ?? "Another app already uses this shortcut. Pick another."}</p>
+      )}
+    </div>
+  );
+}
+
 function Section({ title, children }: { title?: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-4">
@@ -1059,7 +1379,7 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
 /// Set *and* order, so a group added later is one entry plus one body. Icons
 /// are Heroicons' filled 16px set, drawn for small sizes, at the sidebar rows'
 /// own 14px. No keyboard in heroicons, so Shortcuts takes the bolt.
-const SETTINGS_TABS = [
+const ALL_TABS = [
   { id: "appearance", label: "Appearance", Icon: PaintBrushIcon },
   { id: "spaces", label: "Spaces", Icon: Square3Stack3DIcon },
   { id: "servers", label: "Servers", Icon: ServerStackIcon },
@@ -1067,11 +1387,15 @@ const SETTINGS_TABS = [
   { id: "transcription", label: "Transcription", Icon: MicrophoneIcon },
   { id: "integrations", label: "Integrations", Icon: PuzzlePieceIcon },
   { id: "shortcuts", label: "Shortcuts", Icon: BoltIcon },
+  { id: "notch", label: "Notch", Icon: ComputerDesktopIcon },
   { id: "changelog", label: "Changelog", Icon: NewspaperIcon },
   { id: "about", label: "About", Icon: InformationCircleIcon },
 ] as const;
 
-export type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
+export type SettingsTab = (typeof ALL_TABS)[number]["id"];
+
+/// Dray Notch is a Mac app, so elsewhere its tab would be a page of controls for nothing.
+const SETTINGS_TABS = ALL_TABS.filter((t) => IS_MAC || t.id !== "notch");
 
 /// A line under a tab's title saying what the tab is for. Accounts has one
 /// because its harness switches change what the composer's picker offers,

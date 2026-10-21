@@ -7,7 +7,16 @@ struct NewSessionBar: View {
     let composer: Composer
 
     var body: some View {
-        @Bindable var composer = composer
+        // Long model or project names leave no room for the hints, which go first.
+        ViewThatFits(in: .horizontal) {
+            row(hints: true)
+            row(hints: false)
+        }
+        .font(.system(size: 13, weight: .medium))
+        .task(id: composer.harness) { await composer.loadModels() }
+    }
+
+    private func row(hints: Bool) -> some View {
         HStack(spacing: 12) {
             BarButton(id: .model, composer: composer) {
                 AgentGlyph(harness: composer.harness)
@@ -32,9 +41,11 @@ struct NewSessionBar: View {
                     Text(Picks.stances.first { $0.0 == Picks.stanceFor(composer.harness, composer.stance) }?.1 ?? "Auto")
                 }
             }
+            if hints {
+                Spacer(minLength: 0)
+                KeyHints(new: false, close: composer.closeHint)
+            }
         }
-        .font(.system(size: 13, weight: .medium))
-        .task(id: composer.harness) { await composer.loadModels() }
     }
 }
 

@@ -30,7 +30,7 @@ struct AskCard: View {
                         .foregroundStyle(.white.opacity(0.7))
                 }
                 Spacer(minLength: 0)
-                Text("⌘Esc").font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))
+                Text(composer.closeHint).font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))
             }
             // A long option list scrolls rather than pushing the buttons out of the window.
             ScrollView {

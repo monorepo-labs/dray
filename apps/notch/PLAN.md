@@ -66,8 +66,12 @@ dictations. Screen Recording is asked for at the first moment taken, never for
 dictating alone. It may yet replace the screenshot mode.
 
 Later, in order: comments on a mark, browser element pick.
-A Notch page in Dray's Settings, for its key, placement, layout and what it alerts on;
-the key is a row under Shortcuts until then.
+Settings has a Notch tab (#576): an on switch, the key and single or double tap
+to open, the screenshot key, and position and layout drawn as pictures. Position
+and layout are the notch's own preferences, which its right-click menu writes too;
+Settings writes them with `defaults` and pings `com.yogesh.dray.notch.prefs` (or
+`.show`, which also opens the panel) through `notifyutil`. Renaming it Dray
+Island is next, in its own PR.
 
 ## How it talks
 
