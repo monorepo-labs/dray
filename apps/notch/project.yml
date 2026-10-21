@@ -67,3 +67,19 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.yogesh.dray.notch.statusdemo
         GENERATE_INFOPLIST_FILE: YES
         ENABLE_APP_SANDBOX: NO
+  # A demo, kept: every candidate dictation orb side by side, live (#568).
+  OrbLab:
+    type: application
+    platform: macOS
+    sources:
+      - Lab
+      - path: Notch/VoiceOrb.swift
+      - path: Notch/VoiceOrb.metal
+    settings:
+      base:
+        PRODUCT_NAME: OrbLab
+        PRODUCT_BUNDLE_IDENTIFIER: com.yogesh.dray.orblab
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Orb Lab
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Orb Lab can drive the orbs from your microphone.
+        ENABLE_APP_SANDBOX: NO

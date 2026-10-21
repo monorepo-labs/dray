@@ -15,6 +15,8 @@ OUT=$(cd "$1" && pwd)
 cd "$(dirname "$0")"
 
 xcodegen generate --quiet
+# The orb is a Metal shader, and Xcode ships the Metal toolchain as a separate download.
+xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
 xcodebuild -quiet -project DrayNotch.xcodeproj -scheme DrayNotch -configuration Release \
   -derivedDataPath build ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO build
 
