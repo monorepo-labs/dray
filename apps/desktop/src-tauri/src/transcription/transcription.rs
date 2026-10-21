@@ -113,19 +113,16 @@ pub struct TranscriptionState {
     /// The recording's live decode, beside it for its whole life.
     live: Mutex<Option<Live>>,
     engine: Engine,
-    /// A recording the Mac's sleep closed, waiting for its client's stop.
-    interrupted: Mutex<Option<Interruption>>,
+    /// What [`stop_on_sleep`] made of a recording it closed, waiting for that
+    /// client's stop: the window's first, the Island's second. One each, so a
+    /// later sleep under the other client cannot overwrite it.
+    interrupted: [Mutex<Option<Interruption>>; 2],
     /// Held by a start from its ownership check to its open.
     starting: Mutex<()>,
 }
 
-/// What [`stop_on_sleep`] made of the recording it closed, and whose it was.
-struct Interruption {
-    /// The Island's, rather than the window's.
-    host: bool,
-    /// Resolves once the audio is parked; a stop arriving sooner waits for it.
-    outcome: tauri::async_runtime::JoinHandle<TranscribeOutcome>,
-}
+/// Resolves once the audio is parked; a stop arriving sooner waits for it.
+type Interruption = tauri::async_runtime::JoinHandle<TranscribeOutcome>;
 
 /// Bumped by each sleep, so a start that was opening the microphone as the
 /// Mac went down drops it rather than holding it through the sleep.
@@ -133,14 +130,8 @@ static SLEEPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(
 
 /// The interrupted recording, where it is this client's.
 async fn take_interrupted(state: &TranscriptionState, host: bool) -> Option<TranscribeOutcome> {
-    let interruption = {
-        let mut slot = state.interrupted.lock().await;
-        if !slot.as_ref().is_some_and(|i| i.host == host) {
-            return None;
-        }
-        slot.take()?
-    };
-    Some(interruption.outcome.await.unwrap_or_else(|e| TranscribeOutcome::Failed {
+    let interruption = state.interrupted[host as usize].lock().await.take()?;
+    Some(interruption.await.unwrap_or_else(|e| TranscribeOutcome::Failed {
         message: format!("the Mac went to sleep, and the recording was lost: {e}"),
         audio_path: None,
     }))
@@ -356,12 +347,7 @@ async fn open_recorder(
     // Whoever starts last owns the recorder; `answer_host` claims it back after this.
     HOST_OWNS.store(false, SeqCst);
     // A sleep this client never stopped for is not its answer to a new recording.
-    {
-        let mut slot = state.interrupted.lock().await;
-        if slot.as_ref().is_some_and(|i| i.host == host) {
-            *slot = None;
-        }
-    }
+    *state.interrupted[host as usize].lock().await = None;
     let Some(model) = ready_model().await else {
         return Ok(Some(StartRefusal::NeedsModel));
     };
@@ -748,7 +734,7 @@ pub fn stop_on_sleep(app: &AppHandle) {
         let host = HOST_OWNS.load(SeqCst);
         // Held while the task is spawned, so a stop the event prompts cannot
         // look before the outcome is in the slot.
-        let mut slot = state.interrupted.blocking_lock();
+        let mut slot = state.interrupted[host as usize].blocking_lock();
         let app = app.clone();
         let outcome = tauri::async_runtime::spawn(async move {
             drop(live);
@@ -770,7 +756,7 @@ pub fn stop_on_sleep(app: &AppHandle) {
             let _ = app.emit("transcription_interrupted", ());
             outcome
         });
-        *slot = Some(Interruption { host, outcome });
+        *slot = Some(outcome);
     });
     let center = NSWorkspace::sharedWorkspace().notificationCenter();
     // SAFETY: the name is AppKit's own constant, no object filter, and a nil
