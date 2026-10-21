@@ -105,6 +105,9 @@ function isQueuedPrompt(item: WorkItem): boolean {
 /// one summary line, and the prompt that ends the stretch (`null` on the last).
 export type TurnSegment = {
   items: WorkItem[];
+  /// A call in this stretch is still awaiting its result, so it draws unfolded
+  /// until that lands.
+  running: boolean;
   prompt: AgentEvent | null;
   toolCalls: number;
   messages: number;
@@ -125,11 +128,23 @@ export type TurnSegment = {
 /// the turn: `finalText` re-renders the turn's last message, and that message is
 /// always in the last segment — a queued prompt after it would have unset the
 /// discount by being the last rendered row itself.
-export function segmentWork(turn: Turn): TurnSegment[] {
+///
+/// Given `resultByCallId`, a stretch a prompt closed stays unfolded while a
+/// call in it is still running. A build or a test run folded away
+/// the moment the reader types leaves the transcript standing still with
+/// nothing on screen saying why. The last stretch keeps everything: it is the
+/// one being worked on and draws its rows anyway.
+export function segmentWork(turn: Turn, resultByCallId?: Map<string, ToolResult>): TurnSegment[] {
   const segments: TurnSegment[] = [];
   let items: WorkItem[] = [];
+  const pending = (item: WorkItem) =>
+    !!resultByCallId &&
+    (isToolGroup(item) ? item.calls : [item]).some(
+      (e) => e.payload.type === "tool_call_started" && !resultByCallId.has(e.payload.callId),
+    );
 
   const push = (prompt: AgentEvent | null) => {
+    const running = prompt !== null && items.some(pending);
     let toolCalls = 0;
     let messages = 0;
     let rows = 0;
@@ -143,7 +158,7 @@ export function segmentWork(turn: Turn): TurnSegment[] {
       if (item.payload.type === "assistant_text") messages += 1;
       if (rendersRow(item)) rows += 1;
     }
-    segments.push({ items, prompt, toolCalls, messages, rows });
+    segments.push({ items, running, prompt, toolCalls, messages, rows });
     items = [];
   };
 
