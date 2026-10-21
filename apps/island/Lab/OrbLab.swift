@@ -207,7 +207,7 @@ private struct Meter: View {
     }
 }
 
-/// One candidate: at 48pt and 22pt on the panel's black, per palette.
+/// One candidate: at 48pt and 24pt on the panel's black, per palette.
 private struct Card: View {
     let style: OrbStyle
     @Bindable var model: LabModel
@@ -219,7 +219,7 @@ private struct Card: View {
                 ForEach(model.palette.map { [$0] } ?? OrbPalette.all) { p in
                     VStack(spacing: 8) {
                         LabOrb(style: style, size: 48, level: model.level, state: model.state, palette: p)
-                        LabOrb(style: style, size: 22, level: model.level, state: model.state, palette: p)
+                        LabOrb(style: style, size: 24, level: model.level, state: model.state, palette: p)
                         if model.palette == nil {
                             Text(p.name).font(.system(size: 9)).foregroundStyle(.tertiary)
                         }
@@ -291,7 +291,7 @@ private struct PanelMock: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            LabOrb(style: style, size: 22, level: level, state: state, palette: palette)
+            LabOrb(style: style, size: 24, level: level, state: state, palette: palette)
             Text(hint).font(.system(size: 13)).foregroundStyle(.tertiary)
                 .contentTransition(.opacity)
                 .animation(.easeInOut(duration: 0.2), value: hint)
@@ -338,7 +338,7 @@ enum Snapshot {
                             let f = OrbFrame(size: 96, t: 12.3, spin: 1.2 * m.3, curl: m.3, level: m.2, energy: m.2 * 0.7,
                                              rec: m.1 == .recording ? 1 : 0, work: m.3)
                             style.draw(f, palette: p)
-                            style.draw(OrbFrame(size: 22, t: f.t, spin: f.spin, curl: f.curl, level: f.level, energy: f.energy,
+                            style.draw(OrbFrame(size: 24, t: f.t, spin: f.spin, curl: f.curl, level: f.level, energy: f.energy,
                                                 rec: f.rec, work: f.work), palette: p)
                         }
                     }
