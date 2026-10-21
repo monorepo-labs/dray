@@ -1,23 +1,23 @@
 {
-  "version": "0.29.1",
-  "notes": "### New\n\n- **Dray Island.** A composer that floats over every app, at the notch\n  or above the Dock. Tap Control on its own to open it, tap again to\n  dictate. Typed and spoken lines build one prompt, sent to a pinned\n  session or a new one. It lists your sessions with their marks, and\n  permission and question cards land there while it runs. Turn it off\n  or pick another key in Settings → Island.\n\n  ![](https://www.drayhq.com/changelog/dray-island.png)\n- **Screenshots and drawings in the Island.** ⌘⇧2 takes a region of\n  the screen into the draft. While dictating, hold Shift to draw on the\n  live screen; each drawing joins the prompt where you were speaking.\n  Drop files on the Island to attach them.\n\n### Improved\n\n- **Dictation is faster.** Pauses are trimmed before the model reads\n  the audio, and streaming models (Parakeet Unified, Nemotron)\n  transcribe while you talk, so stopping takes a fraction of a second.\n- **Jump to session is ⌥ + digit**, so tapping Control no longer\n  flashes the badges.",
-  "pub_date": "2026-10-21T07:54:06.257Z",
+  "version": "0.29.2",
+  "notes": "### Improved\n\n- **The Island tells you when a session is done**, in place of Dray's\n  banner. Alerts wait while you're typing in it, and ⌘S saves a draft.\n\n### Fixed\n\n- Dictation closes the mic when the Mac sleeps, so other apps can\n  still record. A recording cut short by sleep offers Retry.\n- Queuing a prompt no longer folds away a tool that is still running.\n- Arrow keys keep switching Settings tabs past Shortcuts.",
+  "pub_date": "2026-10-21T14:45:25.931Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWlmY3Q4bElEakRvNkovY3k5cU1DY0pvMWFNcENtVnJTSHNZS25RSzRaWDl2S0sxUE9uMVFaL1VXcUpERjZMaE5na1YrR0UwWExGc3RYMzJ2Y0x5SndjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNTY5MjM3CWZpbGU6RHJheS5hcHAudGFyLmd6CjZSVVZKOUNIbjVucUdQdndQcVNmWERtQ0VwVjdOSHpFVTFJZ3pxM1R5dktXOHdGK09RWGExNXJxYVVyOTdLRmxOZ3l6NVJMOHhvWnZscjJaeHVuMENBPT0K",
-      "url": "https://downloads.drayhq.com/v0.29.1/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXRlbW12R3hEL0dUdjFJTk5XQUI2VkJsZy82NDM2NEtyREdsSkdKSXVLUjJ5bnhuUSszVXY1ZVIwYVpWelNrR2ovb1NBK1QzZkJLLzlOUTMxYzJJU1FJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNTkzOTE0CWZpbGU6RHJheS5hcHAudGFyLmd6ClRuSXJveDlza3JFSlMxVmJ6cTltT016TFhuS2JCaURnVlVvbnc2dU4vQ1FZQkZ0Yzd5U2VKaDJmNHd0TnlveTVtUnZzMWErdkpHSmpOODhHemhwSkR3PT0K",
+      "url": "https://downloads.drayhq.com/v0.29.2/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWlmY3Q4bElEakRvNkovY3k5cU1DY0pvMWFNcENtVnJTSHNZS25RSzRaWDl2S0sxUE9uMVFaL1VXcUpERjZMaE5na1YrR0UwWExGc3RYMzJ2Y0x5SndjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNTY5MjM3CWZpbGU6RHJheS5hcHAudGFyLmd6CjZSVVZKOUNIbjVucUdQdndQcVNmWERtQ0VwVjdOSHpFVTFJZ3pxM1R5dktXOHdGK09RWGExNXJxYVVyOTdLRmxOZ3l6NVJMOHhvWnZscjJaeHVuMENBPT0K",
-      "url": "https://downloads.drayhq.com/v0.29.1/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXRlbW12R3hEL0dUdjFJTk5XQUI2VkJsZy82NDM2NEtyREdsSkdKSXVLUjJ5bnhuUSszVXY1ZVIwYVpWelNrR2ovb1NBK1QzZkJLLzlOUTMxYzJJU1FJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNTkzOTE0CWZpbGU6RHJheS5hcHAudGFyLmd6ClRuSXJveDlza3JFSlMxVmJ6cTltT016TFhuS2JCaURnVlVvbnc2dU4vQ1FZQkZ0Yzd5U2VKaDJmNHd0TnlveTVtUnZzMWErdkpHSmpOODhHemhwSkR3PT0K",
+      "url": "https://downloads.drayhq.com/v0.29.2/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWlmY3Q4bElEakRvNkovY3k5cU1DY0pvMWFNcENtVnJTSHNZS25RSzRaWDl2S0sxUE9uMVFaL1VXcUpERjZMaE5na1YrR0UwWExGc3RYMzJ2Y0x5SndjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNTY5MjM3CWZpbGU6RHJheS5hcHAudGFyLmd6CjZSVVZKOUNIbjVucUdQdndQcVNmWERtQ0VwVjdOSHpFVTFJZ3pxM1R5dktXOHdGK09RWGExNXJxYVVyOTdLRmxOZ3l6NVJMOHhvWnZscjJaeHVuMENBPT0K",
-      "url": "https://downloads.drayhq.com/v0.29.1/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXRlbW12R3hEL0dUdjFJTk5XQUI2VkJsZy82NDM2NEtyREdsSkdKSXVLUjJ5bnhuUSszVXY1ZVIwYVpWelNrR2ovb1NBK1QzZkJLLzlOUTMxYzJJU1FJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNTkzOTE0CWZpbGU6RHJheS5hcHAudGFyLmd6ClRuSXJveDlza3JFSlMxVmJ6cTltT016TFhuS2JCaURnVlVvbnc2dU4vQ1FZQkZ0Yzd5U2VKaDJmNHd0TnlveTVtUnZzMWErdkpHSmpOODhHemhwSkR3PT0K",
+      "url": "https://downloads.drayhq.com/v0.29.2/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWlmY3Q4bElEakRvNkovY3k5cU1DY0pvMWFNcENtVnJTSHNZS25RSzRaWDl2S0sxUE9uMVFaL1VXcUpERjZMaE5na1YrR0UwWExGc3RYMzJ2Y0x5SndjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNTY5MjM3CWZpbGU6RHJheS5hcHAudGFyLmd6CjZSVVZKOUNIbjVucUdQdndQcVNmWERtQ0VwVjdOSHpFVTFJZ3pxM1R5dktXOHdGK09RWGExNXJxYVVyOTdLRmxOZ3l6NVJMOHhvWnZscjJaeHVuMENBPT0K",
-      "url": "https://downloads.drayhq.com/v0.29.1/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXRlbW12R3hEL0dUdjFJTk5XQUI2VkJsZy82NDM2NEtyREdsSkdKSXVLUjJ5bnhuUSszVXY1ZVIwYVpWelNrR2ovb1NBK1QzZkJLLzlOUTMxYzJJU1FJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNTkzOTE0CWZpbGU6RHJheS5hcHAudGFyLmd6ClRuSXJveDlza3JFSlMxVmJ6cTltT016TFhuS2JCaURnVlVvbnc2dU4vQ1FZQkZ0Yzd5U2VKaDJmNHd0TnlveTVtUnZzMWErdkpHSmpOODhHemhwSkR3PT0K",
+      "url": "https://downloads.drayhq.com/v0.29.2/Dray_universal.app.tar.gz"
     }
   }
 }
