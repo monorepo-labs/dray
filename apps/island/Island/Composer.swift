@@ -88,7 +88,11 @@ final class Composer {
     /// Bumped to put focus in the input: every open, and every new task.
     var opens = 0
     /// Drawn open; the window lags it on the way out, so the close can animate.
-    var shown = false { didSet { if oldValue, !shown { released() } else if !oldValue, shown { coverDone() } } }
+    var shown = false {
+        didSet {
+            if oldValue, !shown { released() } else if !oldValue, shown { leaving = nil; coverDone() }
+        }
+    }
     /// Whether the panel has held the keys since it opened, which is when a bare Esc reaches it.
     var keyed = false
     var closeHint: String { keyed ? "Esc" : "⌘Esc" }
@@ -172,7 +176,8 @@ final class Composer {
         func first(_ asks: [AgentEvent]) -> Int {
             asks.compactMap { $0.payload.askId.flatMap(askOrder.firstIndex) }.min() ?? .max
         }
-        return store.asks.filter { !$0.value.isEmpty }
+        // The answered card is gone to the reader already, so no pill waits on it.
+        return store.asks.filter { $0.value.contains { $0.id != leaving?.event.id } }
             .sorted { (first($0.value), $0.key.id) < (first($1.value), $1.key.id) }
             .map(\.key)
     }
@@ -181,6 +186,7 @@ final class Composer {
     /// ask, so answering one moves to the next. Held back while the reader is
     /// busy in the panel, unless they came for the cards.
     var ask: (key: SessionKey, event: AgentEvent)? {
+        if !shown, let leaving { return leaving }
         guard cardsFirst || !busy else { return nil }
         let keys = attention
         guard let key = askTab.flatMap({ keys.contains($0) ? $0 : nil }) ?? keys.first,
@@ -193,6 +199,9 @@ final class Composer {
     var busy: Bool { dictation != .idle || !rows.isEmpty || !typing.isEmpty || listShown || openMenu != nil }
     /// Set by the attention pill, whose whole point is the cards.
     @ObservationIgnored var cardsFirst = false
+    /// The last card, answered: drawn while the panel closes, since the
+    /// answer's reply lands mid-close and the draft flashed in its place.
+    private var leaving: (key: SessionKey, event: AgentEvent)?
     /// News that landed while the reader was busy in the panel, so nothing
     /// sounded; it sounds once, when it can first be seen.
     @ObservationIgnored private var heldAsk = false
@@ -371,12 +380,31 @@ final class Composer {
 
     func respond(_ optionId: String) async {
         guard let (key, e) = ask, case .permissionRequested(let r) = e.payload else { return }
+        closeOnLastCard(key, e)
         await store.respond(key, requestId: r.requestId, optionId: optionId)
+        keepIfRefused(key, e)
     }
 
     func answer(_ answers: [String: String]) async {
         guard let (key, e) = ask, case .questionsAsked(let r) = e.payload else { return }
+        closeOnLastCard(key, e)
         await store.answer(key, requestId: r.requestId, answers: answers)
+        keepIfRefused(key, e)
+    }
+
+    /// The last card answered closes the panel now, on the card, rather than
+    /// once the reply removes it, which drew the draft for a moment first.
+    private func closeOnLastCard(_ key: SessionKey, _ e: AgentEvent) {
+        guard !busy, attention == [key], store.asks[key]?.count == 1 else { return }
+        leaving = (key, e)
+        hide()
+    }
+
+    /// An answer that did not land leaves the card waiting, so its pill comes back.
+    private func keepIfRefused(_ key: SessionKey, _ e: AgentEvent) {
+        guard leaving?.event.id == e.id, store.asks[key]?.contains(where: { $0.id == e.id }) == true else { return }
+        leaving = nil
+        pillChanged()
     }
 
     var key: SessionKey? {
