@@ -13,13 +13,14 @@ struct OrbLabApp: App {
     init() {
         if let i = CommandLine.arguments.firstIndex(of: "--snapshot"), i + 1 < CommandLine.arguments.count {
             let only = CommandLine.arguments[(i + 2)...].compactMap(OrbStyle.init(rawValue:))
-            Snapshot.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]), only: only.isEmpty ? OrbStyle.allCases : only)
-            exit(0)
+            let ok = Snapshot.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]), only: only.isEmpty ? OrbStyle.allCases : only)
+            exit(ok ? 0 : 1)
         }
     }
 
     var body: some Scene {
-        WindowGroup("Orb Lab") {
+        // One window, so closing it quits the lab and the microphone with it.
+        Window("Orb Lab", id: "lab") {
             LabView(model: model)
                 .preferredColorScheme(.dark)
                 .frame(minWidth: 900, minHeight: 600)
@@ -155,29 +156,34 @@ private struct Controls: View {
     @Bindable var model: LabModel
 
     var body: some View {
-        HStack(spacing: 16) {
-            Picker("State", selection: $model.state) {
-                Text("Idle").tag(Dictation.idle)
-                Text("Starting").tag(Dictation.starting)
-                Text("Recording").tag(Dictation.recording)
-                Text("Transcribing").tag(Dictation.transcribing)
+        // Two rows, so the controls fit beside the detail pane at the narrowest window.
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 16) {
+                Picker("State", selection: $model.state) {
+                    Text("Idle").tag(Dictation.idle)
+                    Text("Starting").tag(Dictation.starting)
+                    Text("Recording").tag(Dictation.recording)
+                    Text("Transcribing").tag(Dictation.transcribing)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 320)
+                Spacer()
+                Picker("Palette", selection: $model.palette) {
+                    Text("All").tag(OrbPalette?.none)
+                    ForEach(OrbPalette.all) { Text($0.name).tag(OrbPalette?.some($0)) }
+                }
+                .frame(width: 170)
             }
-            .pickerStyle(.segmented)
-            .frame(width: 360)
-            Picker("Level", selection: $model.source) {
-                ForEach(LevelSource.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            HStack(spacing: 16) {
+                Picker("Level", selection: $model.source) {
+                    ForEach(LevelSource.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .frame(width: 200)
+                if model.source == .slider {
+                    Slider(value: $model.slider, in: 0...1).frame(width: 140)
+                }
+                Meter(level: model.level)
             }
-            .frame(width: 200)
-            if model.source == .slider {
-                Slider(value: $model.slider, in: 0...1).frame(width: 140)
-            }
-            Meter(level: model.level)
-            Spacer()
-            Picker("Palette", selection: $model.palette) {
-                Text("All").tag(OrbPalette?.none)
-                ForEach(OrbPalette.all) { Text($0.name).tag(OrbPalette?.some($0)) }
-            }
-            .frame(width: 180)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -309,8 +315,15 @@ private struct PanelMock: View {
 /// the shaders can be checked without a screen.
 @MainActor
 enum Snapshot {
-    static func write(to dir: URL, only styles: [OrbStyle]) {
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    /// False, having said why on stderr, where any sheet could not be written.
+    static func write(to dir: URL, only styles: [OrbStyle]) -> Bool {
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            FileHandle.standardError.write(Data("\(dir.path): \(error.localizedDescription)\n".utf8))
+            return false
+        }
+        var ok = true
         // Name, state, voice, and how far into transcribing: "turning" is a transition caught halfway.
         let moments: [(String, Dictation, Double, Double)] = [
             ("idle", .idle, 0, 0), ("soft", .recording, 0.3, 0), ("loud", .recording, 1, 0),
@@ -335,10 +348,16 @@ enum Snapshot {
             .background(.black)
             let r = ImageRenderer(content: sheet)
             r.scale = 2
-            if let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
-               let png = rep.representation(using: .png, properties: [:]) {
-                try? png.write(to: dir.appendingPathComponent("\(p.name).png"))
+            let file = dir.appendingPathComponent("\(p.name).png")
+            do {
+                guard let img = r.nsImage, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+                      let png = rep.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
+                try png.write(to: file)
+            } catch {
+                FileHandle.standardError.write(Data("\(file.path): \(error.localizedDescription)\n".utf8))
+                ok = false
             }
         }
+        return ok
     }
 }
