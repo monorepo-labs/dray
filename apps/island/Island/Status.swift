@@ -148,10 +148,11 @@ private struct QuestionsBody: View {
             }
             if q.freeText != false {
                 if editing {
-                    // Typed text is the answer once there is any, so the pick lets go.
+                    // On a single pick, typed text is the answer once there is any, so the pick
+                    // lets go; on a multi-select it is one more answer beside the picks.
                     TextField("", text: Binding(get: { typed[q.question] ?? "" }, set: {
                         typed[q.question] = $0
-                        if !$0.isEmpty { picks[q.question] = nil }
+                        if !$0.isEmpty, !q.multiSelect { picks[q.question] = nil }
                     }),
                               prompt: Text("Something else…").foregroundStyle(.white.opacity(0.3)))
                         .textFieldStyle(.plain)
@@ -200,9 +201,11 @@ private struct QuestionsBody: View {
     }
 
     private func toggle(_ label: String) {
-        // And the other way: a pick is the answer, which typed text would otherwise outrank unseen.
-        typed[q.question] = nil
-        editing = false
+        // And the other way: a single pick is the answer, which typed text would otherwise outrank unseen.
+        if !q.multiSelect {
+            typed[q.question] = nil
+            editing = false
+        }
         var set = picks[q.question, default: []]
         if set.contains(label) { set.remove(label) } else if q.multiSelect { set.insert(label) } else { set = [label] }
         picks[q.question] = set
@@ -228,12 +231,11 @@ private struct QuestionsBody: View {
         var out: [String: String] = [:]
         for q in request.questions {
             let text = (typed[q.question] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty && q.freeText != false {
-                out[q.question] = text
-            } else if let set = picks[q.question], !set.isEmpty {
-                // In option order, so the answer reads the way the menu did.
-                out[q.question] = q.options.map(\.label).filter(set.contains).joined(separator: ", ")
-            }
+            let typedAnswer = !text.isEmpty && q.freeText != false ? [text] : []
+            // In option order, so the answer reads the way the menu did; typed text last.
+            let picked = q.options.map(\.label).filter(picks[q.question, default: []].contains)
+            let parts = q.multiSelect ? picked + typedAnswer : typedAnswer.isEmpty ? picked : typedAnswer
+            if !parts.isEmpty { out[q.question] = parts.joined(separator: ", ") }
         }
         busy = true
         Task {
