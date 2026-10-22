@@ -83,7 +83,7 @@ tauri-plugin-macos-permissions = { version = "2.3", optional = true }
 futures-util = "0.3"
 # Verifies a downloaded model against the catalog's hash. A partial file left by
 # a killed process is otherwise indistinguishable from a whole one.
-sha2 = "0.10"
+sha2 = "0.11"
 # Public addresses for Remote access and shared dev servers (tunnel.rs). TLS
 # ends in this process, so the relay sees no plaintext, and the address is kept.
 opentunnel = "0.5.1"
