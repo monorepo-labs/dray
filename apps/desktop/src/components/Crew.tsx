@@ -281,12 +281,14 @@ export default function Crew({
   // fading top to bottom: the sheet's own fill read as more transcript, and a
   // bordered card pulled more of the eye than the question deserves. A card may
   // also take more of the column than a transcript, since it holds a turn until
-  // answered and has to be read whole.
+  // answered and has to be read whole. Not `shrink-0`: the composer is, so at
+  // that height a tall draft would push it out of the window. The transcript's
+  // zero basis still gives way first; the list scrolls once this does.
   const asking = rows.some((r) => r.asking);
   return stacked ? (
     <div
       className={cn(
-        "@container mx-auto mb-2 flex min-h-0 w-[calc(100%-2rem)] max-w-3xl shrink-0 flex-col overflow-hidden rounded-2xl",
+        "@container mx-auto mb-2 flex min-h-0 w-[calc(100%-2rem)] max-w-3xl flex-col overflow-hidden rounded-2xl",
         asking
           ? "max-h-[70%] bg-linear-to-b from-(--surface-well) to-transparent"
           : "max-h-[40%]",
