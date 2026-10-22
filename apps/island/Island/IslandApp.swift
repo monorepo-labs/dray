@@ -61,6 +61,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var lastTap: Date?
     /// A tap is waiting on Dray's selection; another meanwhile must not open twice.
     private var askingApp = false
+    /// A tap landed while asking, which is the double tap that opens listening.
+    private var dictateOnOpen = false
     private var annotation: Annotation?
     /// Over a capture's or a drawing's overlay, so dictation stays in sight and in reach.
     private static let overOverlay = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
@@ -300,6 +302,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
             panel?.makeKeyAndOrderFront(nil)
         } else if composer.shown {
             Task { await composer.toggleDictation() }
+        } else if askingApp {
+            // The panel is on its way up, so this is the tap that dictates.
+            dictateOnOpen.toggle()
         } else if UserDefaults.standard.string(forKey: "island.tap") == "double",
                   lastTap.map({ Date().timeIntervalSince($0) > 0.4 }) ?? true {
             lastTap = Date()
@@ -319,6 +324,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
             await composer.adoptAppSelection()
             askingApp = false
             show()
+            if dictateOnOpen {
+                dictateOnOpen = false
+                await composer.toggleDictation()
+            }
         }
     }
 
