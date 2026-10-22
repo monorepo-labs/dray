@@ -42,7 +42,7 @@ libc = "0.2"
 dray-proto = { path = "../../../crates/dray-proto" }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-updater = { version = "2", optional = true }
-fff-search = "0.10.3"
+fff-search = "0.11.0"
 # Watches the docs panel's open files. Already in the tree behind `fff-search`,
 # whose index keeps itself current the same way. Not to be confused with
 # `notify-rust` below, which posts desktop banners.
