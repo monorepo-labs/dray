@@ -93,7 +93,7 @@ hyper = { version = "1", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tauri-plugin-window-state = { version = "2", optional = true }
 # `dray-serve`'s WebSocket. The server half alone, and no TLS: it binds localhost.
-tokio-tungstenite = { version = "0.28", optional = true, default-features = false, features = ["handshake"] }
+tokio-tungstenite = { version = "0.30", optional = true, default-features = false, features = ["handshake"] }
 # The file route's query string. Already in the tree under `reqwest`'s `url`.
 form_urlencoded = { version = "1", optional = true }
 # Unpacks the headless Chromium a server downloads, since a fresh Ubuntu has no
