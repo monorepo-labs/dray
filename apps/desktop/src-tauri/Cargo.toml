@@ -72,7 +72,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 # and `rubato` resamples it to the 16kHz mono every model here expects. Audio
 # never leaves the machine. See transcription/.
 cpal = { version = "0.16", optional = true }
-rubato = { version = "0.16", optional = true }
+rubato = { version = "5", optional = true }
 # Voice activity detection, pure Rust with its weights compiled in: dictation
 # cuts the pauses out before the model reads the audio.
 earshot = { version = "1.2", optional = true }
@@ -109,12 +109,12 @@ qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 # so it cannot be switched per model or per machine. Split across two tables
 # rather than one entry, since the `metal` feature does not compile elsewhere.
 [target.'cfg(target_os = "macos")'.dependencies]
-transcribe-cpp = { version = "0.2", default-features = false, features = [
+transcribe-cpp = { version = "0.4", default-features = false, features = [
   "metal",
 ], optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-transcribe-cpp = { version = "0.2", default-features = false, optional = true }
+transcribe-cpp = { version = "0.4", default-features = false, optional = true }
 
 # Embedded Chromium for the in-app browser, macOS only for now. Behind a
 # feature so a build without the CEF binaries on disk still compiles: the
