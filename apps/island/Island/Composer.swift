@@ -686,6 +686,7 @@ final class Composer {
         lastUsed = sent.id
         UserDefaults.standard.set(sent.id, forKey: "island.lastSession")
         self.target = .session(sent)
+        Sound.send?.play()
         flash("Sent")
         return true
     }
@@ -939,9 +940,11 @@ final class Composer {
     }
 }
 
-/// Dray's own dictation tones, so the two dictate alike.
+/// Dray's own dictation tones, so the two dictate alike, and the island's send.
 enum Sound {
     static let start = NSSound(named: "dictate-start")
     static let stop = NSSound(named: "dictate-stop")
     static let done = NSSound(named: "notification")
+    /// Shimmer lift from `demo/send-sound.html`, rendered at 25%.
+    static let send = NSSound(named: "send")
 }

@@ -381,12 +381,15 @@ async fn open_recorder(
     drop(slot);
 
     // After the microphone is open, never before: a refusal must leave the
-    // machine's sound exactly as it found it. The start tone the frontend
-    // plays next therefore lands on a muted system and is not heard, which is
-    // the honest reading of a reader who asked for silence while they talk —
-    // the visualizer appearing is what says the mic is live.
+    // machine's sound exactly as it found it. And after the start tone the
+    // client plays next, or the mute swallows it; the tone is 0.58s, and the
+    // mic hearing it costs nothing, since it is no speech.
     if stored.mute_while_recording {
-        mute_other_audio().await;
+        let ticket = audio::arm_mute();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(START_TONE).await;
+            let _ = tokio::task::spawn_blocking(move || audio::mute_other_audio(ticket)).await;
+        });
     }
 
     Ok(None)
@@ -774,12 +777,12 @@ pub fn stop_on_sleep(app: &AppHandle) {
     std::mem::forget(observer);
 }
 
+/// How long the mute waits after the microphone opens: `dictate-start.wav`
+/// plus the reply reaching the client that plays it.
+const START_TONE: std::time::Duration = std::time::Duration::from_millis(700);
+
 /// Both halves of the muting run `osascript`, which is a spawn and a wait —
 /// off the async worker, or a press parks a runtime thread for ~50ms.
-async fn mute_other_audio() {
-    let _ = tokio::task::spawn_blocking(audio::mute_other_audio).await;
-}
-
 async fn restore_other_audio() {
     let _ = tokio::task::spawn_blocking(audio::restore_other_audio).await;
 }

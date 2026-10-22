@@ -84,7 +84,18 @@ fn open_device(preferred: Option<&str>) -> Result<cpal::Device> {
 /// dropped rather than stopped must still put the sound back.
 static PRIOR_MUTED: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
 
-/// Silences the speakers for the duration of a recording. Blocking.
+/// Which recording a pending mute is for. The mute lands a moment after the
+/// microphone opens, so the start tone is heard; a restore or a newer start
+/// moves this on, and a mute still waiting for an older one does nothing.
+static MUTE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A ticket for the mute a new recording will ask for.
+pub fn arm_mute() -> u64 {
+    MUTE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+}
+
+/// Silences the speakers for the duration of a recording, where `ticket` is
+/// still the newest one. Blocking.
 ///
 /// The microphone hears them, so anything playing lands in the transcript as
 /// words nobody said — nothing here can capture the mic and the system's own
@@ -93,10 +104,16 @@ static PRIOR_MUTED: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None)
 /// Best effort throughout: a machine with no output device, or an `osascript`
 /// that refuses, records anyway. Failing the press over this would be worse
 /// than the audio it is trying to keep out.
-pub fn mute_other_audio() {
+pub fn mute_other_audio(ticket: u64) {
     let Ok(mut prior) = PRIOR_MUTED.lock() else {
         return;
     };
+
+    // Read under the lock a restore takes, or a stop landing between this
+    // check and the mute would restore first and leave the machine silent.
+    if MUTE_GEN.load(std::sync::atomic::Ordering::SeqCst) != ticket {
+        return;
+    }
 
     // A reading already held is the one from before we touched anything, and
     // the only thing that can put the sound back. Overwriting it with our own
@@ -119,6 +136,8 @@ pub fn restore_other_audio() {
     let Ok(mut prior) = PRIOR_MUTED.lock() else {
         return;
     };
+    // The recording is over, so a mute still waiting for it must not land.
+    MUTE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
     // Restored to what it was, never unconditionally unmuted: a reader who was
     // already muted before they started talking stays that way.
