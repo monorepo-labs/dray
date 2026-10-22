@@ -60,12 +60,17 @@ notify-rust = { version = "4.18", features = ["preview-macos-un"], optional = tr
 # this app talks to directly, `gh` and `claude` being reached by spawning them
 # instead. `rustls` rather than the platform TLS so a Linux build needs no
 # OpenSSL. See issues/linear.rs and analytics.rs.
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.13", default-features = false, features = [
   "json",
-  "rustls-tls",
+  "query",
+  # Not `rustls`, which brings aws-lc-rs: ring is already the provider under
+  # opentunnel and the updater, so `http()` in lib.rs installs that one.
+  "rustls-no-provider",
   # A remote session's attachment uploads as it is read, reporting progress.
   "stream",
 ] }
+# Only to install ring as the process's provider for `reqwest` (`http()`).
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 # Local speech-to-text. The engine is `transcribe-cpp` (MIT, "The transcribe.cpp
 # authors") — its own repo, not the Handy app's; `cpal` captures the microphone

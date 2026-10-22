@@ -282,7 +282,7 @@ async fn refresh_releases(fresh: Duration) -> Result<(), String> {
         return Ok(());
     }
     let read = async {
-        let list: Vec<Value> = reqwest::Client::new()
+        let list: Vec<Value> = crate::http()
             .get("https://api.github.com/repos/monorepo-labs/dray/releases?per_page=100")
             .header("User-Agent", "dray")
             .timeout(Duration::from_secs(10))
@@ -654,7 +654,7 @@ async fn tunnel_gone(url: &str) -> bool {
     let Some(host) = host.filter(|h| h.ends_with(".trycloudflare.com")) else {
         return false;
     };
-    let probe = reqwest::Client::new().get(format!("https://{host}/")).timeout(ADMIT).send().await;
+    let probe = crate::http().get(format!("https://{host}/")).timeout(ADMIT).send().await;
     match probe {
         Ok(answer) => answer.status().as_u16() == 530,
         // Unresolvable, while Cloudflare's own name resolves: the address,
@@ -1238,7 +1238,7 @@ fn live_forward(conn: &mut Conn, port: u16) -> Option<u16> {
 /// `drayserver://` scheme. The token stays out of every URL the page holds.
 pub async fn fetch_file(server: &str, path: &str) -> Result<(String, Vec<u8>), String> {
     let (base, token) = http_base(server)?;
-    let response = reqwest::Client::new()
+    let response = crate::http()
         .get(format!("{base}/file"))
         .query(&[("path", path)])
         .bearer_auth(token)
@@ -1313,7 +1313,7 @@ pub async fn upload_attachment(server: String, path: String, id: String) -> Resu
         }
     });
     let failed = |e: reqwest::Error| format!("Could not upload {name}: {e}");
-    let response = reqwest::Client::new()
+    let response = crate::http()
         .post(format!("{base}/upload"))
         .query(&[("name", name.as_str())])
         .bearer_auth(&token)

@@ -11,14 +11,7 @@ import type { CodeThemePair } from "@/lib/codeTheme";
 /// renders unhighlighted — which is why a row could need collapsing and
 /// re-expanding to come out right.
 function canTokenize(lang: string, pair: CodeThemePair): boolean {
-  const highlighter = getHighlighterIfLoaded();
-  if (!highlighter) return false;
-  const themes = highlighter.getLoadedThemes();
-  return (
-    themes.includes(pair.light) &&
-    themes.includes(pair.dark) &&
-    highlighter.getLoadedLanguages().includes(lang)
-  );
+  return getHighlighterIfLoaded({ theme: pair, lang }) != null;
 }
 
 /// The regex engine every Shiki instance here runs on — the shared main-thread

@@ -59,22 +59,14 @@ export function createSharedCodePlugin(pair: CodeThemePair): CodeHighlighterPlug
       if (cached) return cached;
 
       const tokenize = (): HighlightResult | null => {
-        const highlighter = getHighlighterIfLoaded();
+        // Both themes and the grammar must be attached, not just the
+        // highlighter present. A warm highlighter with an unattached theme
+        // still tokenizes — every token with an empty style — and one missing
+        // the grammar falls back to plain text; either result cached is a block
+        // grey forever. They load independently and a diff's preload warms only
+        // its own language, so report not-ready and let the caller await both.
+        const highlighter = getHighlighterIfLoaded({ theme: pair, lang });
         if (!highlighter) return null;
-
-        // Both themes must be attached, not just the highlighter present. A
-        // warm highlighter with an unattached theme still tokenizes — it just
-        // returns every token with an empty style, which then gets cached as if
-        // it were a real result and the block stays grey forever.
-        const loadedThemes = highlighter.getLoadedThemes();
-        if (!themes.every((theme) => loadedThemes.includes(theme))) return null;
-
-        // The grammar loads independently of the themes, and a diff's preload
-        // warms only its own language — so `ts` is routinely still missing here
-        // even with everything else ready. Falling back to plain text and
-        // caching it is what left blocks permanently grey; report not-ready
-        // instead and let the caller await the real grammar.
-        if (!highlighter.getLoadedLanguages().includes(lang)) return null;
 
         const result = highlighter.codeToTokens(code, {
           lang,

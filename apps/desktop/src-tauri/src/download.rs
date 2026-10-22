@@ -44,7 +44,7 @@ pub async fn download_verified(
     mut cancelled: impl FnMut() -> bool,
     mut on_progress: impl FnMut(u64),
 ) -> Result<()> {
-    let mut response = reqwest::get(url)
+    let mut response = crate::http().get(url).send()
         .await
         .context("could not reach the download server")?;
     if !response.status().is_success() {
