@@ -50,7 +50,9 @@ v2 (#565): status, across every live session.
   draws the cards as tabs, oldest first; the last answer closes the panel.
 - A finished session is Dray's own banner and not the island's: where the reader
   works decides which one they see, and only the banner opens the session.
-- The task list carries the sidebar's marks; the title opens its session in Dray.
+- The task list carries the sidebar's marks; the title opens the task list, since a
+  title clicked without thinking must not switch apps. ⌘-click on the title and the
+  done pill's Open in app are the ways into Dray; ⌘⏎ presses the latter while the pill is up.
 - A send says Sent and closes the panel.
 
 Screenshots, pen marks and file drops shipped (#566).

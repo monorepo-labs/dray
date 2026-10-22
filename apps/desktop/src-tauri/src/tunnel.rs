@@ -46,7 +46,7 @@ fn slot(profile: &str) -> &'static tokio::sync::Mutex<Option<Live>> {
 
 async fn client() -> Result<Client> {
     let root = crate::store::get_home_app_dir().await?.join("opentunnel");
-    Ok(Client::new(ClientOptions { api: None, storage: Some(Storage::at(root)) }))
+    Ok(Client::new(ClientOptions { api: None, storage: Some(Storage::at(root)), ca_cert: None }))
 }
 
 /// Whether `profile` already has a tunnel on disk, so its first route waits

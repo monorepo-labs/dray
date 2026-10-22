@@ -10,21 +10,21 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@blobatar/react": "^2.5.0",
-    "@yogesharc/thinking-orbs": "^0.1.1",
-    "blobatar": "^2.5.0",
-    "lucide-react": "^1.28.0",
-    "next": "^15.5.4",
-    "posthog-js": "^1.430.1",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "@blobatar/react": "^2.7.0",
+    "@yogesharc/thinking-orbs": "^0.1.2",
+    "blobatar": "^2.7.0",
+    "lucide-react": "^1.60.0",
+    "next": "^16.4.2",
+    "posthog-js": "^1.438.13",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
-    "@types/node": "^22.20.1",
-    "@types/react": "^19.1.8",
-    "@types/react-dom": "^19.1.6",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "tailwindcss": "^4.3.3",
-    "typescript": "~5.8.3"
+    "typescript": "~7.0.2"
   }
 }

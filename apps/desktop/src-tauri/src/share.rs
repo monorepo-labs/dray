@@ -303,7 +303,7 @@ mod tests {
         let url = tunnel::expose(tunnel::SHARE, "s:1", target.clone()).await.unwrap();
         eprintln!("link {url} in {:?}", t0.elapsed());
         let body = loop {
-            match reqwest::get(&url).await {
+            match crate::http().get(&url).send().await {
                 Ok(answer) => break answer.text().await.unwrap(),
                 Err(e) => {
                     assert!(t0.elapsed() < std::time::Duration::from_secs(60), "never reached: {e}");

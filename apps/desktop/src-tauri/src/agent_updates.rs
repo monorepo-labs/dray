@@ -215,7 +215,7 @@ fn fx_channel() -> Option<String> {
 }
 
 async fn get(url: &str) -> Option<String> {
-    let response = reqwest::Client::new()
+    let response = crate::http()
         .get(url)
         .timeout(CHECK_TIMEOUT)
         .send()
