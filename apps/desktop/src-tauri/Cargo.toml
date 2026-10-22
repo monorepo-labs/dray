@@ -97,9 +97,10 @@ tokio-tungstenite = { version = "0.28", optional = true, default-features = fals
 # The file route's query string. Already in the tree under `reqwest`'s `url`.
 form_urlencoded = { version = "1", optional = true }
 # Unpacks the headless Chromium a server downloads, since a fresh Ubuntu has no
-# `unzip`. Deflate alone; both crates are already in the lock file (the
-# updater's zip, `png`'s flate2). See headless/download.rs.
-zip = { version = "4.6", optional = true, default-features = false, features = ["deflate-flate2"] }
+# `unzip`. Deflate alone, through the flate2 `png` already pulls in. The
+# updater's own zip is an older major and Windows-only, so Mac and Linux
+# build this one alone. See headless/download.rs.
+zip = { version = "9", optional = true, default-features = false, features = ["deflate-flate2"] }
 flate2 = { version = "1", optional = true }
 # The This Mac row's pairing QR for the phone. SVG alone: no `image` tree.
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
