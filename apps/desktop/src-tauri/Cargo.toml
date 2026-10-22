@@ -71,7 +71,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 # authors") — its own repo, not the Handy app's; `cpal` captures the microphone
 # and `rubato` resamples it to the 16kHz mono every model here expects. Audio
 # never leaves the machine. See transcription/.
-cpal = { version = "0.16", optional = true }
+cpal = { version = "0.18", optional = true }
 rubato = { version = "0.16", optional = true }
 # Voice activity detection, pure Rust with its weights compiled in: dictation
 # cuts the pauses out before the model reads the audio.

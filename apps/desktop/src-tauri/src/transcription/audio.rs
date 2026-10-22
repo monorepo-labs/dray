@@ -41,12 +41,12 @@ pub struct InputDevice {
 
 pub fn list_input_devices() -> Result<Vec<InputDevice>> {
     let host = cpal::default_host();
-    let default = host.default_input_device().and_then(|d| d.name().ok());
+    let default = host.default_input_device().and_then(|d| device_name(&d));
 
     let devices = host
         .input_devices()
         .context("could not enumerate input devices")?
-        .filter_map(|d| d.name().ok())
+        .filter_map(|d| device_name(&d))
         .map(|name| InputDevice {
             is_default: Some(&name) == default.as_ref(),
             name,
@@ -54,6 +54,13 @@ pub fn list_input_devices() -> Result<Vec<InputDevice>> {
         .collect();
 
     Ok(devices)
+}
+
+/// The name a device is stored under. cpal 0.18 dropped `name()`; the
+/// description's name reads the same CoreAudio property, so names saved by
+/// older builds still match.
+fn device_name(device: &cpal::Device) -> Option<String> {
+    device.description().ok().map(|d| d.name().to_string())
 }
 
 /// Resolves a stored device name to a live device, falling back to the system
@@ -67,7 +74,7 @@ fn open_device(preferred: Option<&str>) -> Result<cpal::Device> {
 
     if let Some(name) = preferred {
         if let Ok(mut devices) = host.input_devices() {
-            if let Some(found) = devices.find(|d| d.name().is_ok_and(|n| n == name)) {
+            if let Some(found) = devices.find(|d| device_name(d).is_some_and(|n| n == name)) {
                 return Ok(found);
             }
         }
@@ -280,12 +287,6 @@ impl Tap {
     }
 }
 
-// cpal's `Stream` is `!Send` because some backends tie it to the thread that
-// created it. Recording is owned by a `tokio::Mutex` in the manager and only
-// ever touched from commands, never moved across a thread while live, so the
-// bound is sound here — but it is a promise this module has to keep.
-unsafe impl Send for Recording {}
-
 impl Recording {
     /// Opens the device and starts filling a buffer.
     ///
@@ -299,7 +300,7 @@ impl Recording {
             .context("microphone offers no usable input format")?;
 
         let channels = config.channels();
-        let rate = config.sample_rate().0;
+        let rate = config.sample_rate();
         // Preallocated, and that is about the realtime callback rather than
         // speed. `extend` on a growing `Vec` reallocates by doubling, and each
         // one memcpys the whole buffer *on the audio thread* — at 48kHz stereo
@@ -324,13 +325,13 @@ impl Recording {
         // every arm, so each converts to `f32` and appends.
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => device.build_input_stream(
-                &config.into(),
+                config.into(),
                 move |data: &[f32], _: &_| append(&sink, &level, data.iter().copied()),
                 on_error,
                 None,
             ),
             cpal::SampleFormat::I16 => device.build_input_stream(
-                &config.into(),
+                config.into(),
                 move |data: &[i16], _: &_| {
                     append(
                         &sink,
@@ -342,7 +343,7 @@ impl Recording {
                 None,
             ),
             cpal::SampleFormat::U16 => device.build_input_stream(
-                &config.into(),
+                config.into(),
                 move |data: &[u16], _: &_| {
                     append(
                         &sink,
