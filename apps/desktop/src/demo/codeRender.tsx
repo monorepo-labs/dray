@@ -9,7 +9,7 @@ import FileViewer from "@/components/files/FileViewer";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
-import { useCodeTheme } from "@/hooks/useCodeTheme";
+import { useCodeThemeWithMode } from "@/hooks/useCodeTheme";
 import type { OpenFile } from "@/hooks/useOpenFiles";
 import { warmHighlighter } from "@/hooks/useHighlighter";
 import big from "@/App.tsx?raw";
@@ -44,39 +44,47 @@ const OPEN: OpenFile = {
   state: { status: "ready", body: { kind: "text", text: big } },
 } as OpenFile;
 
+/// A token the highlighter gave a colour of its own: the library's per-theme
+/// variables in a code view, Shiki's or a plain `color` in a fence. `inherit`
+/// is excluded — it is what a not-yet-highlighted line is drawn with, so
+/// counting it would end the timer over grey code.
+const TOKEN = ["[style*='--diffs-token-']", "[style*='--shiki-']", "[style*='color:']:not([style*='inherit'])"];
+const tokenIn = (scope: string) => TOKEN.map((t) => `${scope} span${t}`).join(", ");
+
 /// Whether `node` holds a token the highlighter coloured, looking through every
 /// shadow root on the way, since the library draws inside one.
 function coloured(node: ParentNode): boolean {
-  if (node.querySelector("pre span[style*='color'], pre span[style*='--shiki']")) return true;
+  if (node.querySelector(tokenIn("pre"))) return true;
   for (const host of node.querySelectorAll("diffs-container")) {
     const root = host.shadowRoot;
-    if (root && root.querySelector("[data-line] span[style]")) return true;
+    if (root && root.querySelector(tokenIn("[data-line]"))) return true;
   }
   return false;
 }
 
-/// Every timing so far, per run, so the window title can carry them out to
+/// Every timing so far, per pass, so the window title can carry them out to
 /// whatever is reading it — a title is readable from outside the page.
-const timings: Record<number, Record<string, number>> = {};
+const timings: Record<string, Record<string, number>> = {};
 const SECTIONS = 5;
 
-function report(run: number, label: string, ms: number, done: (run: number) => void) {
-  (timings[run] ??= {})[label] = ms;
+function report(pass: string, label: string, ms: number, done: (pass: string) => void) {
+  (timings[pass] ??= {})[label] = ms;
   document.title = Object.entries(timings)
-    .map(([r, t]) => `${r === "0" ? "cold" : `warm${r}`}: ${Object.values(t).join("/")}`)
+    .map(([p, t]) => `${p}: ${Object.values(t).join("/")}`)
     .join(" | ");
-  if (Object.keys(timings[run]).length === SECTIONS) done(run);
+  if (Object.keys(timings[pass]).length === SECTIONS) done(pass);
 }
 
 function Timed({
   label,
-  run,
+  pass,
   done,
   children,
 }: {
   label: string;
-  run: number;
-  done: (run: number) => void;
+  /// Names one mount, and changing it remounts and re-times the view.
+  pass: string;
+  done: (pass: string) => void;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -90,14 +98,14 @@ function Timed({
       if (ref.current && coloured(ref.current)) {
         const took = Math.round(performance.now() - start);
         setMs(took);
-        report(run, label, took, done);
+        report(pass, label, took, done);
         return;
       }
       if (performance.now() - start < 30000) frame = requestAnimationFrame(poll);
     };
     frame = requestAnimationFrame(poll);
     return () => cancelAnimationFrame(frame);
-  }, [run]);
+  }, [pass]);
 
   return (
     <section className="flex flex-col gap-2">
@@ -107,7 +115,7 @@ function Timed({
           {ms === null ? "not coloured yet" : `coloured in ${ms}ms`}
         </span>
       </h2>
-      <div ref={ref} key={run}>
+      <div ref={ref} key={pass}>
         {children}
       </div>
     </section>
@@ -115,13 +123,16 @@ function Timed({
 }
 
 function Page() {
-  const { pair } = useCodeTheme();
+  const { pair, resolvedMode } = useCodeThemeWithMode();
   useEffect(() => warmHighlighter(pair), [pair]);
   const [run, setRun] = useState(0);
+  // A palette or mode change remounts and re-times every view, or the timings
+  // on screen would vouch for a theme no longer drawn.
+  const pass = `${run === 0 ? "cold" : `warm${run}`} ${pair.dark}/${resolvedMode}`;
   // One warm pass on its own once the cold one lands, so a single load
   // answers both questions.
-  const done = (finished: number) => {
-    if (finished === 0) setTimeout(() => setRun((n) => (n === 0 ? 1 : n)), 1500);
+  const done = (finished: string) => {
+    if (finished.startsWith("cold")) setTimeout(() => setRun((n) => (n === 0 ? 1 : n)), 1500);
   };
   const sides = useMemo(() => ({ path: PATH, oldText: big, newText: edited }), []);
 
@@ -137,21 +148,21 @@ function Page() {
             {pair.light} / {pair.dark}
           </span>
         </div>
-        <Timed label="Edit diff" run={run} done={done}>
+        <Timed label="Edit diff" pass={pass} done={done}>
           <DiffView sides={{ path: PATH, oldText: fragment, newText: fragmentNew }} />
         </Timed>
-        <Timed label="Ranged Read" run={run} done={done}>
+        <Timed label="Ranged Read" pass={pass} done={done}>
           <CodeView range={{ path: PATH, text: lines.slice(399, 600).join("\n"), startLine: 400 }} />
         </Timed>
-        <Timed label="Markdown fences" run={run} done={done}>
+        <Timed label="Markdown fences" pass={pass} done={done}>
           <Markdown>{FENCES}</Markdown>
         </Timed>
-        <Timed label={`Full-file diff, ${lines.length} lines`} run={run} done={done}>
+        <Timed label={`Full-file diff, ${lines.length} lines`} pass={pass} done={done}>
           <div className="h-96 overflow-auto rounded-md border border-border/60">
             <DiffView sides={sides} diffStyle="split" overflow="scroll" />
           </div>
         </Timed>
-        <Timed label={`Files view, ${lines.length} lines, line 1200`} run={run} done={done}>
+        <Timed label={`Files view, ${lines.length} lines, line 1200`} pass={pass} done={done}>
           <div className="flex h-96 flex-col rounded-md border border-border/60">
             <FileViewer file={OPEN} />
           </div>
