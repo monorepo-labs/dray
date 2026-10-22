@@ -612,10 +612,9 @@ export default function ChatInput({
   };
 
   // Bound on the document, not on the textarea: on the textarea it only fired
-  // while the box held focus, and every other press fell through to the webview,
-  // where macOS reads a bare Esc as "leave fullscreen" — so the window resized
-  // instead of cancelling. Swallowed only when it did something, or fullscreen
-  // would lose its own exit for nothing.
+  // while the box held focus, and every other press fell through unanswered.
+  // Swallowed only when it did something; `main.tsx` swallows the rest so
+  // Escape never leaves fullscreen.
   //
   // Bubble phase and skipped once handled, because Radix's layers listen in
   // capture and preventDefault when they dismiss — so an open dialog, menu or
