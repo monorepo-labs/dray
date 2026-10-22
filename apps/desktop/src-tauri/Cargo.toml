@@ -48,7 +48,7 @@ fff-search = "0.10.3"
 # `notify-rust` below, which posts desktop banners.
 notify = "9.0.0-rc.4"
 # Attached images travel to the CLI as base64 content blocks.
-base64 = "0.22"
+base64 = "0.23"
 # Desktop notifications are posted directly rather than through
 # `tauri-plugin-notification`: only the handle `show` returns reports a click,
 # and the plugin drops it. `preview-macos-un` is not optional — the default
