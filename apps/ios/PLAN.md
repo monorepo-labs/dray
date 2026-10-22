@@ -9,7 +9,8 @@ phone reads and drives it over the same WebSocket the desktop uses
 
 - **Every saved server at once, one merged list**, the desktop sidebar's live
   list: stages workspace-wide with a gap between runs and no headings, PR marks
-  read through `pr_marks` once per repo, and a chip per project to narrow it.
+  read through `pr_marks` once per repo, and a project menu in the title to
+  narrow it.
   Pins are not drawn apart.
 - **Transcript**, live, shaped like the desktop's: finished turns fold to
   prompt, summary line and answer; runs of one tool group into a row; a
@@ -19,14 +20,16 @@ phone reads and drives it over the same WebSocket the desktop uses
 - **Permission and question cards**, answered in place.
 - **New session** with the desktop composer's picks: project, harness, model,
   effort, stance, fast mode, worktree, branch.
-- **Pairing** by paste or by QR.
+- **Pairing** by paste or by QR, and every server's name, token and removal
+  in one Settings screen.
 - **Pull request** sheet from the session view: readiness in the desktop's
   order, checks, comments; merge, mark ready, reopen. Hidden when the branch
   has none.
 - **Dictation**, transcribed on the Mac: the phone records a 16kHz mono WAV,
   uploads it through `POST /upload` and calls `transcribe_upload`. Only the
   Mac's server has that command, and its welcome frame says `dictation: true`,
-  so the mic is drawn nowhere else.
+  so the mic is drawn nowhere else. Both composers carry it, and the Island's
+  voice orb takes the row while it records.
 
 Left out: push, attachments, the Diff/Files/Browser views,
 forks, settle/pin, the settled list, spaces, issues.
@@ -62,6 +65,37 @@ xcodebuild -exportArchive -archivePath build/Dray.xcarchive \
 
 `ExportOptions.plist` uploads as it exports and lets App Store Connect number
 the build, so `CURRENT_PROJECT_VERSION` never needs bumping by hand.
+
+## Design
+
+Dark only, one palette: the desktop's dark tokens, its one yellow and its
+radius scale. **Every colour, size, radius, font and haptic is in
+[Theme.swift](Dray/Theme.swift)** and nowhere else; a view naming a hex or a
+point size is a bug. Yellow means *needs you* — a card, a refused token, an
+app to update — and nothing else, so the global tint is the page's ink.
+Rationale and the screens it was judged on are in #631.
+
+- **The list has no title.** Settings on the left, New session on the right,
+  the project menu between them once there are two projects.
+- **Each server reports its own trouble** in a banner at the top of the list
+  and a strip above the composer, written by `Store.health`
+  ([ConnectionStatus.swift](Dray/ConnectionStatus.swift)): reconnecting with a
+  visible countdown, can't reach, token refused, protocol behind in either
+  direction, a list that failed to load. Each carries Retry or Fix, and none
+  holds up another server. Offline is one banner, not one per server.
+- **A failure stays where it happened.** A failed send keeps the draft and
+  offers Retry under it; a failed transcript read is the screen's own empty
+  state with Try again; an action with nowhere of its own is a toast, never an
+  alert.
+- **Orbs.** [Orb.swift](Dray/Orb.swift) is the one place app states map to
+  the package's: working, delegating (gyro), background (spiral), reconnecting
+  (lighthouse, fast), loading. Dictation is the Island's `VoiceOrb`, shared by
+  path from `apps/island/Island` the way the Island shares this app's client,
+  driven by the recorder's meter.
+
+**Screens are checked by `DesignTests`**, which walks every screen and failure
+state and attaches a screenshot of each. Two stand-ins answer the failure
+states a real server cannot be made to show (`/tmp/dray631-fake.py` in #631).
 
 ## The wire, as the phone speaks it
 
@@ -123,8 +157,8 @@ where it was typed; a running turn draws its newest five rows and slides older
 ones up under the summary line. Labels follow `tools.ts` (`Tools.swift`) —
 keep the two in step.
 
-The orb is the package's own `Orb(state: .working)`, the desktop's working
-state, in the default foreground as the desktop draws it in the page's ink.
+The orb is the package's own, mapped in `Orb.swift`: the working state while a
+turn runs, gyro for a subagent, spiral for background tasks.
 
 Opens on the newest turns (`turns: 8`), pages older ones in on scroll to top.
 A reconnect re-reads the open session's tail and appends what it does not hold,

@@ -18,8 +18,6 @@ enum Target: Hashable {
     case new
 }
 
-enum Dictation { case idle, starting, recording, transcribing }
-
 /// The panel's layout, the reader's pick from its right-click menu and never
 /// switched for them: compact, one row with the orb beside the input, or voice,
 /// the orb alone in the middle.

@@ -17,7 +17,11 @@ targets:
   Dray:
     type: application
     platform: iOS
-    sources: [Dray]
+    sources:
+      - Dray
+      # The Island's dictation orb, shared by path as the Island shares this app's client.
+      - path: ../island/Island/VoiceOrb.swift
+      - path: ../island/Island/VoiceOrb.metal
     dependencies:
       - package: ThinkingOrbs
     scheme:

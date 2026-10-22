@@ -4,6 +4,7 @@ import ThinkingOrbs
 struct TranscriptView: View {
     @Environment(Store.self) private var store
     let key: SessionKey
+    @State private var fixing = false
 
     private var item: SessionItem? { store.items[key] }
     private var busy: Bool { item?.busy ?? false }
@@ -11,22 +12,30 @@ struct TranscriptView: View {
     var body: some View {
         let transcript = store.transcripts[key]
         let turns = buildTurns(transcript?.events ?? [], busy: busy)
+        let asks = store.asks[key] ?? []
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    if transcript?.olderBefore != nil {
-                        Button("Load earlier") { Task { await store.loadOlder(key) } }
-                            .frame(maxWidth: .infinity)
-                    }
+                LazyVStack(alignment: .leading, spacing: 28) {
+                    if transcript?.olderBefore != nil { older }
                     if transcript == nil {
-                        Orb(state: .working).frame(maxWidth: .infinity).padding(.top, 40)
+                        placeholder
+                    } else if turns.isEmpty && !busy && (store.queued[key] ?? []).isEmpty {
+                        // A session made elsewhere can have no turns yet; blank would read as still loading.
+                        EmptyState(title: "No messages yet", message: "Send one to start this session.") {
+                            Image(systemName: "bubble.left").font(.largeTitle).foregroundStyle(Theme.tertiary)
+                        }
+                        .frame(minHeight: 420)
                     }
                     ForEach(turns) { TurnView(turn: $0) }
                     ForEach(store.queued[key] ?? [], id: \.id) { q in
-                        UserBubble(text: q.text, from: nil).opacity(0.5)
+                        UserBubble(text: q.text, from: nil, queued: true)
                     }
-                    if busy { WorkingLine() }
-                    ForEach(store.asks[key] ?? []) { ask in
+                    if busy {
+                        WorkingLine()
+                    } else if let n = store.tasks[key], n > 0 {
+                        OrbLine(activity: .background, label: n == 1 ? "1 background task running" : "\(n) background tasks running")
+                    }
+                    ForEach(asks) { ask in
                         switch ask.payload {
                         case .permissionRequested(let r): PermissionCard(key: key, request: r)
                         case .questionsAsked(let r): QuestionsCard(key: key, request: r)
@@ -35,21 +44,83 @@ struct TranscriptView: View {
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
-                .padding()
+                .padding(.horizontal, Theme.Space.l)
+                .padding(.vertical, Theme.Space.m)
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
             }
             .scrollDismissesKeyboard(.interactively)
+            // Opens on the newest turn: a scrollTo on appear lands in a lazy stack's estimate and draws blank.
+            .defaultScrollAnchor(.bottom)
             // The newest row, not the count, or loading earlier turns would jump to the end.
-            .onChange(of: "\(turns.last?.id ?? "")|\(turns.last?.work.last?.newestId ?? "")|\(turns.last?.completed ?? false)|\(store.asks[key]?.count ?? 0)|\(busy)") {
+            .onChange(of: "\(turns.last?.id ?? "")|\(turns.last?.work.last?.newestId ?? "")|\(turns.last?.completed ?? false)|\(asks.count)|\(busy)") {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
         }
-        .safeAreaInset(edge: .bottom) { Composer(key: key, busy: busy) }
-        .navigationTitle(item?.title ?? "")
+        .page()
+        // A card arriving is the agent stopping to ask: felt, once per card.
+        .onChange(of: asks.count) { old, new in if new > old { Haptic.warning() } }
+        .safeAreaInset(edge: .bottom) { Composer(key: key, busy: busy) { fixing = true } }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) { title }
+        }
         .modifier(LocalServersButton(key: key))
         .task { await store.open(key) }
         .prPanel(key)
+        .sheet(isPresented: $fixing) { SettingsView(focus: key.server) }
+    }
+
+    /// The session's title over where it runs, in place of a bare title.
+    private var title: some View {
+        VStack(spacing: 1) {
+            Text(item?.title.isEmpty == false ? item!.title : "Untitled")
+                .font(.headline)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+            if let item {
+                Text([item.project, item.branch].compactMap { $0 }.joined(separator: " · "))
+                    .font(Theme.Font.micro)
+                    .foregroundStyle(Theme.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: 240)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Nothing held yet: the read under way, or why it failed.
+    @ViewBuilder private var placeholder: some View {
+        if let error = store.transcriptErrors[key] {
+            EmptyState(title: "Couldn't load this session", message: sentence(error)) {
+                Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(Theme.tertiary)
+            } actions: {
+                Button { Task { await store.retryLoad(key) } } label: { Text("Try again").frame(maxWidth: .infinity) }
+                    .buttonStyle(SecondaryButtonStyle())
+            }
+            .frame(minHeight: 420)
+        } else {
+            Orb(.loading, size: 32, label: "Loading")
+                .frame(maxWidth: .infinity, minHeight: 320)
+        }
+    }
+
+    /// Earlier turns are paged in by asking, so the screen never jumps under a reader mid-sentence.
+    @ViewBuilder private var older: some View {
+        HStack {
+            if let error = store.olderErrors[key] {
+                Text("Couldn't load earlier messages. \(sentence(error))")
+                    .font(Theme.Font.meta).foregroundStyle(Theme.secondary)
+                Spacer(minLength: Theme.Space.s)
+            }
+            Button(store.olderErrors[key] == nil ? "Load earlier" : "Retry") { Task { await store.loadOlder(key) } }
+                .font(Theme.Font.meta.weight(.semibold))
+                .foregroundStyle(Theme.secondary)
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.vertical, Theme.Space.s)
+                .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.sm, style: .continuous))
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -71,7 +142,7 @@ struct TurnView: View {
         let answerOpen = turn.finalLifted ? false : segments.lastIndex {
             $0.items.contains { if case .text(_, let t) = $0 { t == turn.finalText } else { false } }
         }.map(open.contains) ?? false
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             if let prompt = turn.prompt { UserBubble(text: prompt.text, from: prompt.from) }
             if collapsible || turn.running {
                 ForEach(Array(segments.enumerated()), id: \.offset) { i, segment in
@@ -99,7 +170,9 @@ struct TurnView: View {
     }
 
     private func toggle(_ i: Int) {
-        if open.contains(i) { open.remove(i) } else { open.insert(i) }
+        withAnimation(Theme.motion) {
+            if open.contains(i) { open.remove(i) } else { open.insert(i) }
+        }
     }
 }
 
@@ -108,12 +181,21 @@ struct WorkingLine: View {
     /// One word per wait, never switching under the reader.
     @State private var label = ["Working", "Cooking", "Brewing", "Thinking"].randomElement()!
 
+    var body: some View { OrbLine(activity: .working, label: label) }
+}
+
+/// The desktop's `OrbLine`: an orb for the wait and what it is, shimmering.
+struct OrbLine: View {
+    let activity: Activity
+    let label: String
+
     var body: some View {
-        HStack(spacing: 8) {
-            Orb(state: .working)
-            Text(label).shimmer()
+        HStack(spacing: Theme.Space.s) {
+            Orb(activity)
+            Text(label).font(Theme.Font.callout).foregroundStyle(Theme.secondary).shimmer()
         }
         .accessibilityElement(children: .combine)
+        .transition(.opacity)
     }
 }
 
@@ -164,7 +246,7 @@ struct LiveWork: View {
         if hidden > 0 {
             SummaryToggle(label: summaryLabel(Array(items.prefix(hidden))), open: open, onToggle: onToggle)
         }
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             ForEach(windowed ? Array(items.suffix(liveRows)) : items) { item in
                 ItemView(item: item)
                     .transition(.asymmetric(insertion: .opacity, removal: .move(edge: .top).combined(with: .opacity)))
@@ -193,10 +275,10 @@ struct SummaryToggle: View {
                 Text(label).monospacedDigit()
                 Chevron(open: open)
             }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .font(Theme.Font.callout)
+            .foregroundStyle(Theme.tertiary)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(RowButtonStyle())
     }
 }
 
@@ -206,9 +288,9 @@ struct Chevron: View {
 
     var body: some View {
         Image(systemName: "chevron.right")
-            .font(.caption2.weight(.semibold))
+            .font(.caption2.weight(.bold))
             .rotationEffect(.degrees(open ? 90 : 0))
-            .foregroundStyle(open ? .secondary : .tertiary)
+            .foregroundStyle(open ? Theme.secondary : Theme.tertiary)
     }
 }
 
@@ -235,10 +317,15 @@ struct FailureRow: View {
     let text: String
 
     var body: some View {
-        Label(text, systemImage: "exclamationmark.circle")
-            .foregroundStyle(.red)
-            .font(.callout)
-            .textSelection(.enabled)
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+            Image(systemName: "exclamationmark.circle.fill")
+            Text(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .font(Theme.Font.callout)
+        .foregroundStyle(Theme.destructive)
+        .padding(Theme.Space.m)
+        .background(Theme.destructive.opacity(0.1), in: .rect(cornerRadius: Theme.Radius.md, style: .continuous))
     }
 }
 
@@ -249,30 +336,40 @@ struct ChangeCount: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            if added > 0 { Text("+\(added)").foregroundStyle(.green) }
-            if removed > 0 { Text("-\(removed)").foregroundStyle(.red) }
+            if added > 0 { Text("+\(added)").foregroundStyle(Theme.add) }
+            if removed > 0 { Text("-\(removed)").foregroundStyle(Theme.destructive) }
         }
-        .font(.subheadline.monospacedDigit())
+        .font(Theme.Font.callout.monospacedDigit())
     }
 }
 
+/// The reader's own words, the one thing in the transcript set apart in a bubble.
 struct UserBubble: View {
     let text: String
     let from: String?
+    /// Typed into a running turn and not yet read by it: held back, dimmed.
+    var queued = false
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 4) {
+        VStack(alignment: .trailing, spacing: Theme.Space.xs) {
             if let from {
-                Text("From \(from)").font(.caption).foregroundStyle(.secondary)
+                Label("From \(from)", systemImage: "arrow.turn.down.right")
+                    .font(Theme.Font.micro).foregroundStyle(Theme.tertiary)
             }
             Text(text)
+                .font(Theme.Font.body)
+                .foregroundStyle(Theme.text)
                 .textSelection(.enabled)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+            if queued {
+                Text("Queued").font(Theme.Font.micro).foregroundStyle(Theme.tertiary)
+            }
         }
+        .opacity(queued ? 0.55 : 1)
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .padding(.leading, 40)
+        .padding(.leading, 48)
     }
 }
 
@@ -289,40 +386,43 @@ struct ToolRow: View {
         let alarming = failed && !isRoutineError(call.output)
         let expandable = call.output?.isEmpty == false && (failed || !isWholeFileRead(call))
         let summary = call.name.hasPrefix("mcp__") ? mcpSummary(call.name) : call.summary
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             Button {
-                if expandable { open.toggle() }
+                if expandable { withAnimation(Theme.motion) { open.toggle() } }
             } label: {
                 HStack(spacing: 6) {
                     // A delegated run is a whole agent being waited on, so it carries the orb.
-                    if pending && call.toolType == "subagent_spawn" { Orb(state: .working) }
+                    if pending && call.toolType == "subagent_spawn" { Orb(.delegating) }
                     // Inside a group the label is the only thing that turns red, so a failure keeps it.
                     if showLabel || summary == nil || alarming {
                         Text(toolLabel(call.name, pending: pending))
-                            .foregroundStyle(alarming ? AnyShapeStyle(.red) : AnyShapeStyle(.primary.opacity(0.8)))
+                            .fontWeight(.medium)
+                            .foregroundStyle(alarming ? Theme.destructive : Theme.secondary)
                             .shimmer(pending)
                             .layoutPriority(1)
                     }
                     if let summary {
                         Text(summary.split(separator: "\n").first.map(String.init) ?? summary)
-                            .font(.subheadline.monospaced())
-                            .foregroundStyle(.secondary)
+                            .font(Theme.Font.mono)
+                            .foregroundStyle(Theme.tertiary)
                             .lineLimit(1)
                     }
                     if let n = editCounts(call) { ChangeCount(added: n.added, removed: n.removed) }
                     if expandable { Chevron(open: open) }
                 }
-                .font(.subheadline)
+                .font(Theme.Font.callout)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(RowButtonStyle())
             if open, let output = call.output {
                 ScrollView(.horizontal) {
                     Text(output.count > 6000 ? String(output.prefix(6000)) + "\n…" : output)
-                        .font(.caption.monospaced())
+                        .font(Theme.Font.code)
+                        .foregroundStyle(Theme.secondary)
                         .textSelection(.enabled)
-                        .padding(8)
+                        .padding(Theme.Space.m)
                 }
-                .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                .well()
+                .transition(.opacity)
             }
         }
     }
@@ -343,72 +443,144 @@ struct GroupRow: View {
         let pending = calls.contains { $0.state == .pending }
         let counts = calls.compactMap(editCounts)
         let added = counts.reduce(0) { $0 + $1.added }, removed = counts.reduce(0) { $0 + $1.removed }
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
             Button {
-                open.toggle()
+                withAnimation(Theme.motion) { open.toggle() }
             } label: {
                 HStack(spacing: 6) {
                     // A failure inside does not colour the run; that row says so once opened.
                     Text(target == nil ? groupLabel(name, count: targets, pending: pending) : groupVerb(name, pending: pending))
+                        .fontWeight(.medium)
+                        .foregroundStyle(Theme.secondary)
                         .shimmer(pending)
                         .layoutPriority(1)
-                    if let target { Text(target).font(.subheadline.monospaced()).lineLimit(1) }
-                    if calls.count > targets { Text("\(calls.count) calls").layoutPriority(1) }
+                    if let target { Text(target).font(Theme.Font.mono).foregroundStyle(Theme.tertiary).lineLimit(1) }
+                    if calls.count > targets { Text("\(calls.count) calls").foregroundStyle(Theme.tertiary).layoutPriority(1) }
                     if added + removed > 0 { ChangeCount(added: added, removed: removed) }
                     Chevron(open: open)
                 }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(Theme.Font.callout)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(RowButtonStyle())
             if open {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 10) {
                     ForEach(calls) { ToolRow(call: $0, showLabel: false) }
                 }
-                .padding(.leading, 12)
-                .overlay(alignment: .leading) { Rectangle().fill(.separator).frame(width: 1) }
+                .padding(.leading, Theme.Space.m)
+                .overlay(alignment: .leading) { Rectangle().fill(Theme.border).frame(width: 1) }
+                .transition(.opacity)
             }
         }
     }
 }
 
-/// Prose through the system's markdown, inline only since `Text` draws no
-/// blocks; fenced code split out and drawn monospaced.
+/// Prose through the system's markdown, inline marks only, since `Text` draws
+/// no blocks; headings, lists, quotes, rules and code fences are split out
+/// here and drawn as the blocks they are.
 struct MarkdownText: View {
     let text: String
 
+    private enum Block {
+        case prose(String), code(String), heading(Int, String), quote(String), rule
+        case list([(marker: String, text: String, indent: Int)])
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                if block.code {
-                    ScrollView(.horizontal) {
-                        Text(block.text).font(.caption.monospaced()).padding(8)
+                switch block {
+                case .prose(let s):
+                    Text(attributed(s)).font(Theme.Font.body).foregroundStyle(Theme.text)
+                case .heading(let level, let s):
+                    Text(attributed(s))
+                        .font(level <= 2 ? .title3.weight(.semibold) : .headline)
+                        .foregroundStyle(Theme.text)
+                        .padding(.top, 4)
+                case .list(let items):
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                                Text(item.marker).monospacedDigit().foregroundStyle(Theme.tertiary)
+                                Text(attributed(item.text)).foregroundStyle(Theme.text)
+                            }
+                            .padding(.leading, CGFloat(item.indent) * 18)
+                        }
                     }
-                    .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                } else {
-                    Text(attributed(block.text))
+                    .font(Theme.Font.body)
+                case .quote(let s):
+                    Text(attributed(s))
+                        .font(Theme.Font.body)
+                        .foregroundStyle(Theme.secondary)
+                        .padding(.leading, Theme.Space.m)
+                        .overlay(alignment: .leading) { Rectangle().fill(Theme.border).frame(width: 3) }
+                case .code(let s):
+                    ScrollView(.horizontal) {
+                        Text(s).font(Theme.Font.code).foregroundStyle(Theme.text).padding(Theme.Space.m)
+                    }
+                    .well()
+                case .rule:
+                    Rectangle().fill(Theme.border).frame(height: 1).padding(.vertical, 4)
                 }
             }
         }
+        .tint(Theme.link)
         .textSelection(.enabled)
     }
 
-    private var blocks: [(code: Bool, text: String)] {
-        var out: [(code: Bool, text: String)] = []
-        var current: [Substring] = []
-        var code = false
+    private var blocks: [Block] {
+        var out: [Block] = []
+        var prose: [Substring] = [], code: [Substring] = [], quote: [String] = []
+        var list: [(marker: String, text: String, indent: Int)] = []
+        var fenced = false
+        func flush() {
+            let p = prose.joined(separator: "\n").trimmingCharacters(in: .newlines)
+            if !p.isEmpty { out.append(.prose(p)) }
+            if !list.isEmpty { out.append(.list(list)) }
+            if !quote.isEmpty { out.append(.quote(quote.joined(separator: "\n"))) }
+            prose = []; list = []; quote = []
+        }
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-                let joined = current.joined(separator: "\n").trimmingCharacters(in: .newlines)
-                if !joined.isEmpty { out.append((code, joined)) }
-                current = []
-                code.toggle()
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                if fenced {
+                    out.append(.code(code.joined(separator: "\n")))
+                    code = []
+                } else {
+                    flush()
+                }
+                fenced.toggle()
+                continue
+            }
+            if fenced { code.append(line); continue }
+            let indent = (line.prefix { $0 == " " }.count) / 2
+            if let m = trimmed.firstMatch(of: /^(#{1,6})\s+(.+)$/) {
+                flush()
+                out.append(.heading(m.1.count, String(m.2)))
+            } else if let m = trimmed.firstMatch(of: /^[-*+]\s+(.+)$/) {
+                if !prose.isEmpty || !quote.isEmpty { flush() }
+                list.append(("•", String(m.1), indent))
+            } else if let m = trimmed.firstMatch(of: /^(\d+)[.)]\s+(.+)$/) {
+                if !prose.isEmpty || !quote.isEmpty { flush() }
+                list.append(("\(m.1).", String(m.2), indent))
+            } else if let m = trimmed.firstMatch(of: /^>\s?(.*)$/) {
+                if !prose.isEmpty || !list.isEmpty { flush() }
+                quote.append(String(m.1))
+            } else if trimmed.wholeMatch(of: /(-{3,}|\*{3,}|_{3,})/) != nil {
+                flush()
+                out.append(.rule)
+            } else if trimmed.isEmpty {
+                flush()
+            } else if !list.isEmpty && indent > 0 {
+                // A wrapped list item's continuation.
+                list[list.count - 1].text += " " + trimmed
             } else {
-                current.append(line)
+                if !list.isEmpty || !quote.isEmpty { flush() }
+                prose.append(line)
             }
         }
-        let joined = current.joined(separator: "\n").trimmingCharacters(in: .newlines)
-        if !joined.isEmpty { out.append((code, joined)) }
+        // An unclosed fence still shows what it holds.
+        if fenced, !code.isEmpty { out.append(.code(code.joined(separator: "\n"))) }
+        flush()
         return out
     }
 
@@ -418,49 +590,141 @@ struct MarkdownText: View {
     }
 }
 
+/// The reply box, floating over the transcript's foot: the draft, and under it
+/// the mic and Send — or Stop, while a turn runs and nothing is typed. A
+/// dictation takes the row over with its orb.
 struct Composer: View {
     @Environment(Store.self) private var store
     let key: SessionKey
     let busy: Bool
+    let openSettings: () -> Void
     @State private var sending = false
+    /// Why the last send failed; the draft is still there to send again.
+    @State private var failed: String?
 
     var body: some View {
         let draft = Binding(get: { store.drafts[key] ?? "" }, set: { store.drafts[key] = $0 })
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Message", text: draft, axis: .vertical)
-                .lineLimit(1...6)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 18))
-            DictateButton(key: key)
-            if busy {
-                Button {
-                    Task { await store.interrupt(key) }
-                } label: {
-                    Image(systemName: "stop.circle.fill").font(.title)
-                }
-                .accessibilityLabel("Stop")
-            }
-            Button {
-                let text = draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { return }
-                sending = true
-                Task {
-                    // Only if untouched meanwhile: text typed while the send was out was never sent.
-                    if await store.send(key, text), store.drafts[key]?.trimmingCharacters(in: .whitespacesAndNewlines) == text {
-                        store.drafts[key] = nil
+        let text = draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let dictating = Dictations.shared.state(key) != .idle
+        let connected = store.serverState[key.server] == .connected
+        VStack(spacing: Theme.Space.s) {
+            ConnectionStrip(server: key.server, openSettings: openSettings)
+            VStack(alignment: .leading, spacing: 0) {
+                if let failed {
+                    HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                        Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Theme.destructive)
+                        Text("Couldn't send. \(sentence(failed))").foregroundStyle(Theme.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        Button("Retry") { send(text) }
+                            .fontWeight(.semibold)
+                            .foregroundStyle(Theme.text)
+                            .disabled(!connected || text.isEmpty)
                     }
-                    sending = false
+                    .font(Theme.Font.meta)
+                    .buttonStyle(.borderless)
+                    .padding(.horizontal, Theme.Space.l)
+                    .padding(.top, Theme.Space.m)
                 }
-            } label: {
-                Image(systemName: "arrow.up.circle.fill").font(.title)
+                if Dictations.shared.notes[key] != nil {
+                    DictationNote(draft: key)
+                        .padding(.horizontal, Theme.Space.l)
+                        .padding(.top, Theme.Space.m)
+                }
+                TextField("Message", text: draft, axis: .vertical)
+                    .lineLimit(1...8)
+                    .font(Theme.Font.body)
+                    .foregroundStyle(Theme.text)
+                    .padding(.horizontal, Theme.Space.l)
+                    .padding(.top, 14)
+                    .padding(.bottom, Theme.Space.xs)
+                    .accessibilityLabel("Message")
+                HStack(spacing: Theme.Space.xs) {
+                    if dictating {
+                        DictationBar(draft: key)
+                    } else {
+                        Spacer(minLength: 0)
+                        DictateButton(server: key.server, draft: key)
+                        if busy && text.isEmpty {
+                            Button {
+                                Haptic.firm()
+                                Task { await store.interrupt(key) }
+                            } label: { Image(systemName: "stop.fill") }
+                                .buttonStyle(IconButtonStyle(filled: true))
+                                .accessibilityLabel("Stop")
+                        } else {
+                            Button { send(text) } label: { Image(systemName: "arrow.up") }
+                                .buttonStyle(IconButtonStyle(filled: true))
+                                .disabled(sending || text.isEmpty || !connected)
+                                .accessibilityLabel("Send")
+                        }
+                    }
+                }
+                .padding(.horizontal, Theme.Space.s)
+                .padding(.bottom, Theme.Space.s)
+                .frame(minHeight: 44)
             }
-            .disabled(sending || draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityLabel("Send")
+            .composerSurface()
+            .padding(.horizontal, Theme.Space.m)
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.bar)
+        .padding(.bottom, Theme.Space.s)
+        .frame(maxWidth: 760)
+        .animation(Theme.motion, value: dictating)
+        .animation(Theme.motion, value: failed)
+        .animation(Theme.motion, value: connected)
+        // Leaving the session mid-recording sends what was said, which lands in
+        // the draft it was spoken into, the desktop's rule.
+        .onDisappear {
+            if Dictations.shared.state(key) == .recording { Task { await Dictations.shared.stop(store, draft: key) } }
+        }
+    }
+
+    private func send(_ text: String) {
+        guard !text.isEmpty else { return }
+        sending = true
+        failed = nil
+        Haptic.tap()
+        Task {
+            if await store.send(key, text) {
+                // Only if untouched meanwhile: text typed while the send was out was never sent.
+                if store.drafts[key]?.trimmingCharacters(in: .whitespacesAndNewlines) == text { store.drafts[key] = nil }
+            } else {
+                // Said here, beside the draft it failed to send, rather than in the toast.
+                failed = store.lastError ?? "The server didn't answer."
+                store.lastError = nil
+                Haptic.error()
+            }
+            sending = false
+        }
+    }
+}
+
+extension View {
+    /// The composer's surface: glass where the system has it, a material
+    /// washed in the card's colour before that, so the transcript reads as
+    /// passing under it rather than through it.
+    @ViewBuilder func composerSurface() -> some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
+        if #available(iOS 26, *) {
+            glassEffect(.regular.tint(Theme.card.opacity(0.55)), in: shape)
+        } else {
+            background(.ultraThinMaterial, in: shape)
+                .background(Theme.card.opacity(0.6), in: shape)
+                .overlay(shape.strokeBorder(Theme.border))
+        }
+    }
+}
+
+/// A question the agent cannot go on without, in the one colour that means
+/// "this is for you".
+private struct CardHeader: View {
+    let symbol: String
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: symbol)
+            .font(Theme.Font.meta.weight(.semibold))
+            .foregroundStyle(Theme.accent)
     }
 }
 
@@ -471,32 +735,50 @@ struct PermissionCard: View {
     @State private var busy = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(request.title ?? request.displayName ?? request.toolName).font(.headline)
-            if let d = request.description { Text(d).font(.callout).foregroundStyle(.secondary) }
-            if let input = request.input {
-                if let line = toolArgument(input) {
-                    Text(line).font(.caption.monospaced()).lineLimit(4)
+        // The first allow is the answer most often given, so it alone is filled.
+        let primary = request.options.firstIndex { $0.behavior != "deny" }
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            CardHeader(symbol: "hand.raised.fill", text: "Needs your permission")
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                Text(request.title ?? request.displayName ?? request.toolName)
+                    .font(Theme.Font.headline).foregroundStyle(Theme.text)
+                if let d = request.description {
+                    Text(d).font(Theme.Font.callout).foregroundStyle(Theme.secondary)
                 }
             }
-            ForEach(request.options, id: \.id) { option in
-                Button {
-                    busy = true
-                    Task {
-                        await store.respond(key, requestId: request.requestId, optionId: option.id)
-                        busy = false
+            if let input = request.input, let line = toolArgument(input) {
+                Text(line)
+                    .font(Theme.Font.code)
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(6)
+                    .padding(Theme.Space.m)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .well()
+            }
+            VStack(spacing: Theme.Space.s) {
+                ForEach(Array(request.options.enumerated()), id: \.element.id) { i, option in
+                    let answer = Button {
+                        busy = true
+                        Task {
+                            await store.respond(key, requestId: request.requestId, optionId: option.id)
+                            option.behavior == "deny" ? Haptic.tap() : Haptic.success()
+                            busy = false
+                        }
+                    } label: {
+                        Text(option.label).frame(maxWidth: .infinity)
                     }
-                } label: {
-                    Text(option.label).frame(maxWidth: .infinity)
+                    if i == primary {
+                        answer.buttonStyle(PrimaryButtonStyle())
+                    } else {
+                        answer.buttonStyle(SecondaryButtonStyle(ink: option.behavior == "deny" ? Theme.destructive : Theme.text))
+                    }
                 }
-                .buttonStyle(.bordered)
-                .tint(option.behavior == "deny" ? .red : .accentColor)
             }
         }
         .disabled(busy)
-        .padding()
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.yellow.opacity(0.6)))
+        .opacity(busy ? 0.6 : 1)
+        .card(edge: Theme.accent.opacity(0.35))
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }
 
@@ -511,36 +793,43 @@ struct QuestionsCard: View {
     @State private var busy = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: Theme.Space.l) {
+            CardHeader(symbol: "questionmark.bubble.fill",
+                       text: request.questions.count == 1 ? "Needs your answer" : "\(request.questions.count) questions for you")
             ForEach(request.questions, id: \.question) { q in
-                VStack(alignment: .leading, spacing: 6) {
-                    if let header = q.header { Text(header).font(.caption).foregroundStyle(.secondary) }
-                    Text(q.question).font(.headline)
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    Text(q.question).font(Theme.Font.headline).foregroundStyle(Theme.text)
                     ForEach(q.options, id: \.label) { option in
                         let on = picks[q.question, default: []].contains(option.label)
                         Button {
+                            Haptic.select()
                             toggle(q, option.label)
                         } label: {
-                            HStack(alignment: .firstTextBaseline) {
+                            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
                                 Image(systemName: on ? (q.multiSelect ? "checkmark.square.fill" : "largecircle.fill.circle")
                                                      : (q.multiSelect ? "square" : "circle"))
-                                VStack(alignment: .leading) {
-                                    Text(option.label)
+                                    .foregroundStyle(on ? Theme.accent : Theme.tertiary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(option.label).font(Theme.Font.body).foregroundStyle(Theme.text)
                                     if let d = option.description {
-                                        Text(d).font(.caption).foregroundStyle(.secondary)
+                                        Text(d).font(Theme.Font.meta).foregroundStyle(Theme.secondary)
                                     }
                                 }
                                 Spacer(minLength: 0)
                             }
+                            .padding(Theme.Space.m)
+                            .background(on ? Theme.raised : Theme.well, in: .rect(cornerRadius: Theme.Radius.md, style: .continuous))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(RowButtonStyle())
                     }
                     if q.freeText != false {
                         TextField("Or type an answer", text: Binding(
                             get: { typed[q.question] ?? "" },
                             set: { typed[q.question] = $0 }
-                        ))
-                        .textFieldStyle(.roundedBorder)
+                        ), axis: .vertical)
+                        .font(Theme.Font.body)
+                        .padding(Theme.Space.m)
+                        .well()
                     }
                 }
             }
@@ -548,17 +837,18 @@ struct QuestionsCard: View {
                 busy = true
                 Task {
                     await store.answer(key, requestId: request.requestId, answers: answers)
+                    Haptic.success()
                     busy = false
                 }
             } label: {
                 Text("Submit").frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(PrimaryButtonStyle())
         }
         .disabled(busy)
-        .padding()
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.yellow.opacity(0.6)))
+        .opacity(busy ? 0.6 : 1)
+        .card(edge: Theme.accent.opacity(0.35))
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private func toggle(_ q: Question, _ label: String) {

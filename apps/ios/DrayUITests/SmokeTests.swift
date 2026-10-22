@@ -18,14 +18,12 @@ final class SmokeTests: XCTestCase {
             throw XCTSkip("set TEST_RUNNER_DRAY_URL and TEST_RUNNER_DRAY_TOKEN")
         }
         let app = XCUIApplication()
+        // Hides servers an earlier test saved, which would list every session twice.
+        app.launchArguments = ["-servers", ""]
         app.launch()
         snap(app, "1-empty")
 
-        // Through the Servers sheet, which offers Add whether or not a server is already saved.
-        app.buttons["Servers"].tap()
-        // The last match: with no server saved, the empty state's own button sits behind the sheet.
-        let adds = app.buttons.matching(identifier: "Add server")
-        adds.element(boundBy: adds.count - 1).tap()
+        app.buttons["Add server"].firstMatch.tap()
         let address = app.textFields["Address"]
         address.tap()
         address.typeText(url)
@@ -34,7 +32,6 @@ final class SmokeTests: XCTestCase {
         secret.typeText(token)
         snap(app, "2-add-server")
         app.buttons["Add"].tap()
-        app.buttons["Done"].tap()
 
         let row = app.staticTexts["Phone smoke"]
         XCTAssertTrue(row.waitForExistence(timeout: 15), "no session listed")
@@ -48,11 +45,13 @@ final class SmokeTests: XCTestCase {
         let ys = order.map { app.staticTexts[$0].frame.minY }
         XCTAssertEqual(ys, ys.sorted(), "rows out of stage order: \(zip(order, ys).map { "\($0) \($1)" })")
 
+        app.buttons["Project filter"].tap()
         app.buttons["dray-541-gh"].tap()
-        XCTAssertFalse(row.waitForExistence(timeout: 2), "project chip did not filter")
+        XCTAssertFalse(row.waitForExistence(timeout: 2), "project filter did not filter")
         XCTAssertTrue(app.staticTexts["Open PR work"].exists)
         snap(app, "4-filtered")
-        app.buttons["All"].tap()
+        app.buttons["Project filter"].tap()
+        app.buttons["All projects"].tap()
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         row.tap()
 
