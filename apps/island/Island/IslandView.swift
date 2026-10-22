@@ -14,6 +14,8 @@ struct IslandView: View {
     /// The card shrinks to what it holds: the orb and clock, or the word Sent.
     private var fits: Bool { recording || composer.sent }
     private var bare: Bool { recording && composer.mode == .expanded }
+    /// A refusal's flash wears red, where every other outcome is the card's own black.
+    private var denied: Bool { composer.sent && composer.sentLabel == "Denied" }
     /// A file drag over the card, which says where it lands.
     @State private var dropping = false
     /// Mid-recording, the pointer over the card shows what can be done without stopping.
@@ -77,7 +79,7 @@ struct IslandView: View {
             if recording {
                 recordingBar
             } else if composer.sent {
-                Label(composer.sentLabel, systemImage: "checkmark").font(.system(size: 13, weight: .semibold)).padding(.horizontal, 4)
+                Label(composer.sentLabel, systemImage: denied ? "xmark" : "checkmark").font(.system(size: 13, weight: .semibold)).padding(.horizontal, 4)
             } else if let ask = composer.ask {
                 AskCard(composer: composer, key: ask.key, event: ask.event)
                     .onAppear { composer.cardShown() }
@@ -91,7 +93,7 @@ struct IslandView: View {
         // Expanded mode records as the orb alone, floating over whatever is beneath;
         // faded rather than removed, so it animates.
         .background {
-            shape.fill(.black.opacity(bare ? 0 : 1))
+            shape.fill((denied ? Color.red : .black).opacity(bare ? 0 : 1))
                 .padding(.horizontal, composer.placement == .notch ? -NotchShape.ear : 0)
         }
         .shadow(color: .black.opacity(bare ? 0 : 0.35), radius: 12, y: 4)

@@ -146,8 +146,10 @@ final class Composer {
 
     /// Set for the moment between a send landing and the panel closing, which says it went.
     private(set) var sent = false
-    /// What that moment says: Sent, or Saved as draft.
+    /// What that moment says: Sent, Saved as draft, or what a card's answer did.
     private(set) var sentLabel = "Sent"
+    /// Cards answered since the panel opened, so the last one can speak for the lot.
+    @ObservationIgnored private var answered = 0
     /// Return and number keys on a questions card, whose answers live in its view.
     var submits = 0
     var digits = 0
@@ -231,7 +233,8 @@ final class Composer {
             }
             // The last card answered is the panel's job done.
             // Not while the reader is busy: a card answered elsewhere leaves them their draft.
-            if ids.isEmpty, hadCards, shown, !busy { hide() }
+            // Nor under a card's flash, which closes the panel itself once read.
+            if ids.isEmpty, hadCards, shown, !busy, !sent { hide() }
             // Answered elsewhere with the panel shut: the done pill is back in view, its clock with it.
             if ids.isEmpty, hadCards, !shown {
                 unseenDone = []
@@ -392,30 +395,40 @@ final class Composer {
 
     func respond(_ optionId: String) async {
         guard let (key, e) = ask, case .permissionRequested(let r) = e.payload else { return }
-        closeOnLastCard(key, e)
+        let option = r.options.first { $0.id == optionId }
+        let label = switch option?.kind {
+        case "once"?: "Allowed once"
+        case "always_rule"?, "always_directory"?, "switch_mode"?: "Always allowed"
+        case "deny"?: "Denied"
+        default: option?.behavior == "deny" ? "Denied" : "Allowed once"
+        }
+        closeOnLastCard(key, e, label)
         await store.respond(key, requestId: r.requestId, optionId: optionId)
         keepIfRefused(key, e)
     }
 
     func answer(_ answers: [String: String]) async {
         guard let (key, e) = ask, case .questionsAsked(let r) = e.payload else { return }
-        closeOnLastCard(key, e)
+        closeOnLastCard(key, e, "Sent")
         await store.answer(key, requestId: r.requestId, answers: answers)
         keepIfRefused(key, e)
     }
 
-    /// The last card answered closes the panel now, on the card, rather than
-    /// once the reply removes it, which drew the draft for a moment first.
-    private func closeOnLastCard(_ key: SessionKey, _ e: AgentEvent) {
+    /// The last card answered says what was done, then the panel closes, all
+    /// before the reply removes it, which drew the draft for a moment first.
+    /// Several answered in one visit are told as a group.
+    private func closeOnLastCard(_ key: SessionKey, _ e: AgentEvent, _ label: String) {
+        answered += 1
         guard !busy, attention == [key], store.asks[key]?.count == 1 else { return }
         leaving = (key, e)
-        hide()
+        flash(answered > 1 ? "\(answered) answered" : label)
     }
 
-    /// An answer that did not land leaves the card waiting, so its pill comes back.
+    /// An answer that did not land leaves the card waiting: back on screen, or its pill back.
     private func keepIfRefused(_ key: SessionKey, _ e: AgentEvent) {
         guard leaving?.event.id == e.id, store.asks[key]?.contains(where: { $0.id == e.id }) == true else { return }
         leaving = nil
+        sent = false
         pillChanged()
     }
 
@@ -505,6 +518,7 @@ final class Composer {
     func opened() {
         // Cleared here rather than at the close, which would flash the draft back mid-shrink.
         sent = false
+        answered = 0
         keyed = true
         opens += 1
         notice = nil
