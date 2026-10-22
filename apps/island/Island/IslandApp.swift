@@ -316,9 +316,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
 
     /// A tap over Dray's window opens on the session that window has open,
     /// asked before the panel shows so the title never flips under the reader.
+    /// The app answers nothing unless its window has focus, so every tap asks.
     private func open() {
         guard let composer, !askingApp else { return }
-        guard Composer.drayInFront else { return show() }
         askingApp = true
         Task {
             await composer.adoptAppSelection()

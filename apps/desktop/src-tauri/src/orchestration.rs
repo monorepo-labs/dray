@@ -337,7 +337,15 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
             crate::notifications::activate(app, id);
             Ok(serde_json::Value::Null)
         }
-        "selected_session" => Ok(serde_json::json!(crate::apps::app_selection())),
+        // Only while the window has focus: the island opens on Dray's pick when
+        // tapped over Dray, and asking here rather than by bundle id there also
+        // covers `tauri dev`, whose bare binary has none.
+        "selected_session" => {
+            use tauri::Manager;
+            let app = crate::transcription::app().ok_or("Dray is not ready yet.")?;
+            let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+            Ok(serde_json::json!(focused.then(crate::apps::app_selection).flatten()))
+        }
         "close_session" => {
             #[cfg(all(feature = "cef", target_os = "macos"))]
             if let Some(id) = args["sessionId"].as_str() {
