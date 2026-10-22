@@ -215,7 +215,7 @@ impl Engine {
         let mut guard = self.loaded.lock().await;
         let streams = guard
             .as_ref()
-            .is_some_and(|l| l.model_id == model_id && l.session.model().capabilities().supports_streaming);
+            .is_some_and(|l| l.model_id == model_id && l.session.model().capabilities().is_ok_and(|c| c.supports_streaming));
         if self.token() != token || !streams {
             return None;
         }

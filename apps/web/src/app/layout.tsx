@@ -51,10 +51,13 @@ export default function RootLayout({
     // The font variables go on <html>, not <body>: `@theme` resolves
     // `--font-sans: var(--font-geist-sans)` at `:root`, so a variable defined
     // one level down resolves to nothing and every utility silently falls back
-    // to the system stack.
+    // to the system stack. `data-scroll-behavior` keeps a route change jumping
+    // to the top rather than gliding there: Next 16 no longer overrides the
+    // smooth scroll `globals.css` sets for anchor links unless asked.
     <html
       lang="en"
       data-theme="dark"
+      data-scroll-behavior="smooth"
       className={`${geistSans.variable} ${geistMono.variable} ${aeonik.variable}`}
     >
       {/* Nothing analytics-shaped mounts here: PostHog starts from

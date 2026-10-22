@@ -14,8 +14,10 @@ use std::sync::{
 
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{
-    Resampler as _, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    Async, FixedAsync, Resampler as _, SincInterpolationParameters, SincInterpolationType,
+    WindowFunction,
 };
 use serde::Serialize;
 use ts_rs::TS;
@@ -564,7 +566,7 @@ pub(super) fn resample(samples: Vec<f32>, from_rate: u32) -> Vec<f32> {
 /// over the whole recording would.
 pub(super) struct Resampler {
     /// `None` at the target rate already, or where the filter would not build.
-    inner: Option<SincFixedIn<f32>>,
+    inner: Option<Async<f32>>,
     pending: Vec<f32>,
 }
 
@@ -574,14 +576,17 @@ impl Resampler {
     pub(super) fn new(from_rate: u32) -> Self {
         let params = SincInterpolationParameters {
             sinc_len: 256,
-            f_cutoff: 0.95,
+            f_cutoff: Some(0.95),
             interpolation: SincInterpolationType::Linear,
             oversampling_factor: 256,
             window: WindowFunction::BlackmanHarris2,
         };
         let ratio = TARGET_RATE as f64 / from_rate as f64;
         let inner = (from_rate != TARGET_RATE)
-            .then(|| SincFixedIn::<f32>::new(ratio, 2.0, params, RESAMPLE_CHUNK, 1).ok())
+            .then(|| {
+                Async::<f32>::new_sinc(ratio, 2.0, &params, RESAMPLE_CHUNK, 1, FixedAsync::Input)
+                    .ok()
+            })
             .flatten();
         Self { inner, pending: Vec::new() }
     }
@@ -593,7 +598,7 @@ impl Resampler {
         let blocks: Vec<f32> = self.pending.drain(..whole).collect();
         let mut out = Vec::new();
         for block in blocks.chunks(RESAMPLE_CHUNK) {
-            Self::process(inner, block.to_vec(), &mut out);
+            Self::process(inner, block, &mut out);
         }
         out
     }
@@ -607,16 +612,18 @@ impl Resampler {
             if !self.pending.is_empty() {
                 let mut last = std::mem::take(&mut self.pending);
                 last.resize(RESAMPLE_CHUNK, 0.0);
-                Self::process(inner, last, &mut out);
+                Self::process(inner, &last, &mut out);
             }
         }
         out
     }
 
-    fn process(inner: &mut SincFixedIn<f32>, block: Vec<f32>, out: &mut Vec<f32>) {
-        match inner.process(&[block], None) {
-            Ok(mut done) if !done.is_empty() => out.append(&mut done[0]),
-            Ok(_) => {}
+    fn process(inner: &mut Async<f32>, block: &[f32], out: &mut Vec<f32>) {
+        let done = InterleavedSlice::new(block, 1, block.len())
+            .map_err(|e| e.to_string())
+            .and_then(|input| inner.process(&input, None).map_err(|e| e.to_string()));
+        match done {
+            Ok(done) => out.append(&mut done.take_data()),
             Err(e) => eprintln!("[transcription resample err] {e}"),
         }
     }
