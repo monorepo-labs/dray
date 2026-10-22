@@ -19,6 +19,24 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.29.3 · 2026-10-22
+
+### Improved
+
+- **The Island opens on the session you're looking at in Dray.** Click its
+  title for the task list; ⌘⏎ opens a finished session.
+- **Answering a card in the Island says what happened.** It shows
+  Allowed, Denied or Sent, and a send plays a soft sound.
+- The first share link on a machine no longer waits minutes to set up.
+
+### Fixed
+
+- Dray no longer quits when the Mac goes to sleep.
+- Esc no longer takes the window out of fullscreen.
+- A question from a stacked crew session shows whole, not in a tiny scroll.
+- Dictation's start tone plays before the sound mutes.
+- The pair dialog's QR code stays inside its box.
+
 ## 0.29.2 · 2026-10-21
 
 ### Improved

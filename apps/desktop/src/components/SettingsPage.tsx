@@ -1450,8 +1450,6 @@ function SettingsTabs({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
-      // Handled, or WebKit passes the key on to the window, and Escape is
-      // how macOS leaves fullscreen.
       e.preventDefault();
       onClose();
     };

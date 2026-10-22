@@ -35,17 +35,18 @@ struct PairScanner: View {
             Group {
                 switch allowed {
                 case nil:
-                    Orb(state: .working)
+                    Orb(.loading, size: 32)
                 case true?:
                     Scanner(onScan: onScan) { allowed = false }.ignoresSafeArea()
                 default:
-                    ContentUnavailableView(
-                        "Can't use the camera",
-                        systemImage: "camera",
-                        description: Text("Allow Dray to use the camera in Settings, or type the address and token instead.")
-                    )
+                    EmptyState(title: "Can't use the camera",
+                               message: "Allow Dray to use the camera in Settings, or type the address and token instead.") {
+                        Image(systemName: "camera").font(.largeTitle).foregroundStyle(Theme.tertiary)
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .page()
             .navigationTitle("Scan QR code")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

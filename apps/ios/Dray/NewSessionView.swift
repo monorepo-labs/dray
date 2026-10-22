@@ -1,7 +1,14 @@
 import SwiftUI
+import ThinkingOrbs
 import UIKit
 
 // MARK: New session
+
+extension SessionKey {
+    /// The new-session composer's draft: one for the app, so a dismissed sheet
+    /// keeps what was typed and dictation has a draft to land in.
+    static let newSession = SessionKey(server: UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)), id: "new")
+}
 
 struct NewSessionView: View {
     @Environment(Store.self) private var store
@@ -9,7 +16,6 @@ struct NewSessionView: View {
     let onCreated: (SessionKey) -> Void
 
     @State private var pickedServer: UUID?
-    @State private var prompt = ""
     @State private var projects: [Project] = []
     @State private var projectPath: String?
     @State private var agents: [AgentAvailability] = []
@@ -41,26 +47,34 @@ struct NewSessionView: View {
     private var model: Model? { list.first { $0.id == modelId } }
     private var effort: String? { model.map { Picks.usableEffort($0, effortPicks[modelId]) } ?? effortPicks[modelId] }
     private var agent: AgentAvailability? { agents.first { $0.harness == harness } }
+    private var prompt: String { store.drafts[.newSession] ?? "" }
 
     var body: some View {
         NavigationStack {
-            Form {
+            Group {
                 if connected.isEmpty {
-                    Text("No server is connected.").foregroundStyle(.secondary)
+                    noServer
                 } else {
                     form
                 }
             }
-            .scrollDismissesKeyboard(.immediately)
+            .page()
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("New session")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    if sending {
-                        ProgressView()
-                    } else {
-                        Button("Start") { Task { await start() } }.disabled(!ready)
+                // In the bar rather than the card, so it stays in reach once the picks are scrolled to.
+                if !connected.isEmpty {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button {
+                            Haptic.tap()
+                            Task { await start() }
+                        } label: {
+                            if sending { ProgressView() } else { Text("Start") }
+                        }
+                        .disabled(!ready)
+                        .accessibilityLabel("Start")
                     }
                 }
             }
@@ -83,91 +97,170 @@ struct NewSessionView: View {
                 Text("Switching to \(switching?.target ?? ""). Bring moves them with you; Stash keeps them here, saved for later.")
             }
         }
+        // Leaving mid-recording keeps what was said, in the draft the sheet keeps too.
+        .onDisappear {
+            if Dictations.shared.state(.newSession) == .recording { Task { await Dictations.shared.stop(store, draft: .newSession) } }
+        }
     }
 
-    @ViewBuilder private var form: some View {
-        Section {
-            TextField("What should it do?", text: $prompt, axis: .vertical)
-                .lineLimit(3...8)
+    /// No server to start one on: the list explains which and why, so this only points there.
+    private var noServer: some View {
+        EmptyState(title: "No server connected",
+                   message: store.servers.isEmpty ? "Add a server first, in Settings." : "Sessions start once a server connects. The list shows what each one is waiting on.") {
+            Orb(store.servers.isEmpty ? .loading : .reconnecting, size: 40)
+        }
+    }
+
+    /// The prompt, the way the desktop's new-task composer leads: what to do
+    /// first, then where and with what.
+    private var form: some View {
+        Form {
+            Section { promptCard }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+
+            Section {
+                if connected.count > 1 {
+                    Picker("Server", selection: Binding(get: { server }, set: { pickedServer = $0 })) {
+                        ForEach(connected) { Text($0.name).tag(Optional($0.id)) }
+                    }
+                }
+                if !projects.isEmpty {
+                    Picker("Project", selection: $projectPath) {
+                        ForEach(projects, id: \.path) { Text($0.name).tag(Optional($0.path)) }
+                    }
+                }
+                if let server {
+                    NavigationLink {
+                        AttachProjectView(server: server, projects: projects) { list in
+                            projects = list
+                            projectPath = newest(list)
+                        }
+                    } label: {
+                        Label("Attach project…", systemImage: "plus")
+                    }
+                    .accessibilityLabel("Attach project…")
+                }
+                // Both describe a repo, so neither means anything until one is picked.
+                if projectPath != nil {
+                    Toggle("Worktree", isOn: $worktree).tint(Theme.accent)
+                    if worktree {
+                        // A worktree forks from the remote's default branch whatever is
+                        // checked out, so a branch picker here would promise nothing.
+                        if let base = branches?.defaultBase {
+                            LabeledContent("From") { Text(base).font(Theme.Font.mono) }
+                        }
+                    } else if let branches, !branches.branches.isEmpty {
+                        Picker("Branch", selection: Binding(
+                            get: { branches.current ?? "" },
+                            set: { target in Task { await pickBranch(target) } }
+                        )) {
+                            ForEach(branches.branches, id: \.self) { Text($0).tag($0) }
+                        }
+                    }
+                }
+            } header: {
+                GroupLabel("Where")
+            }
+            .listRowBackground(Theme.card)
+
+            Section {
+                Picker("Agent", selection: $harness) {
+                    ForEach(agents, id: \.harness) { a in
+                        Text(a.available ? a.label : "\(a.label) (unavailable)").tag(a.harness)
+                    }
+                }
+                Picker("Model", selection: Binding(get: { modelId }, set: pickModel)) {
+                    if Picks.defaultModel[harness]?.isEmpty ?? false {
+                        Text("Default").tag("")
+                    }
+                    ForEach(list, id: \.id) { Text($0.label).tag($0.id) }
+                }
+                if let model, !model.efforts.isEmpty {
+                    Picker("Effort", selection: Binding(get: { effort ?? "" }, set: pickEffort)) {
+                        ForEach(model.efforts, id: \.self) { Text(Picks.effortLabels[$0] ?? $0).tag($0) }
+                    }
+                }
+                if Picks.offersFast(harness, model) {
+                    Toggle("Fast mode", isOn: $fast).tint(Theme.accent)
+                }
+                if Picks.offersStances(harness) {
+                    Picker("Permissions", selection: Binding(get: { Picks.stanceFor(harness, stance) }, set: { stance = $0 })) {
+                        ForEach(Picks.stances.filter { Picks.honours(harness, $0.0) }, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                }
+            } header: {
+                GroupLabel("Agent")
+            } footer: {
+                if let agent, !agent.available {
+                    Text(agent.reason).font(Theme.Font.meta).foregroundStyle(Theme.tertiary)
+                }
+            }
+            .listRowBackground(Theme.card)
+        }
+        .themedList()
+        .tint(Theme.secondary)
+        .foregroundStyle(Theme.text)
+    }
+
+    /// The draft and dictation, in one card like the session's composer.
+    private var promptCard: some View {
+        let draft = Binding(get: { store.drafts[.newSession] ?? "" }, set: { store.drafts[.newSession] = $0 })
+        let dictating = Dictations.shared.state(.newSession) != .idle
+        return VStack(alignment: .leading, spacing: 0) {
+            if let failure {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Theme.destructive)
+                    Text(sentence(failure)).foregroundStyle(Theme.secondary).fixedSize(horizontal: false, vertical: true)
+                    // Only while a read left the form short; a failed Start is retried with Start.
+                    if agents.isEmpty || list.isEmpty {
+                        Spacer(minLength: Theme.Space.s)
+                        Button("Retry") {
+                            Task {
+                                await loadServer()
+                                await loadModels()
+                            }
+                        }
+                        .font(Theme.Font.meta.weight(.semibold))
+                        .foregroundStyle(Theme.text)
+                        .buttonStyle(.borderless)
+                    }
+                }
+                .font(Theme.Font.meta)
+                .padding(.horizontal, Theme.Space.l)
+                .padding(.top, Theme.Space.m)
+            }
+            if Dictations.shared.notes[.newSession] != nil {
+                DictationNote(draft: .newSession)
+                    .padding(.horizontal, Theme.Space.l)
+                    .padding(.top, Theme.Space.m)
+            }
+            TextField("What should it do?", text: draft, axis: .vertical)
+                .lineLimit(4...12)
+                .font(Theme.Font.body)
+                .foregroundStyle(Theme.text)
+                .padding(Theme.Space.l)
                 .accessibilityLabel("Prompt")
-        }
-
-        if connected.count > 1 {
-            Picker("Server", selection: Binding(get: { server }, set: { pickedServer = $0 })) {
-                ForEach(connected) { Text($0.name).tag(Optional($0.id)) }
-            }
-        }
-
-        Section("Project") {
-            if !projects.isEmpty {
-                Picker("Project", selection: $projectPath) {
-                    ForEach(projects, id: \.path) { Text($0.name).tag(Optional($0.path)) }
+            if dictating {
+                DictationBar(draft: .newSession)
+                    .padding(Theme.Space.s)
+            } else if let server, store.canDictate(server) {
+                HStack {
+                    Spacer(minLength: 0)
+                    DictateButton(server: server, draft: .newSession)
                 }
-            }
-            if let server {
-                NavigationLink("Attach project…") {
-                    AttachProjectView(server: server, projects: projects) { list in
-                        projects = list
-                        projectPath = newest(list)
-                    }
-                }
-            }
-            // Both describe a repo, so neither means anything until one is picked.
-            if projectPath != nil {
-                Toggle("Worktree", isOn: $worktree)
-                if worktree {
-                    // A worktree forks from the remote's default branch whatever is
-                    // checked out, so a branch picker here would promise nothing.
-                    if let base = branches?.defaultBase {
-                        LabeledContent("From", value: base)
-                    }
-                } else if let branches, !branches.branches.isEmpty {
-                    Picker("Branch", selection: Binding(
-                        get: { branches.current ?? "" },
-                        set: { target in Task { await pickBranch(target) } }
-                    )) {
-                        ForEach(branches.branches, id: \.self) { Text($0).tag($0) }
-                    }
-                }
+                .padding(Theme.Space.s)
             }
         }
-
-        Section {
-            Picker("Agent", selection: $harness) {
-                ForEach(agents, id: \.harness) { a in
-                    Text(a.available ? a.label : "\(a.label) (unavailable)").tag(a.harness)
-                }
-            }
-            Picker("Model", selection: Binding(get: { modelId }, set: pickModel)) {
-                if Picks.defaultModel[harness]?.isEmpty ?? false {
-                    Text("Default").tag("")
-                }
-                ForEach(list, id: \.id) { Text($0.label).tag($0.id) }
-            }
-            if let model, !model.efforts.isEmpty {
-                Picker("Effort", selection: Binding(get: { effort ?? "" }, set: pickEffort)) {
-                    ForEach(model.efforts, id: \.self) { Text(Picks.effortLabels[$0] ?? $0).tag($0) }
-                }
-            }
-            if Picks.offersFast(harness, model) {
-                Toggle("Fast mode", isOn: $fast)
-            }
-            if Picks.offersStances(harness) {
-                Picker("Permissions", selection: Binding(get: { Picks.stanceFor(harness, stance) }, set: { stance = $0 })) {
-                    ForEach(Picks.stances.filter { Picks.honours(harness, $0.0) }, id: \.0) { Text($0.1).tag($0.0) }
-                }
-            }
-        } footer: {
-            if let agent, !agent.available { Text(agent.reason) }
-        }
-
-        if let failure {
-            Section { Text(failure).foregroundStyle(.red) }
-        }
+        .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous).strokeBorder(Theme.hairline))
+        .animation(Theme.motion, value: dictating)
+        .padding(.bottom, Theme.Space.s)
     }
 
     private var ready: Bool {
-        !sending && !checkingOut && server != nil && projectPath != nil && agent?.available == true
+        // Dictation answers into this draft, so a Start mid-recording would send without its words.
+        !sending && !checkingOut && Dictations.shared.state(.newSession) == .idle && server != nil && projectPath != nil && agent?.available == true
             && (models[modelsKey] != nil || modelsFailed.contains(modelsKey))
             && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -304,6 +397,8 @@ struct NewSessionView: View {
                 "isNewSession": true,
             ])
             if let item = outcome.snapshot { store.created(server, item) }
+            store.drafts[.newSession] = nil
+            Haptic.success()
             onCreated(SessionKey(server: server, id: id))
             dismiss()
         } catch {
@@ -350,23 +445,25 @@ struct AttachProjectView: View {
             if let u = unavailable, u.kind == "no_cli" || u.kind == "not_authenticated" {
                 missingCli(u.kind)
             } else if let u = unavailable {
-                Text(u.detail ?? "Could not read repositories.").foregroundStyle(.red)
+                Text(sentence(u.detail ?? "Couldn't read repositories.")).foregroundStyle(Theme.destructive)
             } else if repos == nil {
-                Label { Text("Reading your repositories…") } icon: { ProgressView() }
-                    .foregroundStyle(.secondary)
+                Label { Text("Reading your repositories…") } icon: { Orb(.loading) }
+                    .foregroundStyle(Theme.secondary)
             } else if shown.isEmpty {
-                Text(repos!.isEmpty ? "No repositories." : "No repository matches.").foregroundStyle(.secondary)
+                Text(repos!.isEmpty ? "No repositories." : "No repository matches.").foregroundStyle(Theme.secondary)
             } else {
                 Section {
                     ForEach(shown, id: \.slug) { row($0) }
                 } footer: {
                     Text("Repositories not on \(place) yet clone into ~/dray there.")
+                        .font(Theme.Font.meta).foregroundStyle(Theme.tertiary)
                 }
             }
             if let failure {
-                Text(failure).foregroundStyle(.red)
+                Text(sentence(failure)).foregroundStyle(Theme.destructive)
             }
         }
+        .themedList()
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search repositories")
         .navigationTitle("Attach project")
         .toolbar {

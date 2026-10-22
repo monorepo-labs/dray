@@ -18,8 +18,6 @@ enum Target: Hashable {
     case new
 }
 
-enum Dictation { case idle, starting, recording, transcribing }
-
 /// The panel's layout, the reader's pick from its right-click menu and never
 /// switched for them: compact, one row with the orb beside the input, or voice,
 /// the orb alone in the middle.
@@ -150,8 +148,12 @@ final class Composer {
 
     /// Set for the moment between a send landing and the panel closing, which says it went.
     private(set) var sent = false
-    /// What that moment says: Sent, or Saved as draft.
+    /// What that moment says: Sent, Saved as draft, or what a card's answer did.
     private(set) var sentLabel = "Sent"
+    /// Cards answered since the panel opened, so the last one can speak for the lot.
+    @ObservationIgnored private var answered = 0
+    /// Panel opens, so a refusal landing after a reopen leaves the new count alone.
+    @ObservationIgnored private var visit = 0
     /// Return and number keys on a questions card, whose answers live in its view.
     var submits = 0
     var digits = 0
@@ -235,7 +237,9 @@ final class Composer {
             }
             // The last card answered is the panel's job done.
             // Not while the reader is busy: a card answered elsewhere leaves them their draft.
-            if ids.isEmpty, hadCards, shown, !busy { hide() }
+            // Nor under a card's flash, which closes the panel itself once read,
+            // nor on a new session, which the reader asked for with ⌘N.
+            if ids.isEmpty, hadCards, shown, !busy, !sent, target != .new { hide() }
             // Answered elsewhere with the panel shut: the done pill is back in view, its clock with it.
             if ids.isEmpty, hadCards, !shown {
                 unseenDone = []
@@ -363,6 +367,8 @@ final class Composer {
 
     /// A number key on a card: a permission's option outright, a question's toggled.
     func pickOption(_ i: Int) {
+        // The flash covers the card, so a key now would answer one the reader cannot see.
+        guard !sent else { return }
         switch ask?.event.payload {
         case .permissionRequested(let r)? where r.options.indices.contains(i):
             Task { await respond(r.options[i].id) }
@@ -396,30 +402,45 @@ final class Composer {
 
     func respond(_ optionId: String) async {
         guard let (key, e) = ask, case .permissionRequested(let r) = e.payload else { return }
-        closeOnLastCard(key, e)
+        let option = r.options.first { $0.id == optionId }
+        let label = switch option?.kind {
+        case "once"?: "Allowed once"
+        case "always_rule"?, "always_directory"?, "switch_mode"?: "Always allowed"
+        case "deny"?: "Denied"
+        default: option?.behavior == "deny" ? "Denied" : "Allowed once"
+        }
+        let counted = visit
+        closeOnLastCard(key, e, label)
         await store.respond(key, requestId: r.requestId, optionId: optionId)
-        keepIfRefused(key, e)
+        keepIfRefused(key, e, counted)
     }
 
     func answer(_ answers: [String: String]) async {
         guard let (key, e) = ask, case .questionsAsked(let r) = e.payload else { return }
-        closeOnLastCard(key, e)
+        let counted = visit
+        closeOnLastCard(key, e, "Sent")
         await store.answer(key, requestId: r.requestId, answers: answers)
-        keepIfRefused(key, e)
+        keepIfRefused(key, e, counted)
     }
 
-    /// The last card answered closes the panel now, on the card, rather than
-    /// once the reply removes it, which drew the draft for a moment first.
-    private func closeOnLastCard(_ key: SessionKey, _ e: AgentEvent) {
+    /// The last card answered says what was done, then the panel closes, all
+    /// before the reply removes it, which drew the draft for a moment first.
+    /// Several answered in one visit are told as a group.
+    private func closeOnLastCard(_ key: SessionKey, _ e: AgentEvent, _ label: String) {
+        answered += 1
         guard !busy, attention == [key], store.asks[key]?.count == 1 else { return }
         leaving = (key, e)
-        hide()
+        flash(answered > 1 ? "\(answered) answered" : label)
     }
 
-    /// An answer that did not land leaves the card waiting, so its pill comes back.
-    private func keepIfRefused(_ key: SessionKey, _ e: AgentEvent) {
-        guard leaving?.event.id == e.id, store.asks[key]?.contains(where: { $0.id == e.id }) == true else { return }
+    /// An answer that did not land leaves the card waiting: back on screen, or its pill back.
+    private func keepIfRefused(_ key: SessionKey, _ e: AgentEvent, _ counted: Int) {
+        guard store.asks[key]?.contains(where: { $0.id == e.id }) == true else { return }
+        // Uncounted, or answering it again on retry reads as two cards answered.
+        if visit == counted { answered = max(answered - 1, 0) }
+        guard leaving?.event.id == e.id else { return }
         leaving = nil
+        sent = false
         pillChanged()
     }
 
@@ -518,6 +539,8 @@ final class Composer {
     func opened() {
         // Cleared here rather than at the close, which would flash the draft back mid-shrink.
         sent = false
+        answered = 0
+        visit += 1
         keyed = true
         opens += 1
         notice = nil
@@ -536,6 +559,8 @@ final class Composer {
         switch t {
         case .new:
             listShown = false
+            // A new visit to the draft, so an answer's flash must not cover it.
+            sent = false
             opens += 1
             Task { await loadPicks() }
         case .session(let k):
@@ -685,6 +710,7 @@ final class Composer {
         lastUsed = sent.id
         UserDefaults.standard.set(sent.id, forKey: "island.lastSession")
         self.target = .session(sent)
+        Sound.send?.play()
         flash("Sent")
         return true
     }
@@ -942,9 +968,11 @@ final class Composer {
     }
 }
 
-/// Dray's own dictation tones, so the two dictate alike.
+/// Dray's own dictation tones, so the two dictate alike, and the island's send.
 enum Sound {
     static let start = NSSound(named: "dictate-start")
     static let stop = NSSound(named: "dictate-stop")
     static let done = NSSound(named: "notification")
+    /// Shimmer lift from `demo/send-sound.html`, rendered at 25%.
+    static let send = NSSound(named: "send")
 }

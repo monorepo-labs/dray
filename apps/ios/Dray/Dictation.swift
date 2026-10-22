@@ -1,6 +1,5 @@
 import AVFoundation
 import SwiftUI
-import ThinkingOrbs
 
 /// `transcription.rs`'s `TranscribeOutcome`. An unknown kind reads as a failure naming it.
 enum TranscribeOutcome: Decodable {
@@ -66,97 +65,41 @@ extension Store {
     }
 }
 
-/// What a dictation leaves behind, per session, outliving the button: a send
-/// made on leaving a session answers into a view that is gone, and its words,
-/// its sentence or its kept file must still be there on the way back.
+/// Every dictation, per draft, outliving the composer that started it: a
+/// recording sent on leaving a session answers into a view that is gone, and
+/// its words, its sentence or its kept file must still be there on the way back.
 @MainActor @Observable
 final class Dictations {
     static let shared = Dictations()
-    var transcribing: Set<SessionKey> = []
+    private(set) var phase: [SessionKey: Dictation] = [:]
+    private(set) var since: [SessionKey: Date] = [:]
     var notes: [SessionKey: String] = [:]
     /// A recording the server never answered for, kept for Retry: the only copy of the speech.
-    var kept: [SessionKey: URL] = [:]
-}
+    private(set) var kept: [SessionKey: URL] = [:]
+    /// The server each draft's recording goes to, taken at the press.
+    @ObservationIgnored private var servers: [SessionKey: UUID] = [:]
+    @ObservationIgnored private var recorders: [SessionKey: AVAudioRecorder] = [:]
 
-/// Records on the phone, transcribes on the server, appends to the draft.
-/// The mic is drawn only where the server says it can transcribe; a recording
-/// or answer already under way stays on screen through a dropped socket, or
-/// the words spoken so far would go with it.
-struct DictateButton: View {
-    @Environment(Store.self) private var store
-    let key: SessionKey
-    private let shared = Dictations.shared
-    @State private var recorder: AVAudioRecorder?
-    /// False once the controls are gone, so a start still waiting on the
-    /// permission prompt does not open a microphone nothing can stop.
-    @State private var shown = false
+    func state(_ draft: SessionKey) -> Dictation { phase[draft] ?? .idle }
 
-    private var transcribing: Bool { shared.transcribing.contains(key) }
-    private var note: String? {
-        get { shared.notes[key] }
-        nonmutating set { shared.notes[key] = newValue }
-    }
-    private var kept: URL? {
-        get { shared.kept[key] }
-        nonmutating set { shared.kept[key] = newValue }
+    /// The microphone's loudest sample since last asked, linear, as the orb reads it.
+    func level(_ draft: SessionKey) -> Float {
+        guard let r = recorders[draft] else { return 0 }
+        r.updateMeters()
+        return pow(10, r.peakPower(forChannel: 0) / 20)
     }
 
-    var body: some View {
-        let can = store.canDictate(key.server)
-        if can || recorder != nil || transcribing || note != nil {
-            HStack(spacing: 8) {
-                if transcribing {
-                    Orb(state: .working).frame(width: 30, height: 30)
-                } else if recorder != nil {
-                    // Two controls, as on the desktop: they mean opposite things about the words.
-                    Button(action: cancel) {
-                        Image(systemName: "xmark.circle.fill").font(.title)
-                    }
-                    .tint(.secondary)
-                    .accessibilityLabel("Cancel dictation")
-                    Button { Task { await stop() } } label: {
-                        Image(systemName: "stop.circle.fill").font(.title)
-                    }
-                    .tint(.red)
-                    .accessibilityLabel("Stop dictation")
-                } else if can {
-                    Button { Task { await start() } } label: {
-                        Image(systemName: "mic.circle.fill").font(.title)
-                    }
-                    .accessibilityLabel("Dictate")
-                }
-            }
-            .popover(isPresented: Binding(get: { note != nil }, set: { if !$0 { dismissNote() } })) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(note ?? "").font(.callout)
-                    if let url = kept {
-                        Button("Retry") {
-                            // Taken first, so the dismissal below discards nothing.
-                            kept = nil
-                            note = nil
-                            Task { await send(url) }
-                        }
-                    }
-                }
-                .padding()
-                .presentationCompactAdaptation(.popover)
-            }
-            .onAppear { shown = true }
-            // Leaving the session mid-recording sends what was said, which
-            // lands in the draft it was spoken into, the desktop's rule.
-            .onDisappear {
-                shown = false
-                if recorder != nil { Task { await stop() } }
-            }
-        }
-    }
-
-    private func start() async {
+    func start(_ store: Store, server: UUID, draft: SessionKey) async {
+        guard state(draft) == .idle, kept[draft] == nil else { return }
+        phase[draft] = .starting
+        notes[draft] = nil
         guard await AVAudioApplication.requestRecordPermission() else {
-            note = "Dray can't use the microphone. Allow it in Settings, under Privacy, Microphone."
+            phase[draft] = nil
+            notes[draft] = "Dray can't use the microphone. Allow it in Settings, under Privacy, Microphone."
             return
         }
-        guard shown else { return }
+        // Cancelled while the prompt was up: no microphone nothing can stop.
+        guard phase[draft] == .starting else { return }
         do {
             try AVAudioSession.sharedInstance().setCategory(.record)
             try AVAudioSession.sharedInstance().setActive(true)
@@ -171,61 +114,164 @@ struct DictateButton: View {
                     AVLinearPCMIsFloatKey: false,
                     AVLinearPCMIsBigEndianKey: false,
                 ])
+            r.isMeteringEnabled = true
             guard r.record() else { throw DrayError("The microphone would not start") }
-            recorder = r
+            recorders[draft] = r
+            servers[draft] = server
+            since[draft] = Date()
+            phase[draft] = .recording
+            Haptic.firm()
         } catch {
             release()
-            note = error.localizedDescription
+            phase[draft] = nil
+            notes[draft] = error.localizedDescription
         }
     }
 
-    private func stop() async {
-        guard let r = recorder else { return }
+    /// Ends the recording and sends it. The draft is captured here, so words
+    /// land in the draft they were spoken into even if the reader has moved on.
+    func stop(_ store: Store, draft: SessionKey) async {
+        guard let r = recorders.removeValue(forKey: draft), let server = servers[draft] else { return }
         r.stop()
-        recorder = nil
         release()
-        await send(r.url)
+        since[draft] = nil
+        Haptic.tap()
+        await send(store, server, draft, r.url)
     }
 
-    /// The key is captured here, so words land in the draft they were spoken
-    /// into even if the reader has moved on by the time the model answers.
+    /// Two controls, as on the desktop: Cancel throws the words away, Stop keeps them.
+    func cancel(_ draft: SessionKey) {
+        if let r = recorders.removeValue(forKey: draft) {
+            r.stop()
+            r.deleteRecording()
+            release()
+        }
+        since[draft] = nil
+        phase[draft] = nil
+    }
+
+    func retry(_ store: Store, draft: SessionKey) async {
+        guard let url = kept.removeValue(forKey: draft), let server = servers[draft] else { return }
+        notes[draft] = nil
+        await send(store, server, draft, url)
+    }
+
+    /// Closing the note without retrying is the reader letting the recording go.
+    func dismiss(_ draft: SessionKey) {
+        notes[draft] = nil
+        if let url = kept.removeValue(forKey: draft) { try? FileManager.default.removeItem(at: url) }
+    }
+
     /// The file goes once the server has answered, whatever it said; a send
     /// that never reached it keeps the file for Retry.
-    private func send(_ url: URL) async {
-        shared.transcribing.insert(key)
-        defer { shared.transcribing.remove(key) }
+    private func send(_ store: Store, _ server: UUID, _ draft: SessionKey, _ url: URL) async {
+        phase[draft] = .transcribing
+        defer { phase[draft] = nil }
         do {
-            let outcome = try await store.transcribe(key.server, wav: url)
+            let outcome = try await store.transcribe(server, wav: url)
             try? FileManager.default.removeItem(at: url)
             switch outcome {
-            case .text(let words): store.appendToDraft(key, words)
-            case .needsModel: note = "\(store.name(of: key.server)) has no transcription model. Download one in Dray's Settings, under Transcription."
-            case .noAudio: note = "No sound reached the microphone."
-            case .empty: note = "No words heard."
-            case .failed(let message): note = message
+            case .text(let words):
+                store.appendToDraft(draft, words)
+                Haptic.success()
+            case .needsModel: notes[draft] = "\(store.name(of: server)) has no transcription model. Download one in Dray's settings, under Transcription."
+            case .noAudio: notes[draft] = "No sound reached the microphone."
+            case .empty: notes[draft] = "No words heard."
+            case .failed(let message): notes[draft] = sentence(message)
             }
         } catch {
-            kept = url
-            note = error.localizedDescription
+            kept[draft] = url
+            notes[draft] = "Couldn't transcribe: \(error.localizedDescription)"
         }
-    }
-
-    /// Closing the popover without retrying is the reader letting the recording go.
-    private func dismissNote() {
-        note = nil
-        if let url = kept { try? FileManager.default.removeItem(at: url) }
-        kept = nil
-    }
-
-    private func cancel() {
-        guard let r = recorder else { return }
-        r.stop()
-        r.deleteRecording()
-        recorder = nil
-        release()
     }
 
     private func release() {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+}
+
+/// The mic, where the server can transcribe. Pressing it opens the voice orb in
+/// its place; nothing else of dictation draws until then.
+struct DictateButton: View {
+    @Environment(Store.self) private var store
+    let server: UUID
+    let draft: SessionKey
+
+    var body: some View {
+        // A kept recording is retried or let go first, or a new one would bury its Retry.
+        if store.canDictate(server) && Dictations.shared.state(draft) == .idle && Dictations.shared.kept[draft] == nil {
+            Button {
+                Task { await Dictations.shared.start(store, server: server, draft: draft) }
+            } label: {
+                Image(systemName: "mic")
+            }
+            .buttonStyle(IconButtonStyle())
+            .accessibilityLabel("Dictate")
+            // The keyboard's own mic is also "Dictate".
+            .accessibilityIdentifier("dictate")
+        }
+    }
+}
+
+/// A dictation under way: the voice orb hearing the reader, how long it has
+/// run, and the two ways out. Transcribing keeps the orb, curled and turning.
+struct DictationBar: View {
+    @Environment(Store.self) private var store
+    let draft: SessionKey
+    private let shared = Dictations.shared
+
+    var body: some View {
+        let state = shared.state(draft)
+        HStack(spacing: Theme.Space.s) {
+            // Polled at the island's ~20fps; the orb eases between readings itself.
+            TimelineView(.animation(minimumInterval: 1 / 20, paused: state != .recording)) { _ in
+                VoiceOrb(size: 36, level: state == .recording ? shared.level(draft) : 0, state: state)
+            }
+            .frame(width: 36, height: 36)
+            .accessibilityHidden(true)
+            if state == .transcribing {
+                Text("Transcribing…").font(Theme.Font.callout).foregroundStyle(Theme.secondary).shimmer()
+            } else {
+                RecordingTimer(since: shared.since[draft])
+            }
+            Spacer(minLength: 0)
+            if state != .transcribing {
+                Button { shared.cancel(draft) } label: { Image(systemName: "xmark") }
+                    .buttonStyle(IconButtonStyle())
+                    .accessibilityLabel("Cancel dictation")
+                Button { Task { await shared.stop(store, draft: draft) } } label: { Image(systemName: "checkmark") }
+                    .buttonStyle(IconButtonStyle(filled: true))
+                    .disabled(state != .recording)
+                    .accessibilityLabel("Stop dictation")
+            }
+        }
+        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .trailing)))
+    }
+}
+
+/// What a dictation said instead of words, inside the composer, with Retry
+/// where the recording was kept.
+struct DictationNote: View {
+    @Environment(Store.self) private var store
+    let draft: SessionKey
+
+    var body: some View {
+        if let note = Dictations.shared.notes[draft] {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                Image(systemName: "waveform").foregroundStyle(Theme.tertiary)
+                Text(note).foregroundStyle(Theme.secondary).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if Dictations.shared.kept[draft] != nil {
+                    Button("Retry") { Task { await Dictations.shared.retry(store, draft: draft) } }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Theme.text)
+                }
+                Button { Dictations.shared.dismiss(draft) } label: { Image(systemName: "xmark") }
+                    .foregroundStyle(Theme.tertiary)
+                    .accessibilityLabel("Dismiss")
+            }
+            .font(Theme.Font.meta)
+            .buttonStyle(.borderless)
+        }
     }
 }

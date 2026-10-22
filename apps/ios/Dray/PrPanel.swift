@@ -93,8 +93,15 @@ private struct PrPanelModifier: ViewModifier {
             .toolbar {
                 if model.visible {
                     ToolbarItem(placement: .primaryAction) {
-                        Button("Pull request", systemImage: "arrow.triangle.pull") { showing = true }
-                            .tint(model.prs.first.map(stateColor))
+                        // The list row's own glyph, so the button says the PR's state before it is opened.
+                        Button { showing = true } label: {
+                            if let pr = model.prs.first {
+                                PrGlyph(mark: pr.mark, size: 18)
+                            } else {
+                                Image(systemName: "arrow.triangle.pull")
+                            }
+                        }
+                        .accessibilityLabel("Pull request")
                     }
                 }
             }
@@ -102,11 +109,12 @@ private struct PrPanelModifier: ViewModifier {
     }
 }
 
-private func stateColor(_ pr: PullRequest) -> Color {
-    switch pr.state {
-    case "MERGED": .purple
-    case "CLOSED": .red
-    default: pr.isDraft ? .secondary : .green
+extension PullRequest {
+    /// This PR as the list's mark, so the toolbar and the sheet draw the row's own glyph.
+    var mark: PrMark {
+        let checks = checks.contains { $0.state == "failure" } ? "FAILING"
+            : checks.contains { $0.state == "pending" } ? "RUNNING" : "CLEAR"
+        return PrMark(number: number, headRefName: "", isDraft: isDraft, state: state, checksState: checks)
     }
 }
 
@@ -117,22 +125,29 @@ struct PrSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                if let u = model.unavailable {
-                    Text(.init(u.sentence))
-                        .foregroundStyle(u.keepsButton ? Color.secondary : Color.red)
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Space.xl) {
+                    if let u = model.unavailable {
+                        Text(.init(u.sentence))
+                            .font(Theme.Font.callout)
+                            .foregroundStyle(u.keepsButton ? Theme.secondary : Theme.destructive)
+                    }
+                    if let e = model.actionError {
+                        Label(sentence(e), systemImage: "exclamationmark.circle.fill")
+                            .font(Theme.Font.callout)
+                            .foregroundStyle(Theme.destructive)
+                    }
+                    ForEach(model.prs) { pr in
+                        PrSection(pr: pr, model: model)
+                    }
                 }
-                if let e = model.actionError {
-                    Text(e).foregroundStyle(.red)
-                }
-                ForEach(model.prs) { pr in
-                    PrSection(pr: pr, model: model)
-                }
+                .padding(Theme.Space.l)
             }
+            .page()
+            .refreshable { await model.load(store) }
             .navigationTitle(model.branch ?? "Pull request")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("Done") { dismiss() } }
-            .refreshable { await model.load(store) }
+            .toolbar { Button("Done") { dismiss() }.fontWeight(.semibold) }
         }
         // The desktop's poll: quicker while GitHub is still working something out.
         .task {
@@ -144,6 +159,8 @@ struct PrSheet: View {
     }
 }
 
+/// One pull request: what it is, whether it can land and the one action that
+/// moves it, then its checks and what people said, separated by space alone.
 private struct PrSection: View {
     @Environment(Store.self) private var store
     let pr: PullRequest
@@ -152,62 +169,105 @@ private struct PrSection: View {
 
     var body: some View {
         let ready = readiness(pr)
-        Section {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Theme.Space.xl) {
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
                 Link(destination: URL(string: pr.url) ?? URL(string: "https://github.com")!) {
-                    Text(pr.title).font(.headline).multilineTextAlignment(.leading)
-                }
-                Text("#\(pr.number) · \(pr.author) · +\(pr.additions) −\(pr.deletions) · \(pr.changedFiles) files")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(ready.label).font(.subheadline.weight(.medium)).foregroundStyle(tone)
-                    if pr.state == "OPEN" {
-                        Text("into \(pr.baseRefName)").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                        PrGlyph(mark: pr.mark, size: 18).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+                        Text(pr.title)
+                            .font(Theme.Font.title)
+                            .foregroundStyle(Theme.text)
+                            .multilineTextAlignment(.leading)
                     }
                 }
-                if let detail = ready.detail {
-                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text("#\(pr.number) · \(pr.author)")
+                    ChangeCount(added: pr.additions, removed: pr.deletions)
+                    Text("· \(pr.changedFiles) \(pr.changedFiles == 1 ? "file" : "files")")
+                }
+                .font(Theme.Font.meta)
+                .foregroundStyle(Theme.secondary)
+
+                VStack(alignment: .leading, spacing: Theme.Space.m) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(ready.label).font(Theme.Font.callout.weight(.semibold)).foregroundStyle(tone)
+                        if pr.state == "OPEN" {
+                            Text("into \(pr.baseRefName)").font(Theme.Font.mono).foregroundStyle(Theme.tertiary).lineLimit(1)
+                        }
+                    }
+                    if let detail = ready.detail {
+                        Text(detail).font(Theme.Font.meta).foregroundStyle(Theme.secondary)
+                    }
+                    action
+                }
+                .card()
+            }
+
+            if !pr.checks.isEmpty {
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    GroupLabel("Checks")
+                    VStack(spacing: 0) {
+                        ForEach(Array(pr.checks.enumerated()), id: \.element) { i, check in
+                            if i > 0 { Divider().overlay(Theme.hairline).padding(.leading, 44) }
+                            CheckRow(check: check)
+                        }
+                    }
+                    .card(padding: 0)
                 }
             }
-            action
-        }
-        if !pr.checks.isEmpty {
-            Section("Checks") {
-                ForEach(pr.checks, id: \.self) { CheckRow(check: $0) }
-            }
-        }
-        if !pr.comments.isEmpty {
-            Section("Comments") {
-                ForEach(pr.comments) { CommentRow(comment: $0) }
+            if !pr.comments.isEmpty {
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    GroupLabel("Comments")
+                    VStack(spacing: Theme.Space.s) {
+                        ForEach(pr.comments) { CommentRow(comment: $0).card(padding: Theme.Space.m) }
+                    }
+                }
             }
         }
     }
 
     private var tone: Color {
         switch pr.verdict {
-        case .ready: .green
-        case .conflict: .red
-        case .behind, .blocked, .unstable, .unknown: .orange
-        case .merged, .closed, .draft: .secondary
+        case .ready: Theme.add
+        case .conflict: Theme.destructive
+        case .behind, .blocked, .unstable, .unknown: Theme.accent
+        case .merged: Theme.merged
+        case .closed, .draft: Theme.secondary
         }
     }
 
     /// Reopen, mark ready, or merge — and no close or branch delete, as on the desktop.
     @ViewBuilder private var action: some View {
         if model.acting {
-            HStack { Orb(state: .working); Text("Working…").foregroundStyle(.secondary) }
+            HStack(spacing: Theme.Space.s) {
+                Orb(.working)
+                Text("Working…").font(Theme.Font.callout).foregroundStyle(Theme.secondary).shimmer()
+            }
+            .frame(minHeight: 44)
         } else if pr.state == "CLOSED" {
-            Button("Reopen") { Task { await model.act(store, "reopen_pr", pr.number) } }
+            Button { Task { await model.act(store, "reopen_pr", pr.number) } } label: {
+                Text("Reopen").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(SecondaryButtonStyle())
         } else if pr.state == "OPEN" && pr.isDraft {
-            Button("Ready for review") { Task { await model.act(store, "mark_pr_ready", pr.number) } }
+            Button { Task { await model.act(store, "mark_pr_ready", pr.number) } } label: {
+                Text("Ready for review").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PrimaryButtonStyle())
         } else if pr.state == "OPEN" {
-            // One dialog is both the pick and the confirm: merging is the one thing here that cannot be undone.
-            Button("Merge…") { merging = true }
+            // GitHub's green, never disabled: the readiness line above is why it may refuse.
+            Button { merging = true } label: { Text("Merge…").frame(maxWidth: .infinity) }
+                .buttonStyle(PrimaryButtonStyle(fill: Theme.merge, ink: .white))
+                .opacity(pr.verdict == .ready ? 1 : 0.6)
+                // One dialog is both the pick and the confirm: merging is the one thing here that cannot be undone.
                 .confirmationDialog("Merge #\(pr.number)?", isPresented: $merging, titleVisibility: .visible) {
                     ForEach([("squash", "Squash and merge"), ("merge", "Create a merge commit"), ("rebase", "Rebase and merge")], id: \.0) { method, label in
-                        Button(label) { Task { await model.act(store, "merge_pr", pr.number, ["method": .string(method)]) } }
+                        Button(label) {
+                            Task {
+                                await model.act(store, "merge_pr", pr.number, ["method": .string(method)])
+                                model.actionError == nil ? Haptic.success() : Haptic.error()
+                            }
+                        }
                     }
                 } message: {
                     Text(pr.verdict == .ready ? "Into \(pr.baseRefName)." : "\(readiness(pr).label). GitHub may refuse it.")
@@ -220,17 +280,26 @@ private struct CheckRow: View {
     let check: PrCheck
 
     var body: some View {
-        let row = HStack(spacing: 8) {
-            switch check.state {
-            case "success": Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-            case "failure": Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
-            case "pending": Orb(state: .working)
-            default: Image(systemName: "minus.circle").foregroundStyle(.secondary)
+        let row = HStack(spacing: Theme.Space.m) {
+            Group {
+                switch check.state {
+                case "success": Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.add)
+                case "failure": Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.destructive)
+                case "pending": ChecksSpinner()
+                default: Image(systemName: "minus.circle").foregroundStyle(Theme.tertiary)
+                }
             }
-            Text(check.name).lineLimit(1)
+            .frame(width: 20)
+            Text(check.name).font(Theme.Font.callout).foregroundStyle(Theme.text).lineLimit(1)
+            Spacer(minLength: 0)
+            if check.url != nil {
+                Image(systemName: "arrow.up.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+            }
         }
+        .padding(.horizontal, Theme.Space.m)
+        .frame(minHeight: 44)
         if let url = check.url.flatMap(URL.init(string:)) {
-            Link(destination: url) { row }.foregroundStyle(.primary)
+            Link(destination: url) { row }
         } else {
             row
         }
@@ -242,34 +311,40 @@ private struct CommentRow: View {
     @State private var open = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            HStack(spacing: Theme.Space.s) {
                 AsyncImage(url: comment.avatar.flatMap(URL.init(string:))) { $0.resizable() } placeholder: {
-                    Circle().fill(.fill.tertiary)
+                    Circle().fill(Theme.raised)
                 }
-                .frame(width: 18, height: 18)
+                .frame(width: 20, height: 20)
                 .clipShape(Circle())
-                Text(comment.author).font(.subheadline.weight(.medium))
-                if let verb { Text(verb).font(.caption).foregroundStyle(verbColor) }
-                if comment.resolved { Text("Resolved").font(.caption).foregroundStyle(.secondary) }
+                Text(comment.author).font(Theme.Font.callout.weight(.semibold)).foregroundStyle(Theme.text)
+                if let verb { Text(verb).font(Theme.Font.meta).foregroundStyle(verbColor) }
+                Spacer(minLength: 0)
+                if comment.resolved { Text("Resolved").font(Theme.Font.micro).foregroundStyle(Theme.tertiary) }
             }
             if let path = comment.path {
-                Text((path as NSString).lastPathComponent).font(.caption.monospaced()).foregroundStyle(.secondary)
+                Text((path as NSString).lastPathComponent).font(Theme.Font.code).foregroundStyle(Theme.tertiary)
             }
             let text = commentText(comment.body)
             if !text.isEmpty {
-                if open { MarkdownText(text: text) } else { Text(.init(text)).lineLimit(3) }
+                if open { MarkdownText(text: text) } else {
+                    Text(.init(text)).font(Theme.Font.callout).foregroundStyle(Theme.secondary).lineLimit(3)
+                }
             }
             if open {
-                ForEach(comment.replies) { CommentRow(comment: $0).padding(.leading, 12) }
+                ForEach(comment.replies) {
+                    CommentRow(comment: $0)
+                        .padding(.leading, Theme.Space.m)
+                        .overlay(alignment: .leading) { Rectangle().fill(Theme.border).frame(width: 1) }
+                }
             } else if !comment.replies.isEmpty {
-                Text("\(comment.replies.count) more").font(.caption).foregroundStyle(.secondary)
+                Text("\(comment.replies.count) more").font(Theme.Font.meta).foregroundStyle(Theme.tertiary)
             }
         }
-        .font(.callout)
         .opacity(comment.resolved && !open ? 0.6 : 1)
         .contentShape(Rectangle())
-        .onTapGesture { open.toggle() }
+        .onTapGesture { withAnimation(Theme.motion) { open.toggle() } }
     }
 
     private var verb: String? {
@@ -283,9 +358,9 @@ private struct CommentRow: View {
 
     private var verbColor: Color {
         switch comment.kind {
-        case "approved": .green
-        case "changes_requested": .red
-        default: .secondary
+        case "approved": Theme.add
+        case "changes_requested": Theme.destructive
+        default: Theme.secondary
         }
     }
 }

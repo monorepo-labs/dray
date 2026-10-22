@@ -1,5 +1,9 @@
 import SwiftUI
 
+/// Where a dictation is, which is what the orb draws. Here rather than beside
+/// either composer, since the island, the Orb Lab and the iPhone app all share this file.
+enum Dictation { case idle, starting, recording, transcribing }
+
 /// The dictation orb: clear dark glass with sunlight caught inside it, split
 /// into a rainbow band with a white filament through it (#568). A wave flows
 /// along the band, swelling with the voice; transcribing curls the band into

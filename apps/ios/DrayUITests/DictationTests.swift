@@ -2,9 +2,9 @@ import XCTest
 
 /// Dictates into a session's composer against a Mac server (`dray --serve`),
 /// whose welcome frame offers dictation: record, stop, and see the server's
-/// answer land — words in the draft, or its sentence in the popover.
+/// answer land — words in the draft, or its sentence under the composer.
 ///
-/// Grant the microphone first, after the uninstall below, or the system
+/// Grant the microphone first, after any uninstall, or the system
 /// prompt takes the tap:
 ///   xcrun simctl privacy booted grant microphone com.yogesh.dray.ios
 /// and pass the server as SmokeTests does:
@@ -16,11 +16,10 @@ final class DictationTests: XCTestCase {
             throw XCTSkip("set TEST_RUNNER_DRAY_URL and TEST_RUNNER_DRAY_TOKEN")
         }
         let app = XCUIApplication()
+        // Hides saved servers, so the empty list's own Add server is the one on screen.
+        app.launchArguments = ["-servers", ""]
         app.launch()
 
-        // The empty list's own Add server, so start from a fresh install:
-        //   xcrun simctl uninstall booted com.yogesh.dray.ios
-        // A server saved by an earlier run would be listed first and tapped instead.
         app.buttons["Add server"].firstMatch.tap()
         let address = app.textFields["Address"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
@@ -35,7 +34,7 @@ final class DictationTests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 15), "no session listed")
         row.tap()
 
-        let mic = app.buttons["Dictate"]
+        let mic = app.buttons["dictate"]
         XCTAssertTrue(mic.waitForExistence(timeout: 15), "no mic on a server that offers dictation")
         snap(app, "1-mic")
         mic.tap()

@@ -158,7 +158,10 @@ private func ask(_ s: SessionItem, _ payload: [String: Any]) -> AgentEvent {
 }
 
 private func options(_ labels: [(String, String)]) -> [[String: Any]] {
-    labels.enumerated().map { i, o in ["id": "o\(i)", "label": o.0, "behavior": o.1] }
+    // The first allow is once, every other a standing rule, as the harnesses build them.
+    labels.enumerated().map { i, o in
+        ["id": "o\(i)", "label": o.0, "behavior": o.1, "kind": o.1 == "deny" ? "deny" : i == 0 ? "once" : "always_rule"]
+    }
 }
 
 private func bash(_ s: SessionItem) -> AgentEvent {

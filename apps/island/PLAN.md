@@ -86,7 +86,8 @@ until #580, renamed since it sits above the Dock as often as at the notch.
   This Mac's `dray --serve`, address and token read from `serve-port` /
   `serve-token` in the home Dray.app hands it on launch (`DRAY_HOME`), so a dev
   build's island talks to the dev server. Shares `Wire.swift` and
-  `Connection.swift` with `apps/ios` by path, not by package.
+  `Connection.swift` with `apps/ios` by path, not by package, and lends it
+  `VoiceOrb` the same way — so neither side may import the other's UI kit.
 - **Dictation: Dray's own Parakeet, through the server to the app.** The
   transcription commands are the app's (`APP_COMMANDS`), so the island sends
   them to the server and the server forwards them over `host_call` — the
