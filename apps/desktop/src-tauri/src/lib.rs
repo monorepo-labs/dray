@@ -154,11 +154,17 @@ impl serde::Serialize for Fail {
 }
 
 /// The app's one HTTP client, shared because a `Client` owns the connection
-/// pool. No timeout here: each caller sets its own on the request.
+/// pool. No timeout here: each caller sets its own on the request. Every
+/// request goes through it, never `reqwest::Client::new()` or `reqwest::get`:
+/// `reqwest` is built with `rustls-no-provider` and panics building a client
+/// before a provider is installed, and this is the one place that installs it.
 pub fn http() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
 
     CLIENT.get_or_init(|| {
+        // Ring, not reqwest's own aws-lc-rs: opentunnel and the updater already
+        // use ring. Err means one of them installed it first.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         reqwest::Client::builder()
             .user_agent(concat!("Dray/", env!("CARGO_PKG_VERSION")))
             .build()

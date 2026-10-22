@@ -1451,7 +1451,7 @@ mod tests {
                 let chunks = futures_util::stream::iter(
                     body.chunks(64 * 1024).map(|c| Ok::<_, std::io::Error>(c.to_vec())).collect::<Vec<_>>(),
                 );
-                reqwest::Client::new()
+                crate::http()
                     .post(base)
                     .query(&[("name", name)])
                     .bearer_auth(token)
