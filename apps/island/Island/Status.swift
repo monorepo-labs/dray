@@ -20,13 +20,18 @@ struct AskCard: View {
             HStack(spacing: 8) {
                 let keys = composer.attention
                 if keys.count > 1 {
-                    AskTabs(titles: keys.map { store.items[$0]?.title ?? "Session" }, active: keys.firstIndex(of: key) ?? 0) {
-                        composer.askTab = keys[$0]
-                    }
+                    AskTabs(titles: keys.map { store.items[$0]?.title ?? "Session" }, active: keys.firstIndex(of: key) ?? 0,
+                            pick: { composer.askTab = keys[$0] },
+                            openInApp: { i in Task { await composer.showInApp(keys[i]) } })
                 } else {
                     Text(store.items[key]?.title ?? "Session").lineLimit(1)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.45))
+                        // The title row's ⌘-click, so every title in the panel answers it alike.
+                        .onTapGesture {
+                            if NSEvent.modifierFlags.contains(.command) { Task { await composer.showInApp(key) } }
+                        }
+                        .help("⌘-click to open in Dray")
                 }
                 Spacer(minLength: 0)
                 Text(composer.closeHint).font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))

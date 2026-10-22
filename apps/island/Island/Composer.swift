@@ -36,6 +36,9 @@ enum MenuID: Hashable { case model, project, stance }
 @MainActor @Observable
 final class Composer {
     static let width: CGFloat = 520
+    /// Above the Dock the window reaches this far below the cards, or their
+    /// shadows stop in a straight line at its edge.
+    static let shadowRoom: CGFloat = 12
 
     let store: Store
     let server: UUID
@@ -345,6 +348,15 @@ final class Composer {
         present()
     }
 
+    /// The done pill's Open in app: Dray comes forward, and its sidebar already marks the rest unread.
+    func openDoneInApp(_ key: SessionKey) {
+        done = []
+        Task { await showInApp(key) }
+    }
+
+    /// The pill drawn while the panel is shut is the done pill, which ⌘⏎ answers.
+    var donePillUp: Bool { !shown && attention.isEmpty && !done.isEmpty }
+
     /// A number key on a card: a permission's option outright, a question's toggled.
     func pickOption(_ i: Int) {
         switch ask?.event.payload {
@@ -358,7 +370,7 @@ final class Composer {
         }
     }
 
-    /// The title clicked: Dray's window, on this session. A closed app is
+    /// Open in app on the done pill, ⌘⏎ under it, or ⌘-click on the title: Dray's window, on this session. A closed app is
     /// launched and asked again once its window can answer.
     func showInApp(_ key: SessionKey) async {
         let args: [String: JSON] = ["sessionId": .string(key.id)]

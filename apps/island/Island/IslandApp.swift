@@ -54,6 +54,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var closeKey: HotKey?
     /// ⌘⇧2, beside macOS's own ⌘⇧3/4/5: a screenshot into the draft from anywhere.
     private var captureKey: HotKey?
+    /// ⌘⏎ from anywhere, held while the done pill is up: Open in app on the newest.
+    private var openKey: HotKey?
     private static weak var shared: Delegate?
     /// The first of a double tap, while the panel is shut.
     private var lastTap: Date?
@@ -202,6 +204,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
         closeKey = HotKey(key: kVK_Escape, mods: cmdKey) { [weak composer] in
             guard let composer else { return }
             if composer.listening { Task { await composer.cancelDictation() } } else { composer.hide() }
+        }
+        openKey = HotKey(key: kVK_Return, mods: cmdKey) { [weak composer] in
+            guard let composer, composer.donePillUp, let key = composer.done.last else { return }
+            composer.openDoneInApp(key)
         }
         composer.recordingChanged = { [weak self] recording in
             if recording { self?.startAnnotation() } else { self?.endAnnotation() }
@@ -353,6 +359,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         panel.makeKeyAndOrderFront(nil)
         composer.shown = true
         closeKey?.held = true
+        openKey?.held = false
     }
 
     /// Takes the window down once the close animation has run, unless
@@ -368,6 +375,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     /// Drawn, never key: a pill must not take keys from the app being typed in.
     private func showPills() {
         guard let pills, let composer else { return }
+        openKey?.held = composer.donePillUp
         if composer.hasPill {
             pills.orderFrontRegardless()
         } else {
@@ -390,8 +398,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
         return switch (composer.placement, composer.shown) {
         case (.notch, true): NSPoint(x: f.midX, y: f.maxY - composer.notchHeight - 40)
         case (.notch, false): NSPoint(x: f.midX, y: f.maxY - composer.notchHeight / 2)
-        case (.bottom, true): NSPoint(x: f.midX, y: f.minY + 60)
-        case (.bottom, false): NSPoint(x: f.midX, y: f.minY)
+        case (.bottom, true): NSPoint(x: f.midX, y: f.minY + Composer.shadowRoom + 60)
+        case (.bottom, false): NSPoint(x: f.midX, y: f.minY + Composer.shadowRoom)
         }
     }
 
@@ -427,7 +435,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let size = Self.size
         let origin = switch composer.placement {
         case .notch: NSPoint(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - size.height)
-        case .bottom: NSPoint(x: screen.visibleFrame.midX - size.width / 2, y: screen.visibleFrame.minY + Self.hiddenDock(screen))
+        case .bottom: NSPoint(x: screen.visibleFrame.midX - size.width / 2, y: screen.visibleFrame.minY + Self.hiddenDock(screen) - Composer.shadowRoom)
         }
         composer.notchHeight = composer.placement == .notch ? screen.safeAreaInsets.top : 0
         panel.setFrame(NSRect(origin: origin, size: size), display: true)

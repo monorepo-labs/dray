@@ -42,7 +42,7 @@ struct IslandView: View {
         .animation(composer.shown ? .spring(duration: 0.32, bounce: 0.2) : .easeIn(duration: 0.15), value: composer.shown)
         .allowsHitTesting(composer.shown)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: composer.placement == .notch ? .top : .bottom)
-        .padding(.bottom, composer.placement == .bottom ? 12 : 0)
+        .padding(.bottom, composer.placement == .bottom ? 12 + Composer.shadowRoom : 0)
         .animation(.snappy(duration: 0.25), value: fits)
         .animation(.snappy(duration: 0.25), value: composer.drawHint)
         // Out here, so the card's fill widens with the camera rather than snapping.
@@ -167,9 +167,11 @@ struct IslandView: View {
 
     @ViewBuilder private var draft: some View {
         if !composer.listShown, let key = composer.key {
-            TitleRow(title: title, marks: store.marks(key), close: composer.closeHint) {
-                Task { await composer.showInApp(key) }
-            }
+            // The list, not Dray: a title clicked without thinking must not switch apps,
+            // and the arrows can't open the list over text. ⌘-click is the deliberate way to Dray.
+            TitleRow(title: title, marks: store.marks(key), close: composer.closeHint,
+                     list: { composer.searches += 1 },
+                     openInApp: { Task { await composer.showInApp(key) } })
         }
         if composer.target == .new { NewSessionBar(composer: composer) }
         if !composer.rows.isEmpty {
@@ -530,11 +532,7 @@ struct PillsView: View {
                          items: composer.done.reversed().map { ($0, store.items[$0]?.title ?? "") },
                          glowing: composer.glowing,
                          open: { composer.openDone($0) },
-                         openInApp: { key in
-                             // Dray comes forward, and its sidebar already marks the rest unread.
-                             composer.done = []
-                             Task { await composer.showInApp(key) }
-                         },
+                         openInApp: { composer.openDoneInApp($0) },
                          hover: { composer.doneHovered = $0 })
                     .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
             }
@@ -545,6 +543,6 @@ struct PillsView: View {
         .animation(.easeOut(duration: composer.glowing ? 0.2 : 0.6), value: composer.glowing)
         // Where the card hangs from: the panel's top edge, or just above the Dock.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: anchor == .top ? .top : .bottom)
-        .padding(.bottom, composer.placement == .bottom ? 12 : 0)
+        .padding(.bottom, composer.placement == .bottom ? 12 + Composer.shadowRoom : 0)
     }
 }
