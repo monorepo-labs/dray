@@ -236,8 +236,9 @@ struct ErrorToast: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .task(id: message) {
                     Haptic.error()
-                    try? await Task.sleep(for: .seconds(4))
-                    store.lastError = nil
+                    // Cancelled by a newer message, which is not this task's to clear.
+                    do { try await Task.sleep(for: .seconds(4)) } catch { return }
+                    if store.lastError == message { store.lastError = nil }
                 }
             }
         }

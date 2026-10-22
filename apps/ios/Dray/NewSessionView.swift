@@ -259,7 +259,8 @@ struct NewSessionView: View {
     }
 
     private var ready: Bool {
-        !sending && !checkingOut && server != nil && projectPath != nil && agent?.available == true
+        // Dictation answers into this draft, so a Start mid-recording would send without its words.
+        !sending && !checkingOut && Dictations.shared.state(.newSession) == .idle && server != nil && projectPath != nil && agent?.available == true
             && (models[modelsKey] != nil || modelsFailed.contains(modelsKey))
             && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }

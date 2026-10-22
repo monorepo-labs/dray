@@ -191,7 +191,8 @@ final class Store {
         // never moves `modified`, so a stale `completed` would win the tie.
         for key in statuses.keys where key.server == server { statuses[key] = nil }
         await loadIndex(server)
-        for key in transcripts.keys where key.server == server { await reload(key) }
+        // A failed first read holds no transcript, so its error is what remembers it.
+        for key in Set(transcripts.keys).union(transcriptErrors.keys) where key.server == server { await reload(key) }
         // After the transcripts: a mark costs a `gh` call per repo, missed messages must not wait on it.
         await loadProjects(server)
         await loadMarks(server, force: false)
@@ -310,9 +311,9 @@ final class Store {
         if transcripts[key] == nil { await reload(key) }
     }
 
-    /// A transcript's Retry, after a read that failed with nothing held.
+    /// A transcript's Retry. Disconnected, the error stays until the connect
+    /// re-reads it, since a key with nothing held is reloaded through that error.
     func retryLoad(_ key: SessionKey) async {
-        transcriptErrors[key] = nil
         if serverState[key.server] == .connected { await reload(key) } else { connections[key.server]?.retryNow() }
     }
 
@@ -338,8 +339,7 @@ final class Store {
             transcripts[key] = t
             transcriptErrors[key] = nil
         } catch {
-            // With turns on screen, a failed re-read is the connection's to explain.
-            if transcripts[key] == nil { transcriptErrors[key] = error.localizedDescription }
+            transcriptErrors[key] = error.localizedDescription
         }
     }
 

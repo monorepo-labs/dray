@@ -30,6 +30,18 @@ struct TranscriptView: View {
                     ForEach(store.queued[key] ?? [], id: \.id) { q in
                         UserBubble(text: q.text, from: nil, queued: true)
                     }
+                    // Turns held but the refresh failed: what is on screen may be missing newer messages.
+                    if transcript != nil, let error = store.transcriptErrors[key] {
+                        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Theme.destructive)
+                            Text("Couldn't load new messages. \(sentence(error))").foregroundStyle(Theme.secondary)
+                            Spacer(minLength: Theme.Space.s)
+                            Button("Retry") { Task { await store.retryLoad(key) } }
+                                .fontWeight(.semibold)
+                                .foregroundStyle(Theme.text)
+                        }
+                        .font(Theme.Font.meta)
+                    }
                     if busy {
                         WorkingLine()
                     } else if let n = store.tasks[key], n > 0 {

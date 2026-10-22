@@ -90,7 +90,7 @@ final class Dictations {
     }
 
     func start(_ store: Store, server: UUID, draft: SessionKey) async {
-        guard state(draft) == .idle else { return }
+        guard state(draft) == .idle, kept[draft] == nil else { return }
         phase[draft] = .starting
         notes[draft] = nil
         guard await AVAudioApplication.requestRecordPermission() else {
@@ -198,7 +198,8 @@ struct DictateButton: View {
     let draft: SessionKey
 
     var body: some View {
-        if store.canDictate(server) && Dictations.shared.state(draft) == .idle {
+        // A kept recording is retried or let go first, or a new one would bury its Retry.
+        if store.canDictate(server) && Dictations.shared.state(draft) == .idle && Dictations.shared.kept[draft] == nil {
             Button {
                 Task { await Dictations.shared.start(store, server: server, draft: draft) }
             } label: {
