@@ -141,9 +141,12 @@ export default function Crew({
         !stacked && "shrink-0",
         // Stacked, closed rows cap at five before scrolling: five plus the hint
         // row (5 × h-8 + h-7), or five alone where the hint rides the first
-        // row. An open transcript takes the wrapper's 40% instead.
+        // row. An open transcript or a card takes the wrapper's height instead
+        // — a card is taller than five rows, and capped it scrolled inside a
+        // 188px box, its question or its options out of sight (#588).
         stacked
-          ? !rows.some((r) => open.has(r.item.sessionId)) && "max-h-[11.75rem] @lg:max-h-40"
+          ? !rows.some((r) => open.has(r.item.sessionId) || r.asking) &&
+              "max-h-[11.75rem] @lg:max-h-40"
           : "border-l [border-image:linear-gradient(to_bottom,transparent,var(--border))_1]",
       )}
       style={stacked ? undefined : { width: CREW_W }}
@@ -273,9 +276,22 @@ export default function Crew({
   );
 
   // Stacked, the wrapper lines the list up with the composer's column and is
-  // the container the hint's placement is asked of.
+  // the container the hint's placement is asked of; `mb-2` keeps it off the
+  // handoff sliver. While a card is up the list takes the well's darker wash,
+  // fading top to bottom: the sheet's own fill read as more transcript, and a
+  // bordered card pulled more of the eye than the question deserves. A card may
+  // also take more of the column than a transcript, since it holds a turn until
+  // answered and has to be read whole.
+  const asking = rows.some((r) => r.asking);
   return stacked ? (
-    <div className="@container mx-auto flex max-h-[40%] min-h-0 w-[calc(100%-2rem)] max-w-3xl shrink-0 flex-col">
+    <div
+      className={cn(
+        "@container mx-auto mb-2 flex min-h-0 w-[calc(100%-2rem)] max-w-3xl shrink-0 flex-col overflow-hidden rounded-2xl",
+        asking
+          ? "max-h-[70%] bg-linear-to-b from-(--surface-well) to-transparent"
+          : "max-h-[40%]",
+      )}
+    >
       {list}
     </div>
   ) : (
