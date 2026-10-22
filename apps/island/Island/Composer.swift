@@ -362,6 +362,8 @@ final class Composer {
 
     /// A number key on a card: a permission's option outright, a question's toggled.
     func pickOption(_ i: Int) {
+        // The flash covers the card, so a key now would answer one the reader cannot see.
+        guard !sent else { return }
         switch ask?.event.payload {
         case .permissionRequested(let r)? where r.options.indices.contains(i):
             Task { await respond(r.options[i].id) }
@@ -426,7 +428,10 @@ final class Composer {
 
     /// An answer that did not land leaves the card waiting: back on screen, or its pill back.
     private func keepIfRefused(_ key: SessionKey, _ e: AgentEvent) {
-        guard leaving?.event.id == e.id, store.asks[key]?.contains(where: { $0.id == e.id }) == true else { return }
+        guard store.asks[key]?.contains(where: { $0.id == e.id }) == true else { return }
+        // Uncounted, or answering it again on retry reads as two cards answered.
+        answered = max(answered - 1, 0)
+        guard leaving?.event.id == e.id else { return }
         leaving = nil
         sent = false
         pillChanged()
@@ -537,6 +542,8 @@ final class Composer {
         switch t {
         case .new:
             listShown = false
+            // A new visit to the draft, so an answer's flash must not cover it.
+            sent = false
             opens += 1
             Task { await loadPicks() }
         case .session(let k):

@@ -378,14 +378,17 @@ async fn open_recorder(
     }
     *slot = Some(recording);
     *state.live.lock().await = Some(live);
+    // Armed before the slot opens: a stop or sleep taking the recording then
+    // restores after this ticket and voids it, where armed later it would mute
+    // a machine whose microphone had already closed.
+    let ticket = stored.mute_while_recording.then(audio::arm_mute);
     drop(slot);
 
     // After the microphone is open, never before: a refusal must leave the
     // machine's sound exactly as it found it. And after the start tone the
     // client plays next, or the mute swallows it; the tone is 0.58s, and the
     // mic hearing it costs nothing, since it is no speech.
-    if stored.mute_while_recording {
-        let ticket = audio::arm_mute();
+    if let Some(ticket) = ticket {
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(START_TONE).await;
             let _ = tokio::task::spawn_blocking(move || audio::mute_other_audio(ticket)).await;
