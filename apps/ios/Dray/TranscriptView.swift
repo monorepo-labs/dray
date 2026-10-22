@@ -1,4 +1,5 @@
 import SwiftUI
+import ThinkingOrbs
 
 struct TranscriptView: View {
     @Environment(Store.self) private var store
@@ -18,7 +19,7 @@ struct TranscriptView: View {
                             .frame(maxWidth: .infinity)
                     }
                     if transcript == nil {
-                        Orb().frame(maxWidth: .infinity).padding(.top, 40)
+                        Orb(state: .working).frame(maxWidth: .infinity).padding(.top, 40)
                     }
                     ForEach(turns) { TurnView(turn: $0) }
                     ForEach(store.queued[key] ?? [], id: \.id) { q in
@@ -109,7 +110,7 @@ struct WorkingLine: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Orb()
+            Orb(state: .working)
             Text(label).shimmer()
         }
         .accessibilityElement(children: .combine)
@@ -294,7 +295,7 @@ struct ToolRow: View {
             } label: {
                 HStack(spacing: 6) {
                     // A delegated run is a whole agent being waited on, so it carries the orb.
-                    if pending && call.toolType == "subagent_spawn" { Orb() }
+                    if pending && call.toolType == "subagent_spawn" { Orb(state: .working) }
                     // Inside a group the label is the only thing that turns red, so a failure keeps it.
                     if showLabel || summary == nil || alarming {
                         Text(toolLabel(call.name, pending: pending))

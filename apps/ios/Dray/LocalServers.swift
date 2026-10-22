@@ -1,4 +1,5 @@
 import SwiftUI
+import ThinkingOrbs
 import UIKit
 
 /// One dev server the desktop's Browser tab lists; `local_servers.rs`'s `LocalServer`.
@@ -73,7 +74,7 @@ struct LocalServersView: View {
             ContentUnavailableView("Couldn't list servers", systemImage: "exclamationmark.triangle",
                 description: Text(readError))
         } else {
-            Orb()
+            Orb(state: .working)
         }
     }
 
@@ -107,7 +108,7 @@ struct LocalServersView: View {
         TimelineView(.periodic(from: since, by: 5)) { context in
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Orb()
+                    Orb(state: .working)
                     Text(settingUp ? "Setting up tunnel…" : "Creating link…").foregroundStyle(.secondary)
                 }
                 if context.date.timeIntervalSince(since) >= 30 {

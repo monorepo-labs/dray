@@ -1,4 +1,5 @@
 import SwiftUI
+import ThinkingOrbs
 
 @main
 struct DrayApp: App {
@@ -206,7 +207,7 @@ struct SessionRow: View {
         if pr?.state == "OPEN" && pr?.checksState == "RUNNING" {
             ChecksSpinner()
         } else if item.busy {
-            Orb()
+            Orb(state: .working)
         } else if let date = parseDate(item.modified) {
             Text(date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
                 .font(.caption)
