@@ -323,7 +323,9 @@ pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
 /// Its own defaults domain rather than `settings.json`, since the island is the
 /// one that reads it. `open` without `-n` is a no-op for an island already up,
 /// and it outlives Dray on purpose: it talks to the background server, which
-/// does too. A build with no island inside it (`tauri dev`) only writes the pick.
+/// does too — so the launch also pings it, and an island left on a binary an
+/// update replaced restarts onto the new one. A build with no island inside it
+/// (`tauri dev`) only writes the pick.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn configure_island(key: String) -> Result<(), String> {
     use tokio::process::Command;
@@ -354,6 +356,7 @@ pub async fn configure_island(key: String) -> Result<(), String> {
     }
     let out = run(open.arg(&app)).await?;
     if out.status.success() {
+        run(Command::new("notifyutil").args(["-p", "com.yogesh.dray.island.update"])).await?;
         return Ok(());
     }
     Err(crate::git::stderr_or(&out, || "could not start Dray Island".into()))

@@ -14,7 +14,10 @@ the sessions live in `dray --serve` now, not in the window.
   `build.sh` in the release job and copied in by `tauri.island.conf.json`. On by
   default: every app launch runs `configure_island`, which `open`s it. It
   outlives Dray, since it talks to the background server, and restarts itself
-  onto a new binary once an update has swapped the bundle under it.
+  onto a new binary once an update has swapped the bundle under it: every Dray
+  launch pings `com.yogesh.dray.island.update`, and an island whose binary moved
+  restarts then, or once its panel closes. It ships only inside Dray.app, so an
+  island change is a Dray release.
 - **Summoned by tapping one modifier alone**, Control unless Settings →
   Shortcuts says Option, Command or Off. The pick is the island's own
   `island.key` default, read at every tap. A tap opens it; a tap on an open
