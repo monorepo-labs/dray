@@ -235,4 +235,21 @@ mod tests {
             assert!(z.sha256.bytes().all(|b| b.is_ascii_hexdigit()));
         }
     }
+
+    /// The real archive through the real path: fetch, verify, unpack. What a
+    /// `zip` bump has to pass, since only a real archive says whether entry
+    /// modes still land and the binary runs. ~100MB, so ignored.
+    #[tokio::test]
+    #[ignore]
+    async fn unpacks_the_real_archive() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("dray-headless-{}", std::process::id()));
+        let zip = zip().expect("a platform Chrome for Testing ships");
+        download(&dir, zip).await.unwrap();
+        let binary = binary_in(&dir.join(VERSION), zip);
+        assert!(binary.metadata().unwrap().permissions().mode() & 0o111 != 0);
+        let out = std::process::Command::new(&binary).arg("--version").output().unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).contains(VERSION));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
