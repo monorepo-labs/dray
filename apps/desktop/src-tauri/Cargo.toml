@@ -42,7 +42,7 @@ libc = "0.2"
 dray-proto = { path = "../../../crates/dray-proto" }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-updater = { version = "2", optional = true }
-fff-search = "0.10.3"
+fff-search = "0.11.0"
 # Watches the docs panel's open files. Already in the tree behind `fff-search`,
 # whose index keeps itself current the same way. Not to be confused with
 # `notify-rust` below, which posts desktop banners.
@@ -83,7 +83,7 @@ tauri-plugin-macos-permissions = { version = "2.3", optional = true }
 futures-util = "0.3"
 # Verifies a downloaded model against the catalog's hash. A partial file left by
 # a killed process is otherwise indistinguishable from a whole one.
-sha2 = "0.10"
+sha2 = "0.11"
 # Public addresses for Remote access and shared dev servers (tunnel.rs). TLS
 # ends in this process, so the relay sees no plaintext, and the address is kept.
 opentunnel = "0.5.1"
@@ -93,7 +93,7 @@ hyper = { version = "1", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tauri-plugin-window-state = { version = "2", optional = true }
 # `dray-serve`'s WebSocket. The server half alone, and no TLS: it binds localhost.
-tokio-tungstenite = { version = "0.28", optional = true, default-features = false, features = ["handshake"] }
+tokio-tungstenite = { version = "0.30", optional = true, default-features = false, features = ["handshake"] }
 # The file route's query string. Already in the tree under `reqwest`'s `url`.
 form_urlencoded = { version = "1", optional = true }
 # Unpacks the headless Chromium a server downloads, since a fresh Ubuntu has no
