@@ -23,7 +23,9 @@ the sessions live in `dray --serve` now, not in the window.
   watches modifier changes globally, which needs no grant, and reads the
   system's key and click counters to rule out ⌃C and ⌃-click.
 - **Pinned to one session, with a switcher.** Defaults to the session last used
-  or the one wanting the reader. "New session" is an entry in the switcher.
+  or the one wanting the reader; tapped open over Dray's window, the session
+  that window has open (`selected_session`, asked of the app through the
+  server). "New session" is an entry in the switcher.
 - **What it draws: the input** (and, from v2, the open card). No transcript — the main
   window is one click away.
 - **Everything said and done builds one message.** Each dictated line, typed

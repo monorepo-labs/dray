@@ -287,6 +287,10 @@ function App() {
   useEffect(() => {
     if (selectedSessionId) setOpenDraftId(null);
   }, [selectedSessionId]);
+  // Dray Island opens on this session when tapped over Dray's window.
+  useEffect(() => {
+    void invoke("set_app_selection", { sessionId: selectedSessionId }).catch(() => {});
+  }, [selectedSessionId]);
   // `dray draft rm` or `start` can take the open draft away; leave it then.
   useEffect(() => {
     if (openDraftId && !drafts.some((d) => d.id === openDraftId)) setOpenDraftId(null);

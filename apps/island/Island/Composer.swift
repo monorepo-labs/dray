@@ -63,6 +63,10 @@ final class Composer {
         }
     }
     var listening: Bool { dictation == .starting || dictation == .recording }
+    /// Makes the panel key again. The drawing overlay lets clicks through while
+    /// recording, so a click elsewhere takes the keys, and focus in a panel
+    /// that is not key leaves ⏎ going to that other app.
+    @ObservationIgnored var takeKeys: () -> Void = {}
     /// For the drawing overlay, up for exactly as long as the microphone records.
     @ObservationIgnored var recordingChanged: (Bool) -> Void = { _ in }
     /// When the microphone opened, for the timer; `nil` unless recording.
@@ -501,6 +505,15 @@ final class Composer {
 
     // MARK: Opening
 
+    /// The session Dray's window has open, taken as the pick. Silent on any
+    /// failure — no app, the new-task page, a remote session — which leaves the pick as it was.
+    func adoptAppSelection() async {
+        guard case .string(let id)? = try? await store.call(server, "selected_session", as: JSON.self, timeout: .milliseconds(500))
+        else { return }
+        let k = SessionKey(server: server, id: id)
+        if store.items[k] != nil { pick(.session(k)) }
+    }
+
     /// With nothing picked, the last session picked, else the newest.
     func opened() {
         // Cleared here rather than at the close, which would flash the draft back mid-shrink.
@@ -841,7 +854,11 @@ final class Composer {
     @discardableResult
     private func transcribe(_ cmd: String, _ args: [String: JSON]) async -> Bool {
         dictation = .transcribing
-        defer { dictation = .idle }
+        // Keys first, so the view's focus on going idle lands in a key window.
+        defer {
+            if shown { takeKeys() }
+            dictation = .idle
+        }
         do {
             return place(try await store.call(server, cmd, args, timeout: .seconds(180)))
         } catch {

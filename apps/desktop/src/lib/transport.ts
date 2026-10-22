@@ -189,6 +189,7 @@ export const APP_COMMANDS = new Set([
   "open_in_app",
   "configure_island",
   "island_running",
+  "set_app_selection",
   "island_done",
   "island_prefs",
   "set_island_pref",

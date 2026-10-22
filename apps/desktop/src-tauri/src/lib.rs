@@ -902,6 +902,7 @@ pub fn run() {
             apps::open_in_app,
             apps::configure_island,
             apps::island_running,
+            apps::set_app_selection,
             apps::island_done,
             apps::island_prefs,
             apps::set_island_pref,

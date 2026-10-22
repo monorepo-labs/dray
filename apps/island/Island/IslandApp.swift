@@ -59,6 +59,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private static weak var shared: Delegate?
     /// The first of a double tap, while the panel is shut.
     private var lastTap: Date?
+    /// A tap is waiting on Dray's selection; another meanwhile must not open twice.
+    private var askingApp = false
     private var annotation: Annotation?
     /// Over a capture's or a drawing's overlay, so dictation stays in sight and in reach.
     private static let overOverlay = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
@@ -212,6 +214,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         composer.recordingChanged = { [weak self] recording in
             if recording { self?.startAnnotation() } else { self?.endAnnotation() }
         }
+        composer.takeKeys = { [weak self] in self?.panel?.makeKeyAndOrderFront(nil) }
         registerCapture()
         // Dray's Settings writes the picks and then says so, through `notifyutil -p`.
         // A C callback captures nothing, so it finds the delegate through a static;
@@ -302,6 +305,19 @@ final class Delegate: NSObject, NSApplicationDelegate {
             lastTap = Date()
         } else {
             lastTap = nil
+            open()
+        }
+    }
+
+    /// A tap over Dray's window opens on the session that window has open,
+    /// asked before the panel shows so the title never flips under the reader.
+    private func open() {
+        guard let composer, !askingApp else { return }
+        guard Composer.drayInFront else { return show() }
+        askingApp = true
+        Task {
+            await composer.adoptAppSelection()
+            askingApp = false
             show()
         }
     }

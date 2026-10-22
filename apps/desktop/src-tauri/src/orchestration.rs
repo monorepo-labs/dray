@@ -337,6 +337,7 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
             crate::notifications::activate(app, id);
             Ok(serde_json::Value::Null)
         }
+        "selected_session" => Ok(serde_json::json!(crate::apps::app_selection())),
         "close_session" => {
             #[cfg(all(feature = "cef", target_os = "macos"))]
             if let Some(id) = args["sessionId"].as_str() {

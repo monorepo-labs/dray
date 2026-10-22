@@ -1138,9 +1138,10 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     if crate::transcription::HOSTED.contains(&cmd) {
         return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Open Dray to dictate.")));
     }
-    // The Island's title opens its session in the app's window, which only the app can raise.
+    // The Island's title opens its session in the app's window, which only the
+    // app can raise, and the island opens on the session that window shows.
     #[cfg(feature = "desktop")]
-    if cmd == "show_session" {
+    if matches!(cmd, "show_session" | "selected_session") {
         return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Dray's window is closed.")));
     }
     // A `dray-serve` updates itself; the Mac's server follows the app instead.
