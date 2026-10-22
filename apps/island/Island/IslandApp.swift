@@ -93,23 +93,30 @@ final class Delegate: NSObject, NSApplicationDelegate {
         (try? Bundle.main.executableURL?.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
     private let startedOn = Delegate.binaryDate()
-    /// Dray launched while the panel was open; the restart waits for it to close.
+    /// Dray launched while the panel was open or a screenshot ran; the restart waits for it to end.
     private var updatePending = false
+    /// The replacement is launching; a second ping meanwhile would start a second one.
+    private var restarting = false
 
     /// An update swaps the bundle under a running island, and Dray's `open` only
     /// finds this one still up, so every Dray launch pings it and it moves itself
-    /// onto the new binary — while hidden, never under the reader's hands.
+    /// onto the new binary — while hidden, never under the reader's hands. A
+    /// screenshot hides the panel without being done with it, so it waits too.
     private func updateIfReplaced() {
-        guard let now = Self.binaryDate(), now != startedOn else { return }
-        guard panel?.isVisible != true else {
+        guard !restarting, let now = Self.binaryDate(), now != startedOn else { return }
+        guard panel?.isVisible != true, composer?.capturing != true else {
             updatePending = true
             return
         }
+        updatePending = false
+        restarting = true
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
         config.environment = ProcessInfo.processInfo.environment
         NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, error in
-            if error == nil { DispatchQueue.main.async { NSApp.terminate(nil) } }
+            DispatchQueue.main.async {
+                if error == nil { NSApp.terminate(nil) } else { self.restarting = false }
+            }
         }
     }
 
@@ -366,6 +373,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 composer.capturing = false
                 // Dictation may have stopped during the flight or the cut, where `endAnnotation` left the level to this.
                 panel.level = annotation == nil ? .statusBar : Self.overOverlay
+                if updatePending { updateIfReplaced() }
             }
             var shot: Capture.Shot?
             var failed: String?
