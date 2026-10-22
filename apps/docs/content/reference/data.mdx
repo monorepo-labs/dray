@@ -1,0 +1,108 @@
+---
+title: Data on disk
+description: What Dray keeps in ~/.dray, what goes when you delete a session, the environment variables you can set, and where each agent keeps its own data.
+sidebar:
+  order: 2
+---
+
+Dray keeps everything on your machine, in one folder: `~/.dray`. Transcripts, the session list, attachments, settings and the browser's profiles all live there. A Linux server keeps its own `~/.dray` with the sessions that run on it.
+
+The folder is readable by your user alone, and Dray uploads none of it. For what does leave the machine, see [Privacy](/reference/privacy).
+
+## What's in ~/.dray
+
+| Path | What it holds |
+|---|---|
+| `sessions/<session-id>.jsonl` | One file per session: the whole transcript, one event per line. The only copy Dray keeps. |
+| `sessions/index.json` | The session list: each session's title, project, working directory, agent, model and flags. |
+| `attachments/<session-id>/` | A copy of every image you sent in that session, so the transcript still shows it after you delete the original. Other files are not copied; the prompt names them by path. |
+| `drafts.json` | Tasks you saved with `⌘S` and have not started. |
+| `projects.json` | Attached projects, and which one was last selected. |
+| `settings.json` | The analytics choice and install id, your dictation model and microphone, the Linear account name, and whether Remote access is on. |
+| `credentials.json` | Your Linear API key and the tokens for servers you added by address. Readable by your user alone (`0600`). |
+| `servers.json` | The remote servers in Settings → Servers: name, address, channel. Tokens are in `credentials.json`, not here. |
+| `models/` | Dictation models you downloaded in Settings → Transcription. |
+| `recordings/` | Dictation audio, kept only while a transcription failed so you can retry it. Removed once the model answers, and pruned after 7 days. |
+| `browser/<session-id>/` | Each session's browser profile: cookies, cache, history. |
+| `browser/recordings/<session-id>/` | Videos an agent recorded of a session's browser. |
+| `cef/<version>/` | The Chromium framework Dray's browser runs on, downloaded after the first launch. |
+| `chromium/` | The headless browser `dray browser` drives where the app's own browser is not open, such as on a Linux server. |
+| `pi-sessions/` | pi's own transcript of each pi session, which is how pi resumes it. |
+| `opentunnel/`, `tunnel-url` | The identity behind your Remote access and share addresses, and the current address. Deleting `opentunnel/` gives you new addresses. |
+| `serve-token` | The token other Macs use to reach this one through Remote access (`0600`). |
+| `serve-port`, `serve.lock`, `dray.sock` | The running server's port, its lock, and the socket the `dray` command talks to. |
+| `server.log` | The background server's log. See [Troubleshooting](/reference/troubleshooting). |
+| `parse_failures.jsonl` | Lines from an agent CLI that Dray could not read, with the raw line. Safe to delete. |
+| `cli-synced` | The app version that last updated your `dray` CLI. |
+
+Your composer picks, theme, shortcuts, spaces list and other app preferences are not in `~/.dray`. They live in the app's own storage on this Mac.
+
+Outside `~/.dray`, Dray also writes:
+
+- **Worktrees**, inside the project: `<project>/.claude/worktrees/<name>`, on a branch `worktree-<name>`. See [Worktrees](/using-dray/worktrees).
+- **The login item** that starts the background server: `~/Library/LaunchAgents/com.yogesh.dray.server.plist`. The app writes it on every launch.
+- **The `dray` CLI**, if you installed it: `~/.local/bin/dray`, and its skill in `~/.claude/skills/dray/` and `~/.codex/skills/dray/`.
+
+## What goes when you delete a session
+
+Deleting a session removes, from this machine:
+
+- its transcript and its row in the session list,
+- its attachments,
+- its browser profile and any browser recordings,
+- pi's copy of the conversation, for a pi session,
+- its worktree and the worktree's branch, if it had one,
+- any hidden sessions it started that only appear in its crew.
+
+It does not remove the agent's own record of the conversation. Claude Code, Codex, fx and Grok Build keep their own transcripts in their own folders (below). A pushed branch and any pull request stay on GitHub.
+
+**Settling** a session is not deleting it. Settle stops it and removes its browser profile, so it starts signed out of websites if you unsettle it. The transcript, attachments and worktree stay until you delete the worktree or the session. See [Sessions](/using-dray/sessions).
+
+## Environment variables
+
+You rarely need these. Set them in the environment that launches Dray or the `dray` command. The Mac app opened from the Dock or Finder does not read your shell's variables, so start it from Terminal to use one:
+
+```bash
+DRAY_HOME=~/dray-test /Applications/Dray.app/Contents/MacOS/dray
+```
+
+The app passes `DRAY_HOME` and `DRAY_NO_ANALYTICS` on to the background server it starts.
+
+| Variable | Read by | What it does |
+|---|---|---|
+| `DRAY_HOME` | App, server, `dray` | Uses another folder instead of `~/.dray`, with its own sessions, settings and socket. Two Dray servers must never share one folder: each overwrites the other's session list. On a Mac, the browser profiles and Chromium stay in `~/.dray` either way. |
+| `DRAY_NO_ANALYTICS` | App, server | Turns analytics off for that run, whatever the setting says. Any value counts, even `0`. See [Privacy](/reference/privacy). |
+| `DRAY_ENDPOINT` | `dray` | Which Dray the CLI talks to: a socket path. Dray sets it for every agent it runs, so an agent's `dray` calls reach the right app. |
+| `DRAY_SESSION_ID` | `dray` | The session the CLI acts for. Dray sets it for every agent it runs. |
+| `DRAY_CHANNEL` | `install.sh` | `stable` (default) or `beta`. Which releases the installer picks. |
+| `DRAY_VERSION` | `install.sh` | Install one exact release tag instead of the newest. |
+| `DRAY_INSTALL_DIR` | `install.sh` | Where the binaries go. Default `~/.local/bin`. |
+
+`dray update` keeps the channel of the version you have. Use `dray update --channel beta` or `--channel stable` to move. See [the dray CLI](/cli).
+
+## Where agents keep their own data
+
+Dray runs each agent's own CLI and does not store agent logins. Each agent keeps its sign-in, settings and transcripts in its own folder:
+
+| Agent | Folder |
+|---|---|
+| Claude Code | `~/.claude` (transcripts in `~/.claude/projects`) |
+| Codex | `~/.codex` |
+| pi | `~/.pi/agent` |
+| fx | `~/.fx` |
+| Grok Build | `~/.grok` |
+| GitHub CLI | `gh`'s own config. Dray uses it for pull requests and GitHub issues and stores no GitHub token. |
+
+Signing in from Settings → Accounts runs the agent's own login, so the credential lands in that agent's folder. Two exceptions write there on your behalf:
+
+- **pi:** an API key you add in Accounts is written to `~/.pi/agent/auth.json`, pi's own store.
+- **fx:** Dray sets `fast_mode` and `session_titles` in `~/.fx/settings.json` when it creates an fx session. That file is fx's global setting, so it also changes what your fx terminal uses.
+
+See [Accounts](/settings/accounts).
+
+## Limits
+
+- Nothing cleans up `parse_failures.jsonl`; it grows until you delete it.
+- A dictation model removed from Dray's list in a later version stays in `models/` with no button to delete it. Delete the file by hand.
+- If removing a worktree fails while deleting its session, the folder stays behind. Remove it with `git worktree remove <path>` in the project.
+- There is no export. To back up, copy `~/.dray`.

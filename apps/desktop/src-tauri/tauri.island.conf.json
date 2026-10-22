@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "macOS": {
+      "files": {
+        "Helpers/Dray Island.app": "target/island/Dray Island.app"
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+#!/bin/sh
+# Builds Dray Island.app, universal, and signs it into <out-dir> for the
+# release bundle (tauri.island.conf.json copies it into Contents/Helpers).
+#
+#   build.sh <out-dir>
+#     SIGN_IDENTITY=...   codesign identity, hardened runtime (default ad-hoc)
+#
+# Signed here rather than by Xcode for cef-helpers.sh's reason: Tauri's bundler
+# signs nothing `bundle.macOS.files` copied, and codesign refuses an app whose
+# nested bundles carry no signature.
+set -e
+[ -n "$1" ] || { echo "usage: $0 <out-dir>" >&2; exit 1; }
+mkdir -p "$1"
+OUT=$(cd "$1" && pwd)
+cd "$(dirname "$0")"
+
+xcodegen generate --quiet
+# The orb is a Metal shader, and Xcode ships the Metal toolchain as a separate download.
+xcrun metal --version >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
+xcodebuild -quiet -project DrayIsland.xcodeproj -scheme DrayIsland -configuration Release \
+  -derivedDataPath build ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO build
+
+APP="$OUT/Dray Island.app"
+rm -rf "$APP"
+cp -R "build/Build/Products/Release/Dray Island.app" "$APP"
+ID=${SIGN_IDENTITY:--}
+# An ad-hoc signature cannot carry a timestamp.
+T=--timestamp
+[ "$ID" = "-" ] && T=""
+codesign --force --options runtime $T -s "$ID" "$APP"
+echo "island at $APP"

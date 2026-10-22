@@ -1,6 +1,6 @@
 [package]
 name = "dray"
-version = "0.28.1"
+version = "0.29.2"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -73,6 +73,9 @@ reqwest = { version = "0.12", default-features = false, features = [
 # never leaves the machine. See transcription/.
 cpal = { version = "0.16", optional = true }
 rubato = { version = "0.16", optional = true }
+# Voice activity detection, pure Rust with its weights compiled in: dictation
+# cuts the pauses out before the model reads the audio.
+earshot = { version = "1.2", optional = true }
 # macOS hands a *silent* stream to a process without microphone permission
 # rather than refusing it, so nothing downstream can tell "denied" from "quiet
 # room". This is what actually raises the system prompt. See transcription/.
@@ -98,6 +101,8 @@ form_urlencoded = { version = "1", optional = true }
 # updater's zip, `png`'s flate2). See headless/download.rs.
 zip = { version = "4.6", optional = true, default-features = false, features = ["deflate-flate2"] }
 flate2 = { version = "1", optional = true }
+# The This Mac row's pairing QR for the phone. SVG alone: no `image` tree.
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 
 # Metal on macOS, CPU everywhere else — the backend is chosen at *build* time,
 # so it cannot be switched per model or per machine. Split across two tables
@@ -132,6 +137,7 @@ desktop = [
   "dep:notify-rust",
   "dep:cpal",
   "dep:rubato",
+  "dep:earshot",
   "dep:transcribe-cpp",
   # The client half of the serve wire, for remote servers (servers.rs). TLS
   # for `wss://` through a tunnel: rustls on the system's roots, both already

@@ -363,6 +363,26 @@ describe("segmentWork", () => {
     expect(segments).toHaveLength(3);
     expect(segments[1].rows).toBe(0);
   });
+
+  /// A build still running when the reader types must not fold away with the
+  /// stretch it sits in, or the transcript stands still with no reason shown.
+  it("keeps a closed stretch unfolded while a call in it runs", () => {
+    const answered = event(5, {
+      type: "tool_call_completed",
+      callId: "c1",
+      result: { text: "", isError: false, structured: null, exitCode: null, durationMs: null, images: [] },
+    } as AgentEventPayload);
+    const log = [prompt(0, "go", false), callStarted(1, "c1"), prompt(3, "and also", true), callStarted(4, "c2")];
+
+    const running = buildTranscript(log, true);
+    const [closed, last] = segmentWork(running.turns[0], running.resultByCallId);
+    expect(closed.running).toBe(true);
+    expect(last.running).toBe(false);
+
+    const done = buildTranscript([...log, answered], true);
+    const [settled] = segmentWork(done.turns[0], done.resultByCallId);
+    expect(settled.running).toBe(false);
+  });
 });
 
 describe("subagent runs", () => {

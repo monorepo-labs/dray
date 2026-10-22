@@ -1,0 +1,80 @@
+---
+title: Notifications
+description: How Dray tells you a session finished, needs permission or asked a question — a macOS banner, an in-app card, or nothing — plus the ready-to-merge card, ⌘G, the sidebar marks and the dock badge.
+sidebar:
+  order: 5
+---
+
+Dray tells you when a session hands work back to you. It picks one way to tell you, based on where you are, so you never get the same news twice.
+
+## What Dray tells you about
+
+- **Done** — a session's turn ended.
+- **Needs permission** — a session wants your approval before it runs a tool.
+- **Needs an answer** — a session asked you a question.
+- **Ready to merge** — a session's pull request has turned ready.
+
+## Which way you hear
+
+For the first three, the channel depends on where you are:
+
+| You are | You get |
+|---|---|
+| In another app | A macOS banner, with the session's title. Clicking it brings Dray forward on that session. |
+| In Dray, looking at something else | A card in the top-left corner of the window, and a sound. |
+| In Dray, looking at that session | Nothing. The transcript already shows it. |
+
+**Ready to merge** works differently. It is always a card, never a banner, even when you are looking at the session — the panel line changing quietly is easy to miss. It appears when a PR changes to ready, not for one that was already ready when Dray first saw it.
+
+Sessions filed in another [space](/using-dray/spaces) stay silent until you switch to that space. They keep running.
+
+## Cards
+
+Each card names what is wanted and offers a button:
+
+| Card | Button | Goes to | Stays for |
+|---|---|---|---|
+| Done | View | The session | 10 seconds |
+| Needs permission, Needs an answer | Answer | The session, where the card to answer is | 15 seconds |
+| Ready to merge | Review | The session with its PR tab open | 10 seconds |
+| Delete worktree? | Delete or Skip | Delete removes the worktree of a session you just settled. Skip keeps it. | 15 seconds |
+
+The bar along the bottom of a card is its timer. Hover a card to pause it.
+
+{/* screenshot: two notice cards stacked in the top-left corner, the top one showing its ⌘G tooltip */}
+
+### Keyboard
+
+- `⌘G` takes the top card — the oldest one, next to expire. Press it again for the next. On a **Delete worktree?** card it skips; it never deletes.
+- `⌘⇧D` deletes the worktree from a **Delete worktree?** card.
+
+The keys work only while a card is showing. Hover the top card's button to see its key.
+
+A card going away does not mean the work is done. A session still waiting on you keeps its yellow mark in the sidebar until you answer.
+
+## Sounds
+
+- An in-app card plays a short sound.
+- A banner for a finished task plays the macOS default sound. A banner asking for permission or an answer plays Ping.
+- Settling a session plays a short celebration.
+
+There is no setting to turn these off.
+
+## Sidebar marks and the dock badge
+
+Each sidebar row carries a mark on its left edge:
+
+- **Green** — the turn is over and you haven't looked yet. Opening the row clears it.
+- **Yellow** — the session is waiting on you. Only answering clears it.
+
+Yellow wins when both apply. The Dray icon in the Dock shows a count of sessions with either mark, across every space, and clears itself at zero.
+
+## Allow notifications in macOS
+
+macOS asks whether Dray may send notifications the first time it posts a banner. Choose **Allow**. If you declined, turn it back on in System Settings → Notifications → Dray. Cards, sounds, marks and the badge inside Dray work either way.
+
+## Limits
+
+- A banner disappears after a minute if you don't click it.
+- A background subagent that reports back after its turn can raise a second **Done** for the same session.
+- Shortcuts here can be changed in Settings → Shortcuts.

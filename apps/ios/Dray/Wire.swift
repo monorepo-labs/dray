@@ -106,6 +106,19 @@ struct EventFrame<T: Decodable>: Decodable {
 
 /// One index entry. Fields the phone does not read are left undecoded, so a
 /// newer server adding some costs nothing.
+func parseDate(_ s: String) -> Date? {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let d = f.date(from: s) { return d }
+    f.formatOptions = [.withInternetDateTime]
+    return f.date(from: s)
+}
+
+/// The server's first frame, for the one field the phone reads off it.
+struct Welcome: Decodable {
+    let dictation: Bool?
+}
+
 struct SessionItem: Decodable, Hashable {
     let sessionId: String
     let harness: String
@@ -119,10 +132,26 @@ struct SessionItem: Decodable, Hashable {
     var status: String
     var modified: String
     let archived: Bool?
+    let branch: String?
+    let worktreeName: String?
+    let worktreeRemoved: Bool?
     let hidden: Bool?
+    /// Set aside by the reader: started, not wanted now.
+    let aside: Bool?
+    let parentSessionId: String?
 
     var busy: Bool { status == "in_progress" }
     var project: String { (projectPath as NSString).lastPathComponent }
+}
+
+/// One branch's pull request, as `pr_marks` answers it. Only `OPEN` and
+/// `MERGED` are asked for; `checksState` is `RUNNING`, `FAILING` or `CLEAR`.
+struct PrMark: Decodable, Hashable {
+    let number: Int
+    let headRefName: String
+    let isDraft: Bool
+    let state: String
+    let checksState: String
 }
 
 struct Snapshot: Decodable {
@@ -147,6 +176,8 @@ struct TitleEvent: Decodable {
 }
 
 struct SendOutcome: Decodable {
+    /// The new index entry, flattened into a snapshot; only on the send that created it.
+    let snapshot: SessionItem?
     let queued: Queued?
 }
 
@@ -207,9 +238,10 @@ struct ToolResult: Decodable {
 
 enum Payload: Decodable {
     case turnCompleted(failed: Bool, finalText: String?)
-    case userMessage(text: String, fromTitle: String?, fromId: String?)
+    /// `queued` is a prompt typed into a running turn, which answers it inside that turn.
+    case userMessage(text: String, fromTitle: String?, fromId: String?, queued: Bool)
     case assistantText(String)
-    case toolStarted(callId: String, name: String, input: JSON, title: String?)
+    case toolStarted(callId: String, name: String, toolType: String, input: JSON, title: String?)
     case toolCompleted(callId: String, result: ToolResult)
     case permissionRequested(PermissionRequest)
     case questionsAsked(QuestionsRequest)
@@ -235,13 +267,15 @@ enum Payload: Decodable {
                 let from = try c.decodeIfPresent([String: String].self, forKey: "from")
                 self = .userMessage(
                     text: try c.decode(String.self, forKey: "text"),
-                    fromTitle: from?["title"], fromId: from?["sessionId"])
+                    fromTitle: from?["title"], fromId: from?["sessionId"],
+                    queued: (try? c.decode(Bool.self, forKey: "queued")) ?? false)
             case "assistant_text":
                 self = .assistantText(try c.decode(String.self, forKey: "text"))
             case "tool_call_started":
                 self = .toolStarted(
                     callId: try c.decode(String.self, forKey: "callId"),
                     name: try c.decode(String.self, forKey: "name"),
+                    toolType: (try? c.decode(String.self, forKey: "toolType")) ?? "other",
                     input: (try? c.decode(JSON.self, forKey: "input")) ?? .null,
                     title: try c.decodeIfPresent(String.self, forKey: "title"))
             case "tool_call_completed":

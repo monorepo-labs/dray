@@ -12,8 +12,13 @@ final class Connection {
     }
 
     let serverId: UUID
-    private let url: String
-    private let token: String
+    private(set) var url: String
+    private(set) var token: String
+    /// Reads the address afresh before each connect, for a server whose port
+    /// moves on every restart — the Island's This Mac. `nil` keeps the first.
+    var refresh: (() -> (url: String, token: String)?)?
+    /// Whether the server can transcribe a phone's dictation; its welcome frame says.
+    private(set) var dictation = false
     /// Every event frame, whole, with its name. Decoded by the store, which knows the type.
     var onEvent: (String, Data) -> Void = { _, _ in }
     var onState: (State) -> Void = { _ in }
@@ -49,6 +54,7 @@ final class Connection {
         let gen = generation
         task?.cancel(with: .goingAway, reason: nil)
         drop("Reconnecting")
+        if let fresh = refresh?() { (url, token) = fresh }
         guard let address = socketURL(url) else {
             onState(.failed("Not an address: \(url)"))
             return
@@ -71,6 +77,7 @@ final class Connection {
                 throw DrayError(err.message)
             }
             guard gen == generation else { return }
+            dictation = (try? JSONDecoder().decode(Welcome.self, from: welcome))?.dictation ?? false
             connected = true
             retry = 1
             onState(.connected)
@@ -127,7 +134,8 @@ final class Connection {
     }
 
     /// Calls a server command, with arguments named as the desktop's `invoke` names them.
-    func call<T: Decodable>(_ cmd: String, _ args: [String: JSON] = [:], as: T.Type = T.self) async throws -> T {
+    /// `timeout` is how long a silent socket may hold the call.
+    func call<T: Decodable>(_ cmd: String, _ args: [String: JSON] = [:], as: T.Type = T.self, timeout: Duration = .seconds(60)) async throws -> T {
         guard connected, let t = task else { throw DrayError("Not connected") }
         let id = nextId
         nextId += 1
@@ -140,7 +148,7 @@ final class Connection {
             }
             // A socket that stops answering without closing would otherwise hold the call forever.
             Task { @MainActor in
-                try? await Task.sleep(for: .seconds(60))
+                try? await Task.sleep(for: timeout)
                 self.waiting.removeValue(forKey: id)?.resume(throwing: DrayError("The server took too long to answer \(cmd)"))
             }
         }

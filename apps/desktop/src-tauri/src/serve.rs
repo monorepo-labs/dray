@@ -287,7 +287,10 @@ async fn shut_down(code: i32) -> ! {
     for pid in tree.into_iter().filter(|&p| p != me) {
         unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
     }
-    std::process::exit(code)
+    // `_exit`, not `process::exit`: once a phone's dictation has loaded a
+    // model, ggml-metal's atexit handler aborts (lib.rs's `RunEvent::Exit`
+    // says how), which would end every stop and restart as 134, not `code`.
+    unsafe { libc::_exit(code) }
 }
 
 /// Removes the browser profiles of deleted and settled sessions, the backlog
@@ -950,12 +953,14 @@ async fn connection(
     };
     // `release` is the CLI release this binary shipped in, which is what the
     // app compares with the newest one out. Set by release-cli.yml alone, so a
-    // local build says none and is never offered an update.
+    // local build says none and is never offered an update. `dictation` is
+    // whether `transcribe_upload` exists here, so a phone knows to draw a mic.
     let welcome = json!({
         "v": PROTOCOL,
         "version": env!("CARGO_PKG_VERSION"),
         "release": option_env!("DRAY_CLI_VERSION"),
         "stale": stale(),
+        "dictation": cfg!(feature = "desktop"),
     });
     write.send(Message::text(welcome.to_string())).await?;
     write.send(Message::text(snapshot)).await?;
@@ -1104,7 +1109,9 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
         get_remote_access() => ok(crate::remote_access::get_remote_access());
         set_remote_access(on: bool) => crate::remote_access::set_remote_access(sink, on).await;
         remote_access_token() => crate::remote_access::remote_access_token().await;
+        remote_access_qr() => crate::remote_access::remote_access_qr().await;
         restart_when_idle() => ok(restart_when_idle().await);
+        transcribe_upload(path: String) => crate::transcription::transcribe_upload(path).await;
     }
 }
 
@@ -1113,8 +1120,27 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
 /// Mac-only modules are not compiled here.
 async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     #[cfg(feature = "desktop")]
-    if matches!(cmd, "get_remote_access" | "set_remote_access" | "remote_access_token" | "restart_when_idle") {
+    if matches!(
+        cmd,
+        "get_remote_access"
+            | "set_remote_access"
+            | "remote_access_token"
+            | "remote_access_qr"
+            | "restart_when_idle"
+            | "transcribe_upload"
+    ) {
         return dispatch_mac(cmd, args, sink).await;
+    }
+    // The recorder and model live in the app, so a client with no microphone
+    // of its own — the Island — dictates through the app's.
+    #[cfg(feature = "desktop")]
+    if crate::transcription::HOSTED.contains(&cmd) {
+        return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Open Dray to dictate.")));
+    }
+    // The Island's title opens its session in the app's window, which only the app can raise.
+    #[cfg(feature = "desktop")]
+    if cmd == "show_session" {
+        return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Dray's window is closed.")));
     }
     // A `dray-serve` updates itself; the Mac's server follows the app instead.
     #[cfg(not(feature = "desktop"))]
@@ -1149,7 +1175,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             crate::respond_permission(&session_id, &request_id, &option_id, sink).await;
         answer_questions(session_id: String, request_id: String, answers: HashMap<String, String>) =>
             crate::answer_questions(&session_id, &request_id, answers, sink).await;
-        mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read).await;
+        mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read, sink).await;
         set_session_flags(session_id: String, archived: Option<bool>, pinned: Option<bool>, hidden: Option<bool>, aside: Option<bool>) =>
             crate::set_session_flags(&session_id, archived, pinned, hidden, aside).await;
         rename_session(session_id: String, title: String) => crate::rename_session(session_id, title, sink).await;
@@ -1222,6 +1248,15 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         read_attachments(paths: Vec<String>) => ok(crate::attachments::read_attachments(paths).await);
         list_drafts() => crate::drafts::list_drafts().await;
         save_draft(draft: Value) => crate::drafts::save_draft(draft).await;
+        // The island's ⌘S. Unlike `save_draft`, which the app's own autosave
+        // calls on every pause in typing, it says so: nothing else tells the app.
+        create_draft(draft: Value) => {
+            let saved = crate::drafts::save_draft(draft).await;
+            if saved.is_ok() {
+                sink.emit(crate::drafts::DRAFTS_CHANGED, ()).ok();
+            }
+            saved
+        };
         delete_draft(id: String) => crate::drafts::delete_draft(id).await;
         read_doc(path: String) => crate::docs::read_doc(path).await;
         save_doc(path: String, text: String, expect: Option<String>) => crate::docs::save_doc(path, text, expect).await;

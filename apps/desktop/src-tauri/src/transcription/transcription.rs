@@ -22,6 +22,8 @@ pub mod catalog;
 pub mod download;
 #[path = "engine.rs"]
 pub mod engine;
+#[path = "live.rs"]
+pub mod live;
 #[path = "recordings.rs"]
 pub mod recordings;
 
@@ -37,6 +39,7 @@ use crate::settings;
 use audio::{InputDevice, Recording};
 use catalog::TranscriptionModel;
 use engine::Engine;
+use live::{Heard, Live};
 
 /// Everything the transcription tab draws in one read.
 ///
@@ -107,7 +110,31 @@ pub enum TranscribeOutcome {
 #[derive(Default)]
 pub struct TranscriptionState {
     recording: Mutex<Option<Recording>>,
+    /// The recording's live decode, beside it for its whole life.
+    live: Mutex<Option<Live>>,
     engine: Engine,
+    /// What [`stop_on_sleep`] made of a recording it closed, waiting for that
+    /// client's stop: the window's first, the Island's second. One each, so a
+    /// later sleep under the other client cannot overwrite it.
+    interrupted: [Mutex<Option<Interruption>>; 2],
+    /// Held by a start from its ownership check to its open.
+    starting: Mutex<()>,
+}
+
+/// Resolves once the audio is parked; a stop arriving sooner waits for it.
+type Interruption = tauri::async_runtime::JoinHandle<TranscribeOutcome>;
+
+/// Bumped by each sleep, so a start that was opening the microphone as the
+/// Mac went down drops it rather than holding it through the sleep.
+static SLEEPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The interrupted recording, where it is this client's.
+async fn take_interrupted(state: &TranscriptionState, host: bool) -> Option<TranscribeOutcome> {
+    let interruption = state.interrupted[host as usize].lock().await.take()?;
+    Some(interruption.await.unwrap_or_else(|e| TranscribeOutcome::Failed {
+        message: format!("the Mac went to sleep, and the recording was lost: {e}"),
+        audio_path: None,
+    }))
 }
 
 /// The selected model, if one is picked *and* still on disk.
@@ -120,35 +147,6 @@ async fn ready_model() -> Option<&'static TranscriptionModel> {
     let model = catalog::find(&selected)?;
 
     download::is_installed(model).await.then_some(model)
-}
-
-/// Loads the selected model into memory, off to one side.
-///
-/// Called when recording starts and nowhere else: the reader talks for the
-/// whole load, so it usually lands before they press stop. It once also ran at
-/// launch and on every model change, which kept several hundred megabytes
-/// resident for a reader who might never dictate — now the press loads it and
-/// [`engine::IDLE_UNLOAD`] later drops it.
-///
-/// Spawned and silent: nothing here is worth delaying a command for, and the
-/// transcribe behind it loads again and reports for itself.
-fn warm_selected(engine: Engine) {
-    // Taken here rather than inside `warm`: the task below awaits twice before
-    // it loads anything, and a switch landing in either gap would otherwise be
-    // adopted as this warm's own generation — leaving two live loads holding
-    // the same token, where whichever finishes last is the one that stays.
-    let token = engine.token();
-
-    tauri::async_runtime::spawn(async move {
-        let Some(model) = ready_model().await else {
-            return;
-        };
-        let Ok(path) = download::model_path(model).await else {
-            return;
-        };
-
-        engine.warm(token, model.id.to_string(), path).await;
-    });
 }
 
 #[tauri::command]
@@ -327,20 +325,60 @@ pub enum StartRefusal {
 pub async fn start_transcription(
     state: State<'_, TranscriptionState>,
 ) -> Result<Option<StartRefusal>, String> {
-    if ready_model().await.is_none() {
-        return Ok(Some(StartRefusal::NeedsModel));
+    // Held across the check and the open, so an Island start landing at the same
+    // moment waits rather than both passing an empty recorder and one replacing
+    // the other.
+    let _starting = state.starting.lock().await;
+    // Refused rather than taken over, as the Island refuses the window's: the
+    // Island would go on drawing a recording that had been moved out from under it.
+    if HOST_OWNS.load(std::sync::atomic::Ordering::SeqCst) && state.recording.lock().await.is_some() {
+        return Err("The Island is dictating. Stop it there first.".into());
     }
+    open_recorder(&state, false).await
+}
+
+/// Opens the microphone for the window, or for the Island where `host`.
+async fn open_recorder(
+    state: &TranscriptionState,
+    host: bool,
+) -> Result<Option<StartRefusal>, String> {
+    use std::sync::atomic::Ordering::SeqCst;
+    let sleeps = SLEEPS.load(SeqCst);
+    // Whoever starts last owns the recorder; `answer_host` claims it back after this.
+    HOST_OWNS.store(false, SeqCst);
+    // A sleep this client never stopped for is not its answer to a new recording.
+    *state.interrupted[host as usize].lock().await = None;
+    let Some(model) = ready_model().await else {
+        return Ok(Some(StartRefusal::NeedsModel));
+    };
 
     if !microphone_permitted().await {
         return Ok(Some(StartRefusal::NeedsPermission));
     }
 
     let stored = settings::read().await.transcription;
-    let recording = Recording::start(stored.device.as_deref()).map_err(|e| e.to_string())?;
+    // `{:#}`, or the reader sees "could not open the microphone" with the
+    // CoreAudio reason that would say why cut off behind it.
+    let recording = Recording::start(stored.device.as_deref()).map_err(|e| format!("{e:#}"))?;
+
+    // The load starts here and runs under the reader's own talking; a model
+    // that streams then decodes while they talk. It used to start at launch
+    // and on every model change too, which kept several hundred megabytes
+    // resident for a reader who might never dictate — [`engine::IDLE_UNLOAD`]
+    // drops it after a quiet spell instead.
+    let live = Live::start(state.engine.clone(), model, recording.tap());
 
     // Replaces whatever was there, which stops it: two live streams would both
     // be filling buffers and only one could ever be read.
-    *state.recording.lock().await = Some(recording);
+    let mut slot = state.recording.lock().await;
+    // Under the lock [`stop_on_sleep`] takes after counting the sleep, so a sleep
+    // landing during the open is either seen here or finds this recording there.
+    if SLEEPS.load(SeqCst) != sleeps {
+        return Err("The Mac went to sleep.".into());
+    }
+    *slot = Some(recording);
+    *state.live.lock().await = Some(live);
+    drop(slot);
 
     // After the microphone is open, never before: a refusal must leave the
     // machine's sound exactly as it found it. The start tone the frontend
@@ -351,10 +389,91 @@ pub async fn start_transcription(
         mute_other_audio().await;
     }
 
-    // The load starts here and runs under the reader's own talking.
-    warm_selected(state.engine.clone());
-
     Ok(None)
+}
+
+static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+/// The dictation commands the server hands to the app, for [`answer_host`].
+pub const HOSTED: [&str; 6] = [
+    "start_transcription",
+    "stop_transcription",
+    "cut_transcription",
+    "transcription_level",
+    "cancel_transcription",
+    "retry_transcription",
+];
+
+/// Lets [`answer_host`] reach the recorder, which lives in the app's managed state.
+pub fn serve_host(app: &AppHandle) {
+    let _ = APP.set(app.clone());
+}
+
+/// The app, for a host call that needs its window rather than the recorder.
+pub fn app() -> Option<&'static AppHandle> {
+    APP.get()
+}
+
+/// Whether the recorder holds the Island's recording rather than the app's own.
+/// There is one recorder and two clients, so neither may stop or read the
+/// other's: a start from the app hands it back to the app.
+static HOST_OWNS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Dictation asked for through the server rather than the webview — the
+/// Island's route, since it holds no microphone or model of its own.
+/// `None` where `cmd` is not dictation.
+pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<serde_json::Value, String>> {
+    use std::sync::atomic::Ordering::SeqCst;
+    use tauri::Manager;
+    fn json(v: impl Serialize) -> Result<serde_json::Value, String> {
+        serde_json::to_value(v).map_err(|e| e.to_string())
+    }
+    if !HOSTED.contains(&cmd) {
+        return None;
+    }
+    let Some(app) = APP.get() else { return Some(Err("Dictation is not ready yet.".into())) };
+    let state = app.state::<TranscriptionState>();
+    if cmd == "start_transcription" {
+        // Held across the check and the open; see `start_transcription`.
+        let _starting = state.starting.lock().await;
+        let owns = HOST_OWNS.load(SeqCst);
+        // An Island recording found here is one the Island lost — it starts only
+        // when idle, so a restarted Island would otherwise be locked out for good.
+        if !owns && state.recording.lock().await.is_some() {
+            return Some(Err("Dray is already dictating.".into()));
+        }
+        let started = open_recorder(&state, true).await;
+        // A refused start replaced nothing, so a lost recording it found is
+        // still the Island's to stop.
+        HOST_OWNS.store(owns || matches!(started, Ok(None)), SeqCst);
+        return Some(started.and_then(json));
+    }
+    let owns = HOST_OWNS.load(SeqCst);
+    Some(match cmd {
+        // Ahead of the ownership check: the window may have started since the
+        // sleep, and the Island's interrupted words are still the Island's.
+        "stop_transcription" => match take_interrupted(&state, true).await {
+            Some(outcome) => json(outcome),
+            None if !owns => Err("Dictation moved to Dray's window.".into()),
+            None => {
+                HOST_OWNS.store(false, SeqCst);
+                finish_recording(&state, true).await.and_then(json)
+            }
+        },
+        "cut_transcription" if !owns => Err("Dictation moved to Dray's window.".into()),
+        "cut_transcription" => cut_transcription(&state).await.and_then(json),
+        "transcription_level" if !owns => json(0.0),
+        "transcription_level" => transcription_level(state).await.and_then(json),
+        "cancel_transcription" if !owns => json(()),
+        "cancel_transcription" => {
+            HOST_OWNS.store(false, SeqCst);
+            cancel_transcription(state).await.and_then(json)
+        }
+        _ => match args["path"].as_str() {
+            Some(path) => retry_transcription(state, path.to_string()).await.and_then(json),
+            None => Err("retry_transcription wants a path".into()),
+        },
+    })
 }
 
 /// Runs the model over audio already parked on disk.
@@ -362,10 +481,14 @@ pub async fn start_transcription(
 /// Shared by [`stop_transcription`] and [`retry_transcription`], so a retry
 /// cannot drift from a first attempt — the deletion rule above all, which is the
 /// one thing standing between a failed run and a lost recording.
+///
+/// `heard` is what the live decode made of the same audio, used where the
+/// model that heard it is still the one selected.
 async fn transcribe_audio(
     state: &TranscriptionState,
     audio: Vec<f32>,
     saved: Option<PathBuf>,
+    heard: Option<Heard>,
 ) -> TranscribeOutcome {
     let kept = || saved.as_ref().map(|p| p.to_string_lossy().into_owned());
 
@@ -376,6 +499,9 @@ async fn transcribe_audio(
     };
 
     let run = async {
+        if let Some(heard) = heard.filter(|h| h.model_id == model.id) {
+            return heard.text;
+        }
         let path = download::model_path(model).await?;
 
         state.engine.transcribe(model.id, &path, audio).await
@@ -421,7 +547,17 @@ async fn transcribe_audio(
 pub async fn stop_transcription(
     state: State<'_, TranscriptionState>,
 ) -> Result<TranscribeOutcome, String> {
+    finish_recording(&state, false).await
+}
+
+/// The stop, for the window or for the Island where `host`. A recording the
+/// Mac's sleep closed answers first: the client is stopping what it started.
+async fn finish_recording(state: &TranscriptionState, host: bool) -> Result<TranscribeOutcome, String> {
+    if let Some(outcome) = take_interrupted(state, host).await {
+        return Ok(outcome);
+    }
     let recording = state.recording.lock().await.take();
+    let live = state.live.lock().await.take();
 
     // Not `Text("")`, which the frontend takes as success: it plays the closing
     // tone and appends nothing, which is the one shape every other outcome here
@@ -440,9 +576,13 @@ pub async fn stop_transcription(
     // transcribing takes seconds and there is nothing left to keep out of.
     restore_other_audio().await;
 
-    let Some(audio) = captured? else {
+    let (audio, unpulled) = captured?;
+    let Some(audio) = audio else {
         return Ok(TranscribeOutcome::NoAudio);
     };
+
+    // Sent before the save, so the worker finalizes while the file is written.
+    let heard = live.map(|live| live.finish(unpulled));
 
     // Parked before the model is even resolved, at any length. The samples used
     // to travel into the engine by value, so a failed run took them with it and
@@ -459,7 +599,49 @@ pub async fn stop_transcription(
         }
     };
 
-    Ok(transcribe_audio(&state, audio, saved).await)
+    let heard = match heard {
+        Some(pending) => pending.heard().await,
+        None => None,
+    };
+
+    Ok(transcribe_audio(&state, audio, saved, heard).await)
+}
+
+/// Transcribes what has been said so far and leaves the microphone open: the
+/// Island's screenshot, taken mid-sentence, lands between the words before it
+/// and the words after. A stop and a start would lose what was said between
+/// the two. Nothing recording, or only silence, answers `Empty` — a cut with no
+/// words before it is ordinary, not a microphone fault.
+async fn cut_transcription(state: &TranscriptionState) -> Result<TranscribeOutcome, String> {
+    let (captured, pending) = {
+        let recording = state.recording.lock().await;
+        let Some(recording) = recording.as_ref() else {
+            return Ok(TranscribeOutcome::Empty);
+        };
+        let (captured, unpulled) = recording.cut().map_err(|e| e.to_string())?;
+        // Sent under the recording's lock, so a stop's take — and its message
+        // to the worker — lands after this cut's, never between the two.
+        // Told even about a silent stretch, so the next starts a fresh stream.
+        let pending = state.live.lock().await.as_ref().map(|live| live.cut(unpulled, captured.is_some()));
+        (captured, pending)
+    };
+    let Some(audio) = captured else {
+        return Ok(TranscribeOutcome::Empty);
+    };
+    // Parked before the worker is waited on, as the stop does.
+    let saved = match recordings::save(&audio).await {
+        Ok(path) => Some(path),
+        Err(e) => {
+            eprintln!("[recording save err] {e:#}");
+            None
+        }
+    };
+    let heard = match pending {
+        Some(pending) => pending.heard().await,
+        None => None,
+    };
+
+    Ok(transcribe_audio(state, audio, saved, heard).await)
 }
 
 /// Runs a kept recording through the model again.
@@ -476,7 +658,23 @@ pub async fn retry_transcription(
     let path = PathBuf::from(path);
     let audio = recordings::read(&path).await.map_err(|e| format!("{e:#}"))?;
 
-    Ok(transcribe_audio(&state, audio, Some(path)).await)
+    Ok(transcribe_audio(&state, audio, Some(path), None).await)
+}
+
+/// Transcribes a WAV another machine uploaded through `/upload` — a phone's
+/// dictation, run on the Mac's server.
+///
+/// The server holds its own engine: the app's lives in the app's process,
+/// which may not even be running. The upload is deleted once the model
+/// answers, the recordings' own rule, and [`recordings::read`] refuses any
+/// path outside `attachments/uploads`.
+pub async fn transcribe_upload(path: String) -> Result<TranscribeOutcome, String> {
+    static SERVER: std::sync::LazyLock<TranscriptionState> = std::sync::LazyLock::new(Default::default);
+
+    let path = PathBuf::from(path);
+    let audio = recordings::read(&path).await.map_err(|e| format!("{e:#}"))?;
+
+    Ok(transcribe_audio(&SERVER, audio, Some(path), None).await)
 }
 
 /// The loudest sample since this was last asked, 0.0–1.0.
@@ -498,9 +696,82 @@ pub async fn transcription_level(state: State<'_, TranscriptionState>) -> Result
 #[tauri::command]
 pub async fn cancel_transcription(state: State<'_, TranscriptionState>) -> Result<(), String> {
     state.recording.lock().await.take();
+    state.live.lock().await.take();
     restore_other_audio().await;
 
     Ok(())
+}
+
+/// Closes a recording when the Mac goes to sleep, and parks what was said.
+///
+/// A recording left open across sleeps once held the built-in mic for thirteen
+/// hours, and closing it then crashed coreaudiod's mic: no app could record until
+/// coreaudiod was restarted (#582). Nobody dictates through a sleep, so the
+/// stream closes inside the notification, before the machine goes down. The
+/// resample and the save follow on a task, held for the owning client's stop,
+/// which answers with a Retry; `transcription_interrupted` tells the window to
+/// ask, and the Island asks when the reader presses stop.
+#[cfg(target_os = "macos")]
+pub fn stop_on_sleep(app: &AppHandle) {
+    use std::ptr::NonNull;
+    use std::sync::atomic::Ordering::SeqCst;
+
+    use block2::RcBlock;
+    use objc2_app_kit::{NSWorkspace, NSWorkspaceWillSleepNotification};
+    use objc2_foundation::NSNotification;
+    use tauri::{Emitter, Manager};
+
+    let app = app.clone();
+    let block = RcBlock::new(move |_: NonNull<NSNotification>| {
+        // Counted before the lock, so a start between its open and its store
+        // either sees the count or leaves its recording here to be taken.
+        SLEEPS.fetch_add(1, SeqCst);
+        let state = app.state::<TranscriptionState>();
+        // The main thread is outside the runtime, so blocking on the lock is allowed.
+        let Some(recording) = state.recording.blocking_lock().take() else { return };
+        let tap = recording.close();
+        let live = state.live.blocking_lock().take();
+        let host = HOST_OWNS.load(SeqCst);
+        // Held while the task is spawned, so a stop the event prompts cannot
+        // look before the outcome is in the slot.
+        let mut slot = state.interrupted[host as usize].blocking_lock();
+        let app = app.clone();
+        let outcome = tauri::async_runtime::spawn(async move {
+            drop(live);
+            restore_other_audio().await;
+            let outcome = match tauri::async_runtime::spawn_blocking(move || tap.take()).await {
+                Ok(Ok((Some(audio), _))) => TranscribeOutcome::Failed {
+                    message: "the Mac went to sleep".into(),
+                    audio_path: recordings::save(&audio)
+                        .await
+                        .ok()
+                        .map(|p| p.to_string_lossy().into_owned()),
+                },
+                Ok(Ok((None, _))) => TranscribeOutcome::NoAudio,
+                _ => TranscribeOutcome::Failed {
+                    message: "the Mac went to sleep, and the recording was lost".into(),
+                    audio_path: None,
+                },
+            };
+            let _ = app.emit("transcription_interrupted", ());
+            outcome
+        });
+        *slot = Some(outcome);
+    });
+    let center = NSWorkspace::sharedWorkspace().notificationCenter();
+    // SAFETY: the name is AppKit's own constant, no object filter, and a nil
+    // queue runs the block on the posting thread, which for workspace
+    // notifications is the main thread.
+    let observer = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(NSWorkspaceWillSleepNotification),
+            None,
+            None,
+            &block,
+        )
+    };
+    // Lives as long as the app; nothing ever removes it.
+    std::mem::forget(observer);
 }
 
 /// Both halves of the muting run `osascript`, which is a spawn and a wait —
@@ -511,4 +782,136 @@ async fn mute_other_audio() {
 
 async fn restore_other_audio() {
     let _ = tokio::task::spawn_blocking(audio::restore_other_audio).await;
+}
+
+#[cfg(test)]
+mod bench {
+    use std::time::Instant;
+
+    use super::*;
+
+    /// Stop-to-text by stage, on a real model and a WAV clip. Needs a model on
+    /// disk, so ignored; run with
+    /// `DICT_CLIP=/tmp/clip.wav cargo test --release stop_to_text -- --ignored --nocapture`.
+    /// The clip is 16kHz mono 16-bit; it is upsampled to 48kHz stereo with a
+    /// little noise added, so the conversion and the trim see what a mic gives.
+    #[tokio::test]
+    #[ignore]
+    async fn stop_to_text() {
+        let clip = std::env::var("DICT_CLIP").expect("DICT_CLIP names a 16kHz mono WAV");
+        let model = std::env::var("DICT_MODEL").unwrap_or_else(|_| {
+            format!("{}/.dray/models/parakeet-unified-en-0.6b.gguf", std::env::var("HOME").unwrap())
+        });
+        let clean = recordings::decode(&std::fs::read(&clip).unwrap()).unwrap();
+
+        // A fixed LCG, so every run hears the same room.
+        let mut seed = 1u32;
+        let mut noise = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32 * 0.006 - 0.003
+        };
+        let captured: Vec<f32> = clean.iter().flat_map(|s| [*s; 6]).map(|s| s + noise()).collect();
+
+        let t = Instant::now();
+        let audio = audio::resample(audio::to_mono(&captured, 2), 48_000);
+        let convert = t.elapsed();
+
+        let t = Instant::now();
+        std::fs::write(std::env::temp_dir().join("parked.wav"), recordings::encode(&audio)).unwrap();
+        let park = t.elapsed();
+
+        let engine = Engine::default();
+        let path = PathBuf::from(&model);
+        let t = Instant::now();
+        engine.warm(engine.token(), "bench".into(), path.clone()).await;
+        let load = t.elapsed();
+
+        for run in 1..=3 {
+            let t = Instant::now();
+            let text = engine.transcribe("bench", &path, audio.clone()).await.unwrap();
+            eprintln!("run {run}: {:?}  {text}", t.elapsed());
+        }
+
+        let t = Instant::now();
+        let kept = audio::trim_silence(audio.clone()).len();
+        let trim = t.elapsed();
+
+        engine.unload().await;
+        let t = Instant::now();
+        engine.warm(engine.token(), "bench".into(), path.clone()).await;
+        let reload = t.elapsed();
+
+        let secs = |n: usize| n as f32 / audio::TARGET_RATE as f32;
+        eprintln!(
+            "audio {:.1}s, {:.1}s after trim | convert {convert:?} | park {park:?} | trim {trim:?} | load {load:?} | reload {reload:?}",
+            secs(audio.len()),
+            secs(kept),
+        );
+    }
+
+    /// The live decode end to end: the clip played into a capture at real-time
+    /// pace, as 48kHz stereo with noise, then a stop. Prints stop-to-text.
+    /// Takes the clip's length to run. Catalog model `DICT_MODEL_ID`, default
+    /// Parakeet, read from `~/.dray/models`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_stop_to_text() {
+        let clip = std::env::var("DICT_CLIP").expect("DICT_CLIP names a 16kHz mono WAV");
+        let id = std::env::var("DICT_MODEL_ID").unwrap_or("parakeet-unified-en-0.6b".into());
+        let model = catalog::find(&id).expect("a catalog id");
+        let clean = recordings::decode(&std::fs::read(&clip).unwrap()).unwrap();
+
+        let mut seed = 1u32;
+        let mut noise = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32 * 0.006 - 0.003
+        };
+        let captured: Vec<f32> = clean.iter().flat_map(|s| [*s; 6]).map(|s| s + noise()).collect();
+
+        let engine = Engine::default();
+        let tap = audio::Tap::new(2, 48_000);
+        let live = Live::start(engine.clone(), model, tap.clone());
+
+        // 20ms of stereo at 48kHz per callback, as a device delivers it.
+        let play = |audio: Vec<f32>, mic: audio::Tap| {
+            tokio::task::spawn_blocking(move || {
+                let started = Instant::now();
+                for (i, block) in audio.chunks(1920).enumerate() {
+                    mic.push(block);
+                    let due = std::time::Duration::from_millis(20 * (i as u64 + 1));
+                    std::thread::sleep(due.saturating_sub(started.elapsed()));
+                }
+            })
+        };
+
+        // An Island cut a third of the way in, mid-pause, then the rest.
+        let third = captured.len() / 3 / 1920 * 1920;
+        play(captured[..third].to_vec(), tap.clone()).await.unwrap();
+        let t = Instant::now();
+        let (_, unpulled) = tap.take().unwrap();
+        let cut = live.cut(unpulled, true).heard().await.expect("cut decoded live");
+        eprintln!("cut: {:?}\n  {}", t.elapsed(), cut.text.unwrap());
+        play(captured[third..].to_vec(), tap.clone()).await.unwrap();
+
+        let t = Instant::now();
+        let (_, unpulled) = tap.take().unwrap();
+        let heard = live.finish(unpulled).heard().await.expect("decoded live");
+        let stop = t.elapsed();
+        eprintln!("live: stop to text {stop:?}\n  {}", heard.text.unwrap());
+
+        // A stop landing before the model has loaded: the worker gets the
+        // whole stretch as backlog and must run it in one batch.
+        engine.unload().await;
+        let tap = audio::Tap::new(2, 48_000);
+        let live = Live::start(engine.clone(), model, tap.clone());
+        tap.push(&clean.iter().flat_map(|s| [*s; 6]).collect::<Vec<_>>());
+        let t = Instant::now();
+        let (_, unpulled) = tap.take().unwrap();
+        let heard = live.finish(unpulled).heard().await.expect("decoded in the worker");
+        eprintln!("late load: stop to text {:?} (load included)\n  {}", t.elapsed(), heard.text.unwrap());
+
+        // ggml-metal aborts at exit with a model still alive, and the idle
+        // clock's sleepers on Tauri's runtime would keep this one.
+        engine.unload().await;
+    }
 }

@@ -22,6 +22,7 @@ import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { PaneState } from "@/hooks/useSessions";
 import type { CrewRow } from "@/lib/crew";
+import { truncate } from "@/lib/format";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript } from "@/lib/transcript";
 import { CREW_TAIL } from "@/lib/turnWindow";
@@ -378,8 +379,13 @@ function PendingCard({
       ) : (
         <PermissionRequest
           // The agent writes a description for nearly every call; the tool's own
-          // name is the floor, so the card always has a subject.
-          description={ask.description ?? ask.title ?? ask.displayName ?? ask.toolName}
+          // name is the floor, so the card always has a subject. Capped: with no
+          // description the title is often the whole command, already drawn in
+          // full just above it, and this column is 320px wide.
+          description={truncate(
+            ask.description ?? ask.title ?? ask.displayName ?? ask.toolName,
+            140,
+          )}
           argument={toolArgument(ask.input)}
           options={ask.options}
           onRespond={(optionId) => chat.onRespondPermission(id, ask.requestId, optionId)}

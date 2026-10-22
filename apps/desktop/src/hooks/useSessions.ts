@@ -21,6 +21,7 @@ import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
+import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
 import { setOlderLoader } from "@/lib/olderPages";
 import { stanceFor } from "@/lib/permission";
@@ -1026,8 +1027,14 @@ const handleSendMsg = async (
       upsertSession(snapshot);
       // A new session is never archived, so it belongs to the active list only —
       // pushed unconditionally it would show up under the archived filter too.
+      // Deduped: the server announces every new session on `session_created`,
+      // and that can land before this reply does.
       if (!showArchived) {
-        setSessionIndexItems((prev) => [...prev, snapshot]);
+        setSessionIndexItems((prev) =>
+          prev.some((i) => i.sessionId === snapshot.sessionId)
+            ? prev.map((i) => (i.sessionId === snapshot.sessionId ? snapshot : i))
+            : [...prev, snapshot],
+        );
       }
       return true;
     }
@@ -2701,6 +2708,24 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
   if (!canAnnounce(sessionId)) return false;
 
   if (!isWindowFocused()) {
+    // A card is the island's to raise while it runs: its pill counts what waits
+    // and answers it in place, so a banner beside it says the same thing twice.
+    // The island watches This Mac alone, so a remote session keeps its banner.
+    if (kind === "asking" && serverOfSession(sessionId) === LOCAL) {
+      void islandOn().then((on) => on || notifyOS(sessionId, kind, label, item?.title ?? ""));
+      return false;
+    }
+    // A finished turn is the island's done pill, which names the session and
+    // offers Open in app, so the banner would say it twice. A failed hand-off
+    // falls back to the banner rather than saying nothing.
+    if (kind === "completed" && serverOfSession(sessionId) === LOCAL) {
+      void islandOn().then((on) =>
+        on
+          ? invoke("island_done", { sessionId }).catch(() => notifyOS(sessionId, kind, label, item?.title ?? ""))
+          : notifyOS(sessionId, kind, label, item?.title ?? ""),
+      );
+      return false;
+    }
     // Same order as the card: the verb first, because *what is wanted* is the
     // one thing not on screen anywhere else. The session title follows as the
     // body — a banner lands in a stack beside every other app's, so it has to
@@ -2790,7 +2815,7 @@ useEffect(() => {
 
     // Finishing in front of the reader is read the moment it does; everything
     // else is announced.
-    if (status === "completed" && announce(sessionId, "completed", "Task finished")) {
+    if (status === "completed" && announce(sessionId, "completed", "Done")) {
       markSessionRead(sessionId);
       return;
     }

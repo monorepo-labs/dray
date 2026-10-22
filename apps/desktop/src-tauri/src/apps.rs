@@ -316,6 +316,158 @@ pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
     Err(crate::git::stderr_or(&out, || format!("could not open {path}")))
 }
 
+/// Writes the modifier that opens Dray Island (`control`, `option`, `command`)
+/// into the island's own preferences, which it reads at every tap, and starts it
+/// to match — or quits it, for `off`.
+///
+/// Its own defaults domain rather than `settings.json`, since the island is the
+/// one that reads it. `open` without `-n` is a no-op for an island already up,
+/// and it outlives Dray on purpose: it talks to the background server, which
+/// does too. A build with no island inside it (`tauri dev`) only writes the pick.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn configure_island(key: String) -> Result<(), String> {
+    use tokio::process::Command;
+    if !matches!(key.as_str(), "control" | "option" | "command" | "off") {
+        return Err(format!("unknown island key {key}"));
+    }
+    async fn run(cmd: &mut Command) -> Result<std::process::Output, String> {
+        cmd.output().await.map_err(|err| format!("could not configure the island: {err}"))
+    }
+    run(Command::new("defaults").args(["write", "com.yogesh.dray.island", "island.key", "-string", &key])).await?;
+    if key == "off" {
+        // Exit 1 is "nothing running", which is what was asked for.
+        run(Command::new("pkill").args(["-x", "Dray Island"])).await?;
+        return Ok(());
+    }
+    let Some(app) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("Helpers/Dray Island.app")))
+        .filter(|app| app.exists())
+    else {
+        return Ok(());
+    };
+    let mut open = Command::new("open");
+    open.arg("-g");
+    // The island finds its server through the home, so a moved one must ride along.
+    if let Some(home) = crate::store::home_override() {
+        open.arg("--env").arg(format!("DRAY_HOME={}", home.display()));
+    }
+    let out = run(open.arg(&app)).await?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(crate::git::stderr_or(&out, || "could not start Dray Island".into()))
+}
+
+/// Whether Dray Island is running, asked at each permission or question so a
+/// island the reader quit never swallows the banner that would have replaced it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn island_running() -> bool {
+    tokio::process::Command::new("pgrep")
+        .args(["-x", "Dray Island"])
+        .output()
+        .await
+        .is_ok_and(|out| out.status.success())
+}
+
+/// Hands a finished session to Dray Island, which shows it in place of the
+/// banner. A Darwin notification carries no payload, so each session is an
+/// empty file named for it in `island_done_dir`: the island deletes only the
+/// files it read, where a shared list read and then cleared would drop one
+/// written between the two.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn island_done(session_id: String) -> Result<(), String> {
+    // The id names a file, so nothing that could step out of the directory.
+    if session_id.is_empty() || !session_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("not a session id".into());
+    }
+    let dir = island_done_dir().ok_or("no home directory")?;
+    tokio::fs::create_dir_all(&dir).await.map_err(|err| format!("could not reach the island: {err}"))?;
+    tokio::fs::write(dir.join(&session_id), b"").await.map_err(|err| format!("could not reach the island: {err}"))?;
+    tokio::process::Command::new("notifyutil").args(["-p", "com.yogesh.dray.island.done"]).output().await.ok();
+    Ok(())
+}
+
+/// The island's inbox for finished sessions; `Delegate.doneDir` in the island names it too.
+fn island_done_dir() -> Option<std::path::PathBuf> {
+    Some(std::env::home_dir()?.join("Library/Caches/com.yogesh.dray.island/done"))
+}
+
+/// The island preferences Settings draws. The island's own right-click menu
+/// writes the first two as well, so they are read back rather than kept here,
+/// and `captureTaken` is the island's alone: the chord it could not register.
+const ISLAND_PREFS: [&str; 5] = ["island.placement", "island.mode", "island.tap", "island.captureKey", "island.captureTaken"];
+
+fn island_pref_valid(name: &str, value: &str) -> bool {
+    match name {
+        "island.placement" => matches!(value, "notch" | "bottom"),
+        "island.mode" => matches!(value, "compact" | "expanded"),
+        "island.tap" => matches!(value, "single" | "double"),
+        // A Carbon key code and modifier mask, or none.
+        "island.captureKey" => {
+            value == "none" || matches!(value.split_once(' '), Some((k, m)) if k.parse::<u32>().is_ok() && m.parse::<u32>().is_ok())
+        }
+        _ => false,
+    }
+}
+
+/// The island's stored picks, by name; an absent one is the island's default.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn island_prefs() -> std::collections::HashMap<String, String> {
+    let reads = ISLAND_PREFS.map(|name| async move {
+        let out = tokio::process::Command::new("defaults")
+            .args(["read", "com.yogesh.dray.island", name])
+            .output()
+            .await
+            .ok()
+            .filter(|out| out.status.success())?;
+        Some((name.to_string(), String::from_utf8_lossy(&out.stdout).trim().to_string()))
+    });
+    futures_util::future::join_all(reads).await.into_iter().flatten().collect()
+}
+
+/// Writes one island pick and tells a running island to read it again, through a
+/// Darwin notification: it caches the picks, and holds its capture key.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn set_island_pref(name: String, value: String) -> Result<(), String> {
+    use tokio::process::Command;
+    if !island_pref_valid(&name, &value) {
+        return Err(format!("not an island setting: {name} = {value}"));
+    }
+    let out = Command::new("defaults")
+        .args(["write", "com.yogesh.dray.island", &name, "-string", &value])
+        .output()
+        .await
+        .map_err(|err| format!("could not save the island setting: {err}"))?;
+    if !out.status.success() {
+        return Err(crate::git::stderr_or(&out, || "could not save the island setting".into()));
+    }
+    // An island that is not running reads the file when it starts. Position and
+    // layout are only judged on screen, so those open the panel to show them.
+    let ping = match name.as_str() {
+        "island.placement" | "island.mode" => "com.yogesh.dray.island.show",
+        _ => "com.yogesh.dray.island.prefs",
+    };
+    Command::new("notifyutil").args(["-p", ping]).output().await.ok();
+    Ok(())
+}
+
+#[cfg(test)]
+mod island_pref_tests {
+    use super::island_pref_valid;
+
+    #[test]
+    fn takes_only_what_the_island_can_read() {
+        assert!(island_pref_valid("island.placement", "bottom"));
+        assert!(island_pref_valid("island.captureKey", "19 768"));
+        assert!(island_pref_valid("island.captureKey", "none"));
+        assert!(!island_pref_valid("island.captureKey", "19"));
+        assert!(!island_pref_valid("island.mode", "voice"));
+        assert!(!island_pref_valid("island.tap", "triple"));
+        assert!(!island_pref_valid("island.key", "control"));
+    }
+}
+
 /// Terminal.app, and never the terminal the reader picked in the panel beside
 /// this.
 ///

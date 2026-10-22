@@ -7,16 +7,28 @@ phone reads and drives it over the same WebSocket the desktop uses
 
 ## What v1 does
 
-- **Every saved server at once, one merged list**, the desktop sidebar's way.
-- **Transcript**, live: prompts, assistant text as markdown, each tool call one
-  line that expands to its output. No diffs, no highlighting, no images.
+- **Every saved server at once, one merged list**, the desktop sidebar's live
+  list: stages workspace-wide with a gap between runs and no headings, PR marks
+  read through `pr_marks` once per repo, and a chip per project to narrow it.
+  Pins are not drawn apart.
+- **Transcript**, live, shaped like the desktop's: finished turns fold to
+  prompt, summary line and answer; runs of one tool group into a row; a
+  running turn keeps its newest five rows on screen. No diffs, no
+  highlighting, no images.
 - **Reply** to a session, **Stop** a turn.
 - **Permission and question cards**, answered in place.
 - **New session** with the desktop composer's picks: project, harness, model,
   effort, stance, fast mode, worktree, branch.
 - **Pairing** by paste or by QR.
+- **Pull request** sheet from the session view: readiness in the desktop's
+  order, checks, comments; merge, mark ready, reopen. Hidden when the branch
+  has none.
+- **Dictation**, transcribed on the Mac: the phone records a 16kHz mono WAV,
+  uploads it through `POST /upload` and calls `transcribe_upload`. Only the
+  Mac's server has that command, and its welcome frame says `dictation: true`,
+  so the mic is drawn nowhere else.
 
-Left out: push, attachments, dictation, the Diff/Files/Browser/PR views,
+Left out: push, attachments, the Diff/Files/Browser views,
 forks, settle/pin, the settled list, spaces, issues.
 
 ## Stack
@@ -70,7 +82,16 @@ token answers for the connection.
 Commands used: `list_session_index_items`, `get_session_by_id`,
 `get_session_page`, `send_msg`, `interrupt_session`, `respond_permission`,
 `answer_questions`, `list_projects`, `agent_availability`, `list_models`,
-`list_branches`, `checkout_branch`, `mark_session_read`.
+`list_branches`, `checkout_branch`, `mark_session_read`, `work_status`,
+`prs_for_branch`, `merge_pr`, `mark_pr_ready`, `reopen_pr`, `set_last_selected_project`,
+`add_project`, `github_repos`, `clone_github_repo`, `recheck_gh`, `pr_marks`,
+`transcribe_upload`.
+
+**New session restates the desktop composer's rules** (`Picks` in
+`NewSessionView.swift`): which stances each harness honours (`permission.ts`),
+fast mode only where the harness has a route and the model a faster tier
+(`fastMode.ts`), the effort ladder per model and the model fallback
+(`model.ts`). Change one there, change it here.
 
 **Types are hand-written `Codable`, and every decode is lenient.** An unknown
 event `type` decodes as `.unrecognized`, an unknown enum value as its raw
@@ -90,8 +111,19 @@ Built from the events, the desktop's rules cut down:
 - events carrying a `subagent` are not drawn — the desktop filters them too;
 - `tool_call_started` and `tool_call_completed` join on `callId`; a call with
   no result is pending only while the session is `in_progress`;
-- deltas are dropped; "Working…" stands in while a turn runs;
-- a failed turn draws its `finalText` as a red row.
+- deltas are dropped; the orb and a word stand in while a turn runs;
+- a failed turn draws its `finalText` as a red row; a user's Stop draws none.
+
+The shape is `buildTranscript` and `TurnBlock`'s, ported in `Transcript.swift`:
+a finished turn of three rows or more folds behind "N tool calls · M messages"
+with its last message below; consecutive calls to one tool group ("Read 3
+files", "Edited Store.swift +12 -3"); a queued prompt cuts the work so it stays
+where it was typed; a running turn draws its newest five rows and slides older
+ones up under the summary line. Labels follow `tools.ts` (`Tools.swift`) —
+keep the two in step.
+
+`Orb` is a plain spinner until Thinking Orbs ships a Swift package; swapping
+it in is `Orb.swift` alone.
 
 Opens on the newest turns (`turns: 8`), pages older ones in on scroll to top.
 A reconnect re-reads the open session's tail and appends what it does not hold,

@@ -403,7 +403,7 @@ export default function NoticeStack({
 
   return (
     // `items-start` so each card hugs its own text — these are a sentence and a
-    // button, and a fixed width would leave "Task finished" padded out to the
+    // button, and a fixed width would leave "Done" padded out to the
     // length of the longest label the app can produce.
     <div className="pointer-events-none fixed top-(--titlebar-h) left-3 z-50 flex flex-col items-start gap-2">
       {notices.map((notice) => (

@@ -213,7 +213,7 @@ async fn send_msg(
         _ => None,
     };
 
-    Ok(manager()
+    let outcome = manager()
         .send_msg(
             session_id,
             prompt,
@@ -247,7 +247,14 @@ async fn send_msg(
             None,
             &sink,
         )
-        .await?)
+        .await?;
+    // The new entry rides back to the caller alone, so every other client — the
+    // app beside an Island or a phone that started it — hears of it as `dray new`'s
+    // sessions are heard of. The caller's own copy replaces itself.
+    if let Some(snap) = &outcome.snapshot {
+        sink.emit(orchestration::SESSION_CREATED, &snap.index_item).ok();
+    }
+    Ok(outcome)
 }
 
 /// Which agents can actually be run on this machine, and what to say about
@@ -694,8 +701,23 @@ async fn answer_questions(
 async fn mark_session_read(
     session_id: &str,
     read: bool,
+    sink: Sink,
 ) -> Result<Option<SessionStatus>, Fail> {
-    Ok(manager().mark_read(session_id, read).await?)
+    let next = manager().mark_read(session_id, read).await?;
+    // The island and the phone keep their own unread marks and hear of a read
+    // only here. Unread is not echoed: the app's listener reads `completed` as a
+    // turn finishing and would announce it.
+    if next == Some(SessionStatus::Idle) {
+        let event = session::SessionStatusEvent {
+            session_id: session_id.to_string(),
+            status: SessionStatus::Idle,
+            modified: None,
+        };
+        if let Err(e) = sink.emit("session_status", &event) {
+            eprintln!("[status emit err] {e}");
+        }
+    }
+    Ok(next)
 }
 
 #[cfg(feature = "desktop")]
@@ -745,6 +767,9 @@ pub fn run() {
             // last one on disk forever, since nothing else sweeps them and a
             // reader who gives up after one failure writes no more.
             tauri::async_runtime::spawn(transcription::recordings::prune());
+            transcription::serve_host(app.handle());
+            #[cfg(target_os = "macos")]
+            transcription::stop_on_sleep(app.handle());
 
             // Sessions live in the background server launchd runs from this
             // binary, which owns the data, the orchestration socket and
@@ -869,6 +894,11 @@ pub fn run() {
             quit::dismiss_quit,
             apps::list_open_apps,
             apps::open_in_app,
+            apps::configure_island,
+            apps::island_running,
+            apps::island_done,
+            apps::island_prefs,
+            apps::set_island_pref,
             apps::open_login_terminal,
             accounts::run_agent_login,
             agent_updates::update_agent_in_terminal,

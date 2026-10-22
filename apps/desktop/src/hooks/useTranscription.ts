@@ -339,6 +339,22 @@ export function useRecorder<T>({
     }
   }, [apply]);
 
+  // The Mac going to sleep closed the microphone under a recording, and the
+  // backend holds what it parked for the stop that comes next. Only a window
+  // still drawing a recording asks: a stop already under way gets it anyway.
+  const recording = useRef(false);
+  recording.current = state === "recording";
+  const stopRef = useRef(stop);
+  stopRef.current = stop;
+  useEffect(() => {
+    const unlisten = listen("transcription_interrupted", () => {
+      if (recording.current) void stopRef.current();
+    });
+    return () => {
+      void unlisten.then((f) => f());
+    };
+  }, []);
+
   /// Runs the kept recording through the model again.
   ///
   /// Same states as a stop, since from the reader's side it is the same wait —

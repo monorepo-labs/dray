@@ -84,7 +84,7 @@ export type Notice = {
   /// dropped a signal the reader had no other card for.
   sessionId: string;
   kind: NoticeKind;
-  /// The whole of the card's text: "Needs permission", "Task finished". It
+  /// The whole of the card's text: "Needs permission", "Done". It
   /// deliberately does not name the session or the project — the reader has one
   /// window and the sidebar rail is already marking the row, so repeating the
   /// title here spends the card's width saying what the next glance says anyway.

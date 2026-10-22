@@ -1,8 +1,8 @@
 ---
-title: Run on a server
-description: Run Dray on a Linux server and drive it from the Mac app. Your agents run there, not on your laptop.
+title: Connect a server
+description: Connect a Linux server to the Mac app over SSH. Dray installs itself there, and your agents run there, not on your laptop.
 sidebar:
-  order: 1
+  order: 10
 ---
 
 All you need is a Linux server you can reach over SSH with a key. The Mac app does the rest.
@@ -62,4 +62,4 @@ This installs `dray` and `dray-serve` into `~/.local/bin`, then `dray setup` ask
 
 - Linux on x86_64 and arm64.
 - You use it through the Mac app. There is no browser version and no phone app yet.
-- A Mac cannot be a server yet.
+- A Mac cannot be set up over SSH like this. To reach one Mac's sessions from another, use [Remote access](/reference/remote-access).

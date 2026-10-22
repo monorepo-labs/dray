@@ -322,11 +322,20 @@ async fn ask_app(request: Request) -> Result<Response> {
 /// What the Mac's server asks of the app it hosts, answered in the app.
 #[cfg(feature = "desktop")]
 pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
+    if let Some(reply) = crate::transcription::answer_host(cmd, &args).await {
+        return reply;
+    }
     match cmd {
         "request" => {
             let request: Request = serde_json::from_value(args).map_err(|e| e.to_string())?;
             let response = answer_on_screen(request).await.unwrap_or_else(|e| Response::error(format!("{e:#}")));
             serde_json::to_value(response).map_err(|e| e.to_string())
+        }
+        "show_session" => {
+            let id = args["sessionId"].as_str().ok_or("show_session wants a sessionId")?;
+            let app = crate::transcription::app().ok_or("Dray is not ready yet.")?;
+            crate::notifications::activate(app, id);
+            Ok(serde_json::Value::Null)
         }
         "close_session" => {
             #[cfg(all(feature = "cef", target_os = "macos"))]

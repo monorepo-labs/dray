@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: "Geist"; font-weight: 100 900; src: url(fonts/Geist.woff2) format("woff2"); }
+  @font-face { font-family: "Paper Mono"; font-weight: 400; src: url(fonts/PaperMono-Regular.woff2) format("woff2"); }
+  @font-face { font-family: "Paper Mono"; font-weight: 500; src: url(fonts/PaperMono-Medium.woff2) format("woff2"); }
+  :root {
+    --bg: #000;
+    --line: #1f1f1f;
+    --mark: #4d4d4d;
+    --white: #ededed;
+    --gray: #8f8f8f;
+    --dim: #5e5e5e;
+    --x0: 56px; --xs: 336px; --x1: 944px;
+    --y0: 52px; --y1: 156px; --y2: 456px; --y3: 512px;
+    /* bars start at --b0 and 105.2s (the longest) spans --run */
+    --b0: 368px; --run: 480px; --max: 105.2;
+  }
+  html, body { margin: 0; background: var(--bg); }
+  body {
+    position: relative; width: 1000px; height: 562px; overflow: hidden;
+    font-family: "Geist", system-ui, sans-serif; color: var(--white);
+    -webkit-font-smoothing: antialiased;
+  }
+  .h, .v { position: absolute; background: var(--line); }
+  .h { left: 0; right: 0; height: 1px; }
+  .h.in { left: var(--x0); right: calc(1000px - var(--x1)); }
+  .v { top: 0; bottom: 0; width: 1px; }
+  .node { position: absolute; width: 7px; height: 7px; box-sizing: border-box; transform: translate(-3px, -3px);
+    background: var(--bg); border: 1px solid var(--mark); }
+
+  .mono { font-family: "Paper Mono", ui-monospace, monospace; }
+  .cell { position: absolute; box-sizing: border-box; padding: 0 32px; }
+
+  .head { left: var(--x0); right: calc(1000px - var(--x1)); top: var(--y0); height: calc(var(--y1) - var(--y0));
+    display: flex; align-items: center; justify-content: space-between; }
+  h1 { margin: 0; font-size: 40px; font-weight: 400; letter-spacing: -0.035em; }
+  h1 span { color: var(--gray); }
+  .legend { display: flex; gap: 20px; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--gray); }
+  .legend i { display: inline-block; width: 14px; height: 6px; border-radius: 3px; margin-right: 8px; vertical-align: 1px; }
+
+  .stat { left: var(--x0); width: calc(var(--xs) - var(--x0)); height: 100px;
+    display: flex; flex-direction: column; justify-content: center; gap: 8px; }
+  .label { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--gray); }
+  .num { font-size: 40px; line-height: 1; font-weight: 400; letter-spacing: -0.035em; font-variant-numeric: tabular-nums; }
+
+  .bar { position: absolute; left: var(--b0); height: 6px; border-radius: 3px; --base: 14px;
+    width: calc(var(--base) + (var(--run) - var(--base)) * var(--t) / var(--max)); }
+  .bar b { position: absolute; left: calc(100% + 12px); top: -4px; font-weight: 400; font-size: 12px; line-height: 14px; white-space: nowrap; }
+  .old, .legend .old { background: rgba(237, 237, 237, 0.7); }
+  .old b { color: var(--gray); }
+  .new, .legend .new { background: linear-gradient(90deg, #6ee7ff, #3b6dff); }
+  .new b { color: var(--white); }
+
+  .foot { left: var(--x0); right: calc(1000px - var(--x1)); top: var(--y2); height: calc(var(--y3) - var(--y2));
+    display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--dim); }
+  .foot b { font-weight: 500; color: var(--gray); }
+</style>
+</head>
+<body>
+  <div class="h" style="top: var(--y0)"></div>
+  <div class="h" style="top: var(--y1)"></div>
+  <div class="h in" style="top: 256px"></div>
+  <div class="h in" style="top: 356px"></div>
+  <div class="h" style="top: var(--y2)"></div>
+  <div class="h" style="top: var(--y3)"></div>
+  <div class="v" style="left: var(--x0)"></div>
+  <div class="v" style="left: var(--x1)"></div>
+  <div class="v" style="left: var(--xs); top: var(--y1); bottom: calc(562px - var(--y2))"></div>
+
+  <div class="node" style="left: var(--x0); top: var(--y1)"></div>
+  <div class="node" style="left: var(--x1); top: var(--y1)"></div>
+  <div class="node" style="left: var(--x0); top: var(--y2)"></div>
+  <div class="node" style="left: var(--x1); top: var(--y2)"></div>
+
+  <div class="cell head">
+    <h1><span>Dictation,</span> up to 110× faster</h1>
+    <div class="legend mono"><span><i class="old"></i>Before</span><span><i class="new"></i>After</span></div>
+  </div>
+
+  <div class="cell stat" style="top: 156px"><div class="label mono">56 sec clip</div><div class="num">6×</div></div>
+  <div class="bar old mono" style="--t: 1.76; top: 191px"><b>1.8s</b></div>
+  <div class="bar new mono" style="--t: 0.30; top: 215px"><b>0.3s</b></div>
+
+  <div class="cell stat" style="top: 256px"><div class="label mono">5 min clip</div><div class="num">60×</div></div>
+  <div class="bar old mono" style="--t: 26.95; top: 291px"><b>27s</b></div>
+  <div class="bar new mono" style="--t: 0.45; top: 315px"><b>0.45s</b></div>
+
+  <div class="cell stat" style="top: 356px"><div class="label mono">10 min clip</div><div class="num">110×</div></div>
+  <div class="bar old mono" style="--t: 105.2; top: 391px"><b>105s</b></div>
+  <div class="bar new mono" style="--t: 0.94; top: 415px"><b>0.94s</b></div>
+
+  <div class="cell foot mono">
+    <span>Stop to text · Parakeet Unified EN 0.6B · MacBook Pro M1</span>
+    <b>drayhq.com</b>
+  </div>
+</body>
+</html>

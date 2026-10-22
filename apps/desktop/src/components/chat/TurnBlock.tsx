@@ -95,7 +95,7 @@ export default memo(function TurnBlock({
   // A running turn is cut the same way, so the stretches before a queued prompt
   // already sit in the shape they will finish in and only the stretch being
   // worked on is live.
-  const segments = collapsible || running ? segmentWork(turn) : [];
+  const segments = collapsible || running ? segmentWork(turn, running ? resultByCallId : undefined) : [];
   // The last message lives in the last segment, so opening that segment is what
   // puts it on screen twice if `finalText` keeps rendering.
   const lastOpen = collapsible && !!openSegments[segments.length - 1];
@@ -156,12 +156,12 @@ export default memo(function TurnBlock({
             }
             // Open, every row draws its own pictures; closed, they would be
             // behind the click, so they are lifted out under the summary.
-            const media = open ? null : segmentMedia(seg.items, turn.finalText, resultByCallId);
+            const media = open || seg.running ? null : segmentMedia(seg.items, turn.finalText, resultByCallId);
             return (
               <Fragment key={i}>
-                {seg.rows > 0 && <SummaryToggle label={segmentLabel(seg)} open={open} onToggle={toggle} />}
+                {seg.rows > 0 && !seg.running && <SummaryToggle label={segmentLabel(seg)} open={open} onToggle={toggle} />}
                 {media && media.length > 0 && <MediaRow media={media} />}
-                {open && seg.items.map(renderItem)}
+                {(open || seg.running) && seg.items.map(renderItem)}
                 {seg.prompt && renderItem(seg.prompt)}
               </Fragment>
             );

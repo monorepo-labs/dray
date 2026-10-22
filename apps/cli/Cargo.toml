@@ -1,6 +1,6 @@
 [package]
 name = "dray"
-version = "0.12.1"
+version = "0.13.1"
 edition = "2021"
 license = "Apache-2.0"
 description = "Run and manage Dray sessions from the command line."
@@ -15,6 +15,7 @@ dray-proto = { path = "../../crates/dray-proto" }
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 serde_json = "1"
+qrcode = { version = "0.14.1", default-features = false }
 
 [profile.release]
 strip = true

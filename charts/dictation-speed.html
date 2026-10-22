@@ -1,0 +1,92 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face { font-family: "Geist"; font-weight: 100 900; src: url(fonts/Geist.woff2) format("woff2"); }
+  @font-face { font-family: "Paper Mono"; font-weight: 400; src: url(fonts/PaperMono-Regular.woff2) format("woff2"); }
+  @font-face { font-family: "Paper Mono"; font-weight: 500; src: url(fonts/PaperMono-Medium.woff2) format("woff2"); }
+  :root {
+    --bg: #000;
+    --line: #1f1f1f;
+    --mark: #4d4d4d;
+    --white: #ededed;
+    --gray: #8f8f8f;
+    --dim: #5e5e5e;
+    --track: #121212;
+    --x0: 56px; --xs: 336px; --x1: 944px;
+    --y0: 52px; --y1: 156px; --ym: 306px; --y2: 456px; --y3: 512px;
+  }
+  html, body { margin: 0; background: var(--bg); }
+  body {
+    position: relative; width: 1000px; height: 562px; overflow: hidden;
+    font-family: "Geist", system-ui, sans-serif; color: var(--white);
+    -webkit-font-smoothing: antialiased;
+  }
+  .h, .v { position: absolute; background: var(--line); }
+  .h { left: 0; right: 0; height: 1px; }
+  .v { top: 0; bottom: 0; width: 1px; }
+  .node { position: absolute; width: 7px; height: 7px; box-sizing: border-box; transform: translate(-3px, -3px);
+    background: var(--bg); border: 1px solid var(--mark); }
+
+  .cell { position: absolute; box-sizing: border-box; padding: 0 32px; }
+  .mono { font-family: "Paper Mono", ui-monospace, monospace; }
+
+  .head { left: var(--x0); right: calc(1000px - var(--x1)); top: var(--y0); height: calc(var(--y1) - var(--y0));
+    display: flex; align-items: center; }
+  h1 { margin: 0; font-size: 40px; font-weight: 400; letter-spacing: -0.035em; }
+  h1 span { color: var(--gray); }
+
+  .stat { left: var(--x0); width: calc(var(--xs) - var(--x0)); height: 150px;
+    display: flex; flex-direction: column; justify-content: center; gap: 10px; }
+  .label { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--gray); }
+  .num { font-size: 80px; line-height: 1; font-weight: 400; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+  .num small { font-size: 0.45em; letter-spacing: -0.02em; margin-left: 4px; }
+  .before .num { color: var(--dim); }
+
+  .lane { left: var(--xs); width: calc(var(--x1) - var(--xs)); height: 150px; display: flex; align-items: center; }
+  .bar { width: 100%; height: 6px; background: var(--track); border-radius: 3px; }
+  .bar i { display: block; height: 100%; border-radius: 3px; }
+  .lane.before .bar i { width: 100%; background: rgba(237, 237, 237, 0.7); }
+  .lane.after .bar i { width: calc(100% * 0.3 / 2.1); background: linear-gradient(90deg, #6ee7ff, #3b6dff); }
+
+  .foot { left: var(--x0); right: calc(1000px - var(--x1)); top: var(--y2); height: calc(var(--y3) - var(--y2));
+    display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--dim); }
+  .foot b { font-weight: 500; color: var(--gray); }
+</style>
+</head>
+<body>
+  <div class="h" style="top: var(--y0)"></div>
+  <div class="h" style="top: var(--y1)"></div>
+  <div class="h" style="top: var(--ym); left: var(--x0); right: calc(1000px - var(--x1))"></div>
+  <div class="h" style="top: var(--y2)"></div>
+  <div class="h" style="top: var(--y3)"></div>
+  <div class="v" style="left: var(--x0)"></div>
+  <div class="v" style="left: var(--x1)"></div>
+  <div class="v" style="left: var(--xs); top: var(--y1); bottom: calc(562px - var(--y2))"></div>
+
+  <div class="node" style="left: var(--x0); top: var(--y1)"></div>
+  <div class="node" style="left: var(--x1); top: var(--y1)"></div>
+  <div class="node" style="left: var(--x0); top: var(--y2)"></div>
+  <div class="node" style="left: var(--x1); top: var(--y2)"></div>
+
+  <div class="cell head"><h1><span>Dictation,</span> 7× faster</h1></div>
+
+  <div class="cell stat before" style="top: var(--y1)">
+    <div class="label mono">Before</div>
+    <div class="num">2.1<small>s</small></div>
+  </div>
+  <div class="cell lane before" style="top: var(--y1)"><div class="bar"><i></i></div></div>
+
+  <div class="cell stat after" style="top: var(--ym)">
+    <div class="label mono">After</div>
+    <div class="num">0.3<small>s</small></div>
+  </div>
+  <div class="cell lane after" style="top: var(--ym)"><div class="bar"><i></i></div></div>
+
+  <div class="cell foot mono">
+    <span>Stop to text · 56s clip · Parakeet Unified EN 0.6B · MacBook Pro M1</span>
+    <b>drayhq.com</b>
+  </div>
+</body>
+</html>

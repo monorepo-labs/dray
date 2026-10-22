@@ -1,0 +1,91 @@
+---
+title: Writing prompts
+description: "Use slash commands, mention files with @, tag issues with # and other sessions with &, attach images and files, dictate, and save a task as a draft."
+sidebar:
+  order: 2
+---
+
+A prompt is mostly plain text, but the composer understands four kinds of tag, takes attachments, and can turn speech into text. The placeholder names the tags that work right now, for example "Follow-up. @files. /skills. &tasks. #issues."
+
+Each tag opens a picker as you type it. In any picker, `↑` and `↓` move, `⏎` or `Tab` picks, and `Esc` closes it without losing what you typed. A finished tag turns into a chip: a short label that stands for the full text sent to the agent.
+
+## Slash commands
+
+Type `/` at the very start of the prompt to open the command picker. Keep typing to filter it. With nothing typed, the list shows **Recently used** first, then the agent's built-in commands, then the ones you installed.
+
+What the list holds depends on the agent:
+
+| Agent | Commands listed |
+|---|---|
+| Claude Code | Its built-in commands plus your user, project and plugin commands and skills. |
+| Codex | Your installed skills. |
+| pi | pi's own commands, from its extensions and skills. |
+| fx | The skills fx loads from your project and home folders. |
+| Grok | Grok's commands, once a Grok session has opened in that folder. Until then the picker stays shut. |
+
+If an agent has none, the picker says "This agent publishes no slash commands". A command you type by hand works whether or not the picker lists it. In the transcript a sent command shows as a chip.
+
+Claude Code's `/clear`, `/fast`, `/model` and `/rename` are left out of the picker, because Dray already has controls for them and cannot follow what they change. Use the composer's own controls instead.
+
+## Mention a file with @
+
+Type `@` anywhere in the prompt to search the session's folder. The search forgives typos and matches parts of the path. A bare `@` lists the files changed in the working tree first. The pick goes into the prompt as `@path`.
+
+Claude Code reads a mentioned file into the prompt before the model starts. The other agents get the path in your text and open the file themselves when they need it.
+
+In a reply, file paths the agent writes are links. Click one to open it in Dray: Markdown in the Docs panel, anything else in the Files view. `⌘`-click opens it in your own editor.
+
+## Tag an issue with #
+
+With an issue tracker connected, type `#` to search your issues. The pick writes the issue's identifier and title, like `#DRA-53 Add issue tracker integration`. Picking an issue already in the prompt takes it back out. `⌘⏎` or `⌘`-click picks and keeps the list open for another.
+
+A tag in a prompt is a mention. It does not link the session to the issue. Clicking a tag in a sent prompt opens it on the issues page.
+
+Connecting Linear or GitHub, and how linking works: [Issue trackers](/settings/issues).
+
+## Tag another session with &
+
+Type `&` to pick another session from the sidebar's current list. Settled sessions and the session you are in are left out. The pick writes the session's title and its id, so the agent can message it with `dray send`. `&tasks.` shows in the placeholder only when there is another session to tag.
+
+## Attach images and files
+
+Three ways in:
+
+- Click **+** at the left of the control row, or press `⌥⌘O`.
+- Drag files anywhere onto the window. "Drop to attach" shows over the composer.
+- Paste an image.
+
+Attachments show as tiles above the text. Hover a tile and click its cross to remove it. A prompt can be an attachment alone.
+
+What happens depends on the file:
+
+- **Images** (PNG, JPEG, GIF, WebP) up to 5 MB go to the model as images. Dray keeps a copy with the session, so the transcript still shows the picture after you delete the original.
+- **Everything else**, and images over 5 MB, goes in as an `@path` mention. The agent opens the file itself. These are not copied.
+
+If the model takes text only, the tray says "This model takes text only — the image will be sent, and the provider may refuse it."
+
+## Dictate
+
+Press `⌘D` or click the microphone to speak a prompt. Click the tick to stop and transcribe, or the cross to discard. `Esc` also discards. The words go into the draft of the session you started in, even if you have switched away.
+
+Dictation runs on your Mac with a model you download once. Setup and models: [Dictation](/settings/dictation).
+
+## Drafts
+
+Your unsent text is kept per session. Switch away and back and it is still there. It is not kept after you quit Dray.
+
+To keep a new task for later, write it in the new-task composer and press `⌘S`. It needs a project picked. The text, project, agent, model, effort, permission mode, fast mode and worktree choice are saved as a draft, the composer empties, and a "Saved as draft" card appears with **View**.
+
+To find drafts, click the dashed circle (**Show drafts**) next to the project filter in the sidebar. Click a draft to open it in the new-task composer. While it is open, edits save on their own ("Changes auto-saved"). Send it to start the task. Right-click a draft and choose **Delete** to remove it.
+
+## Undo
+
+`⌘Z` undoes and `⌘⇧Z` redoes in the composer, a word at a time. Each session has its own undo history.
+
+Shortcuts here are defaults; you can change them in Settings → Shortcuts.
+
+## Limits
+
+- A path holding a space cannot be mentioned with `@`.
+- Commands from a Claude Code plugin installed while Dray is open show after you restart Dray.
+- Unsent text is lost when you quit; use a draft to keep it.

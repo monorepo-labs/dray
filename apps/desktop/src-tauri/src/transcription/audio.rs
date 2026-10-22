@@ -15,7 +15,7 @@ use std::sync::{
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rubato::{
-    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    Resampler as _, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use serde::Serialize;
 use ts_rs::TS;
@@ -202,7 +202,7 @@ const PREALLOC_SECS: usize = 60;
 /// A capture in flight. Dropping it stops the stream.
 pub struct Recording {
     stream: cpal::Stream,
-    samples: Arc<Mutex<Vec<f32>>>,
+    tap: Tap,
     /// Loudest sample since the last read, reset by reading it.
     ///
     /// Written from the audio thread as an ordinary atomic rather than pushed
@@ -210,8 +210,74 @@ pub struct Recording {
     /// compare-and-swap and never a lock it could block on. `f32` has no atomic,
     /// so the bits ride a `u32`.
     peak: Arc<AtomicU32>,
-    channels: u16,
-    rate: u32,
+}
+
+/// The captured samples, interleaved at the device's rate, and how far the
+/// live decoder has read into them.
+#[derive(Default)]
+struct Capture {
+    buf: Vec<f32>,
+    /// Samples of `buf` already handed to [`Tap::pull`].
+    pulled: usize,
+    /// Set by [`Tap::take`] until the live decoder has closed the stretch the
+    /// take ended. A pull in that gap would read the *next* stretch's first
+    /// samples into the stream being finalized.
+    held: bool,
+}
+
+/// A handle on a recording's buffer, for the stop, the cut and the live decoder.
+#[derive(Clone)]
+pub struct Tap {
+    capture: Arc<Mutex<Capture>>,
+    pub channels: u16,
+    pub rate: u32,
+}
+
+impl Tap {
+    #[cfg(test)]
+    pub(super) fn new(channels: u16, rate: u32) -> Self {
+        Self { capture: Default::default(), channels, rate }
+    }
+
+    #[cfg(test)]
+    pub(super) fn push(&self, samples: &[f32]) {
+        self.capture.lock().unwrap().buf.extend_from_slice(samples);
+    }
+
+    /// Raw samples captured since the last pull. Empty while a take is held.
+    pub fn pull(&self) -> Vec<f32> {
+        let Ok(mut c) = self.capture.lock() else { return Vec::new() };
+        if c.held {
+            return Vec::new();
+        }
+        let new = c.buf[c.pulled..].to_vec();
+        c.pulled = c.buf.len();
+        new
+    }
+
+    /// Lets pulls read the next stretch.
+    pub fn release(&self) {
+        if let Ok(mut c) = self.capture.lock() {
+            c.held = false;
+        }
+    }
+
+    /// Empties the buffer: the stretch as 16kHz mono, `None` where it held
+    /// only silence, and the raw samples no pull has read yet.
+    pub fn take(&self) -> Result<(Option<Vec<f32>>, Vec<f32>)> {
+        let mut c = self.capture.lock().map_err(|_| anyhow!("recording buffer was poisoned"))?;
+        let captured = std::mem::take(&mut c.buf);
+        let unpulled = captured[c.pulled.min(captured.len())..].to_vec();
+        c.pulled = 0;
+        c.held = true;
+        drop(c);
+
+        if captured.iter().all(|s| s.abs() < SILENCE_PEAK) {
+            return Ok((None, unpulled));
+        }
+
+        Ok((Some(resample(to_mono(&captured, self.channels), self.rate)), unpulled))
+    }
 }
 
 // cpal's `Stream` is `!Send` because some backends tie it to the thread that
@@ -240,12 +306,17 @@ impl Recording {
         // the later copies run to tens of megabytes, which is a dropout, which
         // is a word the reader has to notice is missing. A minute of headroom
         // covers dictation; past it the doubling resumes, no worse than before.
-        let samples = Arc::new(Mutex::new(Vec::<f32>::with_capacity(
-            rate as usize * channels as usize * PREALLOC_SECS,
-        )));
+        let tap = Tap {
+            capture: Arc::new(Mutex::new(Capture {
+                buf: Vec::with_capacity(rate as usize * channels as usize * PREALLOC_SECS),
+                ..Default::default()
+            })),
+            channels,
+            rate,
+        };
         let peak = Arc::new(AtomicU32::new(0));
 
-        let sink = Arc::clone(&samples);
+        let sink = Arc::clone(&tap.capture);
         let level = Arc::clone(&peak);
         let on_error = |e| eprintln!("[transcription capture err] {e}");
 
@@ -289,13 +360,11 @@ impl Recording {
 
         stream.play().context("could not start recording")?;
 
-        Ok(Self {
-            stream,
-            samples,
-            peak,
-            channels,
-            rate,
-        })
+        Ok(Self { stream, tap, peak })
+    }
+
+    pub fn tap(&self) -> Tap {
+        self.tap.clone()
     }
 
     /// Loudest sample since the last call, as 0.0–1.0. Reading resets it, so
@@ -313,25 +382,30 @@ impl Recording {
     /// callbacks fire, and every sample is silence — so without this check the
     /// only symptom is a dictation that transcribes to nothing, which reads as
     /// the model being broken.
-    pub fn finish(self) -> Result<Option<Vec<f32>>> {
+    ///
+    /// The raw samples beside it are the ones the live decoder has not read yet.
+    pub fn finish(self) -> Result<(Option<Vec<f32>>, Vec<f32>)> {
+        self.close().take()
+    }
+
+    /// Closes the microphone and hands back the buffer, for a caller that
+    /// cannot wait for the resample [`Tap::take`] runs.
+    pub fn close(self) -> Tap {
         drop(self.stream);
+        self.tap
+    }
 
-        let captured = self
-            .samples
-            .lock()
-            .map_err(|_| anyhow!("recording buffer was poisoned"))?
-            .clone();
-
-        if captured.iter().all(|s| s.abs() < SILENCE_PEAK) {
-            return Ok(None);
-        }
-
-        Ok(Some(resample(to_mono(&captured, self.channels), self.rate)))
+    /// What has been said so far, taken out of the buffer with the microphone
+    /// left open, so the next stretch starts empty. The Island cuts here to put
+    /// a screenshot between two stretches of speech without losing a word to a
+    /// stop and a start. Silence answers `None`, as [`Recording::finish`] does.
+    pub fn cut(&self) -> Result<(Option<Vec<f32>>, Vec<f32>)> {
+        self.tap.take()
     }
 }
 
 fn append(
-    sink: &Arc<Mutex<Vec<f32>>>,
+    sink: &Arc<Mutex<Capture>>,
     level: &Arc<AtomicU32>,
     samples: impl Iterator<Item = f32> + Clone,
 ) {
@@ -347,8 +421,8 @@ fn append(
 
     // The audio thread must never block or panic, so a poisoned lock drops the
     // frame rather than taking the process down with it.
-    if let Ok(mut buf) = sink.lock() {
-        buf.extend(samples);
+    if let Ok(mut c) = sink.lock() {
+        c.buf.extend(samples);
     }
 }
 
@@ -356,7 +430,7 @@ fn append(
 ///
 /// Averaging rather than taking the first channel: on a stereo interface the mic
 /// is often wired to one side only, and picking the wrong one records silence.
-fn to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+pub(super) fn to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
     if channels <= 1 {
         return samples.to_vec();
     }
@@ -368,48 +442,184 @@ fn to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
         .collect()
 }
 
-/// Resamples to [`TARGET_RATE`], returning the input untouched if it is already
-/// there or too short to filter.
-fn resample(samples: Vec<f32>, from_rate: u32) -> Vec<f32> {
-    if from_rate == TARGET_RATE || samples.is_empty() {
-        return samples;
+/// Samples per VAD frame: earshot scores 16ms at a time.
+const VAD_FRAME: usize = 256;
+/// Voiced frames in a row before a run counts as speech (64ms), so a click or
+/// a cough on its own keeps nothing.
+const VAD_ONSET: usize = 4;
+/// Frames kept either side of speech (~460ms), so a soft onset or a trailing
+/// consonant the detector scored low still reaches the model. Onset and pad
+/// follow Handy's timings.
+const VAD_PAD: usize = 29;
+const VAD_THRESHOLD: f32 = 0.5;
+
+/// Drops the stretches where nobody is talking, so the model reads less audio.
+///
+/// Answers the input untouched where no speech is found: the detector missing
+/// quiet speech must cost the old speed, never the reader's words.
+pub(super) fn trim_silence(audio: Vec<f32>) -> Vec<f32> {
+    let mut gate = Gate::default();
+    let mut kept = gate.push(&audio);
+    kept.extend(gate.finish());
+
+    if kept.is_empty() {
+        return audio;
+    }
+    kept
+}
+
+/// The silence trim, fed a piece at a time, so the live decoder and the batch
+/// run cut the same audio: speech opens after [`VAD_ONSET`] voiced frames,
+/// [`VAD_PAD`] frames before it come along, and [`VAD_PAD`] after it close it.
+pub(super) struct Gate {
+    detector: Box<earshot::Detector>,
+    /// Samples short of a whole frame, carried to the next push.
+    partial: Vec<f32>,
+    /// Frames not let through yet, kept as lead-in for speech that may start.
+    lead: std::collections::VecDeque<Vec<f32>>,
+    /// Voiced frames in a row.
+    run: usize,
+    /// Frames still let through after the last speech.
+    tail: usize,
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self {
+            detector: earshot::Detector::default_boxed(),
+            partial: Vec::new(),
+            lead: Default::default(),
+            run: 0,
+            tail: 0,
+        }
+    }
+}
+
+impl Gate {
+    /// The speech in `audio`, in order. Up to [`VAD_PAD`] frames lag behind,
+    /// since a frame is only dropped once no speech follows it closely enough.
+    pub(super) fn push(&mut self, audio: &[f32]) -> Vec<f32> {
+        let mut out = Vec::new();
+        self.partial.extend_from_slice(audio);
+        let whole = self.partial.len() / VAD_FRAME * VAD_FRAME;
+        let frames: Vec<f32> = self.partial.drain(..whole).collect();
+        for frame in frames.chunks(VAD_FRAME) {
+            self.frame(frame.to_vec(), &mut out);
+        }
+        out
     }
 
-    let params = SincInterpolationParameters {
-        sinc_len: 256,
-        f_cutoff: 0.95,
-        interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 256,
-        window: WindowFunction::BlackmanHarris2,
-    };
+    /// The last partial frame, scored zero-padded and let through as captured.
+    pub(super) fn finish(&mut self) -> Vec<f32> {
+        let mut out = Vec::new();
+        if !self.partial.is_empty() {
+            let last = std::mem::take(&mut self.partial);
+            self.frame(last, &mut out);
+        }
+        out
+    }
 
-    let ratio = TARGET_RATE as f64 / from_rate as f64;
-    let chunk = 1024;
+    fn frame(&mut self, samples: Vec<f32>, out: &mut Vec<f32>) {
+        // Clamped because a resampled full-scale signal rings past ±1, which
+        // earshot forbids.
+        let mut scored = [0.0f32; VAD_FRAME];
+        for (f, s) in scored.iter_mut().zip(&samples) {
+            *f = s.clamp(-1.0, 1.0);
+        }
+        let voiced = self.detector.predict_f32(&scored) >= VAD_THRESHOLD;
+        self.run = if voiced { self.run + 1 } else { 0 };
 
-    let Ok(mut resampler) = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk, 1) else {
-        return samples;
-    };
-
-    let mut out = Vec::with_capacity((samples.len() as f64 * ratio) as usize);
-
-    // A fixed-size resampler consumes whole chunks, so the tail is zero-padded
-    // to one full chunk rather than dropped — the last fraction of a second is
-    // usually the end of a word.
-    for block in samples.chunks(chunk) {
-        let mut padded = block.to_vec();
-        padded.resize(chunk, 0.0);
-
-        match resampler.process(&[padded], None) {
-            Ok(mut done) if !done.is_empty() => out.append(&mut done[0]),
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("[transcription resample err] {e}");
-                return samples;
+        if self.run >= VAD_ONSET {
+            out.extend(self.lead.drain(..).flatten());
+            out.extend(samples);
+            self.tail = VAD_PAD;
+        } else if self.tail > 0 {
+            out.extend(samples);
+            self.tail -= 1;
+        } else {
+            // Lead-in reaches back VAD_PAD frames from the run's first frame,
+            // and the run is ONSET - 1 frames old when it opens.
+            self.lead.push_back(samples);
+            if self.lead.len() > VAD_PAD + VAD_ONSET - 1 {
+                self.lead.pop_front();
             }
         }
     }
+}
 
+/// Resamples to [`TARGET_RATE`], returning the input untouched if it is already
+/// there or too short to filter.
+pub(super) fn resample(samples: Vec<f32>, from_rate: u32) -> Vec<f32> {
+    if from_rate == TARGET_RATE || samples.is_empty() {
+        return samples;
+    }
+    let mut resampler = Resampler::new(from_rate);
+    let mut out = resampler.push(&samples);
+    out.extend(resampler.finish());
     out
+}
+
+/// [`resample`], fed a piece at a time. Its own carry-over rather than one
+/// filter per piece, so the live decoder hears the same samples a batch run
+/// over the whole recording would.
+pub(super) struct Resampler {
+    /// `None` at the target rate already, or where the filter would not build.
+    inner: Option<SincFixedIn<f32>>,
+    pending: Vec<f32>,
+}
+
+const RESAMPLE_CHUNK: usize = 1024;
+
+impl Resampler {
+    pub(super) fn new(from_rate: u32) -> Self {
+        let params = SincInterpolationParameters {
+            sinc_len: 256,
+            f_cutoff: 0.95,
+            interpolation: SincInterpolationType::Linear,
+            oversampling_factor: 256,
+            window: WindowFunction::BlackmanHarris2,
+        };
+        let ratio = TARGET_RATE as f64 / from_rate as f64;
+        let inner = (from_rate != TARGET_RATE)
+            .then(|| SincFixedIn::<f32>::new(ratio, 2.0, params, RESAMPLE_CHUNK, 1).ok())
+            .flatten();
+        Self { inner, pending: Vec::new() }
+    }
+
+    pub(super) fn push(&mut self, samples: &[f32]) -> Vec<f32> {
+        let Some(inner) = &mut self.inner else { return samples.to_vec() };
+        self.pending.extend_from_slice(samples);
+        let whole = self.pending.len() / RESAMPLE_CHUNK * RESAMPLE_CHUNK;
+        let blocks: Vec<f32> = self.pending.drain(..whole).collect();
+        let mut out = Vec::new();
+        for block in blocks.chunks(RESAMPLE_CHUNK) {
+            Self::process(inner, block.to_vec(), &mut out);
+        }
+        out
+    }
+
+    /// A fixed-size resampler consumes whole chunks, so the tail is zero-padded
+    /// to one full chunk rather than dropped — the last fraction of a second is
+    /// usually the end of a word.
+    pub(super) fn finish(&mut self) -> Vec<f32> {
+        let mut out = Vec::new();
+        if let Some(inner) = &mut self.inner {
+            if !self.pending.is_empty() {
+                let mut last = std::mem::take(&mut self.pending);
+                last.resize(RESAMPLE_CHUNK, 0.0);
+                Self::process(inner, last, &mut out);
+            }
+        }
+        out
+    }
+
+    fn process(inner: &mut SincFixedIn<f32>, block: Vec<f32>, out: &mut Vec<f32>) {
+        match inner.process(&[block], None) {
+            Ok(mut done) if !done.is_empty() => out.append(&mut done[0]),
+            Ok(_) => {}
+            Err(e) => eprintln!("[transcription resample err] {e}"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -428,6 +638,73 @@ mod tests {
     fn an_unreadable_output_reads_as_nothing() {
         assert_eq!(parse_muted("missing value"), None);
         assert_eq!(parse_muted(""), None);
+    }
+
+    /// "Hello there", 2.5s of nothing, "Goodbye". The pause goes, minus the
+    /// pad either side, and both words stay.
+    #[test]
+    fn trim_cuts_the_pause_and_keeps_the_words() {
+        let wav = include_bytes!("fixtures/pause.wav");
+        let audio = super::super::recordings::decode(wav).unwrap();
+        let secs = |n: usize| n as f32 / TARGET_RATE as f32;
+
+        let energy = |a: &[f32]| a.iter().map(|s| s * s).sum::<f32>();
+        let trimmed = trim_silence(audio.clone());
+        let kept = secs(trimmed.len());
+
+        assert!(kept < secs(audio.len()) - 1.0, "kept {kept}s of {}s", secs(audio.len()));
+        // The pause is digital silence, so every bit of energy is speech:
+        // dropping any word drops some of it.
+        assert!(energy(&trimmed) > energy(&audio) * 0.999, "speech was cut");
+    }
+
+    /// The live decoder gates a piece at a time; it must keep exactly what the
+    /// batch trim keeps, or the stream hears different audio than a retry.
+    #[test]
+    fn the_gate_in_pieces_keeps_what_the_trim_keeps() {
+        let audio = super::super::recordings::decode(include_bytes!("fixtures/pause.wav")).unwrap();
+        let mut gate = Gate::default();
+        let mut pieced: Vec<f32> = audio.chunks(1000).flat_map(|c| gate.push(c)).collect();
+        pieced.extend(gate.finish());
+
+        assert_eq!(pieced, trim_silence(audio));
+    }
+
+    #[test]
+    fn the_resampler_in_pieces_matches_one_pass() {
+        let audio: Vec<f32> = (0..48_000 * 2).map(|i| (i as f32 / 37.0).sin() * 0.5).collect();
+        let mut resampler = Resampler::new(48_000);
+        let mut pieced: Vec<f32> = audio.chunks(777).flat_map(|c| resampler.push(c)).collect();
+        pieced.extend(resampler.finish());
+
+        assert_eq!(pieced, resample(audio, 48_000));
+    }
+
+    /// A take hands over only what no pull read, and holds pulls off until the
+    /// stretch it ended is closed — or the next stretch leaks into it.
+    #[test]
+    fn a_take_hands_over_the_unpulled_tail_and_holds_pulls() {
+        let tap = Tap::new(1, TARGET_RATE);
+        tap.push(&[0.5; 10]);
+        assert_eq!(tap.pull().len(), 10);
+        tap.push(&[0.5; 4]);
+
+        let (audio, unpulled) = tap.take().unwrap();
+        assert_eq!(audio.unwrap().len(), 14);
+        assert_eq!(unpulled.len(), 4);
+
+        tap.push(&[0.5; 3]);
+        assert!(tap.pull().is_empty(), "held until released");
+        tap.release();
+        assert_eq!(tap.pull().len(), 3);
+    }
+
+    /// Nothing the detector calls speech is no reason to send nothing.
+    #[test]
+    fn trim_keeps_everything_when_it_hears_no_speech() {
+        let quiet = vec![0.0f32; TARGET_RATE as usize * 2];
+
+        assert_eq!(trim_silence(quiet.clone()), quiet);
     }
 
     #[test]

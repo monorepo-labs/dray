@@ -383,8 +383,10 @@ function App() {
   const [draftNudge, setDraftNudge] = useState(false);
   const nudgeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  /// ⌘S on the new-task composer: its text and picks become a draft in the
-  /// sidebar, and the composer empties for the next task.
+  /// ⌘S on any composer: its text and picks become a draft in the sidebar, and
+  /// the composer empties for the next task. From a session the draft is a new
+  /// task on that session's settings — the picks already mirror it — started
+  /// from the default branch like any other, never from the session's work.
   const saveAsDraft = async () => {
     if (openDraftId) {
       setDraftNudge(true);
@@ -392,25 +394,29 @@ function App() {
       nudgeTimer.current = setTimeout(() => setDraftNudge(false), 2500);
       return;
     }
-    const prompt = readDraft(null);
-    if (!projectPath || !prompt.trim()) return;
+    const key = selectedSessionId;
+    const source = key ? sessionIndexItems.find((i) => i.sessionId === key) : null;
+    if (key && !source) return;
+    const prompt = readDraft(key);
+    const draftProject = source ? source.projectPath : projectPath;
+    if (!draftProject || !prompt.trim()) return;
     const id = crypto.randomUUID();
     const saved = await saveDraft({
       id,
       prompt,
-      projectPath,
+      projectPath: draftProject,
       harness,
       model: modelId,
       effort,
       permissionMode,
       fast,
-      useWorktree,
+      useWorktree: source ? !!source.worktreeName || source.worktreeRemoved : useWorktree,
       created: new Date().toISOString(),
     });
     if (!saved) return;
     // Only what was saved leaves: text typed while the write was out stays.
-    const now = readDraft(null);
-    writeDraft(null, now.startsWith(prompt) ? now.slice(prompt.length) : now);
+    const now = readDraft(key);
+    writeDraft(key, now.startsWith(prompt) ? now.slice(prompt.length) : now);
     pushNotice({ sessionId: id, kind: "draft-saved", label: "Saved as draft" });
     playNotification();
   };
@@ -2588,10 +2594,10 @@ function App() {
   useHotkey("doc.save", () => saveActiveDoc(selectedSessionId), {
     enabled: panelShown && activeTab === "docs",
   });
-  // The same ⌘S on the new-task composer, which has no session and so no docs
-  // tab; the gate says so outright rather than leaning on that.
+  // The same ⌘S on any composer, wherever the docs tab is not the one taking it.
+  // Off Chat the composer is hidden, so there is nothing on screen to save.
   useHotkey("composer.draft", () => void saveAsDraft(), {
-    enabled: !selectedSessionId && !issuesOpen && !(panelShown && activeTab === "docs"),
+    enabled: !issuesOpen && viewTab === "chat" && !(panelShown && activeTab === "docs"),
   });
   // ⌘1–⌘9 live in `ViewTabs`, which is drawn only where there is a row to
   // switch, so the issues page and a new task need no guard of their own.
