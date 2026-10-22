@@ -150,6 +150,8 @@ final class Composer {
     private(set) var sentLabel = "Sent"
     /// Cards answered since the panel opened, so the last one can speak for the lot.
     @ObservationIgnored private var answered = 0
+    /// Panel opens, so a refusal landing after a reopen leaves the new count alone.
+    @ObservationIgnored private var visit = 0
     /// Return and number keys on a questions card, whose answers live in its view.
     var submits = 0
     var digits = 0
@@ -233,8 +235,9 @@ final class Composer {
             }
             // The last card answered is the panel's job done.
             // Not while the reader is busy: a card answered elsewhere leaves them their draft.
-            // Nor under a card's flash, which closes the panel itself once read.
-            if ids.isEmpty, hadCards, shown, !busy, !sent { hide() }
+            // Nor under a card's flash, which closes the panel itself once read,
+            // nor on a new session, which the reader asked for with ⌘N.
+            if ids.isEmpty, hadCards, shown, !busy, !sent, target != .new { hide() }
             // Answered elsewhere with the panel shut: the done pill is back in view, its clock with it.
             if ids.isEmpty, hadCards, !shown {
                 unseenDone = []
@@ -404,16 +407,18 @@ final class Composer {
         case "deny"?: "Denied"
         default: option?.behavior == "deny" ? "Denied" : "Allowed once"
         }
+        let counted = visit
         closeOnLastCard(key, e, label)
         await store.respond(key, requestId: r.requestId, optionId: optionId)
-        keepIfRefused(key, e)
+        keepIfRefused(key, e, counted)
     }
 
     func answer(_ answers: [String: String]) async {
         guard let (key, e) = ask, case .questionsAsked(let r) = e.payload else { return }
+        let counted = visit
         closeOnLastCard(key, e, "Sent")
         await store.answer(key, requestId: r.requestId, answers: answers)
-        keepIfRefused(key, e)
+        keepIfRefused(key, e, counted)
     }
 
     /// The last card answered says what was done, then the panel closes, all
@@ -427,10 +432,10 @@ final class Composer {
     }
 
     /// An answer that did not land leaves the card waiting: back on screen, or its pill back.
-    private func keepIfRefused(_ key: SessionKey, _ e: AgentEvent) {
+    private func keepIfRefused(_ key: SessionKey, _ e: AgentEvent, _ counted: Int) {
         guard store.asks[key]?.contains(where: { $0.id == e.id }) == true else { return }
         // Uncounted, or answering it again on retry reads as two cards answered.
-        answered = max(answered - 1, 0)
+        if visit == counted { answered = max(answered - 1, 0) }
         guard leaving?.event.id == e.id else { return }
         leaving = nil
         sent = false
@@ -524,6 +529,7 @@ final class Composer {
         // Cleared here rather than at the close, which would flash the draft back mid-shrink.
         sent = false
         answered = 0
+        visit += 1
         keyed = true
         opens += 1
         notice = nil
