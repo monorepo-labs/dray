@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import ThinkingOrbs
 import VisionKit
 
 /// What a pairing QR carries: `dray://connect?url=…&token=…&name=…`, drawn by
@@ -34,7 +35,7 @@ struct PairScanner: View {
             Group {
                 switch allowed {
                 case nil:
-                    Orb()
+                    Orb(state: .working)
                 case true?:
                     Scanner(onScan: onScan) { allowed = false }.ignoresSafeArea()
                 default:

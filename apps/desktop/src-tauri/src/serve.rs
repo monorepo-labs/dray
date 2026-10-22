@@ -93,6 +93,7 @@ pub async fn run(port: u16) -> Result<()> {
     // Remote access fronts this listener rather than binding one of its own.
     crate::remote_access::fronts(listener.local_addr()?.port());
     tokio::spawn(crate::remote_access::start(sink.clone()));
+    tokio::spawn(crate::tunnel::warm(crate::tunnel::SHARE));
 
     eprintln!(
         "dray-serve listening on ws://{}, token in {}",
@@ -1451,7 +1452,7 @@ mod tests {
                 let chunks = futures_util::stream::iter(
                     body.chunks(64 * 1024).map(|c| Ok::<_, std::io::Error>(c.to_vec())).collect::<Vec<_>>(),
                 );
-                reqwest::Client::new()
+                crate::http()
                     .post(base)
                     .query(&[("name", name)])
                     .bearer_auth(token)

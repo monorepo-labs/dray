@@ -784,7 +784,7 @@ mod tests {
         let target = parse(&std::env::var("DRAY_SSH_TEST").unwrap()).unwrap();
         let remote: u16 = std::env::var("DRAY_SSH_TEST_PORT").unwrap().parse().unwrap();
         let mut forward = forward(&target, remote).await.unwrap();
-        let body = reqwest::get(format!("http://localhost:{}/", forward.port)).await.unwrap().text().await.unwrap();
+        let body = crate::http().get(format!("http://localhost:{}/", forward.port)).send().await.unwrap().text().await.unwrap();
         assert!(!body.is_empty());
         assert!(forward.alive());
         println!("forwarded {remote} to localhost:{}: {} bytes", forward.port, body.len());

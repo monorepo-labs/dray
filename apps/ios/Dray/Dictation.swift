@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import ThinkingOrbs
 
 /// `transcription.rs`'s `TranscribeOutcome`. An unknown kind reads as a failure naming it.
 enum TranscribeOutcome: Decodable {
@@ -105,7 +106,7 @@ struct DictateButton: View {
         if can || recorder != nil || transcribing || note != nil {
             HStack(spacing: 8) {
                 if transcribing {
-                    Orb().frame(width: 30, height: 30)
+                    Orb(state: .working).frame(width: 30, height: 30)
                 } else if recorder != nil {
                     // Two controls, as on the desktop: they mean opposite things about the words.
                     Button(action: cancel) {

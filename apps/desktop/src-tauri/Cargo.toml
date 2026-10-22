@@ -42,13 +42,13 @@ libc = "0.2"
 dray-proto = { path = "../../../crates/dray-proto" }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-updater = { version = "2", optional = true }
-fff-search = "0.10.3"
+fff-search = "0.11.0"
 # Watches the docs panel's open files. Already in the tree behind `fff-search`,
 # whose index keeps itself current the same way. Not to be confused with
 # `notify-rust` below, which posts desktop banners.
 notify = "9.0.0-rc.4"
 # Attached images travel to the CLI as base64 content blocks.
-base64 = "0.22"
+base64 = "0.23"
 # Desktop notifications are posted directly rather than through
 # `tauri-plugin-notification`: only the handle `show` returns reports a click,
 # and the plugin drops it. `preview-macos-un` is not optional — the default
@@ -60,19 +60,24 @@ notify-rust = { version = "4.18", features = ["preview-macos-un"], optional = tr
 # this app talks to directly, `gh` and `claude` being reached by spawning them
 # instead. `rustls` rather than the platform TLS so a Linux build needs no
 # OpenSSL. See issues/linear.rs and analytics.rs.
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.13", default-features = false, features = [
   "json",
-  "rustls-tls",
+  "query",
+  # Not `rustls`, which brings aws-lc-rs: ring is already the provider under
+  # opentunnel and the updater, so `http()` in lib.rs installs that one.
+  "rustls-no-provider",
   # A remote session's attachment uploads as it is read, reporting progress.
   "stream",
 ] }
+# Only to install ring as the process's provider for `reqwest` (`http()`).
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 # Local speech-to-text. The engine is `transcribe-cpp` (MIT, "The transcribe.cpp
 # authors") — its own repo, not the Handy app's; `cpal` captures the microphone
 # and `rubato` resamples it to the 16kHz mono every model here expects. Audio
 # never leaves the machine. See transcription/.
-cpal = { version = "0.16", optional = true }
-rubato = { version = "0.16", optional = true }
+cpal = { version = "0.18", optional = true }
+rubato = { version = "5", optional = true }
 # Voice activity detection, pure Rust with its weights compiled in: dictation
 # cuts the pauses out before the model reads the audio.
 earshot = { version = "1.2", optional = true }
@@ -83,7 +88,7 @@ tauri-plugin-macos-permissions = { version = "2.3", optional = true }
 futures-util = "0.3"
 # Verifies a downloaded model against the catalog's hash. A partial file left by
 # a killed process is otherwise indistinguishable from a whole one.
-sha2 = "0.10"
+sha2 = "0.11"
 # Public addresses for Remote access and shared dev servers (tunnel.rs). TLS
 # ends in this process, so the relay sees no plaintext, and the address is kept.
 opentunnel = "0.5.1"
@@ -93,13 +98,14 @@ hyper = { version = "1", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tauri-plugin-window-state = { version = "2", optional = true }
 # `dray-serve`'s WebSocket. The server half alone, and no TLS: it binds localhost.
-tokio-tungstenite = { version = "0.28", optional = true, default-features = false, features = ["handshake"] }
+tokio-tungstenite = { version = "0.30", optional = true, default-features = false, features = ["handshake"] }
 # The file route's query string. Already in the tree under `reqwest`'s `url`.
 form_urlencoded = { version = "1", optional = true }
 # Unpacks the headless Chromium a server downloads, since a fresh Ubuntu has no
-# `unzip`. Deflate alone; both crates are already in the lock file (the
-# updater's zip, `png`'s flate2). See headless/download.rs.
-zip = { version = "4.6", optional = true, default-features = false, features = ["deflate-flate2"] }
+# `unzip`. Deflate alone, through the flate2 `png` already pulls in. The
+# updater's own zip is an older major and Windows-only, so Mac and Linux
+# build this one alone. See headless/download.rs.
+zip = { version = "9", optional = true, default-features = false, features = ["deflate-flate2"] }
 flate2 = { version = "1", optional = true }
 # The This Mac row's pairing QR for the phone. SVG alone: no `image` tree.
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
@@ -108,12 +114,12 @@ qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 # so it cannot be switched per model or per machine. Split across two tables
 # rather than one entry, since the `metal` feature does not compile elsewhere.
 [target.'cfg(target_os = "macos")'.dependencies]
-transcribe-cpp = { version = "0.2", default-features = false, features = [
+transcribe-cpp = { version = "0.4", default-features = false, features = [
   "metal",
 ], optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-transcribe-cpp = { version = "0.2", default-features = false, optional = true }
+transcribe-cpp = { version = "0.4", default-features = false, optional = true }
 
 # Embedded Chromium for the in-app browser, macOS only for now. Behind a
 # feature so a build without the CEF binaries on disk still compiles: the

@@ -46,7 +46,7 @@ fn slot(profile: &str) -> &'static tokio::sync::Mutex<Option<Live>> {
 
 async fn client() -> Result<Client> {
     let root = crate::store::get_home_app_dir().await?.join("opentunnel");
-    Ok(Client::new(ClientOptions { api: None, storage: Some(Storage::at(root)) }))
+    Ok(Client::new(ClientOptions { api: None, storage: Some(Storage::at(root)), ca_cert: None }))
 }
 
 /// Whether `profile` already has a tunnel on disk, so its first route waits
@@ -74,6 +74,42 @@ fn drop_unissued(root: &Path, profile: &str) {
     }
 }
 
+/// `profile`'s identity, registering it and waiting out its first
+/// certificate if it has none.
+async fn ensure(client: &Client, profile: &str) -> Result<opentunnel::Identity> {
+    match tokio::time::timeout(PROVISION_WAIT, client.ensure(profile)).await {
+        Ok(identity) => identity.context("could not set up the tunnel"),
+        Err(_) => {
+            // Resuming it would wait on the same stalled order.
+            drop_unissued(client.storage().root(), profile);
+            bail!(
+                "the relay did not issue the tunnel's certificate in {} minutes; try again",
+                PROVISION_WAIT.as_secs() / 60
+            )
+        }
+    }
+}
+
+/// Provisions `profile`'s identity ahead of its first route, so that route
+/// waits on no certificate (#626). Opens no tunnel. Does nothing where one is
+/// already issued; a failure is logged and the first route tries again.
+pub async fn warm(profile: &'static str) {
+    // Held so a share arriving mid-warm waits for this registration rather
+    // than starting a second one beside it.
+    let _live = slot(profile).lock().await;
+    let client = match client().await {
+        Ok(client) => client,
+        Err(e) => return eprintln!("tunnel: could not warm {profile}: {e:#}"),
+    };
+    if matches!(client.get(profile), Ok(Some(_))) {
+        return;
+    }
+    match ensure(&client, profile).await {
+        Ok(_) => eprintln!("tunnel: {profile} provisioned"),
+        Err(e) => eprintln!("tunnel: could not warm {profile}: {e:#}"),
+    }
+}
+
 /// Routes `label` on `profile`'s tunnel to `target` (`host:port`), answering
 /// its `https://` address once the relay has it attached.
 pub async fn expose(profile: &'static str, label: &str, target: String) -> Result<String> {
@@ -81,17 +117,7 @@ pub async fn expose(profile: &'static str, label: &str, target: String) -> Resul
         let mut live = slot(profile).lock().await;
         if live.is_none() {
             let client = client().await?;
-            let identity = match tokio::time::timeout(PROVISION_WAIT, client.ensure(profile)).await {
-                Ok(identity) => identity.context("could not set up the tunnel")?,
-                Err(_) => {
-                    // Resuming it would wait on the same stalled order.
-                    drop_unissued(client.storage().root(), profile);
-                    bail!(
-                        "the relay did not issue the tunnel's certificate in {} minutes; try again",
-                        PROVISION_WAIT.as_secs() / 60
-                    )
-                }
-            };
+            let identity = ensure(&client, profile).await?;
             let tunnel = client.connect(profile, Routes::new())?;
             *live = Some(Live { tunnel, hostname: identity.hostname, token: identity.token, routes: Routes::new() });
         }

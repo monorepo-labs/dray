@@ -1,4 +1,5 @@
 import SwiftUI
+import ThinkingOrbs
 
 /// What the server says about a session's pull requests. Lives in the session
 /// view, so the toolbar button knows whether there is anything to open.
@@ -196,7 +197,7 @@ private struct PrSection: View {
     /// Reopen, mark ready, or merge — and no close or branch delete, as on the desktop.
     @ViewBuilder private var action: some View {
         if model.acting {
-            HStack { Orb(); Text("Working…").foregroundStyle(.secondary) }
+            HStack { Orb(state: .working); Text("Working…").foregroundStyle(.secondary) }
         } else if pr.state == "CLOSED" {
             Button("Reopen") { Task { await model.act(store, "reopen_pr", pr.number) } }
         } else if pr.state == "OPEN" && pr.isDraft {
@@ -223,7 +224,7 @@ private struct CheckRow: View {
             switch check.state {
             case "success": Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
             case "failure": Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
-            case "pending": Orb()
+            case "pending": Orb(state: .working)
             default: Image(systemName: "minus.circle").foregroundStyle(.secondary)
             }
             Text(check.name).lineLimit(1)
