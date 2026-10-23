@@ -41,6 +41,17 @@ final class IslandPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+extension NSWindow {
+    /// WindowServer can drop a window's all-Spaces tag while the island runs, leaving
+    /// it on one desktop and never over a fullscreen app. AppKit skips setting a
+    /// behavior it thinks is unchanged, so it is cleared before being put back.
+    func rejoinAllSpaces() {
+        let behavior = collectionBehavior
+        collectionBehavior = []
+        collectionBehavior = behavior
+    }
+}
+
 @MainActor
 final class Delegate: NSObject, NSApplicationDelegate {
     private var panel: IslandPanel?
@@ -398,6 +409,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         guard let panel, let composer, !composer.shown else { return }
         composer.opened()
         place()
+        panel.rejoinAllSpaces()
         panel.makeKeyAndOrderFront(nil)
         composer.shown = true
         closeKey?.held = true
@@ -420,6 +432,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         guard let pills, let composer else { return }
         openKey?.held = composer.donePillUp
         if composer.hasPill {
+            pills.rejoinAllSpaces()
             pills.orderFrontRegardless()
         } else {
             // After the pill's own exit, which the view animates.
