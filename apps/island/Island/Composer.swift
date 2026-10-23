@@ -708,6 +708,9 @@ final class Composer {
         let sentRows = rows, sentTyping = typing
         rows = []
         typing = ""
+        // A done held for this session is the turn this message follows on from,
+        // and drawn as the panel closes it reads as an answer to the send.
+        if case .session(let k) = target { done.removeAll { $0 == k } }
         Sound.send?.playInBackground()
         flash("Sent")
         let sent: SessionKey?
