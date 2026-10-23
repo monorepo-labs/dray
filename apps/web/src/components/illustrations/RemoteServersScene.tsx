@@ -17,7 +17,8 @@ function phaseAt(t: number): Phase {
   return { loadDone: t >= 5, iosDone: t >= 7.2 };
 }
 
-export default function RemoteServersScene() {
+/// `plain` leaves the maker's mark off the hardware.
+export default function RemoteServersScene({ plain = false }: { plain?: boolean }) {
   const wrap = useRef<HTMLDivElement>(null);
   const cards = useRef<(HTMLDivElement | null)[]>([]);
   const leaders = useRef<(SVGLineElement | null)[]>([]);
@@ -51,7 +52,7 @@ export default function RemoteServersScene() {
         gl={{ antialias: true }}
         onCreated={({ camera }) => camera.lookAt(0, 0.85, 0)}
       >
-        <Scene still={still} phase={phase} onPhase={setPhase} cards={cards} leaders={leaders} />
+        <Scene still={still} phase={phase} onPhase={setPhase} cards={cards} leaders={leaders} plain={plain} />
       </Canvas>
       <svg className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
         {[0, 1].map(i => <line key={i} ref={el => void (leaders.current[i] = el)} stroke="#72757a" strokeOpacity={0.55} strokeWidth={1} />)}
@@ -81,7 +82,9 @@ function Scene({
   onPhase,
   cards,
   leaders,
+  plain,
 }: {
+  plain: boolean;
   still: boolean;
   phase: Phase;
   onPhase: (p: Phase) => void;
@@ -139,7 +142,7 @@ function Scene({
         <MacBook phase={phase} cards={cards} />
       </group>
       <group position={MINI_AT} rotation-y={0.28}>
-        <MacMini />
+        <MacMini plain={plain} />
       </group>
       <group position={RACK_AT} rotation-y={-0.30}>
         <RackServer />
@@ -436,14 +439,14 @@ function AppleMark({ y }: { y: number }) {
   return <mesh position={[0, y, 0]} rotation-x={-Math.PI / 2} scale={0.72}><shapeGeometry args={[shapes, 20]} /><meshStandardMaterial color="#4a4d52" metalness={1} roughness={0.3} /></mesh>;
 }
 
-function MacMini() {
+function MacMini({ plain }: { plain: boolean }) {
   const S = 1.65;
   const H = 0.34;
   return (
     <group>
       <Shell width={S - 0.15} depth={S - 0.15} height={0.055} radius={0.25} position={[0, 0.025, 0]} color="#101113" />
       <Shell width={S} depth={S} height={H} radius={0.23} position={[0, 0.075, 0]} color="#b9bcc1" roughness={0.24} />
-      <AppleMark y={H + 0.078} />
+      {!plain && <AppleMark y={H + 0.078} />}
       {/* Front: two USB-C ports, the headphone jack, the power light. */}
       {[-0.32, -0.18].map((x) => (
         <RoundedBox key={x} args={[0.09, 0.028, 0.01]} radius={0.012} position={[x, H * 0.45 + 0.075, S / 2 + 0.029]}>

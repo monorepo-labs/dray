@@ -6,10 +6,10 @@ import dynamic from "next/dynamic";
 /// browser only, behind a box already holding its size.
 const Scene = dynamic(() => import("./RemoteServersScene"), { ssr: false });
 
-export function RemoteServers({ className }: { className?: string }) {
+export function RemoteServers({ className, plain }: { className?: string; plain?: boolean }) {
   return (
     <div className={`aspect-[1128/430] w-full ${className ?? ""}`}>
-      <Scene />
+      <Scene plain={plain} />
     </div>
   );
 }

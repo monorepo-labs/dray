@@ -1,0 +1,28 @@
+/* The crew picture's three steps, each lit while the picture tells it. Same
+   12s loop as the SVG's clock, which starts at the same moment. */
+.step {
+  opacity: 0.4;
+  animation-duration: 12s;
+  animation-iteration-count: infinite;
+  animation-timing-function: step-end;
+}
+@keyframes step0 {
+  0% { opacity: 1; }
+  10% { opacity: 0.4; }
+}
+@keyframes step1 {
+  0% { opacity: 0.4; }
+  10% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+@keyframes step2 {
+  0% { opacity: 0.4; }
+  50% { opacity: 1; }
+  94% { opacity: 0.4; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .step {
+    animation: none;
+    opacity: 1;
+  }
+}

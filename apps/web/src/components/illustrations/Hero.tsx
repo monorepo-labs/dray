@@ -34,10 +34,11 @@ const HEIGHT = 720;
 
 /// The app, whole, above the fold: a session beside its pull request. The
 /// last check passes, the reader says merge it, the agent does, and the panel
-/// follows — the one loop that shows where a Dray session ends up.
-export function Hero({ className }: { className?: string }) {
+/// follows — the one loop that shows where a Dray session ends up. `startX`
+/// is where a phone's sideways scroll opens; 0 opens on the sidebar.
+export function Hero({ className, startX = 240 }: { className?: string; startX?: number }) {
   return (
-    <ScaledWindow width={WIDTH} height={HEIGHT} minScale={0.7} startX={240} className={`${s.scene} ${className ?? ""}`}>
+    <ScaledWindow width={WIDTH} height={HEIGHT} minScale={0.7} startX={startX} className={`${s.scene} ${className ?? ""}`}>
       <Window
         className="h-full w-full"
         sidebar={

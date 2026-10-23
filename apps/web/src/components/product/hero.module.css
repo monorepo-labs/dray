@@ -1,0 +1,264 @@
+/* The hero's moving parts. Phases are set from script; everything that moves
+   inside a phase is a CSS animation keyed off the element mounting, so the
+   script only says *when*, never *how far*. */
+
+.fadeIn {
+  animation: fadeIn 200ms ease-out both;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+}
+
+/* One word at a time, the rate somebody talks at. `--i` is the word's index. */
+.word {
+  display: inline-block;
+  animation: word 260ms ease-out both;
+  animation-delay: calc(var(--i) * 230ms);
+}
+@keyframes word {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+    filter: blur(3px);
+  }
+}
+
+/* The pen: the stroke and the dot riding it share one duration and curve, so
+   the dot is always at the end of the ink. */
+.ink {
+  stroke-dasharray: 1;
+  animation: ink 1100ms cubic-bezier(0.45, 0.05, 0.4, 1) both;
+}
+@keyframes ink {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.pen {
+  offset-rotate: 0deg;
+  animation: pen 1100ms cubic-bezier(0.45, 0.05, 0.4, 1) both;
+}
+@keyframes pen {
+  from {
+    offset-distance: 0%;
+  }
+  to {
+    offset-distance: 100%;
+  }
+}
+
+/* The ink fades as the capture is taken, over Island's 0.4s. */
+.inkGone {
+  transition: opacity 400ms ease-out;
+  opacity: 0;
+}
+
+/* The capture: a flash where it was taken, then the flight into the notch. */
+.flash {
+  animation: flash 380ms ease-out both;
+}
+@keyframes flash {
+  0% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.fly {
+  transition:
+    transform 500ms cubic-bezier(0.55, 0, 0.35, 1) 220ms,
+    opacity 500ms ease-in 220ms;
+}
+
+/* Reloading after the agent's fix. */
+.loadBar {
+  animation: load 1300ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+@keyframes load {
+  from {
+    transform: scaleX(0);
+  }
+  80% {
+    opacity: 1;
+  }
+  to {
+    transform: scaleX(1);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fadeIn,
+  .word,
+  .ink,
+  .pen,
+  .flash,
+  .loadBar {
+    animation: none;
+  }
+}
+
+/* The attention pill's fresh-news glow: a yellow edge that flares and
+   settles. A drop-shadow, so it follows the notch's ears and corners rather
+   than the box. */
+.glow {
+  animation: glow 3.2s ease-out infinite;
+}
+@keyframes glow {
+  0%,
+  8% {
+    filter: drop-shadow(0 0 0.75px rgb(229 192 87 / 0.95)) drop-shadow(0 0 10px rgb(229 192 87 / 0.5));
+  }
+  70%,
+  100% {
+    filter: drop-shadow(0 0 0.75px rgb(229 192 87 / 0)) drop-shadow(0 0 10px rgb(229 192 87 / 0));
+  }
+}
+
+/* One alert at a time: the attention pill, then the done pill, each growing
+   out of the notch and shrinking back into it. */
+.alertA,
+.alertB {
+  transform-origin: top center;
+  animation: alert 8s cubic-bezier(0.34, 1.32, 0.64, 1) infinite;
+}
+.alertB {
+  animation-delay: -4s;
+}
+@keyframes alert {
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  6%,
+  44% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50%,
+  100% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+}
+
+/* ⌘⇧2: the region drawn out from its corner, held, then let go. The size
+   is animated as two registered integers so the "W × H" label can count
+   along with it — in device pixels, as Island prints it. */
+@property --rw {
+  syntax: "<integer>";
+  inherits: true;
+  initial-value: 640;
+}
+@property --rh {
+  syntax: "<integer>";
+  inherits: true;
+  initial-value: 300;
+}
+.region {
+  width: calc(var(--rw) * 0.5px);
+  height: calc(var(--rh) * 0.5px);
+  animation: region 4.5s cubic-bezier(0.5, 0, 0.2, 1) infinite;
+}
+.region::after {
+  counter-reset: rw var(--rw) rh var(--rh);
+  content: counter(rw) " \00d7  " counter(rh);
+  position: absolute;
+  right: 0;
+  bottom: -20px;
+  font-size: 12px;
+  font-weight: 500;
+  color: white;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+@keyframes region {
+  0% {
+    --rw: 0;
+    --rh: 0;
+  }
+  35%,
+  100% {
+    --rw: 640;
+    --rh: 300;
+  }
+}
+
+/* A highlight walking down a list, one row a beat, as ↑↓ would. */
+.walk {
+  animation: walk 4s steps(1, end) infinite;
+}
+@keyframes walk {
+  0% {
+    transform: translateY(0);
+  }
+  25% {
+    transform: translateY(32px);
+  }
+  50% {
+    transform: translateY(64px);
+  }
+  75% {
+    transform: translateY(32px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glow,
+  .region,
+  .walk,
+  .alertA {
+    animation: none;
+  }
+  .alertB {
+    display: none;
+  }
+}
+
+/* Testimonials: each row holds its cards twice and slides by exactly one
+   copy, so the loop has no seam. Hover holds it for reading. */
+.marquee {
+  animation: marquee 60s linear infinite;
+}
+.marquee[data-reverse] {
+  animation-direction: reverse;
+}
+.marquee:hover {
+  animation-play-state: paused;
+}
+@keyframes marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .marquee {
+    animation: none;
+  }
+}
+
+
+/* The headline's agent mark: hold, then rise by one cell's height (1.2em),
+   five times over. */
+.roll {
+  animation: roll 7.5s cubic-bezier(0.7, 0, 0.2, 1) infinite;
+}
+@keyframes roll {
+  0%, 16% { transform: translateY(0); }
+  20%, 36% { transform: translateY(-1.2em); }
+  40%, 56% { transform: translateY(-2.4em); }
+  60%, 76% { transform: translateY(-3.6em); }
+  80%, 96% { transform: translateY(-4.8em); }
+  100% { transform: translateY(-6em); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .roll {
+    animation: none;
+  }
+}

@@ -8,7 +8,8 @@ import { FEEDBACK } from "@/lib/links";
 /// The last word: one sentence, the download again, and the repo. The
 /// hero's button is a screen and a half up by now, and somebody who read this
 /// far has decided — so the ask is here, where they are.
-export function Cta({ className }: { className?: string }) {
+/// `light` and `dark` restyle the buttons where a page draws its own.
+export function Cta({ className, light, dark }: { className?: string; light?: string; dark?: string }) {
   return (
     <section
       id="download"
@@ -23,8 +24,8 @@ export function Cta({ className }: { className?: string }) {
         agents all day. Issues, pull requests and ideas are all welcome.
       </p>
       <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row">
-        <DownloadButton />
-        <ContributeButton />
+        <DownloadButton className={light} />
+        <ContributeButton className={dark} />
         {/* The person, not the product account — same reasoning as the nav's
             Feedback link: most visitors came from a tweet and are looking for
             who made it. */}
@@ -32,7 +33,7 @@ export function Cta({ className }: { className?: string }) {
           href={FEEDBACK}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 rounded-full bg-card px-5 py-2.5 text-sm font-medium transition-colors hover:bg-muted"
+          className={dark ?? "inline-flex items-center gap-2 rounded-full bg-card px-5 py-2.5 text-sm font-medium transition-colors hover:bg-muted"}
         >
           <XGlyph className="size-3.5" />
           Follow the journey

@@ -19,14 +19,25 @@ import { SPONSOR } from "@/lib/links";
 ///
 /// Deliberately not a list in `lib/` — two entries drawn two different ways
 /// (an avatar, a mark) have no shape worth sharing.
-export function Sponsors({ className }: { className?: string }) {
+///
+/// `row` is the product preview's shape: heading and both names on one line,
+/// Greptile in its own colours, and no ask, the nav carrying the Sponsor link.
+export function Sponsors({ className, row = false }: { className?: string; row?: boolean }) {
   return (
-    <section className={`flex flex-col items-center text-center ${className ?? ""}`}>
-      <h2 className="mb-6 font-display text-xl leading-tight font-medium tracking-tight text-balance sm:text-2xl">
+    <section
+      className={`flex ${row ? "flex-col items-start gap-5 text-left sm:flex-row sm:flex-wrap sm:items-center sm:justify-center sm:gap-x-10" : "flex-col items-center text-center"} ${className ?? ""}`}
+    >
+      <h2
+        className={
+          row
+            ? "text-sm font-medium text-muted-foreground"
+            : "mb-6 font-display text-xl leading-tight font-medium tracking-tight text-balance sm:text-2xl"
+        }
+      >
         Supported by
       </h2>
 
-      <div className="grid w-full gap-6 sm:grid-cols-2">
+      <div className={row ? "flex flex-col items-start gap-4 sm:contents" : "grid w-full gap-6 sm:grid-cols-2"}>
         {/* "Vercel CEO" is who he is, not who is paying — the grant is his own
             programme and Vercel is nowhere in it. It earns the line anyway,
             since the name alone means nothing to a reader who doesn't follow
@@ -72,9 +83,17 @@ export function Sponsors({ className }: { className?: string }) {
             one does. */}
         <Entry
           mark={
-            <span className="grid size-10 shrink-0 place-items-center rounded-full bg-card">
-              <GreptileGlyph className="size-5" />
-            </span>
+            row ? (
+              // Greptile's brand mark: its glyph in near-black on mint, the
+              // tile its favicon draws, sampled from greptile-brand-mark.png.
+              <span className="grid size-10 shrink-0 place-items-center rounded-full bg-[#28E99F] text-[#2A2A2A]">
+                <GreptileGlyph className="h-5 w-auto" />
+              </span>
+            ) : (
+              <span className="grid size-10 shrink-0 place-items-center rounded-full bg-card">
+                <GreptileGlyph className="size-5" />
+              </span>
+            )
           }
           name={
             <Credit href="https://www.greptile.com/" sponsor="greptile" destination="website">
@@ -87,15 +106,17 @@ export function Sponsors({ className }: { className?: string }) {
 
       {/* The way in for the next name. One quiet line under the two rather
           than a button beside them: the section credits, it does not ask. */}
-      <a
-        href={SPONSOR}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="mt-6 inline-flex items-center gap-0.5 text-sm text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
-      >
-        Support the project
-        <ArrowUpRight className="size-3.5" aria-hidden />
-      </a>
+      {!row && (
+        <a
+          href={SPONSOR}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-6 inline-flex items-center gap-0.5 text-sm text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+        >
+          Support the project
+          <ArrowUpRight className="size-3.5" aria-hidden />
+        </a>
+      )}
     </section>
   );
 }
