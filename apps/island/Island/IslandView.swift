@@ -236,8 +236,8 @@ struct IslandView: View {
                     .scrollIndicators(.never)
                     .padding(8)
                     .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-                } else if let i = composer.rows.firstIndex(where: { $0.id == ids[0] }) {
-                    RowView(row: $composer.rows[i]) { remove(ids[0]) }
+                } else if let row = composer.rows.first(where: { $0.id == ids[0] }) {
+                    RowView(row: binding(row)) { remove(ids[0]) }
                         .id(ids[0])
                         .reorderable(ids[0], move)
                 }
@@ -259,6 +259,17 @@ struct IslandView: View {
     /// The id is taken by value: read through a binding inside `removeAll`, it
     /// reenters `rows` mid-mutation and Swift aborts.
     private func remove(_ id: UUID) { composer.rows.removeAll { $0.id == id } }
+
+    /// Keyed by id, not index: a send empties `rows` while the panel animates
+    /// shut, and a stale index binding reads past the end and Swift aborts.
+    private func binding(_ row: Row) -> Binding<Row> {
+        Binding(
+            get: { composer.rows.first { $0.id == row.id } ?? row },
+            set: { new in
+                if let i = composer.rows.firstIndex(where: { $0.id == row.id }) { composer.rows[i] = new }
+            }
+        )
+    }
 
     private var title: String {
         switch composer.target {
