@@ -28,10 +28,7 @@ enum Capture {
         let grab = try await reader(of: screen)
         let model = Marking(size: screen.frame.size) { rect in
             let image = await grab(rect)
-            if image != nil {
-                shutter?.stop()
-                shutter?.play()
-            }
+            if image != nil { shutter?.playInBackground() }
             return image
         }
         model.notchHeight = screen.safeAreaInsets.top

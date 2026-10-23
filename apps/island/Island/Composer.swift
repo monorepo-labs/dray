@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Observation
 
 /// One line of the message being built, in the order it was said or typed,
@@ -96,6 +97,7 @@ final class Composer {
     var shown = false {
         didSet {
             if oldValue, !shown { released() } else if !oldValue, shown { leaving = nil; coverDone() }
+            if shown != oldValue { Sound.keepAwake(shown) }
         }
     }
     /// Whether the panel has held the keys since it opened, which is when a bare Esc reaches it.
@@ -269,7 +271,7 @@ final class Composer {
 
     /// Dray in front sounds its own notice, so a chime here would double it.
     private func chime() {
-        if !Self.drayInFront { Sound.done?.play() }
+        if !Self.drayInFront { Sound.done?.playInBackground() }
     }
 
     /// The panel shut: what was held is shown now, as the pill, with its one sound.
@@ -678,9 +680,27 @@ final class Composer {
 
     @discardableResult
     func send() async -> Bool {
-        // The words still being spoken belong to this message, so a failed
-        // transcription keeps the draft open, its notice and Retry with it.
-        if dictation == .recording, !(await stopDictation()) { return false }
+        // Words still being spoken, or a drawing whose image is still landing,
+        // count as something to send: both are waited for behind the flash.
+        let recording = dictation == .recording
+        guard dictation == .idle || recording, !capturing, !retryingCut, !sending, !saving, let target,
+              recording || canSend || rows.contains(where: \.pending) else { return false }
+        if target == .new, projectPath == nil {
+            notice = "Pick a project first."
+            return false
+        }
+        sending = true
+        defer { sending = false }
+        // Sent is said at the press and everything else runs behind it: the
+        // transcription, then a server that answers only after a session read
+        // and a git snapshot. Each is time the reader would otherwise watch.
+        Sound.send?.playInBackground()
+        flash("Sent")
+        // A failed transcription keeps the draft open, its notice and Retry with it.
+        if recording, !(await stopDictation()) {
+            unflash()
+            return false
+        }
         // Closing the microphone takes the drawing still on screen; its image lands a moment later.
         // ponytail: polls for up to 30s; an awaitable per held row if this ever needs to be exact.
         var waited = 0
@@ -688,31 +708,55 @@ final class Composer {
             try? await Task.sleep(for: .milliseconds(100))
             waited += 1
         }
-        // After the wait: a dictation started meanwhile holds words this send would leave behind.
+        // A dictation started meanwhile already took the draft back (`dictation`'s didSet).
         guard dictation == .idle else { return false }
+        // Nothing heard and nothing else written: the notice says so.
+        guard canSend else {
+            unflash()
+            return false
+        }
         let text = prompt, files = attachments
-        guard canSend, !sending, !saving, let target else { return false }
-        sending = true
-        defer { sending = false }
-        // Only what went out is cleared: the draft stays editable while the request runs.
-        let sentRows = Set(rows.map(\.id)), sentTyping = typing
+        let sentRows = rows, sentTyping = typing
+        rows = []
+        typing = ""
         let sent: SessionKey?
+        var failure: String?
         switch target {
         case .session(let k):
             sent = await store.send(k, text, attachments: files) ? k : nil
-            if sent == nil { notice = store.lastError }
+            if sent == nil { failure = store.lastError }
         case .new:
             sent = await create(text, files)
+            if sent == nil { failure = notice }
         }
-        guard let sent else { return false }
-        rows.removeAll { sentRows.contains($0.id) }
-        if typing == sentTyping { typing = "" }
+        guard let sent else {
+            restore(sentRows, sentTyping, failure)
+            return false
+        }
         lastUsed = sent.id
         UserDefaults.standard.set(sent.id, forKey: "island.lastSession")
-        self.target = .session(sent)
-        Sound.send?.play()
-        flash("Sent")
+        // A pick made while the request ran is the reader's, and outranks this one.
+        if self.target == target { self.target = .session(sent) }
         return true
+    }
+
+    /// A send that failed behind its Sent: the draft back ahead of anything
+    /// begun since, the panel open on it if the flash already closed it, and why.
+    private func restore(_ sentRows: [Row], _ sentTyping: String, _ failure: String?) {
+        rows = sentRows + rows
+        typing = typing.isEmpty ? sentTyping : sentTyping + " " + typing
+        notice = failure ?? "Couldn't send."
+        unflash()
+    }
+
+    /// Takes a Sent back: the panel open on the draft, if the flash already
+    /// closed it, keeping the notice and Retry that opening would clear.
+    private func unflash() {
+        let n = notice, r = retryPath
+        sent = false
+        present()
+        notice = n
+        retryPath = r
     }
 
     /// Says it went, then closes the panel, or turns to a card held while the
@@ -856,7 +900,7 @@ final class Composer {
             }
             dictation = .recording
             listShown = false
-            Sound.start?.play()
+            Sound.start?.playInBackground()
             Task { await pollLevel() }
         } catch {
             dictation = .idle
@@ -939,7 +983,8 @@ final class Composer {
         case "text":
             if let text = o.value?.string, !text.isEmpty {
                 rows.append(Row(text: text, said: true))
-                Sound.stop?.play()
+                // A send already sounded at the press, and a tone after it reads as a second event.
+                if !sending { Sound.stop?.playInBackground() }
             }
             return true
         case "empty":
@@ -975,4 +1020,29 @@ enum Sound {
     static let done = NSSound(named: "notification")
     /// Shimmer lift from `demo/send-sound.html`, rendered at 25%.
     static let send = NSSound(named: "send")
+
+    /// Silence playing while the panel is open. macOS powers the output down
+    /// a few seconds after the last sound, and waking it put the send sound a
+    /// beat behind its Sent; the panel is the only place that sound can come from.
+    private static let silence: AVAudioEngine = {
+        let engine = AVAudioEngine()
+        _ = engine.mainMixerNode
+        return engine
+    }()
+
+    static func keepAwake(_ on: Bool) {
+        NSSound.queue.async {
+            if on { try? silence.start() } else { silence.stop() }
+        }
+    }
+}
+
+extension NSSound {
+    fileprivate static let queue = DispatchQueue(label: "island.sound", qos: .userInteractive)
+
+    /// `play()` blocks until the output device is awake — 774ms measured on a
+    /// send — so it runs off the main thread, where it held up the Sent it rang for.
+    func playInBackground() {
+        Self.queue.async { self.stop(); self.play() }
+    }
 }
