@@ -680,27 +680,9 @@ final class Composer {
 
     @discardableResult
     func send() async -> Bool {
-        // Words still being spoken, or a drawing whose image is still landing,
-        // count as something to send: both are waited for behind the flash.
-        let recording = dictation == .recording
-        guard dictation == .idle || recording, !capturing, !retryingCut, !sending, !saving, let target,
-              recording || canSend || rows.contains(where: \.pending) else { return false }
-        if target == .new, projectPath == nil {
-            notice = "Pick a project first."
-            return false
-        }
-        sending = true
-        defer { sending = false }
-        // Sent is said at the press and everything else runs behind it: the
-        // transcription, then a server that answers only after a session read
-        // and a git snapshot. Each is time the reader would otherwise watch.
-        Sound.send?.playInBackground()
-        flash("Sent")
-        // A failed transcription keeps the draft open, its notice and Retry with it.
-        if recording, !(await stopDictation()) {
-            unflash()
-            return false
-        }
+        // The words still being spoken belong to this message, so a failed
+        // transcription keeps the draft open, its notice and Retry with it.
+        if dictation == .recording, !(await stopDictation()) { return false }
         // Closing the microphone takes the drawing still on screen; its image lands a moment later.
         // ponytail: polls for up to 30s; an awaitable per held row if this ever needs to be exact.
         var waited = 0
@@ -708,17 +690,25 @@ final class Composer {
             try? await Task.sleep(for: .milliseconds(100))
             waited += 1
         }
-        // A dictation started meanwhile already took the draft back (`dictation`'s didSet).
+        // After the wait: a dictation started meanwhile holds words this send would leave behind.
         guard dictation == .idle else { return false }
-        // Nothing heard and nothing else written: the notice says so.
-        guard canSend else {
-            unflash()
+        let text = prompt, files = attachments
+        guard canSend, !sending, !saving, let target else { return false }
+        if target == .new, projectPath == nil {
+            notice = "Pick a project first."
             return false
         }
-        let text = prompt, files = attachments
+        sending = true
+        defer { sending = false }
+        // Sent is said here and the request runs behind it: the server answers
+        // only after a session read and a git snapshot, ~200ms the reader would
+        // otherwise watch. The message leaves the draft whole first, so nothing
+        // typed after Return can join it.
         let sentRows = rows, sentTyping = typing
         rows = []
         typing = ""
+        Sound.send?.playInBackground()
+        flash("Sent")
         let sent: SessionKey?
         var failure: String?
         switch target {
@@ -730,7 +720,7 @@ final class Composer {
             if sent == nil { failure = notice }
         }
         guard let sent else {
-            restore(sentRows, sentTyping, failure)
+            restore(text, sentRows, sentTyping, to: target, failure ?? "Couldn't send.")
             return false
         }
         lastUsed = sent.id
@@ -740,23 +730,25 @@ final class Composer {
         return true
     }
 
-    /// A send that failed behind its Sent: the draft back ahead of anything
-    /// begun since, the panel open on it if the flash already closed it, and why.
-    private func restore(_ sentRows: [Row], _ sentTyping: String, _ failure: String?) {
-        rows = sentRows + rows
-        typing = typing.isEmpty ? sentTyping : sentTyping + " " + typing
-        notice = failure ?? "Couldn't send."
-        unflash()
-    }
-
-    /// Takes a Sent back: the panel open on the draft, if the flash already
-    /// closed it, keeping the notice and Retry that opening would clear.
-    private func unflash() {
-        let n = notice, r = retryPath
+    /// A send that failed behind its Sent comes back as the draft, on the
+    /// session it was for, the panel open on it if the flash already closed it.
+    /// A draft begun since for somewhere else is the reader's and is left
+    /// alone, so the failed message goes to the clipboard instead of into it.
+    private func restore(_ text: String, _ sentRows: [Row], _ sentTyping: String, to dest: Target, _ why: String) {
+        var why = why
+        if target == dest || (rows.isEmpty && typing.isEmpty) {
+            target = dest
+            rows = sentRows + rows
+            typing = typing.isEmpty ? sentTyping : sentTyping + " " + typing
+        } else {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            why += " The message is on the clipboard."
+        }
         sent = false
         present()
-        notice = n
-        retryPath = r
+        // Last: the draft's setters and opening the panel both clear it.
+        notice = why
     }
 
     /// Says it went, then closes the panel, or turns to a card held while the
@@ -983,8 +975,7 @@ final class Composer {
         case "text":
             if let text = o.value?.string, !text.isEmpty {
                 rows.append(Row(text: text, said: true))
-                // A send already sounded at the press, and a tone after it reads as a second event.
-                if !sending { Sound.stop?.playInBackground() }
+                Sound.stop?.playInBackground()
             }
             return true
         case "empty":
