@@ -12,7 +12,8 @@ import "../App.css";
 ///
 /// Both strips are the real components. The browser's tab order lives in Rust,
 /// so the bridge is stubbed here to answer `browser_move` the way the app does:
-/// reorder, then publish `browser_tabs`.
+/// reorder, then publish `browser_tabs`. `browser_open` answers right-click
+/// Duplicate tab the same way: a new active tab at the end.
 const SESSION = "demo-session";
 
 let tabs = ["Acme", "Pricing", "Docs", "Changelog", "Blog", "Careers"].map(
@@ -46,7 +47,7 @@ Object.assign(window, {
     },
     invoke: async (
       cmd: string,
-      args: { event?: string; handler?: number; id?: number; to?: number },
+      args: { event?: string; handler?: number; id?: number; to?: number; url?: string },
     ) => {
       switch (cmd) {
         case "plugin:event|listen":
@@ -62,6 +63,13 @@ Object.assign(window, {
           tabs = next;
           emit("browser_tabs", { sessionId: SESSION, tabs });
           return tabs;
+        }
+        case "browser_open": {
+          const from = tabs.find((t) => t.url === args.url)!;
+          const id = Math.max(...tabs.map((t) => t.id)) + 1;
+          tabs = [...tabs.map((t) => ({ ...t, active: false })), { ...from, id, active: true }];
+          emit("browser_tabs", { sessionId: SESSION, tabs });
+          return null;
         }
         case "browser_activate":
           tabs = tabs.map((t) => ({ ...t, active: t.id === args.id }));
@@ -132,6 +140,16 @@ async function dragCheck(): Promise<string> {
   return out.join("\n");
 }
 
+/// Right-clicks the browser strip's third tab, opening its real menu, for an
+/// agent whose browser verbs have no right button.
+function rightClickTab() {
+  const tab = document.querySelectorAll<HTMLElement>("#browser-tabs [role=tab]")[2];
+  const r = tab.getBoundingClientRect();
+  tab.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, button: 2, clientX: r.left + 10, clientY: r.bottom }),
+  );
+}
+
 function Demo() {
   const [check, setCheck] = useState("");
   const [files, setFiles] = useState(FILES);
@@ -155,6 +173,13 @@ function Demo() {
             className="rounded-md border border-border px-3 py-1.5 text-sm"
           >
             Run drag check
+          </button>
+          <button
+            type="button"
+            onClick={rightClickTab}
+            className="rounded-md border border-border px-3 py-1.5 text-sm"
+          >
+            Right-click a browser tab
           </button>
           <pre id="drag-check" className="text-xs text-muted-foreground">
             {check}

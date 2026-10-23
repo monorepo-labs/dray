@@ -25,6 +25,8 @@ import Favicon, { hostOf } from "@/components/browser/Favicon";
 import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
 import RecordingNotice from "@/components/browser/RecordingNotice";
 import ShortcutKeys from "@/components/ShortcutKeys";
+import TabMenu from "@/components/browser/TabMenu";
+import { ContextMenuTrigger } from "@/components/ui/context-menu";
 import Spinner from "@/components/ui/spinner";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
@@ -413,6 +415,14 @@ function Chrome({
                 if (!tab.active) void activateTab(sessionId, tab.id);
               }}
               onClose={() => void closeTab(sessionId, tab.id)}
+              onDuplicate={
+                tab.url
+                  ? () => {
+                      setPendingTab(sessionId, false);
+                      void openInBrowser(sessionId, tab.url, true).catch(() => undefined);
+                    }
+                  : undefined
+              }
             />
           ))}
           {blanks.ids.map((id) => (
@@ -683,6 +693,7 @@ function TabButton({
   locked = false,
   onPick,
   onClose,
+  onDuplicate,
   onPointerDown,
   transform,
   held = false,
@@ -700,6 +711,8 @@ function TabButton({
   locked?: boolean;
   onPick: () => void;
   onClose: () => void;
+  /// Right-click Duplicate tab, on real tabs only.
+  onDuplicate?: () => void;
   /// Drag-to-reorder, on real tabs only.
   onPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
   transform?: string;
@@ -712,6 +725,8 @@ function TabButton({
 }) {
   const pick = locked ? undefined : onPick;
   return (
+    <TabMenu onDuplicate={locked ? undefined : onDuplicate}>
+    <ContextMenuTrigger asChild disabled={!onDuplicate || locked}>
     <div
       role="tab"
       aria-selected={active}
@@ -760,6 +775,8 @@ function TabButton({
         <X className="size-3" />
       </button>}
     </div>
+    </ContextMenuTrigger>
+    </TabMenu>
   );
 }
 
