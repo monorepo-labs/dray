@@ -720,7 +720,7 @@ final class Composer {
             if sent == nil { failure = notice }
         }
         guard let sent else {
-            restore(text, sentRows, sentTyping, to: target, failure ?? "Couldn't send.")
+            restore(sentRows, sentTyping, to: target, failure ?? "Couldn't send.")
             return false
         }
         lastUsed = sent.id
@@ -733,8 +733,9 @@ final class Composer {
     /// A send that failed behind its Sent comes back as the draft, on the
     /// session it was for, the panel open on it if the flash already closed it.
     /// A draft begun since for somewhere else is the reader's and is left
-    /// alone, so the failed message goes to the clipboard instead of into it.
-    private func restore(_ text: String, _ sentRows: [Row], _ sentTyping: String, to dest: Target, _ why: String) {
+    /// alone, so the failed message goes to the clipboard instead of into it,
+    /// each file as its path, since a label like `[Image 1]` would lose it.
+    private func restore(_ sentRows: [Row], _ sentTyping: String, to dest: Target, _ why: String) {
         var why = why
         if target == dest || (rows.isEmpty && typing.isEmpty) {
             target = dest
@@ -742,6 +743,10 @@ final class Composer {
             typing = typing.isEmpty ? sentTyping : sentTyping + " " + typing
         } else {
             NSPasteboard.general.clearContents()
+            let text = (sentRows.map { $0.file ?? $0.text } + [sentTyping])
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
             NSPasteboard.general.setString(text, forType: .string)
             why += " The message is on the clipboard."
         }
