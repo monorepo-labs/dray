@@ -60,6 +60,7 @@ function start() {
         });
       }
       openErrors.delete(sessionId);
+      opening.delete(sessionId);
     }
     tabsBySession.set(sessionId, tabs);
     fetched.add(sessionId);
@@ -248,9 +249,13 @@ export function clearOpenError(sessionId: string) {
 export function openInBrowser(sessionId: string, url: string, newTab = false, fromBlank?: number | null) {
   openErrors.delete(sessionId);
   if (fromBlank != null) submitted.set(sessionId, fromBlank);
+  // A page loading into a tab already there draws its address from Rust at
+  // once; one that has to be made first has no tab to draw it on yet.
+  if (newTab || !tabsBySession.get(sessionId)?.some((t) => t.active)) opening.set(sessionId, url);
   notify();
   return invoke("browser_open", { sessionId, url, newTab }).catch((e: unknown) => {
     if (submitted.get(sessionId) === fromBlank) submitted.delete(sessionId);
+    if (opening.get(sessionId) === url) opening.delete(sessionId);
     openErrors.set(sessionId, String(e));
     notify();
     throw e;
@@ -426,6 +431,13 @@ const blanks = new Map<string, BlankTabs>();
 let nextBlank = 1;
 /// The blank whose URL is on its way to being a page, per session.
 const submitted = new Map<string, number>();
+/// The address of a tab Chromium is still making, per session, so the URL bar
+/// shows it from the click rather than from the tab's arrival.
+const opening = new Map<string, string>();
+
+export function useOpeningUrl(sessionId: string): string | null {
+  return useSyncExternalStore(subscribe, () => opening.get(sessionId) ?? null);
+}
 
 /// What is typed into each tab's URL field, keyed `<session>:blank:<id>` or
 /// `<session>:page:<id>`. Here rather than in the pane, since the panel and the
