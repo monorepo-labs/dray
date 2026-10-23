@@ -251,11 +251,14 @@ export function openInBrowser(sessionId: string, url: string, newTab = false, fr
   if (fromBlank != null) submitted.set(sessionId, fromBlank);
   // A page loading into a tab already there draws its address from Rust at
   // once; one that has to be made first has no tab to draw it on yet.
-  if (newTab || !tabsBySession.get(sessionId)?.some((t) => t.active)) opening.set(sessionId, url);
+  // Owned by the blank the page will replace, the same pick the tab's arrival makes.
+  if (newTab || !tabsBySession.get(sessionId)?.some((t) => t.active)) {
+    opening.set(sessionId, { url, blank: fromBlank ?? blanks.get(sessionId)?.active ?? null });
+  }
   notify();
   return invoke("browser_open", { sessionId, url, newTab }).catch((e: unknown) => {
     if (submitted.get(sessionId) === fromBlank) submitted.delete(sessionId);
-    if (opening.get(sessionId) === url) opening.delete(sessionId);
+    if (opening.get(sessionId)?.url === url) opening.delete(sessionId);
     openErrors.set(sessionId, String(e));
     notify();
     throw e;
@@ -433,10 +436,14 @@ let nextBlank = 1;
 const submitted = new Map<string, number>();
 /// The address of a tab Chromium is still making, per session, so the URL bar
 /// shows it from the click rather than from the tab's arrival.
-const opening = new Map<string, string>();
+const opening = new Map<string, { url: string; blank: number | null }>();
 
+/// Only on the blank that asked for it, so another blank stays empty.
 export function useOpeningUrl(sessionId: string): string | null {
-  return useSyncExternalStore(subscribe, () => opening.get(sessionId) ?? null);
+  return useSyncExternalStore(subscribe, () => {
+    const held = opening.get(sessionId);
+    return held && held.blank === (blanks.get(sessionId)?.active ?? null) ? held.url : null;
+  });
 }
 
 /// What is typed into each tab's URL field, keyed `<session>:blank:<id>` or
