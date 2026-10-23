@@ -430,6 +430,7 @@ final class Composer {
         answered += 1
         guard !busy, attention == [key], store.asks[key]?.count == 1 else { return }
         leaving = (key, e)
+        Sound.send?.play()
         flash(answered > 1 ? "\(answered) answered" : label)
     }
 

@@ -103,7 +103,7 @@ const ISLAND: Sound[] = [
     file: "apps/island/Island/send.wav",
     play: () => void new Audio(sendUrl).play().catch(() => {}),
     where: [
-      "A message sent from the island, as the panel says Sent. Not on card answers or drafts.",
+      "A message sent from the island, as the panel says Sent, and once with the flash after the last card is answered. Not per card, nor on drafts.",
       "Shimmer lift, picked on the send-sound page and rendered at 25%.",
     ],
   },
