@@ -6,13 +6,13 @@ export const HERO_BG: CSSProperties = {
   backgroundImage: "linear-gradient(180deg, oklch(0.115 0 0), #060C3A 30%, #13259C 68%, #1C33A3)",
 };
 
-/// The feature cards' backdrop: the page's black at the top,
-/// navy at the foot.
+/// The feature cards' backdrop: deep blue at the top into the hero's bright
+/// blue at the foot, bright enough to pull the eye off the black page.
 export const CARD_BG: CSSProperties = {
-  backgroundImage: "linear-gradient(180deg, oklch(0.115 0 0), #000C40)",
+  backgroundImage: "linear-gradient(180deg, #0B1660, #2A48E8)",
 };
 
-/// The Island cards' backdrop, the card gradient upside down: navy at the top.
+/// The Island cards' backdrop, the card gradient upside down: bright at the top.
 export const CARD_BG_FLIPPED: CSSProperties = { backgroundImage: String(CARD_BG.backgroundImage).replace("180deg", "0deg") };
 
 /// The gradients page's graphite blue: the page's black into a blue-grey.

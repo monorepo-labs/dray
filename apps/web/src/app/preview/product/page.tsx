@@ -87,8 +87,8 @@ export default function ProductPreview() {
           <div>
             <Heading
               eyebrow="Orchestration"
-              title="One prompt, a crew of agents."
-              line="Ask one agent to split the work. It starts a session per task, each in its own git worktree, and the crew reports back beside the conversation."
+              title="Run a swarm of agents in parallel."
+              line="Ask one agent to split the work. It starts a session per task, each in its own worktree."
             />
             <CrewSteps className="mt-8 text-base" />
           </div>
@@ -101,7 +101,7 @@ export default function ProductPreview() {
           <Heading
             eyebrow="Dray Island"
             title="Never leave the app you're in."
-            line="Island hangs from the notch over every app. Tap Control and talk, hold Shift to circle what you mean, and send it to a session without switching windows."
+            line="Island lives in the notch, over every app. Talk, draw over what you mean, and send it to a session."
           />
           <IslandHero className="mt-10 sm:mt-12" />
         </div>
