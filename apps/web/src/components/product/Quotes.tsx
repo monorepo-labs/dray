@@ -10,7 +10,7 @@ export function Quotes({ className = "" }: { className?: string }) {
   const rows = [TESTIMONIALS.slice(0, half), TESTIMONIALS.slice(half)];
   return (
     <div
-      className={`flex flex-col gap-3 overflow-hidden ${className}`}
+      className={`flex flex-col gap-3 overflow-hidden ${s.quotes} ${className}`}
       style={{
         maskImage: "linear-gradient(to right, transparent, black 8%, black 92%, transparent)",
         WebkitMaskImage: "linear-gradient(to right, transparent, black 8%, black 92%, transparent)",

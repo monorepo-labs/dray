@@ -237,9 +237,23 @@
     transform: translateX(-50%);
   }
 }
+/* Stopped, a row wider than the screen hides most of its quotes with no
+   way to reach them, so it wraps instead: the loop's second copy goes, and
+   so does the edge fade, which only made sense on a moving row. */
 @media (prefers-reduced-motion: reduce) {
   .marquee {
     animation: none;
+    width: auto;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding-inline: 1rem;
+  }
+  .marquee > [aria-hidden] {
+    display: none;
+  }
+  .quotes {
+    mask-image: none !important;
+    -webkit-mask-image: none !important;
   }
 }
 
