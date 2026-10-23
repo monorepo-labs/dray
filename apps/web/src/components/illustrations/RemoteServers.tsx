@@ -29,3 +29,10 @@ class Contained extends Component<{ children: ReactNode }, { failed: boolean }> 
     return this.state.failed ? null : this.props.children;
   }
 }
+
+/// The plain scene as a still, shot at 2x off `/preview/servers-shot` and
+/// matted to a transparent PNG. No three.js and no WebGL; `RemoteServers`
+/// stays the live version.
+export function RemoteServersStill({ className }: { className?: string }) {
+  return <img src="/remote-servers.png" alt="" width={1128} height={430} className={`h-auto max-w-none ${className ?? "w-full"}`} />;
+}

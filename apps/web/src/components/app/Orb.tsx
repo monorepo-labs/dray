@@ -8,11 +8,20 @@ import { Orb as ThinkingOrb } from "@yogesharc/thinking-orbs";
 ///
 /// `searching` at 18px is the browser tab's: a page the agent is driving
 /// draws it in place of its favicon.
-export default function Orb({ state = "working", size }: { state?: "working" | "searching"; size?: number }) {
+export default function Orb({
+  state = "working",
+  size,
+  paused,
+}: {
+  state?: "working" | "searching";
+  size?: number;
+  paused?: boolean;
+}) {
   return (
     <ThinkingOrb
       state={state}
       size={size}
+      paused={paused}
       label={state === "working" ? "Working" : "Agent is using this tab"}
       className="text-foreground will-change-transform"
     />

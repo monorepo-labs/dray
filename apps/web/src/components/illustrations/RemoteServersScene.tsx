@@ -17,20 +17,23 @@ function phaseAt(t: number): Phase {
   return { loadDone: t >= 5, iosDone: t >= 7.2 };
 }
 
-/// `plain` leaves the maker's mark off the hardware.
-export default function RemoteServersScene({ plain = false }: { plain?: boolean }) {
+/// `plain` leaves the maker's mark off the hardware. `freeze` holds the scene
+/// and its orbs on the finished frame whatever the reader's motion setting,
+/// for taking a still of it.
+export default function RemoteServersScene({ plain = false, freeze = false }: { plain?: boolean; freeze?: boolean }) {
   const wrap = useRef<HTMLDivElement>(null);
   const cards = useRef<(HTMLDivElement | null)[]>([]);
   const leaders = useRef<(SVGLineElement | null)[]>([]);
   const [visible, setVisible] = useState(false);
-  const [still, setStill] = useState(false);
+  const [reduced, setReduced] = useState(false);
+  const still = reduced || freeze;
   const [livePhase, setPhase] = useState<Phase>(() => phaseAt(0));
   const phase = still ? phaseAt(STILL_AT) : livePhase;
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => {
-      setStill(media.matches);
+      setReduced(media.matches);
     };
     update();
     media.addEventListener("change", update);
@@ -61,12 +64,12 @@ export default function RemoteServersScene({ plain = false }: { plain?: boolean 
           scene. drei's Html renders through a second React root, which
           StrictMode's double mount left empty half the time. */}
       <Card ref={(el) => void (cards.current[0] = el)}>
-        <SessionRow title="iOS release build" trailing={<Settling done={phase.iosDone} />} />
-        <SessionRow title="Screenshot every page" trailing={<Orb />} />
+        <SessionRow title="iOS release build" trailing={<Settling done={phase.iosDone} paused={freeze} />} />
+        <SessionRow title="Screenshot every page" trailing={<Orb paused={freeze} />} />
       </Card>
       <Card ref={(el) => void (cards.current[1] = el)}>
-        <SessionRow title="Load test staging" trailing={<Settling done={phase.loadDone} />} />
-        <SessionRow title="Nightly backup script" trailing={<Orb />} />
+        <SessionRow title="Load test staging" trailing={<Settling done={phase.loadDone} paused={freeze} />} />
+        <SessionRow title="Nightly backup script" trailing={<Orb paused={freeze} />} />
       </Card>
     </div>
   );
@@ -523,6 +526,6 @@ function Card({ ref, children }: { ref: Ref<HTMLDivElement>; children: ReactNode
 }
 
 /// The orb while the session works, then the time it finished.
-function Settling({ done }: { done: boolean }) {
-  return done ? <>now</> : <Orb />;
+function Settling({ done, paused }: { done: boolean; paused?: boolean }) {
+  return done ? <>now</> : <Orb paused={paused} />;
 }

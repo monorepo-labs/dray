@@ -6,7 +6,7 @@ import { DownloadButton } from "@/components/DownloadButton";
 import { Nav } from "@/components/Nav";
 import { Sponsors } from "@/components/Sponsors";
 import { Hero } from "@/components/illustrations/Hero";
-import { RemoteServers } from "@/components/illustrations/RemoteServers";
+import { RemoteServersStill } from "@/components/illustrations/RemoteServers";
 import { AgentRoll } from "@/components/product/AgentRoll";
 import { DARK_BUTTON, LIGHT_BUTTON, SMALL_LIGHT_BUTTON } from "@/components/product/buttons";
 import { Cards } from "@/components/product/Cards";
@@ -131,7 +131,7 @@ export default function ProductPreview() {
           {/* The scene draws its machines in the middle half of its box, so the
               box runs wider than its column for them to read at size. */}
           <div className="min-w-0">
-            <RemoteServers plain className="-mx-[10%] w-[120%] lg:-mx-[22%] lg:w-[144%]" />
+            <RemoteServersStill className="-mx-[10%] w-[120%] lg:-mx-[22%] lg:w-[144%]" />
           </div>
         </section>
       </div>
