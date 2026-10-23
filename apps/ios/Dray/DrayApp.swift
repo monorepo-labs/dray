@@ -1,4 +1,5 @@
 import SwiftUI
+import ThinkingOrbs
 
 @main
 struct DrayApp: App {
@@ -9,6 +10,9 @@ struct DrayApp: App {
         WindowGroup {
             RootView()
                 .environment(store)
+                .preferredColorScheme(.dark)
+                // Neutral, so yellow stays the one colour that means "this is for you".
+                .tint(Theme.text)
         }
         .onChange(of: phase) { _, now in
             if now == .active { store.resume() }
@@ -16,72 +20,55 @@ struct DrayApp: App {
     }
 }
 
+/// The one sheet the root can show. A single slot, so a pairing link can
+/// replace whatever is up rather than stacking on it.
+enum RootSheet: Identifiable {
+    /// Settings, opened on one server's page where a banner's Fix asked for it.
+    case settings(server: UUID?)
+    case add(PairLink?, scan: Bool)
+    case new
+
+    var id: String {
+        switch self {
+        case .settings(let s): "settings\(s?.uuidString ?? "")"
+        case .add(let link, let scan): "add\(link?.id ?? "")\(scan)"
+        case .new: "new"
+        }
+    }
+}
+
 struct RootView: View {
     @Environment(Store.self) private var store
-    @State private var selection: SessionKey?
-    @State private var showServers = false
-    @State private var adding = false
     @Environment(\.scenePhase) private var phase
-    @State private var creating = false
-    @State private var pairing: PairLink?
-    @State private var opening: Task<Void, Never>?
+    @State private var selection: SessionKey?
+    @State private var sheet: RootSheet?
 
     var body: some View {
         NavigationSplitView {
-            SessionList(selection: $selection)
-                .navigationTitle("Dray")
-                .toolbar {
-                    Button("Servers", systemImage: "server.rack") { showServers = true }
-                    Button("New session", systemImage: "square.and.pencil") { creating = true }
-                        .disabled(store.servers.isEmpty)
-                }
-                .overlay {
-                    if store.servers.isEmpty {
-                        ContentUnavailableView {
-                            Label("No servers", systemImage: "server.rack")
-                        } description: {
-                            Text("Add a Mac with Remote access on, or a server running dray-serve.")
-                        } actions: {
-                            Button("Add server") { adding = true }
-                                .buttonStyle(.borderedProminent)
-                        }
-                    }
-                }
+            SessionList(selection: $selection, sheet: $sheet)
         } detail: {
             if let selection {
                 TranscriptView(key: selection)
                     .id(selection)
             } else {
-                ContentUnavailableView("Pick a session", systemImage: "bubble.left.and.text.bubble.right")
+                EmptyState(title: "No session open", message: "Pick one from the list.") {
+                    Orb(state: .idle, size: 40)
+                }
+                .page()
             }
         }
-        .sheet(isPresented: $showServers) { ServersView() }
-        .sheet(isPresented: $adding) { AddServerView() }
-        .sheet(isPresented: $creating) { NewSessionView { selection = $0 } }
-        // Filled in, not added: a link from anywhere should not add a server unasked.
-        .sheet(item: $pairing) { AddServerView(link: $0) }
+        .sheet(item: $sheet) { s in
+            switch s {
+            case .settings(let server): SettingsView(focus: server)
+            // Filled in, not added: a link from anywhere should not add a server unasked.
+            case .add(let link, let scan): AddServerView(link: link, scanFirst: scan)
+            case .new: NewSessionView { selection = $0 }
+            }
+        }
         .onOpenURL { url in
-            guard let link = PairLink(url.absoluteString) else { return }
-            let covered = showServers || adding || pairing != nil
-            showServers = false
-            adding = false
-            pairing = nil
-            // A sheet asked for while another is still leaving is dropped. A newer
-            // link cancels this one's wait, so the older can't land on top.
-            opening?.cancel()
-            opening = Task {
-                if covered { try? await Task.sleep(for: .milliseconds(600)) }
-                if !Task.isCancelled { pairing = link }
-            }
+            if let link = PairLink(url.absoluteString) { sheet = .add(link, scan: false) }
         }
-        .alert("Something went wrong", isPresented: Binding(
-            get: { store.lastError != nil },
-            set: { if !$0 { store.lastError = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(store.lastError ?? "")
-        }
+        .overlay(alignment: .top) { ErrorToast() }
         // The desktop's 30s open-PR poll, and none while the app is away.
         .task(id: phase) {
             guard phase == .active else { return }
@@ -96,69 +83,135 @@ struct RootView: View {
 struct SessionList: View {
     @Environment(Store.self) private var store
     @Binding var selection: SessionKey?
+    @Binding var sheet: RootSheet?
     @State private var project: ProjectKey?
 
     var body: some View {
-        let chips = store.servers.flatMap { s in (store.projects[s.id] ?? []).map { (key: ProjectKey(server: s.id, path: $0.path), name: $0.name) } }
+        let projects = store.servers.flatMap { s in
+            (store.projects[s.id] ?? []).map { (key: ProjectKey(server: s.id, path: $0.path), name: $0.name) }
+        }
         // A picked project that left the list narrows nothing.
-        let filter = chips.contains { $0.key == project } ? project : nil
+        let filter = projects.contains { $0.key == project } ? project : nil
+        let runs = store.runs(filter)
+        let problems = store.servers.compactMap { s in store.health(s.id).map { (server: s, health: $0) } }
         List(selection: $selection) {
-            // A row of the list rather than an inset over it, so the large title still collapses into the bar.
-            if chips.count > 1 {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        Chip(title: "All", on: filter == nil) { project = nil }
-                        ForEach(chips, id: \.key) { chip in
-                            Chip(title: chip.name, on: filter == chip.key) { project = chip.key }
-                        }
-                    }
-                    .padding(.horizontal)
-                }
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
+            if !store.online { OfflineBanner().plainRow() }
+            ForEach(problems, id: \.server.id) { p in
+                ServerBanner(name: p.server.name, health: p.health,
+                             retry: { Task { await store.retry(p.server.id) } },
+                             fix: { sheet = .settings(server: p.server.id) })
+                    .plainRow()
             }
-            ForEach(store.servers) { s in
-                if case .failed(let reason) = store.serverState[s.id] {
-                    Label {
-                        VStack(alignment: .leading) {
-                            Text(s.name).font(.subheadline.weight(.medium))
-                            Text(reason).font(.caption).foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
-                    }
-                }
+            if runs.isEmpty {
+                empty.plainRow().frame(minHeight: 460)
             }
-            // One section per run: the gap between them is the whole signal, never a heading.
-            ForEach(store.runs(filter), id: \.stage) { run in
-                Section {
-                    ForEach(run.rows) { row in
-                        SessionRow(key: row.key, item: row.item, showServer: store.servers.count > 1)
-                            .padding(.leading, CGFloat(row.depth) * 16)
-                            .tag(row.key)
-                    }
+            // One block per run: the gap between them is the whole signal, never a heading.
+            ForEach(Array(runs.enumerated()), id: \.element.stage) { i, run in
+                if i > 0 { Color.clear.frame(height: Theme.Space.m).plainRow() }
+                ForEach(run.rows) { row in
+                    SessionRow(key: row.key, item: row.item, depth: row.depth, showServer: store.servers.count > 1)
+                        .tag(row.key)
+                        .listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.l, bottom: 0, trailing: Theme.Space.l))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(
+                            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                                .fill(selection == row.key ? Theme.selected : .clear)
+                                .padding(.horizontal, Theme.Space.s))
                 }
             }
         }
-        .listSectionSpacing(.compact)
+        .listStyle(.plain)
+        // The spacers between runs are 12pt, under the 44pt a list row otherwise takes.
+        .environment(\.defaultMinListRowHeight, 1)
+        .themedList()
+        .animation(Theme.motion, value: runs.map { $0.rows.map(\.id) })
         .refreshable { await store.refresh() }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Settings", systemImage: "gearshape") { sheet = .settings(server: nil) }
+            }
+            // The list's only title is what narrows it, and only once there is a choice.
+            ToolbarItem(placement: .principal) {
+                if projects.count > 1 {
+                    ProjectMenu(projects: projects, picked: filter) { project = $0 }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("New session", systemImage: "square.and.pencil") { sheet = .new }
+                    .disabled(store.servers.isEmpty)
+            }
+        }
+    }
+
+    /// What the list says with no rows: no server yet, one coming up, or nothing started.
+    @ViewBuilder private var empty: some View {
+        if store.servers.isEmpty {
+            EmptyState(title: "Connect a server",
+                       message: "Pair this phone with Dray on your Mac, or with a server running dray-serve, to see and steer its sessions.") {
+                Orb(state: .idle, size: 56)
+            } actions: {
+                Button { sheet = .add(nil, scan: true) } label: {
+                    Label("Scan QR code", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                Button { sheet = .add(nil, scan: false) } label: {
+                    Text("Add server").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(SecondaryButtonStyle())
+            }
+        } else if store.servers.allSatisfy({ if case .connecting(0)? = store.serverState[$0.id] { true } else { false } }) {
+            EmptyState(title: "Connecting", message: store.servers.map(\.name).joined(separator: ", ")) {
+                Orb(.reconnecting, size: 40)
+            }
+        } else if store.servers.contains(where: { store.serverState[$0.id] == .connected }) {
+            EmptyState(title: "No sessions yet", message: "Start one here, or on your Mac, and it shows up in this list.") {
+                Orb(state: .idle, size: 40)
+            } actions: {
+                Button { sheet = .new } label: { Text("New session").frame(maxWidth: .infinity) }
+                    .buttonStyle(PrimaryButtonStyle())
+            }
+        } else {
+            EmptyState(title: "Nothing to show yet", message: "Sessions show up here once a server connects.") {
+                Orb(state: .idle, size: 40)
+            }
+        }
     }
 }
 
-struct Chip: View {
-    let title: String
-    let on: Bool
-    let action: () -> Void
+extension View {
+    /// A list row that is not a session: no inset, no separator, no fill.
+    func plainRow() -> some View {
+        listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.l, bottom: 0, trailing: Theme.Space.l))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .selectionDisabled()
+    }
+}
+
+/// The list's title: which project it is narrowed to, and the menu that narrows it.
+struct ProjectMenu: View {
+    let projects: [(key: ProjectKey, name: String)]
+    let picked: ProjectKey?
+    let pick: (ProjectKey?) -> Void
 
     var body: some View {
-        Button(title, action: action)
-            .font(.subheadline)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .foregroundStyle(on ? Color(.systemBackground) : .primary)
-            .background(on ? Color.primary : Color(.secondarySystemFill), in: Capsule())
-            .buttonStyle(.plain)
-            .accessibilityAddTraits(on ? .isSelected : [])
+        Menu {
+            Picker("Project", selection: Binding(get: { picked }, set: { Haptic.select(); pick($0) })) {
+                Text("All projects").tag(ProjectKey?.none)
+                ForEach(projects, id: \.key) { Text($0.name).tag(Optional($0.key)) }
+            }
+        } label: {
+            HStack(spacing: Theme.Space.xs) {
+                Text(projects.first { $0.key == picked }?.name ?? "All projects")
+                    .font(.headline)
+                    .foregroundStyle(Theme.text)
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Theme.tertiary)
+            }
+        }
+        .accessibilityLabel("Project filter")
     }
 }
 
@@ -166,37 +219,41 @@ struct SessionRow: View {
     @Environment(Store.self) private var store
     let key: SessionKey
     let item: SessionItem
+    let depth: Int
     let showServer: Bool
 
     var body: some View {
         let pr = store.prMark(key, item)
-        HStack(spacing: 10) {
-            mark.frame(width: 8)
-            VStack(alignment: .leading, spacing: 2) {
+        let unread = item.status == "completed"
+        HStack(spacing: Theme.Space.m) {
+            rail
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     if let pr { PrGlyph(mark: pr) }
                     Text(item.title.isEmpty ? "Untitled" : item.title)
+                        .font(unread ? .body.weight(.semibold) : Theme.Font.row)
+                        .foregroundStyle(Theme.text)
                         .lineLimit(1)
                 }
                 Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Theme.Font.meta)
+                    .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: Theme.Space.s)
             slot(pr)
         }
+        .padding(.vertical, 11)
+        .padding(.leading, CGFloat(depth) * 18)
     }
 
-    /// Yellow waits on the reader, green is finished and unread — the desktop rail's two marks.
-    @ViewBuilder private var mark: some View {
-        if store.isAsking(key) {
-            Circle().fill(.yellow).frame(width: 8, height: 8)
-        } else if item.status == "completed" {
-            Circle().fill(.green).frame(width: 8, height: 8)
-        } else {
-            Color.clear.frame(width: 8, height: 8)
-        }
+    /// The desktop rail's two marks: yellow waits on the reader, green is
+    /// finished and unread. Holds its width bare, so titles line up.
+    private var rail: some View {
+        let tone: Color? = store.isAsking(key) ? Theme.accent : item.status == "completed" ? Theme.add : nil
+        return Capsule()
+            .fill(tone ?? .clear)
+            .frame(width: 3, height: 22)
     }
 
     /// The timestamp's slot, and what outranks it there: running checks, then
@@ -206,123 +263,15 @@ struct SessionRow: View {
         if pr?.state == "OPEN" && pr?.checksState == "RUNNING" {
             ChecksSpinner()
         } else if item.busy {
-            Orb()
+            Orb(.working, label: "Working")
         } else if let date = parseDate(item.modified) {
             Text(date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Theme.Font.meta.monospacedDigit())
+                .foregroundStyle(Theme.tertiary)
         }
     }
 
     private var subtitle: String {
         showServer ? "\(item.project) · \(store.name(of: key.server))" : item.project
     }
-}
-
-struct ServersView: View {
-    @Environment(Store.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    @State private var adding = false
-
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(store.servers) { s in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(s.name)
-                        Text(s.url).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
-                        Text(state(s.id)).font(.caption).foregroundStyle(.secondary)
-                    }
-                    .swipeActions {
-                        Button("Remove", role: .destructive) { store.removeServer(s) }
-                    }
-                }
-                Button("Add server", systemImage: "plus") { adding = true }
-            }
-            .navigationTitle("Servers")
-            .toolbar { Button("Done") { dismiss() } }
-            .sheet(isPresented: $adding) { AddServerView() }
-        }
-    }
-
-    private func state(_ id: UUID) -> String {
-        switch store.serverState[id] {
-        case .connected: "Connected"
-        case .connecting, nil: "Connecting…"
-        case .failed(let reason): reason
-        }
-    }
-}
-
-struct AddServerView: View {
-    @Environment(Store.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    var link: PairLink?
-    @State private var address = ""
-    @State private var token = ""
-    @State private var name = ""
-    @State private var scanning = false
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Button("Scan QR code", systemImage: "qrcode.viewfinder") { scanning = true }
-                }
-                Section {
-                    Group {
-                        TextField("Address", text: $address, prompt: Text("wss://…"))
-                            .accessibilityLabel("Address")
-                            .onChange(of: address) { _, text in
-                                // A pasted connect line carries both halves.
-                                if let line = parseConnectLine(text) {
-                                    address = line.url
-                                    token = line.token
-                                }
-                            }
-                        // Not a SecureField: iOS would offer to save a pasted server token as a password.
-                        TextField("Token", text: $token)
-                    }
-                    .font(.body.monospaced())
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                } footer: {
-                    Text("On a Mac, turn on Remote access in Dray's Settings, Servers, This Mac, then scan its QR code or copy the address and token. On a server, `dray server pair` shows the code.")
-                }
-                Section {
-                    TextField("Name", text: $name, prompt: Text(host ?? "Name"))
-                        .accessibilityLabel("Name")
-                }
-            }
-            .navigationTitle("Add server")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
-                        guard let parsed else { return }
-                        let trimmed = name.trimmingCharacters(in: .whitespaces)
-                        store.addServer(name: trimmed.isEmpty ? (host ?? "Server") : trimmed, url: parsed.url, token: parsed.token)
-                        dismiss()
-                    }
-                    .disabled(parsed == nil)
-                }
-            }
-            .sheet(isPresented: $scanning) {
-                PairScanner { fill($0); scanning = false }
-            }
-            .onAppear { link.map(fill) }
-        }
-    }
-
-    private func fill(_ link: PairLink) {
-        address = link.url
-        token = link.token
-        name = link.name ?? ""
-    }
-
-    private var parsed: (url: String, token: String)? {
-        parseConnectLine("\(address) \(token.trimmingCharacters(in: .whitespacesAndNewlines))")
-    }
-    private var host: String? { parsed.flatMap { socketURL($0.url)?.host } }
 }

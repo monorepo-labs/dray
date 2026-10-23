@@ -378,15 +378,21 @@ async fn open_recorder(
     }
     *slot = Some(recording);
     *state.live.lock().await = Some(live);
+    // Armed before the slot opens: a stop or sleep taking the recording then
+    // restores after this ticket and voids it, where armed later it would mute
+    // a machine whose microphone had already closed.
+    let ticket = stored.mute_while_recording.then(audio::arm_mute);
     drop(slot);
 
     // After the microphone is open, never before: a refusal must leave the
-    // machine's sound exactly as it found it. The start tone the frontend
-    // plays next therefore lands on a muted system and is not heard, which is
-    // the honest reading of a reader who asked for silence while they talk —
-    // the visualizer appearing is what says the mic is live.
-    if stored.mute_while_recording {
-        mute_other_audio().await;
+    // machine's sound exactly as it found it. And after the start tone the
+    // client plays next, or the mute swallows it; the tone is 0.58s, and the
+    // mic hearing it costs nothing, since it is no speech.
+    if let Some(ticket) = ticket {
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(START_TONE).await;
+            let _ = tokio::task::spawn_blocking(move || audio::mute_other_audio(ticket)).await;
+        });
     }
 
     Ok(None)
@@ -726,37 +732,40 @@ pub fn stop_on_sleep(app: &AppHandle) {
         // Counted before the lock, so a start between its open and its store
         // either sees the count or leaves its recording here to be taken.
         SLEEPS.fetch_add(1, SeqCst);
-        let state = app.state::<TranscriptionState>();
-        // The main thread is outside the runtime, so blocking on the lock is allowed.
-        let Some(recording) = state.recording.blocking_lock().take() else { return };
-        let tap = recording.close();
-        let live = state.live.blocking_lock().take();
-        let host = HOST_OWNS.load(SeqCst);
-        // Held while the task is spawned, so a stop the event prompts cannot
-        // look before the outcome is in the slot.
-        let mut slot = state.interrupted[host as usize].blocking_lock();
-        let app = app.clone();
-        let outcome = tauri::async_runtime::spawn(async move {
-            drop(live);
-            restore_other_audio().await;
-            let outcome = match tauri::async_runtime::spawn_blocking(move || tap.take()).await {
-                Ok(Ok((Some(audio), _))) => TranscribeOutcome::Failed {
-                    message: "the Mac went to sleep".into(),
-                    audio_path: recordings::save(&audio)
-                        .await
-                        .ok()
-                        .map(|p| p.to_string_lossy().into_owned()),
-                },
-                Ok(Ok((None, _))) => TranscribeOutcome::NoAudio,
-                _ => TranscribeOutcome::Failed {
-                    message: "the Mac went to sleep, and the recording was lost".into(),
-                    audio_path: None,
-                },
-            };
-            let _ = app.emit("transcription_interrupted", ());
-            outcome
+        // `main` is `#[tokio::main]`, so the event loop runs inside `block_on` and a
+        // bare `blocking_lock` here panics, quitting the app on every sleep (#624).
+        tokio::task::block_in_place(|| {
+            let state = app.state::<TranscriptionState>();
+            let Some(recording) = state.recording.blocking_lock().take() else { return };
+            let tap = recording.close();
+            let live = state.live.blocking_lock().take();
+            let host = HOST_OWNS.load(SeqCst);
+            // Held while the task is spawned, so a stop the event prompts cannot
+            // look before the outcome is in the slot.
+            let mut slot = state.interrupted[host as usize].blocking_lock();
+            let app = app.clone();
+            let outcome = tauri::async_runtime::spawn(async move {
+                drop(live);
+                restore_other_audio().await;
+                let outcome = match tauri::async_runtime::spawn_blocking(move || tap.take()).await {
+                    Ok(Ok((Some(audio), _))) => TranscribeOutcome::Failed {
+                        message: "the Mac went to sleep".into(),
+                        audio_path: recordings::save(&audio)
+                            .await
+                            .ok()
+                            .map(|p| p.to_string_lossy().into_owned()),
+                    },
+                    Ok(Ok((None, _))) => TranscribeOutcome::NoAudio,
+                    _ => TranscribeOutcome::Failed {
+                        message: "the Mac went to sleep, and the recording was lost".into(),
+                        audio_path: None,
+                    },
+                };
+                let _ = app.emit("transcription_interrupted", ());
+                outcome
+            });
+            *slot = Some(outcome);
         });
-        *slot = Some(outcome);
     });
     let center = NSWorkspace::sharedWorkspace().notificationCenter();
     // SAFETY: the name is AppKit's own constant, no object filter, and a nil
@@ -774,12 +783,12 @@ pub fn stop_on_sleep(app: &AppHandle) {
     std::mem::forget(observer);
 }
 
+/// How long the mute waits after the microphone opens: `dictate-start.wav`
+/// plus the reply reaching the client that plays it.
+const START_TONE: std::time::Duration = std::time::Duration::from_millis(700);
+
 /// Both halves of the muting run `osascript`, which is a spawn and a wait —
 /// off the async worker, or a press parks a runtime thread for ~50ms.
-async fn mute_other_audio() {
-    let _ = tokio::task::spawn_blocking(audio::mute_other_audio).await;
-}
-
 async fn restore_other_audio() {
     let _ = tokio::task::spawn_blocking(audio::restore_other_audio).await;
 }

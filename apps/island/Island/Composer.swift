@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Observation
 
 /// One line of the message being built, in the order it was said or typed,
@@ -18,8 +19,6 @@ enum Target: Hashable {
     case new
 }
 
-enum Dictation { case idle, starting, recording, transcribing }
-
 /// The panel's layout, the reader's pick from its right-click menu and never
 /// switched for them: compact, one row with the orb beside the input, or voice,
 /// the orb alone in the middle.
@@ -36,6 +35,9 @@ enum MenuID: Hashable { case model, project, stance }
 @MainActor @Observable
 final class Composer {
     static let width: CGFloat = 520
+    /// Above the Dock the window reaches this far below the cards, or their
+    /// shadows stop in a straight line at its edge.
+    static let shadowRoom: CGFloat = 12
 
     let store: Store
     let server: UUID
@@ -60,6 +62,10 @@ final class Composer {
         }
     }
     var listening: Bool { dictation == .starting || dictation == .recording }
+    /// Makes the panel key again. The drawing overlay lets clicks through while
+    /// recording, so a click elsewhere takes the keys, and focus in a panel
+    /// that is not key leaves ⏎ going to that other app.
+    @ObservationIgnored var takeKeys: () -> Void = {}
     /// For the drawing overlay, up for exactly as long as the microphone records.
     @ObservationIgnored var recordingChanged: (Bool) -> Void = { _ in }
     /// When the microphone opened, for the timer; `nil` unless recording.
@@ -91,6 +97,7 @@ final class Composer {
     var shown = false {
         didSet {
             if oldValue, !shown { released() } else if !oldValue, shown { leaving = nil; coverDone() }
+            if shown != oldValue { Sound.keepAwake(shown) }
         }
     }
     /// Whether the panel has held the keys since it opened, which is when a bare Esc reaches it.
@@ -143,8 +150,12 @@ final class Composer {
 
     /// Set for the moment between a send landing and the panel closing, which says it went.
     private(set) var sent = false
-    /// What that moment says: Sent, or Saved as draft.
+    /// What that moment says: Sent, Saved as draft, or what a card's answer did.
     private(set) var sentLabel = "Sent"
+    /// Cards answered since the panel opened, so the last one can speak for the lot.
+    @ObservationIgnored private var answered = 0
+    /// Panel opens, so a refusal landing after a reopen leaves the new count alone.
+    @ObservationIgnored private var visit = 0
     /// Return and number keys on a questions card, whose answers live in its view.
     var submits = 0
     var digits = 0
@@ -228,7 +239,9 @@ final class Composer {
             }
             // The last card answered is the panel's job done.
             // Not while the reader is busy: a card answered elsewhere leaves them their draft.
-            if ids.isEmpty, hadCards, shown, !busy { hide() }
+            // Nor under a card's flash, which closes the panel itself once read,
+            // nor on a new session, which the reader asked for with ⌘N.
+            if ids.isEmpty, hadCards, shown, !busy, !sent, target != .new { hide() }
             // Answered elsewhere with the panel shut: the done pill is back in view, its clock with it.
             if ids.isEmpty, hadCards, !shown {
                 unseenDone = []
@@ -258,7 +271,7 @@ final class Composer {
 
     /// Dray in front sounds its own notice, so a chime here would double it.
     private func chime() {
-        if !Self.drayInFront { Sound.done?.play() }
+        if !Self.drayInFront { Sound.done?.playInBackground() }
     }
 
     /// The panel shut: what was held is shown now, as the pill, with its one sound.
@@ -345,8 +358,19 @@ final class Composer {
         present()
     }
 
+    /// The done pill's Open in app: Dray comes forward, and its sidebar already marks the rest unread.
+    func openDoneInApp(_ key: SessionKey) {
+        done = []
+        Task { await showInApp(key) }
+    }
+
+    /// The pill drawn while the panel is shut is the done pill, which ⌘⏎ answers.
+    var donePillUp: Bool { !shown && attention.isEmpty && !done.isEmpty }
+
     /// A number key on a card: a permission's option outright, a question's toggled.
     func pickOption(_ i: Int) {
+        // The flash covers the card, so a key now would answer one the reader cannot see.
+        guard !sent else { return }
         switch ask?.event.payload {
         case .permissionRequested(let r)? where r.options.indices.contains(i):
             Task { await respond(r.options[i].id) }
@@ -358,7 +382,7 @@ final class Composer {
         }
     }
 
-    /// The title clicked: Dray's window, on this session. A closed app is
+    /// Open in app on the done pill, ⌘⏎ under it, or ⌘-click on the title: Dray's window, on this session. A closed app is
     /// launched and asked again once its window can answer.
     func showInApp(_ key: SessionKey) async {
         let args: [String: JSON] = ["sessionId": .string(key.id)]
@@ -380,30 +404,46 @@ final class Composer {
 
     func respond(_ optionId: String) async {
         guard let (key, e) = ask, case .permissionRequested(let r) = e.payload else { return }
-        closeOnLastCard(key, e)
+        let option = r.options.first { $0.id == optionId }
+        let label = switch option?.kind {
+        case "once"?: "Allowed once"
+        case "always_rule"?, "always_directory"?, "switch_mode"?: "Always allowed"
+        case "deny"?: "Denied"
+        default: option?.behavior == "deny" ? "Denied" : "Allowed once"
+        }
+        let counted = visit
+        closeOnLastCard(key, e, label)
         await store.respond(key, requestId: r.requestId, optionId: optionId)
-        keepIfRefused(key, e)
+        keepIfRefused(key, e, counted)
     }
 
     func answer(_ answers: [String: String]) async {
         guard let (key, e) = ask, case .questionsAsked(let r) = e.payload else { return }
-        closeOnLastCard(key, e)
+        let counted = visit
+        closeOnLastCard(key, e, "Sent")
         await store.answer(key, requestId: r.requestId, answers: answers)
-        keepIfRefused(key, e)
+        keepIfRefused(key, e, counted)
     }
 
-    /// The last card answered closes the panel now, on the card, rather than
-    /// once the reply removes it, which drew the draft for a moment first.
-    private func closeOnLastCard(_ key: SessionKey, _ e: AgentEvent) {
+    /// The last card answered says what was done, then the panel closes, all
+    /// before the reply removes it, which drew the draft for a moment first.
+    /// Several answered in one visit are told as a group.
+    private func closeOnLastCard(_ key: SessionKey, _ e: AgentEvent, _ label: String) {
+        answered += 1
         guard !busy, attention == [key], store.asks[key]?.count == 1 else { return }
         leaving = (key, e)
-        hide()
+        Sound.send?.play()
+        flash(answered > 1 ? "\(answered) answered" : label)
     }
 
-    /// An answer that did not land leaves the card waiting, so its pill comes back.
-    private func keepIfRefused(_ key: SessionKey, _ e: AgentEvent) {
-        guard leaving?.event.id == e.id, store.asks[key]?.contains(where: { $0.id == e.id }) == true else { return }
+    /// An answer that did not land leaves the card waiting: back on screen, or its pill back.
+    private func keepIfRefused(_ key: SessionKey, _ e: AgentEvent, _ counted: Int) {
+        guard store.asks[key]?.contains(where: { $0.id == e.id }) == true else { return }
+        // Uncounted, or answering it again on retry reads as two cards answered.
+        if visit == counted { answered = max(answered - 1, 0) }
+        guard leaving?.event.id == e.id else { return }
         leaving = nil
+        sent = false
         pillChanged()
     }
 
@@ -489,10 +529,21 @@ final class Composer {
 
     // MARK: Opening
 
+    /// The session Dray's window has open, taken as the pick. Silent on any
+    /// failure — no app, the new-task page, a remote session — which leaves the pick as it was.
+    func adoptAppSelection() async {
+        guard case .string(let id)? = try? await store.call(server, "selected_session", as: JSON.self, timeout: .milliseconds(500))
+        else { return }
+        let k = SessionKey(server: server, id: id)
+        if store.items[k] != nil { pick(.session(k)) }
+    }
+
     /// With nothing picked, the last session picked, else the newest.
     func opened() {
         // Cleared here rather than at the close, which would flash the draft back mid-shrink.
         sent = false
+        answered = 0
+        visit += 1
         keyed = true
         opens += 1
         notice = nil
@@ -511,6 +562,8 @@ final class Composer {
         switch t {
         case .new:
             listShown = false
+            // A new visit to the draft, so an answer's flash must not cover it.
+            sent = false
             opens += 1
             Task { await loadPicks() }
         case .session(let k):
@@ -642,26 +695,69 @@ final class Composer {
         guard dictation == .idle else { return false }
         let text = prompt, files = attachments
         guard canSend, !sending, !saving, let target else { return false }
+        if target == .new, projectPath == nil {
+            notice = "Pick a project first."
+            return false
+        }
         sending = true
         defer { sending = false }
-        // Only what went out is cleared: the draft stays editable while the request runs.
-        let sentRows = Set(rows.map(\.id)), sentTyping = typing
+        // Sent is said here and the request runs behind it: the server answers
+        // only after a session read and a git snapshot, ~200ms the reader would
+        // otherwise watch. The message leaves the draft whole first, so nothing
+        // typed after Return can join it.
+        let sentRows = rows, sentTyping = typing
+        rows = []
+        typing = ""
+        // A done held for this session is the turn this message follows on from,
+        // and drawn as the panel closes it reads as an answer to the send.
+        if case .session(let k) = target { done.removeAll { $0 == k } }
+        Sound.send?.playInBackground()
+        flash("Sent")
         let sent: SessionKey?
+        var failure: String?
         switch target {
         case .session(let k):
             sent = await store.send(k, text, attachments: files) ? k : nil
-            if sent == nil { notice = store.lastError }
+            if sent == nil { failure = store.lastError }
         case .new:
             sent = await create(text, files)
+            if sent == nil { failure = notice }
         }
-        guard let sent else { return false }
-        rows.removeAll { sentRows.contains($0.id) }
-        if typing == sentTyping { typing = "" }
+        guard let sent else {
+            restore(sentRows, sentTyping, to: target, failure ?? "Couldn't send.")
+            return false
+        }
         lastUsed = sent.id
         UserDefaults.standard.set(sent.id, forKey: "island.lastSession")
-        self.target = .session(sent)
-        flash("Sent")
+        // A pick made while the request ran is the reader's, and outranks this one.
+        if self.target == target { self.target = .session(sent) }
         return true
+    }
+
+    /// A send that failed behind its Sent comes back as the draft, on the
+    /// session it was for, the panel open on it if the flash already closed it.
+    /// A draft begun since for somewhere else is the reader's and is left
+    /// alone, so the failed message goes to the clipboard instead of into it,
+    /// each file as its path, since a label like `[Image 1]` would lose it.
+    private func restore(_ sentRows: [Row], _ sentTyping: String, to dest: Target, _ why: String) {
+        var why = why
+        if target == dest || (rows.isEmpty && typing.isEmpty) {
+            target = dest
+            rows = sentRows + rows
+            typing = typing.isEmpty ? sentTyping : sentTyping + " " + typing
+        } else {
+            NSPasteboard.general.clearContents()
+            let text = (sentRows.map { $0.file ?? $0.text } + [sentTyping])
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            NSPasteboard.general.setString(text, forType: .string)
+            why += " The message is on the clipboard."
+        }
+        sent = false
+        present()
+        // Last: the draft's setters and opening the panel both clear it.
+        notice = why
     }
 
     /// Says it went, then closes the panel, or turns to a card held while the
@@ -805,7 +901,7 @@ final class Composer {
             }
             dictation = .recording
             listShown = false
-            Sound.start?.play()
+            Sound.start?.playInBackground()
             Task { await pollLevel() }
         } catch {
             dictation = .idle
@@ -829,7 +925,11 @@ final class Composer {
     @discardableResult
     private func transcribe(_ cmd: String, _ args: [String: JSON]) async -> Bool {
         dictation = .transcribing
-        defer { dictation = .idle }
+        // Keys first, so the view's focus on going idle lands in a key window.
+        defer {
+            if shown { takeKeys() }
+            dictation = .idle
+        }
         do {
             return place(try await store.call(server, cmd, args, timeout: .seconds(180)))
         } catch {
@@ -884,7 +984,7 @@ final class Composer {
         case "text":
             if let text = o.value?.string, !text.isEmpty {
                 rows.append(Row(text: text, said: true))
-                Sound.stop?.play()
+                Sound.stop?.playInBackground()
             }
             return true
         case "empty":
@@ -913,9 +1013,36 @@ final class Composer {
     }
 }
 
-/// Dray's own dictation tones, so the two dictate alike.
+/// Dray's own dictation tones, so the two dictate alike, and the island's send.
 enum Sound {
     static let start = NSSound(named: "dictate-start")
     static let stop = NSSound(named: "dictate-stop")
     static let done = NSSound(named: "notification")
+    /// Shimmer lift from `demo/send-sound.html`, rendered at 25%.
+    static let send = NSSound(named: "send")
+
+    /// Silence playing while the panel is open. macOS powers the output down
+    /// a few seconds after the last sound, and waking it put the send sound a
+    /// beat behind its Sent; the panel is the only place that sound can come from.
+    private static let silence: AVAudioEngine = {
+        let engine = AVAudioEngine()
+        _ = engine.mainMixerNode
+        return engine
+    }()
+
+    static func keepAwake(_ on: Bool) {
+        NSSound.queue.async {
+            if on { try? silence.start() } else { silence.stop() }
+        }
+    }
+}
+
+extension NSSound {
+    fileprivate static let queue = DispatchQueue(label: "island.sound", qos: .userInteractive)
+
+    /// `play()` blocks until the output device is awake — 774ms measured on a
+    /// send — so it runs off the main thread, where it held up the Sent it rang for.
+    func playInBackground() {
+        Self.queue.async { self.stop(); self.play() }
+    }
 }

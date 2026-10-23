@@ -14,6 +14,8 @@ struct IslandView: View {
     /// The card shrinks to what it holds: the orb and clock, or the word Sent.
     private var fits: Bool { recording || composer.sent }
     private var bare: Bool { recording && composer.mode == .expanded }
+    /// A refusal's flash wears red, where every other outcome is the card's own black.
+    private var denied: Bool { composer.sent && composer.sentLabel == "Denied" }
     /// A file drag over the card, which says where it lands.
     @State private var dropping = false
     /// Mid-recording, the pointer over the card shows what can be done without stopping.
@@ -42,7 +44,7 @@ struct IslandView: View {
         .animation(composer.shown ? .spring(duration: 0.32, bounce: 0.2) : .easeIn(duration: 0.15), value: composer.shown)
         .allowsHitTesting(composer.shown)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: composer.placement == .notch ? .top : .bottom)
-        .padding(.bottom, composer.placement == .bottom ? 12 : 0)
+        .padding(.bottom, composer.placement == .bottom ? 12 + Composer.shadowRoom : 0)
         .animation(.snappy(duration: 0.25), value: fits)
         .animation(.snappy(duration: 0.25), value: composer.drawHint)
         // Out here, so the card's fill widens with the camera rather than snapping.
@@ -77,7 +79,7 @@ struct IslandView: View {
             if recording {
                 recordingBar
             } else if composer.sent {
-                Label(composer.sentLabel, systemImage: "checkmark").font(.system(size: 13, weight: .semibold)).padding(.horizontal, 4)
+                Label(composer.sentLabel, systemImage: denied ? "xmark" : "checkmark").font(.system(size: 13, weight: .semibold)).padding(.horizontal, 4)
             } else if let ask = composer.ask {
                 AskCard(composer: composer, key: ask.key, event: ask.event)
                     .onAppear { composer.cardShown() }
@@ -91,7 +93,7 @@ struct IslandView: View {
         // Expanded mode records as the orb alone, floating over whatever is beneath;
         // faded rather than removed, so it animates.
         .background {
-            shape.fill(.black.opacity(bare ? 0 : 1))
+            shape.fill((denied ? Color.red : .black).opacity(bare ? 0 : 1))
                 .padding(.horizontal, composer.placement == .notch ? -NotchShape.ear : 0)
         }
         .shadow(color: .black.opacity(bare ? 0 : 0.35), radius: 12, y: 4)
@@ -167,9 +169,11 @@ struct IslandView: View {
 
     @ViewBuilder private var draft: some View {
         if !composer.listShown, let key = composer.key {
-            TitleRow(title: title, marks: store.marks(key), close: composer.closeHint) {
-                Task { await composer.showInApp(key) }
-            }
+            // The list, not Dray: a title clicked without thinking must not switch apps,
+            // and the arrows can't open the list over text. ⌘-click is the deliberate way to Dray.
+            TitleRow(title: title, marks: store.marks(key), close: composer.closeHint,
+                     list: { composer.searches += 1 },
+                     openInApp: { Task { await composer.showInApp(key) } })
         }
         if composer.target == .new { NewSessionBar(composer: composer) }
         if !composer.rows.isEmpty {
@@ -232,8 +236,8 @@ struct IslandView: View {
                     .scrollIndicators(.never)
                     .padding(8)
                     .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-                } else if let i = composer.rows.firstIndex(where: { $0.id == ids[0] }) {
-                    RowView(row: $composer.rows[i]) { remove(ids[0]) }
+                } else if let row = composer.rows.first(where: { $0.id == ids[0] }) {
+                    RowView(row: binding(row)) { remove(ids[0]) }
                         .id(ids[0])
                         .reorderable(ids[0], move)
                 }
@@ -255,6 +259,17 @@ struct IslandView: View {
     /// The id is taken by value: read through a binding inside `removeAll`, it
     /// reenters `rows` mid-mutation and Swift aborts.
     private func remove(_ id: UUID) { composer.rows.removeAll { $0.id == id } }
+
+    /// Keyed by id, not index: a send empties `rows` while the panel animates
+    /// shut, and a stale index binding reads past the end and Swift aborts.
+    private func binding(_ row: Row) -> Binding<Row> {
+        Binding(
+            get: { composer.rows.first { $0.id == row.id } ?? row },
+            set: { new in
+                if let i = composer.rows.firstIndex(where: { $0.id == row.id }) { composer.rows[i] = new }
+            }
+        )
+    }
 
     private var title: String {
         switch composer.target {
@@ -530,11 +545,7 @@ struct PillsView: View {
                          items: composer.done.reversed().map { ($0, store.items[$0]?.title ?? "") },
                          glowing: composer.glowing,
                          open: { composer.openDone($0) },
-                         openInApp: { key in
-                             // Dray comes forward, and its sidebar already marks the rest unread.
-                             composer.done = []
-                             Task { await composer.showInApp(key) }
-                         },
+                         openInApp: { composer.openDoneInApp($0) },
                          hover: { composer.doneHovered = $0 })
                     .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
             }
@@ -545,6 +556,6 @@ struct PillsView: View {
         .animation(.easeOut(duration: composer.glowing ? 0.2 : 0.6), value: composer.glowing)
         // Where the card hangs from: the panel's top edge, or just above the Dock.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: anchor == .top ? .top : .bottom)
-        .padding(.bottom, composer.placement == .bottom ? 12 : 0)
+        .padding(.bottom, composer.placement == .bottom ? 12 + Composer.shadowRoom : 0)
     }
 }

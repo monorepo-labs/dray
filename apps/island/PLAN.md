@@ -14,7 +14,10 @@ the sessions live in `dray --serve` now, not in the window.
   `build.sh` in the release job and copied in by `tauri.island.conf.json`. On by
   default: every app launch runs `configure_island`, which `open`s it. It
   outlives Dray, since it talks to the background server, and restarts itself
-  onto a new binary once an update has swapped the bundle under it.
+  onto a new binary once an update has swapped the bundle under it: every Dray
+  launch pings `com.yogesh.dray.island.update`, and an island whose binary moved
+  restarts then, or once its panel closes. It ships only inside Dray.app, so an
+  island change is a Dray release.
 - **Summoned by tapping one modifier alone**, Control unless Settings →
   Shortcuts says Option, Command or Off. The pick is the island's own
   `island.key` default, read at every tap. A tap opens it; a tap on an open
@@ -23,7 +26,9 @@ the sessions live in `dray --serve` now, not in the window.
   watches modifier changes globally, which needs no grant, and reads the
   system's key and click counters to rule out ⌃C and ⌃-click.
 - **Pinned to one session, with a switcher.** Defaults to the session last used
-  or the one wanting the reader. "New session" is an entry in the switcher.
+  or the one wanting the reader; tapped open over Dray's window, the session
+  that window has open (`selected_session`, asked of the app through the
+  server). "New session" is an entry in the switcher.
 - **What it draws: the input** (and, from v2, the open card). No transcript — the main
   window is one click away.
 - **Everything said and done builds one message.** Each dictated line, typed
@@ -50,7 +55,9 @@ v2 (#565): status, across every live session.
   draws the cards as tabs, oldest first; the last answer closes the panel.
 - A finished session is Dray's own banner and not the island's: where the reader
   works decides which one they see, and only the banner opens the session.
-- The task list carries the sidebar's marks; the title opens its session in Dray.
+- The task list carries the sidebar's marks; the title opens the task list, since a
+  title clicked without thinking must not switch apps. ⌘-click on the title and the
+  done pill's Open in app are the ways into Dray; ⌘⏎ presses the latter while the pill is up.
 - A send says Sent and closes the panel.
 
 Screenshots, pen marks and file drops shipped (#566).
@@ -79,7 +86,8 @@ until #580, renamed since it sits above the Dock as often as at the notch.
   This Mac's `dray --serve`, address and token read from `serve-port` /
   `serve-token` in the home Dray.app hands it on launch (`DRAY_HOME`), so a dev
   build's island talks to the dev server. Shares `Wire.swift` and
-  `Connection.swift` with `apps/ios` by path, not by package.
+  `Connection.swift` with `apps/ios` by path, not by package, and lends it
+  `VoiceOrb` the same way — so neither side may import the other's UI kit.
 - **Dictation: Dray's own Parakeet, through the server to the app.** The
   transcription commands are the app's (`APP_COMMANDS`), so the island sends
   them to the server and the server forwards them over `host_call` — the

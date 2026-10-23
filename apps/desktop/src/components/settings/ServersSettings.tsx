@@ -434,7 +434,7 @@ function PairButton() {
             </DialogDescription>
           </DialogHeader>
           {/* White under the code whatever the theme: a scanner reads dark on light. */}
-          <div className="flex aspect-square items-center justify-center rounded-lg bg-white p-3">
+          <div className="flex aspect-square min-w-0 items-center justify-center rounded-lg bg-white p-3">
             {svg ? (
               <img alt="Pairing QR code" className="size-full" src={`data:image/svg+xml;utf8,${encodeURIComponent(svg)}`} />
             ) : error ? (

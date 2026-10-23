@@ -200,6 +200,8 @@ struct PermissionOption: Decodable, Hashable {
     let id: String
     let label: String
     let behavior: String
+    /// `once`, `always_rule`, `always_directory`, `switch_mode` or `deny`; absent from an older server.
+    let kind: String?
 }
 
 struct PermissionRequest: Decodable, Hashable {

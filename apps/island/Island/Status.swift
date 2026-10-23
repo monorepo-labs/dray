@@ -20,13 +20,18 @@ struct AskCard: View {
             HStack(spacing: 8) {
                 let keys = composer.attention
                 if keys.count > 1 {
-                    AskTabs(titles: keys.map { store.items[$0]?.title ?? "Session" }, active: keys.firstIndex(of: key) ?? 0) {
-                        composer.askTab = keys[$0]
-                    }
+                    AskTabs(titles: keys.map { store.items[$0]?.title ?? "Session" }, active: keys.firstIndex(of: key) ?? 0,
+                            pick: { composer.askTab = keys[$0] },
+                            openInApp: { i in Task { await composer.showInApp(keys[i]) } })
                 } else {
                     Text(store.items[key]?.title ?? "Session").lineLimit(1)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.45))
+                        // The title row's ⌘-click, so every title in the panel answers it alike.
+                        .onTapGesture {
+                            if NSEvent.modifierFlags.contains(.command) { Task { await composer.showInApp(key) } }
+                        }
+                        .help("⌘-click to open in Dray")
                 }
                 Spacer(minLength: 0)
                 Text(composer.closeHint).font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))
@@ -143,10 +148,11 @@ private struct QuestionsBody: View {
             }
             if q.freeText != false {
                 if editing {
-                    // Typed text is the answer once there is any, so the pick lets go.
+                    // On a single pick, typed text is the answer once there is any, so the pick
+                    // lets go; on a multi-select it is one more answer beside the picks.
                     TextField("", text: Binding(get: { typed[q.question] ?? "" }, set: {
                         typed[q.question] = $0
-                        if !$0.isEmpty { picks[q.question] = nil }
+                        if !$0.isEmpty, !q.multiSelect { picks[q.question] = nil }
                     }),
                               prompt: Text("Something else…").foregroundStyle(.white.opacity(0.3)))
                         .textFieldStyle(.plain)
@@ -195,9 +201,11 @@ private struct QuestionsBody: View {
     }
 
     private func toggle(_ label: String) {
-        // And the other way: a pick is the answer, which typed text would otherwise outrank unseen.
-        typed[q.question] = nil
-        editing = false
+        // And the other way: a single pick is the answer, which typed text would otherwise outrank unseen.
+        if !q.multiSelect {
+            typed[q.question] = nil
+            editing = false
+        }
         var set = picks[q.question, default: []]
         if set.contains(label) { set.remove(label) } else if q.multiSelect { set.insert(label) } else { set = [label] }
         picks[q.question] = set
@@ -223,12 +231,11 @@ private struct QuestionsBody: View {
         var out: [String: String] = [:]
         for q in request.questions {
             let text = (typed[q.question] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty && q.freeText != false {
-                out[q.question] = text
-            } else if let set = picks[q.question], !set.isEmpty {
-                // In option order, so the answer reads the way the menu did.
-                out[q.question] = q.options.map(\.label).filter(set.contains).joined(separator: ", ")
-            }
+            let typedAnswer = !text.isEmpty && q.freeText != false ? [text] : []
+            // In option order, so the answer reads the way the menu did; typed text last.
+            let picked = q.options.map(\.label).filter(picks[q.question, default: []].contains)
+            let parts = q.multiSelect ? picked + typedAnswer : typedAnswer.isEmpty ? picked : typedAnswer
+            if !parts.isEmpty { out[q.question] = parts.joined(separator: ", ") }
         }
         busy = true
         Task {

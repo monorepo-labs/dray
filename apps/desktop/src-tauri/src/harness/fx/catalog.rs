@@ -179,7 +179,7 @@ pub async fn forget() {
 }
 
 async fn fetch() -> Result<HashMap<String, Vec<Effort>>> {
-    let listing: Listing = reqwest::Client::new()
+    let listing: Listing = crate::http()
         .get(URL)
         .timeout(TIMEOUT)
         .send()

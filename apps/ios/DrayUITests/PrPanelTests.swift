@@ -11,9 +11,10 @@ final class PrPanelTests: XCTestCase {
             throw XCTSkip("set TEST_RUNNER_DRAY_URL and TEST_RUNNER_DRAY_TOKEN")
         }
         let app = XCUIApplication()
+        app.launchArguments = ["-servers", ""]
         app.launch()
-        // The empty list's own button: through the Servers sheet there are two, and
-        // which one `firstMatch` takes is not stable. Wants a fresh install.
+        // The empty list's own button: through Settings there are two, and
+        // which one `firstMatch` takes is not stable.
         app.buttons["Add server"].firstMatch.tap()
         app.textFields["Address"].tap()
         app.textFields["Address"].typeText(url)

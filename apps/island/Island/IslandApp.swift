@@ -41,6 +41,17 @@ final class IslandPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+extension NSWindow {
+    /// WindowServer can drop a window's all-Spaces tag while the island runs, leaving
+    /// it on one desktop and never over a fullscreen app. AppKit skips setting a
+    /// behavior it thinks is unchanged, so it is cleared before being put back.
+    func rejoinAllSpaces() {
+        let behavior = collectionBehavior
+        collectionBehavior = []
+        collectionBehavior = behavior
+    }
+}
+
 @MainActor
 final class Delegate: NSObject, NSApplicationDelegate {
     private var panel: IslandPanel?
@@ -54,16 +65,21 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var closeKey: HotKey?
     /// ⌘⇧2, beside macOS's own ⌘⇧3/4/5: a screenshot into the draft from anywhere.
     private var captureKey: HotKey?
+    /// ⌘⏎ from anywhere, held while the done pill is up: Open in app on the newest.
+    private var openKey: HotKey?
     private static weak var shared: Delegate?
     /// The first of a double tap, while the panel is shut.
     private var lastTap: Date?
+    /// A tap is waiting on Dray's selection; another meanwhile must not open twice.
+    private var askingApp = false
+    /// A tap landed while asking, which is the double tap that opens listening.
+    private var dictateOnOpen = false
     private var annotation: Annotation?
     /// Over a capture's or a drawing's overlay, so dictation stays in sight and in reach.
     private static let overOverlay = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         waitForServer()
-        restartWhenReplaced()
         // Open PRs' checks move on their own; read them while the panel is up, as the phone does on screen.
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -84,21 +100,33 @@ final class Delegate: NSObject, NSApplicationDelegate {
         return .terminateLater
     }
 
+    private static func binaryDate() -> Date? {
+        (try? Bundle.main.executableURL?.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    }
+    private let startedOn = Delegate.binaryDate()
+    /// Dray launched while the panel was open or a screenshot ran; the restart waits for it to end.
+    private var updatePending = false
+    /// The replacement is launching; a second ping meanwhile would start a second one.
+    private var restarting = false
+
     /// An update swaps the bundle under a running island, and Dray's `open` only
-    /// finds this one still up, so it moves itself onto the new binary — while
-    /// hidden, never under the reader's hands.
-    private func restartWhenReplaced() {
-        let modified = { (try? Bundle.main.executableURL?.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate }
-        let started = modified()
-        Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard self?.panel?.isVisible != true, let now = modified(), now != started else { return }
-                let config = NSWorkspace.OpenConfiguration()
-                config.createsNewApplicationInstance = true
-                config.environment = ProcessInfo.processInfo.environment
-                NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, error in
-                    if error == nil { DispatchQueue.main.async { NSApp.terminate(nil) } }
-                }
+    /// finds this one still up, so every Dray launch pings it and it moves itself
+    /// onto the new binary — while hidden, never under the reader's hands. A
+    /// screenshot hides the panel without being done with it, so it waits too.
+    private func updateIfReplaced() {
+        guard !restarting, let now = Self.binaryDate(), now != startedOn else { return }
+        guard panel?.isVisible != true, composer?.capturing != true else {
+            updatePending = true
+            return
+        }
+        updatePending = false
+        restarting = true
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        config.environment = ProcessInfo.processInfo.environment
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, error in
+            DispatchQueue.main.async {
+                if error == nil { NSApp.terminate(nil) } else { self.restarting = false }
             }
         }
     }
@@ -203,9 +231,14 @@ final class Delegate: NSObject, NSApplicationDelegate {
             guard let composer else { return }
             if composer.listening { Task { await composer.cancelDictation() } } else { composer.hide() }
         }
+        openKey = HotKey(key: kVK_Return, mods: cmdKey) { [weak composer] in
+            guard let composer, composer.donePillUp, let key = composer.done.last else { return }
+            composer.openDoneInApp(key)
+        }
         composer.recordingChanged = { [weak self] recording in
             if recording { self?.startAnnotation() } else { self?.endAnnotation() }
         }
+        composer.takeKeys = { [weak self] in self?.panel?.makeKeyAndOrderFront(nil) }
         registerCapture()
         // Dray's Settings writes the picks and then says so, through `notifyutil -p`.
         // A C callback captures nothing, so it finds the delegate through a static;
@@ -231,6 +264,11 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 MainActor.assumeIsolated { Delegate.shared?.sessionsDone() }
             }
         }, "com.yogesh.dray.island.done" as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), nil, { _, _, _, _, _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { Delegate.shared?.updateIfReplaced() }
+            }
+        }, "com.yogesh.dray.island.update" as CFString, nil, .deliverImmediately)
         // The tap's twin for other processes: Dray.app, or a script driving the panel.
         DistributedNotificationCenter.default().addObserver(forName: .init("com.yogesh.dray.island.tap"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.pressed() }
@@ -291,12 +329,32 @@ final class Delegate: NSObject, NSApplicationDelegate {
             panel?.makeKeyAndOrderFront(nil)
         } else if composer.shown {
             Task { await composer.toggleDictation() }
+        } else if askingApp {
+            // The panel is on its way up, so this is the tap that dictates.
+            dictateOnOpen.toggle()
         } else if UserDefaults.standard.string(forKey: "island.tap") == "double",
                   lastTap.map({ Date().timeIntervalSince($0) > 0.4 }) ?? true {
             lastTap = Date()
         } else {
             lastTap = nil
+            open()
+        }
+    }
+
+    /// A tap over Dray's window opens on the session that window has open,
+    /// asked before the panel shows so the title never flips under the reader.
+    /// The app answers nothing unless its window has focus, so every tap asks.
+    private func open() {
+        guard let composer, !askingApp else { return }
+        askingApp = true
+        Task {
+            await composer.adoptAppSelection()
+            askingApp = false
             show()
+            if dictateOnOpen {
+                dictateOnOpen = false
+                await composer.toggleDictation()
+            }
         }
     }
 
@@ -326,6 +384,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 composer.capturing = false
                 // Dictation may have stopped during the flight or the cut, where `endAnnotation` left the level to this.
                 panel.level = annotation == nil ? .statusBar : Self.overOverlay
+                if updatePending { updateIfReplaced() }
             }
             var shot: Capture.Shot?
             var failed: String?
@@ -350,9 +409,11 @@ final class Delegate: NSObject, NSApplicationDelegate {
         guard let panel, let composer, !composer.shown else { return }
         composer.opened()
         place()
+        panel.rejoinAllSpaces()
         panel.makeKeyAndOrderFront(nil)
         composer.shown = true
         closeKey?.held = true
+        openKey?.held = false
     }
 
     /// Takes the window down once the close animation has run, unless
@@ -361,6 +422,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self, let panel, let composer, !composer.shown else { return }
             panel.orderOut(nil)
+            if updatePending { updateIfReplaced() }
         }
     }
 
@@ -368,7 +430,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
     /// Drawn, never key: a pill must not take keys from the app being typed in.
     private func showPills() {
         guard let pills, let composer else { return }
+        openKey?.held = composer.donePillUp
         if composer.hasPill {
+            pills.rejoinAllSpaces()
             pills.orderFrontRegardless()
         } else {
             // After the pill's own exit, which the view animates.
@@ -390,8 +454,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
         return switch (composer.placement, composer.shown) {
         case (.notch, true): NSPoint(x: f.midX, y: f.maxY - composer.notchHeight - 40)
         case (.notch, false): NSPoint(x: f.midX, y: f.maxY - composer.notchHeight / 2)
-        case (.bottom, true): NSPoint(x: f.midX, y: f.minY + 60)
-        case (.bottom, false): NSPoint(x: f.midX, y: f.minY)
+        case (.bottom, true): NSPoint(x: f.midX, y: f.minY + Composer.shadowRoom + 60)
+        case (.bottom, false): NSPoint(x: f.midX, y: f.minY + Composer.shadowRoom)
         }
     }
 
@@ -427,7 +491,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let size = Self.size
         let origin = switch composer.placement {
         case .notch: NSPoint(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - size.height)
-        case .bottom: NSPoint(x: screen.visibleFrame.midX - size.width / 2, y: screen.visibleFrame.minY + Self.hiddenDock(screen))
+        case .bottom: NSPoint(x: screen.visibleFrame.midX - size.width / 2, y: screen.visibleFrame.minY + Self.hiddenDock(screen) - Composer.shadowRoom)
         }
         composer.notchHeight = composer.placement == .notch ? screen.safeAreaInsets.top : 0
         panel.setFrame(NSRect(origin: origin, size: size), display: true)

@@ -10,6 +10,7 @@ final class PairingTests: XCTestCase {
             throw XCTSkip("set TEST_RUNNER_DRAY_URL and TEST_RUNNER_DRAY_TOKEN")
         }
         let app = XCUIApplication()
+        app.launchArguments = ["-servers", ""]
         app.launch()
 
         let encoded = url.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
@@ -22,12 +23,13 @@ final class PairingTests: XCTestCase {
         snap(app, "1-paired")
 
         // The scanner itself needs a camera; the simulator has none, so this sees its fallback.
-        app.buttons["Scan QR code"].tap()
+        // The sheet's, not the empty list's under it.
+        app.buttons.matching(identifier: "Scan QR code").allElementsBoundByIndex.first { $0.isHittable }?.tap()
         snap(app, "2-scanner")
-        app.buttons["Cancel"].firstMatch.tap()
+        app.buttons.matching(identifier: "Cancel").allElementsBoundByIndex.first { $0.isHittable }?.tap()
 
         app.buttons["Add"].tap()
-        app.buttons["Servers"].tap()
+        app.buttons["Settings"].tap()
         XCTAssertTrue(app.staticTexts["Scratch Mac"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 15), "never connected")
         snap(app, "3-connected")

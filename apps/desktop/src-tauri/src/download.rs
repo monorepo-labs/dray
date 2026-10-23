@@ -44,7 +44,7 @@ pub async fn download_verified(
     mut cancelled: impl FnMut() -> bool,
     mut on_progress: impl FnMut(u64),
 ) -> Result<()> {
-    let mut response = reqwest::get(url)
+    let mut response = crate::http().get(url).send()
         .await
         .context("could not reach the download server")?;
     if !response.status().is_success() {
@@ -84,10 +84,16 @@ pub async fn download_verified(
     if received != size {
         bail!("downloaded {received} bytes where {size} were expected");
     }
-    if format!("{:x}", hasher.finalize()) != sha256 {
+    if hex(&hasher.finalize()) != sha256 {
         bail!("the download does not match its published checksum");
     }
     Ok(())
+}
+
+/// Lowercase, zero-padded hex: the spelling every pinned hash is written in.
+/// sha2 0.11's digest no longer formats with `{:x}`.
+fn hex(digest: &[u8]) -> String {
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -98,7 +104,7 @@ mod tests {
     /// stopped zero-padding would fail every download silently.
     #[test]
     fn a_digest_prints_as_the_pinned_spelling() {
-        let digest = format!("{:x}", Sha256::digest(b""));
+        let digest = hex(&Sha256::digest(b""));
 
         assert_eq!(
             digest,

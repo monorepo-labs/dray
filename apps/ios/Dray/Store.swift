@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Observation
 import Security
 
@@ -31,10 +32,19 @@ final class Store {
     /// gh's latest progress line per clone, by server and slug.
     var cloneProgress: [UUID: [String: String]] = [:]
     var lastError: String?
+    /// False while the device has no network at all, which every server shares.
+    private(set) var online = true
+    /// A server that connected and then failed to read its sessions, by server.
+    private(set) var loadErrors: [UUID: String] = [:]
+    /// A transcript that could not be read with nothing of it held yet.
+    private(set) var transcriptErrors: [SessionKey: String] = [:]
+    /// An older page that could not be read; the newer turns stay on screen.
+    private(set) var olderErrors: [SessionKey: String] = [:]
+    private(set) var tasks: [SessionKey: Int] = [:]
 
     /// For a client that reacts beside drawing: the Island opens itself on a card.
     @ObservationIgnored var asksChanged: () -> Void = {}
-    @ObservationIgnored private var tasks: [SessionKey: Int] = [:]
+    @ObservationIgnored private let path = NWPathMonitor()
     @ObservationIgnored private var reading: Set<UUID> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
     @ObservationIgnored private var connections: [UUID: Connection] = [:]
@@ -47,6 +57,7 @@ final class Store {
             servers = saved
         }
         for s in servers { start(s) }
+        watchNetwork()
     }
 
     /// One server, read through `read` at every connect rather than the
@@ -54,6 +65,25 @@ final class Store {
     init(local s: Server, read: @escaping () -> (url: String, token: String)?) {
         servers = [s]
         start(s, read: read)
+        watchNetwork()
+    }
+
+    /// The network coming back retries every server at once, rather than each
+    /// sitting out the rest of its backoff.
+    private func watchNetwork() {
+        #if DEBUG
+        // The UI test's way to draw offline: the simulator only follows the Mac's network.
+        if ProcessInfo.processInfo.arguments.contains("-offline") { return online = false }
+        #endif
+        path.pathUpdateHandler = { [weak self] p in
+            Task { @MainActor in
+                guard let self else { return }
+                let now = p.status == .satisfied
+                if now && !self.online { self.resume(now: true) }
+                self.online = now
+            }
+        }
+        path.start(queue: .main)
     }
 
     // MARK: Servers
@@ -76,7 +106,20 @@ final class Store {
         for key in asks.keys where key.server == s.id { asks[key] = nil }
         for key in marks.keys where key.server == s.id { marks[key] = nil }
         projects[s.id] = nil
+        loadErrors[s.id] = nil
         save()
+    }
+
+    func renameServer(_ id: UUID, to name: String) {
+        guard let i = servers.firstIndex(where: { $0.id == id }) else { return }
+        servers[i].name = name
+        save()
+    }
+
+    /// A new token for a server whose old one was refused, tried at once.
+    func updateToken(_ id: UUID, _ token: String) {
+        Keychain.set(token, for: id.uuidString)
+        connections[id]?.update(token: token)
     }
 
     func connection(_ server: UUID) -> Connection? { connections[server] }
@@ -86,8 +129,18 @@ final class Store {
     }
 
     /// iOS drops sockets once the app leaves the screen; coming back reconnects.
-    func resume() {
-        for c in connections.values { c.resume() }
+    /// `now` also asks servers that stopped, as a Retry does.
+    func resume(now: Bool = false) {
+        for c in connections.values { now ? c.retryNow() : c.resume() }
+    }
+
+    /// One server's Retry: reconnect where it is down, re-read where it is up.
+    func retry(_ server: UUID) async {
+        if serverState[server] == .connected {
+            await loadIndex(server)
+        } else {
+            connections[server]?.retryNow()
+        }
     }
 
     func refresh() async {
@@ -116,10 +169,9 @@ final class Store {
     }
 
     private func start(_ s: Server, read: (() -> (url: String, token: String)?)? = nil) {
-        guard let token = read?()?.token ?? Keychain.get(s.id.uuidString) else {
-            serverState[s.id] = .failed("No token saved; remove and add this server again")
-            return
-        }
+        // No token saved connects anyway: the server refuses it, which draws as
+        // a refused token, and that state is where a new one is pasted.
+        let token = read?()?.token ?? Keychain.get(s.id.uuidString) ?? ""
         let c = Connection(serverId: s.id, url: s.url, token: token)
         c.refresh = read
         c.onState = { [weak self] state in
@@ -139,7 +191,8 @@ final class Store {
         // never moves `modified`, so a stale `completed` would win the tie.
         for key in statuses.keys where key.server == server { statuses[key] = nil }
         await loadIndex(server)
-        for key in transcripts.keys where key.server == server { await reload(key) }
+        // A failed first read holds no transcript, so its error is what remembers it.
+        for key in Set(transcripts.keys).union(transcriptErrors.keys) where key.server == server { await reload(key) }
         // After the transcripts: a mark costs a `gh` call per repo, missed messages must not wait on it.
         await loadProjects(server)
         await loadMarks(server, force: false)
@@ -201,8 +254,10 @@ final class Store {
             let list: [SessionItem] = try await c.call("list_session_index_items", ["archived": false])
             for key in items.keys where key.server == server { items[key] = nil }
             for item in list { store(SessionKey(server: server, id: item.sessionId), item) }
+            loadErrors[server] = nil
         } catch {
-            serverState[server] = .failed(error.localizedDescription)
+            // The rows already listed stay; the list says this read failed beside them.
+            loadErrors[server] = error.localizedDescription
         }
     }
 
@@ -256,6 +311,12 @@ final class Store {
         if transcripts[key] == nil { await reload(key) }
     }
 
+    /// A transcript's Retry. Disconnected, the error stays until the connect
+    /// re-reads it, since a key with nothing held is reloaded through that error.
+    func retryLoad(_ key: SessionKey) async {
+        if serverState[key.server] == .connected { await reload(key) } else { connections[key.server]?.retryNow() }
+    }
+
     /// Re-reads the newest turns and lays them over what is held: older pages
     /// the read starts inside are kept, the read's own events follow in log
     /// order, and anything that arrived live while it was out goes last.
@@ -276,13 +337,15 @@ final class Store {
             }
             for e in snap.events + live { t.append(e) }
             transcripts[key] = t
+            transcriptErrors[key] = nil
         } catch {
-            lastError = error.localizedDescription
+            transcriptErrors[key] = error.localizedDescription
         }
     }
 
     func loadOlder(_ key: SessionKey) async {
         guard let c = connections[key.server], let before = transcripts[key]?.olderBefore else { return }
+        olderErrors[key] = nil
         do {
             let page: Snapshot = try await c.call("get_session_page", ["sessionId": .string(key.id), "before": JSON(before), "turns": 16])
             guard var t = transcripts[key] else { return }
@@ -292,7 +355,7 @@ final class Store {
             t.olderBefore = page.olderBefore
             transcripts[key] = t
         } catch {
-            lastError = error.localizedDescription
+            olderErrors[key] = error.localizedDescription
         }
     }
 

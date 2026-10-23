@@ -14,8 +14,10 @@ use std::sync::{
 
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{
-    Resampler as _, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+    Async, FixedAsync, Resampler as _, SincInterpolationParameters, SincInterpolationType,
+    WindowFunction,
 };
 use serde::Serialize;
 use ts_rs::TS;
@@ -41,12 +43,12 @@ pub struct InputDevice {
 
 pub fn list_input_devices() -> Result<Vec<InputDevice>> {
     let host = cpal::default_host();
-    let default = host.default_input_device().and_then(|d| d.name().ok());
+    let default = host.default_input_device().and_then(|d| device_name(&d));
 
     let devices = host
         .input_devices()
         .context("could not enumerate input devices")?
-        .filter_map(|d| d.name().ok())
+        .filter_map(|d| device_name(&d))
         .map(|name| InputDevice {
             is_default: Some(&name) == default.as_ref(),
             name,
@@ -54,6 +56,13 @@ pub fn list_input_devices() -> Result<Vec<InputDevice>> {
         .collect();
 
     Ok(devices)
+}
+
+/// The name a device is stored under. cpal 0.18 dropped `name()`; the
+/// description's name reads the same CoreAudio property, so names saved by
+/// older builds still match.
+fn device_name(device: &cpal::Device) -> Option<String> {
+    device.description().ok().map(|d| d.name().to_string())
 }
 
 /// Resolves a stored device name to a live device, falling back to the system
@@ -67,7 +76,7 @@ fn open_device(preferred: Option<&str>) -> Result<cpal::Device> {
 
     if let Some(name) = preferred {
         if let Ok(mut devices) = host.input_devices() {
-            if let Some(found) = devices.find(|d| d.name().is_ok_and(|n| n == name)) {
+            if let Some(found) = devices.find(|d| device_name(d).is_some_and(|n| n == name)) {
                 return Ok(found);
             }
         }
@@ -84,7 +93,18 @@ fn open_device(preferred: Option<&str>) -> Result<cpal::Device> {
 /// dropped rather than stopped must still put the sound back.
 static PRIOR_MUTED: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
 
-/// Silences the speakers for the duration of a recording. Blocking.
+/// Which recording a pending mute is for. The mute lands a moment after the
+/// microphone opens, so the start tone is heard; a restore or a newer start
+/// moves this on, and a mute still waiting for an older one does nothing.
+static MUTE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A ticket for the mute a new recording will ask for.
+pub fn arm_mute() -> u64 {
+    MUTE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+}
+
+/// Silences the speakers for the duration of a recording, where `ticket` is
+/// still the newest one. Blocking.
 ///
 /// The microphone hears them, so anything playing lands in the transcript as
 /// words nobody said — nothing here can capture the mic and the system's own
@@ -93,10 +113,16 @@ static PRIOR_MUTED: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None)
 /// Best effort throughout: a machine with no output device, or an `osascript`
 /// that refuses, records anyway. Failing the press over this would be worse
 /// than the audio it is trying to keep out.
-pub fn mute_other_audio() {
+pub fn mute_other_audio(ticket: u64) {
     let Ok(mut prior) = PRIOR_MUTED.lock() else {
         return;
     };
+
+    // Read under the lock a restore takes, or a stop landing between this
+    // check and the mute would restore first and leave the machine silent.
+    if MUTE_GEN.load(std::sync::atomic::Ordering::SeqCst) != ticket {
+        return;
+    }
 
     // A reading already held is the one from before we touched anything, and
     // the only thing that can put the sound back. Overwriting it with our own
@@ -119,6 +145,8 @@ pub fn restore_other_audio() {
     let Ok(mut prior) = PRIOR_MUTED.lock() else {
         return;
     };
+    // The recording is over, so a mute still waiting for it must not land.
+    MUTE_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
     // Restored to what it was, never unconditionally unmuted: a reader who was
     // already muted before they started talking stays that way.
@@ -280,12 +308,6 @@ impl Tap {
     }
 }
 
-// cpal's `Stream` is `!Send` because some backends tie it to the thread that
-// created it. Recording is owned by a `tokio::Mutex` in the manager and only
-// ever touched from commands, never moved across a thread while live, so the
-// bound is sound here — but it is a promise this module has to keep.
-unsafe impl Send for Recording {}
-
 impl Recording {
     /// Opens the device and starts filling a buffer.
     ///
@@ -299,7 +321,7 @@ impl Recording {
             .context("microphone offers no usable input format")?;
 
         let channels = config.channels();
-        let rate = config.sample_rate().0;
+        let rate = config.sample_rate();
         // Preallocated, and that is about the realtime callback rather than
         // speed. `extend` on a growing `Vec` reallocates by doubling, and each
         // one memcpys the whole buffer *on the audio thread* — at 48kHz stereo
@@ -324,13 +346,13 @@ impl Recording {
         // every arm, so each converts to `f32` and appends.
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => device.build_input_stream(
-                &config.into(),
+                config.into(),
                 move |data: &[f32], _: &_| append(&sink, &level, data.iter().copied()),
                 on_error,
                 None,
             ),
             cpal::SampleFormat::I16 => device.build_input_stream(
-                &config.into(),
+                config.into(),
                 move |data: &[i16], _: &_| {
                     append(
                         &sink,
@@ -342,7 +364,7 @@ impl Recording {
                 None,
             ),
             cpal::SampleFormat::U16 => device.build_input_stream(
-                &config.into(),
+                config.into(),
                 move |data: &[u16], _: &_| {
                     append(
                         &sink,
@@ -564,7 +586,7 @@ pub(super) fn resample(samples: Vec<f32>, from_rate: u32) -> Vec<f32> {
 /// over the whole recording would.
 pub(super) struct Resampler {
     /// `None` at the target rate already, or where the filter would not build.
-    inner: Option<SincFixedIn<f32>>,
+    inner: Option<Async<f32>>,
     pending: Vec<f32>,
 }
 
@@ -574,14 +596,17 @@ impl Resampler {
     pub(super) fn new(from_rate: u32) -> Self {
         let params = SincInterpolationParameters {
             sinc_len: 256,
-            f_cutoff: 0.95,
+            f_cutoff: Some(0.95),
             interpolation: SincInterpolationType::Linear,
             oversampling_factor: 256,
             window: WindowFunction::BlackmanHarris2,
         };
         let ratio = TARGET_RATE as f64 / from_rate as f64;
         let inner = (from_rate != TARGET_RATE)
-            .then(|| SincFixedIn::<f32>::new(ratio, 2.0, params, RESAMPLE_CHUNK, 1).ok())
+            .then(|| {
+                Async::<f32>::new_sinc(ratio, 2.0, &params, RESAMPLE_CHUNK, 1, FixedAsync::Input)
+                    .ok()
+            })
             .flatten();
         Self { inner, pending: Vec::new() }
     }
@@ -593,7 +618,7 @@ impl Resampler {
         let blocks: Vec<f32> = self.pending.drain(..whole).collect();
         let mut out = Vec::new();
         for block in blocks.chunks(RESAMPLE_CHUNK) {
-            Self::process(inner, block.to_vec(), &mut out);
+            Self::process(inner, block, &mut out);
         }
         out
     }
@@ -607,16 +632,18 @@ impl Resampler {
             if !self.pending.is_empty() {
                 let mut last = std::mem::take(&mut self.pending);
                 last.resize(RESAMPLE_CHUNK, 0.0);
-                Self::process(inner, last, &mut out);
+                Self::process(inner, &last, &mut out);
             }
         }
         out
     }
 
-    fn process(inner: &mut SincFixedIn<f32>, block: Vec<f32>, out: &mut Vec<f32>) {
-        match inner.process(&[block], None) {
-            Ok(mut done) if !done.is_empty() => out.append(&mut done[0]),
-            Ok(_) => {}
+    fn process(inner: &mut Async<f32>, block: &[f32], out: &mut Vec<f32>) {
+        let done = InterleavedSlice::new(block, 1, block.len())
+            .map_err(|e| e.to_string())
+            .and_then(|input| inner.process(&input, None).map_err(|e| e.to_string()));
+        match done {
+            Ok(done) => out.append(&mut done.take_data()),
             Err(e) => eprintln!("[transcription resample err] {e}"),
         }
     }

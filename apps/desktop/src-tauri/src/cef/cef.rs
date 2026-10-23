@@ -676,7 +676,7 @@ fn create_tab(session: &str, url: &str, activate: bool, tab: Option<i32>) -> Res
     }
     let info = child_window_info()?;
     let tab = tab.unwrap_or_else(|| NEXT_TAB.fetch_add(1, Ordering::SeqCst));
-    let mut client = DrayClient::new(session.to_string(), activate, tab, None);
+    let mut client = DrayClient::new(session.to_string(), activate, tab, None, url.to_string());
     let mut context = context_for(session);
     creation_started();
     let ok = browser_host_create_browser(
@@ -941,11 +941,12 @@ wrap_client! {
         activate: bool,
         tab: i32,
         opener: Option<i32>,
+        url: String,
     }
 
     impl Client {
         fn life_span_handler(&self) -> Option<LifeSpanHandler> {
-            Some(DrayLifeSpan::new(self.session.clone(), self.activate, self.tab, self.opener))
+            Some(DrayLifeSpan::new(self.session.clone(), self.activate, self.tab, self.opener, self.url.clone()))
         }
         fn display_handler(&self) -> Option<DisplayHandler> {
             Some(DrayDisplay::new(self.tab))
@@ -985,6 +986,9 @@ wrap_life_span_handler! {
         activate: bool,
         tab: i32,
         opener: Option<i32>,
+        // What was asked for, drawn until the page commits: the main frame
+        // answers empty until then, so the URL bar sat blank for the load.
+        url: String,
     }
 
     impl LifeSpanHandler {
@@ -1007,7 +1011,11 @@ wrap_life_span_handler! {
                     slot.closing.then_some(browser)
                 }
                 None => {
-                    let url = browser.main_frame().map(|f| CefString::from(&f.url()).to_string()).unwrap_or_default();
+                    let url = browser
+                        .main_frame()
+                        .map(|f| CefString::from(&f.url()).to_string())
+                        .filter(|u| !u.is_empty())
+                        .unwrap_or_else(|| self.url.clone());
                     tabs.push(Tab {
                         id,
                         session: self.session.clone(),
@@ -1058,7 +1066,7 @@ wrap_life_span_handler! {
             _browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
             _popup_id: ::std::os::raw::c_int,
-            _target_url: Option<&CefString>,
+            target_url: Option<&CefString>,
             _target_frame_name: Option<&CefString>,
             _target_disposition: WindowOpenDisposition,
             _user_gesture: ::std::os::raw::c_int,
@@ -1073,7 +1081,8 @@ wrap_life_span_handler! {
             let Ok(info) = child_window_info() else { return 1 };
             *window_info = info;
             let tab = NEXT_TAB.fetch_add(1, Ordering::SeqCst);
-            *client = Some(DrayClient::new(self.session.clone(), true, tab, Some(self.tab)));
+            let url = target_url.map(CefString::to_string).unwrap_or_default();
+            *client = Some(DrayClient::new(self.session.clone(), true, tab, Some(self.tab), url));
             creation_started();
             0
         }
@@ -1920,8 +1929,18 @@ pub fn browser_open(session_id: String, url: String, new_tab: bool) -> Result<()
     let (tx, rx) = mpsc::channel();
     on_main(move || {
         if !new_tab {
-            if let Some(frame) = active_id(&session_id).and_then(|id| browser_of(id)).and_then(|b| b.main_frame()) {
+            if let Some((id, frame)) = active_id(&session_id)
+                .and_then(|id| Some((id, browser_of(id)?.main_frame()?)))
+            {
                 frame.load_url(Some(&CefString::from(url.as_str())));
+                // Drawn at once, as a browser does: the address otherwise
+                // waits for the commit, and a page that never answers never
+                // shows what was asked for.
+                update_tab(id, |t| {
+                    t.url = url;
+                    t.loading = true;
+                    t.error = None;
+                });
                 let _ = tx.send(Ok(()));
                 return;
             }

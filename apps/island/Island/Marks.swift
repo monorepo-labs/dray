@@ -53,18 +53,21 @@ struct LeadMark: View {
     var shown: Bool { marks.checksRunning || marks.busy || marks.pr != nil }
 }
 
-/// The selected session's title row: the title opens it in Dray behind its
-/// lead mark, and the hints teach the keys.
+/// The selected session's title row: the title opens the task list behind its
+/// lead mark, ⌘-click opens the session in Dray, and the hints teach the keys.
 struct TitleRow: View {
     let title: String
     let marks: Marks
     let close: String
-    let open: () -> Void
+    let list: () -> Void
+    let openInApp: () -> Void
     @State private var hovered = false
 
     var body: some View {
         HStack(spacing: 12) {
-            Button(action: open) {
+            Button {
+                if NSEvent.modifierFlags.contains(.command) { openInApp() } else { list() }
+            } label: {
                 HStack(spacing: 4) {
                     let lead = LeadMark(marks: marks)
                     if lead.shown { lead }
@@ -78,7 +81,7 @@ struct TitleRow: View {
             .buttonStyle(.plain)
             .onHover { hovered = $0 }
             .animation(.easeOut(duration: 0.12), value: hovered)
-            .help("Open in Dray")
+            .help("Tasks, ⌘-click to open in Dray")
             KeyHints(new: true, close: close)
         }
     }
@@ -136,12 +139,15 @@ struct AskTabs: View {
     let titles: [String]
     let active: Int
     let pick: (Int) -> Void
+    let openInApp: (Int) -> Void
 
     var body: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 4) {
                 ForEach(Array(titles.enumerated()), id: \.offset) { i, title in
-                    AskTab(title: title, active: i == active) { pick(i) }
+                    AskTab(title: title, active: i == active) {
+                        if NSEvent.modifierFlags.contains(.command) { openInApp(i) } else { pick(i) }
+                    }
                 }
             }
         }
@@ -150,7 +156,7 @@ struct AskTabs: View {
 }
 
 /// One waiting session over the card, as a browser tab: the active one names
-/// itself, the others are clipped short.
+/// itself, the others are clipped short. ⌘-click opens it in Dray.
 struct AskTab: View {
     let title: String
     let active: Bool
@@ -235,7 +241,7 @@ struct DonePill: View {
                     // Several are a count alone; their titles wait for the pointer.
                     if items.count == 1, let first = items.first {
                         DoneTitle(title: first.title, cap: 240)
-                        OpenInAppButton { openInApp(first.key) }
+                        OpenInAppButton(chord: true) { openInApp(first.key) }
                     }
                 }
                 .contentShape(Rectangle())
@@ -298,16 +304,22 @@ private struct DoneTitle: View {
 }
 
 private struct OpenInAppButton: View {
+    /// ⌘⏎ opens the newest alone, so only its button names the chord.
+    var chord = false
     let action: () -> Void
     @State private var hover = false
 
     var body: some View {
         Button(action: action) {
-            Text("Open in app").font(.system(size: 12, weight: .medium))
-                .padding(.horizontal, 10)
-                .frame(height: 22)
-                .background(.white.opacity(hover ? 0.22 : 0.12), in: Capsule())
-                .contentShape(Capsule())
+            HStack(spacing: 6) {
+                Text("Open in app")
+                if chord { Text("⌘⏎").foregroundStyle(.white.opacity(0.45)) }
+            }
+            .font(.system(size: 12, weight: .medium))
+            .padding(.horizontal, 10)
+            .frame(height: 22)
+            .background(.white.opacity(hover ? 0.22 : 0.12), in: Capsule())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }

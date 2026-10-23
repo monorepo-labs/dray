@@ -93,6 +93,7 @@ pub async fn run(port: u16) -> Result<()> {
     // Remote access fronts this listener rather than binding one of its own.
     crate::remote_access::fronts(listener.local_addr()?.port());
     tokio::spawn(crate::remote_access::start(sink.clone()));
+    tokio::spawn(crate::tunnel::warm(crate::tunnel::SHARE));
 
     eprintln!(
         "dray-serve listening on ws://{}, token in {}",
@@ -1137,9 +1138,10 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     if crate::transcription::HOSTED.contains(&cmd) {
         return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Open Dray to dictate.")));
     }
-    // The Island's title opens its session in the app's window, which only the app can raise.
+    // The Island's title opens its session in the app's window, which only the
+    // app can raise, and the island opens on the session that window shows.
     #[cfg(feature = "desktop")]
-    if cmd == "show_session" {
+    if matches!(cmd, "show_session" | "selected_session") {
         return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Dray's window is closed.")));
     }
     // A `dray-serve` updates itself; the Mac's server follows the app instead.
@@ -1451,7 +1453,7 @@ mod tests {
                 let chunks = futures_util::stream::iter(
                     body.chunks(64 * 1024).map(|c| Ok::<_, std::io::Error>(c.to_vec())).collect::<Vec<_>>(),
                 );
-                reqwest::Client::new()
+                crate::http()
                     .post(base)
                     .query(&[("name", name)])
                     .bearer_auth(token)

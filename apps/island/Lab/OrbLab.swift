@@ -1,9 +1,6 @@
 import AVFoundation
 import SwiftUI
 
-/// The real panel's, in Composer.swift; the lab builds without the composer.
-enum Dictation { case idle, starting, recording, transcribing }
-
 /// Every candidate dictation orb side by side, live at the panel's two sizes
 /// (#568). A demo, kept: open it again when the orb is next in question.
 @main

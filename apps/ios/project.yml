@@ -9,11 +9,21 @@ settings:
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: 1
+packages:
+  ThinkingOrbs:
+    url: https://github.com/yogesharc/thinking-orbs
+    revision: 78760661f652ffb1fa1955cd7ea41657fb7beae7
 targets:
   Dray:
     type: application
     platform: iOS
-    sources: [Dray]
+    sources:
+      - Dray
+      # The Island's dictation orb, shared by path as the Island shares this app's client.
+      - path: ../island/Island/VoiceOrb.swift
+      - path: ../island/Island/VoiceOrb.metal
+    dependencies:
+      - package: ThinkingOrbs
     scheme:
       testTargets: [DrayTests, DrayUITests]
     settings:

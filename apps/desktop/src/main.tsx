@@ -26,6 +26,12 @@ startAgentUpdateChecks();
 void applyIsland();
 // The webview opens at 100% whatever the reader left it at.
 applyZoom();
+// An Escape nothing handled is passed on to the window, which macOS reads as
+// "leave fullscreen". On `window` in bubble phase, so every handler on the
+// document has already had the key and still sees `defaultPrevented` unset.
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") e.preventDefault();
+});
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

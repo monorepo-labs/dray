@@ -1,4 +1,5 @@
 import SwiftUI
+import ThinkingOrbs
 import UIKit
 
 /// One dev server the desktop's Browser tab lists; `local_servers.rs`'s `LocalServer`.
@@ -57,91 +58,112 @@ struct LocalServersView: View {
 
     @ViewBuilder private var content: some View {
         if let servers, !servers.isEmpty {
-            List {
-                Section {
-                    ForEach(servers, id: \.port) { row($0) }
-                } header: {
-                    Text("Running on \(store.name(of: key.server))")
-                } footer: {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    GroupLabel("Running on \(store.name(of: key.server))")
+                    ForEach(servers, id: \.port) { row($0).card() }
                     Text("A public link is one anyone can open, until you stop it.")
+                        .font(Theme.Font.meta).foregroundStyle(Theme.tertiary)
+                        .padding(.horizontal, Theme.Space.xs)
                 }
+                .padding(Theme.Space.l)
             }
+            .page()
         } else if servers != nil {
-            ContentUnavailableView("No servers running", systemImage: "globe",
-                description: Text("Dev servers this session starts, or ones started in its checkout, show here."))
+            EmptyState(title: "No servers running",
+                       message: "Dev servers this session starts, or ones started in its checkout, show here.") {
+                Image(systemName: "globe").font(.largeTitle).foregroundStyle(Theme.tertiary)
+            }
+            .page()
         } else if let readError {
-            ContentUnavailableView("Couldn't list servers", systemImage: "exclamationmark.triangle",
-                description: Text(readError))
+            EmptyState(title: "Couldn't list servers", message: readError) {
+                Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(Theme.tertiary)
+            } actions: {
+                Button { Task { await read() } } label: { Text("Try again").frame(maxWidth: .infinity) }
+                    .buttonStyle(SecondaryButtonStyle())
+            }
+            .page()
         } else {
-            Orb()
+            Orb(.loading, size: 32, label: "Loading").frame(maxWidth: .infinity, maxHeight: .infinity).page()
         }
     }
 
     private func row(_ s: LocalServer) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(verbatim: "localhost:\(s.port)").font(.body.monospaced())
-                Text(s.process).foregroundStyle(.secondary).lineLimit(1)
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                Text(verbatim: "localhost:\(s.port)").font(Theme.Font.mono.weight(.medium)).foregroundStyle(Theme.text)
+                Text(s.process).font(Theme.Font.meta).foregroundStyle(Theme.secondary).lineLimit(1)
                 Spacer()
-                if s.mine { Text("this session").font(.caption).foregroundStyle(.secondary) }
+                if s.mine { Text("This session").font(Theme.Font.micro).foregroundStyle(Theme.tertiary) }
             }
             if let link = s.share.flatMap(URL.init(string:)) {
                 shared(link, port: s.port)
             } else if let sharing, sharing.port == s.port {
                 waiting(since: sharing.since)
             } else {
-                Button("Get public link", systemImage: "square.and.arrow.up") { share(s.port) }
-                    .disabled(sharing != nil)
+                Button { share(s.port) } label: {
+                    Label("Get public link", systemImage: "link").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(sharing != nil)
             }
             if let failure = failures[s.port] {
-                Text(failure).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                Text(failure).font(Theme.Font.callout).foregroundStyle(Theme.destructive).textSelection(.enabled)
             }
         }
-        // Several buttons in one row: borderless, or a tap anywhere fires them all.
-        .buttonStyle(.borderless)
     }
 
     /// The share's wait, and past half a minute what it is waiting on, so a
     /// stalled relay reads as one rather than as a spinner.
     private func waiting(since: Date) -> some View {
         TimelineView(.periodic(from: since, by: 5)) { context in
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Orb()
-                    Text(settingUp ? "Setting up tunnel…" : "Creating link…").foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                HStack(spacing: Theme.Space.s) {
+                    Orb(.working)
+                    Text(settingUp ? "Setting up tunnel…" : "Creating link…")
+                        .font(Theme.Font.callout).foregroundStyle(Theme.secondary).shimmer()
                 }
                 if context.date.timeIntervalSince(since) >= 30 {
                     Text(settingUp
                         ? "A first link registers the tunnel, which can take a few minutes. It shows here once it's up, or why it failed."
                         : "Still waiting on the relay. The link shows here once it's up, or why it failed.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(Theme.Font.meta).foregroundStyle(Theme.secondary)
                 }
             }
         }
     }
 
     private func shared(_ link: URL, port: Int) -> some View {
-        HStack(spacing: 16) {
+        HStack(spacing: Theme.Space.xs) {
             Link(destination: link) {
                 Label(link.host() ?? link.absoluteString, systemImage: "link")
+                    .font(Theme.Font.callout)
+                    .foregroundStyle(Theme.link)
                     .lineLimit(1).truncationMode(.middle)
             }
-            Spacer()
-            Button(copied == link ? "Copied" : "Copy link", systemImage: copied == link ? "checkmark" : "doc.on.doc") {
+            Spacer(minLength: Theme.Space.s)
+            Button {
                 UIPasteboard.general.url = link
+                Haptic.tap()
                 copied = link
                 Task {
                     try? await Task.sleep(for: .seconds(2))
                     if copied == link { copied = nil }
                 }
+            } label: {
+                Image(systemName: copied == link ? "checkmark" : "doc.on.doc")
             }
-            .labelStyle(.iconOnly)
-            ShareLink(item: link) { Label("Share link", systemImage: "square.and.arrow.up") }
-                .labelStyle(.iconOnly)
-            Button("Stop sharing", systemImage: "xmark", role: .destructive) { stop(port) }
-                .labelStyle(.iconOnly)
+            .buttonStyle(IconButtonStyle())
+            .accessibilityLabel(copied == link ? "Copied" : "Copy link")
+            ShareLink(item: link) { Image(systemName: "square.and.arrow.up") }
+                .buttonStyle(IconButtonStyle())
+                .accessibilityLabel("Share link")
+            Button { stop(port) } label: { Image(systemName: "xmark") }
+                .buttonStyle(IconButtonStyle())
+                .accessibilityLabel("Stop sharing")
         }
     }
+
 
     private func read() async {
         do {

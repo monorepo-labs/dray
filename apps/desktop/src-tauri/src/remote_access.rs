@@ -135,6 +135,8 @@ async fn switch(sink: &Sink, on: bool) {
     if on {
         let task = tokio::spawn(serve_and_tunnel(sink.clone()));
         state().1 = Some(task);
+        // A machine reachable remotely is one a phone may ask to share from.
+        tokio::spawn(tunnel::warm(tunnel::SHARE));
     }
     announce(sink);
 }

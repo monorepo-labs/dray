@@ -41,7 +41,7 @@ function DialogContent({
         // are set raw: `duration-250` also sets `--tw-duration`, which would
         // slow the open and close fades with it.
         className={cn(
-          "peer fixed inset-0 z-50 bg-black/50 transition-colors [transition-duration:250ms] data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+          "fixed inset-0 z-50 bg-black/50 transition-colors [transition-duration:250ms] data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
           dismissible && "hover:bg-black/48 dark:hover:bg-black/40"
         )}
       />
@@ -62,19 +62,6 @@ function DialogContent({
         {...props}
       >
         {children}
-        {/* Says what the lifted overlay means, dropping into place as it
-            fades in. Inside the card so it rides the card wherever its height
-            puts it; matched off the overlay's hover by sibling selector, since
-            `peer-hover` reaches siblings and not their children.
-            `pointer-events-none` so it never takes the hover off the overlay. */}
-        {dismissible && (
-          <p
-            aria-hidden
-            className="pointer-events-none absolute bottom-full left-1/2 mb-3 -translate-x-1/2 -translate-y-1 text-ui whitespace-nowrap text-white/50 opacity-0 transition-[opacity,translate] [transition-duration:250ms] [.peer:hover~*_&]:translate-y-0 [.peer:hover~*_&]:opacity-100"
-          >
-            Click or press Esc to close
-          </p>
-        )}
         {showClose && (
           <DialogPrimitive.Close
             data-slot="dialog-close"

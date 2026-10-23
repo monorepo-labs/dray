@@ -18,13 +18,15 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import AgentBeam from "@/components/browser/AgentBeam";
 import Favicon, { hostOf } from "@/components/browser/Favicon";
 import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
 import RecordingNotice from "@/components/browser/RecordingNotice";
 import ShortcutKeys from "@/components/ShortcutKeys";
+import TabMenu from "@/components/browser/TabMenu";
+import { ContextMenuTrigger } from "@/components/ui/context-menu";
 import Spinner from "@/components/ui/spinner";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
@@ -52,6 +54,7 @@ import {
   saveCustomDevice,
   setPendingTab,
   setUrlDraft,
+  useOpeningUrl,
   activateBlankTab,
   closeBlankTab,
   useBlankTabs,
@@ -305,6 +308,38 @@ function Snapshot({ of }: { of: BrowserSnapshot | null }) {
   );
 }
 
+/// A browser's load line along the toolbar's bottom edge. Chromium reports
+/// loading and not how far along it is, so the bar crawls toward 90% and
+/// snaps to the end when the load stops. Transitions rather than keyframes,
+/// since the finish has to start from wherever the crawl had got to.
+function LoadBar({ loading }: { loading: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const bar = ref.current;
+    if (!bar) return;
+    if (loading) {
+      bar.style.transition = "none";
+      bar.style.opacity = "1";
+      bar.style.transform = "scaleX(0)";
+      // Commits the reset, or the crawl starts from where the last load ended.
+      void bar.offsetWidth;
+      bar.style.transition = "transform 10s cubic-bezier(0.1, 0.7, 0.2, 1)";
+      bar.style.transform = "scaleX(0.9)";
+    } else {
+      bar.style.transition = "transform 200ms ease-out, opacity 300ms ease 200ms";
+      bar.style.transform = "scaleX(1)";
+      bar.style.opacity = "0";
+    }
+  }, [loading]);
+  return (
+    <div
+      ref={ref}
+      aria-hidden
+      className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 origin-left bg-linear-to-r from-[#a8dde3] to-[#4f8fc6] opacity-0"
+    />
+  );
+}
+
 /// Tab strip and URL bar, coloured the way Chrome does it: the strip takes
 /// the panel's own surface, the active tab and toolbar share the card, and
 /// the URL field is cut into it, so which tab the bar belongs to is read
@@ -337,7 +372,9 @@ function Chrome({
   // whichever tab is active, and a switch here would send it somewhere else.
   // The agent's own tab verbs stay open, since a flow may cross tabs.
   const recording = useRecording(sessionId);
-  const url = current?.url ?? "";
+  const opening = useOpeningUrl(sessionId);
+  const url = current?.url ?? opening ?? "";
+  const loading = current ? current.loading : opening !== null;
   const blanks = useBlankTabs(sessionId);
   const draftKey = `${sessionId}:${blanks.active !== null ? `blank:${blanks.active}` : `page:${current?.id}`}`;
   // Per tab, as a browser's are: each new tab keeps what was typed into it.
@@ -413,6 +450,14 @@ function Chrome({
                 if (!tab.active) void activateTab(sessionId, tab.id);
               }}
               onClose={() => void closeTab(sessionId, tab.id)}
+              onDuplicate={
+                tab.url
+                  ? () => {
+                      setPendingTab(sessionId, false);
+                      void openInBrowser(sessionId, tab.url, true).catch(() => undefined);
+                    }
+                  : undefined
+              }
             />
           ))}
           {blanks.ids.map((id) => (
@@ -459,11 +504,13 @@ function Chrome({
           // draw close to the background; under `tint` it flips with the page.
           // `text-foreground` re-resolves the ink here: inherited, `color` is
           // already computed from the page's tokens and `tint` cannot reach it.
-          "flex h-9 items-center gap-0.5 border-b border-foreground/10 px-1.5 text-foreground",
+          "relative flex h-9 items-center gap-0.5 border-b border-foreground/10 px-1.5 text-foreground",
           current && !current.background && "bg-card",
         )}
         style={current?.background ? tint(current.background) : undefined}
       >
+        {/* Keyed, so a tab switch starts its own bar rather than finishing another's. */}
+        <LoadBar key={current?.id ?? "new"} loading={loading} />
         <Button
           variant="ghost"
           size="icon-sm"
@@ -683,6 +730,7 @@ function TabButton({
   locked = false,
   onPick,
   onClose,
+  onDuplicate,
   onPointerDown,
   transform,
   held = false,
@@ -700,6 +748,8 @@ function TabButton({
   locked?: boolean;
   onPick: () => void;
   onClose: () => void;
+  /// Right-click Duplicate tab, on real tabs only.
+  onDuplicate?: () => void;
   /// Drag-to-reorder, on real tabs only.
   onPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
   transform?: string;
@@ -712,6 +762,8 @@ function TabButton({
 }) {
   const pick = locked ? undefined : onPick;
   return (
+    <TabMenu onDuplicate={locked ? undefined : onDuplicate}>
+    <ContextMenuTrigger asChild disabled={!onDuplicate || locked}>
     <div
       role="tab"
       aria-selected={active}
@@ -760,6 +812,8 @@ function TabButton({
         <X className="size-3" />
       </button>}
     </div>
+    </ContextMenuTrigger>
+    </TabMenu>
   );
 }
 

@@ -19,6 +19,57 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.29.7 · 2026-10-23
+
+### Fixed
+
+- The Island no longer crashes when it closes right after a send.
+- A message sent from the Island is no longer followed by an old
+  "done" alert for that session.
+
+## 0.29.6 · 2026-10-23
+
+### Fixed
+
+- The Island shows on every desktop and over fullscreen apps again,
+  instead of sometimes staying on one desktop.
+
+## 0.29.5 · 2026-10-23
+
+### Improved
+
+- **Duplicate a browser tab.** It's in the tab's right-click menu.
+- The Chat tab shows the working orb while you're on another view.
+- A link opened in the browser shows its address straight away, with a
+  load line under the toolbar while the page loads.
+- Sending from the Island says Sent at once, and answering a card plays
+  the send sound.
+
+## 0.29.4 · 2026-10-22
+
+### Fixed
+
+- After an update, the Island restarts on the new version when Dray opens,
+  instead of running the old one until you quit it.
+
+## 0.29.3 · 2026-10-22
+
+### Improved
+
+- **The Island opens on the session you're looking at in Dray.** Click its
+  title for the task list; ⌘⏎ opens a finished session.
+- **Answering a card in the Island says what happened.** It shows
+  Allowed, Denied or Sent, and a send plays a soft sound.
+- The first share link on a machine no longer waits minutes to set up.
+
+### Fixed
+
+- Dray no longer quits when the Mac goes to sleep.
+- Esc no longer takes the window out of fullscreen.
+- A question from a stacked crew session shows whole, not in a tiny scroll.
+- Dictation's start tone plays before the sound mutes.
+- The pair dialog's QR code stays inside its box.
+
 ## 0.29.2 · 2026-10-21
 
 ### Improved

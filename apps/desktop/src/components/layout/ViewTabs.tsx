@@ -9,7 +9,10 @@ import AgentBeam from "@/components/browser/AgentBeam";
 import Favicon, { hostOf } from "@/components/browser/Favicon";
 import FileIcon from "@/components/FileIcon";
 import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
+import Orb from "@/components/Orb";
 import ShortcutKeys from "@/components/ShortcutKeys";
+import TabMenu from "@/components/browser/TabMenu";
+import { ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,6 +32,7 @@ import {
   activateTab,
   closeBlankTab,
   closeTab,
+  openInBrowser,
   setPendingTab,
   useBlankTabs,
   useBrowserTabs,
@@ -87,6 +91,7 @@ type Item = {
   active: boolean;
   pick: () => void;
   close?: () => void;
+  duplicate?: () => void;
   locked?: boolean;
   /// Sized by its own label rather than by the row.
   fixed?: boolean;
@@ -114,7 +119,11 @@ export default function ViewTabs({
   cwd,
   alignX = 0,
   rename,
+  working = false,
 }: {
+  /// Mid-turn: off Chat, the chat tab's icon says so, since the transcript
+  /// that would is not on screen.
+  working?: boolean;
   sessionId: string;
   /// The session's own title and how to change it; absent where the chat
   /// stands for a group rather than one session.
@@ -163,7 +172,12 @@ export default function ViewTabs({
   const present: Item[] = [
     {
       key: "chat",
-      icon: <ChatBubbleOvalLeftIcon className={MARK} />,
+      icon:
+        working && tab !== "chat" ? (
+          <Orb state="working" label="Working" size={16} />
+        ) : (
+          <ChatBubbleOvalLeftIcon className={MARK} />
+        ),
       label: title,
       active: tab === "chat",
       pick: () => onChange("chat"),
@@ -195,6 +209,13 @@ export default function ViewTabs({
         if (!page.active) void activateTab(sessionId, page.id);
       },
       close: () => void closeTab(sessionId, page.id),
+      duplicate: page.url
+        ? () => {
+            onChange("browser");
+            setPendingTab(sessionId, false);
+            void openInBrowser(sessionId, page.url, true).catch(() => undefined);
+          }
+        : undefined,
     })),
     ...blanks.ids.map((id) => ({
       key: `blank:${id}`,
@@ -386,6 +407,7 @@ export default function ViewTabs({
           onPick={item.pick}
           rename={item.rename}
           onClose={item.close && (() => closeAt(i))}
+          onDuplicate={item.duplicate}
           onPointerDown={(e) => drag.start(e, i)}
           transform={drag.offset(i)}
           held={drag.drag?.from === i}
@@ -466,6 +488,7 @@ export function ItemTab({
   locked = false,
   onPick,
   onClose,
+  onDuplicate,
   onPointerDown,
   transform,
   held = false,
@@ -486,6 +509,8 @@ export function ItemTab({
   onPick: () => void;
   /// Absent on the view tabs, which are never closed.
   onClose?: () => void;
+  /// A browser page's right-click Duplicate tab.
+  onDuplicate?: () => void;
   onPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
   transform?: string;
   held?: boolean;
@@ -506,8 +531,9 @@ export function ItemTab({
   // Closed by the tab going inactive, not only by blur: the drag hook cancels
   // the press on another tab, so focus never leaves the field.
   if (renaming && !active) setRenaming(false);
+  // A div rather than a button, since the close control sits inside it.
   const tab = (
-    // A div rather than a button, since the close control sits inside it.
+    <ContextMenuTrigger asChild disabled={!onDuplicate || locked}>
     <div
       role="tab"
       aria-selected={active}
@@ -606,13 +632,19 @@ export function ItemTab({
         </button>
       )}
     </div>
+    </ContextMenuTrigger>
   );
-  if (!hint) return tab;
   return (
-    <Tooltip delayDuration={TIP_DELAY}>
-      <TooltipTrigger asChild>{tab}</TooltipTrigger>
-      <TooltipContent side="bottom">{hint}</TooltipContent>
-    </Tooltip>
+    <TabMenu onDuplicate={locked ? undefined : onDuplicate}>
+      {hint ? (
+        <Tooltip delayDuration={TIP_DELAY}>
+          <TooltipTrigger asChild>{tab}</TooltipTrigger>
+          <TooltipContent side="bottom">{hint}</TooltipContent>
+        </Tooltip>
+      ) : (
+        tab
+      )}
+    </TabMenu>
   );
 }
 
