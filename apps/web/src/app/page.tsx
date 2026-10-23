@@ -35,11 +35,14 @@ export default function Home() {
           <Nav sponsor action={<DownloadButton className={SMALL_LIGHT_BUTTON} label="Download" />} />
         </div>
       </StickyNav>
-      <div id="hero" className="relative" style={HERO_BG}>
+      {/* Outside the hero's gradient so it can sit outside <main>: the
+          gradient opens on the page's own colour, so no seam shows. */}
       <header className={`relative ${SHELL} pt-4`}>
         <Nav sponsor />
       </header>
 
+      <main>
+      <div id="hero" className="relative" style={HERO_BG}>
       <section className={`relative ${SHELL} pt-8 pb-12 sm:pt-8 sm:pb-16`}>
         <div className="relative z-10 flex flex-col items-start text-left">
           <h1 className="max-w-3xl font-display text-[2.25rem] leading-[1.05] font-medium tracking-[-0.03em] text-balance sm:text-[2.75rem]">
@@ -130,11 +133,11 @@ export default function Home() {
         </section>
       </div>
 
-      <main className={SHELL}>
+      <div className={SHELL}>
         <Section id="more" eyebrow="And around the work" title="Everything else, in the same window.">
           <Cards features={FEATURES.filter((f) => f.card && !f.hidden)} />
         </Section>
-      </main>
+      </div>
 
       <section className="mt-28 sm:mt-36">
         <div className={SHELL}>
@@ -149,6 +152,7 @@ export default function Home() {
           <Cta light={LIGHT_BUTTON} dark={DARK_BUTTON} className="max-sm:[&>div]:w-full max-sm:[&>div]:max-w-xs max-sm:[&>div]:items-stretch max-sm:[&>div>a]:justify-center [&>p]:max-w-2xl [&>p]:text-xl sm:[&>p]:text-[1.75rem] [&>svg]:size-9" />
         </div>
       </div>
+      </main>
       <div className={SHELL}>
         <SiteFooter />
       </div>
