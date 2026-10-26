@@ -34,7 +34,11 @@ const TOP_LEVEL: usize = 2;
 /// The window every current grok model reports, and the denominator the context
 /// ring needs: `_meta.totalTokens` on a prompt reply is a count with nothing
 /// beside it.
-pub const DEFAULT_CONTEXT_WINDOW: u64 = 500_000;
+///
+/// 256k since 1.0.70, down from 500k. Each row also lists `contextWindows:
+/// [256000, 500000]`, but no ACP config option reaches the larger one, so a
+/// session here always runs on the first.
+pub const DEFAULT_CONTEXT_WINDOW: u64 = 256_000;
 
 /// Every model grok reports, or the table where the probe cannot run.
 ///
@@ -207,7 +211,15 @@ pub fn read_models(reply: &Value) -> Vec<Model> {
         return Vec::new();
     };
 
-    fold(state.available_models)
+    // Per handshake rather than per model: grok answers it once for the
+    // agent. `false` through 1.0.40, `true` from 1.0.70 — read off the wire so
+    // an older grok never has the tray offering what it would refuse.
+    let images = reply
+        .pointer("/agentCapabilities/promptCapabilities/image")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    fold(state.available_models, images)
 }
 
 /// The rows the picker draws, in the order it draws them.
@@ -216,7 +228,7 @@ pub fn read_models(reply: &Value) -> Vec<Model> {
 /// flagship and that flagship's fast twin — the pair a session is flipped
 /// between. Everything below is left out of the default shortlist, and so out
 /// of Shift+Tab's cycle until the reader turns it on.
-fn fold(rows: Vec<Row>) -> Vec<Model> {
+fn fold(rows: Vec<Row>, images: bool) -> Vec<Model> {
     // Mapped over the whole set rather than one row at a time, because
     // `supports_fast` is a lookup *in* that set: a model's fast tier is another
     // row beside it.
@@ -266,10 +278,7 @@ fn fold(rows: Vec<Row>) -> Vec<Model> {
                 arg: row.model_id.clone(),
                 // One vendor, so there is nothing for the picker to group by.
                 provider: String::new(),
-                // `promptCapabilities.image` is `false` on every grok
-                // handshake, so the tray must not offer to attach a screenshot
-                // to any of these.
-                accepts_images: false,
+                accepts_images: images,
                 // A twin is never top level because it is never drawn at
                 // all — `list` filters it out. Said here too so the flag can
                 // never contradict that from the unfiltered list.
@@ -330,7 +339,9 @@ pub fn fallback() -> Vec<Model> {
         default_effort: Some(High),
         arg: id.to_string(),
         provider: String::new(),
-        accepts_images: false,
+        // Every grok model takes an image from 1.0.70 — the build this table
+        // was last checked against.
+        accepts_images: true,
         secondary,
         supports_fast,
     };
@@ -468,9 +479,12 @@ mod tests {
         assert_eq!(older.id.as_str(), "grok-4.5");
         assert_eq!(older.efforts, [Effort::Low, Effort::Medium, Effort::High]);
 
-        // No image prompts on any grok model — `promptCapabilities.image` is
-        // false on every handshake, so the tray must never offer one.
+        // The capture is 1.0.40's, which took no images. The flag follows
+        // the handshake, so the same reply from 1.0.70 offers them on every row.
         assert!(models.iter().all(|m| !m.accepts_images));
+        let mut newer = reply.clone();
+        newer["agentCapabilities"]["promptCapabilities"]["image"] = json!(true);
+        assert!(read_models(&newer).iter().all(|m| m.accepts_images));
     }
 
     /// The table stands in for the wire, so it has to *look* like the wire: a

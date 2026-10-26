@@ -233,8 +233,12 @@ impl Mapper {
             }
 
             GrokUpdate::BackgroundTasks { tasks } => {
+                // Since 1.0.70 a finished task stays in the set with `status:
+                // completed` or `failed` rather than dropping out, so status is
+                // what says it ended. Absent reads as running, the 1.0.40 shape.
                 let live: Vec<BackgroundTask> = tasks
                     .into_iter()
+                    .filter(|task| task.status.as_deref().is_none_or(|s| s == "running"))
                     .map(|task| BackgroundTask {
                         description: task
                             .description
@@ -258,12 +262,11 @@ impl Mapper {
                             &task.task_id,
                             task.task_type.clone(),
                             AgentEventPayload::SubagentStarted {
-                                // Empty for the subagent rule's reason: grok
-                                // publishes no per-task cancel, and a `taskId`
-                                // here draws a Stop whose `stop_task` is a
-                                // Claude Code control line this transport has
-                                // not got. Settle still reaps the tree.
-                                agent_id: String::new(),
+                                // The handle `_x.ai/task/kill` takes, which is
+                                // what the panel's Stop names. It is also the
+                                // id `BackgroundTasksChanged` lists, so the
+                                // transcript keeps the run open while it lives.
+                                agent_id: task.task_id.clone(),
                                 label: task.task_type.clone(),
                                 description: Some(task.description.clone()),
                                 prompt: None,
@@ -288,7 +291,7 @@ impl Mapper {
                         &id,
                         SUBAGENT_LABEL.to_string(),
                         AgentEventPayload::SubagentCompleted {
-                            agent_id: String::new(),
+                            agent_id: id.clone(),
                             status: "completed".to_string(),
                             summary: None,
                             usage: None,
@@ -351,6 +354,7 @@ impl Mapper {
             | GrokUpdate::PendingInteraction
             | GrokUpdate::InteractionResolved
             | GrokUpdate::TaskBackgrounded
+            | GrokUpdate::LastTurnSummary
             | GrokUpdate::ConfigOptionUpdate
             | GrokUpdate::Plan
             | GrokUpdate::Unknown => Vec::new(),
@@ -549,12 +553,10 @@ impl Mapper {
             &id,
             label.clone(),
             AgentEventPayload::SubagentStarted {
-                // Empty on purpose, the reading fx already takes: this is the
-                // handle a Stop would name, and `stop_task` is Claude Code's
-                // control line — it writes to a stdin this transport has not
-                // got. grok publishes no subagent cancel, so a run here must
-                // draw no Stop button rather than one that errors.
-                agent_id: String::new(),
+                // The handle `_x.ai/subagent/cancel` takes, so the panel's Stop
+                // ends this child alone: its spawning call fails "Subagent was
+                // cancelled" and the parent's turn carries on.
+                agent_id: spawned.subagent_id.clone(),
                 label,
                 description: spawned.description,
                 // The brief grok handed the child rides `rawInput.prompt` on
@@ -577,7 +579,7 @@ impl Mapper {
             &id,
             SUBAGENT_LABEL.to_string(),
             AgentEventPayload::SubagentCompleted {
-                agent_id: String::new(),
+                agent_id: finished.subagent_id.clone(),
                 status: finished.status.unwrap_or_else(|| "completed".to_string()),
                 // The child's whole report, which is why nothing about its own
                 // stream is kept: those updates arrive under the child's session
@@ -731,7 +733,7 @@ mod tests {
     const SUBAGENT: &str = include_str!("fixtures/subagent.jsonl");
 
     /// grok's context window, the one every current model reports.
-    const WINDOW: u64 = 500_000;
+    const WINDOW: u64 = 256_000;
 
     /// Replays one capture through the mapper the way the read loop does:
     /// every notification on either channel, filtered to the session the
@@ -891,20 +893,25 @@ mod tests {
     }
 
     /// A backgrounded shell opens a run and closes it when grok stops listing
-    /// it, because the count alone sent the reader to an empty panel: the
-    /// indicator's click opens the subagent pane, which draws runs and knows
-    /// nothing of `BackgroundTasksChanged`.
+    /// it as running, because the count alone sent the reader to an empty
+    /// panel: the indicator's click opens the subagent pane, which draws runs
+    /// and knows nothing of `BackgroundTasksChanged`.
     ///
-    /// Hand-written, since no capture here backgrounds anything — grok
-    /// republishes the whole set on every change, which is the half worth
-    /// pinning: the close is inferred from an id going missing.
+    /// Hand-written, in both of grok's shapes: 1.0.40 dropped a finished task
+    /// from the set and sent no status, 1.0.70 keeps it there marked
+    /// `completed` or `failed`. Read the old way, the second never closed.
     #[test]
     fn a_background_task_is_a_run_the_panel_can_draw() {
         const TASKS: &str = concat!(
             "<< {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"sessionId\":\"s\"}}\n",
             "<< {\"jsonrpc\":\"2.0\",\"method\":\"_x.ai/session_notification\",\"params\":",
             "{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"background_tasks\",\"tasks\":",
-            "[{\"task_id\":\"t1\",\"command\":\"pnpm dev\",\"kind\":\"bash\"}]}}}\n",
+            "[{\"task_id\":\"t1\",\"command\":\"pnpm dev\",\"kind\":\"bash\"},",
+            "{\"task_id\":\"t2\",\"command\":\"sleep 300\",\"kind\":\"bash\",\"status\":\"running\"}]}}}\n",
+            "<< {\"jsonrpc\":\"2.0\",\"method\":\"_x.ai/session_notification\",\"params\":",
+            "{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"background_tasks\",\"tasks\":",
+            "[{\"task_id\":\"t1\",\"command\":\"pnpm dev\",\"kind\":\"bash\"},",
+            "{\"task_id\":\"t2\",\"command\":\"sleep 300\",\"kind\":\"bash\",\"status\":\"failed\"}]}}}\n",
             "<< {\"jsonrpc\":\"2.0\",\"method\":\"_x.ai/session_notification\",\"params\":",
             "{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"background_tasks\",\"tasks\":[]}}}\n",
         );
@@ -923,18 +930,22 @@ mod tests {
             .collect();
         assert_eq!(
             lifecycle,
-            vec![("t1", ""), ("t1", "")],
-            "the task opens a run and the set losing it closes that same run, and \
-             neither end names a handle — grok publishes no per-task cancel, so a \
-             Stop drawn here would reach Claude Code's control line"
+            vec![("t1", "t1"), ("t2", "t2"), ("t2", "t2"), ("t1", "t1")],
+            "each task opens a run and closes that same run — t2 on its status, \
+             t1 on leaving the set — and both ends name the task id, which is the \
+             handle `_x.ai/task/kill` takes"
         );
 
-        // The list itself still goes out: it is what the indicator counts and
-        // what `has_outstanding_work` reads.
-        let published = events.iter().filter(|e| {
-            matches!(&e.payload, P::BackgroundTasksChanged { .. })
-        });
-        assert_eq!(published.count(), 2);
+        // The list itself still goes out, running tasks only: it is what the
+        // indicator counts and what `has_outstanding_work` reads.
+        let counts: Vec<usize> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                P::BackgroundTasksChanged { tasks } => Some(tasks.len()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(counts, vec![2, 1, 0]);
     }
 
     /// Both ends of a run are enveloped on the **spawning call's** id, which is
@@ -985,9 +996,9 @@ mod tests {
                 _ => None,
             })
             .expect("the spawn is announced");
-        assert!(
-            started.0.is_empty(),
-            "grok publishes no subagent cancel, so a run must name no handle a Stop could send"
+        assert_eq!(
+            started.0, "01a0c70b-b538-7433-8808-f1977eec64a0",
+            "the child's own id, which is what `_x.ai/subagent/cancel` takes"
         );
         assert_eq!(started.1, "general-purpose");
 

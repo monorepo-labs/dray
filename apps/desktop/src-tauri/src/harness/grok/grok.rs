@@ -40,6 +40,7 @@ pub mod probe;
 use crate::events::{AgentEventPayload, ApprovalPolicy};
 use crate::harness::claude_code::permissions::{rpc_request_id, PendingPermissions};
 use crate::harness::codex::rpc::{Incoming, RpcClient};
+use crate::attachments::PreparedImage;
 use crate::harness::{read_stderr, record_failure, Harness::Grok};
 use crate::models::{Effort, Model};
 use crate::session::{QueuedMessages, Session, StatusTracker, Transport};
@@ -656,17 +657,21 @@ async fn set_config(session: &GrokSession, config_id: &str, value: &str) -> Resu
 /// Nothing is appended to the text — grok's rules went in at `session/new` and
 /// persist on the session — so the transcript shows exactly what the model was
 /// told, which fx alone cannot promise.
-pub async fn start_turn(session: &GrokSession, text: &str) -> Result<()> {
+///
+/// Images ride as ACP image blocks beside the text, which grok takes from
+/// 1.0.70 (`promptCapabilities.image: true`) and reads natively — measured, it
+/// named both the colour and the words of a rendered PNG with no tool call.
+pub async fn start_turn(session: &GrokSession, text: &str, images: &[PreparedImage]) -> Result<()> {
+    let mut prompt = vec![json!({"type": "text", "text": text})];
+    prompt.extend(image_blocks(images));
+
     // Held across the send, which only hands the line to the writer task: an
     // outright refusal can answer before this returns, and `prompt_answer`
     // takes this same lock, so it cannot read the id before it is written.
     let mut running = session.prompt_id.lock().expect("grok prompt id poisoned");
     let id = session.client.request_detached(
         "session/prompt",
-        json!({
-            "sessionId": session.id,
-            "prompt": [{"type": "text", "text": text}],
-        }),
+        json!({"sessionId": session.id, "prompt": prompt}),
     )?;
     *running = Some(id);
     Ok(())
@@ -680,12 +685,57 @@ pub async fn start_turn(session: &GrokSession, text: &str) -> Result<()> {
 /// after the turn, and it would replace the id the read loop settles this turn
 /// on. **Landing after the turn has ended loses nothing** — grok answers the
 /// same `queued` and opens a turn of its own for it (`interject-fallback-…`),
-/// which the read loop closes off grok's own `turn_completed`. Text only: the
-/// method refuses a content array.
-pub async fn interject(session: &GrokSession, text: &str) -> Result<()> {
+/// which the read loop closes off grok's own `turn_completed`.
+///
+/// `text` is required and is a string, never a content array. Images ride
+/// beside it under **`content`** — measured on 1.0.70, the model quoted the
+/// words of an image sent there with no tool call. `images` is the trap: taken
+/// with no error and dropped, so the model went hunting the disk for "the
+/// attached image" and read some other session's.
+pub async fn interject(session: &GrokSession, text: &str, images: &[PreparedImage]) -> Result<()> {
+    let mut params = json!({"sessionId": session.id, "text": text});
+    if !images.is_empty() {
+        params["content"] = json!(image_blocks(images));
+    }
     session
         .client
-        .request("_x.ai/interject", json!({"sessionId": session.id, "text": text}))
+        .request("_x.ai/interject", params)
+        .await
+        .map(|_| ())
+}
+
+/// ACP's image block, which grok reads in a prompt and in an interject alike.
+fn image_blocks(images: &[PreparedImage]) -> Vec<Value> {
+    images
+        .iter()
+        .map(|image| json!({"type": "image", "mimeType": image.mime_type, "data": image.data}))
+        .collect()
+}
+
+/// Stops one backgrounded task or one subagent, whichever `handle` names.
+///
+/// The panel's Stop sends the run's `agent_id`, which the mapper sets to a
+/// task id for a background shell and a subagent id for a delegated child —
+/// two methods, and nothing on the handle says which. So kill is asked first
+/// and cancel only where kill had no such task: both answer `not_found`
+/// outright rather than failing, and the two id spaces never overlap.
+///
+/// Neither ends the turn. A killed task's spawning call is already answered;
+/// a cancelled child's call fails "Subagent was cancelled" and the parent
+/// carries on. A kill does wake the model for a short turn of grok's own
+/// (`task-completed-…`), which the read loop closes off `turn_completed`.
+pub async fn stop_task(session: &GrokSession, handle: &str) -> Result<()> {
+    let killed = session
+        .client
+        .request("_x.ai/task/kill", json!({"sessionId": session.id, "taskId": handle}))
+        .await?;
+    if killed.pointer("/result/outcome").and_then(Value::as_str) != Some("not_found") {
+        return Ok(());
+    }
+
+    session
+        .client
+        .request("_x.ai/subagent/cancel", json!({"subagentId": handle}))
         .await
         .map(|_| ())
 }
@@ -879,7 +929,7 @@ async fn read_stdout(
                     record_failure(Grok, &handles.session_id, "stray_response", &detail, &line).await;
                     continue;
                 }
-                Incoming::Response { .. } => continue,
+                Incoming::Response { .. } | Incoming::Foreign => continue,
 
                 Incoming::Malformed => {
                     record_failure(Grok, &handles.session_id, "parse", "not a JSON-RPC message", &line)
