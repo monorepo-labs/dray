@@ -41,6 +41,7 @@ import {
   openInBrowser,
   reachableUrl,
   setPendingTab,
+  trackBrowserOpen,
   closeBlankTab,
   useBlankTabs,
   setPickHandler,
@@ -1977,7 +1978,10 @@ function App() {
         (reached) => {
           if (external) return void openUrl(reached).catch(console.error);
           void openInBrowser(sessionId, reached, true)
-            .then(() => setBrowserWanted(sessionId))
+            .then(() => {
+              setBrowserWanted(sessionId);
+              trackBrowserOpen(reached);
+            })
             .catch(() => {
               // Answered by the system browser, so the pane has nothing to say.
               clearOpenError(sessionId);
