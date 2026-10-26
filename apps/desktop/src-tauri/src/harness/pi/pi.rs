@@ -142,6 +142,11 @@ pub async fn init(
     if let Some(tools) = tools_for(permission_mode) {
         args.push("--tools".into());
         args.push(tools.join(","));
+        // An allowlist alone is not read-only since pi 1.0.4: `--tools` keeps
+        // MCP tools unless an entry starts with `mcp__`, and an MCP tool can
+        // write anything. Not declared to the model with this list, but one
+        // flag makes that certain rather than an accident of what is listed.
+        args.push("--no-mcp".into());
     }
 
     args.push("--append-system-prompt".into());
@@ -373,12 +378,18 @@ fn register_dialog(
 /// second response. So awaiting this proves the prompt was taken and nothing
 /// else — still worth awaiting, because a refusal then reaches the caller as an
 /// error instead of as a prompt that vanished.
+///
+/// Answers whether a run follows. `false` is pi's `disposition: "handled"`: an
+/// extension command or `input` handler consumed the prompt (`/mcp`, measured
+/// on 1.4.0), so no `agent_start` and no `agent_settled` will ever arrive and
+/// the caller has to close the turn itself. An answer with no disposition is a
+/// pi from before 0.99, where every accepted prompt started a run.
 pub async fn send_prompt(
     client: &PiClient,
     text: &str,
     delivery: Delivery,
     images: &[crate::attachments::PreparedImage],
-) -> Result<()> {
+) -> Result<bool> {
     // The refusal window closes here, on the way out, and not on the inbound
     // `agent_start` it used to. Two reasons, and the first is the damaging one:
     // a new run's own preflight can ask before `agent_start` is ever published —
@@ -394,10 +405,10 @@ pub async fn send_prompt(
         client.end_stop();
     }
 
-    client
+    let answer = client
         .request("prompt", prompt_request(text, delivery, images))
         .await?;
-    Ok(())
+    Ok(answer["disposition"] != "handled")
 }
 
 /// The `prompt` command's body.

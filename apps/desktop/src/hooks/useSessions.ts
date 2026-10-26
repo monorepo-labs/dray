@@ -2092,6 +2092,17 @@ useEffect(() => {
               setWorkingBySession((prev) => ({ ...prev, [agentEvent.sessionId]: null }));
             }
 
+            // The CLI moved the session to another model for good — a refusal's
+            // fallback. The index already says so; a composer on this session
+            // follows too, or its next send restates the model the CLI left.
+            if (
+              agentEvent.payload.type === "notice" &&
+              agentEvent.payload.model &&
+              agentEvent.sessionId === selectedSessionIdRef.current
+            ) {
+              setModelId(agentEvent.payload.model);
+            }
+
             // Republished whole on every change, so the latest set replaces
             // rather than merges. The backend mints an empty one when the child
             // exits, which is what clears a dead child's tasks from here.

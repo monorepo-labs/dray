@@ -24,26 +24,17 @@ describe("offersFast", () => {
   it("draws the row only where the harness has a route to one", () => {
     const has: Harness[] = ["claude_code", "codex", "fx"];
     for (const harness of has) {
-      expect(offersFast(harness, OPUS, true)).toBe(true);
+      expect(offersFast(harness, OPUS)).toBe(true);
     }
-    expect(offersFast("pi", OPUS, true)).toBe(false);
+    expect(offersFast("pi", OPUS)).toBe(false);
   });
 
   /// Codex takes an unknown `serviceTier` with no error at all, so a row drawn
   /// over a model with no faster tier is a switch indistinguishable from one
   /// that works.
   it("draws nothing for a model with no faster tier", () => {
-    expect(offersFast("claude_code", HAIKU, true)).toBe(false);
-    expect(offersFast("claude_code", null, true)).toBe(false);
-  });
-
-  /// fx stamps `fast_mode` onto its own session record at `session/new` and a
-  /// resume honours the stamp, so a session that exists can never be moved —
-  /// not even by replacing the child.
-  it("drops fx's row once the session exists, and keeps the others", () => {
-    expect(offersFast("fx", OPUS, false)).toBe(false);
-    expect(offersFast("claude_code", OPUS, false)).toBe(true);
-    expect(offersFast("codex", OPUS, false)).toBe(true);
+    expect(offersFast("claude_code", HAIKU)).toBe(false);
+    expect(offersFast("claude_code", null)).toBe(false);
   });
 });
 
@@ -73,10 +64,10 @@ describe("fastFor", () => {
 /// that answer per model it has to.
 describe("an unset model", () => {
   it("keeps fx's row and hides the others", () => {
-    expect(offersFast("fx", null, true)).toBe(true);
+    expect(offersFast("fx", null)).toBe(true);
     expect(fastFor(true, "fx", [], "" as ModelId)).toBe(true);
 
-    expect(offersFast("codex", null, true)).toBe(false);
+    expect(offersFast("codex", null)).toBe(false);
     expect(fastFor(true, "codex", [], "" as ModelId)).toBe(false);
   });
 });

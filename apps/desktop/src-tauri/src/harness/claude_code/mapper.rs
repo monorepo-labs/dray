@@ -168,6 +168,8 @@ impl Mapper {
                 let session_id = match &result_event {
                     ResultEvent::Success { session_id, .. }
                     | ResultEvent::ErrorDuringExecution { session_id, .. } => session_id.clone(),
+                    // The catch-all keeps no fields; the mapper is per session.
+                    ResultEvent::Unrecognized => self.session_id.clone().unwrap_or_default(),
                 };
 
                 // A resume files a task stranded by the last child as a
@@ -247,6 +249,9 @@ impl Mapper {
             // A liveness ping for a long-running call. The tool row already
             // shimmers for exactly as long, so there is nothing to draw.
             ClaudeCodeEvent::ToolProgress => Ok(None),
+
+            // Recorded by the read loop when unrecognized; nothing to draw.
+            ClaudeCodeEvent::CommandLifecycle | ClaudeCodeEvent::Unrecognized => Ok(None),
 
             ClaudeCodeEvent::ControlRequest {
                 request_id,
@@ -520,6 +525,37 @@ impl Mapper {
             SystemEvent::Notification { key, text, .. } if key.starts_with("fast-mode-") => {
                 Ok(Some(AgentEventPayload::FastModeNotice { text }))
             }
+            // Only a session-scoped move is recorded, and only onto a model the
+            // table names — an id the picker cannot draw would be repaired
+            // straight back to the default.
+            SystemEvent::ModelRefusalFallback {
+                scope,
+                fallback_model,
+                content,
+                ..
+            } => {
+                let text = content
+                    .filter(|c| !c.is_empty())
+                    .unwrap_or_else(|| format!("Switched to {fallback_model}."));
+                let model = (scope.as_deref() == Some("session"))
+                    .then(|| crate::models::ModelId::new(fallback_model))
+                    .filter(|id| crate::models::runs_on(id, Harness::ClaudeCode));
+                Ok(Some(AgentEventPayload::Notice { text, model }))
+            }
+            SystemEvent::ModelRefusalNoFallback {
+                content,
+                api_refusal_explanation,
+                ..
+            } => {
+                let text = content
+                    .filter(|c| !c.is_empty())
+                    .or(api_refusal_explanation)
+                    .unwrap_or_else(|| "The model refused this request.".to_string());
+                Ok(Some(AgentEventPayload::Notice { text, model: None }))
+            }
+            SystemEvent::Informational { content, .. } => {
+                Ok(Some(AgentEventPayload::Notice { text: content, model: None }))
+            }
             _ => Ok(None),
         }
     }
@@ -754,6 +790,18 @@ impl Mapper {
                 final_text: None,
                 usage: Some(self.map_result_usage(&usage, total_cost_usd, &model_usage)),
                 duration_ms: Some(duration_ms),
+                head: None,
+            }),
+
+            // Read as a failure: every subtype past these two is an `error_*`.
+            // The row draws "Turn failed", having no sentence to draw instead.
+            ResultEvent::Unrecognized => Ok(AgentEventPayload::TurnCompleted {
+                status: TurnStatus::Error,
+                stop_reason: None,
+                auth_failed: false,
+                final_text: None,
+                usage: None,
+                duration_ms: None,
                 head: None,
             }),
         }
@@ -1120,7 +1168,10 @@ fn system_event_session_id(e: &SystemEvent) -> &str {
         | SystemEvent::PermissionDenied { session_id, .. }
         | SystemEvent::CompactBoundary { session_id, .. }
         | SystemEvent::ApiRetry { session_id, .. }
-        | SystemEvent::Notification { session_id, .. } => session_id,
+        | SystemEvent::Notification { session_id, .. }
+        | SystemEvent::ModelRefusalFallback { session_id, .. }
+        | SystemEvent::ModelRefusalNoFallback { session_id, .. }
+        | SystemEvent::Informational { session_id, .. } => session_id,
         // No fields survive the catch-all. Harmless: an unrecognized subtype
         // maps to `None`, so no envelope is ever built from this value.
         SystemEvent::Unrecognized => "",
@@ -1776,6 +1827,82 @@ mod tests {
                 "Fast mode disabled · usage credits exhausted"
             ]
         );
+    }
+
+    /// Real lines, once filed as `unknown_subtype` or failed whole. Each draws
+    /// the CLI's own sentence, the no-fallback refusal's out of its
+    /// explanation since its `content` is empty; only the session-scoped
+    /// fallback names a model to record, and `command_lifecycle` draws nothing.
+    #[test]
+    fn maps_model_refusals_to_the_clis_own_sentence() {
+        let events = map_fixture(
+            &mut Mapper::default(),
+            include_str!("fixtures/model_refusal.jsonl"),
+        );
+
+        let notices: Vec<(&str, Option<&str>)> = events
+            .iter()
+            .map(|event| match &event.payload {
+                AgentEventPayload::Notice { text, model } => {
+                    (text.as_str(), model.as_ref().map(|m| m.as_str()))
+                }
+                other => panic!("expected a notice, got {other:?}"),
+            })
+            .collect();
+
+        assert_eq!(notices.len(), 3);
+        assert!(notices[0].0.starts_with("Opus 5.5's safeguards stopped"));
+        assert!(notices[1].0.starts_with("This request was blocked"));
+        assert!(notices[2].0.contains("Switched to Opus 4.8"));
+        assert_eq!(
+            notices.iter().map(|(_, m)| *m).collect::<Vec<_>>(),
+            [None, None, Some("claude-opus-4-8")]
+        );
+    }
+
+    /// A fallback for this turn alone leaves the session where it was, and one
+    /// onto a model the table cannot name records nothing the picker would
+    /// repair straight back.
+    #[test]
+    fn a_fallback_moves_the_model_only_for_the_session_and_a_known_id() {
+        let line = |scope: &str, model: &str| {
+            format!(
+                r#"{{"type":"system","subtype":"model_refusal_fallback","scope":"{scope}","fallback_model":"{model}","content":"x","session_id":"s"}}"#
+            )
+        };
+        let model_of = |line: String| match Mapper::default()
+            .map(parser::parse_line(&line).unwrap())
+            .unwrap()
+            .unwrap()
+            .payload
+        {
+            AgentEventPayload::Notice { model, .. } => model,
+            other => panic!("expected a notice, got {other:?}"),
+        };
+
+        assert_eq!(model_of(line("turn", "claude-opus-4-8")), None);
+        assert_eq!(model_of(line("session", "claude-nope-9")), None);
+        assert!(model_of(line("session", "claude-opus-4-8")).is_some());
+    }
+
+    /// A `result` subtype this build has never seen still closes the turn, as
+    /// a failure. Failing the line left the session `in_progress` for good.
+    #[test]
+    fn an_unknown_result_subtype_still_closes_the_turn() {
+        let line = r#"{"type":"result","subtype":"error_max_turns","is_error":true,"num_turns":3,"session_id":"s"}"#;
+
+        let event = Mapper::default()
+            .map(parser::parse_line(line).unwrap())
+            .unwrap()
+            .unwrap();
+
+        assert!(matches!(
+            event.payload,
+            AgentEventPayload::TurnCompleted {
+                status: TurnStatus::Error,
+                ..
+            }
+        ));
     }
 
     /// Every other key on that channel is somebody else's notice, and a notice

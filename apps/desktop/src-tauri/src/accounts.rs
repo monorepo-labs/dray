@@ -52,7 +52,7 @@ const FX_PROVIDERS: [(&str, &str, &str); 3] = [
 /// has**.
 ///
 /// The last two are the whole reason this is a table rather than a list of
-/// names. **Six of pi's providers have OAuth and the rest do not**, and
+/// names. **Eight of pi's providers have OAuth and the rest do not**, and
 /// `openai-codex` has OAuth and *no* key — so offering the same pair on every
 /// row, which the first draft did, drew a sign-in button for thirty providers
 /// that have none and a key field for the one that cannot take one. Both are
@@ -88,11 +88,11 @@ const fn pi_entry(id: &'static str, label: &'static str, oauth: bool, api_key: b
     }
 }
 
-const PI_PROVIDERS: [PiProvider; 39] = [
+const PI_PROVIDERS: [PiProvider; 41] = [
     pi_entry("amazon-bedrock", "Amazon Bedrock", false, false),
     pi_entry("ant-ling", "Ant Ling", false, true),
     pi_entry("anthropic", "Anthropic", true, true),
-    pi_entry("azure-openai-responses", "Azure OpenAI", false, true),
+    pi_entry("azure", "Azure", false, true),
     pi_entry("baseten", "Baseten", false, true),
     pi_entry("cerebras", "Cerebras", false, true),
     pi_entry("cloudflare-ai-gateway", "Cloudflare AI Gateway", false, false),
@@ -105,16 +105,18 @@ const PI_PROVIDERS: [PiProvider; 39] = [
     pi_entry("groq", "Groq", false, true),
     pi_entry("huggingface", "Hugging Face", false, true),
     pi_entry("kimi-coding", "Kimi For Coding", true, true),
+    pi_entry("meta", "Meta", true, true),
     pi_entry("minimax", "MiniMax", false, true),
     pi_entry("minimax-cn", "MiniMax CN", false, true),
     pi_entry("mistral", "Mistral", false, true),
     pi_entry("moonshotai", "Moonshot AI", false, true),
     pi_entry("moonshotai-cn", "Moonshot AI CN", false, true),
     pi_entry("nvidia", "NVIDIA", false, true),
-    pi_entry("openai", "OpenAI", false, true),
+    pi_entry("openai", "OpenAI", true, true),
     // OAuth and nothing else — a ChatGPT subscription, which is not a thing
-    // anybody holds a key for.
-    pi_entry("openai-codex", "OpenAI Codex", true, false),
+    // anybody holds a key for. pi's own label since `openai` took the same
+    // sign-in (0.99).
+    pi_entry("openai-codex", "OpenAI Codex (legacy)", true, false),
     pi_entry("opencode", "OpenCode Zen", false, true),
     pi_entry("opencode-go", "OpenCode Go", false, true),
     pi_entry("openrouter", "OpenRouter", true, true),
@@ -122,6 +124,7 @@ const PI_PROVIDERS: [PiProvider; 39] = [
     pi_entry("qwen-token-plan-cn", "Qwen Token Plan CN", false, true),
     pi_entry("qwen-token-plan-individual", "Qwen Token Plan Individual", false, true),
     pi_entry("together", "Together", false, true),
+    pi_entry("typesafe", "TypeSafe", false, true),
     pi_entry("vercel-ai-gateway", "Vercel AI Gateway", false, true),
     pi_entry("xai", "xAI", true, true),
     pi_entry("xiaomi", "Xiaomi", false, true),
@@ -1373,7 +1376,7 @@ mod tests {
     }
 
     /// **pi's methods are per provider**, which the first draft got wrong: it
-    /// offered OAuth and a key on every row, where six of pi's providers have
+    /// offered OAuth and a key on every row, where eight of pi's providers have
     /// OAuth and `openai-codex` has no key at all. Both halves of that mistake
     /// are a control the reader can pick that ends in a refusal.
     #[test]
@@ -1385,8 +1388,12 @@ mod tests {
                 .collect()
         };
 
-        // Both, and it is one of the six.
+        // Both, and it is one of the eight.
         assert_eq!(ids("anthropic"), vec!["oauth", "api_key"]);
+        // Sign in with ChatGPT since pi 0.99, beside the key it always took.
+        assert_eq!(ids("openai"), vec!["oauth", "api_key"]);
+        // Renamed from `azure-openai-responses` in pi 1.0.3.
+        assert_eq!(ids("azure"), vec!["api_key"]);
         // A subscription nobody holds a key for.
         assert_eq!(ids("openai-codex"), vec!["oauth"]);
         // The ordinary case: a key and nothing else.
