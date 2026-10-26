@@ -76,6 +76,11 @@ pub enum PiEvent {
         tool_name: String,
         #[serde(default)]
         args: Value,
+        /// Set on a call another tool made through `ctx.executeTool` — a
+        /// codemode script's, an MCP call from one. pi keeps those out of its
+        /// own transcript and reports them through the calling tool.
+        #[serde(default)]
+        parent_tool_call_id: Option<String>,
     },
     /// Partial output while a tool runs. Modelled and drawn as nothing: the
     /// tool row already shimmers for exactly as long as the call is pending,
@@ -93,6 +98,11 @@ pub enum PiEvent {
         result: Value,
         #[serde(default)]
         is_error: bool,
+        /// How long `execute()` took. Absent where the tool never ran.
+        #[serde(default)]
+        duration_ms: Option<u64>,
+        #[serde(default)]
+        parent_tool_call_id: Option<String>,
     },
 
     /// The only line that travels inbound expecting an answer, and only when an

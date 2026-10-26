@@ -232,10 +232,23 @@ impl Mapper {
                 assistant_message_event,
             } => self.streamed(assistant_message_event),
 
+            // A nested call is the calling tool's business: pi leaves it out of
+            // its own transcript and the caller reports what it did, so drawn as
+            // a row of its own it would read as the agent calling it directly.
+            PiEvent::ToolExecutionStart {
+                parent_tool_call_id: Some(_),
+                ..
+            }
+            | PiEvent::ToolExecutionEnd {
+                parent_tool_call_id: Some(_),
+                ..
+            } => Vec::new(),
+
             PiEvent::ToolExecutionStart {
                 tool_call_id,
                 tool_name,
                 args,
+                ..
             } => vec![self.event(AgentEventPayload::ToolCallStarted {
                 call_id: tool_call_id,
                 tool_type: tool_type(&tool_name),
@@ -253,6 +266,8 @@ impl Mapper {
                 tool_call_id,
                 result,
                 is_error,
+                duration_ms,
+                ..
             } => vec![self.event(AgentEventPayload::ToolCallCompleted {
                 call_id: tool_call_id,
                 result: ToolResult {
@@ -260,7 +275,7 @@ impl Mapper {
                     is_error,
                     structured: Some(result),
                     exit_code: None,
-                    duration_ms: None,
+                    duration_ms,
                     images: Vec::new(),
                 },
             })],
@@ -682,6 +697,38 @@ mod tests {
         assert_eq!(completed, 2);
         assert_eq!(started[0].1, "read");
         assert_eq!(started[1].1, "write");
+    }
+
+    /// A codemode script's own calls are the script's, and a top-level call
+    /// keeps the duration pi measured. Hand-written to `docs/extensions.md`
+    /// and `docs/json.md` (1.4.0): no capture runs codemode, which is off by
+    /// default.
+    #[test]
+    fn nested_calls_draw_no_row_and_durations_ride_the_result() {
+        let mut mapper = Mapper::new(
+            "s".into(),
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
+        );
+        let lines = [
+            r#"{"type":"tool_execution_start","toolCallId":"c1","toolName":"codemode","args":{}}"#,
+            r#"{"type":"tool_execution_start","toolCallId":"c1/1","toolName":"read","args":{"path":"a"},"parentToolCallId":"c1"}"#,
+            r#"{"type":"tool_execution_end","toolCallId":"c1/1","result":{},"isError":false,"durationMs":3,"parentToolCallId":"c1"}"#,
+            r#"{"type":"tool_execution_end","toolCallId":"c1","result":{"content":[]},"isError":false,"durationMs":41}"#,
+        ];
+        let events: Vec<_> = lines
+            .iter()
+            .flat_map(|l| mapper.map(super::super::parser::parse_line(l).expect("line")))
+            .collect();
+
+        assert_eq!(events.len(), 2, "only the codemode call itself draws");
+        match &events[1].payload {
+            AgentEventPayload::ToolCallCompleted { call_id, result } => {
+                assert_eq!(call_id, "c1");
+                assert_eq!(result.duration_ms, Some(41));
+            }
+            other => panic!("expected the codemode result, got {other:?}"),
+        }
     }
 
     /// The echoes are dropped. Dray sent the prompt itself and already reported

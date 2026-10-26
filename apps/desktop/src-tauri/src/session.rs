@@ -2,7 +2,7 @@ use crate::{
     attachments,
     events::{
         AgentEvent, AgentEventPayload, ApprovalPolicy, ErrorSource, ImageRef,
-        MessageSender, PermissionBehavior,
+        MessageSender, PermissionBehavior, TurnStatus,
     },
     git,
     harness::{
@@ -2004,13 +2004,13 @@ impl Session {
         from: Option<MessageSender>,
         app: &Sink,
     ) -> Result<()> {
-        deliver_prompt(
+        let (_, runs) = deliver_prompt(
             &self.id,
             self.harness,
             prompt,
             attachment_paths,
             issues,
-            baseline,
+            baseline.clone(),
             false,
             crate::harness::pi::Delivery::WhenIdle,
             true,
@@ -2023,7 +2023,39 @@ impl Session {
 
         // After the write: a prompt that never reached the child starts
         // nothing, and the command's error is what the frontend acts on.
-        if let Some(next) = self.status.lock().await.on_send() {
+        let mut next = self.status.lock().await.on_send();
+
+        // A prompt pi handled itself starts no run, so nothing will ever close
+        // the turn the send just opened — and the composer, already busy
+        // optimistically, would sit on Stop for good. Closed here, after
+        // `on_send`, since doing it before would be reopened by it. The head is
+        // the baseline: nothing ran, so the changes panel reads the turn as
+        // having changed nothing rather than diffing it against "now".
+        if !runs {
+            let closed = AgentEvent::mint(
+                self.id.clone(),
+                self.harness,
+                self.seq.fetch_add(1, Relaxed),
+                None,
+                None,
+                AgentEventPayload::TurnCompleted {
+                    status: TurnStatus::Success,
+                    stop_reason: None,
+                    final_text: None,
+                    auth_failed: false,
+                    usage: None,
+                    duration_ms: None,
+                    head: baseline,
+                },
+            );
+            if let Err(err) = app.emit("agent_event", &closed) {
+                eprintln!("[emit err] {err}");
+            }
+            next = self.status.lock().await.on_event(&closed.payload).or(next);
+            append_session_event(&self.id, closed).await?;
+        }
+
+        if let Some(next) = next {
             publish_status(&self.id, next, app).await;
         }
 
@@ -2732,7 +2764,7 @@ async fn deliver_prompt(
     seq: &Arc<AtomicU64>,
     transport: &Transport,
     app: &Sink,
-) -> Result<String> {
+) -> Result<(String, bool)> {
     let seq = seq.fetch_add(1, Relaxed);
 
     // Ahead of the event, because it is what decides the event's own text:
@@ -2793,7 +2825,7 @@ async fn deliver_prompt(
 
     // Logged, not sent: the caller holds the text and opens the turn itself.
     if !send {
-        return Ok(text);
+        return Ok((text, true));
     }
 
     // Codex takes a prompt as a request that opens a turn, so the write is the
@@ -2802,29 +2834,29 @@ async fn deliver_prompt(
     // Its input was built above, where a failure could still be a no-op.
     if let Some((thread, input)) = codex {
         crate::harness::codex::start_turn(thread, input).await?;
-        return Ok(text);
+        return Ok((text, true));
     }
     // pi takes a prompt as a command whose answer says it was accepted, so the
     // write is the send rather than a line the child picks up on its own
     // schedule.
     if let Transport::Pi(client) = transport {
-        crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images)
+        let runs = crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images)
             .await
             .context(Undelivered)?;
-        return Ok(text);
+        return Ok((text, runs));
     }
     // grok takes a prompt into the running turn through a method of its own;
     // a second `session/prompt` would take over the id the turn settles on.
     if let (Transport::Grok(session), crate::harness::pi::Delivery::Steer) = (transport, delivery) {
         crate::harness::grok::interject(session, &text).await.context(Undelivered)?;
-        return Ok(text);
+        return Ok((text, true));
     }
     // fx takes a prompt as a request that blocks for the turn, so the write
     // is the send and the reader settles the answer. Images not wired: the
     // Codex provider answered `refused` to one on capture.
     if let Some(sent) = transport.open_turn(&text).await {
         sent?;
-        return Ok(text);
+        return Ok((text, true));
     }
     let stdin = transport.lines()?;
 
@@ -2853,7 +2885,7 @@ async fn deliver_prompt(
 
     let line = json!({"type":"user","message":{"role":"user","content": content}});
     write_line(stdin, &line).await?;
-    Ok(text)
+    Ok((text, true))
 }
 
 /// The handles a read loop needs once its harness has stopped being relevant.
@@ -3387,7 +3419,7 @@ async fn flush_one_per_turn(
             )
             .await
             {
-                Ok(text) => texts.push(text),
+                Ok((text, _)) => texts.push(text),
                 Err(err) => {
                     eprintln!("[queued flush err] {err}");
                     report_send_failure(session_id, harness, &err.to_string(), seq, app)
@@ -3704,7 +3736,7 @@ mod tests {
     #[test]
     fn an_fx_reservation_holds_the_turn_across_the_flush() {
         let done = AgentEventPayload::TurnCompleted {
-            status: crate::events::TurnStatus::Success,
+            status: TurnStatus::Success,
             stop_reason: None,
             final_text: None,
             usage: None,
@@ -3838,7 +3870,7 @@ mod tests {
 
     fn turn_completed_auth(auth_failed: bool) -> AgentEventPayload {
         AgentEventPayload::TurnCompleted {
-            status: crate::events::TurnStatus::Success,
+            status: TurnStatus::Success,
             stop_reason: None,
             auth_failed,
             final_text: None,
