@@ -46,8 +46,10 @@ extension NSWindow {
     /// tag still set, so it never shows over a fullscreen app (#650). Clearing the
     /// behavior and setting it back rejoins every Space, but only once the cleared
     /// one has reached WindowServer while the window is ordered in: done in one
-    /// turn, AppKit coalesces the pair into nothing. Call after ordering front.
-    /// An empty behavior is a repair still pending, and saving it would restore nothing.
+    /// turn, AppKit coalesces the pair into nothing. Call after ordering front, and
+    /// on every Space change: a window stranded on the Space it came up on only
+    /// shows the loss once the reader leaves it. An empty behavior is a repair
+    /// still pending, and saving it would restore nothing.
     func rejoinAllSpacesIfLost() {
         guard isVisible, !isOnActiveSpace, !collectionBehavior.isEmpty else { return }
         let behavior = collectionBehavior
@@ -188,6 +190,12 @@ final class Delegate: NSObject, NSApplicationDelegate {
         pills.hasShadow = false
         pills.contentView = FirstClickHostingView(rootView: PillsView(composer: composer).environment(composer.store))
         self.pills = pills
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak panel, weak pills] _ in
+            MainActor.assumeIsolated {
+                panel?.rejoinAllSpacesIfLost()
+                pills?.rejoinAllSpacesIfLost()
+            }
+        }
         // Only losing the keys moves the hint; getting them back waits for the next open, so it never flickers.
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak composer] _ in
             MainActor.assumeIsolated { composer?.keyed = false }
