@@ -822,19 +822,11 @@ impl SessionManager {
             // the reader's own text and never leaves the machine.
             // Read off the index entry rather than the arguments, which the
             // build above has already consumed — and which is the better source
-            // anyway: this reports what was actually written down.
-            crate::analytics::track(
-                "session_started",
-                serde_json::json!({
-                    "harness": item.harness,
-                    "model": item.model.as_str(),
-                    "effort": item.effort,
-                    "permission_mode": item.permission_mode,
-                    "fast": item.fast,
-                    "worktree": item.worktree_name.is_some(),
-                    "spawned": item.parent_session_id.is_some(),
-                }),
-            );
+            // anyway: this reports what was actually written down. Skipped for
+            // a remote reader's app, which reports the session itself.
+            if !crate::analytics::client_counts() {
+                crate::analytics::session_started(&item);
+            }
 
             // Detached: generation takes ~16s and the snapshot below is what the
             // composer waits on. The title written above stands until this lands.

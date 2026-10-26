@@ -528,6 +528,10 @@ struct Hello {
     token: String,
     #[serde(default)]
     host: Option<HostOffer>,
+    /// The client reports the sessions it starts here itself — the reader's
+    /// app on another machine — so this server must not count them too.
+    #[serde(default)]
+    counts: bool,
 }
 
 /// What the app can answer when it connects as the host.
@@ -962,6 +966,8 @@ async fn connection(
         "release": option_env!("DRAY_CLI_VERSION"),
         "stale": stale(),
         "dictation": cfg!(feature = "desktop"),
+        // Read by the app to tag a session it starts here, as a closed value.
+        "os": std::env::consts::OS,
     });
     write.send(Message::text(welcome.to_string())).await?;
     write.send(Message::text(snapshot)).await?;
@@ -992,7 +998,9 @@ async fn connection(
     });
 
     let connection = NEXT_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let offer = serde_json::from_str::<Hello>(&hello).ok().and_then(|h| h.host).filter(|_| hosts);
+    let hello = serde_json::from_str::<Hello>(&hello).ok();
+    let counts = hello.as_ref().is_some_and(|h| h.counts);
+    let offer = hello.and_then(|h| h.host).filter(|_| hosts);
     if let Some(offer) = offer {
         *host() = Some(Host { connection, browser: offer.browser, frames: replies.clone(), waiting: HashMap::new() });
     }
@@ -1025,13 +1033,13 @@ async fn connection(
         // Concurrently, as Tauri runs async commands: a send that spawns a
         // child must not hold a permission reply behind it.
         let (sink, replies) = (sink.clone(), replies.clone());
-        tokio::spawn(async move {
+        tokio::spawn(crate::analytics::CLIENT_COUNTS.scope(counts, async move {
             let reply = match dispatch(&call.cmd, call.args, sink).await {
                 Ok(ok) => json!({ "id": call.id, "ok": ok }),
                 Err(err) => json!({ "id": call.id, "err": err }),
             };
             let _ = replies.send(reply.to_string());
-        });
+        }));
     }
 
     // Dropping its waiters answers every call still out on it.

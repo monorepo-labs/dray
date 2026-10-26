@@ -209,8 +209,12 @@ async fn send_msg(
     // reaches that function directly, both to relay a `dray send` and to start
     // a session `dray new` asked for, and an agent finishing at 3am would mark
     // the day active with nobody in the room. A Tauri command is reachable from
-    // the webview alone, so getting here means somebody pressed send.
-    analytics::track_active_day();
+    // the webview alone, so getting here means somebody pressed send. Not for
+    // another Mac's app sending here: that reader was active on their own
+    // install, not this one.
+    if !analytics::client_counts() {
+        analytics::track_active_day();
+    }
 
     // A draft keeps its base as written, a session id among the spellings, so
     // it is resolved here the way `dray draft start` resolves it.
