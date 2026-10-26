@@ -1200,6 +1200,14 @@ impl SessionManager {
                 }
             }
 
+            // An index model this record doesn't hold was written by a refusal's
+            // fallback: the CLI moved itself. What the child runs is no longer
+            // known here, so the record is cleared and the pick below goes out
+            // whatever it is — under this lock, so no ordering can lose it.
+            if s.harness == Harness::ClaudeCode && indexed.as_ref().is_some_and(|i| i.model != s.model) {
+                s.model = ModelId::default();
+            }
+
             // Before the send, so the index reflects intent even if writing to
             // the child fails — the prompt event is persisted ahead of stdin too.
             touch_session_index_item(session_id, model.clone(), effort, permission_mode, fast).await?;
@@ -3118,17 +3126,6 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
             Ok(None) => {}
             Err(e) => eprintln!("[model fallback write err] {e:#}"),
         }
-        // The live record too, or picking the old model again compares equal
-        // and never reaches the CLI. Spawned, since a slot holder may be
-        // waiting on this read loop.
-        let (session_id, status, model) = (ctx.session_id.to_string(), ctx.status.clone(), model.clone());
-        tokio::spawn(async move {
-            let Some(slot) = manager().existing(&session_id).await else { return };
-            let mut guard = slot.lock().await;
-            if let Some(s) = guard.as_mut().filter(|s| Arc::ptr_eq(&s.status, &status)) {
-                s.model = model;
-            }
-        });
     }
 
     // One lock for both. The tool count is fed here rather than from inside
