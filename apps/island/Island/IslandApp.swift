@@ -42,13 +42,16 @@ final class IslandPanel: NSPanel {
 }
 
 extension NSWindow {
-    /// WindowServer can drop a window's all-Spaces tag while the island runs, leaving
-    /// it on one desktop and never over a fullscreen app. AppKit skips setting a
-    /// behavior it thinks is unchanged, so it is cleared before being put back.
-    func rejoinAllSpaces() {
+    /// WindowServer can leave a window on the desktop Space alone with its all-Spaces
+    /// tag still set, so it never shows over a fullscreen app (#650). Clearing the
+    /// behavior and setting it back rejoins every Space, but only once the cleared
+    /// one has reached WindowServer while the window is ordered in: done in one
+    /// turn, AppKit coalesces the pair into nothing. Call after ordering front.
+    func rejoinAllSpacesIfLost() {
+        guard isVisible, !isOnActiveSpace else { return }
         let behavior = collectionBehavior
         collectionBehavior = []
-        collectionBehavior = behavior
+        DispatchQueue.main.async { self.collectionBehavior = behavior }
     }
 }
 
@@ -409,8 +412,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
         guard let panel, let composer, !composer.shown else { return }
         composer.opened()
         place()
-        panel.rejoinAllSpaces()
         panel.makeKeyAndOrderFront(nil)
+        panel.rejoinAllSpacesIfLost()
         composer.shown = true
         closeKey?.held = true
         openKey?.held = false
@@ -432,8 +435,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
         guard let pills, let composer else { return }
         openKey?.held = composer.donePillUp
         if composer.hasPill {
-            pills.rejoinAllSpaces()
             pills.orderFrontRegardless()
+            pills.rejoinAllSpacesIfLost()
         } else {
             // After the pill's own exit, which the view animates.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
