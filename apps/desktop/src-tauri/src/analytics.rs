@@ -367,6 +367,21 @@ async fn send(event: &'static str, daily_key: Option<String>, properties: Value)
     }
 
     let mut props = base_properties().clone();
+    // PostHog judges bot traffic at query time off this *property*, never the
+    // request's User-Agent header, and reads a missing one as automation — so
+    // without it every app event is `$virt_is_bot` and bot-filtered insights
+    // drop the app silently. Here rather than in `base_properties`, which is
+    // also `$set` on the person.
+    props.insert(
+        "$raw_user_agent".into(),
+        format!(
+            "Dray/{} ({}; {})",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )
+        .into(),
+    );
     if let Value::Object(extra) = properties {
         props.extend(extra);
     }
