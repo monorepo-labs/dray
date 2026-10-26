@@ -180,13 +180,22 @@ pub struct StatusTracker {
     /// When the usage limit that refused this turn resets. Read off the turn's
     /// end by [`Self::take_limit_reset`], which schedules the auto-continue.
     limit_reset: Option<String>,
+    /// Moves on every turn opening or closing. What Stop's watchdog compares,
+    /// so it closes only a turn nothing has moved since the interrupt.
+    epoch: u64,
 }
 
 impl StatusTracker {
     /// The user sent a prompt; work is starting regardless of what stdout says.
     pub fn on_send(&mut self) -> Option<SessionStatus> {
         self.model_call_open = true;
+        self.epoch += 1;
         self.set(SessionStatus::InProgress)
+    }
+
+    /// Moves on every turn opening or closing.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     /// Advances on one mapped event. `Some` when the status changed — the
@@ -199,6 +208,7 @@ impl StatusTracker {
             // must be able to go straight back to in-progress here.
             AgentEventPayload::TurnStarted(_) => {
                 self.model_call_open = true;
+                self.epoch += 1;
                 self.limit_reset = None;
                 self.set(SessionStatus::InProgress)
             }
@@ -217,6 +227,7 @@ impl StatusTracker {
             // notice hanging until the reader clicked Stop.
             AgentEventPayload::TurnCompleted { auth_failed, .. } => {
                 self.model_call_open = false;
+                self.epoch += 1;
                 self.auth_failed = *auth_failed;
                 self.set(SessionStatus::Completed)
             }
@@ -408,6 +419,111 @@ pub async fn publish_status(session_id: &str, status: SessionStatus, app: &Sink)
     };
     if let Err(e) = app.emit("session_status", &event) {
         eprintln!("[status emit err] {e}");
+    }
+}
+
+/// How long Stop waits for Claude Code's own `result` before closing the turn
+/// itself. A real interrupt answers well inside it.
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The turn end a `result` would have been, for a turn Dray closes itself.
+/// `stop_reason` starting `aborted` is what keeps a reader's own Stop from
+/// drawing as a failure.
+fn closing_turn(stop_reason: &str, final_text: Option<&str>) -> AgentEventPayload {
+    AgentEventPayload::TurnCompleted {
+        status: crate::events::TurnStatus::Error,
+        stop_reason: Some(stop_reason.to_string()),
+        final_text: final_text.map(str::to_string),
+        usage: None,
+        duration_ms: None,
+        head: None,
+        auth_failed: false,
+    }
+}
+
+/// Closes the turn Stop was pressed on, where nothing has moved it since.
+///
+/// Through [`ingest`] like a real `result`, so the closing snapshot is taken
+/// and a prompt queued behind the stuck turn goes out rather than waiting on a
+/// boundary that is never coming.
+async fn close_unanswered_stop(
+    slot: &Slot,
+    session_id: &str,
+    status: &Arc<Mutex<StatusTracker>>,
+    epoch: u64,
+    app: &Sink,
+) {
+    let guard = slot.lock().await;
+    // A respawn put a new tracker in the slot; that child has a turn of its own.
+    let Some(s) = guard.as_ref().filter(|s| Arc::ptr_eq(&s.status, status)) else {
+        return;
+    };
+    {
+        let tracker = status.lock().await;
+        if !tracker.turn_in_flight() || tracker.epoch() != epoch {
+            return;
+        }
+    }
+    let session_cwd = match get_session_index_item(session_id).await {
+        Ok(Some(item)) => item.cwd,
+        _ => return,
+    };
+
+    let closed = AgentEvent::mint(
+        session_id.to_string(),
+        s.harness,
+        s.seq.fetch_add(1, Relaxed),
+        None,
+        None,
+        closing_turn("aborted", None),
+    );
+    let ctx = Ingest {
+        session_id,
+        harness: s.harness,
+        session_cwd: &session_cwd,
+        status,
+        queued: &s.queued,
+        flush_seq: &s.seq,
+        flush_transport: &s.stdin,
+    };
+    ingest(&ctx, closed, app).await;
+}
+
+/// Closes the turn of a child that died with one open. No `result` can come,
+/// so without this the session sat `in_progress` for good: sends queued behind
+/// it and Stop, settle and fork all refused until a restart.
+///
+/// Emitted, never logged, for the reason the drained task set is: a delete may
+/// have removed the file, where an append would quietly recreate it.
+pub async fn close_dead_turn(
+    session_id: &str,
+    harness: Harness,
+    seq: &AtomicU64,
+    status: &Mutex<StatusTracker>,
+    why: &str,
+    app: &Sink,
+) {
+    let next = {
+        let mut tracker = status.lock().await;
+        if !tracker.turn_in_flight() {
+            return;
+        }
+        let closed = AgentEvent::mint(
+            session_id.to_string(),
+            harness,
+            seq.fetch_add(1, Relaxed),
+            None,
+            None,
+            closing_turn("process_exited", Some(why)),
+        );
+        if let Err(err) = app.emit("agent_event", &closed) {
+            eprintln!("[emit err] {err}");
+        }
+        tracker.note_tool_call(&closed.payload);
+        tracker.on_event(&closed.payload)
+    };
+    if let Some(next) = next {
+        publish_status(session_id, next, app).await;
     }
 }
 
@@ -920,6 +1036,15 @@ impl SessionManager {
         // session's Stop and send carry on.
         let slot = self.slot(session_id).await;
         let mut slot_guard = slot.lock().await;
+
+        // A child that exited on its own still sits in the slot, and writing to
+        // it fails. Dropped here, so this send resumes it like any idle session.
+        if slot_guard
+            .as_mut()
+            .is_some_and(|s| matches!(s.child.try_wait(), Ok(Some(_))))
+        {
+            slot_guard.take();
+        }
 
         if let Some(at) = claim_continue {
             let Some((item, send)) = crate::store::take_continue_at(session_id, at).await? else {
@@ -1437,7 +1562,24 @@ impl SessionManager {
 
         let slot = self.slot(session_id).await;
         let mut guard = slot.lock().await;
-        live(&mut guard, session_id)?.interrupt().await
+        let session = live(&mut guard, session_id)?;
+        session.interrupt().await?;
+
+        // Claude Code acks an interrupt with no turn to stop and sends nothing
+        // else (v2.1.310) — and a turn it opened for a task notification can
+        // be exactly that, `init` with no model call and no `result`. So Stop
+        // closes the turn itself where the CLI has not within the grace.
+        if matches!(session.stdin, Transport::Lines(_)) {
+            let status = session.status.clone();
+            let epoch = status.lock().await.epoch();
+            drop(guard);
+            let (slot, session_id, app) = (slot.clone(), session_id.to_string(), app.clone());
+            tokio::spawn(async move {
+                tokio::time::sleep(STOP_GRACE).await;
+                close_unanswered_stop(&slot, &session_id, &status, epoch, &app).await;
+            });
+        }
+        Ok(())
     }
 
     /// Stops one of a session's background tasks. Errors for a dead child like
@@ -2928,6 +3070,18 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink) {
         eprintln!("[emit err] {err}");
     }
 
+    // The CLI moved the session to another model for good. Recorded, or the
+    // next send restates the model it left and the CLI goes back to it.
+    if let AgentEventPayload::Notice { model: Some(model), .. } = &agent_event.payload {
+        match crate::store::set_session_model(ctx.session_id, model.clone()).await {
+            Ok(Some(item)) => {
+                app.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("[model fallback write err] {e:#}"),
+        }
+    }
+
     // One lock for both. The tool count is fed here rather than from inside
     // `on_event` because the subagent test needs the envelope: a subagent's
     // tool call runs on its own thread, and its result is not a point where
@@ -3730,6 +3884,23 @@ mod tests {
             Some(SessionStatus::Completed)
         );
         assert!(!tracker.turn_in_flight());
+    }
+
+    /// What Stop's watchdog reads: the epoch moves on a send and on every turn
+    /// edge, so a turn the CLI closed or reopened after the interrupt is left
+    /// alone, and Dray's own closing payload closes the turn it is handed.
+    #[test]
+    fn the_epoch_moves_on_every_turn_edge_and_a_synthetic_close_ends_the_turn() {
+        let mut tracker = StatusTracker::default();
+
+        tracker.on_send();
+        let at_stop = tracker.epoch();
+        assert!(tracker.turn_in_flight());
+
+        tracker.on_event(&closing_turn("aborted", None));
+        assert!(!tracker.turn_in_flight());
+        assert_eq!(tracker.status(), SessionStatus::Completed);
+        assert_ne!(tracker.epoch(), at_stop);
     }
 
     /// The fixture's second turn spawns a background agent: its `result`

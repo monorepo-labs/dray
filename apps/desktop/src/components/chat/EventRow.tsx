@@ -149,6 +149,10 @@ export default function EventRow({
         </Notice>
       );
 
+    // The harness's own sentence — a refusal, a safeguard notice — as written.
+    case "notice":
+      return <Notice wrap>{payload.text}</Notice>;
+
     case "rate_limited": {
       // Only actionable reports reach here — the mapper drops the healthy ones
       // — so anything that arrives is worth a line. Overage in use is the

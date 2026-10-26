@@ -342,7 +342,13 @@ label: string,
  * True when the app answered on its own — an unsupported request
  * subtype, or a shutdown clearing what it could not ask about.
  */
-automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUseId: string, message: string, } | { "type": "fast_mode_notice", text: string, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUseId: string, message: string, } | { "type": "fast_mode_notice", text: string, } | { "type": "notice", text: string, 
+/**
+ * The model the harness moved the session to for good, where this
+ * notice says it did. The session layer records it, so the composer
+ * stops naming the model the CLI left.
+ */
+model: ModelId | null, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.

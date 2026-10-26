@@ -262,7 +262,17 @@ async fn read_stdout(
         flush_transport: &crate::session::Transport::Lines(stdin.clone()),
     };
 
-    while let Some(line) = lines.next_line().await? {
+    // A read error ends the loop like a closed pipe, never with `?`: either way
+    // no more of this turn is coming, and the cleanup below has to run.
+    loop {
+        let line = match lines.next_line().await {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(err) => {
+                eprintln!("[claude stdout err] {err}");
+                break;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -299,8 +309,14 @@ async fn read_stdout(
         // Parsed, but only by a catch-all — the line is a subtype this build
         // has never seen. Recorded alongside outright failures because it is
         // the same coverage gap; the catch-all only stops it costing the line.
-        if let ClaudeCodeEvent::System(parser::SystemEvent::Unrecognized) = &claude_event {
-            record_failure(ClaudeCode, session_id, "unknown_subtype", "unmodeled system subtype", &line).await;
+        let unmodeled = match &claude_event {
+            ClaudeCodeEvent::System(parser::SystemEvent::Unrecognized) => Some("unmodeled system subtype"),
+            ClaudeCodeEvent::Result(parser::ResultEvent::Unrecognized) => Some("unmodeled result subtype"),
+            ClaudeCodeEvent::Unrecognized => Some("unmodeled line type"),
+            _ => None,
+        };
+        if let Some(detail) = unmodeled {
+            record_failure(ClaudeCode, session_id, "unknown_subtype", detail, &line).await;
         }
 
         let agent_event = match mapper.map(claude_event) {
@@ -334,6 +350,16 @@ async fn read_stdout(
         }
         status.lock().await.on_event(&drained.payload);
     }
+
+    crate::session::close_dead_turn(
+        session_id,
+        ClaudeCode,
+        &seq,
+        &status,
+        "Claude Code stopped before the turn finished",
+        app,
+    )
+    .await;
 
     Ok(())
 }

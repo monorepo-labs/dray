@@ -402,6 +402,17 @@ pub enum AgentEventPayload {
         text: String,
     },
 
+    /// A sentence the harness wants read in the transcript — a model refusal,
+    /// a safeguard notice. Drawn as the harness wrote it.
+    Notice {
+        text: String,
+        /// The model the harness moved the session to for good, where this
+        /// notice says it did. The session layer records it, so the composer
+        /// stops naming the model the CLI left.
+        #[serde(default)]
+        model: Option<crate::models::ModelId>,
+    },
+
     /// The harness has sent a request to the model and is waiting on its first
     /// token. Drives the working indicator and nothing else.
     ///

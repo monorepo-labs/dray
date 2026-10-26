@@ -300,8 +300,21 @@ pub fn claude_models() -> Vec<Model> {
         )
         .with_fast()
         .under_more(),
-        Model::new("sonnet", "sonnet", "Sonnet 5", all, Some(High)).under_more(),
-        Model::new("haiku", "haiku", "Haiku 4.5", Vec::new(), None).under_more(),
+        // The model a refusal falls back to (`model_refusal_fallback` names
+        // `claude-opus-4-8`), listed so the session can record where it went.
+        Model::new(
+            "claude-opus-4-8",
+            "claude-opus-4-8",
+            "Opus 4.8",
+            all.clone(),
+            Some(High),
+        )
+        .with_fast()
+        .under_more(),
+        Model::new("sonnet", "sonnet", "Sonnet 5.5", all.clone(), Some(High)).under_more(),
+        // Haiku 5.5 takes the whole ladder (v2.1.310's `initialize`), where
+        // Haiku 4.5 took none.
+        Model::new("haiku", "haiku", "Haiku 5.5", all, Some(High)).under_more(),
     ]
 }
 
@@ -597,14 +610,15 @@ mod tests {
             .all(|m| !m.efforts.contains(&Effort::Ultra)));
     }
 
-    /// Verified against the CLI: `--effort` on Haiku is accepted and ignored,
-    /// so this pins a UI/persistence rule, not a spawn failure.
+    /// `haiku` resolves to Haiku 5.5, which takes every level (v2.1.310). The
+    /// table once said Haiku 4.5 with none, so `--effort` was never passed.
     #[test]
-    fn haiku_never_takes_an_effort() {
+    fn haiku_takes_the_whole_ladder() {
         let haiku = find_model(&id("haiku")).unwrap();
 
-        assert_eq!(resolve_effort(&haiku, Some(Effort::Max)), None);
-        assert_eq!(resolve_effort(&haiku, None), None);
+        assert_eq!(haiku.label, "Haiku 5.5");
+        assert_eq!(resolve_effort(&haiku, Some(Effort::Max)), Some(Effort::Max));
+        assert_eq!(resolve_effort(&haiku, None), Some(Effort::High));
     }
 
     #[test]
@@ -663,7 +677,7 @@ mod tests {
             .map(|m| m.label)
             .collect();
 
-        assert_eq!(more, ["Fable 5", "Opus 5", "Sonnet 5", "Haiku 4.5"]);
+        assert_eq!(more, ["Fable 5", "Opus 5", "Opus 4.8", "Sonnet 5.5", "Haiku 5.5"]);
     }
 
     /// The flag decides where a row is drawn and nothing else. A model reached
@@ -876,6 +890,7 @@ mod wire_tests {
                 ("opus".to_string(), true),
                 ("claude-fable-5".to_string(), false),
                 ("claude-opus-5".to_string(), true),
+                ("claude-opus-4-8".to_string(), true),
                 ("sonnet".to_string(), false),
                 ("haiku".to_string(), false),
             ]

@@ -326,6 +326,7 @@ const RENDERS = new Set([
   "context_compacted",
   "rate_limited",
   "permission_denied",
+  "notice",
 ]);
 
 /// Whether an item draws a row. A group always does — it is built from tool
