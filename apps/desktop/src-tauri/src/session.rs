@@ -662,10 +662,9 @@ impl SessionManager {
         // same reading, stated there because neither side can call the other.
         let fast = fast
             && harness.caps().fast_mode.offered()
-            && model_spec.as_ref().map_or(
-                harness.caps().fast_mode == FastMode::AtCreation,
-                |spec| spec.supports_fast,
-            );
+            && model_spec
+                .as_ref()
+                .map_or(harness == Harness::Fx, |spec| spec.supports_fast);
 
         // Resolved once for every path below — created, live, queued and
         // resumed alike — so a `#DRA-53` means the same thing whichever one the
@@ -980,11 +979,7 @@ impl SessionManager {
                 || (s.model != model && !caps.applies_model_in_place)
                 || (s.permission_mode != permission_mode && !caps.applies_permission_in_place)
                 // Only the harness whose fast mode rides the spawn. `InPlace`
-                // is applied below without replacing anything, and `AtCreation`
-                // is fx — where a respawn would *not* move it, since a resumed
-                // fx session carries the stamp it was created with, so killing
-                // the child would cost the reader a running conversation and
-                // change nothing at all.
+                // is applied below without replacing anything.
                 || (s.fast != fast && caps.fast_mode == FastMode::OnSpawn)
         });
 
@@ -1040,6 +1035,9 @@ impl SessionManager {
                     }
                     if let Some(mode) = landed.mode {
                         s.permission_mode = mode;
+                    }
+                    if let Some(fast) = landed.fast {
+                        s.fast = fast;
                     }
                 }
             }
@@ -1115,6 +1113,7 @@ impl SessionManager {
                             model: model_spec.clone(),
                             effort,
                             mode: permission_mode,
+                            fast,
                         });
                     }
                     if let Some(queued) = s
@@ -2231,14 +2230,14 @@ impl Session {
         Ok(())
     }
 
-    /// Moves a running child on or off its harness's faster tier — Claude Code
-    /// alone, whose `apply_flag_settings` carries the same `flagSettings` layer
-    /// `--settings` fills at spawn.
+    /// Moves a running child on or off its harness's faster tier — Claude
+    /// Code's `apply_flag_settings`, grok's model twin, fx's `fast` config
+    /// option.
     ///
-    /// `Capabilities::fast_mode` is what keeps the other three off this path:
-    /// Codex's rides its spawn, fx's is stamped on its session at creation, and
-    /// pi has none. The recorded value moves only once the write has, so a
-    /// failed control leaves the session describing what the child is still on.
+    /// `Capabilities::fast_mode` is what keeps the others off this path:
+    /// Codex's rides its spawn and pi has none. The recorded value moves only
+    /// once the write has, so a failed control leaves the session describing
+    /// what the child is still on.
     pub async fn set_fast(&mut self, fast: bool) -> Result<()> {
         // grok's fast tier is a model id, so its switch is a model switch and
         // there is no flag to send. `fast_arg` is what pairs the two, and the
@@ -2252,6 +2251,13 @@ impl Session {
             crate::harness::grok::set_model(session, &model, fast).await?;
             self.fast = fast;
             return Ok(());
+        }
+
+        // fx's is a session config option; the session records what fx said.
+        if let Transport::Fx(session) = &self.stdin {
+            let result = crate::harness::fx::set_fast(session, fast).await;
+            self.fast = session.current_fast();
+            return result;
         }
 
         write_line(
@@ -2712,11 +2718,6 @@ async fn deliver_prompt(
     // Already resolved against the tracker by the caller. Appended to the text
     // the child is given, so the transcript keeps showing exactly what the
     // model was told — the same rule a non-image attachment's `@path` follows.
-    //
-    // fx is the one exception, and it is deliberate: it has no system-prompt
-    // surface, so [`crate::harness::fx::start_turn`] appends Dray's rules to
-    // the wire text alone and the transcript shows strictly less than the
-    // model was told. Nothing else may take that liberty.
     issues: &[IssueRef],
     baseline: Option<String>,
     queued: bool,
@@ -3178,7 +3179,17 @@ async fn apply_live_controls(
         s.set_permission_mode(permission_mode).await?;
     }
     if caps.fast_mode == FastMode::InPlace && s.fast != fast {
-        s.set_fast(fast).await?;
+        if let Err(err) = s.set_fast(fast).await {
+            // fx turns fast mode down on a model with no fast lane, and that is
+            // effort's case: run the turn at ordinary speed and say so, rather
+            // than lose the prompt over it.
+            if s.harness != Harness::Fx {
+                return Err(err);
+            }
+            report_session_error(session_id, s.harness, &format!("{err:#}"), &s.seq, app).await;
+            touch_session_index_item(session_id, s.model.clone(), s.effort, s.permission_mode, s.fast)
+                .await?;
+        }
     }
     Ok(())
 }
@@ -3228,6 +3239,11 @@ async fn apply_deferred(
         Ok(()) => landed.mode = Some(controls.mode),
         Err(err) => report_session_error(session_id, harness, &format!("{err:#}"), seq, app).await,
     }
+    // After the model, which can turn fast mode off or take the option away.
+    if let Err(err) = fx::set_fast(fx, controls.fast).await {
+        report_session_error(session_id, harness, &format!("{err:#}"), seq, app).await;
+    }
+    landed.fast = Some(fx.current_fast());
 
     fx.record_applied(landed);
 }

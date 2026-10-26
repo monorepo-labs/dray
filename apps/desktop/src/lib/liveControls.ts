@@ -15,7 +15,7 @@ const LIVE: Record<Harness, readonly Control[]> = {
   claude_code: ["model", "stance", "fast"],
   grok: ["model", "effort", "fast"],
   pi: ["model", "effort"],
-  fx: ["model", "effort", "stance"],
+  fx: ["model", "effort", "stance", "fast"],
   codex: [],
 };
 

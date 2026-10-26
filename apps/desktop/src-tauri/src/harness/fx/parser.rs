@@ -280,6 +280,13 @@ impl ConfigOptions {
             .as_deref()
     }
 
+    /// Whether fast mode is on, or `None` where the reply carries no `fast`
+    /// option — fx before 0.0.14, or a model with no fast lane.
+    pub fn fast(&self) -> Option<bool> {
+        let option = self.config_options.iter().find(|o| o.id == "fast")?;
+        Some(option.current_value.as_deref() == Some("true"))
+    }
+
     fn effort(&self) -> Option<&ConfigOption> {
         self.config_options.iter().find(|o| o.id == "effort")
     }

@@ -2687,7 +2687,7 @@ function App() {
       enabled:
         !issuesOpen &&
         !lockedMidTurn(harness, "fast", busy) &&
-        offersFast(harness, models.find((m) => m.id === modelId), composingNewSession),
+        offersFast(harness, models.find((m) => m.id === modelId)),
     },
   );
   // Opens, and does nothing where the page is already up — the same answer the

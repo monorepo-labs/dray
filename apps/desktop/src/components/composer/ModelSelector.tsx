@@ -670,7 +670,7 @@ export default function ModelSelector({
             this look like a model with a mark rather than a control. Drawn only
             where the harness *and* the model have one, so it is never a control
             that acks and changes nothing. */}
-        {offersFast(harness, selected, isNewSession) && (
+        {offersFast(harness, selected) && (
           <>
             <DropdownMenuItem
               className="cursor-pointer text-ui"
