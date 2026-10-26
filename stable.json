@@ -1,23 +1,23 @@
 {
-  "version": "0.29.7",
-  "notes": "### Fixed\n\n- The Island no longer crashes when it closes right after a send.\n- A message sent from the Island is no longer followed by an old\n  \"done\" alert for that session.",
-  "pub_date": "2026-10-23T11:01:10.861Z",
+  "version": "0.29.8",
+  "notes": "### Improved\n\n- **Reopen a closed tab with ⌘⇧T.** It works for browser pages, files and\n  the Diff view.\n- Settings no longer has an analytics switch, and a choice saved there is\n  no longer read. Set `DRAY_NO_ANALYTICS` before starting Dray to turn\n  usage reporting off.\n\n### Fixed\n\n- The Island shows over fullscreen apps again.",
+  "pub_date": "2026-10-26T10:35:18.003Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW02TVpUNnlkdXpFYnEyVHVCekNqU1I1UGZIRlhsQWV0d2tVMkJYVkJFQjUyclZtbEQvWlhWN2UzOXRyV3JEZkhDNzVuWWtjTERGd091anhvUEFlNkFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNzUzMjYwCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS43Ck01STRvY3JKNUpHVlMwNDdOVXIzSW4yQW43V0N6SUJsQzg0bmZjcG0xQ2VGalpjd29LZmREVzQ2VndKd1BySVpOdzRSMVFHRGlhSTI3VmRObUt1VEJnPT0K",
-      "url": "https://downloads.drayhq.com/v0.29.7/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWsxOGFmaTE1UTUyejJxL2UrZUhkWGhJQUtCMzhudnZJUGtPcVVLb3c5RlFjTzhxZXd5QVlONVFKNmR2T29INDYwS1Zqdkp6bHV0MHBCYWNma3kxNUFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDEwOTA0CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS44Ckp1cFBlODRKWk44STNzR0xvQWxKQ1dpNFZIbkJmbGZOWitLWHh4eHhaQnB5UjAyVEtzRXdTcjVaT0xHOGNKOXk4QWFjVGFoazJrWEpXRFY3RFJsM0J3PT0K",
+      "url": "https://downloads.drayhq.com/v0.29.8/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW02TVpUNnlkdXpFYnEyVHVCekNqU1I1UGZIRlhsQWV0d2tVMkJYVkJFQjUyclZtbEQvWlhWN2UzOXRyV3JEZkhDNzVuWWtjTERGd091anhvUEFlNkFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNzUzMjYwCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS43Ck01STRvY3JKNUpHVlMwNDdOVXIzSW4yQW43V0N6SUJsQzg0bmZjcG0xQ2VGalpjd29LZmREVzQ2VndKd1BySVpOdzRSMVFHRGlhSTI3VmRObUt1VEJnPT0K",
-      "url": "https://downloads.drayhq.com/v0.29.7/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWsxOGFmaTE1UTUyejJxL2UrZUhkWGhJQUtCMzhudnZJUGtPcVVLb3c5RlFjTzhxZXd5QVlONVFKNmR2T29INDYwS1Zqdkp6bHV0MHBCYWNma3kxNUFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDEwOTA0CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS44Ckp1cFBlODRKWk44STNzR0xvQWxKQ1dpNFZIbkJmbGZOWitLWHh4eHhaQnB5UjAyVEtzRXdTcjVaT0xHOGNKOXk4QWFjVGFoazJrWEpXRFY3RFJsM0J3PT0K",
+      "url": "https://downloads.drayhq.com/v0.29.8/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW02TVpUNnlkdXpFYnEyVHVCekNqU1I1UGZIRlhsQWV0d2tVMkJYVkJFQjUyclZtbEQvWlhWN2UzOXRyV3JEZkhDNzVuWWtjTERGd091anhvUEFlNkFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNzUzMjYwCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS43Ck01STRvY3JKNUpHVlMwNDdOVXIzSW4yQW43V0N6SUJsQzg0bmZjcG0xQ2VGalpjd29LZmREVzQ2VndKd1BySVpOdzRSMVFHRGlhSTI3VmRObUt1VEJnPT0K",
-      "url": "https://downloads.drayhq.com/v0.29.7/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWsxOGFmaTE1UTUyejJxL2UrZUhkWGhJQUtCMzhudnZJUGtPcVVLb3c5RlFjTzhxZXd5QVlONVFKNmR2T29INDYwS1Zqdkp6bHV0MHBCYWNma3kxNUFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDEwOTA0CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS44Ckp1cFBlODRKWk44STNzR0xvQWxKQ1dpNFZIbkJmbGZOWitLWHh4eHhaQnB5UjAyVEtzRXdTcjVaT0xHOGNKOXk4QWFjVGFoazJrWEpXRFY3RFJsM0J3PT0K",
+      "url": "https://downloads.drayhq.com/v0.29.8/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW02TVpUNnlkdXpFYnEyVHVCekNqU1I1UGZIRlhsQWV0d2tVMkJYVkJFQjUyclZtbEQvWlhWN2UzOXRyV3JEZkhDNzVuWWtjTERGd091anhvUEFlNkFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNzUzMjYwCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS43Ck01STRvY3JKNUpHVlMwNDdOVXIzSW4yQW43V0N6SUJsQzg0bmZjcG0xQ2VGalpjd29LZmREVzQ2VndKd1BySVpOdzRSMVFHRGlhSTI3VmRObUt1VEJnPT0K",
-      "url": "https://downloads.drayhq.com/v0.29.7/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWsxOGFmaTE1UTUyejJxL2UrZUhkWGhJQUtCMzhudnZJUGtPcVVLb3c5RlFjTzhxZXd5QVlONVFKNmR2T29INDYwS1Zqdkp6bHV0MHBCYWNma3kxNUFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDEwOTA0CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS44Ckp1cFBlODRKWk44STNzR0xvQWxKQ1dpNFZIbkJmbGZOWitLWHh4eHhaQnB5UjAyVEtzRXdTcjVaT0xHOGNKOXk4QWFjVGFoazJrWEpXRFY3RFJsM0J3PT0K",
+      "url": "https://downloads.drayhq.com/v0.29.8/Dray_universal.app.tar.gz"
     }
   }
 }
