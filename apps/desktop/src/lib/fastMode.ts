@@ -9,18 +9,18 @@ import type { AgentEvent, Harness, Model, ModelId } from "@/types/events";
 /// this one decides whether the reader is offered the switch at all, so a
 /// disagreement is a control that does nothing or a setting with no control.
 ///
-/// - `in-place` — Claude Code. `apply_flag_settings` moves a running child.
-/// - `on-spawn` — Codex. `serviceTier` rides the spawn, so a change respawns.
+/// - `in-place` — Claude Code, whose `apply_flag_settings` moves a running
+///   child, and Codex, whose `serviceTier` rides the next `turn/start`.
 /// - `at-creation` — fx. It reads `fast_mode` out of its settings at
 ///   `session/new` and stamps it onto its own session record, which a resume
 ///   then honours whatever the file says since — so nothing, not even a
 ///   respawn, can move a session that already exists.
 /// - `none` — pi, which has no route to one.
-export type FastModeSupport = "none" | "in-place" | "on-spawn" | "at-creation";
+export type FastModeSupport = "none" | "in-place" | "at-creation";
 
 export const FAST_MODE_BY_HARNESS: Record<Harness, FastModeSupport> = {
   claude_code: "in-place",
-  codex: "on-spawn",
+  codex: "in-place",
   fx: "at-creation",
   pi: "none",
   // grok's fast tier is a **model id** (`grok-4.7-build-fast`) rather than a

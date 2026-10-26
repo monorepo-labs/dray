@@ -74,8 +74,10 @@ pub struct Thread {
     /// while the index reported the new. `turn/start` overrides "this turn and
     /// subsequent turns", which is the one place that covers both.
     ///
-    /// Fixed for the life of the child: every one of these respawns it.
-    pub settings: TurnSettings,
+    /// Shared with the read loop's clone, which flushes queued prompts through
+    /// the same `start_turn`: a pick moved here reaches the next turn whichever
+    /// side opens it. A plain lock, never held across an await.
+    pub settings: Arc<std::sync::Mutex<TurnSettings>>,
     /// The turn now running, or `None` between turns.
     ///
     /// `turn/interrupt` takes a turn id *as well as* a thread id — a request
@@ -83,6 +85,13 @@ pub struct Thread {
     /// turnId`, verified live — so without this Stop reaches the server as an
     /// error and the turn keeps going.
     pub turn_id: Arc<Mutex<Option<String>>>,
+}
+
+impl Thread {
+    /// Moves a setting for the next `turn/start`, from whichever clone.
+    pub fn update(&self, change: impl FnOnce(&mut TurnSettings)) {
+        change(&mut self.settings.lock().expect("turn settings mutex poisoned"));
+    }
 }
 
 /// What a turn is started with. Every field is an override that also applies to
@@ -104,6 +113,18 @@ pub struct TurnSettings {
     /// `priority` reported `default` again only once a turn passed that word
     /// explicitly.
     pub service_tier: &'static str,
+    /// The `sandbox` the thread was opened under, and the policy Codex resolved
+    /// it to there — the policy carries `writableRoots` and `networkAccess` out
+    /// of the reader's `config.toml`, which the bare mode name leaves to Codex.
+    opened_sandbox: &'static str,
+    opened_policy: Option<Value>,
+    /// What `turn/start` sends as `sandboxPolicy`, once the stance has moved.
+    ///
+    /// `None` until then, and that is the care: a policy restated on every turn
+    /// would overwrite whatever the config made of the mode. Once sent it
+    /// sticks to the thread (measured on 0.164: a turn after a `readOnly` one
+    /// with no override still could not write), so it is kept and resent.
+    sandbox_policy: Option<Value>,
 }
 
 /// Codex's id for the faster tier, as `model/list` names it in `serviceTiers`.
@@ -115,6 +136,25 @@ pub struct TurnSettings {
 /// is why nothing here builds one from a string.
 pub(super) const FAST_TIER: &str = "priority";
 const STANDARD_TIER: &str = "default";
+
+fn tier(fast: bool) -> &'static str {
+    if fast {
+        FAST_TIER
+    } else {
+        STANDARD_TIER
+    }
+}
+
+/// The turn-level spelling of a `sandbox` mode. camelCase in a `type` field,
+/// where the thread-level mode is kebab-case — the same setting, spelled twice.
+fn sandbox_policy(sandbox: &str) -> Value {
+    let kind = match sandbox {
+        "read-only" => "readOnly",
+        "danger-full-access" => "dangerFullAccess",
+        _ => "workspaceWrite",
+    };
+    json!({"type": kind})
+}
 
 /// What `additionalSpeedTiers` calls the same thing — the *speed*'s name where
 /// [`FAST_TIER`] is the *tier*'s id. Both are read when deciding whether a model
@@ -136,8 +176,43 @@ impl TurnSettings {
             effort: effort.map(Effort::as_arg),
             approval_policy,
             sandbox,
-            service_tier: if fast { FAST_TIER } else { STANDARD_TIER },
+            service_tier: tier(fast),
+            opened_sandbox: sandbox,
+            opened_policy: None,
+            sandbox_policy: None,
         }
+    }
+
+    /// Moves the stance, both halves of it. The approval policy rides every
+    /// turn already; the sandbox is a policy object on the turn, and going back
+    /// to the mode the thread opened under sends the policy Codex resolved for
+    /// it rather than a bare one.
+    pub fn set_stance(&mut self, mode: ApprovalPolicy) {
+        let (approval_policy, sandbox) = approval_for(mode);
+        self.approval_policy = approval_policy;
+        if sandbox == self.sandbox {
+            return;
+        }
+        self.sandbox = sandbox;
+        self.sandbox_policy = Some(match &self.opened_policy {
+            Some(policy) if sandbox == self.opened_sandbox => policy.clone(),
+            // ponytail: a bare policy for any mode the thread did not open
+            // under, so a `config.toml` network grant is not carried onto it.
+            _ => sandbox_policy(sandbox),
+        });
+    }
+
+    pub fn set_model(&mut self, model: &Model) {
+        self.model = model.arg.clone();
+    }
+
+    /// `None` leaves the field off the turn, which keeps the thread's level.
+    pub fn set_effort(&mut self, effort: Option<Effort>) {
+        self.effort = effort.map(Effort::as_arg);
+    }
+
+    pub fn set_fast(&mut self, fast: bool) {
+        self.service_tier = tier(fast);
     }
 
     /// What `thread/start` and `thread/resume` both restate. No `effort` —
@@ -168,13 +243,14 @@ pub async fn init(
     cwd: &str,
     session_cwd: &str,
     is_new_session: bool,
+    fork_from: Option<&str>,
     app: &Sink,
 ) -> Result<Session> {
     // Ahead of the spawn, and for one reason: everything between the spawn
     // and the kill-wrapped `open_thread` below has to be infallible, or a `?`
     // returns leaving a child nothing can reach. An unreadable log is a
     // refusal that owes the caller no process.
-    let settings = TurnSettings::new(model, effort, permission_mode, fast);
+    let mut settings = TurnSettings::new(model, effort, permission_mode, fast);
     let seq_start = if is_new_session {
         0
     } else {
@@ -243,16 +319,17 @@ pub async fn init(
         }
     });
 
-    let thread_id = match open_thread(
+    let (thread_id, opened) = match open_thread(
         &client,
         session_id,
         &settings,
         session_cwd,
         is_new_session,
+        fork_from,
     )
     .await
     {
-        Ok(thread_id) => thread_id,
+        Ok(opened) => opened,
         Err(error) => {
             // Everything above is post-spawn, so the child is running and about
             // to be dropped with nobody left to talk to it. Killed rather than
@@ -265,10 +342,11 @@ pub async fn init(
         }
     };
 
+    settings.opened_policy = opened.get("sandbox").cloned();
     let thread = Thread {
         client,
         id: thread_id,
-        settings,
+        settings: Arc::new(std::sync::Mutex::new(settings)),
         turn_id: Arc::new(Mutex::new(None)),
     };
 
@@ -294,7 +372,8 @@ pub async fn init(
     })
 }
 
-/// Handshakes and opens the thread this session will run on.
+/// Handshakes and opens the thread this session will run on, answering its id
+/// and the server's whole answer.
 ///
 /// Split out from `init` for one reason: everything in it happens after the
 /// spawn, so its caller has a child to kill on the way out.
@@ -304,15 +383,28 @@ async fn open_thread(
     settings: &TurnSettings,
     session_cwd: &str,
     is_new_session: bool,
-) -> Result<String> {
+    fork_from: Option<&str>,
+) -> Result<(String, Value)> {
     handshake(client).await?;
 
+    // A fork's first send: the index entry exists, so this is not a new
+    // session, and it holds no thread of its own yet to resume.
+    if let Some(parent) = fork_from {
+        let parent_thread = store::get_session_index_item(parent)
+            .await?
+            .and_then(|item| item.thread_id)
+            .context("the session this was forked from has no Codex thread")?;
+        let (thread, answer) = fork_thread(client, &parent_thread, settings, session_cwd).await?;
+        store::set_session_thread_id(session_id, &thread).await?;
+        return Ok((thread, answer));
+    }
+
     if is_new_session {
-        let thread = start_thread(client, settings, session_cwd).await?;
+        let (thread, answer) = start_thread(client, settings, session_cwd).await?;
         // Recorded before the first prompt, so a session whose child dies mid
         // turn can still be resumed rather than silently starting over.
         store::set_session_thread_id(session_id, &thread).await?;
-        return Ok(thread);
+        return Ok((thread, answer));
     }
 
     let recorded = store::get_session_index_item(session_id)
@@ -322,8 +414,8 @@ async fn open_thread(
         // `thread/start` never answered. Nothing to resume by.
         .context("this session has no Codex thread to resume")?;
 
-    resume_thread(client, &recorded, settings).await?;
-    Ok(recorded)
+    let answer = resume_thread(client, &recorded, settings).await?;
+    Ok((recorded, answer))
 }
 
 /// `initialize`, then the `initialized` notification. Every other method on the
@@ -343,13 +435,42 @@ async fn handshake(client: &RpcClient) -> Result<()> {
 }
 
 /// Opens a fresh thread.
-async fn start_thread(client: &RpcClient, settings: &TurnSettings, cwd: &str) -> Result<String> {
+async fn start_thread(
+    client: &RpcClient,
+    settings: &TurnSettings,
+    cwd: &str,
+) -> Result<(String, Value)> {
     let mut params = settings.thread_params();
     params["cwd"] = json!(cwd);
 
     let answer = client.request("thread/start", params).await?;
 
-    thread_id_from(&answer).context("thread/start answered with no thread id")
+    let id = thread_id_from(&answer).context("thread/start answered with no thread id")?;
+    Ok((id, answer))
+}
+
+/// Copies a thread into a new one, carried on from here in `cwd`.
+///
+/// The whole conversation, measured on 0.164: the fork answers the parent's
+/// turns and remembers them, it works with the parent loaded in another
+/// app-server, and it resumes in a fresh process once its own goes. It carries
+/// the parent's own `developerInstructions` — the ones sent here are not read —
+/// so a Dray parent's rules come across with it. Its model and effort are the
+/// config's rather than the parent's, which is why this restates them.
+async fn fork_thread(
+    client: &RpcClient,
+    parent_thread: &str,
+    settings: &TurnSettings,
+    cwd: &str,
+) -> Result<(String, Value)> {
+    let mut params = settings.thread_params();
+    params["threadId"] = json!(parent_thread);
+    params["cwd"] = json!(cwd);
+
+    let answer = client.request("thread/fork", params).await?;
+
+    let id = thread_id_from(&answer).context("thread/fork answered with no thread id")?;
+    Ok((id, answer))
 }
 
 /// Picks a thread back up, restating what it should run as.
@@ -363,13 +484,11 @@ async fn resume_thread(
     client: &RpcClient,
     thread_id: &str,
     settings: &TurnSettings,
-) -> Result<()> {
+) -> Result<Value> {
     let mut params = settings.thread_params();
     params["threadId"] = json!(thread_id);
 
-    client.request("thread/resume", params).await?;
-
-    Ok(())
+    client.request("thread/resume", params).await
 }
 
 fn thread_id_from(answer: &Value) -> Option<String> {
@@ -601,18 +720,34 @@ async fn read_stdout(
 /// asking the child something, and `deliver_prompt` emits, holds and appends
 /// the `user_message` before it sends — so a failure past that point leaves a
 /// bubble in the transcript with no turn behind it, and a retry draws a second.
-pub async fn turn_input(thread: &Thread, text: &str) -> Result<Value> {
-    let Some(skill) = commands::skill_item(&thread.client, text).await? else {
-        return Ok(json!([{"type": "text", "text": text}]));
+pub async fn turn_input(
+    thread: &Thread,
+    text: &str,
+    images: &[crate::attachments::PreparedImage],
+) -> Result<Value> {
+    let mut input = match commands::skill_item(&thread.client, text).await? {
+        None => vec![json!({"type": "text", "text": text})],
+        Some(skill) => {
+            let rest = commands::without_command(text);
+            // A skill with nothing beside it is accepted on its own, verified live.
+            if rest.is_empty() {
+                vec![skill]
+            } else {
+                vec![skill, json!({"type": "text", "text": rest})]
+            }
+        }
     };
 
-    let rest = commands::without_command(text);
-    if rest.is_empty() {
-        // A skill with nothing beside it is accepted on its own, verified live.
-        return Ok(json!([skill]));
-    }
+    // By path, the archived copy: Codex reads the file itself, so the bytes
+    // already in hand are not sent twice. Measured on 0.164 — a solid green
+    // PNG named this way came back "Green".
+    input.extend(
+        images
+            .iter()
+            .map(|image| json!({"type": "localImage", "path": image.stored_path})),
+    );
 
-    Ok(json!([skill, {"type": "text", "text": rest}]))
+    Ok(Value::Array(input))
 }
 
 /// Writes one prompt as a turn.
@@ -626,19 +761,11 @@ pub async fn turn_input(thread: &Thread, text: &str) -> Result<Value> {
 /// so everything that can fail *before* the reader's message is recorded has
 /// already happened by the time this is called.
 pub async fn start_turn(thread: &Thread, input: Value) -> Result<()> {
-    let mut params = json!({
-        "threadId": thread.id,
-        "input": input,
-        "model": thread.settings.model,
-        "approvalPolicy": thread.settings.approval_policy,
-        "serviceTier": thread.settings.service_tier,
-    });
-
-    // Absent means "whatever the model defaults to", which is not the same as
-    // any level, so it is left out rather than sent as null.
-    if let Some(effort) = thread.settings.effort {
-        params["effort"] = json!(effort);
-    }
+    let params = turn_params(
+        &thread.id,
+        &thread.settings.lock().expect("turn settings mutex poisoned"),
+        input,
+    );
 
     let answer = thread.client.request("turn/start", params).await?;
 
@@ -654,6 +781,30 @@ pub async fn start_turn(thread: &Thread, input: Value) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// `turn/start`'s params: the prompt, and every setting restated, since each
+/// is an override that also sticks to the turns after it. That stickiness is
+/// what lets a control change ride the next turn instead of a respawn.
+fn turn_params(thread_id: &str, settings: &TurnSettings, input: Value) -> Value {
+    let mut params = json!({
+        "threadId": thread_id,
+        "input": input,
+        "model": settings.model,
+        "approvalPolicy": settings.approval_policy,
+        "serviceTier": settings.service_tier,
+    });
+
+    // Absent means "whatever the model defaults to", which is not the same as
+    // any level, so it is left out rather than sent as null.
+    if let Some(effort) = settings.effort {
+        params["effort"] = json!(effort);
+    }
+    if let Some(policy) = &settings.sandbox_policy {
+        params["sandboxPolicy"] = policy.clone();
+    }
+
+    params
 }
 
 /// Stops the running turn.
@@ -783,6 +934,47 @@ mod tests {
             ("never", "danger-full-access")
         );
         assert_eq!(approval_for(ApprovalPolicy::DontAsk).0, "never");
+    }
+
+    /// A control change rides the next turn, and the sandbox is the half with
+    /// care in it: nothing is sent until the stance moves, since a policy on
+    /// every turn would overwrite what `config.toml` made of the mode, and
+    /// going back sends the policy Codex resolved when the thread opened.
+    #[test]
+    fn a_control_change_rides_the_next_turn() {
+        let model = crate::models::find_model(&crate::models::ModelId::new("gpt-6.1-sol")).unwrap();
+        let mut settings = TurnSettings::new(&model, Some(Effort::High), ApprovalPolicy::Auto, false);
+        let opened = json!({"type": "workspaceWrite", "networkAccess": true, "writableRoots": []});
+        settings.opened_policy = Some(opened.clone());
+        let params = |s: &TurnSettings| turn_params("t", s, json!([]));
+
+        let first = params(&settings);
+        assert_eq!(first["model"], "gpt-6.1-sol");
+        assert_eq!(first["effort"], "high");
+        assert_eq!(first["serviceTier"], STANDARD_TIER);
+        assert!(first.get("sandboxPolicy").is_none());
+
+        // Manual shares Auto's sandbox, so only the approval policy moves.
+        settings.set_stance(ApprovalPolicy::Manual);
+        assert_eq!(params(&settings)["approvalPolicy"], "untrusted");
+        assert!(params(&settings).get("sandboxPolicy").is_none());
+
+        settings.set_stance(ApprovalPolicy::BypassPermissions);
+        settings.set_model(&crate::models::find_model(&crate::models::ModelId::new("gpt-6-luna")).unwrap());
+        settings.set_effort(Some(Effort::Low));
+        settings.set_fast(true);
+        let moved = params(&settings);
+        assert_eq!(moved["approvalPolicy"], "never");
+        assert_eq!(moved["sandboxPolicy"], json!({"type": "dangerFullAccess"}));
+        assert_eq!(moved["model"], "gpt-6-luna");
+        assert_eq!(moved["effort"], "low");
+        assert_eq!(moved["serviceTier"], FAST_TIER);
+
+        settings.set_stance(ApprovalPolicy::Auto);
+        assert_eq!(params(&settings)["sandboxPolicy"], opened);
+
+        settings.set_stance(ApprovalPolicy::Plan);
+        assert_eq!(params(&settings)["sandboxPolicy"], json!({"type": "readOnly"}));
     }
 
     /// The one field of `thread/start`'s answer everything after is keyed on.
@@ -1440,7 +1632,7 @@ mod tests {
             crate::models::find_model(&default).expect("the default Codex model should be listed");
         let settings = TurnSettings::new(&model, None, ApprovalPolicy::Auto, false);
 
-        let thread_id = start_thread(
+        let (thread_id, _) = start_thread(
             &client,
             &settings,
             std::env::temp_dir().to_str().unwrap(),
@@ -1478,7 +1670,7 @@ mod tests {
         let thread = Thread {
             client: client.clone(),
             id: thread_id,
-            settings,
+            settings: Arc::new(std::sync::Mutex::new(settings)),
             turn_id: Arc::new(Mutex::new(Some(
                 "00000000-0000-0000-0000-000000000000".to_string(),
             ))),

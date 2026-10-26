@@ -64,12 +64,12 @@ describe("rememberedModel", () => {
 
   it("defaults a harness nobody has picked in", () => {
     expect(rememberedModel({ codex: "gpt55" }, "claude_code")).toBe("opus");
-    expect(rememberedModel({}, "codex")).toBe("gpt-6-sol");
+    expect(rememberedModel({}, "codex")).toBe("gpt-6.1-sol");
   });
 
   /// A pick under one harness must not reach the other's default.
   it("does not let one harness's pick answer for the other", () => {
-    expect(rememberedModel({ claude_code: "haiku" }, "codex")).toBe("gpt-6-sol");
+    expect(rememberedModel({ claude_code: "haiku" }, "codex")).toBe("gpt-6.1-sol");
   });
 });
 

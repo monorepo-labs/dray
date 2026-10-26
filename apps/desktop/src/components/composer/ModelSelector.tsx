@@ -6,11 +6,12 @@ import { useAgentAvailability } from "@/hooks/useAgentAvailability";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import {
   byProvider,
-  defaultStars,
+  OFFERED_MODELS_KEY,
   seedKey,
   shortlist,
   STARRED_MODELS_KEY,
   starsFor,
+  starsToAdd,
   type StarsByHarness,
   STARS_SEEDED_KEY,
 } from "@/lib/starredModels";
@@ -286,21 +287,30 @@ export default function ModelSelector({
   // provider on fx) — once each, marked, so unstarring them all leaves the
   // menu empty as asked rather than putting ours back on the next visit.
   // Marked even where the list names none of them, since that is an answer too.
+  // After that, a top-level row is starred the first time it is offered, so a
+  // model published later reaches a shortlist seeded before it existed.
   const [seeded, setSeeded] = useLocalStorage<string[]>(STARS_SEEDED_KEY, []);
+  const [offered, setOffered] = useLocalStorage<Record<string, ModelId[]>>(
+    OFFERED_MODELS_KEY,
+    {},
+  );
   useEffect(() => {
     if (models.length === 0) return;
     const provider = models[0].provider;
     const key = seedKey(harness, provider);
-    if (seeded.includes(key)) return;
-    setSeeded((prev) => (prev.includes(key) ? prev : [...prev, key]));
-    // A reader who already starred something here predates the marker; their
-    // list is the answer and ours would arrive as rows nobody asked for.
-    if (models.some((m) => starred.includes(m.id))) return;
-    const seeds = defaultStars(harness, provider, models);
-    if (seeds.length) {
-      setStarred((prev) => [...prev, ...seeds.filter((id) => !prev.includes(id))]);
+    const was = offered[key];
+    const next = starsToAdd(harness, provider, models, starred, was, seeded.includes(key));
+    if (!seeded.includes(key)) {
+      setSeeded((prev) => (prev.includes(key) ? prev : [...prev, key]));
     }
-  }, [harness, models, seeded, setSeeded, setStarred]);
+    // The record only ever grows, so a length that moved is a record that did.
+    if (next.offered.length !== (was?.length ?? -1)) {
+      setOffered((prev) => ({ ...prev, [key]: next.offered }));
+    }
+    if (next.add.length) {
+      setStarred((prev) => [...prev, ...next.add.filter((id) => !prev.includes(id))]);
+    }
+  }, [harness, models, starred, offered, seeded, setSeeded, setOffered, setStarred]);
 
   // Shared with Shift+Tab, which cycles exactly what this draws — a chord
   // landing on a model the menu never offered is the bug the sharing prevents.

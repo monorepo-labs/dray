@@ -35,7 +35,8 @@ initialized →                                  (a notification, not a request)
 thread/start {cwd, model, approvalPolicy, sandbox, developerInstructions}
   ←  {thread: {id}}                            ← recorded on the index entry
   ↓
-turn/start {threadId, input, model, effort, approvalPolicy}
+turn/start {threadId, input, model, effort, approvalPolicy, serviceTier,
+            sandboxPolicy?}
   ←  {turn: {id}}                              ← the id Stop has to name
   ←  turn/started
   ←  item/started      {agentMessage}          ← a block opens
@@ -315,22 +316,38 @@ The name comes off `agentPath` (`/root/count_to_three`), which is the agent's
 own name and not a filesystem path — `/root` is the namespace they all share, so
 the last segment is the name.
 
-## What doesn't, yet
+## Fork and images
 
-Not wired: fork for Codex (it refuses before it copies anything, rather
-than forking into the parent's own conversation) and images in prompts.
+**A fork is `thread/fork`**, made on the fork's first send — the instruction
+`fork_from` carries until then, as for Claude Code and grok. It names the
+parent's `thread_id` and the fork's own `cwd`, and the new thread id is recorded
+before the prompt goes out. Measured on 0.164: the fork answers the parent's
+turns and remembers them, works while the parent is loaded in another
+app-server, and resumes in a fresh process. It carries the **parent's own**
+`developerInstructions` — the ones sent on the fork, or on a later resume, are
+not read — so a Dray parent's rules come across with it. Its model and effort
+are the config's, not the parent's, which is why the fork call restates them.
+
+**An image is a `localImage` input item** naming the archived copy under
+`~/.dray/attachments`, so Codex reads the file itself.
+
+## What doesn't, yet
 
 A card left on screen when its turn is interrupted stays there — Codex sends no
 "never mind" for an approval the way Claude's `control_cancel_request` does, so
 the buttons answer a turn that has gone. Harmless (the reply is ignored) but
 untidy.
 
-Model, effort and permission mode **do** change mid-session, by replacing the
-child rather than steering it. Codex takes model, effort and approval policy as
-`turn/start` overrides, so two of the three could apply in place — but a stance
-is two settings and `sandbox` has no turn-level form, so applying one in place
-would move the approval policy and leave the sandbox where it was. Respawning
-settles both at once; `thread/resume` carries the conversation across it.
+Model, effort, stance and fast mode change **on the next turn**, without
+replacing the child. Every one is a `turn/start` override that sticks to the
+turns after it — measured on 0.164, a turn after a `readOnly` one with no
+override still could not write. The sandbox goes as `sandboxPolicy`, an object
+(`{"type":"dangerFullAccess"}`) where the thread-level `sandbox` is a kebab-case
+mode, and it is sent **only once the stance moves**: the policy `thread/start`
+answers carries `writableRoots` and `networkAccess` out of `config.toml`, and a
+bare one restated every turn would overwrite them. Going back to the mode the
+thread opened under sends that answered policy. Mid-turn the controls stay
+locked, since a steered `turn/start` ignores them.
 
 Worktrees **do** work, by a different route. Claude gets a `-w` flag and makes
 its own tree; Codex has none, so Dray creates the tree first — resolving the

@@ -116,7 +116,7 @@ fn resolve(id: &ModelId, discovered: &[Model]) -> Option<Model> {
 /// table's default is a model this build knows and the *installed* Codex may
 /// not, and one it does not list is a create that fails at the spawn for a
 /// choice nobody made. So it is taken only where Codex answers for it, and the
-/// table's own top level stands in otherwise — GPT-6 Sol is the default, and a
+/// table's own top level stands in otherwise — GPT-6.1 Sol is the default, and a
 /// Codex not yet updated to list it lands on 6 Astra rather than on whatever
 /// [`fold`] draws first, which may be a model this build has never heard of. A probe that cannot run falls back to the table
 /// through [`list`], so the old answer is still the answer where there is
@@ -232,7 +232,9 @@ struct Row {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Rung {
-    reasoning_effort: String,
+    /// Untyped because a custom effort may arrive as a JSON number, and one
+    /// such row typed as a string would fail the whole page.
+    reasoning_effort: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -384,7 +386,7 @@ fn display_name(row: &Row) -> String {
 fn ladder(row: &Row) -> Vec<Effort> {
     row.supported_reasoning_efforts
         .iter()
-        .filter_map(|rung| Effort::from_arg(&rung.reasoning_effort))
+        .filter_map(|rung| Effort::from_arg(rung.reasoning_effort.as_str()?))
         .collect()
 }
 
@@ -429,6 +431,11 @@ mod tests {
         serde_json::from_str(include_str!("fixtures/model_list_gpt6.json")).expect("fixture json")
     }
 
+    /// Off `codex-cli 0.164.0`, the first to list GPT-6.1 Sol, as its default.
+    fn captured_0164() -> Value {
+        serde_json::from_str(include_str!("fixtures/model_list_0164.json")).expect("fixture json")
+    }
+
     fn cycled(models: &[Model]) -> Vec<&str> {
         models
             .iter()
@@ -456,14 +463,15 @@ mod tests {
         let models = read_rows(&captured());
 
         assert!(!models.iter().any(|m| m.arg == "gpt-6-sol"));
-        assert_eq!(cycled(&models), ["6 Astra", "5.6 Sol"]);
+        assert_eq!(cycled(&models), ["6 Astra"]);
     }
 
-    /// The default is GPT-6 Sol only where Codex lists it; an older one lands
+    /// The default is GPT-6.1 Sol only where Codex lists it; an older one lands
     /// on the table's next top-level row, never on a model it cannot run.
     #[test]
     fn the_default_is_a_model_the_installed_codex_lists() {
-        assert_eq!(pick_default(&read_rows(&captured_gpt6())).as_str(), "gpt-6-sol");
+        assert_eq!(pick_default(&read_rows(&captured_0164())).as_str(), "gpt-6.1-sol");
+        assert_eq!(pick_default(&read_rows(&captured_gpt6())).as_str(), "gpt6_astra");
         assert_eq!(pick_default(&read_rows(&captured())).as_str(), "gpt6_astra");
     }
 
@@ -515,11 +523,14 @@ mod tests {
     /// everything else starts off — including a generation the hand-written
     /// list had retired outright.
     #[test]
-    fn astra_and_the_two_sols_are_the_cycle() {
-        let models = read_rows(&captured_gpt6());
+    fn the_newest_sol_astra_and_6_sol_are_the_cycle() {
+        let models = read_rows(&captured_0164());
 
-        assert_eq!(cycled(&models), ["6 Astra", "6 Sol", "5.6 Sol"]);
+        assert_eq!(cycled(&models), ["6.1 Sol", "6 Astra", "6 Sol"]);
         assert!(models.iter().filter(|m| m.secondary).count() >= 2);
+
+        // A Codex from before 6.1 Sol draws the two the table still names.
+        assert_eq!(cycled(&read_rows(&captured_gpt6())), ["6 Astra", "6 Sol"]);
     }
 
     /// The wire's order is Codex's own recommendation, not the tier, so the
@@ -595,6 +606,22 @@ mod tests {
         let rows = json!({"data": [{
             "id": "a",
             "supportedReasoningEfforts": [{"reasoningEffort": "hyper"},
+                                          {"reasoningEffort": "high"}],
+        }]});
+
+        let models = read_rows(&rows);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].efforts, vec![Effort::High]);
+    }
+
+    /// A custom effort can arrive as a number. It costs that rung, never the
+    /// page — one row failing to parse used to drop the whole list.
+    #[test]
+    fn a_numeric_rung_is_dropped_and_the_page_survives() {
+        let rows = json!({"data": [{
+            "id": "a",
+            "supportedReasoningEfforts": [{"reasoningEffort": 7},
                                           {"reasoningEffort": "high"}],
         }]});
 

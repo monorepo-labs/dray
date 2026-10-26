@@ -344,13 +344,14 @@ mod capability_tests {
         }
     }
 
-    /// The two ACP harnesses take `session/set_config_option` and pi takes
-    /// `set_thinking_level`, verified live against each — so every other effort
+    /// The two ACP harnesses take `session/set_config_option`, pi takes
+    /// `set_thinking_level` and Codex the next `turn/start`'s `effort`, verified
+    /// live against each — so every other effort
     /// change replaces the child. Stated because `true` here silently drops the
     /// change on a harness whose wire cannot carry it.
     #[test]
     fn only_harnesses_with_an_effort_request_apply_it_in_place() {
-        const IN_PLACE: [Harness; 3] = [Harness::Fx, Harness::Grok, Harness::Pi];
+        const IN_PLACE: [Harness; 4] = [Harness::Codex, Harness::Fx, Harness::Grok, Harness::Pi];
 
         for harness in Harness::ALL {
             assert_eq!(
@@ -379,7 +380,7 @@ mod capability_tests {
     #[test]
     fn each_harness_reaches_fast_mode_its_own_way() {
         assert_eq!(Harness::ClaudeCode.caps().fast_mode, FastMode::InPlace);
-        assert_eq!(Harness::Codex.caps().fast_mode, FastMode::OnSpawn);
+        assert_eq!(Harness::Codex.caps().fast_mode, FastMode::InPlace);
         assert_eq!(Harness::Fx.caps().fast_mode, FastMode::AtCreation);
         assert_eq!(Harness::Pi.caps().fast_mode, FastMode::Unsupported);
         // grok's fast tier is a model id (`grok-4.7-build-fast`) rather than a
@@ -617,17 +618,9 @@ pub enum FastMode {
     Unsupported,
     /// Reaches a running child. Claude Code's `apply_flag_settings` carries
     /// `{"fastMode": <bool>}` both ways, verified against v2.1.270 — the reply
-    /// is `success` and the next `init`/`result` reports the new state.
+    /// is `success` and the next `init`/`result` reports the new state. Codex's
+    /// `serviceTier` rides the next `turn/start` and sticks to the thread.
     InPlace,
-    /// Rides the spawn, so changing it replaces the child.
-    ///
-    /// Codex's `serviceTier` does have a turn-level form — `turn/start` takes
-    /// it and it persists to later turns, exactly like `effort` — but
-    /// [`TurnSettings`](crate::harness::codex::TurnSettings) is fixed for the
-    /// life of the child by design, and every other Codex setting respawns for
-    /// the same reason. One more is cheaper than a second mutation path into a
-    /// struct that is cloned.
-    OnSpawn,
     /// Settled when the session is first created and unreachable after.
     ///
     /// fx alone. It reads `fast_mode` out of `~/.fx/settings.json` at
@@ -729,23 +722,19 @@ impl Harness {
                 forkable: true,
                 fork_needs_cli: true,
             },
-            // `turn/start` carries model, effort and approval policy on every
-            // turn, so this is not for want of a per-turn override. A stance is
-            // *two* settings and only one has a turn-level form: `sandbox` is
-            // thread-level, so applying a change in place would move the
-            // approval policy and leave the sandbox where it was — exactly the
-            // half-applied setting that makes a session freer than was asked
-            // for. Respawning settles both, and `thread/resume` carries the
-            // conversation across it.
+            // Every control rides the next `turn/start`, which sticks to the
+            // thread: model, effort, approval policy, `sandboxPolicy` and
+            // `serviceTier`, measured on 0.164. Forked by `thread/fork` on the
+            // fork's first spawn, the lazy route Claude Code's takes.
             Harness::Codex => Capabilities {
                 creates_own_worktree: false,
-                applies_model_in_place: false,
-                applies_effort_in_place: false,
-                applies_permission_in_place: false,
-                fast_mode: FastMode::OnSpawn,
+                applies_model_in_place: true,
+                applies_effort_in_place: true,
+                applies_permission_in_place: true,
+                fast_mode: FastMode::InPlace,
                 expands_at_mentions: false,
-                forkable: false,
-                fork_needs_cli: false,
+                forkable: true,
+                fork_needs_cli: true,
             },
             // pi has no worktree flag, and the three settings are ones it takes
             // at spawn and nowhere else, so changing any of them is a respawn.

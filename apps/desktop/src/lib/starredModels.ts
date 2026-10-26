@@ -1,4 +1,5 @@
 import { readLocalStorage } from "@/hooks/useLocalStorage";
+import { DEFAULT_MODEL_FOR } from "@/lib/model";
 import type { Harness, Model, ModelId } from "@/types/events";
 
 /// Where the reader's shortlist lives.
@@ -72,6 +73,51 @@ export function defaultStars(harness: Harness, provider: string, models: Model[]
   return models
     .filter((m) => needles.some((n) => m.id === n || m.id.endsWith(`/${n}`)))
     .map((m) => m.id);
+}
+
+/// Every row each seed key's list has ever shown, so a row that appears later
+/// can be told apart from one the reader saw and left unstarred.
+export const OFFERED_MODELS_KEY = "ade.offeredModels";
+
+/// What a list landing owes the shortlist: the stars to add, and the offered
+/// record to keep for next time.
+///
+/// Seeding once was right for the reader's choices and wrong for the vendor's:
+/// a model published after the seed never reached an already-seeded shortlist,
+/// so Codex's new default sat unstarred, missing from the picker and from ⇧⇥.
+/// Now a row the default seed would star is starred **the first time it is
+/// offered**, and only then — unstarring it again sticks.
+///
+/// The record starts with the build that writes it, so a key seeded before
+/// then has no history to compare with. That one landing stars the harness's
+/// default model alone: every other row on it may be one the reader turned
+/// down, where the default is the row this issue was about.
+export function starsToAdd(
+  harness: Harness,
+  provider: string,
+  models: Model[],
+  starred: ModelId[],
+  offered: ModelId[] | undefined,
+  seeded: boolean,
+): { add: ModelId[]; offered: ModelId[] } {
+  const seen = new Set(offered ?? []);
+  const record = [...(offered ?? []), ...models.map((m) => m.id).filter((id) => !seen.has(id))];
+
+  let add: ModelId[];
+  if (!seeded) {
+    // A reader who already starred something here predates the seed marker;
+    // their list is the answer and ours would arrive as rows nobody asked for.
+    add = models.some((m) => starred.includes(m.id))
+      ? []
+      : defaultStars(harness, provider, models);
+  } else if (!offered) {
+    const fallback = DEFAULT_MODEL_FOR[harness];
+    add = models.some((m) => m.id === fallback && !m.secondary) ? [fallback] : [];
+  } else {
+    add = defaultStars(harness, provider, models).filter((id) => !seen.has(id));
+  }
+
+  return { add: add.filter((id) => !starred.includes(id)), offered: record };
 }
 
 /// The models the composer's picker draws.
