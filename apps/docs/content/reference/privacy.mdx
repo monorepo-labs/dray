@@ -33,12 +33,12 @@ Then each event adds its own:
 | Event | When | Adds |
 |---|---|---|
 | `app_started` | Each launch | Nothing more. |
-| `active_day` | At most once a day: on launch, when Dray comes to the front, or when you send a message | Nothing more. Messages agents send each other do not count. |
+| `active_day` | At most once a day: on launch, when Dray comes to the front, when you send a message, or when you use Dray Island | Nothing more. Messages agents send each other do not count. |
 | `session_started` | You create a session | Agent, model, effort, permission mode, whether fast mode is on, whether it uses a worktree, whether another session started it. |
 | `feature_used` | A feature works | Which feature, from a fixed list (below). |
 | `error` | Something breaks | Where it broke, never what it said (below). |
 
-`feature_used` names one of: `dictation` (with the dictation model's id), `fork`, `pr_merged`, `linear_connected`, `space_created`, `worktree_deleted`, `settle`, `unsettle`, `pin`, `unpin`, `set_aside`, `unset_aside`, `handoff_commit`, `handoff_pr`, `handoff_runServer`, `remote_access`, `share`, `server_added` and `server_connected`. The last three add how: `app` or `cli` for a share, `ssh` or `address` for a server. Never the port, the address or the server's name. `server_connected` is sent at most once a day per kind.
+`feature_used` names one of: `dictation` (with the dictation model's id, and where you dictated: `app`, `island` or `phone`), `island_open` (you opened Dray Island), `island_send` (you sent a message from it), `island_card` (you answered a permission or question card from it), `fork`, `pr_merged`, `linear_connected`, `space_created`, `worktree_deleted`, `settle`, `unsettle`, `pin`, `unpin`, `set_aside`, `unset_aside`, `handoff_commit`, `handoff_pr`, `handoff_runServer`, `remote_access`, `share`, `server_added` and `server_connected`. The last three add how: `app` or `cli` for a share, `ssh` or `address` for a server. Never the port, the address or the server's name. `server_connected` is sent at most once a day per kind.
 
 ## What is never sent
 

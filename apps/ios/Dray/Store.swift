@@ -64,7 +64,7 @@ final class Store {
     /// Keychain — the Island's This Mac, whose port and token are files.
     init(local s: Server, read: @escaping () -> (url: String, token: String)?) {
         servers = [s]
-        start(s, read: read)
+        start(s, read: read, client: "island")
         watchNetwork()
     }
 
@@ -168,12 +168,13 @@ final class Store {
         UserDefaults.standard.set(try? JSONEncoder().encode(servers), forKey: "servers")
     }
 
-    private func start(_ s: Server, read: (() -> (url: String, token: String)?)? = nil) {
+    private func start(_ s: Server, read: (() -> (url: String, token: String)?)? = nil, client: String? = nil) {
         // No token saved connects anyway: the server refuses it, which draws as
         // a refused token, and that state is where a new one is pasted.
         let token = read?()?.token ?? Keychain.get(s.id.uuidString) ?? ""
         let c = Connection(serverId: s.id, url: s.url, token: token)
         c.refresh = read
+        c.client = client
         c.onState = { [weak self] state in
             guard let self else { return }
             serverState[s.id] = state
