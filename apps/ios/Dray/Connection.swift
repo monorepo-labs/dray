@@ -58,6 +58,8 @@ final class Connection {
     var refresh: (() -> (url: String, token: String)?)?
     /// Whether the server can transcribe a phone's dictation; its welcome frame says.
     private(set) var dictation = false
+    /// Named in the hello; `"island"` is what the server counts the Island's use by.
+    var client: String?
     /// Every event frame, whole, with its name. Decoded by the store, which knows the type.
     var onEvent: (String, Data) -> Void = { _, _ in }
     var onState: (State) -> Void = { _ in }
@@ -132,7 +134,9 @@ final class Connection {
 
     private func run(_ t: URLSessionWebSocketTask, _ gen: Int) async {
         do {
-            let hello = try JSONEncoder().encode(["v": JSON(serveProtocol), "token": .string(token)])
+            var fields: [String: JSON] = ["v": JSON(serveProtocol), "token": .string(token)]
+            if let client { fields["client"] = .string(client) }
+            let hello = try JSONEncoder().encode(fields)
             try await t.send(.string(String(decoding: hello, as: UTF8.self)))
             let welcome = try await receive(t)
             if let err = try JSONDecoder().decode(Head.self, from: welcome).err {

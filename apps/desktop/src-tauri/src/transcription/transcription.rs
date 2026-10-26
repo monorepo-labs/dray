@@ -455,6 +455,8 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
         return Some(started.and_then(json));
     }
     let owns = HOST_OWNS.load(SeqCst);
+    // Set by the server off the connection that asked, never by the caller.
+    let via = if args["via"] == "island" { "island" } else { "app" };
     Some(match cmd {
         // Ahead of the ownership check: the window may have started since the
         // sleep, and the Island's interrupted words are still the Island's.
@@ -463,11 +465,11 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
             None if !owns => Err("Dictation moved to Dray's window.".into()),
             None => {
                 HOST_OWNS.store(false, SeqCst);
-                finish_recording(&state, true).await.and_then(json)
+                finish_recording(&state, true, via).await.and_then(json)
             }
         },
         "cut_transcription" if !owns => Err("Dictation moved to Dray's window.".into()),
-        "cut_transcription" => cut_transcription(&state).await.and_then(json),
+        "cut_transcription" => cut_transcription(&state, via).await.and_then(json),
         "transcription_level" if !owns => json(0.0),
         "transcription_level" => transcription_level(state).await.and_then(json),
         "cancel_transcription" if !owns => json(()),
@@ -476,7 +478,7 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
             cancel_transcription(state).await.and_then(json)
         }
         _ => match args["path"].as_str() {
-            Some(path) => retry_transcription(state, path.to_string()).await.and_then(json),
+            Some(path) => retry(&state, path.to_string(), via).await.and_then(json),
             None => Err("retry_transcription wants a path".into()),
         },
     })
@@ -489,12 +491,14 @@ pub async fn answer_host(cmd: &str, args: &serde_json::Value) -> Option<Result<s
 /// one thing standing between a failed run and a lost recording.
 ///
 /// `heard` is what the live decode made of the same audio, used where the
-/// model that heard it is still the one selected.
+/// model that heard it is still the one selected. `via` is who dictated —
+/// `app`, `island` or `phone` — for the report alone.
 async fn transcribe_audio(
     state: &TranscriptionState,
     audio: Vec<f32>,
     saved: Option<PathBuf>,
     heard: Option<Heard>,
+    via: &'static str,
 ) -> TranscribeOutcome {
     let kept = || saved.as_ref().map(|p| p.to_string_lossy().into_owned());
 
@@ -533,7 +537,7 @@ async fn transcribe_audio(
                 // carrying.
                 crate::analytics::track(
                     "feature_used",
-                    serde_json::json!({ "feature": "dictation", "model": model.id }),
+                    serde_json::json!({ "feature": "dictation", "model": model.id, "via": via }),
                 );
                 TranscribeOutcome::Text(text)
             }
@@ -553,12 +557,16 @@ async fn transcribe_audio(
 pub async fn stop_transcription(
     state: State<'_, TranscriptionState>,
 ) -> Result<TranscribeOutcome, String> {
-    finish_recording(&state, false).await
+    finish_recording(&state, false, "app").await
 }
 
 /// The stop, for the window or for the Island where `host`. A recording the
 /// Mac's sleep closed answers first: the client is stopping what it started.
-async fn finish_recording(state: &TranscriptionState, host: bool) -> Result<TranscribeOutcome, String> {
+async fn finish_recording(
+    state: &TranscriptionState,
+    host: bool,
+    via: &'static str,
+) -> Result<TranscribeOutcome, String> {
     if let Some(outcome) = take_interrupted(state, host).await {
         return Ok(outcome);
     }
@@ -610,7 +618,7 @@ async fn finish_recording(state: &TranscriptionState, host: bool) -> Result<Tran
         None => None,
     };
 
-    Ok(transcribe_audio(&state, audio, saved, heard).await)
+    Ok(transcribe_audio(&state, audio, saved, heard, via).await)
 }
 
 /// Transcribes what has been said so far and leaves the microphone open: the
@@ -618,7 +626,7 @@ async fn finish_recording(state: &TranscriptionState, host: bool) -> Result<Tran
 /// and the words after. A stop and a start would lose what was said between
 /// the two. Nothing recording, or only silence, answers `Empty` — a cut with no
 /// words before it is ordinary, not a microphone fault.
-async fn cut_transcription(state: &TranscriptionState) -> Result<TranscribeOutcome, String> {
+async fn cut_transcription(state: &TranscriptionState, via: &'static str) -> Result<TranscribeOutcome, String> {
     let (captured, pending) = {
         let recording = state.recording.lock().await;
         let Some(recording) = recording.as_ref() else {
@@ -647,7 +655,7 @@ async fn cut_transcription(state: &TranscriptionState) -> Result<TranscribeOutco
         None => None,
     };
 
-    Ok(transcribe_audio(state, audio, saved, heard).await)
+    Ok(transcribe_audio(state, audio, saved, heard, via).await)
 }
 
 /// Runs a kept recording through the model again.
@@ -661,10 +669,15 @@ pub async fn retry_transcription(
     state: State<'_, TranscriptionState>,
     path: String,
 ) -> Result<TranscribeOutcome, String> {
+    retry(&state, path, "app").await
+}
+
+/// [`retry_transcription`] for the window or, through the server, the island.
+async fn retry(state: &TranscriptionState, path: String, via: &'static str) -> Result<TranscribeOutcome, String> {
     let path = PathBuf::from(path);
     let audio = recordings::read(&path).await.map_err(|e| format!("{e:#}"))?;
 
-    Ok(transcribe_audio(&state, audio, Some(path), None).await)
+    Ok(transcribe_audio(state, audio, Some(path), None, via).await)
 }
 
 /// Transcribes a WAV another machine uploaded through `/upload` — a phone's
@@ -680,7 +693,7 @@ pub async fn transcribe_upload(path: String) -> Result<TranscribeOutcome, String
     let path = PathBuf::from(path);
     let audio = recordings::read(&path).await.map_err(|e| format!("{e:#}"))?;
 
-    Ok(transcribe_audio(&SERVER, audio, Some(path), None).await)
+    Ok(transcribe_audio(&SERVER, audio, Some(path), None, "phone").await)
 }
 
 /// The loudest sample since this was last asked, 0.0–1.0.
