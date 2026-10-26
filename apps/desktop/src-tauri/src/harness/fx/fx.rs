@@ -1579,6 +1579,32 @@ mod tests {
         assert!(rx.try_recv().is_err(), "already on");
     }
 
+    /// A model switch whose reply says fast is off, or carries no `fast`
+    /// option, moves the session's reading off — which is what
+    /// `Session::set_model` copies back, so the fast check after a model
+    /// switch compares against the child rather than the stale pick.
+    #[test]
+    fn a_model_reply_that_drops_fast_mode_is_what_the_session_reads() {
+        let (session, _rx) = session_on(None);
+        let app = Sink::new(|_, _| {});
+        *session.fast.lock().unwrap() = Some(true);
+
+        let reply = |fast: Option<&str>| {
+            let mut options = vec![json!({"id": "model", "currentValue": "m", "options": []})];
+            if let Some(value) = fast {
+                options.push(json!({"id": "fast", "currentValue": value, "options": []}));
+            }
+            parser::ConfigOptions::of(&json!({"configOptions": options}))
+        };
+
+        note_config(&session, &reply(Some("false")), None, &app);
+        assert!(!session.current_fast());
+
+        *session.fast.lock().unwrap() = Some(true);
+        note_config(&session, &reply(None), None, &app);
+        assert!(!session.current_fast(), "a model with no fast lane");
+    }
+
     /// `set_mode` rewrites the reader's global `permission_mode`, so the open
     /// reply's mode is what lets a spawn skip it.
     #[test]

@@ -2201,6 +2201,9 @@ impl Session {
             if let Some(landed) = crate::harness::fx::landed_model(session) {
                 self.model = landed;
             }
+            // fx turns fast mode off on a model without it, so the fast check
+            // after this must compare against what the child is on.
+            self.fast = session.current_fast();
             outcome?;
             self.model = model.id.clone();
             return Ok(());
