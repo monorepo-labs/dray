@@ -29,9 +29,9 @@ and one of its two streaming formats is literally the Messages API
 `stream_event`). Install: `curl -fsSL https://x.ai/cli/install.sh | sh`.
 
 Models today: `grok-4.7`, `grok-4.7-build-fast`, `grok-4.6`, `grok-4.5`. All
-500k context. Ladder `low medium high xhigh` on 4.7/4.6, `low medium high` on
-4.5; default `high` everywhere. No image input over ACP
-(`promptCapabilities.image: false`). Auth is OIDC at `auth.x.ai` (browser or
+500k context at 1.0.40, 256k from 1.0.70. Ladder `low medium high xhigh` on 4.7/4.6, `low medium high` on
+4.5; default `high` everywhere. No image input over ACP at 1.0.40
+(`promptCapabilities.image: false`); 1.0.70 takes images — see the last section. Auth is OIDC at `auth.x.ai` (browser or
 `--device-auth`) or `XAI_API_KEY`; a `grok` subscription session token wins
 over the key.
 
@@ -172,7 +172,7 @@ consent granted by the reader in the browser mid-probe.
 - **Diffs off `tool_call_update.content[type=diff]`**, falling back to `rawInput`'s Claude-named pair. `write` → `ToolType::FileWrite {file_path, content}`, `search_replace` → `FileEdit {file_path, old_string, new_string}`, `run_terminal_command` → `Bash {command, description}` with `exit_code`/`duration` from `rawOutput`. `read_file` → `FileRead`. `_meta["x.ai/tool"].name` is the key, never `title`, which is a display string that changes between the call and its first update.
 - **Fork is one eager call and can ship in v1 if wanted.** `_x.ai/session/fork {sourceSessionId, sourceCwd, newCwd, newSessionId?, newModelId?}` — three required strings, Dray's own UUID honoured as `newSessionId` — answers `{newSessionId, parentSessionId, chatMessagesCopied, updatesCopied, planStateCopied, newCwd}` and the copy is made **inside the call** (pi's shape, not Claude Code's lazy `fork_from`): a fresh process `session/load`ed on the fork recalled the parent's turn. No worktree flag on it — `worktree`, `useWorktree`, `sessionKind` are swallowed with no error — so a fork-in-worktree is Dray's tree plus this call with `newCwd` pointing at it. Needs a live or throwaway child to make the call. `forkable: true, fork_needs_cli: false`, or defer; the shape is settled either way. **Shipped as `fork_needs_cli: true`, not `false`** — the child the first send spawns is a child to make the call on, so the eager request rides Claude Code's lazy instruction and no fork path has to arrange one of its own. Measured since: the call answers in 0.07s on a child with no session open, and `session/resume` after it replays nothing where `session/load` replays the whole copied conversation. See CLAUDE.md, _Forking a session_.
 - **Worktrees are Dray's** (`creates_own_worktree: false`), the Codex/pi route. `grok -w` and `x.ai/git/worktree/*` exist but the TUI's `-w` defaults to the checked-out HEAD via Grove copies under `~/.grok/worktrees`, a different tree layout to Dray's.
-- **Images: none** (`image: false`). `accepts_images: false` on every row.
+- **Images: none** (`image: false`). `accepts_images: false` on every row. *Superseded by 1.0.70 — see below.*
 - **Titles: the wire's, free.** Measured 0.22–0.24s from last token to the `session/prompt` reply, with `session_info_update {title}` landing out of band mid-turn — fx's stall is absent. So `session_info_update` → `session_title` and `title.rs` needs no grok arm. Grok regenerates the title "at a couple of early turns and then freezes it", so later updates are ordinary.
 - **Accounts row**: no `grok auth status`, but `initialize` answers it: `authMethods` holding `cached_token` means signed in, its absence means `session/new` will refuse (`-32000 Authentication required`, `data: "no auth method id provided"`, nothing on stderr). Identity comes from `~/.grok/auth.json` (0600, ours): one key per issuer holding `email`, `first_name`, `auth_mode` (`oidc`), `expires_at`, `team_id`. An absent file with `XAI_API_KEY` set is the API-key state; absent both is signed out. Sign-in commands: `grok login` (browser), `grok login --device-auth`; sign-out `grok logout`. **Never call `authenticate {methodId: "grok.com"}` as a probe** — on a machine already signed in it minted a fresh credential with no browser and no prompt, into whatever `GROK_HOME` the child had; `GROK_HOME` isolates sessions and config, not auth.
 - **Analytics `session_started` harness tag**: `grok`.
@@ -298,3 +298,40 @@ Modes, run here after the reader pointed out the TUI has four
   read as revise, so the card is two buttons, and abandon is the reader's
   next prompt. A write asked for inside plan mode is held until approval,
   then made; the `made.txt` probe ran end to end on the approve reply.
+
+## Re-measured against 1.0.70
+
+Run 2026-10-26 against `grok 1.0.70 (f50904eaee6c) [stable]`, the first grok
+session since 2026-09-25. Probes and logs under `/tmp/grok-678/`.
+
+- **Images.** `promptCapabilities.image: true`. A `session/prompt` carrying
+  `{type: image, mimeType, data}` beside the text was read natively: blue
+  background, "ZEBRA 47", no tool call. `_x.ai/interject` takes them as
+  `content: [image blocks]` beside `text`; an `images` field is swallowed and
+  the model goes looking on disk instead. grok copies each image into
+  `<session>/assets/`.
+- **Context.** `totalContextTokens: 256000` on all four models, plus
+  `contextWindows: [256000, 500000]`. `session/new` offers only `model` and
+  `reasoning_effort` as config options, so 500k is not reachable over ACP.
+  `currentModelId` with no `--model` is now `grok-4.6`.
+- **Stop.** `_x.ai/task/kill {sessionId, taskId}` answers
+  `{result: {taskId, outcome: killed | already_exited | not_found}}`; the
+  process is gone, `background_tasks` republishes the task with
+  `status: failed`, `_x.ai/task_completed` follows, and the model is woken for
+  a `task-completed-…` turn. `_x.ai/subagent/cancel {subagentId}` answers
+  `{result: {subagentId, cancelled, outcome: {kind: cancelled | already_finished | not_found}}}`;
+  the child's turn ends `cancelled`, `subagent_finished` says
+  `status: cancelled`, the spawning call fails "Subagent was cancelled", and
+  the parent's turn carries on.
+- **Background tasks keep finished rows.** `background_tasks` lists a task
+  after it ends, with `status` one of `running completed failed`.
+- **Still true:** config values are bare strings (`{value: …}` refused, `xhigh`
+  on 4.5 refused); `session/set_mode` answers `{}` and a shell command still
+  asks; the stance rides `session/resume` (`yoloMode` resumed asks nothing, an
+  empty `_meta` asks again); `_x.ai/session/fork` takes the four fields and
+  honours `newSessionId`; `rawOutput` is snake case; `_meta.sessionId` is
+  honoured; `_x.ai/toggle_plan_mode` is still an unknown method.
+- **Log noise.** `{"id":"skills-reload","result":…}` arrives unasked whenever a
+  skill directory changes — a response under a string id, now `Foreign` in
+  the shared demux. `_x.ai/task_completed` and `_x.ai/session/interjection`
+  are quiet; `last_turn_summary` is a named update drawn as nothing.

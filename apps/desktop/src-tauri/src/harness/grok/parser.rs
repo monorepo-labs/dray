@@ -150,6 +150,8 @@ pub enum GrokUpdate {
     PendingInteraction,
     InteractionResolved,
     TaskBackgrounded,
+    /// A one-line recap grok writes after each turn, for its own session list.
+    LastTurnSummary,
     ConfigOptionUpdate,
     Plan,
     #[serde(other)]
@@ -223,6 +225,10 @@ pub struct GrokTask {
     pub description: Option<String>,
     #[serde(default)]
     pub kind: Option<String>,
+    /// `running`, `completed` or `failed` — grok's `BackgroundTaskStatus`.
+    /// Absent before 1.0.70, when a finished task simply left the set.
+    #[serde(default)]
+    pub status: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -422,6 +428,12 @@ fn is_quiet(method: &str) -> bool {
         "_x.ai/settings/update",
         "_x.ai/announcements/update",
         "_x.ai/task_backgrounded",
+        // A task's end, which the `background_tasks` republish beside it
+        // already says with a status.
+        "_x.ai/task_completed",
+        // The echo of an `_x.ai/interject` Dray sent; the bubble is already
+        // drawn from the reader's own send.
+        "_x.ai/session/interjection",
         // Both spellings: grok punctuates its MCP methods two ways, and
         // `_x.ai/mcp_initialized` — a tool count and an elapsed time, once per
         // session — landed in the failure log for want of the underscore.

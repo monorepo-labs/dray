@@ -1061,7 +1061,7 @@ async fn read_stdout(
                     record_failure(Fx, &handles.session_id, "stray_response", &detail, &line).await;
                     continue;
                 }
-                Incoming::Response { .. } => continue,
+                Incoming::Response { .. } | Incoming::Foreign => continue,
 
                 Incoming::Malformed => {
                     record_failure(Fx, &handles.session_id, "parse", "not a JSON-RPC message", &line)

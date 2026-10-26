@@ -71,6 +71,10 @@ pub enum Incoming {
     /// An answer to something we sent. Already routed to its waiter; carried
     /// here only so the caller can log a stray one.
     Response { id: i64, matched: bool },
+    /// An answer under an id that is not an integer, so to nothing we sent —
+    /// the counter mints integers alone. grok sends `{"id":"skills-reload",
+    /// "result":…}` whenever a skill directory changes, hundreds a session.
+    Foreign,
     /// Not JSON, or JSON in none of the three shapes.
     Malformed,
 }
@@ -214,6 +218,9 @@ impl RpcClient {
                 let matched = self.pending.settle(&id, outcome);
                 Incoming::Response { id, matched }
             }
+            (None, None) if value.get("result").is_some() || value.get("error").is_some() => {
+                Incoming::Foreign
+            }
             (None, None) => Incoming::Malformed,
         }
     }
@@ -301,6 +308,15 @@ mod tests {
         assert!(matches!(
             client.accept("not json").await,
             Incoming::Malformed
+        ));
+
+        // Captured off grok 1.0.70, which answers a request of its own making
+        // on our pipe. Nothing of ours to settle and nothing malformed about it.
+        assert!(matches!(
+            client
+                .accept(r#"{"jsonrpc":"2.0","id":"skills-reload","result":{"result":{"reloaded":1}}}"#)
+                .await,
+            Incoming::Foreign
         ));
     }
 

@@ -1953,10 +1953,14 @@ impl Transport {
     /// Stated once because the queue path and the ordinary send path both need
     /// it, and a harness added to one and not the other reads as correct in
     /// both — the same trap `title_command`'s one match exists to close.
-    pub async fn open_turn(&self, text: &str) -> Option<Result<()>> {
+    ///
+    /// fx drops `images`: its Codex provider answered `refused` to one on capture.
+    pub async fn open_turn(&self, text: &str, images: &[attachments::PreparedImage]) -> Option<Result<()>> {
         match self {
             Transport::Fx(session) => Some(crate::harness::fx::start_turn(session, text).await),
-            Transport::Grok(session) => Some(crate::harness::grok::start_turn(session, text).await),
+            Transport::Grok(session) => {
+                Some(crate::harness::grok::start_turn(session, text, images).await)
+            }
             _ => None,
         }
     }
@@ -2613,6 +2617,10 @@ impl Session {
     /// one would mean waking the model for a turn to announce something the
     /// harness deliberately keeps quiet.
     pub async fn stop_task(&mut self, task_id: &str) -> Result<()> {
+        if let Transport::Grok(session) = &self.stdin {
+            return crate::harness::grok::stop_task(session, task_id).await;
+        }
+
         write_line(
             self.stdin.lines()?,
             &ControlLine::new(ControlRequest::StopTask { task_id }),
@@ -3065,13 +3073,14 @@ async fn deliver_prompt(
     // grok takes a prompt into the running turn through a method of its own;
     // a second `session/prompt` would take over the id the turn settles on.
     if let (Transport::Grok(session), crate::harness::pi::Delivery::Steer) = (transport, delivery) {
-        crate::harness::grok::interject(session, &text).await.context(Undelivered)?;
+        crate::harness::grok::interject(session, &text, &prepared.images)
+            .await
+            .context(Undelivered)?;
         return Ok((text, true));
     }
-    // fx takes a prompt as a request that blocks for the turn, so the write
-    // is the send and the reader settles the answer. Images not wired: the
-    // Codex provider answered `refused` to one on capture.
-    if let Some(sent) = transport.open_turn(&text).await {
+    // fx and grok take a prompt as a request that blocks for the turn, so the
+    // write is the send and the reader settles the answer.
+    if let Some(sent) = transport.open_turn(&text, &prepared.images).await {
         sent?;
         return Ok((text, true));
     }
@@ -3687,7 +3696,7 @@ async fn flush_one_per_turn(
         // so the sentence saying why is the only thing still owing.
         if let (false, Some(sent)) = (
             texts.is_empty(),
-            transport.open_turn(&texts.join("\n\n")).await,
+            transport.open_turn(&texts.join("\n\n"), &[]).await,
         ) {
             match sent {
                 Ok(()) => return,
