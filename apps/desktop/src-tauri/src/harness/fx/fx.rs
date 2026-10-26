@@ -129,6 +129,10 @@ pub struct FxSession {
     /// comparing anything against it — or a later pick matching the stale
     /// record would be skipped as no change.
     applied: Arc<std::sync::Mutex<Option<AppliedControls>>>,
+    /// Whether this fx predates 0.0.14 and still names its modes `code` and
+    /// `ask` — read off the open reply's `modes`, since each build refuses the
+    /// other's names and a refused stance at spawn kills the child.
+    legacy_modes: bool,
 }
 
 /// What a mid-turn send asked for; `None` where it named no model or level.
@@ -331,7 +335,7 @@ pub async fn init(
         }
     });
 
-    let (fx_id, config) = match open_session(&client, session_id, session_cwd, is_new_session).await
+    let (fx_id, answer) = match open_session(&client, session_id, session_cwd, is_new_session).await
     {
         Ok(opened) => opened,
         Err(error) => {
@@ -341,6 +345,7 @@ pub async fn init(
             return Err(error);
         }
     };
+    let config = parser::ConfigOptions::of(&answer);
 
     let session = FxSession {
         client,
@@ -352,6 +357,7 @@ pub async fn init(
         preamble: Arc::new(AtomicBool::new(owes_preamble(is_new_session, seq_start))),
         deferred: Arc::default(),
         applied: Arc::default(),
+        legacy_modes: offers_code_mode(&answer),
     };
     note_config(&session, &config, None, app);
 
@@ -618,14 +624,14 @@ fn announce_ladder(model_arg: &str, reading: Option<models::LadderReading>, app:
 }
 
 /// `initialize`, then `session/new` or `session/resume`. Answers fx's own id
-/// and the settings it opened with — both replies carry `configOptions`,
-/// captured, which is the only statement of what the active model takes.
+/// and the reply it opened with — both carry `configOptions`, captured, which
+/// is the only statement of what the active model takes, and `modes`.
 async fn open_session(
     client: &RpcClient,
     session_id: &str,
     session_cwd: &str,
     is_new_session: bool,
-) -> Result<(String, parser::ConfigOptions)> {
+) -> Result<(String, Value)> {
     client
         .request(
             "initialize",
@@ -658,7 +664,7 @@ async fn open_session(
         // Before the first prompt, so a child dying mid-turn still leaves a
         // session to resume rather than one that silently starts over.
         store::set_session_thread_id(session_id, &id).await?;
-        return Ok((id, parser::ConfigOptions::of(&answer)));
+        return Ok((id, answer));
     }
 
     let recorded = store::get_session_index_item(session_id)
@@ -673,7 +679,14 @@ async fn open_session(
         mcp_servers,
     )
     .await?;
-    Ok((recorded, parser::ConfigOptions::of(&answer)))
+    Ok((recorded, answer))
+}
+
+/// Whether an open reply lists the pre-0.0.14 `code` mode.
+fn offers_code_mode(answer: &Value) -> bool {
+    answer["modes"]["availableModes"]
+        .as_array()
+        .is_some_and(|modes| modes.iter().any(|mode| mode["id"] == "code"))
 }
 
 /// `session/new` or `session/resume` with the MCP list, shedding servers fx
@@ -843,9 +856,14 @@ async fn set_config(session: &FxSession, config_id: &str, value: &str) -> Result
 /// had before 0.0.14. `dontAsk` lands on `auto` and `plan` on `ask`, the
 /// nearest fx has, and the frontend's `stanceFor` records that rather than the
 /// stance that was asked for.
-pub fn mode_for(mode: ApprovalPolicy) -> &'static str {
+///
+/// An older fx (`legacy`) offers `ask` and `code` alone, so everything wider
+/// than `ask` lands on `code`. A bypass there runs as `code` while the index
+/// records `bypassPermissions` — the cost of not refusing to open at all.
+pub fn mode_for(mode: ApprovalPolicy, legacy: bool) -> &'static str {
     match mode {
         ApprovalPolicy::Plan | ApprovalPolicy::Manual => "ask",
+        _ if legacy => "code",
         ApprovalPolicy::Auto | ApprovalPolicy::DontAsk => "auto",
         ApprovalPolicy::BypassPermissions => "full-access",
     }
@@ -857,7 +875,7 @@ pub async fn set_mode(session: &FxSession, mode: ApprovalPolicy) -> Result<()> {
         .client
         .request(
             "session/set_mode",
-            json!({"sessionId": session.id, "modeId": mode_for(mode)}),
+            json!({"sessionId": session.id, "modeId": mode_for(mode, session.legacy_modes)}),
         )
         .await?;
     Ok(())
@@ -1261,11 +1279,34 @@ mod tests {
     /// is refused at spawn, which kills the child, so the session never opens.
     #[test]
     fn every_stance_lands_on_a_mode_fx_has() {
-        assert_eq!(mode_for(ApprovalPolicy::Manual), "ask");
-        assert_eq!(mode_for(ApprovalPolicy::Plan), "ask");
-        assert_eq!(mode_for(ApprovalPolicy::Auto), "auto");
-        assert_eq!(mode_for(ApprovalPolicy::DontAsk), "auto");
-        assert_eq!(mode_for(ApprovalPolicy::BypassPermissions), "full-access");
+        assert_eq!(mode_for(ApprovalPolicy::Manual, false), "ask");
+        assert_eq!(mode_for(ApprovalPolicy::Plan, false), "ask");
+        assert_eq!(mode_for(ApprovalPolicy::Auto, false), "auto");
+        assert_eq!(mode_for(ApprovalPolicy::DontAsk, false), "auto");
+        assert_eq!(mode_for(ApprovalPolicy::BypassPermissions, false), "full-access");
+        for mode in [ApprovalPolicy::Auto, ApprovalPolicy::DontAsk, ApprovalPolicy::BypassPermissions] {
+            assert_eq!(mode_for(mode, true), "code");
+        }
+        assert_eq!(mode_for(ApprovalPolicy::Manual, true), "ask");
+    }
+
+    /// An older fx is told apart by the open reply alone: the captured 0.0.9
+    /// `session/new` lists `code`, and 0.0.14's lists `auto` and `full-access`.
+    #[test]
+    fn an_older_fx_is_read_off_its_modes() {
+        let old = include_str!("fixtures/cancel.jsonl")
+            .lines()
+            .find(|line| line.contains("availableModes"))
+            .and_then(|line| line.strip_prefix("<< "))
+            .expect("cancel.jsonl carries a session/new reply");
+        let old: Value = serde_json::from_str(old).unwrap();
+        assert!(offers_code_mode(&old["result"]));
+
+        let current = json!({"modes": {"currentModeId": "auto", "availableModes": [
+            {"id": "auto"}, {"id": "ask"}, {"id": "full-access"},
+        ]}});
+        assert!(!offers_code_mode(&current));
+        assert!(!offers_code_mode(&json!({})));
     }
 
     /// The rules go **after** the reader's text, which is what keeps fx's own
@@ -1395,6 +1436,7 @@ mod tests {
                 preamble: Arc::new(AtomicBool::new(false)),
                 deferred: Arc::default(),
                 applied: Arc::default(),
+                legacy_modes: false,
                     },
             rx,
         )
