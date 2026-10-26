@@ -1078,6 +1078,12 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
         }
     }
     let counts = server != LOCAL && cmd == "send_msg";
+    // The server skips both for this app, which reports them instead. Only
+    // the webview reaches this command, so a send here is somebody pressing it.
+    let created = (counts && args["isNewSession"] == true).then(|| args["sessionId"].as_str().map(str::to_string)).flatten();
+    if counts {
+        crate::analytics::track_active_day();
+    }
     let call = NEXT_CALL.fetch_add(1, Ordering::Relaxed);
     let (reply, answer) = oneshot::channel();
     {
@@ -1099,8 +1105,16 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
         .unwrap_or_else(|_| Err(json!("the connection closed before the server answered")));
     // A created session answers with its snapshot, `null` otherwise. One the
     // server wrote in a shape this build cannot read goes uncounted.
-    if counts {
-        let item = answer.as_ref().ok().and_then(|ok| store::SessionIndexItem::deserialize(&ok["snapshot"]).ok());
+    if let Some(id) = created {
+        let item = match &answer {
+            Ok(ok) => store::SessionIndexItem::deserialize(&ok["snapshot"]).ok(),
+            // The row is written before the spawn, so a create failing after
+            // it still started a session — the rule the local count follows.
+            Err(_) => Box::pin(server_invoke(server.clone(), "session_index_item".into(), json!({ "sessionId": id })))
+                .await
+                .ok()
+                .and_then(|row| store::SessionIndexItem::deserialize(&row).ok()),
+        };
         if let Some(item) = item {
             let os = conns().iter().find(|c| c.saved.id == server).and_then(|c| c.met.as_ref()?.os.clone());
             crate::analytics::remote_session_started(&item, os.as_deref());
