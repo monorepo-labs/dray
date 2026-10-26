@@ -47,8 +47,9 @@ extension NSWindow {
     /// behavior and setting it back rejoins every Space, but only once the cleared
     /// one has reached WindowServer while the window is ordered in: done in one
     /// turn, AppKit coalesces the pair into nothing. Call after ordering front.
+    /// An empty behavior is a repair still pending, and saving it would restore nothing.
     func rejoinAllSpacesIfLost() {
-        guard isVisible, !isOnActiveSpace else { return }
+        guard isVisible, !isOnActiveSpace, !collectionBehavior.isEmpty else { return }
         let behavior = collectionBehavior
         collectionBehavior = []
         DispatchQueue.main.async { self.collectionBehavior = behavior }
