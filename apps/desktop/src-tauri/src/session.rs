@@ -3206,6 +3206,8 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
             // it would also be most of a busy session's log — it fires once
             // per turn *and* once per tool result, 89 times in one capture.
             | AgentEventPayload::ModelRequestStarted
+            // A prompt to re-read git and GitHub, true only of the moment.
+            | AgentEventPayload::RepoChanged { .. }
             | AgentEventPayload::PermissionRequested { .. }
             | AgentEventPayload::QuestionsAsked { .. }
             // The decision retiring a withdrawn card. Dropped for the same

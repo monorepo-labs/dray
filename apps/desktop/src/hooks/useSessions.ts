@@ -18,6 +18,7 @@ import {
   type NoticeKind,
 } from "@/hooks/useNotices";
 import { hiddenChildren } from "@/lib/crew";
+import { repoChanged } from "@/lib/prSync";
 import { dropHeld, dropHeldAsks, heldFor, holdEarlyEvent, isAsk } from "@/lib/earlyEvents";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
@@ -1839,8 +1840,8 @@ useEffect(() => {
 /// exactly the one somebody would then try to use, and waiting out the cache
 /// reads as the list being wrong. Codex's list is read too, and is kept for the
 /// life of the process — so this is the only way to see a model that arrived
-/// with a CLI update without restarting. Claude Code is still a table, so this
-/// costs it one round trip and answers the same thing.
+/// with a CLI update without restarting. Claude Code's is the same: kept for
+/// the process, re-asked here, and `models_changed` brings the answer back.
 const refreshModels = () => {
   invoke("refresh_models", {}, activeServer)
     .catch(() => {})
@@ -1958,6 +1959,13 @@ useEffect(() => {
       // console.log(event);
 
       const agentEvent = event.payload;
+
+        // A signal to re-read git and GitHub, never a row: kept out of the
+        // transcript as it is kept out of the log.
+        if (agentEvent.payload.type === "repo_changed") {
+          repoChanged.emit({ sessionId: agentEvent.sessionId, pullRequest: agentEvent.payload.pullRequest });
+          return;
+        }
 
         if (agentEvent.payload.type != "delta") {
             // The committed event supersedes its preview, and it arrives one

@@ -413,6 +413,14 @@ pub enum AgentEventPayload {
         model: Option<crate::models::ModelId>,
     },
 
+    /// The agent moved the checkout's git state or a pull request mid-turn —
+    /// Claude Code's `vcs_state_changed` and `code_change_published`. Tells the
+    /// handoff row, and with `pull_request` the PR tab and sidebar marks, to
+    /// re-read now rather than when the turn ends. A signal, never persisted.
+    RepoChanged {
+        pull_request: bool,
+    },
+
     /// The harness has sent a request to the model and is waiting on its first
     /// token. Drives the working indicator and nothing else.
     ///

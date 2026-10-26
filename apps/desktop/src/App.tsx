@@ -48,6 +48,7 @@ import {
   useBrowserTabs,
 } from "@/lib/browser";
 import { setLinkOpener } from "@/lib/openLink";
+import { repoChanged } from "@/lib/prSync";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
 import { usePrMarks } from "@/hooks/usePrMarks";
@@ -741,7 +742,10 @@ function App() {
   // What the composer's handoff row draws itself from, and — one line down —
   // which branch the pull requests are looked up by. Read on the same falling
   // edge as those, since a turn is what moves all of it.
-  const { status: workStatus } = useWorkStatus(selectedSession?.cwd ?? "", busy);
+  const { status: workStatus, refresh: refreshWorkStatus } = useWorkStatus(
+    selectedSession?.cwd ?? "",
+    busy,
+  );
   const handoffConfig = useHandoffConfig();
 
   // Filtered here rather than inside the sidebar, so the list and the ⌘⇧↑/↓ walk
@@ -1591,6 +1595,21 @@ function App() {
     prMarks.refresh();
     setTurnsEnded((n) => n + 1);
   }, [selectedSessionId, busy, pullRequests.refresh, prMarks.refresh]);
+
+  // The same reads, mid-turn, where Claude Code says what moved: an agent that
+  // opens a PR and then spends minutes on CI no longer hides it until the turn
+  // ends. Marks for any session, since a row's glyph is on screen whichever is
+  // selected; the panel and the handoff row for the selected one alone.
+  useEffect(
+    () =>
+      repoChanged.subscribe(({ sessionId, pullRequest }) => {
+        if (pullRequest) prMarks.refreshAfterWrite();
+        if (sessionId !== selectedSessionId) return;
+        refreshWorkStatus();
+        if (pullRequest) pullRequests.refresh();
+      }),
+    [selectedSessionId, prMarks.refreshAfterWrite, pullRequests.refresh, refreshWorkStatus],
+  );
 
   // A doc arriving on screen is re-read, because the watcher behind `DocsPanel`
   // only ever holds the *selected* session's files: anything written while the

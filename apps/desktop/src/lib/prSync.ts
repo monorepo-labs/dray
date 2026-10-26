@@ -30,6 +30,12 @@ export function inRepo(cwd: string, repo: string): boolean {
 /// that repo and re-reads if it is on screen.
 export const branchChanged = channel<{ repo: string; branch: string }>();
 
+/// The agent committed or pushed, or with `pullRequest` created or changed a
+/// pull request, mid-turn — Claude Code's `vcs_state_changed` and
+/// `code_change_published`. The readers that otherwise wait for the turn to end
+/// re-read on it.
+export const repoChanged = channel<{ sessionId: string; pullRequest: boolean }>();
+
 /// A panel read landed. The marks side compares it against the mark it holds
 /// for that branch — only it has one — and re-reads the repo on disagreement.
 export const panelRead = channel<{ cwd: string; branch: string; prs: PullRequest[] }>();

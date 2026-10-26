@@ -18,6 +18,7 @@ pub use parser::ClaudeCodeEvent;
 pub mod commands;
 pub mod control;
 pub mod mapper;
+pub mod models;
 pub mod permissions;
 use permissions::PendingPermissions;
 
