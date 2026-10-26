@@ -458,25 +458,34 @@ async fn close_unanswered_stop(
     let Some(s) = guard.as_ref().filter(|s| Arc::ptr_eq(&s.status, status)) else {
         return;
     };
-    {
-        let tracker = status.lock().await;
-        if !tracker.turn_in_flight() || tracker.epoch() != epoch {
-            return;
-        }
-    }
     let session_cwd = match get_session_index_item(session_id).await {
         Ok(Some(item)) => item.cwd,
         _ => return,
     };
 
-    let closed = AgentEvent::mint(
-        session_id.to_string(),
-        s.harness,
-        s.seq.fetch_add(1, Relaxed),
-        None,
-        None,
-        closing_turn("aborted", None),
-    );
+    // Checked and closed under one lock. Released between the two, the read
+    // loop could end this turn and open the next, which this would then close.
+    let (closed, next) = {
+        let mut tracker = status.lock().await;
+        if !tracker.turn_in_flight() || tracker.epoch() != epoch {
+            return;
+        }
+        let closed = AgentEvent::mint(
+            session_id.to_string(),
+            s.harness,
+            s.seq.fetch_add(1, Relaxed),
+            None,
+            None,
+            closing_turn("aborted", None),
+        );
+        tracker.note_tool_call(&closed.payload);
+        let next = tracker.on_event(&closed.payload);
+        (closed, next)
+    };
+    if let Some(next) = next {
+        publish_status(session_id, next, app).await;
+    }
+
     let ctx = Ingest {
         session_id,
         harness: s.harness,
@@ -486,41 +495,63 @@ async fn close_unanswered_stop(
         flush_seq: &s.seq,
         flush_transport: &s.stdin,
     };
-    ingest(&ctx, closed, app).await;
+    ingest_event(&ctx, closed, app, false).await;
 }
 
-/// Closes the turn of a child that died with one open. No `result` can come,
-/// so without this the session sat `in_progress` for good: sends queued behind
-/// it and Stop, settle and fork all refused until a restart.
+/// What a child that exited leaves behind: its background tasks, which died
+/// with it, and an open turn no `result` can close. Without the second the
+/// session sat `in_progress` for good: sends queued behind it and Stop,
+/// settle and fork all refused until a restart.
 ///
-/// Emitted, never logged, for the reason the drained task set is: a delete may
-/// have removed the file, where an append would quietly recreate it.
-pub async fn close_dead_turn(
+/// Only while the slot still holds this child, under the slot's lock. A send
+/// that finds it exited starts a replacement, and this child's reader can
+/// reach here after that — where it would write `completed` over the
+/// replacement's running turn.
+///
+/// Emitted, never logged: a delete may have removed the file, where an append
+/// would quietly recreate it.
+pub async fn settle_dead_child(
     session_id: &str,
     harness: Harness,
     seq: &AtomicU64,
-    status: &Mutex<StatusTracker>,
+    status: &Arc<Mutex<StatusTracker>>,
     why: &str,
     app: &Sink,
 ) {
+    let slot = manager().existing(session_id).await;
+    let guard = match &slot {
+        Some(slot) => Some(slot.lock().await),
+        None => None,
+    };
+    let replaced = guard
+        .as_ref()
+        .and_then(|g| g.as_ref())
+        .is_some_and(|s| !Arc::ptr_eq(&s.status, status));
+    if replaced {
+        return;
+    }
+
+    let mint = |payload| {
+        AgentEvent::mint(session_id.to_string(), harness, seq.fetch_add(1, Relaxed), None, None, payload)
+    };
     let next = {
         let mut tracker = status.lock().await;
-        if !tracker.turn_in_flight() {
-            return;
+        let mut closing = Vec::new();
+        if !tracker.background_task_ids().is_empty() {
+            closing.push(mint(AgentEventPayload::BackgroundTasksChanged { tasks: vec![] }));
         }
-        let closed = AgentEvent::mint(
-            session_id.to_string(),
-            harness,
-            seq.fetch_add(1, Relaxed),
-            None,
-            None,
-            closing_turn("process_exited", Some(why)),
-        );
-        if let Err(err) = app.emit("agent_event", &closed) {
-            eprintln!("[emit err] {err}");
+        if tracker.turn_in_flight() {
+            closing.push(mint(closing_turn("process_exited", Some(why))));
         }
-        tracker.note_tool_call(&closed.payload);
-        tracker.on_event(&closed.payload)
+        let mut next = None;
+        for event in closing {
+            if let Err(err) = app.emit("agent_event", &event) {
+                eprintln!("[emit err] {err}");
+            }
+            tracker.note_tool_call(&event.payload);
+            next = tracker.on_event(&event.payload).or(next);
+        }
+        next
     };
     if let Some(next) = next {
         publish_status(session_id, next, app).await;
@@ -3024,7 +3055,14 @@ pub struct Ingest<'a> {
 /// properties of Dray's own event model. With a copy per harness they would
 /// drift, and the drift would be silent — a second harness whose deltas were
 /// persisted looks exactly like one whose logs are simply larger.
-pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink) {
+pub async fn ingest(ctx: &Ingest<'_>, agent_event: AgentEvent, app: &Sink) {
+    ingest_event(ctx, agent_event, app, true).await
+}
+
+/// [`ingest`], with `tracked` false for an event whose status change the
+/// caller already made under its own lock — Stop's close, which has to check
+/// and close the turn in one step.
+async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink, tracked: bool) {
     // Filled here rather than in the mapper because only the session layer
     // knows the cwd. Freezing the tree id onto the closing event is what
     // stops an idle session's diff from absorbing everything that later
@@ -3080,6 +3118,17 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink) {
             Ok(None) => {}
             Err(e) => eprintln!("[model fallback write err] {e:#}"),
         }
+        // The live record too, or picking the old model again compares equal
+        // and never reaches the CLI. Spawned, since a slot holder may be
+        // waiting on this read loop.
+        let (session_id, status, model) = (ctx.session_id.to_string(), ctx.status.clone(), model.clone());
+        tokio::spawn(async move {
+            let Some(slot) = manager().existing(&session_id).await else { return };
+            let mut guard = slot.lock().await;
+            if let Some(s) = guard.as_mut().filter(|s| Arc::ptr_eq(&s.status, &status)) {
+                s.model = model;
+            }
+        });
     }
 
     // One lock for both. The tool count is fed here rather than from inside
@@ -3105,7 +3154,9 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink) {
     //
     // Order is status→queued, matching every other holder of both, so no
     // deadlock: nothing holds `queued` while awaiting `status`.
-    let (next_status, reserved, limit_reset) = {
+    let (next_status, reserved, limit_reset) = if !tracked {
+        (None, false, None)
+    } else {
         let mut tracker = ctx.status.lock().await;
         let before = tracker.status();
         if agent_event.subagent.is_none() {
