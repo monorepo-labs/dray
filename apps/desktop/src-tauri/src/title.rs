@@ -101,39 +101,6 @@ async fn scratch_dir() -> Result<std::path::PathBuf> {
     crate::store::app_subdir(SCRATCH_DIR).await
 }
 
-/// The reader's text with Dray's own rules cut out of it, if they are in there.
-///
-/// **fx is the one harness whose rules ride a prompt**, having no system-prompt
-/// surface to put them on, and the block is 4KB about Dray attached to a
-/// sentence about the reader's repo. A model handed both titles the block: fx's
-/// own titler, reading the wire text, answered `Dray Agent Workflow
-/// Instructions` for a request to add a verbose flag, which is the whole reason
-/// `fx::with_preamble` puts the rules *behind* the prompt rather than in front.
-///
-/// Today nothing reaches here carrying them — `session.rs` titles from the
-/// reader's own expanded prompt and `with_preamble` runs a layer below, on the
-/// way to the transport alone. This is the guard that keeps that true from the
-/// side that would have to live with it being false: a refactor preparing the
-/// wire text one step earlier reads perfectly fine, and its only symptom is
-/// every fx session named after this app.
-///
-/// **Matched whole and stripped as a suffix, never searched for by tag.** The
-/// text handed here is the reader's own, and a hunt for `<dray_system_prompt>`
-/// inside it is a hunt through their words — in *this* repo most of all, where
-/// a first prompt may quote the markup outright. Cutting from a tag they typed
-/// to the end of their sentence would hand the model a fragment, or nothing,
-/// and replace a perfectly good prompt-derived title with `Untitled`. The block
-/// `fx::preamble_block` builds is 4KB of this app's rules; matching that
-/// exactly cannot fire on anything but the rules themselves, and where it does
-/// fire the text really is them.
-///
-/// A suffix because that is where `with_preamble` puts them, and the ordering
-/// is measured rather than incidental — see that function.
-fn strip_dray_rules(prompt: &str) -> String {
-    let block = crate::harness::fx::preamble_block();
-    prompt.strip_suffix(&block).unwrap_or(prompt).to_string()
-}
-
 /// The instructions and the text to title, as the one prompt argument both
 /// CLIs take.
 ///
@@ -147,10 +114,9 @@ fn strip_dray_rules(prompt: &str) -> String {
 /// given is one somebody actually sent an agent, so it is never meaningless.
 /// `clean_title` still takes a one-word answer, so nothing here has a floor.
 fn build_prompt(user_prompt: &str) -> String {
-    // Stripped before the cut, which would otherwise halve the block and leave
-    // a suffix match with nothing to match against. Char-based, so a cut can't
-    // land mid-codepoint and hand the CLI invalid UTF-8 in argv.
-    let user_prompt: String = strip_dray_rules(user_prompt).chars().take(MAX_PROMPT_CHARS).collect();
+    // Char-based, so a cut can't land mid-codepoint and hand the CLI invalid
+    // UTF-8 in argv.
+    let user_prompt: String = user_prompt.chars().take(MAX_PROMPT_CHARS).collect();
 
     format!(
         "Write a title for a coding-agent session, given the user's first \
@@ -747,49 +713,6 @@ mod tests {
         assert!(clean_title("").is_none());
         assert!(clean_title("\n  \n").is_none());
         assert!(clean_title("\"\"").is_none());
-    }
-
-    /// Dray's own rules never reach the model that titles. A title is about the
-    /// reader's work, never about this app — which is what fx's own titler got
-    /// wrong, answering "Dray Agent Workflow Instructions" for a request to add
-    /// a verbose flag.
-    #[test]
-    fn dray_rules_are_cut_out_before_the_prompt_is_titled() {
-        let built = build_prompt(&format!(
-            "add a --verbose flag{}",
-            crate::harness::fx::preamble_block()
-        ));
-
-        assert!(
-            !built.contains("You run inside Dray"),
-            "the rules survived into the title prompt: {built}"
-        );
-        assert!(
-            !built.contains("dray_system_prompt"),
-            "the tag survived: {built}"
-        );
-        assert!(
-            built.contains("add a --verbose flag"),
-            "the reader's own text was eaten: {built}"
-        );
-    }
-
-    /// **The reader's own words are never hunted through for the tag.** Someone
-    /// working on this repo may well write the markup into a prompt, and a
-    /// match on the tag alone would cut from there to the end of their sentence
-    /// — handing the model a fragment and putting `Untitled` where a perfectly
-    /// good prompt-derived title already sat. Only the whole 4KB block counts,
-    /// and only where `with_preamble` puts it.
-    #[test]
-    fn a_prompt_that_merely_mentions_the_tag_keeps_every_word() {
-        for text in [
-            "add a --verbose flag",
-            "why does <dray_system_prompt> ride the first fx prompt and not the second",
-            "strip <dray_system_prompt> before titling",
-        ] {
-            assert_eq!(strip_dray_rules(text), text);
-            assert!(build_prompt(text).contains(text), "{text} was cut");
-        }
     }
 
     /// The user's text has to sit inside the fence, or a prompt that reads as

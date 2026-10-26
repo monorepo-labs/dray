@@ -9,19 +9,16 @@ import type { AgentEvent, Harness, Model, ModelId } from "@/types/events";
 /// this one decides whether the reader is offered the switch at all, so a
 /// disagreement is a control that does nothing or a setting with no control.
 ///
-/// - `in-place` — Claude Code, whose `apply_flag_settings` moves a running
-///   child, and Codex, whose `serviceTier` rides the next `turn/start`.
-/// - `at-creation` — fx. It reads `fast_mode` out of its settings at
-///   `session/new` and stamps it onto its own session record, which a resume
-///   then honours whatever the file says since — so nothing, not even a
-///   respawn, can move a session that already exists.
+/// - `in-place` — Claude Code's `apply_flag_settings`, fx's `fast` config
+///   option, grok's model twin and Codex's `serviceTier` on the next
+///   `turn/start`. Each moves a running child.
 /// - `none` — pi, which has no route to one.
-export type FastModeSupport = "none" | "in-place" | "at-creation";
+export type FastModeSupport = "none" | "in-place";
 
 export const FAST_MODE_BY_HARNESS: Record<Harness, FastModeSupport> = {
   claude_code: "in-place",
   codex: "in-place",
-  fx: "at-creation",
+  fx: "in-place",
   pi: "none",
   // grok's fast tier is a **model id** (`grok-4.7-build-fast`) rather than a
   // flag, so the switch is a model switch — which grok takes on a running
@@ -32,15 +29,14 @@ export const FAST_MODE_BY_HARNESS: Record<Harness, FastModeSupport> = {
 
 /// Whether a harness's fast mode stands even with no model picked.
 ///
-/// fx alone, and it falls out of the same fact its `supportsFast` does: fx
-/// decides per model itself ("when the model supports it") and publishes no
-/// list, so Dray never knows which. A pick of "let fx decide" is therefore
-/// exactly as able to run fast as any named model — and it is the *ordinary*
-/// state there, since Dray names no default for a multi-provider CLI whose own
-/// settings already hold one. The other two answer no: with no model named,
-/// nothing here can tell, and Codex takes an unknown tier without complaint.
+/// fx alone. "Let fx decide" is its *ordinary* pick, since Dray names no
+/// default for a multi-provider CLI whose own settings already hold one, and
+/// fx turns fast mode down in a sentence on a model with no fast lane — so the
+/// switch stays offered and a refusal is drawn in the transcript. The others
+/// answer no: with no model named, nothing here can tell, and Codex takes an
+/// unknown tier without complaint.
 function standsWithNoModel(harness: Harness): boolean {
-  return FAST_MODE_BY_HARNESS[harness] === "at-creation";
+  return harness === "fx";
 }
 
 /// Whether the composer draws the fast-mode row at all.
@@ -49,17 +45,13 @@ function standsWithNoModel(harness: Harness): boolean {
 /// *harness* must have a route to one. The *model* must have a faster tier —
 /// Claude Code offers fast mode on Opus alone, and Codex answers it row by row
 /// — since Codex accepts an unknown `serviceTier` with no error, which makes a
-/// wrongly drawn switch indistinguishable from a working one. And an fx session
-/// that already exists can never be moved, so the row goes once one has started
-/// rather than sitting there lit and inert.
+/// wrongly drawn switch indistinguishable from a working one.
 export function offersFast(
   harness: Harness,
   model: Model | null | undefined,
-  isNewSession: boolean,
 ): boolean {
   const support = FAST_MODE_BY_HARNESS[harness] ?? "none";
   if (support === "none") return false;
-  if (support === "at-creation" && !isNewSession) return false;
   return model?.supportsFast ?? standsWithNoModel(harness);
 }
 

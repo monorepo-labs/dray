@@ -12,7 +12,6 @@
 //! Rejected: `fx ask --json` is one JSON object after the turn — no stream, no
 //! permission channel, no cancel. See `apps/desktop/FX-PLAN.md`.
 
-pub mod catalog;
 pub mod commands;
 pub mod mapper;
 pub mod mcp;
@@ -30,8 +29,8 @@ use crate::store::{self, next_seq_by_session_id};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{Arc, LazyLock};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use crate::sink::Sink;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -43,23 +42,18 @@ use tokio::{
 /// ACP protocol version fx speaks (`agentCapabilities` answered `1`).
 const PROTOCOL_VERSION: u64 = 1;
 
-/// Dray's rules, which fx has nowhere to put but a prompt.
+/// Dray's rules, sent as `systemPrompt` on `session/new`.
 ///
-/// Every other harness has a surface for this — Claude Code and pi take
-/// `--append-system-prompt`, Codex takes `developerInstructions` — and fx has
-/// none: `fx acp` takes `--model` and `--log-file` and nothing else (0.0.10),
-/// `session/new` has no field for it, and `~/.fx/settings.json` holds no key.
-/// So the text rides the first prompt of a new session and nothing else, since
-/// `session/resume` restores the thread and the rules are in its history.
+/// fx 0.0.14 advertises `sessionCapabilities.systemPrompt` and stores the text
+/// on its own session record, so a `session/resume` in a fresh process still
+/// carries it — measured with a codeword asked only after the resume. An fx
+/// that does not advertise it gets no rules at all; the first-prompt append
+/// that stood in for this is gone.
 ///
 /// Its own file rather than pi's: pi's names `~/.agents/skills`, and fx reads
 /// `~/.claude/skills` among its global roots, so each has to name the path its
 /// own agent will actually find the skill at.
 const SYSTEM_PROMPT: &str = include_str!("system_prompt.md");
-
-/// The tag the rules are wrapped in, so anything reading the prompt back can
-/// find where they stop.
-const PREAMBLE_TAG: &str = "dray_system_prompt";
 
 /// How long a child is given to leave after `session/close` and EOF before it
 /// is killed. fx holds a `session.lock` per session under `~/.fx/sessions`,
@@ -105,20 +99,9 @@ pub struct FxSession {
     /// on the model call after it leaves the session somewhere neither side
     /// picked.
     model: Arc<std::sync::Mutex<Option<String>>>,
-    /// Whether [`SYSTEM_PROMPT`] still has to ride a prompt.
-    ///
-    /// **Not `is_new_session`, and the gap is a real one.** `open_session`
-    /// records fx's thread id *before* the first prompt, so an `init` failing
-    /// after it — a refused stance, a child dying — leaves a session that
-    /// resumes onto a thread no prompt ever reached. Read off
-    /// `is_new_session` alone, that retry resumes with the flag already false
-    /// and the rules are lost for the life of the conversation.
-    ///
-    /// So a resume that has logged nothing counts as owing them too. The
-    /// signal is already on disk: [`crate::session`] writes `user_message`
-    /// before the send, so `seq` still at 0 means no prompt was ever
-    /// delivered and the rules cannot have gone with one.
-    preamble: Arc<AtomicBool>,
+    /// Fast mode as fx last reported it, or `None` where the active model has
+    /// no `fast` option — fx before 0.0.14, or a model with no fast lane.
+    fast: Arc<std::sync::Mutex<Option<bool>>>,
     /// Settings a send made while a prompt was open, held for the turn the
     /// queue opens. fx refuses every config change mid-prompt
     /// (`-32600 Prompt already in progress`, measured), and its queued
@@ -141,6 +124,7 @@ pub struct DeferredControls {
     pub model: Option<Model>,
     pub effort: Option<Effort>,
     pub mode: ApprovalPolicy,
+    pub fast: bool,
 }
 
 /// What a deferred apply left the child on, each field `None` where it was not
@@ -150,6 +134,7 @@ pub struct AppliedControls {
     pub model: Option<crate::models::ModelId>,
     pub effort: Option<Effort>,
     pub mode: Option<ApprovalPolicy>,
+    pub fast: Option<bool>,
 }
 
 impl FxSession {
@@ -172,6 +157,7 @@ impl FxSession {
             model: landed.model.or(prev.model),
             effort: landed.effort.or(prev.effort),
             mode: landed.mode.or(prev.mode),
+            fast: landed.fast.or(prev.fast),
         });
     }
 
@@ -183,6 +169,11 @@ impl FxSession {
     /// The active model's ladder, or `None` where fx has not said.
     fn efforts(&self) -> Option<Vec<Effort>> {
         self.efforts.lock().expect("fx efforts poisoned").clone()
+    }
+
+    /// Whether fx last reported fast mode on; off where it offers none.
+    pub fn current_fast(&self) -> bool {
+        self.fast.lock().expect("fx fast poisoned").unwrap_or(false)
     }
 
     /// The provider fx last reported for this session.
@@ -250,30 +241,10 @@ pub async fn init(
         next_seq_by_session_id(session_id).await?
     };
 
-    // Before the spawn, and only on one: fx reads `fast_mode` out of its
-    // settings file at `session/new` and stamps it onto the session record it
-    // keeps, where a `session/resume` then honours the stamp whatever the file
-    // says since. So this is the only moment it can be set, and a resume asking
-    // again would be a write that changes nothing.
-    //
-    // **The guard has to outlive the write, and that is the whole of it.** What
-    // reads the file is `session/new`, seconds later and a process away — so a
-    // lock around the rewrite alone leaves two creations free to interleave
-    // write, write, read, read, and one session is permanently stamped with the
-    // other's speed while Dray's index records the value that was asked for. A
-    // fan-out of `dray new` is exactly where two land at once.
-    //
-    // Named, not `_`: a plain underscore drops the guard on the spot and puts
-    // the race straight back. It falls at the end of `init`, which is wider than
-    // `open_session` by one handshake and costs nothing worth a narrower scope.
-    let _creating = if is_new_session {
-        let guard = FX_CREATING.lock().await;
-        set_fast_mode(fast).await;
+    // fx's own titling holds the first prompt's reply — see [`disable_fx_titles`].
+    if is_new_session {
         disable_fx_titles().await;
-        Some(guard)
-    } else {
-        None
-    };
+    }
 
     let bin = crate::binpath::fx().await;
     let mut command = Command::new(&bin);
@@ -354,7 +325,7 @@ pub async fn init(
         efforts: Arc::new(std::sync::Mutex::new(None)),
         provider: Arc::new(std::sync::Mutex::new(None)),
         model: Arc::new(std::sync::Mutex::new(None)),
-        preamble: Arc::new(AtomicBool::new(owes_preamble(is_new_session, seq_start))),
+        fast: Arc::new(std::sync::Mutex::new(None)),
         deferred: Arc::default(),
         applied: Arc::default(),
         legacy_modes: offers_code_mode(&answer),
@@ -398,12 +369,31 @@ pub async fn init(
         crate::session::report_session_error(session_id, Fx, &refusal, &seq, app).await;
     }
 
+    // Not fatal either, for effort's reason: a model with no fast lane turns it
+    // down, and the session runs at ordinary speed and says so.
+    let fast = match set_fast(&session, fast).await {
+        Ok(()) => fast,
+        Err(error) => {
+            crate::session::report_session_error(session_id, Fx, &format!("{error:#}"), &seq, app)
+                .await;
+            session.current_fast()
+        }
+    };
+
     // A stance that will not apply is the fatal one: the session would run
     // freer or narrower than the reader asked, which is not something to
     // report and carry on from.
-    if let Err(error) = set_mode(&session, permission_mode).await {
-        let _ = child.kill().await;
-        return Err(error);
+    //
+    // Skipped where the session already opened on it. fx 0.0.14 writes every
+    // `set_mode` into the reader's global `permission_mode` — by design, its
+    // changelog says ACP changes are remembered "for future CLI and ACP
+    // sessions" — and a session opens in that saved mode, so asking again
+    // would rewrite their TUI default for nothing.
+    if opened_mode(&answer) != Some(mode_for(permission_mode, session.legacy_modes)) {
+        if let Err(error) = set_mode(&session, permission_mode).await {
+            let _ = child.kill().await;
+            return Err(error);
+        }
     }
 
     let _ = ready_tx.send(session.clone());
@@ -427,32 +417,6 @@ pub async fn init(
     })
 }
 
-/// Serializes fx session *creation*, so a global setting written for one cannot
-/// be read by another.
-///
-/// Only creation: a resume reads nothing out of the settings file, since fx
-/// honours the stamp on its own session record instead. Two resumes, or a resume
-/// beside a creation, still run side by side.
-static FX_CREATING: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-/// Puts fx's fast mode where the next `session/new` will read it.
-///
-/// **fx's own global setting, and there is no narrower place to put it.** ACP's
-/// `configOptions` are provider, model, mode and effort and nothing else (fx
-/// 0.0.10), `fx acp` takes `--model` and `--log-file` and nothing else, and no
-/// `FX_*` variable names it — so the settings file is the only surface, exactly
-/// as it is for the provider switch next door. The composer's row says so.
-///
-/// Best effort, deliberately. A session must not fail to start because another
-/// tool's config file could not be edited, and the cost of a failed write is a
-/// session running at ordinary speed — which is the safe direction, since the
-/// faster tier is the one that spends more.
-async fn set_fast_mode(fast: bool) {
-    if let Err(error) = models::write_setting("fast_mode", fast.into()).await {
-        eprintln!("[fx] couldn't set fast mode: {error:#}");
-    }
-}
-
 /// Turns fx's own session titling off, so the first turn ends when the answer
 /// does.
 ///
@@ -473,10 +437,12 @@ async fn set_fast_mode(fast: bool) {
 /// [`crate::title`] writes the title instead, detached, the way every other
 /// harness here is titled.
 ///
-/// Best effort and for fast mode's reason, and it sits beside it for another:
-/// this is fx's **global** setting, so it moves the reader's own TUI default
-/// too, and the two writers can undo each other. A lost write costs the stall
-/// back, never the session.
+/// Still there in 0.0.14: with titling on, the reply landed 1.66s after the
+/// last chunk, against ~0 with it off.
+///
+/// Best effort: this is fx's **global** setting, so it moves the reader's own
+/// TUI default too, and the two writers can undo each other. A lost write costs
+/// the stall back, never the session.
 async fn disable_fx_titles() {
     if let Err(error) = models::write_setting("session_titles", false.into()).await {
         eprintln!("[fx] couldn't turn fx's own session titling off: {error:#}");
@@ -573,6 +539,9 @@ fn note_config(
     if let Some(model) = config.model() {
         *session.model.lock().expect("fx model poisoned") = Some(model.to_string());
     }
+    // Read off every reply, since a model switch can turn fast mode off or take
+    // the option away with a model that has no fast lane.
+    *session.fast.lock().expect("fx fast poisoned") = config.fast();
 
     // The model list outlives this session, so it only takes the part of that
     // list which cannot be this session's own level leaking in — with the whole
@@ -632,7 +601,7 @@ async fn open_session(
     session_cwd: &str,
     is_new_session: bool,
 ) -> Result<(String, Value)> {
-    client
+    let hello = client
         .request(
             "initialize",
             json!({
@@ -654,7 +623,7 @@ async fn open_session(
 
     if is_new_session {
         let answer =
-            open_with_servers(client, "session/new", json!({"cwd": session_cwd}), mcp_servers)
+            open_with_servers(client, "session/new", new_session_params(&hello, session_cwd), mcp_servers)
                 .await?;
         let id = answer
             .get("sessionId")
@@ -680,6 +649,20 @@ async fn open_session(
     )
     .await?;
     Ok((recorded, answer))
+}
+
+/// `session/new`'s params, carrying [`SYSTEM_PROMPT`] where fx said it takes one.
+///
+/// Gated on the capability rather than sent blind: an fx that predates it is
+/// one nobody has watched answer an unknown field, and a refused open kills the
+/// session before it starts.
+fn new_session_params(hello: &Value, session_cwd: &str) -> Value {
+    let mut params = json!({"cwd": session_cwd});
+    if hello["agentCapabilities"]["sessionCapabilities"]["systemPrompt"].is_object() {
+        params["systemPrompt"] = json!([{"type": "text", "text": SYSTEM_PROMPT}]);
+        params["systemPromptMode"] = json!("append");
+    }
+    params
 }
 
 /// Whether an open reply lists the pre-0.0.14 `code` mode.
@@ -881,42 +864,36 @@ pub async fn set_mode(session: &FxSession, mode: ApprovalPolicy) -> Result<()> {
     Ok(())
 }
 
-/// Whether this spawn still owes [`SYSTEM_PROMPT`] — see [`FxSession::preamble`].
-///
-/// A creation always does. A resume does only where nothing has ever been
-/// logged for the session, which is the shape an `init` that failed after
-/// `session/new` leaves: a thread id on the index, an empty conversation, and
-/// a retry that would otherwise resume with the rules already written off.
-fn owes_preamble(is_new_session: bool, seq_start: u64) -> bool {
-    is_new_session || seq_start == 0
+/// The mode an open reply says the session is on.
+fn opened_mode(answer: &Value) -> Option<&str> {
+    answer["modes"]["currentModeId"].as_str()
 }
 
-/// The reader's text with [`SYSTEM_PROMPT`] behind it, wrapped in
-/// [`PREAMBLE_TAG`] so where the rules start and stop is mechanical.
+/// Moves a live session on or off fast mode, through the `fast` config option
+/// fx 0.0.14 added.
 ///
-/// **The rules go after the request, and that ordering is measured rather than
-/// stylistic.** fx titles the session off its first turn, so a prompt opening
-/// with 4KB of Dray rules is titled about Dray: the same request came back
-/// "Dray Agent Workflow Instructions" with the block first and "Add Verbose
-/// Flag to CLI Parser" with it last, and fx restates that title on later turns
-/// rather than re-deriving it, so a first turn titled wrong stays wrong. Two
-/// content blocks in the `prompt` array read as the block-first order and title
-/// the same way. The rules are still honoured from down there — pinned live
-/// with a codeword rule the model obeyed on the turn it arrived.
-fn with_preamble(text: &str) -> String {
-    format!("{text}{}", preamble_block())
-}
-
-/// Exactly what [`with_preamble`] appends, as one string.
+/// In place and per session — measured: the switch leaves `settings.json`
+/// untouched, survives a `session/resume` in a fresh process, and survives a
+/// model switch on the codex provider. It replaced writing `fast_mode` into
+/// the reader's global settings before `session/new`, which raced fx's own
+/// TUI writing the same key.
 ///
-/// **Split out so [`crate::title`] can cut back off what this puts on, by
-/// equality rather than by pattern.** A search for the tag alone is a search
-/// through the reader's own words — and in this repo, of all places, a prompt
-/// may well quote the markup — where the whole block is 4KB nobody writes by
-/// accident. Two spellings of it would leave that cut silently matching
-/// nothing, which is why this is one function and not a rule stated twice.
-pub(crate) fn preamble_block() -> String {
-    format!("\n\n<{PREAMBLE_TAG}>\n{SYSTEM_PROMPT}\n</{PREAMBLE_TAG}>")
+/// fx refuses it mid-prompt like every other config change, so a mid-turn pick
+/// rides [`DeferredControls`]. A session with no `fast` option — an older fx, or
+/// a model with no fast lane — can only be asked to stay off; asking for on is
+/// refused here in Dray's words rather than sent.
+pub async fn set_fast(session: &FxSession, fast: bool) -> Result<()> {
+    let current = *session.fast.lock().expect("fx fast poisoned");
+    if current.unwrap_or(false) == fast {
+        return Ok(());
+    }
+    if current.is_none() {
+        anyhow::bail!("This model has no fast mode, so it runs at ordinary speed.");
+    }
+    let answer = set_config(session, "fast", if fast { "true" } else { "false" }).await?;
+    let fast = parser::ConfigOptions::of(&answer).fast();
+    *session.fast.lock().expect("fx fast poisoned") = fast;
+    Ok(())
 }
 
 /// Writes one prompt as a turn.
@@ -925,22 +902,7 @@ pub(crate) fn preamble_block() -> String {
 /// away, and the read loop settles it on the id kept here. A prompt refused
 /// outright still answers on that id, as an error, which the reader draws as
 /// a failed turn.
-///
-/// **Dray's rules ride the first prompt of a new session**, since fx has no
-/// system-prompt surface at all — see [`SYSTEM_PROMPT`]. Only the *transport*
-/// text carries them: [`crate::session`] logs `user_message` from the reader's
-/// own string, so the transcript never sees the block and there is nothing to
-/// strip on the way out.
 pub async fn start_turn(session: &FxSession, text: &str) -> Result<()> {
-    // Read, not taken: a send that fails hands the line to nobody, and the
-    // reader's retry is then a turn that never learns the rules.
-    let owed = session.preamble.load(std::sync::atomic::Ordering::Relaxed);
-    let sent = if owed {
-        with_preamble(text)
-    } else {
-        text.to_string()
-    };
-
     // Held across the send, which only hands the line to the writer task:
     // an outright refusal can answer before this returns, and `prompt_answer`
     // takes this same lock, so it cannot read the id before it is written.
@@ -949,13 +911,10 @@ pub async fn start_turn(session: &FxSession, text: &str) -> Result<()> {
         "session/prompt",
         json!({
             "sessionId": session.id,
-            "prompt": [{"type": "text", "text": sent}],
+            "prompt": [{"type": "text", "text": text}],
         }),
     )?;
     *running = Some(id);
-    session
-        .preamble
-        .store(false, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 
@@ -1309,38 +1268,6 @@ mod tests {
         assert!(!offers_code_mode(&json!({})));
     }
 
-    /// The rules go **after** the reader's text, which is what keeps fx's own
-    /// title on the work — measured, see [`with_preamble`]. A refactor that
-    /// tidies them to the front reads fine and costs every fx session its
-    /// title, so the order is pinned rather than left to the comment.
-    #[test]
-    fn the_rules_ride_behind_the_prompt_in_a_tag_that_closes() {
-        let sent = with_preamble("add a --verbose flag");
-
-        assert!(sent.starts_with("add a --verbose flag\n\n"));
-        let opens = sent.find("<dray_system_prompt>").expect("no opening tag");
-        let closes = sent.find("</dray_system_prompt>").expect("no closing tag");
-        assert!(opens < closes);
-        assert!(sent.trim_end().ends_with("</dray_system_prompt>"));
-        // The rules themselves, not just an empty envelope.
-        assert!(sent.contains("You run inside Dray"));
-    }
-
-    /// A resume that has logged nothing never delivered a prompt, so it still
-    /// owes the rules — the state an `init` failing after `session/new`
-    /// leaves, where reading `is_new_session` alone lost them for good.
-    #[test]
-    fn a_resume_onto_a_thread_no_prompt_reached_still_owes_the_rules() {
-        assert!(owes_preamble(true, 0));
-        // The failed-creation retry: thread id recorded, nothing logged.
-        assert!(owes_preamble(false, 0));
-        // An ordinary resume — `user_message` is logged before the send, so a
-        // conversation that ran has moved the counter and took the rules with
-        // its first turn.
-        assert!(!owes_preamble(false, 1));
-        assert!(!owes_preamble(false, 420));
-    }
-
     /// fx's refusal names the server in quotes, and that is the whole match:
     /// a server whose name is a prefix of another's must not be blamed for
     /// it, and a message naming none answers `None` so the caller sheds all
@@ -1433,7 +1360,7 @@ mod tests {
                 efforts: Arc::new(std::sync::Mutex::new(efforts)),
                 provider: Arc::new(std::sync::Mutex::new(None)),
                 model: Arc::new(std::sync::Mutex::new(None)),
-                preamble: Arc::new(AtomicBool::new(false)),
+                fast: Arc::new(std::sync::Mutex::new(None)),
                 deferred: Arc::default(),
                 applied: Arc::default(),
                 legacy_modes: false,
@@ -1583,5 +1510,107 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":8,"error":{"code":-32600,"message":"Run fx login grok."}}"#,
         );
         assert!(matches!(failed, Some(parser::FxEvent::PromptFailed { message }) if message.contains("grok")));
+    }
+
+    /// fx's answers in `fast_and_rules.jsonl` (0.0.14), in the order they came.
+    fn answers() -> Vec<Value> {
+        include_str!("fixtures/fast_and_rules.jsonl")
+            .lines()
+            .filter_map(|line| line.strip_prefix("<< "))
+            .map(|line| serde_json::from_str(line).unwrap())
+            .filter(|msg: &Value| msg.get("method").is_none())
+            .collect()
+    }
+
+    /// The rules ride `session/new` only where fx said it takes them — the
+    /// captured 0.0.14 handshake does, and the 0.0.9 one in `cancel.jsonl`
+    /// does not, so an older fx is never sent a field nobody watched it read.
+    #[test]
+    fn the_rules_ride_session_new_where_fx_advertises_a_system_prompt() {
+        let hello = &answers()[0]["result"];
+        let params = new_session_params(hello, "/tmp/x");
+        assert_eq!(params["systemPromptMode"], "append");
+        let text = params["systemPrompt"][0]["text"].as_str().unwrap();
+        assert!(text.contains("You run inside Dray"));
+
+        let old = include_str!("fixtures/cancel.jsonl")
+            .lines()
+            .find(|line| line.contains("agentCapabilities"))
+            .and_then(|line| line.strip_prefix("<< "))
+            .expect("cancel.jsonl carries an initialize reply");
+        let old: Value = serde_json::from_str(old).unwrap();
+        assert_eq!(new_session_params(&old["result"], "/tmp/x"), json!({"cwd": "/tmp/x"}));
+    }
+
+    /// `fast` is a config option on 0.0.14: off at `session/new`, on after the
+    /// switch, still on after a `session/resume` in a fresh process, and kept
+    /// across a model switch on the codex provider. An older reply has no
+    /// option at all, which reads as `None` rather than as off.
+    #[test]
+    fn fast_mode_is_read_off_the_session_and_survives_a_resume() {
+        let answers = answers();
+        let fast = |i: usize| parser::ConfigOptions::of(&answers[i]["result"]).fast();
+        assert_eq!(fast(1), Some(false), "session/new");
+        assert_eq!(fast(2), Some(true), "set_config_option fast");
+        assert_eq!(fast(9), Some(true), "session/resume");
+        assert_eq!(fast(11), Some(true), "model switch");
+
+        let old = include_str!("fixtures/live_turn.jsonl")
+            .lines()
+            .find(|line| line.contains("configOptions"))
+            .and_then(|line| line.strip_prefix("<< "))
+            .unwrap();
+        let old: Value = serde_json::from_str(old).unwrap();
+        assert_eq!(parser::ConfigOptions::of(&old["result"]).fast(), None);
+    }
+
+    /// Asking for what the session already has sends nothing, and asking a
+    /// session with no `fast` option for it is refused here rather than sent.
+    #[tokio::test]
+    async fn fast_mode_is_only_sent_where_it_moves_something() {
+        let (session, mut rx) = session_on(None);
+        set_fast(&session, false).await.expect("off is where it already is");
+        let refused = set_fast(&session, true).await.unwrap_err();
+        assert!(format!("{refused:#}").contains("no fast mode"));
+        assert!(rx.try_recv().is_err(), "nothing was written");
+
+        *session.fast.lock().unwrap() = Some(true);
+        set_fast(&session, true).await.unwrap();
+        assert!(rx.try_recv().is_err(), "already on");
+    }
+
+    /// A model switch whose reply says fast is off, or carries no `fast`
+    /// option, moves the session's reading off — which is what
+    /// `Session::set_model` copies back, so the fast check after a model
+    /// switch compares against the child rather than the stale pick.
+    #[test]
+    fn a_model_reply_that_drops_fast_mode_is_what_the_session_reads() {
+        let (session, _rx) = session_on(None);
+        let app = Sink::new(|_, _| {});
+        *session.fast.lock().unwrap() = Some(true);
+
+        let reply = |fast: Option<&str>| {
+            let mut options = vec![json!({"id": "model", "currentValue": "m", "options": []})];
+            if let Some(value) = fast {
+                options.push(json!({"id": "fast", "currentValue": value, "options": []}));
+            }
+            parser::ConfigOptions::of(&json!({"configOptions": options}))
+        };
+
+        note_config(&session, &reply(Some("false")), None, &app);
+        assert!(!session.current_fast());
+
+        *session.fast.lock().unwrap() = Some(true);
+        note_config(&session, &reply(None), None, &app);
+        assert!(!session.current_fast(), "a model with no fast lane");
+    }
+
+    /// `set_mode` rewrites the reader's global `permission_mode`, so the open
+    /// reply's mode is what lets a spawn skip it.
+    #[test]
+    fn the_mode_a_session_opened_on_is_read_off_the_reply() {
+        assert_eq!(opened_mode(&answers()[1]["result"]), Some("auto"));
+        assert_eq!(opened_mode(&answers()[9]["result"]), Some("full-access"));
+        assert_eq!(opened_mode(&json!({})), None);
     }
 }

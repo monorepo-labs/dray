@@ -17,9 +17,9 @@
 //!
 //! 1. [`ladder_for`]'s guess by provider, which is wrong in both directions and
 //!    only ever a first draw.
-//! 2. The gateway's own catalog ([`super::catalog`]), which names every public
-//!    model's ladder outright and is fetched once. Gateway models only, and
-//!    only those it names — codex and grok are not in it.
+//! 2. The row's own `efforts`, which `fx models --json` carries for gateway
+//!    models since 0.0.14 — authenticated, so a reader's private models are in
+//!    it too. Codex and grok rows still carry an id and a source alone.
 //! 3. What a live session reported, through [`learn_ladder`] — a level at a
 //!    time, since fx's list is the model's ladder unioned with the level the
 //!    session is on and only the subtraction of that level is sound
@@ -32,12 +32,10 @@
 //! `none` are levels Dray's ladder cannot spell, so they are dropped rather
 //! than given a rung (DRA-140's rule — a rung is a persisted enum).
 //!
-//! Fast mode, by contrast, **is** in this list: the gateway names a fast tier
-//! as a model of its own with `-fast` on the end, so [`supports_fast`] is a
-//! lookup in the ids already in hand and [`visible`] keeps the twins out of the
-//! picker.
+//! Fast mode is in this list too: a gateway row says `fast` outright since
+//! 0.0.14, and the gateway still names each fast tier as a model of its own
+//! with `-fast` on the end, which [`visible`] keeps out of the picker.
 
-use super::catalog;
 use crate::harness::ProbeCache;
 use crate::models::{Effort, Model, ModelId};
 use anyhow::{Context, Result};
@@ -129,7 +127,7 @@ async fn all() -> Vec<Model> {
     // below — that is how [`refresh`] lets a changed subscription catalog reach
     // the picker despite the tables. Fresh only; a stale entry falls through.
     if let Some(fresh) = CACHE.peek(&key) {
-        return with_ladders(fresh).await;
+        return with_learned_ladders(fresh);
     }
 
     // The subscription providers serve a handful of models each, fixed and
@@ -139,13 +137,13 @@ async fn all() -> Vec<Model> {
     // [`refresh`], which probes fx even for a table-backed provider and caches
     // the answer above.
     if let Some(models) = known_models(&key) {
-        return with_ladders(models).await;
+        return with_learned_ladders(models);
     }
 
     match probe_stable().await {
         Some((provider, models)) => {
             CACHE.insert(&provider, models.clone());
-            with_ladders(models).await
+            with_learned_ladders(models)
         }
         None => Vec::new(),
     }
@@ -157,10 +155,6 @@ async fn all() -> Vec<Model> {
 /// even for codex or grok.
 pub async fn refresh() {
     CACHE.forget();
-    // The catalog goes with it. Refresh is the reader saying a list on screen
-    // is behind the world, and a model too new for [`catalog`]'s floor is one
-    // of the two things they could mean by that.
-    catalog::forget().await;
     if let Some((provider, models)) = probe_stable().await {
         CACHE.insert(&provider, models);
     }
@@ -403,24 +397,28 @@ async fn set_provider_via_cli(provider: &str) -> Result<()> {
 
 #[derive(Deserialize)]
 struct Listing {
-    /// Every model of the active provider, always present. The richer `models`
-    /// array below is dropped above a few dozen rows — gateway's 247 come back
-    /// as `ids` only — so this is the list, and the provider comes from fx's
-    /// settings rather than a per-row `source`.
+    /// Every model of the active provider, always present, and the list. Before
+    /// 0.0.14 the `models` array below was dropped above a few dozen rows, so
+    /// this is what is read and the rows only add to it.
     #[serde(default)]
     ids: Vec<String>,
-    /// Present only for short lists, and carries a per-row `source`. Kept as a
-    /// fallback for reading the provider when fx's settings can't be.
     #[serde(default)]
     models: Vec<Row>,
 }
 
+/// One row of `fx models --json`. Codex and grok rows carry `id` and `source`;
+/// gateway rows carry `id`, `name`, `efforts`, `fast` and `ultrafast` (0.0.14).
 #[derive(Deserialize)]
 struct Row {
+    #[serde(default)]
+    id: String,
     /// Prose — "Codex subscription", "Vercel AI Gateway" — not the key
     /// `fx provider` takes. [`provider_key`] maps it.
     #[serde(default)]
     source: String,
+    name: Option<String>,
+    efforts: Option<Vec<String>>,
+    fast: Option<bool>,
 }
 
 /// Bounds the probe. `fx models` hangs indefinitely on a provider that is
@@ -468,7 +466,32 @@ async fn probe() -> Result<(Option<String>, Vec<Model>)> {
         .or_else(|| sourced.clone())
         .unwrap_or_default();
 
-    Ok((sourced, ids_to_models(listing.ids, &provider)))
+    let mut models = ids_to_models(listing.ids, &provider);
+    with_rows(&mut models, &listing.models);
+    Ok((sourced, models))
+}
+
+/// Puts what a row says about its model over what the id alone gave.
+///
+/// An empty `efforts` is an answer — the model takes none — where an absent one
+/// leaves the guess. `none` and `minimal` are fx's own and have no rung, so a
+/// model offering only those reads as having no effort.
+fn with_rows(models: &mut [Model], rows: &[Row]) {
+    let rows: HashMap<&str, &Row> = rows.iter().map(|row| (row.id.as_str(), row)).collect();
+    for model in models.iter_mut() {
+        let Some(row) = rows.get(model.arg.as_str()) else {
+            continue;
+        };
+        if let Some(name) = &row.name {
+            model.label = name.clone();
+        }
+        if let Some(efforts) = &row.efforts {
+            model.efforts = efforts.iter().filter_map(|e| Effort::from_arg(e)).collect();
+        }
+        if let Some(fast) = row.fast {
+            model.supports_fast = fast;
+        }
+    }
 }
 
 /// The provider `fx provider` last wrote, read from `~/.fx/settings.json`.
@@ -558,8 +581,9 @@ fn visible(model: &Model) -> bool {
     !(model.provider == "gateway" && is_fast_tier(&model.arg))
 }
 
-/// Whether this model has a faster tier to ask for — per provider, because only
-/// one of them publishes the answer.
+/// Whether this model has a faster tier to ask for, where its row does not say —
+/// an fx before 0.0.14, or a codex or grok row. Per provider, because only one
+/// of them published the answer then.
 ///
 /// **gateway names its fast tiers as models**, a separate id with `-fast` on
 /// the end, 25 of the 247 on the probe box. So a model has fast mode exactly
@@ -698,48 +722,6 @@ pub fn learn_ladder(model_arg: &str, reading: Option<LadderReading>) -> bool {
     true
 }
 
-/// The whole ladder story in the order it is believed: the guess
-/// [`id_to_model`] stamped on, then the catalog over it, then what a session
-/// actually watched the model do.
-///
-/// Applied **at read rather than at build** — the gateway's list is cached as
-/// whole [`Model`]s, so a ladder learned or fetched after that read would never
-/// reach the picker if it were stamped on in [`id_to_model`]. One place, and
-/// every route into [`list`] passes through it.
-async fn with_ladders(models: Vec<Model>) -> Vec<Model> {
-    with_learned_ladders(with_catalog_ladders(models).await)
-}
-
-/// Puts the gateway's own answer over the guess, for the gateway's own models.
-///
-/// Only where the catalog names the model: an id it does not hold is one it
-/// cannot answer for rather than one with no ladder, since the fetch is
-/// anonymous and a reader's private models are invisible to it. Keyed on the
-/// provider and not on the id's shape, [`visible`]'s reason — another provider
-/// shipping an id spelled like a gateway one must not start reading answers
-/// out of a catalog that knows nothing about it.
-async fn with_catalog_ladders(mut models: Vec<Model>) -> Vec<Model> {
-    let wanted: Vec<&str> = models
-        .iter()
-        .filter(|model| model.provider == "gateway")
-        .map(|model| model.arg.as_str())
-        .collect();
-    if wanted.is_empty() {
-        return models;
-    }
-
-    let ladders = catalog::ladders(&wanted).await;
-    for model in models.iter_mut() {
-        if model.provider != "gateway" {
-            continue;
-        }
-        if let Some(named) = ladders.get(&model.arg) {
-            model.efforts = named.clone();
-        }
-    }
-    models
-}
-
 /// Puts what has been learned over everything else — the only source that has
 /// seen this model take a level rather than been told it would.
 fn with_learned_ladders(models: Vec<Model>) -> Vec<Model> {
@@ -762,10 +744,10 @@ fn with_learned_ladders(models: Vec<Model>) -> Vec<Model> {
 // better has answered for yet. It is wrong in both directions on the gateway —
 // it offers effort where a model has none and stops at `xhigh` where
 // claude-opus-5 goes to `max` — which is why it is only ever a first draw:
-// [`with_catalog_ladders`] replaces it for any public gateway model and
-// [`learn_ladder`] for any model a session runs. What is left for it is a
-// gateway model the catalog does not name, and the two subscription providers,
-// whose lists are short and fixed enough that a capture each is the answer.
+// a gateway row's own `efforts` replaces it, and [`learn_ladder`] does for any
+// model a session runs. What is left for it is an fx before 0.0.14, and the two
+// subscription providers, whose lists are short and fixed enough that a capture
+// each is the answer.
 fn ladder_for(provider: &str) -> Vec<Effort> {
     use Effort::*;
     match provider {
@@ -1066,6 +1048,34 @@ mod tests {
         accepted.takes.push(Effort::High);
         assert!(learn_ladder("test/accepted", Some(accepted)));
         assert_eq!(ladder("test/accepted"), whole);
+    }
+
+    /// fx 0.0.14's gateway rows, verbatim from `fx models --json`: the row's
+    /// own name, ladder and fast flag win over the guess, and a `-fast` twin
+    /// says it has no fast mode of its own.
+    #[test]
+    fn a_gateway_row_names_its_own_ladder_and_fast_mode() {
+        let listing: Listing = serde_json::from_str(r#"{"kind":"models","ids":["anthropic/claude-opus-5.5","anthropic/claude-opus-5.5-fast","openai/gpt-5.4-nano","morph/morph-v3","morph/morph-v3-fast"],"models":[{"id":"anthropic/claude-opus-5.5","name":"Claude Opus 5.5","efforts":["low","medium","high","xhigh","max"],"fast":true,"ultrafast":false},{"id":"anthropic/claude-opus-5.5-fast","name":"Claude Opus 5.5 (Fast)","efforts":["low","medium","high","xhigh","max"],"fast":false,"ultrafast":false},{"id":"openai/gpt-5.4-nano","name":"GPT 5.4 Nano","efforts":["none","minimal","low","medium","high","xhigh"],"fast":false,"ultrafast":false},{"id":"morph/morph-v3","name":"Morph v3","efforts":[],"fast":false,"ultrafast":false}]}"#).unwrap();
+        let mut models = ids_to_models(listing.ids, "gateway");
+        with_rows(&mut models, &listing.models);
+
+        let opus = model(&models, "anthropic/claude-opus-5.5");
+        assert_eq!(opus.label, "Claude Opus 5.5");
+        assert!(opus.efforts.contains(&Effort::Max));
+        assert!(opus.supports_fast);
+        assert!(!model(&models, "anthropic/claude-opus-5.5-fast").supports_fast);
+
+        let nano = model(&models, "openai/gpt-5.4-nano");
+        assert_eq!(nano.efforts.first(), Some(&Effort::Low), "none and minimal have no rung");
+        assert!(!nano.supports_fast);
+
+        // The row says no fast lane, whatever the twin rule would have read.
+        let morph = model(&models, "morph/morph-v3");
+        assert!(!morph.supports_fast);
+        assert!(morph.efforts.is_empty(), "an empty list is an answer");
+
+        // No row, so the guess and the twin rule stand.
+        assert_eq!(model(&models, "morph/morph-v3-fast").efforts, ladder_for("gateway"));
     }
 
     #[test]

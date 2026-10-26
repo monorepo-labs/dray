@@ -112,6 +112,38 @@ And four things the docs do not say at all:
 
 ---
 
+## pi 1.4.0 (#677)
+
+Re-read against `@earendil-works/pi-coding-agent` 1.4.0. The RPC surface Dray
+uses still answers in the shapes above. What moved:
+
+- **A prompt can start no run.** Since 0.99 `prompt` answers
+  `data.disposition`: `started`, `queued`, or `handled`. `handled` means an
+  extension command or `input` handler consumed it — `/mcp` and
+  `/ponytail status` both do, measured — and no `agent_start` or
+  `agent_settled` follows. `send_prompt` reports it and `Session::send_msg`
+  closes the turn itself, head set to the baseline so the changes panel reads
+  it as changing nothing. Before this the session sat `in_progress` for good.
+  The extension's own `notify` lines are still dropped, so a handled command
+  draws nothing but the reader's bubble.
+- **Providers.** `azure-openai-responses` is `azure` (1.0.3), `openai` takes
+  OAuth (0.99), `openai-codex` is labelled legacy, `meta` and `typesafe` are
+  new. 41 in all, read out of `pi-ai/dist/providers`.
+- **`tool_execution_end.durationMs`** now rides the tool result.
+- **Nested calls** (`ctx.executeTool`, codemode) carry `parentToolCallId` and
+  draw no row, matching pi's own transcript, which keeps them off it too.
+- **Plan adds `--no-mcp`.** Since 1.0.4 `--tools` keeps MCP tools unless an
+  entry starts with `mcp__`.
+
+Left as they were, on purpose:
+
+- **`--session-id`** cannot be combined with `--session`, pi's docs say
+  verbatim, and the path is Dray's resume handle. Ids still differ.
+- **`thinkingLevelMap`** on each model row could stand in for the per-row
+  `set_model` + `get_available_thinking_levels` pair. That pair asks pi's own
+  rule rather than restating it, and the whole probe is 1.2s for eleven models
+  with the spawn included.
+
 ## Where the build is
 
 Kept here rather than in a second file: the slice lists are in §14, and a status

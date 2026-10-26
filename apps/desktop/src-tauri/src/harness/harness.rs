@@ -381,7 +381,7 @@ mod capability_tests {
     fn each_harness_reaches_fast_mode_its_own_way() {
         assert_eq!(Harness::ClaudeCode.caps().fast_mode, FastMode::InPlace);
         assert_eq!(Harness::Codex.caps().fast_mode, FastMode::InPlace);
-        assert_eq!(Harness::Fx.caps().fast_mode, FastMode::AtCreation);
+        assert_eq!(Harness::Fx.caps().fast_mode, FastMode::InPlace);
         assert_eq!(Harness::Pi.caps().fast_mode, FastMode::Unsupported);
         // grok's fast tier is a model id (`grok-4.7-build-fast`) rather than a
         // flag, so its switch is a model switch — which reaches a running child.
@@ -605,11 +605,9 @@ impl Harness {
 
 /// When a fast-mode pick can reach the child, if at all.
 ///
-/// One enum rather than a pair of bools, because the four answers are not two
+/// One enum rather than a pair of bools, because the answers are not two
 /// independent questions: "offered" and "changeable" would let a harness claim
-/// a combination no CLI has, and fx's is exactly the one a bool pair spells
-/// wrong — it *has* fast mode and a running session can never be moved onto it,
-/// not even by replacing the child.
+/// a combination no CLI has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FastMode {
     /// No route to it on this CLI's wire. pi plumbs `serviceTier` through its
@@ -618,17 +616,10 @@ pub enum FastMode {
     Unsupported,
     /// Reaches a running child. Claude Code's `apply_flag_settings` carries
     /// `{"fastMode": <bool>}` both ways, verified against v2.1.270 — the reply
-    /// is `success` and the next `init`/`result` reports the new state. Codex's
+    /// is `success` and the next `init`/`result` reports the new state. fx
+    /// 0.0.14's `fast` config option does the same per session, and Codex's
     /// `serviceTier` rides the next `turn/start` and sticks to the thread.
     InPlace,
-    /// Settled when the session is first created and unreachable after.
-    ///
-    /// fx alone. It reads `fast_mode` out of `~/.fx/settings.json` at
-    /// `session/new` and **stamps it onto its own session record**; a
-    /// `session/resume` keeps the stamp whatever the settings file says since,
-    /// verified live. So a respawn would not move it either, and the composer
-    /// draws the row on a new session alone.
-    AtCreation,
 }
 
 impl FastMode {
@@ -758,12 +749,13 @@ impl Harness {
                 forkable: true,
                 fork_needs_cli: false,
             },
-            // ACP carries all three as session settings —
-            // `session/set_config_option` for model and effort,
+            // ACP carries all four as session settings —
+            // `session/set_config_option` for model, effort and fast,
             // `session/set_mode` for the stance — each verified live to move
-            // the session's own `currentValue` and to write nothing to fx's
-            // settings file. So fx is the one harness where an effort change
-            // is a request rather than a respawn.
+            // the session's own `currentValue`. Model, effort and fast write
+            // nothing to fx's settings file; the stance does, by fx's design
+            // since 0.0.14. So fx is the one harness where an effort change is
+            // a request rather than a respawn.
             //
             // Not forkable: fx has no fork and its resume handle is an id it
             // minted, not a file to copy. No `-w` either; Dray makes the tree.
@@ -772,7 +764,7 @@ impl Harness {
                 applies_model_in_place: true,
                 applies_effort_in_place: true,
                 applies_permission_in_place: true,
-                fast_mode: FastMode::AtCreation,
+                fast_mode: FastMode::InPlace,
                 expands_at_mentions: false,
                 forkable: false,
                 fork_needs_cli: false,

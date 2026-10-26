@@ -85,6 +85,13 @@ pub enum ClaudeCodeEvent {
     /// row already shimmers for as long as the call is pending, so the ping
     /// says nothing the transcript isn't showing.
     ToolProgress,
+    /// A scheduled command (`/loop`, `ScheduleWakeup`) starting or finishing.
+    /// Its turn arrives as an ordinary `init` … `result`, so nothing reads this.
+    CommandLifecycle,
+    /// A line type this build doesn't model. Without it a new type failed the
+    /// line whole, as `command_lifecycle` did.
+    #[serde(other)]
+    Unrecognized,
 }
 
 /// A question from the CLI. Externally tagged on `subtype`, like the control
@@ -420,6 +427,32 @@ pub enum SystemEvent {
         text: String,
         session_id: String,
     },
+    /// The model refused and the CLI retried on another one. `scope:
+    /// "session"` moves the session for good — "Switched to Opus 4.8" — which
+    /// is why `fallback_model` is read at all.
+    ModelRefusalFallback {
+        #[serde(default)]
+        scope: Option<String>,
+        fallback_model: String,
+        #[serde(default)]
+        content: Option<String>,
+        session_id: String,
+    },
+    /// The model refused with nothing to fall back to. `content` is empty in
+    /// every capture, so `api_refusal_explanation` is the sentence.
+    ModelRefusalNoFallback {
+        #[serde(default)]
+        content: Option<String>,
+        #[serde(default)]
+        api_refusal_explanation: Option<String>,
+        session_id: String,
+    },
+    /// A notice in the CLI's own words — "Opus 5.5's safeguards stopped the
+    /// response above · continuing once with that noted".
+    Informational {
+        content: String,
+        session_id: String,
+    },
     /// A subtype this build doesn't model. The CLI adds subtypes over time
     /// (`thinking_tokens` arrived unannounced), and without this every such
     /// line failed whole — the loop logged a parse error and dropped it.
@@ -508,6 +541,11 @@ pub enum ResultEvent {
         #[serde(default)]
         errors: Vec<String>,
     },
+    /// A subtype this build doesn't model — `error_max_turns` and kin. Still a
+    /// `result`, so it still closes the turn: failing the line instead left
+    /// the session on `in_progress` for good.
+    #[serde(other)]
+    Unrecognized,
 }
 
 /// One Anthropic SSE frame, as carried in `stream_event.event`.
@@ -1201,6 +1239,30 @@ mod tests {
             event,
             ClaudeCodeEvent::System(SystemEvent::PermissionDenied { .. })
         )));
+    }
+
+    /// Every line of the capture parses as something modelled: the three
+    /// refusal subtypes were `unknown_subtype` and `command_lifecycle` failed
+    /// whole. A line type nobody has seen yet falls to the catch-all.
+    #[test]
+    fn parses_refusals_and_command_lifecycle() {
+        let events = parse_fixture(include_str!("fixtures/model_refusal.jsonl"));
+
+        assert!(events.iter().all(|e| !matches!(
+            e,
+            ClaudeCodeEvent::Unrecognized | ClaudeCodeEvent::System(SystemEvent::Unrecognized)
+        )));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, ClaudeCodeEvent::CommandLifecycle))
+                .count(),
+            2
+        );
+        assert!(matches!(
+            parse_line(r#"{"type":"brand_new","session_id":"s"}"#).unwrap(),
+            ClaudeCodeEvent::Unrecognized
+        ));
     }
 
     /// The notice channel, captured on the one key Dray reads. `priority` and

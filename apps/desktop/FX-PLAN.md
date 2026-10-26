@@ -128,12 +128,14 @@ Frontend: `Harness` union (generated), `AGENT_LABELS`, `AgentIcon`,
 That is one model switch in the TUI, and it moved **two** fields in one write: the per-provider model pick, and `fast_mode` — turned off because the model it moved to has no fast tier.
 
 - **`models.<provider>` is the TUI's record of the model picked under that provider.** It had been seen holding `"gateway":"spacexai/grok-4.6"`, a grok model under the gateway key, which read as corruption and is not: it is a pick. **No Dray path writes that map at all** — Dray writes `provider` and `fast_mode` and nothing else.
-- **`fast_mode` therefore has two writers**, fx's TUI and Dray's own per-creation write. See _Known issues_ in the root `CLAUDE.md`.
+- **`fast_mode` had two writers**, fx's TUI and Dray's own per-creation write, until fx 0.0.14 made fast mode a session config option (`set_config_option fast`) and Dray stopped writing the key (#676).
 - **Every fx write leaves a backup and lands at `0600`**, including this one — which is what makes those two things a usable signature for telling an fx write from a Dray one.
 
 Nothing over ACP does any of this: probed byte- and mtime-identical across `fx acp` spawn, `initialize`, `session/new`, `set_config_option` for model *and* provider, `set_mode`, `session/prompt`, exit, `fx models --json`, `fx status`, `fx doctor`, and a cross-provider `fx acp --model <id>` in all three directions. It is the TUI alone.
 
 ## Fast mode is per provider, and each one answers differently
+
+**Superseded in part by 0.0.14** (2026-10-26, #676): fast mode is a `fast` config option on the session, set in place, and `fx models --json` carries `fast` on every gateway row, so the twin rule below is the fallback for rows that do not say. The twins are still listed.
 
 Measured 2026-09-15 against fx 0.0.10. DRA-218 shipped on "fx publishes no list of which models support it"; that is true of two providers and false of the one where it matters.
 

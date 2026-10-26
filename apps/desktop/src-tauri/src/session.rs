@@ -2,7 +2,7 @@ use crate::{
     attachments,
     events::{
         AgentEvent, AgentEventPayload, ApprovalPolicy, ErrorSource, ImageRef,
-        MessageSender, PermissionBehavior,
+        MessageSender, PermissionBehavior, TurnStatus,
     },
     git,
     harness::{
@@ -180,13 +180,22 @@ pub struct StatusTracker {
     /// When the usage limit that refused this turn resets. Read off the turn's
     /// end by [`Self::take_limit_reset`], which schedules the auto-continue.
     limit_reset: Option<String>,
+    /// Moves on every turn opening or closing. What Stop's watchdog compares,
+    /// so it closes only a turn nothing has moved since the interrupt.
+    epoch: u64,
 }
 
 impl StatusTracker {
     /// The user sent a prompt; work is starting regardless of what stdout says.
     pub fn on_send(&mut self) -> Option<SessionStatus> {
         self.model_call_open = true;
+        self.epoch += 1;
         self.set(SessionStatus::InProgress)
+    }
+
+    /// Moves on every turn opening or closing.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     /// Advances on one mapped event. `Some` when the status changed — the
@@ -199,6 +208,7 @@ impl StatusTracker {
             // must be able to go straight back to in-progress here.
             AgentEventPayload::TurnStarted(_) => {
                 self.model_call_open = true;
+                self.epoch += 1;
                 self.limit_reset = None;
                 self.set(SessionStatus::InProgress)
             }
@@ -217,6 +227,7 @@ impl StatusTracker {
             // notice hanging until the reader clicked Stop.
             AgentEventPayload::TurnCompleted { auth_failed, .. } => {
                 self.model_call_open = false;
+                self.epoch += 1;
                 self.auth_failed = *auth_failed;
                 self.set(SessionStatus::Completed)
             }
@@ -408,6 +419,142 @@ pub async fn publish_status(session_id: &str, status: SessionStatus, app: &Sink)
     };
     if let Err(e) = app.emit("session_status", &event) {
         eprintln!("[status emit err] {e}");
+    }
+}
+
+/// How long Stop waits for Claude Code's own `result` before closing the turn
+/// itself. A real interrupt answers well inside it.
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The turn end a `result` would have been, for a turn Dray closes itself.
+/// `stop_reason` starting `aborted` is what keeps a reader's own Stop from
+/// drawing as a failure.
+fn closing_turn(stop_reason: &str, final_text: Option<&str>) -> AgentEventPayload {
+    AgentEventPayload::TurnCompleted {
+        status: crate::events::TurnStatus::Error,
+        stop_reason: Some(stop_reason.to_string()),
+        final_text: final_text.map(str::to_string),
+        usage: None,
+        duration_ms: None,
+        head: None,
+        auth_failed: false,
+    }
+}
+
+/// Closes the turn Stop was pressed on, where nothing has moved it since.
+///
+/// Through [`ingest`] like a real `result`, so the closing snapshot is taken
+/// and a prompt queued behind the stuck turn goes out rather than waiting on a
+/// boundary that is never coming.
+async fn close_unanswered_stop(
+    slot: &Slot,
+    session_id: &str,
+    status: &Arc<Mutex<StatusTracker>>,
+    epoch: u64,
+    app: &Sink,
+) {
+    let guard = slot.lock().await;
+    // A respawn put a new tracker in the slot; that child has a turn of its own.
+    let Some(s) = guard.as_ref().filter(|s| Arc::ptr_eq(&s.status, status)) else {
+        return;
+    };
+    let session_cwd = match get_session_index_item(session_id).await {
+        Ok(Some(item)) => item.cwd,
+        _ => return,
+    };
+
+    // Checked and closed under one lock. Released between the two, the read
+    // loop could end this turn and open the next, which this would then close.
+    let (closed, next) = {
+        let mut tracker = status.lock().await;
+        if !tracker.turn_in_flight() || tracker.epoch() != epoch {
+            return;
+        }
+        let closed = AgentEvent::mint(
+            session_id.to_string(),
+            s.harness,
+            s.seq.fetch_add(1, Relaxed),
+            None,
+            None,
+            closing_turn("aborted", None),
+        );
+        tracker.note_tool_call(&closed.payload);
+        let next = tracker.on_event(&closed.payload);
+        (closed, next)
+    };
+    if let Some(next) = next {
+        publish_status(session_id, next, app).await;
+    }
+
+    let ctx = Ingest {
+        session_id,
+        harness: s.harness,
+        session_cwd: &session_cwd,
+        status,
+        queued: &s.queued,
+        flush_seq: &s.seq,
+        flush_transport: &s.stdin,
+    };
+    ingest_event(&ctx, closed, app, false).await;
+}
+
+/// What a child that exited leaves behind: its background tasks, which died
+/// with it, and an open turn no `result` can close. Without the second the
+/// session sat `in_progress` for good: sends queued behind it and Stop,
+/// settle and fork all refused until a restart.
+///
+/// Only while the slot still holds this child, under the slot's lock. A send
+/// that finds it exited starts a replacement, and this child's reader can
+/// reach here after that — where it would write `completed` over the
+/// replacement's running turn.
+///
+/// Emitted, never logged: a delete may have removed the file, where an append
+/// would quietly recreate it.
+pub async fn settle_dead_child(
+    session_id: &str,
+    harness: Harness,
+    seq: &AtomicU64,
+    status: &Arc<Mutex<StatusTracker>>,
+    why: &str,
+    app: &Sink,
+) {
+    let slot = manager().existing(session_id).await;
+    let guard = match &slot {
+        Some(slot) => Some(slot.lock().await),
+        None => None,
+    };
+    let replaced = guard
+        .as_ref()
+        .and_then(|g| g.as_ref())
+        .is_some_and(|s| !Arc::ptr_eq(&s.status, status));
+    if replaced {
+        return;
+    }
+
+    let mint = |payload| {
+        AgentEvent::mint(session_id.to_string(), harness, seq.fetch_add(1, Relaxed), None, None, payload)
+    };
+    let next = {
+        let mut tracker = status.lock().await;
+        let mut closing = Vec::new();
+        if !tracker.background_task_ids().is_empty() {
+            closing.push(mint(AgentEventPayload::BackgroundTasksChanged { tasks: vec![] }));
+        }
+        if tracker.turn_in_flight() {
+            closing.push(mint(closing_turn("process_exited", Some(why))));
+        }
+        let mut next = None;
+        for event in closing {
+            if let Err(err) = app.emit("agent_event", &event) {
+                eprintln!("[emit err] {err}");
+            }
+            tracker.note_tool_call(&event.payload);
+            next = tracker.on_event(&event.payload).or(next);
+        }
+        next
+    };
+    if let Some(next) = next {
+        publish_status(session_id, next, app).await;
     }
 }
 
@@ -662,10 +809,9 @@ impl SessionManager {
         // same reading, stated there because neither side can call the other.
         let fast = fast
             && harness.caps().fast_mode.offered()
-            && model_spec.as_ref().map_or(
-                harness.caps().fast_mode == FastMode::AtCreation,
-                |spec| spec.supports_fast,
-            );
+            && model_spec
+                .as_ref()
+                .map_or(harness == Harness::Fx, |spec| spec.supports_fast);
 
         // Resolved once for every path below — created, live, queued and
         // resumed alike — so a `#DRA-53` means the same thing whichever one the
@@ -921,6 +1067,15 @@ impl SessionManager {
         let slot = self.slot(session_id).await;
         let mut slot_guard = slot.lock().await;
 
+        // A child that exited on its own still sits in the slot, and writing to
+        // it fails. Dropped here, so this send resumes it like any idle session.
+        if slot_guard
+            .as_mut()
+            .is_some_and(|s| matches!(s.child.try_wait(), Ok(Some(_))))
+        {
+            slot_guard.take();
+        }
+
         if let Some(at) = claim_continue {
             let Some((item, send)) = crate::store::take_continue_at(session_id, at).await? else {
                 return Ok(SendOutcome::default());
@@ -969,10 +1124,8 @@ impl SessionManager {
             (s.effort != effort && !caps.applies_effort_in_place)
                 || (s.model != model && !caps.applies_model_in_place)
                 || (s.permission_mode != permission_mode && !caps.applies_permission_in_place)
-            // No fast-mode arm: `InPlace` is applied below without replacing
-            // anything, and `AtCreation` is fx — where a respawn would *not*
-            // move it, since a resumed fx session carries the stamp it was
-            // created with.
+            // No fast-mode arm: every harness that has one moves a running
+            // child, so a pick never replaces anything.
         });
 
         if respawn_needed(auth_failed, turn_in_flight, busy, settings_changed) {
@@ -1028,7 +1181,18 @@ impl SessionManager {
                     if let Some(mode) = landed.mode {
                         s.permission_mode = mode;
                     }
+                    if let Some(fast) = landed.fast {
+                        s.fast = fast;
+                    }
                 }
+            }
+
+            // An index model this record doesn't hold was written by a refusal's
+            // fallback: the CLI moved itself. What the child runs is no longer
+            // known here, so the record is cleared and the pick below goes out
+            // whatever it is — under this lock, so no ordering can lose it.
+            if s.harness == Harness::ClaudeCode && indexed.as_ref().is_some_and(|i| i.model != s.model) {
+                s.model = ModelId::default();
             }
 
             // Before the send, so the index reflects intent even if writing to
@@ -1102,6 +1266,7 @@ impl SessionManager {
                             model: model_spec.clone(),
                             effort,
                             mode: permission_mode,
+                            fast,
                         });
                     }
                     if let Some(queued) = s
@@ -1437,7 +1602,24 @@ impl SessionManager {
 
         let slot = self.slot(session_id).await;
         let mut guard = slot.lock().await;
-        live(&mut guard, session_id)?.interrupt().await
+        let session = live(&mut guard, session_id)?;
+        session.interrupt().await?;
+
+        // Claude Code acks an interrupt with no turn to stop and sends nothing
+        // else (v2.1.310) — and a turn it opened for a task notification can
+        // be exactly that, `init` with no model call and no `result`. So Stop
+        // closes the turn itself where the CLI has not within the grace.
+        if matches!(session.stdin, Transport::Lines(_)) {
+            let status = session.status.clone();
+            let epoch = status.lock().await.epoch();
+            drop(guard);
+            let (slot, session_id, app) = (slot.clone(), session_id.to_string(), app.clone());
+            tokio::spawn(async move {
+                tokio::time::sleep(STOP_GRACE).await;
+                close_unanswered_stop(&slot, &session_id, &status, epoch, &app).await;
+            });
+        }
+        Ok(())
     }
 
     /// Stops one of a session's background tasks. Errors for a dead child like
@@ -2001,13 +2183,13 @@ impl Session {
         from: Option<MessageSender>,
         app: &Sink,
     ) -> Result<()> {
-        deliver_prompt(
+        let (_, runs) = deliver_prompt(
             &self.id,
             self.harness,
             prompt,
             attachment_paths,
             issues,
-            baseline,
+            baseline.clone(),
             false,
             crate::harness::pi::Delivery::WhenIdle,
             true,
@@ -2020,7 +2202,39 @@ impl Session {
 
         // After the write: a prompt that never reached the child starts
         // nothing, and the command's error is what the frontend acts on.
-        if let Some(next) = self.status.lock().await.on_send() {
+        let mut next = self.status.lock().await.on_send();
+
+        // A prompt pi handled itself starts no run, so nothing will ever close
+        // the turn the send just opened — and the composer, already busy
+        // optimistically, would sit on Stop for good. Closed here, after
+        // `on_send`, since doing it before would be reopened by it. The head is
+        // the baseline: nothing ran, so the changes panel reads the turn as
+        // having changed nothing rather than diffing it against "now".
+        if !runs {
+            let closed = AgentEvent::mint(
+                self.id.clone(),
+                self.harness,
+                self.seq.fetch_add(1, Relaxed),
+                None,
+                None,
+                AgentEventPayload::TurnCompleted {
+                    status: TurnStatus::Success,
+                    stop_reason: None,
+                    final_text: None,
+                    auth_failed: false,
+                    usage: None,
+                    duration_ms: None,
+                    head: baseline,
+                },
+            );
+            if let Err(err) = app.emit("agent_event", &closed) {
+                eprintln!("[emit err] {err}");
+            }
+            next = self.status.lock().await.on_event(&closed.payload).or(next);
+            append_session_event(&self.id, closed).await?;
+        }
+
+        if let Some(next) = next {
             publish_status(&self.id, next, app).await;
         }
 
@@ -2199,6 +2413,9 @@ impl Session {
             if let Some(landed) = crate::harness::fx::landed_model(session) {
                 self.model = landed;
             }
+            // fx turns fast mode off on a model without it, so the fast check
+            // after this must compare against what the child is on.
+            self.fast = session.current_fast();
             outcome?;
             self.model = model.id.clone();
             return Ok(());
@@ -2235,14 +2452,14 @@ impl Session {
         Ok(())
     }
 
-    /// Moves a running child on or off its harness's faster tier — Claude Code
-    /// alone, whose `apply_flag_settings` carries the same `flagSettings` layer
-    /// `--settings` fills at spawn.
+    /// Moves a running child on or off its harness's faster tier — Claude
+    /// Code's `apply_flag_settings`, grok's model twin, fx's `fast` config
+    /// option.
     ///
-    /// `Capabilities::fast_mode` is what keeps the other three off this path:
-    /// Codex's rides its spawn, fx's is stamped on its session at creation, and
-    /// pi has none. The recorded value moves only once the write has, so a
-    /// failed control leaves the session describing what the child is still on.
+    /// `Capabilities::fast_mode` is what keeps the others off this path:
+    /// Codex's rides its spawn and pi has none. The recorded value moves only
+    /// once the write has, so a failed control leaves the session describing
+    /// what the child is still on.
     pub async fn set_fast(&mut self, fast: bool) -> Result<()> {
         // grok's fast tier is a model id, so its switch is a model switch and
         // there is no flag to send. `fast_arg` is what pairs the two, and the
@@ -2263,6 +2480,13 @@ impl Session {
             thread.update(|settings| settings.set_fast(fast));
             self.fast = fast;
             return Ok(());
+        }
+
+        // fx's is a session config option; the session records what fx said.
+        if let Transport::Fx(session) = &self.stdin {
+            let result = crate::harness::fx::set_fast(session, fast).await;
+            self.fast = session.current_fast();
+            return result;
         }
 
         write_line(
@@ -2739,11 +2963,6 @@ async fn deliver_prompt(
     // Already resolved against the tracker by the caller. Appended to the text
     // the child is given, so the transcript keeps showing exactly what the
     // model was told — the same rule a non-image attachment's `@path` follows.
-    //
-    // fx is the one exception, and it is deliberate: it has no system-prompt
-    // surface, so [`crate::harness::fx::start_turn`] appends Dray's rules to
-    // the wire text alone and the transcript shows strictly less than the
-    // model was told. Nothing else may take that liberty.
     issues: &[IssueRef],
     baseline: Option<String>,
     queued: bool,
@@ -2759,7 +2978,7 @@ async fn deliver_prompt(
     seq: &Arc<AtomicU64>,
     transport: &Transport,
     app: &Sink,
-) -> Result<String> {
+) -> Result<(String, bool)> {
     let seq = seq.fetch_add(1, Relaxed);
 
     // Ahead of the event, because it is what decides the event's own text:
@@ -2823,7 +3042,7 @@ async fn deliver_prompt(
 
     // Logged, not sent: the caller holds the text and opens the turn itself.
     if !send {
-        return Ok(text);
+        return Ok((text, true));
     }
 
     // Codex takes a prompt as a request that opens a turn, so the write is the
@@ -2832,29 +3051,29 @@ async fn deliver_prompt(
     // a no-op.
     if let Some((thread, input)) = codex {
         crate::harness::codex::start_turn(thread, input).await?;
-        return Ok(text);
+        return Ok((text, true));
     }
     // pi takes a prompt as a command whose answer says it was accepted, so the
     // write is the send rather than a line the child picks up on its own
     // schedule.
     if let Transport::Pi(client) = transport {
-        crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images)
+        let runs = crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images)
             .await
             .context(Undelivered)?;
-        return Ok(text);
+        return Ok((text, runs));
     }
     // grok takes a prompt into the running turn through a method of its own;
     // a second `session/prompt` would take over the id the turn settles on.
     if let (Transport::Grok(session), crate::harness::pi::Delivery::Steer) = (transport, delivery) {
         crate::harness::grok::interject(session, &text).await.context(Undelivered)?;
-        return Ok(text);
+        return Ok((text, true));
     }
     // fx takes a prompt as a request that blocks for the turn, so the write
     // is the send and the reader settles the answer. Images not wired: the
     // Codex provider answered `refused` to one on capture.
     if let Some(sent) = transport.open_turn(&text).await {
         sent?;
-        return Ok(text);
+        return Ok((text, true));
     }
     let stdin = transport.lines()?;
 
@@ -2883,7 +3102,7 @@ async fn deliver_prompt(
 
     let line = json!({"type":"user","message":{"role":"user","content": content}});
     write_line(stdin, &line).await?;
-    Ok(text)
+    Ok((text, true))
 }
 
 /// The handles a read loop needs once its harness has stopped being relevant.
@@ -2912,7 +3131,14 @@ pub struct Ingest<'a> {
 /// properties of Dray's own event model. With a copy per harness they would
 /// drift, and the drift would be silent — a second harness whose deltas were
 /// persisted looks exactly like one whose logs are simply larger.
-pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink) {
+pub async fn ingest(ctx: &Ingest<'_>, agent_event: AgentEvent, app: &Sink) {
+    ingest_event(ctx, agent_event, app, true).await
+}
+
+/// [`ingest`], with `tracked` false for an event whose status change the
+/// caller already made under its own lock — Stop's close, which has to check
+/// and close the turn in one step.
+async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink, tracked: bool) {
     // Filled here rather than in the mapper because only the session layer
     // knows the cwd. Freezing the tree id onto the closing event is what
     // stops an idle session's diff from absorbing everything that later
@@ -2958,6 +3184,18 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink) {
         eprintln!("[emit err] {err}");
     }
 
+    // The CLI moved the session to another model for good. Recorded, or the
+    // next send restates the model it left and the CLI goes back to it.
+    if let AgentEventPayload::Notice { model: Some(model), .. } = &agent_event.payload {
+        match crate::store::set_session_model(ctx.session_id, model.clone()).await {
+            Ok(Some(item)) => {
+                app.emit(crate::orchestration::SESSION_CHANGED, &item).ok();
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("[model fallback write err] {e:#}"),
+        }
+    }
+
     // One lock for both. The tool count is fed here rather than from inside
     // `on_event` because the subagent test needs the envelope: a subagent's
     // tool call runs on its own thread, and its result is not a point where
@@ -2981,7 +3219,9 @@ pub async fn ingest(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink) {
     //
     // Order is status→queued, matching every other holder of both, so no
     // deadlock: nothing holds `queued` while awaiting `status`.
-    let (next_status, reserved, limit_reset) = {
+    let (next_status, reserved, limit_reset) = if !tracked {
+        (None, false, None)
+    } else {
         let mut tracker = ctx.status.lock().await;
         let before = tracker.status();
         if agent_event.subagent.is_none() {
@@ -3208,7 +3448,17 @@ async fn apply_live_controls(
         s.set_permission_mode(permission_mode).await?;
     }
     if caps.fast_mode == FastMode::InPlace && s.fast != fast {
-        s.set_fast(fast).await?;
+        if let Err(err) = s.set_fast(fast).await {
+            // fx turns fast mode down on a model with no fast lane, and that is
+            // effort's case: run the turn at ordinary speed and say so, rather
+            // than lose the prompt over it.
+            if s.harness != Harness::Fx {
+                return Err(err);
+            }
+            report_session_error(session_id, s.harness, &format!("{err:#}"), &s.seq, app).await;
+            touch_session_index_item(session_id, s.model.clone(), s.effort, s.permission_mode, s.fast)
+                .await?;
+        }
     }
     Ok(())
 }
@@ -3258,6 +3508,11 @@ async fn apply_deferred(
         Ok(()) => landed.mode = Some(controls.mode),
         Err(err) => report_session_error(session_id, harness, &format!("{err:#}"), seq, app).await,
     }
+    // After the model, which can turn fast mode off or take the option away.
+    if let Err(err) = fx::set_fast(fx, controls.fast).await {
+        report_session_error(session_id, harness, &format!("{err:#}"), seq, app).await;
+    }
+    landed.fast = Some(fx.current_fast());
 
     fx.record_applied(landed);
 }
@@ -3417,7 +3672,7 @@ async fn flush_one_per_turn(
             )
             .await
             {
-                Ok(text) => texts.push(text),
+                Ok((text, _)) => texts.push(text),
                 Err(err) => {
                     eprintln!("[queued flush err] {err}");
                     report_send_failure(session_id, harness, &err.to_string(), seq, app)
@@ -3734,7 +3989,7 @@ mod tests {
     #[test]
     fn an_fx_reservation_holds_the_turn_across_the_flush() {
         let done = AgentEventPayload::TurnCompleted {
-            status: crate::events::TurnStatus::Success,
+            status: TurnStatus::Success,
             stop_reason: None,
             final_text: None,
             usage: None,
@@ -3760,6 +4015,23 @@ mod tests {
             Some(SessionStatus::Completed)
         );
         assert!(!tracker.turn_in_flight());
+    }
+
+    /// What Stop's watchdog reads: the epoch moves on a send and on every turn
+    /// edge, so a turn the CLI closed or reopened after the interrupt is left
+    /// alone, and Dray's own closing payload closes the turn it is handed.
+    #[test]
+    fn the_epoch_moves_on_every_turn_edge_and_a_synthetic_close_ends_the_turn() {
+        let mut tracker = StatusTracker::default();
+
+        tracker.on_send();
+        let at_stop = tracker.epoch();
+        assert!(tracker.turn_in_flight());
+
+        tracker.on_event(&closing_turn("aborted", None));
+        assert!(!tracker.turn_in_flight());
+        assert_eq!(tracker.status(), SessionStatus::Completed);
+        assert_ne!(tracker.epoch(), at_stop);
     }
 
     /// The fixture's second turn spawns a background agent: its `result`
@@ -3868,7 +4140,7 @@ mod tests {
 
     fn turn_completed_auth(auth_failed: bool) -> AgentEventPayload {
         AgentEventPayload::TurnCompleted {
-            status: crate::events::TurnStatus::Success,
+            status: TurnStatus::Success,
             stop_reason: None,
             auth_failed,
             final_text: None,

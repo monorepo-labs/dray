@@ -1330,6 +1330,19 @@ pub async fn set_session_status(
     .await
 }
 
+/// Records a model the harness moved the session to on its own — a refusal's
+/// fallback — so a resume and the composer follow it.
+pub async fn set_session_model(
+    session_id: &str,
+    model: ModelId,
+) -> Result<Option<SessionIndexItem>> {
+    update_item(session_id, |item| {
+        item.model = model;
+        item.clone()
+    })
+    .await
+}
+
 /// Moves a session out of the worktree it was running in and back to its
 /// project root, which is what makes it survive the directory being deleted.
 ///
