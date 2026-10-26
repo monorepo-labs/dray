@@ -13,8 +13,8 @@ const RUN_SERVER_PROMPT = "start the dev server in the background";
 /// the design: the agent writes the commit message with the context it just
 /// worked in, so there is no second write path, no confirm dialog and no error
 /// surface — whatever goes wrong is reported in the transcript like any other
-/// tool failure. The prompts stay a few words for the same reason. The model
-/// knows how to commit and whether the branch has an upstream; a sentence
+/// tool failure. The shipped prompts stay a few words for the same reason. The
+/// model knows how to commit and whether the branch has an upstream; a sentence
 /// spelling it out here is a spec competing with the repo's own instructions,
 /// and this repo has firm ones about commit messages.
 ///
@@ -34,87 +34,89 @@ export type HandoffAction = {
   /// `handoff_custom` and its text never leaves the machine.
   builtin: BuiltinHandoffId | null;
   label: string;
-  /// Sent verbatim as if it were typed. The shipped defaults are deliberately
-  /// as short as the button — the model knows how to commit, and whether the
-  /// branch has an upstream, better than a sentence written here does. A
-  /// reader's own prompt can be any length.
+  /// Sent verbatim as if it were typed.
   prompt: string;
 };
 
 export type BuiltinHandoffId = "commit" | "pr" | "runServer";
 
-/// One button as the reader configured it, in local storage. **Empty means the
-/// default** on a built-in, label and prompt alike, so the stored copy carries
-/// only what the reader changed and a later build's wording still reaches
-/// everyone who never touched it.
-export type HandoffButton = { id: string; label: string; prompt: string };
-
-/// The three that ship, and what each says when nobody has changed it.
-export const BUILTIN_HANDOFF: Record<BuiltinHandoffId, { label: string; prompt: string }> = {
-  commit: { label: "Commit", prompt: "commit your changes" },
-  pr: { label: "Create PR", prompt: "create a PR" },
-  runServer: { label: "Run server", prompt: RUN_SERVER_PROMPT },
-};
-
-/// The row as shipped, and what Reset brings back. Stored order is draw order:
-/// commit, then propose, then Run server last — Commit sits where the eye
-/// lands, and a third kind of action at the head displaces the thing most
-/// often wanted. A custom button is appended after them.
-export const DEFAULT_HANDOFF_BUTTONS: HandoffButton[] = [
-  { id: "commit", label: "", prompt: "" },
-  { id: "pr", label: "", prompt: "" },
-  { id: "runServer", label: "", prompt: "" },
+/// The three that ship, in their shipped order: commit, then propose, then Run
+/// server last — Commit sits where the eye lands, and a third kind of action
+/// at the head displaces the thing most often wanted. The reader can reorder.
+///
+/// **Fixed, not editable.** Each is shown by a rule about the checkout, and
+/// that rule is only right for the words it was written for: "commit your
+/// changes" belongs on a dirty tree, a prompt rewritten into something else
+/// does not. So the reader can switch one off, and writes their own words as a
+/// button of their own.
+export const BUILTIN_HANDOFF: { id: BuiltinHandoffId; label: string; prompt: string }[] = [
+  { id: "commit", label: "Commit", prompt: "commit your changes" },
+  { id: "pr", label: "Create PR", prompt: "create a PR" },
+  { id: "runServer", label: "Run server", prompt: RUN_SERVER_PROMPT },
 ];
 
-export function isBuiltinHandoff(id: string): id is BuiltinHandoffId {
-  return Object.hasOwn(BUILTIN_HANDOFF, id);
+export function builtinHandoff(id: BuiltinHandoffId) {
+  return BUILTIN_HANDOFF.find((b) => b.id === id)!;
 }
 
+function isBuiltinHandoff(id: unknown): id is BuiltinHandoffId {
+  return BUILTIN_HANDOFF.some((b) => b.id === id);
+}
+
+/// A button the reader added. Shown whenever there is a session, since nothing
+/// here can know what its prompt needs.
+export type CustomHandoffButton = { kind: "custom"; id: string; label: string; prompt: string };
+
+/// One entry in the reader's row: a built-in, switched on or off, or one of
+/// their own.
+export type HandoffEntry = { kind: "builtin"; id: BuiltinHandoffId; on: boolean } | CustomHandoffButton;
+
+/// The reader's row, in local storage, in draw order — built-ins and their own
+/// buttons in one list, since the reader orders them together.
+export type HandoffConfig = HandoffEntry[];
+
+export const DEFAULT_HANDOFF: HandoffConfig = BUILTIN_HANDOFF.map((b) => ({
+  kind: "builtin",
+  id: b.id,
+  on: true,
+}));
+
 /// A stored value read back, whatever is in there. Anything that is not a list
-/// of buttons — a malformed write, a shape from another build — reads as the
-/// defaults rather than breaking the row, and a bad entry inside a good list
-/// is dropped alone. An empty list is a real answer: every button removed.
-export function readHandoffButtons(raw: unknown): HandoffButton[] {
-  if (!Array.isArray(raw)) return DEFAULT_HANDOFF_BUTTONS;
+/// — a malformed write, a shape from another build — reads as the defaults
+/// rather than breaking the row, and a bad entry inside a good list is dropped
+/// alone. A built-in the stored list lacks is appended switched on, so one a
+/// later build adds reaches every reader.
+export function readHandoffConfig(raw: unknown): HandoffConfig {
+  if (!Array.isArray(raw)) return DEFAULT_HANDOFF;
   const seen = new Set<string>();
-  const out: HandoffButton[] = [];
+  const out: HandoffConfig = [];
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
-    const { id, label, prompt } = entry as Record<string, unknown>;
+    const { kind, id, on, label, prompt } = entry as Record<string, unknown>;
     if (typeof id !== "string" || !id || seen.has(id)) continue;
+    if (kind === "builtin" && isBuiltinHandoff(id)) {
+      out.push({ kind, id, on: on !== false });
+    } else if (kind === "custom" && !isBuiltinHandoff(id)) {
+      // A built-in's id would collide with it as a React key in the row.
+      out.push({
+        kind,
+        id,
+        label: typeof label === "string" ? label : "",
+        prompt: typeof prompt === "string" ? prompt : "",
+      });
+    } else {
+      continue;
+    }
     seen.add(id);
-    out.push({
-      id,
-      label: typeof label === "string" ? label : "",
-      prompt: typeof prompt === "string" ? prompt : "",
-    });
   }
-  return out.length === 0 && raw.length > 0 ? DEFAULT_HANDOFF_BUTTONS : out;
+  for (const b of DEFAULT_HANDOFF) if (!seen.has(b.id)) out.push(b);
+  return out;
 }
 
 /// What an empty label falls back to on a custom button: the prompt's first
 /// few words, which is roughly what the reader would have called it.
 export function labelFromPrompt(prompt: string): string {
   return prompt.trim().split(/\s+/).slice(0, 3).join(" ");
-}
-
-/// A configured button made drawable, or `null` for a custom one with nothing
-/// to send — an empty prompt never goes out. A built-in left empty falls back
-/// to what it ships with.
-function resolve(button: HandoffButton): HandoffAction | null {
-  const label = button.label.trim();
-  const prompt = button.prompt.trim();
-  if (isBuiltinHandoff(button.id)) {
-    const shipped = BUILTIN_HANDOFF[button.id];
-    return {
-      id: button.id,
-      builtin: button.id,
-      label: label || shipped.label,
-      prompt: prompt || shipped.prompt,
-    };
-  }
-  if (!prompt) return null;
-  return { id: button.id, builtin: null, label: label || labelFromPrompt(prompt), prompt };
 }
 
 /// Whether a pull request from this checkout would contain anything.
@@ -136,10 +138,9 @@ function canOpenPr(status: WorkStatus): boolean {
   return status.dirty > 0 || status.aheadOfBase === null || status.aheadOfBase > 0;
 }
 
-/// Which buttons the composer's action row draws, in the order they are drawn:
-/// the reader's configured list, each built-in kept only where its rule offers
-/// it. Relabelling or re-prompting one keeps that rule — a Commit renamed "Ship
-/// it" still has nothing to ship on a clean tree.
+/// Which buttons the composer's action row draws, in the reader's order: each
+/// built-in this checkout earns and the reader has not switched off, and each
+/// of the reader's own that has something to send.
 ///
 /// Empty means no session — with one, Run server and any custom button keep
 /// the row standing.
@@ -149,26 +150,25 @@ function canOpenPr(status: WorkStatus): boolean {
 /// "Create PR" button would open a duplicate.
 ///
 /// Run server is the exception to the git rules: it wants a session and nothing
-/// else, and a custom button takes the same rule, since nothing here can know
-/// what the reader's prompt needs. Being parked behind the sliver is what makes
-/// that bearable. Nothing tracks whether a server is already up — the cheap
-/// signal, `tasksBySession`, answers "some background task is live" and not
-/// "this project's server is up", so gating on it would hide the button through
-/// an unrelated `Monitor` run. On permanent display the button asks a question
-/// it cannot answer; behind the sliver only someone who went looking sees it,
-/// and going looking is wanting it.
+/// else, and a custom button takes the same rule. Being parked behind the
+/// sliver is what makes that bearable. Nothing tracks whether a server is
+/// already up — the cheap signal, `tasksBySession`, answers "some background
+/// task is live" and not "this project's server is up", so gating on it would
+/// hide the button through an unrelated `Monitor` run. On permanent display the
+/// button asks a question it cannot answer; behind the sliver only someone who
+/// went looking sees it, and going looking is wanting it.
 export function handoffActions(
   status: WorkStatus | null,
   hasPr: boolean,
   hasSession = false,
-  buttons: HandoffButton[] = DEFAULT_HANDOFF_BUTTONS,
+  config: HandoffConfig = DEFAULT_HANDOFF,
 ): HandoffAction[] {
   const offered = new Set<BuiltinHandoffId>();
 
   // Running a server needs no repository. Vague about which server — the agent
-  // reads the repo — but "in the background" is load-bearing in the default:
-  // without it the CLI runs `pnpm dev` in a foreground Bash, which times out
-  // and takes the server down with it.
+  // reads the repo — but "in the background" is load-bearing: without it the
+  // CLI runs `pnpm dev` in a foreground Bash, which times out and takes the
+  // server down with it.
   if (hasSession) offered.add("runServer");
 
   if (status && status.branch !== null) {
@@ -176,15 +176,19 @@ export function handoffActions(
     // composer is `max-w-3xl` but shrinks with its column, so with the right
     // panel open it is nearer 415px. Five labelled buttons came to ~523px and
     // four to ~411px, both over; Commit & push, Draft PR and Push went for
-    // that. A reader's own buttons can go past it, and `HandoffRow` answers by
-    // truncating labels inside the composer's width.
+    // that. A reader's own buttons can go past it, and `HandoffRow` scrolls.
     if (status.dirty > 0) offered.add("commit");
     if (canOpenPr(status) && !hasPr) offered.add("pr");
   }
 
-  return buttons.flatMap((button) => {
-    const shown = isBuiltinHandoff(button.id) ? offered.has(button.id) : hasSession;
-    const action = shown ? resolve(button) : null;
-    return action ? [action] : [];
+  return config.flatMap((entry): HandoffAction[] => {
+    if (entry.kind === "builtin") {
+      if (!entry.on || !offered.has(entry.id)) return [];
+      return [{ ...builtinHandoff(entry.id), builtin: entry.id }];
+    }
+    // An empty prompt never goes out as a send.
+    const prompt = entry.prompt.trim();
+    if (!hasSession || !prompt) return [];
+    return [{ id: entry.id, builtin: null, label: entry.label.trim() || labelFromPrompt(prompt), prompt }];
   });
 }

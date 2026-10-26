@@ -50,7 +50,7 @@ export function useDragReorder<T>(
     // write fails.
     if (e.button !== 0 || !list.current || pending.current) return;
     // The item's own controls and fields answer their own presses.
-    if ((e.target as Element).closest("button:not([data-grip]), input")) return;
+    if ((e.target as Element).closest("button:not([data-grip]), input, textarea")) return;
     // Keeps the press from starting a text selection across the items.
     e.preventDefault();
     const el = e.currentTarget;

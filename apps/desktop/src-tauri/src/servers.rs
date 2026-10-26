@@ -427,11 +427,17 @@ struct Welcome {
     release: Option<String>,
     #[serde(default)]
     stale: bool,
+    /// `std::env::consts::OS` on the server.
+    #[serde(default)]
+    os: Option<String>,
 }
 
 /// Connects and says hello. Answers the admitted socket, or why not.
 async fn admit(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
-    admit_with(url, json!({ "v": PROTOCOL, "token": token })).await
+    // `counts`: this app reports the sessions it starts there, so the server
+    // must not. This Mac's own server is reached through `admit_as_host`
+    // instead and counts its sessions itself.
+    admit_with(url, json!({ "v": PROTOCOL, "token": token, "counts": true })).await
 }
 
 /// This Mac's own server, which may call back into the app: browser steps go
@@ -1071,6 +1077,13 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
+    let counts = server != LOCAL && cmd == "send_msg";
+    // The server skips both for this app, which reports them instead. Only
+    // the webview reaches this command, so a send here is somebody pressing it.
+    let created = (counts && args["isNewSession"] == true).then(|| args["sessionId"].as_str().map(str::to_string)).flatten();
+    if counts {
+        crate::analytics::track_active_day();
+    }
     let call = NEXT_CALL.fetch_add(1, Ordering::Relaxed);
     let (reply, answer) = oneshot::channel();
     {
@@ -1087,9 +1100,27 @@ pub async fn server_invoke(server: String, cmd: String, args: Value) -> Result<V
         }
         conn.pending.insert(call, reply);
     }
-    answer
+    let answer = answer
         .await
-        .unwrap_or_else(|_| Err(json!("the connection closed before the server answered")))
+        .unwrap_or_else(|_| Err(json!("the connection closed before the server answered")));
+    // A created session answers with its snapshot, `null` otherwise. One the
+    // server wrote in a shape this build cannot read goes uncounted.
+    if let Some(id) = created {
+        let item = match &answer {
+            Ok(ok) => store::SessionIndexItem::deserialize(&ok["snapshot"]).ok(),
+            // The row is written before the spawn, so a create failing after
+            // it still started a session — the rule the local count follows.
+            Err(_) => Box::pin(server_invoke(server.clone(), "session_index_item".into(), json!({ "sessionId": id })))
+                .await
+                .ok()
+                .and_then(|row| store::SessionIndexItem::deserialize(&row).ok()),
+        };
+        if let Some(item) = item {
+            let os = conns().iter().find(|c| c.saved.id == server).and_then(|c| c.met.as_ref()?.os.clone());
+            crate::analytics::remote_session_started(&item, os.as_deref());
+        }
+    }
+    answer
 }
 
 /// Asks `server` to update itself on its own channel. Answers `"restarting"` —
@@ -1346,7 +1377,7 @@ mod tests {
         assert_eq!(out.stable.as_ref().map(ToString::to_string).as_deref(), Some("0.11.1"));
         assert_eq!(out.beta.as_ref().map(ToString::to_string).as_deref(), Some("0.12.0-beta.10"), "numeric, not lexical");
 
-        let on = |release: &str| Welcome { version: Some("0.28.0".into()), release: Some(release.into()), stale: false };
+        let on = |release: &str| Welcome { version: Some("0.28.0".into()), release: Some(release.into()), stale: false, os: None };
         assert!(behind(&on("0.11.0"), false, &out));
         assert!(!behind(&on("0.11.1"), false, &out));
         assert!(!behind(&on("0.11.1"), false, &Releases::default()), "nothing out is nothing to update to");
@@ -1359,7 +1390,7 @@ mod tests {
 
         let old = Welcome::default();
         assert!(behind(&old, false, &out), "a server that says nothing predates saying");
-        let local = Welcome { version: Some("0.28.0".into()), release: None, stale: false };
+        let local = Welcome { version: Some("0.28.0".into()), release: None, stale: false, os: None };
         assert!(!behind(&local, true, &out), "a local build is never offered one");
     }
 

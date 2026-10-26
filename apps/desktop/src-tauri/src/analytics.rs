@@ -38,6 +38,7 @@ use serde_json::{json, Map, Value};
 use ts_rs::TS;
 
 use crate::settings;
+use crate::store::SessionIndexItem;
 
 /// Set at build time by the release workflow. `option_env!` resolves at compile
 /// time, so `build.rs` has to declare the rerun — otherwise a key exported
@@ -254,6 +255,62 @@ pub fn feature_used(feature: &'static str) {
     track("feature_used", json!({ "feature": feature }));
 }
 
+tokio::task_local! {
+    /// Set around a serve call from a Dray app that reports the sessions it
+    /// starts on this server itself, which it says in its hello.
+    pub static CLIENT_COUNTS: bool;
+}
+
+/// Whether the call being served came from an app that reports what it
+/// starts here, so this process must not report it a second time under its
+/// own install id. False outside a serve call: the composer on this machine,
+/// an agent's `dray new`, a phone.
+pub fn client_counts() -> bool {
+    CLIENT_COUNTS.try_with(|counts| *counts).unwrap_or(false)
+}
+
+/// Reports a session this process just wrote down, on this machine.
+pub fn session_started(item: &SessionIndexItem) {
+    track("session_started", session_properties(item, None));
+}
+
+/// Reports a session the reader's app just started on an external server.
+/// `os` is what the server's welcome said, `None` from one too old to say.
+///
+/// The app owns this count rather than the server: a Linux `dray-serve`
+/// carries no key and sends nothing, and a remote Mac would count it under
+/// its own install as a local session of somebody else.
+pub fn remote_session_started(item: &SessionIndexItem, os: Option<&str>) {
+    track("session_started", session_properties(item, Some(os)));
+}
+
+/// `session_started`'s properties. Read off the index entry, which is what was
+/// actually written down; nothing about the prompt, the path or the server,
+/// whose OS goes out only as a closed tag since the welcome is the server's
+/// own text.
+fn session_properties(item: &SessionIndexItem, remote: Option<Option<&str>>) -> Value {
+    let mut props = json!({
+        "harness": item.harness,
+        "model": item.model.as_str(),
+        "effort": item.effort,
+        "permission_mode": item.permission_mode,
+        "fast": item.fast,
+        "worktree": item.worktree_name.is_some(),
+        "spawned": item.parent_session_id.is_some(),
+        "location": if remote.is_some() { "remote" } else { "local" },
+    });
+    if let Some(os) = remote {
+        props["remote_os"] = match os {
+            Some("macos") => "macos",
+            Some("linux") => "linux",
+            Some(_) => "other",
+            None => "unknown",
+        }
+        .into();
+    }
+    props
+}
+
 /// Reports something that broke, by **where** it broke and never by what it
 /// said.
 ///
@@ -348,6 +405,10 @@ fn trim_source_path(file: &str) -> &str {
 /// silently reports nothing — a wrong key and a wrong region — both land there.
 async fn send(event: &'static str, daily_key: Option<String>, properties: Value) {
     let Some(key) = api_key() else {
+        // A dev build has no key, so this is the only way to see what it would send.
+        if cfg!(debug_assertions) && !env_opt_out() {
+            eprintln!("[analytics] would send {event} {properties}");
+        }
         return;
     };
 
@@ -367,6 +428,21 @@ async fn send(event: &'static str, daily_key: Option<String>, properties: Value)
     }
 
     let mut props = base_properties().clone();
+    // PostHog judges bot traffic at query time off this *property*, never the
+    // request's User-Agent header, and reads a missing one as automation — so
+    // without it every app event is `$virt_is_bot` and bot-filtered insights
+    // drop the app silently. Here rather than in `base_properties`, which is
+    // also `$set` on the person.
+    props.insert(
+        "$raw_user_agent".into(),
+        format!(
+            "Dray/{} ({}; {})",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )
+        .into(),
+    );
     if let Value::Object(extra) = properties {
         props.extend(extra);
     }
@@ -424,6 +500,39 @@ fn base_properties() -> &'static Map<String, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn item() -> SessionIndexItem {
+        use crate::{events::ApprovalPolicy, harness::Harness, models::ModelId};
+        SessionIndexItem::new(
+            "s", Harness::ClaudeCode, "/p", "/p", None, None, "hi",
+            ModelId::new("opus"), None, ApprovalPolicy::Auto, false, None,
+        )
+    }
+
+    /// One owner per session: a serve call from an app that counts its own
+    /// sessions is the only place this process stays quiet.
+    #[tokio::test]
+    async fn only_a_counting_client_silences_the_server() {
+        assert!(!client_counts(), "the composer on this machine, an agent's `dray new`");
+        assert!(CLIENT_COUNTS.scope(true, async { client_counts() }).await);
+        assert!(!CLIENT_COUNTS.scope(false, async { client_counts() }).await, "a phone");
+    }
+
+    /// The server's OS is its own text, so only closed tags leave the machine.
+    #[test]
+    fn location_is_closed_tags() {
+        let local = session_properties(&item(), None);
+        assert_eq!(local["location"], json!("local"));
+        assert!(local.get("remote_os").is_none());
+        assert_eq!(local["harness"], json!("claude_code"));
+
+        let tag = |os| session_properties(&item(), Some(os))["remote_os"].clone();
+        assert_eq!(tag(Some("linux")), json!("linux"));
+        assert_eq!(tag(Some("macos")), json!("macos"));
+        assert_eq!(tag(Some("my-hostname")), json!("other"));
+        assert_eq!(tag(None), json!("unknown"));
+        assert_eq!(session_properties(&item(), Some(None))["location"], json!("remote"));
+    }
 
     /// The kind is what the breakdown is read by, so a call site's own
     /// properties must not be able to rename it.

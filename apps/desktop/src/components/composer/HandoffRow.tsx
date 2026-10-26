@@ -108,7 +108,10 @@ export default function HandoffRow({
             "h-1 group-hover:h-8 group-focus-within:h-8"
           }
         >
-          <div className="flex gap-1">
+          {/* Scrolls sideways once the buttons outgrow the card, so a row of
+              the reader's own never puts one out of reach. No scrollbar: the
+              window is 32px tall and a bar would eat the buttons. */}
+          <div className="flex gap-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none]">
           {actions.map((action) => {
             const Icon = handoffIcon(action.builtin);
             return (
@@ -138,10 +141,10 @@ export default function HandoffRow({
                   trackFeature(action.builtin ? `handoff_${action.builtin}` : "handoff_custom");
                   onSend(action.prompt);
                 }}
-                // `min-w-0 shrink` with a cap, so a long label truncates and a
-                // row of the reader's own buttons squeezes inside the zone's
-                // width rather than wrapping or running out past it.
-                className="pointer-events-none min-w-0 max-w-48 shrink group-focus-within:pointer-events-auto group-hover:pointer-events-auto"
+                // Capped, so a long label truncates; never shrunk, since a row
+                // squeezed to fit truncates every label to a letter. A row
+                // wider than the card scrolls instead.
+                className="pointer-events-none max-w-48 group-focus-within:pointer-events-auto group-hover:pointer-events-auto"
               >
                 <Icon className="size-3.5" strokeWidth={1.5} />
                 <span className="truncate">{action.label}</span>

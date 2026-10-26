@@ -554,6 +554,8 @@ final class Composer {
                 ?? .new
         }
         if target == .new { Task { await loadPicks() } }
+        // Counted by the server off this connection; nothing is sent but the name.
+        Task { _ = try? await store.call(server, "island_opened", as: JSON.self) }
     }
 
     func pick(_ t: Target) {

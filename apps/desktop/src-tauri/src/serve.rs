@@ -528,6 +528,13 @@ struct Hello {
     token: String,
     #[serde(default)]
     host: Option<HostOffer>,
+    /// `"island"` from Dray Island, which [`island_used`] counts by.
+    #[serde(default)]
+    client: Option<String>,
+    /// The client reports the sessions it starts here itself — the reader's
+    /// app on another machine — so this server must not count them too.
+    #[serde(default)]
+    counts: bool,
 }
 
 /// What the app can answer when it connects as the host.
@@ -962,6 +969,8 @@ async fn connection(
         "release": option_env!("DRAY_CLI_VERSION"),
         "stale": stale(),
         "dictation": cfg!(feature = "desktop"),
+        // Read by the app to tag a session it starts here, as a closed value.
+        "os": std::env::consts::OS,
     });
     write.send(Message::text(welcome.to_string())).await?;
     write.send(Message::text(snapshot)).await?;
@@ -992,7 +1001,14 @@ async fn connection(
     });
 
     let connection = NEXT_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let offer = serde_json::from_str::<Hello>(&hello).ok().and_then(|h| h.host).filter(|_| hosts);
+    let hello = serde_json::from_str::<Hello>(&hello).ok();
+    // Read before the filter: a remote reader's app reaches this server
+    // through the tunnel or a `dray-serve` listener too, neither of them hosts.
+    let counts = hello.as_ref().is_some_and(|h| h.counts);
+    let hello = hello.filter(|_| hosts);
+    // The local listener alone, like the host offer: the island runs on this Mac.
+    let island = hello.as_ref().is_some_and(|h| h.client.as_deref() == Some("island"));
+    let offer = hello.and_then(|h| h.host);
     if let Some(offer) = offer {
         *host() = Some(Host { connection, browser: offer.browser, frames: replies.clone(), waiting: HashMap::new() });
     }
@@ -1025,13 +1041,19 @@ async fn connection(
         // Concurrently, as Tauri runs async commands: a send that spawns a
         // child must not hold a permission reply behind it.
         let (sink, replies) = (sink.clone(), replies.clone());
-        tokio::spawn(async move {
-            let reply = match dispatch(&call.cmd, call.args, sink).await {
-                Ok(ok) => json!({ "id": call.id, "ok": ok }),
+        tokio::spawn(crate::analytics::CLIENT_COUNTS.scope(counts, async move {
+            let args = tag_dictation(&call.cmd, call.args, island);
+            let reply = match dispatch(&call.cmd, args, sink).await {
+                Ok(ok) => {
+                    if island {
+                        island_used(&call.cmd);
+                    }
+                    json!({ "id": call.id, "ok": ok })
+                }
                 Err(err) => json!({ "id": call.id, "err": err }),
             };
             let _ = replies.send(reply.to_string());
-        });
+        }));
     }
 
     // Dropping its waiters answers every call still out on it.
@@ -1043,6 +1065,44 @@ async fn connection(
     drop(replies);
     writer.abort();
     failed.map_or(Ok(()), |e| Err(e.into()))
+}
+
+/// Dictation forwarded to the app carries `via`, set here off the hello and
+/// never taken from the caller, so only the island's connection counts as the
+/// island in `transcribe_audio`'s report.
+#[cfg(feature = "desktop")]
+fn tag_dictation(cmd: &str, args: Value, island: bool) -> Value {
+    if !crate::transcription::HOSTED.contains(&cmd) {
+        return args;
+    }
+    let mut args = match args {
+        Value::Object(args) => args,
+        _ => serde_json::Map::new(),
+    };
+    args.remove("via");
+    if island {
+        args.insert("via".into(), json!("island"));
+    }
+    Value::Object(args)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn tag_dictation(_: &str, args: Value, _: bool) -> Value {
+    args
+}
+
+/// What the island did, counted off its connection rather than a per-call
+/// argument, and on the call succeeding. Each is also activity: somebody
+/// working through the island all day with Dray's window hidden is using Dray.
+fn island_used(cmd: &str) {
+    let feature = match cmd {
+        "island_opened" => "island_open",
+        "send_msg" => "island_send",
+        "respond_permission" | "answer_questions" => "island_card",
+        _ => return,
+    };
+    crate::analytics::track("feature_used", json!({ "feature": feature }));
+    crate::analytics::track_active_day();
 }
 
 /// A reply from the host, handed to the call waiting on it.
@@ -1220,9 +1280,12 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         move_project(path: String, delta: isize) => crate::projects::move_project(&path, delta).await;
         retag_space(from: String, to: Option<String>) => crate::projects::retag_space(&from, to).await;
         analytics_identity() => ok(crate::analytics::analytics_identity().await);
-        track_feature(feature: String) => ok(crate::track_feature(feature));
+        track_feature(feature: String, target: Option<crate::BrowserTarget>) => ok(crate::track_feature(feature, target));
         track_render_error(code: Option<u32>, frames: Vec<String>) => ok(crate::track_render_error(code, frames));
         track_active_day() => ok(crate::analytics::track_active_day());
+        // The panel opening, which nothing else reaches the server for; counted
+        // by `island_used` off the connection, so the call itself does nothing.
+        island_opened() => ok(());
 
         // Git and files.
         list_branches(cwd: String) => git::list_branches(&cwd).await;
@@ -1351,6 +1414,15 @@ mod tests {
         std::fs::write(&file, "").unwrap();
         assert!(!tunnel_origin("", &file), "an empty file names nothing");
         std::fs::remove_file(&file).ok();
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn dictation_via_comes_from_the_connection() {
+        let forged = json!({ "via": "island", "path": "/x.wav" });
+        assert_eq!(tag_dictation("retry_transcription", forged.clone(), false), json!({ "path": "/x.wav" }));
+        assert_eq!(tag_dictation("stop_transcription", Value::Null, true), json!({ "via": "island" }));
+        assert_eq!(tag_dictation("send_msg", forged.clone(), false), forged);
     }
 
     #[test]

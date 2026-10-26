@@ -5,7 +5,7 @@ import HandoffRow from "@/components/composer/HandoffRow";
 import HandoffSettings from "@/components/settings/HandoffSettings";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
-import { useHandoffButtons } from "@/hooks/useHandoffButtons";
+import { useHandoffConfig } from "@/hooks/useHandoffConfig";
 import { handoffActions } from "@/lib/handoff";
 import type { WorkStatus } from "@/types/events";
 import "../App.css";
@@ -24,8 +24,8 @@ const STATUS: WorkStatus = {
 };
 
 function Composer({ width, dirty }: { width: number; dirty: boolean }) {
-  const buttons = useHandoffButtons();
-  const actions = handoffActions(dirty ? STATUS : { ...STATUS, dirty: 0, aheadOfBase: 0 }, false, true, buttons);
+  const config = useHandoffConfig();
+  const actions = handoffActions(dirty ? STATUS : { ...STATUS, dirty: 0, aheadOfBase: 0 }, false, true, config);
   return (
     <div style={{ width }} className="pt-10">
       <HandoffRow actions={actions} onSend={(p) => console.log("send", p)} />
@@ -53,7 +53,7 @@ function Demo() {
           <input type="checkbox" checked={held} onChange={(e) => setHeld(e.target.checked)} />
           Hold the rows open
         </label>
-        <div className="max-w-160">
+        <div className="flex max-w-160 flex-col gap-7">
           <HandoffSettings />
         </div>
         <Composer width={768} dirty={dirty} />

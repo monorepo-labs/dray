@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  BUILTIN_HANDOFF,
-  DEFAULT_HANDOFF_BUTTONS,
-  handoffActions,
-  labelFromPrompt,
-  readHandoffButtons,
-} from "./handoff";
-import type { HandoffButton } from "./handoff";
+import { DEFAULT_HANDOFF, handoffActions, labelFromPrompt, readHandoffConfig } from "./handoff";
+import type { CustomHandoffButton, HandoffEntry } from "./handoff";
 import type { WorkStatus } from "@/types/events";
 
 const status = (over: Partial<WorkStatus> = {}): WorkStatus => ({
@@ -171,107 +165,94 @@ describe("handoffActions", () => {
   });
 });
 
-describe("handoffActions with the reader's buttons", () => {
-  const custom = (id: string, label: string, prompt: string): HandoffButton => ({
-    id,
-    label,
-    prompt,
-  });
+const custom = (id: string, label: string, prompt: string): CustomHandoffButton => ({
+  kind: "custom",
+  id,
+  label,
+  prompt,
+});
+const builtin = (id: "commit" | "pr" | "runServer", on = true): HandoffEntry => ({
+  kind: "builtin",
+  id,
+  on,
+});
+
+describe("handoffActions with the reader's config", () => {
   const dirty = status({ dirty: 1 });
 
-  // A Commit renamed "Ship it" still has nothing to ship on a clean tree.
-  it("keeps a built-in's rule when it is relabelled and re-prompted", () => {
-    const buttons = [custom("commit", "Ship it", "commit and push")];
-    expect(handoffActions(status(), false, true, buttons)).toEqual([]);
-    expect(handoffActions(dirty, false, true, buttons)).toEqual([
-      { id: "commit", builtin: "commit", label: "Ship it", prompt: "commit and push" },
-    ]);
+  it("hides a built-in the reader switched off", () => {
+    const config = [builtin("commit", false), builtin("pr"), builtin("runServer")];
+    expect(ids(dirty, false, true, config)).toEqual(["pr", "runServer"]);
   });
 
-  // Empty means the shipped text, so clearing a field is how to go back to it.
-  it("falls back to the shipped label and prompt where a built-in is left empty", () => {
-    const [run] = handoffActions(null, false, true, [custom("runServer", "  ", "")]);
-    expect(run).toEqual({ ...run, label: "Run server", prompt: BUILTIN_HANDOFF.runServer.prompt });
+  // The switch only takes a built-in away; it never shows one its rule refuses.
+  it("keeps a switched-on built-in's rule", () => {
+    expect(ids(status(), false, true, DEFAULT_HANDOFF)).not.toContain("commit");
   });
 
-  it("hides a built-in the reader removed", () => {
-    const buttons = DEFAULT_HANDOFF_BUTTONS.filter((b) => b.id !== "commit");
-    expect(ids(dirty, false, true, buttons)).toEqual(["pr", "runServer"]);
+  it("draws in the reader's order, built-ins and their own mixed", () => {
+    const config = [builtin("runServer"), custom("c1", "Lint", "lint"), builtin("commit"), builtin("pr")];
+    expect(ids(dirty, false, true, config)).toEqual(["runServer", "c1", "commit", "pr"]);
   });
 
   it("draws a custom button whenever there is a session, and never without", () => {
-    const buttons = [...DEFAULT_HANDOFF_BUTTONS, custom("custom-1", "Lint", "run the linter")];
-    expect(ids(null, false, true, buttons)).toEqual(["runServer", "custom-1"]);
-    expect(ids(status({ branch: "main" }), false, true, buttons)).toEqual([
-      "runServer",
-      "custom-1",
-    ]);
-    expect(ids(dirty, false, false, buttons)).toEqual(["commit", "pr"]);
+    const config = [...DEFAULT_HANDOFF, custom("c1", "Lint", "run the linter")];
+    expect(ids(null, false, true, config)).toEqual(["runServer", "c1"]);
+    expect(ids(dirty, false, false, config)).toEqual(["commit", "pr"]);
   });
 
   it("marks a custom button as no built-in, so it reports as one fixed name", () => {
-    const [action] = handoffActions(null, false, true, [custom("custom-1", "Lint", "lint")]);
+    const [action] = handoffActions(null, false, true, [custom("c1", "L", "lint")]);
     expect(action.builtin).toBeNull();
   });
 
   // An empty prompt must never go out as a send.
   it("drops a custom button with nothing to send", () => {
-    expect(ids(null, false, true, [custom("custom-1", "Lint", "   ")])).toEqual([]);
+    expect(ids(null, false, true, [custom("c1", "Lint", "  \n ")])).toEqual([]);
   });
 
   it("names an unlabelled custom button after its prompt's first words", () => {
     const [action] = handoffActions(null, false, true, [
-      custom("custom-1", "", "  open a draft pull request please"),
+      custom("c1", "", "  open a draft\npull request please"),
     ]);
     expect(action.label).toBe("open a draft");
-    expect(action.prompt).toBe("open a draft pull request please");
-  });
-
-  it("draws in the stored order", () => {
-    const buttons = [
-      custom("custom-1", "Lint", "lint"),
-      custom("runServer", "", ""),
-      custom("commit", "", ""),
-    ];
-    expect(ids(dirty, false, true, buttons)).toEqual(["custom-1", "runServer", "commit"]);
-  });
-
-  it("draws nothing once every button is removed", () => {
-    expect(ids(dirty, false, true, [])).toEqual([]);
+    expect(action.prompt).toBe("open a draft\npull request please");
   });
 });
 
-describe("readHandoffButtons", () => {
+describe("readHandoffConfig", () => {
   // Nothing stored, or a shape this build cannot read, must leave the row as
   // shipped rather than empty or broken.
   it("reads anything that is not a list as the defaults", () => {
-    for (const raw of [null, undefined, "commit", 3, { commit: "x" }]) {
-      expect(readHandoffButtons(raw)).toEqual(DEFAULT_HANDOFF_BUTTONS);
+    for (const raw of [null, undefined, "commit", 3, { off: [], custom: [] }]) {
+      expect(readHandoffConfig(raw)).toEqual(DEFAULT_HANDOFF);
     }
   });
 
-  it("reads a list holding nothing usable as the defaults", () => {
-    expect(readHandoffButtons([null, 4, { label: "x" }])).toEqual(DEFAULT_HANDOFF_BUTTONS);
-  });
-
-  // Every button removed is an answer, not a corruption.
-  it("keeps an empty list", () => {
-    expect(readHandoffButtons([])).toEqual([]);
+  it("keeps the stored order and appends a built-in it lacks, switched on", () => {
+    expect(readHandoffConfig([custom("c1", "L", "p"), builtin("runServer", false)])).toEqual([
+      custom("c1", "L", "p"),
+      builtin("runServer", false),
+      builtin("commit"),
+      builtin("pr"),
+    ]);
   });
 
   it("drops bad entries and repeated ids, and fills missing fields", () => {
     expect(
-      readHandoffButtons([
-        { id: "commit", label: 5 },
-        { id: "commit", label: "again", prompt: "again" },
-        { id: "", label: "x", prompt: "x" },
+      readHandoffConfig([
+        { kind: "builtin", id: "commit", on: "yes" },
+        { kind: "builtin", id: "commit", on: false },
+        { kind: "builtin", id: "push" },
+        { kind: "custom", id: "pr", label: "x", prompt: "x" },
+        { kind: "custom", id: "c1", label: 5 },
+        { kind: "custom", id: "", label: "x", prompt: "x" },
+        { id: "c2", label: "no kind", prompt: "x" },
         "junk",
-        { id: "custom-1", label: "Lint", prompt: "lint" },
+        builtin("pr"),
+        builtin("runServer"),
       ]),
-    ).toEqual([
-      { id: "commit", label: "", prompt: "" },
-      { id: "custom-1", label: "Lint", prompt: "lint" },
-    ]);
+    ).toEqual([builtin("commit"), custom("c1", "", ""), builtin("pr"), builtin("runServer")]);
   });
 });
 
