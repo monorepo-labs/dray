@@ -8,17 +8,12 @@
 //! uses, and whether the build is failing under them in a way nothing else
 //! would ever tell us.
 //!
-//! **The install id is minted only for an install that is opted in**, and
-//! consent is read in the same hold of the settings lock that mints it —
-//! [`settings::ensure_install_id`], which is why it lives over there rather
-//! than here. Someone who turns this off never has an id written for them, and
-//! turning the switch off clears the stored one, so opting back in is a new
-//! person rather than the old one resurfacing. **Nothing caches it in this
-//! process**: a cache would have to be invalidated by the settings command,
-//! which is a second place for consent to be wrong, and the file read it saves
-//! is small and happens a few times a session. A uuid v4 rather than the v7
-//! used for session ids elsewhere: v7 embeds the moment it was minted, which
-//! for an identifier meant to say nothing is one more thing it says.
+//! **`DRAY_NO_ANALYTICS` is the only opt-out.** Settings has no switch, and a
+//! stored `analytics_enabled: false` from a build that had one is ignored. The
+//! install id is minted on first use by [`settings::ensure_install_id`] and
+//! never cleared. A uuid v4 rather than the v7 used for session ids elsewhere:
+//! v7 embeds the moment it was minted, which for an identifier meant to say
+//! nothing is one more thing it says.
 //!
 //! **No transport plugin.** `reqwest` is already here for Linear, and PostHog's
 //! capture API is one POST, so an event is a request rather than a queue with a
@@ -81,35 +76,17 @@ fn api_key() -> Option<&'static str> {
 /// is a task outliving the thing it was reporting about.
 const TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Whether this run reports at all — what the settings dialog draws, and not
-/// the same as what is on disk whenever [`env_opt_out`] holds.
-///
-/// Read from disk on every ask rather than held: a copy kept here would be one
-/// more thing to keep in step with the file, and the read is one small file
-/// that nothing asks for on a hot path.
-///
-/// The environment wins over the file in one direction only. `DRAY_NO_ANALYTICS`
-/// can turn reporting off; it cannot turn it on over a stored `false`.
-pub async fn enabled() -> bool {
-    !env_opt_out() && settings::read().await.analytics_enabled
-}
-
-/// Whether the environment has forced reporting off for this run.
-///
-/// Read live rather than remembered, and in one place: two call sites reading
-/// the same variable is how the flag and the switch drawn from it drift apart.
-pub fn env_opt_out() -> bool {
+/// Whether the environment has turned reporting off for this run — the only
+/// opt-out there is.
+fn env_opt_out() -> bool {
     std::env::var_os("DRAY_NO_ANALYTICS").is_some()
 }
 
 /// What the webview needs to speak to PostHog for itself.
 ///
-/// Handed over whole rather than looked up on the other side, and that is the
-/// whole of why this type exists: a frontend reading `analytics_enabled` for
-/// itself would be a second reader of consent, free to answer differently from
-/// this one — which is the shape DRA-199 was already caught by once. Here the
-/// answer to "may I", "as whom" and "where to" is one value, and its absence is
-/// the refusal.
+/// Handed over whole rather than looked up on the other side: the answer to
+/// "may I", "as whom" and "where to" is one value, and its absence is the
+/// refusal.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
@@ -133,13 +110,9 @@ pub struct SurveyIdentity {
 ///
 /// The SDK on the other side exists for **surveys**, which are drawn by
 /// `posthog-js` and by nothing else — there is no way to render one from here.
-/// It captures no events of its own, so this is less a second analytics client
-/// than a second surface of the same consent, and consent is still read in one
-/// place: [`settings::ensure_install_id`] answers `None` for an install that
-/// opted out, and that `None` is what stops the SDK ever being initialised.
-///
-/// One value rather than a consent flag the frontend pairs with a lookup of its
-/// own — see [`SurveyIdentity`].
+/// It captures no events of its own. `None` on exactly the grounds [`send`]
+/// refuses on — no key compiled in, or `DRAY_NO_ANALYTICS` — plus an install id
+/// that could not be persisted.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn analytics_identity() -> Option<SurveyIdentity> {
     // Same order as `send`: no key compiled in is the ordinary case for a local
@@ -175,7 +148,7 @@ pub async fn analytics_identity() -> Option<SurveyIdentity> {
     })
 }
 
-/// Enqueues one event, or drops it if this run opted out.
+/// Enqueues one event, or drops it under `DRAY_NO_ANALYTICS`.
 ///
 /// Deliberately **not** `async` and takes no `AppHandle`: an event is
 /// fire-and-forget, and a call that had to be awaited would put a file read and
@@ -183,8 +156,8 @@ pub async fn analytics_identity() -> Option<SurveyIdentity> {
 /// lets the sites that report features call this — several are synchronous
 /// commands with no handle in reach.
 ///
-/// Consent is read inside the spawned half, on every call, so a new call site
-/// cannot forget to ask and cannot run ahead of the persisted answer.
+/// The opt-out is read inside the spawned half, on every call, so a new call
+/// site cannot forget to ask.
 ///
 /// `event` is `&'static str` because every one is a literal, and taking it by
 /// value is what keeps the spawned future `'static` without an allocation.
@@ -201,14 +174,10 @@ pub fn track(event: &'static str, properties: Value) {
 /// event and moves no number, where remembering the date across runs would cost
 /// a file, a lock and a corruption path on the launch path to prevent nothing.
 ///
-/// **The day is claimed only once consent has answered**, inside [`send`] and
-/// after the opt-out is read — never here, where the spawn happens. Claiming up
-/// front looked equivalent and is the bug [`settings::ensure_install_id`] was
-/// written to stop, one layer up: an install that launched opted *out* would
-/// claim the day, send nothing, and then be silenced for the rest of that day
-/// by its own claim if the reader turned reporting back on. Process state that
-/// consent has to remember to clear is a second place for consent to be wrong;
-/// claiming after it is asked leaves nothing to clear.
+/// **The day is claimed only once an event can actually go**, inside [`send`]
+/// and after the install id is in hand — never here, where the spawn happens.
+/// Claimed up front, a run whose id write failed would claim the day, send
+/// nothing, and silence itself until midnight.
 ///
 /// Known wrinkle, not worth solving: "day" is the machine's local date, which
 /// disagrees with PostHog's project timezone at the edges for anyone outside
@@ -386,17 +355,11 @@ async fn send(event: &'static str, daily_key: Option<String>, properties: Value)
         return;
     }
 
-    // The consent check *is* this call. `ensure_install_id` reads the stored
-    // opt-out and mints under the same hold of the settings lock, so there is
-    // no window where consent is read here and acted on a moment later — which
-    // is what let an id be minted for an install that had just opted out.
     let Some(distinct_id) = settings::ensure_install_id().await else {
         return;
     };
 
-    // After consent, never before it: a day claimed by a run that was opted out
-    // would suppress every later report that run made, including the ones the
-    // reader turned back on to get.
+    // After the id, never before it: see `track_daily`.
     if let Some(daily_key) = daily_key {
         if !claim_day(daily_key, chrono::Local::now().format("%Y-%m-%d").to_string()) {
             return;

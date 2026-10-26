@@ -461,10 +461,9 @@ impl std::error::Error for IssueUnavailable {}
 /// same trade.
 ///
 /// Its own file rather than a field on `settings.json`, for two reasons that
-/// both bite: settings are rewritten by every analytics toggle and read on the
-/// launch path where a parse failure falls back to defaults — which would
-/// silently forget the key — and `get_settings` hands that struct to the
-/// frontend, which a credential must never ride along with.
+/// both bite: settings are rewritten whole and read on the launch path where a
+/// parse failure falls back to defaults — which would silently forget the key
+/// — and a struct the frontend may be handed is no place for a credential.
 const CREDENTIALS_FILE: &str = "credentials.json";
 
 /// Serializes writers, like every other whole-file rewrite here.

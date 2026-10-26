@@ -20,7 +20,7 @@ onFocusChange((focused) => {
 
 // Here for the same reason, and not in an effect for the same reason: the SDK
 // lives for the process, and a mount that runs twice would initialise it twice.
-// It refuses itself where the install has opted out, so this is unconditional.
+// It refuses itself under DRAY_NO_ANALYTICS, so this is unconditional.
 void startSurveys();
 startAgentUpdateChecks();
 void applyIsland();

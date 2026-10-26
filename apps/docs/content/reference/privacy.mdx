@@ -1,25 +1,21 @@
 ---
 title: Privacy
-description: Exactly which analytics events Dray sends and what they carry, what is never sent, how to turn analytics off, and how surveys and the website measure visits.
+description: Exactly which analytics events Dray sends and what they carry, what is never sent, how to turn analytics off with `DRAY_NO_ANALYTICS`, and how surveys and the website measure visits.
 sidebar:
   order: 3
 ---
 
-Dray sends a small set of anonymous usage events, so we can see which builds are in use, which features get used and where the app breaks. Your prompts, code, conversations, file paths, session titles and error messages never leave your machine through analytics. Analytics is on by default and one switch turns it off.
+Dray sends a small set of anonymous usage events, so we can see which builds are in use, which features get used and where the app breaks. Your prompts, code, conversations, file paths, session titles and error messages never leave your machine through analytics. Analytics is on, and Settings has no switch for it.
 
 ## Turn analytics off
 
-**Where:** Settings → About → **Share basic analytics**.
+Set `DRAY_NO_ANALYTICS` to any value in the environment Dray starts from. Dray then sends nothing, from the app or from the background server on your Mac, since the app passes the variable on to it. See [Environment variables](/reference/data#environment-variables) for how to start the app with one.
 
-Switch it off and Dray sends nothing more, from the app or from the background server on your Mac. Both read the same setting.
-
-To turn it off without opening Settings, set `DRAY_NO_ANALYTICS` to any value in the environment Dray starts from. The switch then shows as off and greyed out, with "Turned off for this run by DRAY_NO_ANALYTICS." See [Environment variables](/reference/data#environment-variables) for how to start the app with one.
-
-If `~/.dray/settings.json` exists but cannot be read, Dray treats analytics as off.
+Older versions had a **Share basic analytics** switch in Settings. A choice saved there is no longer read.
 
 ## The install id
 
-Events are tied to a random id for this install, not to you. It is created with the first event, only while analytics is on, and stored in `~/.dray/settings.json`. Turning analytics off deletes it. Turning it back on creates a new one, so you come back as a new, unrelated install.
+Events are tied to a random id for this install, not to you. It is created with the first event and stored in `~/.dray/settings.json`.
 
 ## What is sent
 
@@ -66,7 +62,7 @@ Other errors in the app's interface are not reported.
 
 ## Surveys
 
-Now and then Dray may show a short survey card from PostHog, the analytics service it uses. Only while analytics is on: with it off, no survey is loaded. A survey can be aimed at installs by the facts above and by how many sessions this install has. Answering is optional, and your answer goes to PostHog. Dismiss the card to skip it.
+Now and then Dray may show a short survey card from PostHog, the analytics service it uses. With `DRAY_NO_ANALYTICS` set, no survey is loaded. A survey can be aimed at installs by the facts above and by how many sessions this install has. Answering is optional, and your answer goes to PostHog. Dismiss the card to skip it.
 
 ## Linux servers
 
@@ -91,5 +87,5 @@ Dictation runs on your Mac. Your voice is never sent anywhere.
 
 ## Limits
 
-- Analytics is on by default.
+- There is no switch in Settings. `DRAY_NO_ANALYTICS` is the only way to turn analytics off.
 - Surveys are drawn by PostHog and look like PostHog's, not like Dray.

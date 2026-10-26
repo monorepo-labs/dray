@@ -38,7 +38,6 @@ import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useAppSettings } from "@/hooks/useAppSettings";
 import type { useIntegrations } from "@/hooks/useIntegrations";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { chordFor, useShortcutOverrides } from "@/hooks/useShortcuts";
@@ -71,7 +70,6 @@ import { cn } from "@/lib/utils";
 import type {
   ExternalApp,
   Project,
-  SettingsView,
   UpdateChannel,
   UpdateStatus,
 } from "@/types/events";
@@ -175,7 +173,6 @@ export default function SettingsPage({
   /// directory it is started in.
   cwd: string;
 }) {
-  const { settings, setAnalyticsEnabled } = useAppSettings(open);
   const transcription = useTranscriptionSettings(open);
 
   if (!open) return null;
@@ -266,7 +263,6 @@ export default function SettingsPage({
                   View changelog
                 </Button>
               </SettingRow>
-              <AnalyticsRow view={settings} onChange={setAnalyticsEnabled} />
             </Section>
             {/* The two blocks here with no label of their own, so they are the
                 ones that still want a heading over them. */}
@@ -717,53 +713,6 @@ function UpdatesRow({
       ) : (
         button
       )}
-    </SettingRow>
-  );
-}
-
-/// Two sentences: what it is for, and what it never touches.
-///
-/// The second one is the row's whole job. "Analytics" reads as behavioural
-/// tracking to most people, and for a tool that watches you work on your own
-/// code, saying plainly that conversations and activity are not collected is
-/// the part worth the space. Kept short on purpose — an itemised list of
-/// fields reads as something to be wary of rather than something to skim.
-function AnalyticsRow({
-  view,
-  onChange,
-}: {
-  view: SettingsView | null;
-  onChange: (next: boolean) => void;
-}) {
-  const id = useId();
-
-  return (
-    <SettingRow
-      id={id}
-      label="Share basic analytics"
-      description={
-        view?.analyticsLocked
-          ? // Disabled and saying why, rather than hidden or — worse — drawn
-            // from the stored value and sitting at `on` while nothing is sent.
-            "Turned off for this run by DRAY_NO_ANALYTICS."
-          : // Says what is actually sent. It read "your conversations and
-            // activity are never collected" while a launch was the only event,
-            // and that stopped being true the moment features were reported —
-            // a privacy line that overpromises is worse than no line. Errors
-            // are named for the same reason, and named as *where*: what goes is
-            // a stage or a `file:line`, never the message beside it.
-            "Counts launches, which features get used, and where errors happen, under a random id. Your prompts, code and conversations are never collected."
-      }
-    >
-      <Switch
-        id={id}
-        // `null` until the first read lands. Disabled rather than guessing a
-        // value: either guess is wrong for somebody, and the page's own open
-        // animation is longer than a local file read.
-        disabled={view === null || view.analyticsLocked}
-        checked={view?.analyticsEnabled ?? false}
-        onCheckedChange={onChange}
-      />
     </SettingRow>
   );
 }

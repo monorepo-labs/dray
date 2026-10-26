@@ -1219,8 +1219,6 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         set_project_space(path: String, space: Option<String>) => crate::projects::set_project_space(&path, space).await;
         move_project(path: String, delta: isize) => crate::projects::move_project(&path, delta).await;
         retag_space(from: String, to: Option<String>) => crate::projects::retag_space(&from, to).await;
-        get_settings() => ok(crate::settings::get_settings().await);
-        set_analytics_enabled(enabled: bool) => crate::set_analytics_enabled(enabled).await;
         analytics_identity() => ok(crate::analytics::analytics_identity().await);
         track_feature(feature: String) => ok(crate::track_feature(feature));
         track_render_error(code: Option<u32>, frames: Vec<String>) => ok(crate::track_render_error(code, frames));

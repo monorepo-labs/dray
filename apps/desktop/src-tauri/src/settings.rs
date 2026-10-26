@@ -1,11 +1,10 @@
 //! Preferences Rust has to know before the frontend exists.
 //!
-//! Only one lives here, and timing is the whole reason: `app_started` is sent
-//! from `setup`, so a preference kept in the webview's local storage — where
-//! `ade.diffStyle` and every other pick lives — could not be consulted until
-//! after the one event it governs had already gone. **Anything the frontend can
-//! read for itself belongs there, not here**, or this file becomes a second
-//! settings store free to disagree with the first.
+//! Timing is the whole reason: the install id, the transcription picks and
+//! remote access are all read by Rust, some before any webview exists.
+//! **Anything the frontend can read for itself belongs in its local storage,
+//! not here**, or this file becomes a second settings store free to disagree
+//! with the first.
 
 use std::path::{Path, PathBuf};
 
@@ -29,18 +28,15 @@ static SETTINGS_LOCK: Mutex<()> = Mutex::const_new(());
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
-    /// Opted in by default, and the default is what a **missing** file reads
-    /// as. A file that exists and cannot be parsed reads the other way — see
-    /// [`read`].
+    /// The old in-app analytics switch, **read by nothing**: Settings offers no
+    /// opt-out any more, so a stored `false` is ignored and `DRAY_NO_ANALYTICS`
+    /// is the only way off. Kept so an older build sharing `~/.dray` still finds
+    /// the field it reads, and so a rewrite here carries its value through.
     #[serde(default = "enabled_by_default")]
     pub analytics_enabled: bool,
     /// A random id for this install, or `None` where nothing has ever been
-    /// reported from it.
-    ///
-    /// Minted lazily by [`crate::analytics`] on the first event rather than at
-    /// install time, which is what keeps an opted-out install from ever having
-    /// one written — and cleared again when the switch goes off, so opting back
-    /// in is a new person rather than the old one resurfacing.
+    /// reported from it. Minted lazily by [`ensure_install_id`] on the first
+    /// event.
     #[serde(default)]
     pub install_id: Option<String>,
     /// Who the stored issue-tracker key belongs to.
@@ -116,68 +112,19 @@ impl Default for AppSettings {
     }
 }
 
-/// What the settings dialog draws, which is not what is on disk.
+/// Reads `settings.json`, any failure reading as the defaults.
 ///
-/// The environment can force reporting off for a run, and a switch drawn from
-/// the file alone would then sit at `on` while nothing was being sent.
-/// `analytics_locked` is what lets the row disable itself and say why, rather
-/// than lie.
-#[derive(Debug, Clone, Copy, Serialize, TS)]
-#[ts(export, export_to = "events.ts")]
-#[serde(rename_all = "camelCase")]
-pub struct SettingsView {
-    /// Effective, not stored — the environment is already folded in.
-    pub analytics_enabled: bool,
-    pub analytics_locked: bool,
-}
-
-/// The preferences Rust owns. Everything else the settings page draws is the
-/// frontend's own local storage.
-///
-/// Answers with the **effective** state, off `analytics::enabled`, not with
-/// what is on disk. The two differ whenever `DRAY_NO_ANALYTICS` is set, and a
-/// switch drawn from the file there would sit at `on` while nothing was being
-/// sent.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn get_settings() -> SettingsView {
-    SettingsView {
-        analytics_enabled: crate::analytics::enabled().await,
-        analytics_locked: crate::analytics::env_opt_out(),
-    }
-}
-
-/// Reads `settings.json`, **failing closed**.
-///
-/// A missing or empty file is a fresh install and reads as the defaults. Any
-/// other failure — unparseable JSON, an unreadable file, no home directory —
-/// reads as opted *out*, because a file that exists and cannot be understood is
-/// far likelier to belong to someone who turned this off than to someone who
-/// never touched it. Never an error: this sits on the launch path, and a
-/// hand-edited file must not be able to stop the app starting.
+/// Never an error: this sits on the launch path, and a hand-edited file must
+/// not be able to stop the app starting.
 pub async fn read() -> AppSettings {
-    let dir = match config_dir().await {
-        Ok(dir) => dir,
-        Err(e) => {
-            eprintln!("[settings read err] {e:#}");
-            return opted_out();
-        }
+    let read = match config_dir().await {
+        Ok(dir) => read_from(&dir).await,
+        Err(e) => Err(e),
     };
-
-    match read_from(&dir).await {
-        Ok(settings) => settings,
-        Err(e) => {
-            eprintln!("[settings read err] {e:#}");
-            opted_out()
-        }
-    }
-}
-
-/// The fail-closed answer: the default is opted *in*, and this is its opposite.
-fn opted_out() -> AppSettings {
-    AppSettings {
-        analytics_enabled: false,
-        ..Default::default()
-    }
+    read.unwrap_or_else(|e| {
+        eprintln!("[settings read err] {e:#}");
+        AppSettings::default()
+    })
 }
 
 /// Takes the directory so a test can round-trip against a tempdir rather than
@@ -194,13 +141,9 @@ async fn read_from(dir: &Path) -> Result<AppSettings> {
 /// write in two steps can be interleaved by another and lose its field. There
 /// was a `pub write` beside `read` and seven callers pairing them, which is
 /// exactly the shape that fails — and it fails *across* features, not within
-/// one: the case that made it concrete was the Linear account or a transcription
-/// pick being read while analytics was on, then written back after the reader
-/// opted out, restoring `analytics_enabled: true` and the install id with it.
-///
-/// So consent could be undone by a setting that has nothing to do with it. A
-/// comment saying "use `update`" would have been true and unenforced; taking
-/// the write away is what stops the next one.
+/// one: a Linear account read before the install id was minted and written back
+/// after takes the id with it. A comment saying "use `update`" would have been
+/// true and unenforced; taking the write away is what stops the next one.
 pub async fn update(edit: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> {
     let _guard = SETTINGS_LOCK.lock().await;
     let _across = crate::store::lock_across_processes("settings.json").await;
@@ -208,21 +151,17 @@ pub async fn update(edit: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> 
 
     // **Only a malformed file recovers**, and the distinction is the whole of
     // this branch. A file that cannot be *parsed* can never be preserved, and
-    // erroring on it would block every settings write in the app — consent,
-    // Linear, transcription — until somebody deleted it by hand, which nothing
-    // on screen says to do. A file that cannot be *read* is the opposite case:
-    // it may be perfectly good and merely unreachable for a moment, so writing
-    // `opted_out()` over it would erase the Linear account, the install id and
-    // every transcription pick in order to change one unrelated switch.
-    //
-    // Opted *out* and not `Default` where it does recover: recovering must
-    // never be a route to turning reporting back on for somebody who had
-    // turned it off.
+    // erroring on it would block every settings write in the app — the install
+    // id, Linear, transcription — until somebody deleted it by hand, which
+    // nothing on screen says to do. A file that cannot be *read* is the opposite
+    // case: it may be perfectly good and merely unreachable for a moment, so
+    // writing defaults over it would erase the Linear account, the install id
+    // and every transcription pick in order to change one unrelated setting.
     let mut settings = match read_from(&dir).await {
         Ok(settings) => settings,
         Err(e) if is_malformed(&e) => {
             eprintln!("[settings read err] {e:#}");
-            opted_out()
+            AppSettings::default()
         }
         Err(e) => return Err(e),
     };
@@ -233,66 +172,43 @@ pub async fn update(edit: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> 
     Ok(settings)
 }
 
-/// This install's id, minted and persisted on first use, or `None` where it is
-/// not wanted.
+/// This install's id, minted and persisted on first use.
 ///
-/// **Consent and the id are one decision and one hold of the lock**, which is
-/// the whole reason this lives here rather than in `analytics`: an id minted
-/// for an install that opted out a moment ago is exactly what the opt-out was
-/// for, and reading consent separately races the command that cleared it.
+/// Every install gets one, a stored `analytics_enabled: false` included: the
+/// only opt-out is `DRAY_NO_ANALYTICS`, which [`crate::analytics`] checks before
+/// asking. Minting goes through [`update`], so a malformed file is recovered
+/// rather than silencing analytics for good, and an unreadable one is left
+/// untouched.
 ///
-/// `None` for three cases, all of which correctly send nothing: opted out, no
-/// home directory, and a settings file that exists and cannot be parsed — the
-/// same fail-closed reading [`read`] takes.
-///
-/// **A failed write answers `None` too**, and that is a deliberate reversal:
-/// nothing caches this any more, so an id that did not reach disk would be
-/// re-minted on the very next event and every event would arrive as a different
-/// person. No events beats a fabricated population.
+/// **A failed write answers `None`**: nothing caches this, so an id that did not
+/// reach disk would be re-minted on the very next event and every event would
+/// arrive as a different person. No events beats a fabricated population.
 pub async fn ensure_install_id() -> Option<String> {
-    let _guard = SETTINGS_LOCK.lock().await;
-    let _across = crate::store::lock_across_processes("settings.json").await;
+    // The common case, without the lock. Ids are never cleared, so a read that
+    // finds one is right however stale; one that finds none re-checks under it.
+    if let Some(id) = read().await.install_id {
+        return Some(id);
+    }
 
-    let dir = match config_dir().await {
-        Ok(dir) => dir,
+    let minted = update(|settings| {
+        settings
+            .install_id
+            .get_or_insert_with(|| Uuid::new_v4().to_string());
+    })
+    .await;
+
+    match minted {
+        Ok(settings) => settings.install_id,
         Err(e) => {
-            eprintln!("[settings read err] {e:#}");
-            return None;
+            eprintln!("[settings write err] install id not persisted: {e:#}");
+            None
         }
-    };
-
-    let settings = match read_from(&dir).await {
-        Ok(settings) => settings,
-        Err(e) => {
-            eprintln!("[settings read err] {e:#}");
-            return None;
-        }
-    };
-
-    if !settings.analytics_enabled {
-        return None;
     }
-    if settings.install_id.is_some() {
-        return settings.install_id;
-    }
-
-    let id = Uuid::new_v4().to_string();
-    let next = AppSettings {
-        install_id: Some(id.clone()),
-        ..settings
-    };
-
-    if let Err(e) = write_to(&dir, &next).await {
-        eprintln!("[settings write err] install id not persisted: {e:#}");
-        return None;
-    }
-
-    Some(id)
 }
 
 /// Rewrites the file whole, landing via write-temp + `rename` like the session
 /// index does — a torn settings file would fail to parse on the next launch and
-/// read as opted out, silently undoing whatever was just set.
+/// read as defaults, silently undoing whatever was just set.
 async fn write_to(dir: &Path, settings: &AppSettings) -> Result<()> {
     write_atomic(&path_in(dir), serde_json::to_string_pretty(settings)?).await
 }
@@ -326,30 +242,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_file_reads_as_opted_in() {
+    async fn missing_file_reads_as_defaults() {
         let dir = tempdir();
 
-        assert!(read_from(&dir).await.unwrap().analytics_enabled);
+        assert_eq!(read_from(&dir).await.unwrap(), AppSettings::default());
     }
 
     #[tokio::test]
-    async fn empty_file_reads_as_opted_in() {
+    async fn empty_file_reads_as_defaults() {
         let dir = tempdir();
         std::fs::write(path_in(&dir), "   \n").unwrap();
 
-        assert!(read_from(&dir).await.unwrap().analytics_enabled);
+        assert_eq!(read_from(&dir).await.unwrap(), AppSettings::default());
     }
 
-    /// The direction that matters: a file someone opted out in, then corrupted,
-    /// must not come back as opted in. `read_from` reports it as an error, and
-    /// [`read`] turns any error into [`opted_out`].
+    /// `read_from` reports it so `update` can tell it from an unreadable file.
     #[tokio::test]
-    async fn unparseable_file_is_an_error_not_a_default() {
+    async fn unparseable_file_is_an_error() {
         let dir = tempdir();
         std::fs::write(path_in(&dir), "{ not json").unwrap();
 
         assert!(read_from(&dir).await.is_err());
-        assert!(!opted_out().analytics_enabled);
     }
 
     #[tokio::test]
@@ -395,57 +308,17 @@ mod tests {
         let dir = tempdir();
         std::fs::write(path_in(&dir), "{ not json").unwrap();
 
-        let mut settings = read_from(&dir).await.unwrap_or_else(|_| opted_out());
+        let mut settings = read_from(&dir).await.unwrap_or_default();
         settings.transcription.mute_while_recording = false;
         write_to(&dir, &settings).await.unwrap();
 
         let after = read_from(&dir).await.unwrap();
         assert!(!after.transcription.mute_while_recording);
-        // Recovering is not a route back to reporting for somebody who had
-        // turned it off: the fallback is `opted_out`, never `Default`.
-        assert!(!after.analytics_enabled);
-    }
-
-    /// The invariant the whole opt-out rests on: no id is written for an
-    /// install that has turned reporting off. Checked against the file, not the
-    /// return value, since the damage a bug here does is a identifier left on
-    /// disk rather than one handed back.
-    #[tokio::test]
-    async fn an_opted_out_install_is_given_no_id() {
-        let dir = tempdir();
-        let off = AppSettings {
-            analytics_enabled: false,
-            ..AppSettings::default()
-        };
-        write_to(&dir, &off).await.unwrap();
-
-        assert_eq!(read_from(&dir).await.unwrap().install_id, None);
-    }
-
-    /// Clearing the id and clearing consent are one write, so a reader who opts
-    /// out cannot be left identified by the entry that survives.
-    #[tokio::test]
-    async fn opting_out_clears_the_id_in_one_write() {
-        let dir = tempdir();
-        let identified = AppSettings {
-            install_id: Some("2f1c…".into()),
-            ..AppSettings::default()
-        };
-        write_to(&dir, &identified).await.unwrap();
-
-        let mut next = read_from(&dir).await.unwrap();
-        next.analytics_enabled = false;
-        next.install_id = None;
-        write_to(&dir, &next).await.unwrap();
-
-        let after = read_from(&dir).await.unwrap();
-        assert!(!after.analytics_enabled);
-        assert_eq!(after.install_id, None);
     }
 
     /// A file written before the id existed must read as an install that has
     /// simply never reported, not fail the parse and take the whole file's
-    /// other settings down as opted out with it.
+    /// other settings down with it.
     #[tokio::test]
     async fn a_file_predating_the_install_id_reads_without_one() {
         let dir = tempdir();
@@ -458,7 +331,7 @@ mod tests {
     }
 
     /// An unknown field must not fail the read, or a file written by a newer
-    /// build reads as opted out on every older one.
+    /// build reads as defaults on every older one.
     #[tokio::test]
     async fn unknown_fields_are_ignored() {
         let dir = tempdir();

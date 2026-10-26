@@ -18,7 +18,7 @@ The folder is readable by your user alone, and Dray uploads none of it. For what
 | `attachments/<session-id>/` | A copy of every image you sent in that session, so the transcript still shows it after you delete the original. Other files are not copied; the prompt names them by path. |
 | `drafts.json` | Tasks you saved with `⌘S` and have not started. |
 | `projects.json` | Attached projects, and which one was last selected. |
-| `settings.json` | The analytics choice and install id, your dictation model and microphone, the Linear account name, and whether Remote access is on. |
+| `settings.json` | The analytics install id, your dictation model and microphone, the Linear account name, and whether Remote access is on. |
 | `credentials.json` | Your Linear API key and the tokens for servers you added by address. Readable by your user alone (`0600`). |
 | `servers.json` | The remote servers in Settings → Servers: name, address, channel. Tokens are in `credentials.json`, not here. |
 | `models/` | Dictation models you downloaded in Settings → Transcription. |
@@ -71,7 +71,7 @@ The app passes `DRAY_HOME` and `DRAY_NO_ANALYTICS` on to the background server i
 | Variable | Read by | What it does |
 |---|---|---|
 | `DRAY_HOME` | App, server, `dray` | Uses another folder instead of `~/.dray`, with its own sessions, settings and socket. Two Dray servers must never share one folder: each overwrites the other's session list. On a Mac, the browser profiles and Chromium stay in `~/.dray` either way. |
-| `DRAY_NO_ANALYTICS` | App, server | Turns analytics off for that run, whatever the setting says. Any value counts, even `0`. See [Privacy](/reference/privacy). |
+| `DRAY_NO_ANALYTICS` | App, server | Turns analytics off for that run, and is the only way to. Any value counts, even `0`. See [Privacy](/reference/privacy). |
 | `DRAY_ENDPOINT` | `dray` | Which Dray the CLI talks to: a socket path. Dray sets it for every agent it runs, so an agent's `dray` calls reach the right app. |
 | `DRAY_SESSION_ID` | `dray` | The session the CLI acts for. Dray sets it for every agent it runs. |
 | `DRAY_CHANNEL` | `install.sh` | `stable` (default) or `beta`. Which releases the installer picks. |

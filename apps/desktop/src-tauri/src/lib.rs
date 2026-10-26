@@ -398,31 +398,6 @@ async fn set_fx_provider(provider: String) -> Result<(), String> {
         .map_err(|e| format!("{e:#}"))
 }
 
-/// Persists the analytics opt-out. Every send reads the file, so the switch
-/// needs no restart to mean anything.
-///
-/// Read-modify-write rather than a fresh struct: with a second field here one
-/// day, building this from `enabled` alone would reset whatever the caller did
-/// not name.
-#[cfg_attr(feature = "desktop", tauri::command)]
-async fn set_analytics_enabled(enabled: bool) -> Result<settings::SettingsView, Fail> {
-    // `update` and not read-then-write: the two steps can be interleaved by the
-    // install id minting itself, whose write would then carry a snapshot taken
-    // before this switch moved and put `analytics_enabled: true` straight back.
-    settings::update(|next| {
-        next.analytics_enabled = enabled;
-        // Turning it off takes the identifier with it, so nothing is left on
-        // disk naming an install that has asked not to be counted. Opting back
-        // in mints a fresh one, which reads as a new person — the honest
-        // answer, since the gap in between is unmeasured either way.
-        if !enabled {
-            next.install_id = None;
-        }
-    })
-    .await?;
-
-    Ok(settings::get_settings().await)
-}
 
 /// Reports a feature whose only chokepoint is in the frontend.
 ///
@@ -790,9 +765,8 @@ pub fn run() {
                 servers::start(sink).await;
             });
 
-            // Returns immediately: consent is read, and the id minted, inside
-            // the task `track` spawns — so nothing on screen waits on a file
-            // read and an opted-out install still sends nothing. The install
+            // Returns immediately: the id is minted inside the task `track`
+            // spawns, so nothing on screen waits on a file read. The install
             // and version signal, never the activity one: this app is left open
             // for days, so launches undercount use badly.
             analytics::track("app_started", serde_json::json!({}));

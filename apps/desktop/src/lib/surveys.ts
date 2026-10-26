@@ -12,99 +12,29 @@
 // **The marketing site can never draw one**, whatever a survey is targeted at:
 // it loads `posthog-js/dist/module.slim`, which drops surveys outright.
 //
-// **Consent is read in Rust, once.** `analytics_identity` answers with a key,
-// a host, an id and the properties together, or with nothing — and nothing is
-// the refusal. Reading `analytics_enabled` here as well would be a second
-// reader free to disagree with the first, which is what DRA-199 was.
-import type { PostHog } from "posthog-js";
+// **Whether to start is Rust's answer.** `analytics_identity` answers with a
+// key, a host, an id and the properties together, or with nothing — no key
+// compiled in, or `DRAY_NO_ANALYTICS` — and nothing is the refusal.
 import { invoke } from "@/lib/transport";
 
 import type { SurveyIdentity } from "@/types/events";
 
-/// Whether `init` has run. `posthog.init` a second time is not a no-op, and the
-/// settings toggle can reach this after the first call.
-let started = false;
-
-/// The SDK, loaded only once consent answers yes. It is ~300KB of the entry
-/// chunk otherwise, parsed on every launch including every opted-out one.
-let posthog: PostHog | null = null;
-
-/// The id the SDK was started under, so a re-opt-in can tell whether it is
-/// still the right one. Opting out clears the stored install id and opting back
-/// in mints a fresh one — deliberately a new person — so the bootstrapped value
-/// goes stale exactly there and nowhere else.
-let identified: string | null = null;
-
-/// Which consent answer is the current one. Taken before the read and checked
-/// after it, the same bargain `navGen` makes in `App` and the issue caches make
-/// with theirs.
-///
-/// The startup call is fire-and-forget, so it can still be suspended at its own
-/// read when the reader opts out and the settings call makes a second one. The
-/// answers can then land in either order — and an *older* one landing last used
-/// to be acted on, which starts the SDK under an identity consent has since
-/// withdrawn. The refusal has to win however the reads interleave, so a read
-/// that is no longer the newest is discarded rather than believed.
-let generation = 0;
-
-/// Starts PostHog, or does nothing at all where this install has opted out.
-///
-/// Safe to call more than once: the second call re-reads consent and is what
-/// the settings toggle goes through.
+/// Starts PostHog, or does nothing where Rust refuses. Called once, at startup.
 export async function startSurveys(): Promise<void> {
-  const mine = ++generation;
-
-  let identity: SurveyIdentity | null = null;
   try {
-    identity = await invoke<SurveyIdentity | null>("analytics_identity");
-  } catch (e) {
-    // Best effort, like every other analytics path: the one thing worse than a
-    // survey never appearing is the app failing because one could not.
-    console.error("[surveys]", e);
-    return;
-  }
+    const identity = await invoke<SurveyIdentity | null>("analytics_identity");
+    // Loaded only on a yes: it is ~300KB, parsed otherwise on every launch of a
+    // build that sends nothing.
+    if (!identity) return;
+    const posthog = (await import("posthog-js")).default;
 
-  // Somebody asked after this read started, so their answer is the current one
-  // and this is a reading of consent as it used to be. Dropped rather than
-  // acted on, in *both* directions — a stale `null` that opted the SDK out
-  // would be as wrong as a stale identity that started it.
-  if (mine !== generation) return;
-
-  if (!identity) {
-    // Opted out. Nothing to start, and anything already running stops — the
-    // switch has to mean something without a restart, the same promise
-    // `analytics::enabled` makes by reading the file on every send.
-    posthog?.opt_out_capturing();
-    return;
-  }
-
-  if (!posthog) {
-    let sdk: PostHog;
-    try {
-      sdk = (await import("posthog-js")).default;
-    } catch (e) {
-      console.error("[surveys]", e);
-      return;
-    }
-    // The import is a second await, and the same rule holds across it.
-    if (mine !== generation) return;
-    posthog = sdk;
-  }
-
-  // Narrowed into a const because the `loaded` callback below closes over it,
-  // and TypeScript will not carry a `let`'s narrowing into a closure.
-  const found = identity;
-
-  if (!started) {
-    started = true;
-    identified = found.distinctId;
-    posthog.init(found.key, {
-      api_host: found.host,
+    posthog.init(identity.key, {
+      api_host: identity.host,
       // The id Rust posts under, so the SDK joins that person rather than
       // minting a second one beside it. `bootstrap` and not `identify`: the
       // POSTs have already made this a person, and identifying into it would
       // alias an anonymous id nobody ever used.
-      bootstrap: { distinctID: found.distinctId },
+      bootstrap: { distinctID: identity.distinctId },
       // Surveys target persons, so there has to be one. The app's id is stable
       // and already a person in practice; `identified_only` — the site's
       // setting, where every visit is a new cookieless id — would leave
@@ -117,18 +47,11 @@ export async function startSurveys(): Promise<void> {
       capture_pageview: false,
       capture_pageleave: false,
       disable_session_recording: true,
-      loaded: (ph) => ph.setPersonProperties(found.personProperties),
+      loaded: (ph) => ph.setPersonProperties(identity.personProperties),
     });
-    return;
+  } catch (e) {
+    // Best effort, like every other analytics path: the one thing worse than a
+    // survey never appearing is the app failing because one could not.
+    console.error("[surveys]", e);
   }
-
-  // Already running, so this is the reader opting back in. A fresh id means a
-  // fresh person and the SDK has to be told; the same id means the toggle went
-  // off and on again with nothing minted in between.
-  posthog.opt_in_capturing();
-  if (identified !== found.distinctId) {
-    identified = found.distinctId;
-    posthog.identify(found.distinctId);
-  }
-  posthog.setPersonProperties(found.personProperties);
 }

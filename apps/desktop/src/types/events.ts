@@ -366,19 +366,16 @@ export type AgentUpdate = { harness: Harness, label: string, current: string, la
  */
 export type AppSettings = { 
 /**
- * Opted in by default, and the default is what a **missing** file reads
- * as. A file that exists and cannot be parsed reads the other way — see
- * [`read`].
+ * The old in-app analytics switch, **read by nothing**: Settings offers no
+ * opt-out any more, so a stored `false` is ignored and `DRAY_NO_ANALYTICS`
+ * is the only way off. Kept so an older build sharing `~/.dray` still finds
+ * the field it reads, and so a rewrite here carries its value through.
  */
 analyticsEnabled: boolean, 
 /**
  * A random id for this install, or `None` where nothing has ever been
- * reported from it.
- *
- * Minted lazily by [`crate::analytics`] on the first event rather than at
- * install time, which is what keeps an opted-out install from ever having
- * one written — and cleared again when the switch goes off, so opting back
- * in is a new person rather than the old one resurfacing.
+ * reported from it. Minted lazily by [`ensure_install_id`] on the first
+ * event.
  */
 installId: string | null, 
 /**
@@ -1978,20 +1975,6 @@ export type Settings = { model: string | null,
 approvalPolicy: PermissionMode | null, sandbox: string | null, writableRoots: Array<string>, networkAccess: boolean | null, fastMode: string | null, };
 
 /**
- * What the settings dialog draws, which is not what is on disk.
- *
- * The environment can force reporting off for a run, and a switch drawn from
- * the file alone would then sit at `on` while nothing was being sent.
- * `analytics_locked` is what lets the row disable itself and say why, rather
- * than lie.
- */
-export type SettingsView = { 
-/**
- * Effective, not stored — the environment is already folded in.
- */
-analyticsEnabled: boolean, analyticsLocked: boolean, };
-
-/**
  * One command the user may type. `name` carries no leading slash — the picker
  * adds it — and may be namespaced by its plugin (`railway:deploy`).
  */
@@ -2045,12 +2028,9 @@ gitCommand: string | null, };
 /**
  * What the webview needs to speak to PostHog for itself.
  *
- * Handed over whole rather than looked up on the other side, and that is the
- * whole of why this type exists: a frontend reading `analytics_enabled` for
- * itself would be a second reader of consent, free to answer differently from
- * this one — which is the shape DRA-199 was already caught by once. Here the
- * answer to "may I", "as whom" and "where to" is one value, and its absence is
- * the refusal.
+ * Handed over whole rather than looked up on the other side: the answer to
+ * "may I", "as whom" and "where to" is one value, and its absence is the
+ * refusal.
  */
 export type SurveyIdentity = { key: string, host: string, 
 /**
