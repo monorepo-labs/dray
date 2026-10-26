@@ -20,7 +20,8 @@ export default defineConfig({
   // button that does nothing.
   feedback: false,
   // The site's PostHog project and settings (apps/web instrumentation-client.ts):
-  // cookieless, no autocapture, no recording. `/ingest` is the site's own
+  // the same cookie, so a visitor moving between the site and the docs stays one
+  // person, no autocapture, no recording. `/ingest` is the site's own
   // rewrite, reachable because the docs are served through drayhq.com.
   // `source` is registered through the snippet's queue, which replays before
   // the first pageview fires, so every docs event can be told from the site's.
@@ -29,7 +30,7 @@ export default defineConfig({
       key: "phc_kLtmvfyx2NtnooMrHzqLhxmzRTHxbPEnfKmxbbTNkDdM",
       host: "/ingest",
       ui_host: "https://us.posthog.com",
-      persistence: "memory",
+      persistence: "localStorage+cookie",
       autocapture: false,
       disable_session_recording: true,
       capture_pageview: "history_change",

@@ -25,11 +25,12 @@ if (key) {
     // Where "open in PostHog" links go. Not the ingest host, and unset it
     // points the toolbar at our rewrite, which serves no UI.
     ui_host: "https://us.posthog.com",
-    // Cookieless. Everything lives for the life of the page view, so there is
-    // no banner to show and no consent to store — and every visit is a new
-    // person, which is the cost: referrers and conversions still answer,
-    // returning visitors do not.
-    persistence: "memory",
+    // A cookie, so a visitor keeps one id across pages and visits. Cookieless
+    // made every page load a new person: a visit landing on /changelog and
+    // downloading from / read as two people, the second "referred" by our own
+    // domain, so the source that brought them lost the conversion. No consent
+    // banner, by decision — the EU exposure is known and accepted.
+    persistence: "localStorage+cookie",
     autocapture: false,
     disable_session_recording: true,
     // The site is one route today, but a pageview that only fires on hard
@@ -37,7 +38,7 @@ if (key) {
     capture_pageview: "history_change",
     person_profiles: "identified_only",
     // The desktop app reports into this same project under a stable install
-    // uuid where every visit here is a new cookieless person, so an unfiltered
+    // uuid where a visitor here is a browser cookie, so an unfiltered
     // "unique users" figure is the sum of two populations that mean different
     // things. Registered from `loaded` rather than after `init` returns,
     // because the initial pageview is captured inside init and a super property

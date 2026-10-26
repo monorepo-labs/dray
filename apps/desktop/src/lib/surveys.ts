@@ -37,7 +37,7 @@ export async function startSurveys(): Promise<void> {
       bootstrap: { distinctID: identity.distinctId },
       // Surveys target persons, so there has to be one. The app's id is stable
       // and already a person in practice; `identified_only` — the site's
-      // setting, where every visit is a new cookieless id — would leave
+      // setting, where a visitor is an anonymous cookie id — would leave
       // nothing here to target.
       person_profiles: "always",
       // Rust owns events. Everything the SDK would capture on its own is off,
