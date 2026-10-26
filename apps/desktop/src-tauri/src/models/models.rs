@@ -463,7 +463,7 @@ pub fn runs_on(id: &ModelId, harness: Harness) -> bool {
     }
 
     match harness {
-        Harness::ClaudeCode => claude_code_models::known().iter().any(|m| &m.id == id),
+        Harness::ClaudeCode => claude_code_models::find(id).is_some(),
         Harness::Codex => every_codex_model().iter().any(|m| &m.id == id),
         Harness::Pi | Harness::Fx | Harness::Grok => find_model(id).is_none(),
         // Nothing runs on a harness this build cannot spawn, and `false` is
@@ -486,10 +486,7 @@ pub fn find_model(id: &ModelId) -> Option<Model> {
         return None;
     }
 
-    claude_code_models::known()
-        .into_iter()
-        .chain(every_codex_model())
-        .find(|m| &m.id == id)
+    claude_code_models::find(id).or_else(|| every_codex_model().into_iter().find(|m| &m.id == id))
 }
 
 /// The id for a `--model` alias arriving from outside the app — the `dray`
@@ -511,7 +508,9 @@ pub fn id_for_arg(alias: &str, harness: Harness) -> Option<ModelId> {
             .into_iter()
             .chain(every_codex_model())
             .find(|m| m.arg == alias)
-            .map(|m| m.id)?,
+            .map(|m| m.id)
+            // A pinned Claude id nothing has listed yet, taken as written.
+            .or_else(|| claude_code_models::find(&ModelId::new(alias)).map(|m| m.id))?,
     };
 
     // One gate for all three, so an alias can never resolve to a model its own

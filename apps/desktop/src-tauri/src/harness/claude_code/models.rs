@@ -6,10 +6,12 @@
 //! [`claude_models`] as the fallback — what the picker draws until the probe
 //! lands and wherever it cannot run.
 //!
-//! **The picker never waits on it.** Claude Code is the default harness, so
-//! [`list`] answers the table at once and probes in the background, and
-//! `models_changed` makes the picker read again once the CLI's answer is in —
-//! fx's bargain for fx's reason.
+//! **The first read waits for it, briefly, and nothing after does.** The picker
+//! repairs the composer's pick against whatever list lands first, so answering
+//! the table at once moved a remembered `claude-opus-4-6` onto `opus` before
+//! the real list could name it. So [`list`] waits up to [`FIRST_WAIT`] for the
+//! probe (0.84s measured) and falls back to the table past that; a probe landing
+//! later still emits `models_changed`, fx's bargain.
 
 use super::commands::initialize;
 use crate::models::{claude_models, Effort, Model, ModelId};
@@ -18,49 +20,114 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Mutex,
+    LazyLock,
 };
+use std::time::Duration;
+use tokio::sync::watch;
+
+#[derive(Clone)]
+enum Probe {
+    Pending,
+    Listed(Vec<Model>),
+    Failed,
+}
 
 /// What the CLI last listed. Kept across a [`forget`], so a refresh serves the
 /// old answer while the new one is read rather than flashing the table.
-static LISTED: Mutex<Option<Vec<Model>>> = Mutex::new(None);
+static STATE: LazyLock<watch::Sender<Probe>> = LazyLock::new(|| watch::channel(Probe::Pending).0);
 
 /// Whether a probe has been started since the last [`forget`]. A failed one is
 /// not retried until then: the CLI does not grow a model list by being asked
 /// again, and a probe is a child.
 static PROBED: AtomicBool = AtomicBool::new(false);
 
-/// What the picker draws: the CLI's own list once read, the table until then.
-pub fn list(sink: &Sink) -> Vec<Model> {
+/// How long the first read waits on the probe. A hung CLI costs the picker this
+/// once, where the probe's own timeout is 15s.
+const FIRST_WAIT: Duration = Duration::from_secs(4);
+
+/// What the picker draws: the CLI's own list once read, the table otherwise.
+pub async fn list(sink: &Sink) -> Vec<Model> {
     if !PROBED.swap(true, Ordering::SeqCst) {
         let sink = sink.clone();
         tokio::spawn(async move {
             match probe().await {
                 Ok(models) => {
-                    *LISTED.lock().unwrap() = Some(models);
+                    STATE.send_replace(Probe::Listed(models));
                     if let Err(err) = sink.emit("models_changed", ()) {
                         eprintln!("[claude models_changed emit err] {err}");
                     }
                 }
-                Err(err) => eprintln!("[claude models] {err:#}"),
+                Err(err) => {
+                    eprintln!("[claude models] {err:#}");
+                    // A refresh's failure keeps the list it already had.
+                    STATE.send_if_modified(|state| {
+                        let pending = matches!(state, Probe::Pending);
+                        if pending {
+                            *state = Probe::Failed;
+                        }
+                        pending
+                    });
+                }
             }
         });
     }
 
-    LISTED.lock().unwrap().clone().unwrap_or_else(claude_models)
+    let mut answer = STATE.subscribe();
+    let _ = tokio::time::timeout(
+        FIRST_WAIT,
+        answer.wait_for(|state| !matches!(state, Probe::Pending)),
+    )
+    .await;
+    listed().unwrap_or_else(claude_models)
+}
+
+fn listed() -> Option<Vec<Model>> {
+    match &*STATE.borrow() {
+        Probe::Listed(models) => Some(models.clone()),
+        Probe::Pending | Probe::Failed => None,
+    }
 }
 
 /// Every model this build can name for Claude Code: what the CLI listed, then
 /// any table row it did not, so a session on a model the CLI has since dropped
 /// still resumes and fails in the CLI's own words.
 pub fn known() -> Vec<Model> {
-    let mut models = LISTED.lock().unwrap().clone().unwrap_or_default();
+    let mut models = listed().unwrap_or_default();
     for row in claude_models() {
         if !models.iter().any(|m| m.id == row.id) {
             models.push(row);
         }
     }
     models
+}
+
+/// The model with this id, or a stand-in for a pinned `claude-*` id nothing has
+/// listed yet.
+///
+/// The stand-in is Codex's rule for Codex's reason: the list lives in memory, so
+/// after a restart a session on `claude-opus-4-6` would otherwise read as
+/// "unknown model" until the probe lands, and for good if it never does. Every
+/// pinned id the CLI lists starts `claude-`, which is also what keeps another
+/// harness's alias out. No ladder, so that one spawn omits `--effort`; the
+/// recorded level is untouched.
+pub fn find(id: &ModelId) -> Option<Model> {
+    if id.is_unset() {
+        return None;
+    }
+
+    known().into_iter().find(|m| &m.id == id).or_else(|| {
+        id.as_str().starts_with("claude-").then(|| Model {
+            id: id.clone(),
+            label: id.to_string(),
+            efforts: Vec::new(),
+            default_effort: None,
+            arg: id.to_string(),
+            provider: String::new(),
+            accepts_images: true,
+            secondary: true,
+            supports_fast: false,
+        })
+    })
 }
 
 /// Makes the next [`list`] ask the CLI again.
@@ -202,6 +269,22 @@ mod tests {
         let ids: Vec<String> = read(&reply).into_iter().map(|m| m.id.to_string()).collect();
 
         assert_eq!(ids, ["mythos", "opus", "claude-opus-4-1"]);
+    }
+
+    /// Before any probe lands — every restart — a saved pinned id still runs,
+    /// on Claude Code alone, and a dated id of another shape still does not.
+    #[test]
+    fn a_pinned_id_resolves_before_the_list_lands() {
+        use crate::harness::Harness;
+        use crate::models::{find_model, id_for_arg, runs_on};
+
+        let pinned = ModelId::new("claude-opus-4-6");
+        assert!(find(&pinned).is_some_and(|m| m.efforts.is_empty() && m.arg == "claude-opus-4-6"));
+        assert!(runs_on(&pinned, Harness::ClaudeCode));
+        assert!(!runs_on(&pinned, Harness::Codex));
+        assert_eq!(id_for_arg("claude-opus-4-6", Harness::ClaudeCode), Some(pinned.clone()));
+        assert_eq!(id_for_arg("claude-opus-4-6", Harness::Codex), None);
+        assert!(find_model(&ModelId::new("opus-4-1-20250805")).is_none());
     }
 
     /// Hits the real CLI: `cargo test -- --ignored asks_the_real_cli_for_its_models`.

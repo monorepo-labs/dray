@@ -373,7 +373,7 @@ async fn list_models(sink: Sink, harness: Option<harness::Harness>) -> Vec<Model
         }
         harness::Harness::Grok => harness::grok::models::list().await,
         harness::Harness::Codex => harness::codex::models::list().await,
-        harness::Harness::ClaudeCode => harness::claude_code::models::list(&sink),
+        harness::Harness::ClaudeCode => harness::claude_code::models::list(&sink).await,
         other => models::models_for(other),
     }
 }

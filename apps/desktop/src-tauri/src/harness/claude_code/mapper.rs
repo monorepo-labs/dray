@@ -539,7 +539,7 @@ impl Mapper {
                     .unwrap_or_else(|| format!("Switched to {fallback_model}."));
                 let model = (scope.as_deref() == Some("session"))
                     .then(|| crate::models::ModelId::new(fallback_model))
-                    .filter(|id| crate::models::runs_on(id, Harness::ClaudeCode));
+                    .filter(|id| super::models::known().iter().any(|m| &m.id == id));
                 Ok(Some(AgentEventPayload::Notice { text, model }))
             }
             SystemEvent::ModelRefusalNoFallback {
