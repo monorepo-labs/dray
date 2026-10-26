@@ -510,6 +510,11 @@ function setParked(sessionId: string, id: number, page: ParkedPage | null) {
   parked.set(sessionId, page ? { ...rest, [id]: page } : rest);
 }
 
+/// Drops a deleted session's parked pages.
+export function forgetParkedTabs(sessionId: string) {
+  parked.delete(sessionId);
+}
+
 export function useParkedTabs(sessionId: string): Record<number, ParkedPage> {
   return useSyncExternalStore(subscribe, () => parked.get(sessionId) ?? NO_PARKED);
 }

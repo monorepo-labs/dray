@@ -10,6 +10,7 @@ import { useDockBadge } from "@/hooks/useDockBadge";
 import { readLocalStorage, useLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { forgetOpenFiles } from "@/hooks/useOpenFiles";
 import { forgetClosedTabs } from "@/lib/tabOrder";
+import { forgetParkedTabs } from "@/lib/browser";
 import {
   ANSWERED_BY_OPENING,
   dismissNotice,
@@ -1747,6 +1748,7 @@ const deleteSession = async (sessionId: string) => {
   forgetDocs(sessionId);
   forgetOpenFiles(sessionId);
   forgetClosedTabs(sessionId);
+  forgetParkedTabs(sessionId);
 
   if (selectedSessionId === sessionId) {
     handleNewSession();
