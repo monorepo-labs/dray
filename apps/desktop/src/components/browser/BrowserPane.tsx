@@ -49,6 +49,7 @@ import {
   shareReady,
   shareServer,
   stopShare,
+  trackBrowserOpen,
   pickElement,
   removeCustomDevice,
   saveCustomDevice,
@@ -412,7 +413,9 @@ function Chrome({
   const open = (raw: string, newTab: boolean) => {
     const target = normalizeUrl(raw);
     if (!target) return;
-    void openInBrowser(sessionId, target, newTab, blanks.active).catch(() => undefined);
+    void openInBrowser(sessionId, target, newTab, blanks.active)
+      .then(() => trackBrowserOpen(target))
+      .catch(() => undefined);
   };
 
   const newTab = () => {
@@ -1192,7 +1195,10 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
   // A remote session's list is its server's.
   const server = serverOfSession(sessionId);
   useServers();
-  const open = (port: number) => void openServer(sessionId, port).catch(() => undefined);
+  const open = (port: number) =>
+    void openServer(sessionId, port)
+      .then(() => trackBrowserOpen("http://localhost"))
+      .catch(() => undefined);
 
   // One column, one left edge: the heading, the rows and the hint all start
   // at the same x, and the column as a whole sits in the middle.
@@ -1249,7 +1255,7 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
                     onOpen={(external) =>
                       void (external
                         ? openUrl(s.share!)
-                        : openInBrowser(sessionId, s.share!, true)
+                        : openInBrowser(sessionId, s.share!, true).then(() => trackBrowserOpen(s.share!))
                       ).catch(() => undefined)
                     }
                     onCopy={() => void copy(s.share!)}
@@ -1267,7 +1273,11 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
               <button
                 key={visit.url}
                 type="button"
-                onClick={() => void openInBrowser(sessionId, visit.url, true).catch(() => undefined)}
+                onClick={() =>
+                  void openInBrowser(sessionId, visit.url, true)
+                    .then(() => trackBrowserOpen(visit.url))
+                    .catch(() => undefined)
+                }
                 className="flex min-h-7 min-w-0 items-center gap-2 rounded-md px-2 text-left hover:bg-foreground/5"
               >
                 <Favicon tab={visit} />

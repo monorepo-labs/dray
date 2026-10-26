@@ -413,10 +413,25 @@ async fn set_fx_provider(provider: String) -> Result<(), String> {
 ///
 /// Takes the feature as a `String` and does not validate it. The only caller is
 /// this app's own frontend, and a list of permitted names here would be a
-/// second copy of one the call sites already are.
+/// second copy of one the call sites already are. `target` is the one property
+/// it carries, and it is an enum so the webview can only ever send its two
+/// words — never a URL or a host.
 #[cfg_attr(feature = "desktop", tauri::command)]
-fn track_feature(feature: String) {
-    analytics::track("feature_used", serde_json::json!({ "feature": feature }));
+fn track_feature(feature: String, target: Option<BrowserTarget>) {
+    let mut props = serde_json::json!({ "feature": feature });
+    if let Some(target) = target {
+        props["target"] = serde_json::json!(target);
+    }
+    analytics::track("feature_used", props);
+}
+
+/// What a page the reader opened in Dray's browser was, as `browser_open`
+/// reports it: a dev server on this machine or its network, or anything else.
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum BrowserTarget {
+    Localhost,
+    Site,
 }
 
 /// Reports a render error the frontend's crash screen caught: React's error

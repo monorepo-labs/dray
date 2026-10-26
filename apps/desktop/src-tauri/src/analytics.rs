@@ -405,6 +405,10 @@ fn trim_source_path(file: &str) -> &str {
 /// silently reports nothing — a wrong key and a wrong region — both land there.
 async fn send(event: &'static str, daily_key: Option<String>, properties: Value) {
     let Some(key) = api_key() else {
+        // A dev build has no key, so this is the only way to see what it would send.
+        if cfg!(debug_assertions) && !env_opt_out() {
+            eprintln!("[analytics] would send {event} {properties}");
+        }
         return;
     };
 

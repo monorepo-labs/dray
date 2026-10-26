@@ -943,3 +943,37 @@ export function normalizeUrl(input: string): string {
   }
   return `https://${s}`;
 }
+
+/// What a page the reader opened is, for `browser_open`: `localhost` for a dev
+/// server — loopback, `.localhost`, `.local` and the private LAN ranges —
+/// `site` for any other http(s) page, and `null` for what is no web page at
+/// all. Takes a URL as opened, so the URL bar's input goes through
+/// [`normalizeUrl`] first.
+export function browserTarget(url: string): "localhost" | "site" | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  const host = u.hostname;
+  const dev =
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host === "[::1]" ||
+    host === "0.0.0.0" ||
+    /^(127|10)\.\d+\.\d+\.\d+$/.test(host) ||
+    /^192\.168\.\d+\.\d+$/.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(host);
+  return dev ? "localhost" : "site";
+}
+
+/// Reports a page the reader opened, by [`browserTarget`] alone — never the
+/// URL. Only the reader's own entry points call this; an agent's `dray
+/// browser` and a page's own navigation go nowhere near it.
+export function trackBrowserOpen(url: string) {
+  const target = browserTarget(url);
+  if (target) void invoke("track_feature", { feature: "browser_open", target }).catch(() => {});
+}
