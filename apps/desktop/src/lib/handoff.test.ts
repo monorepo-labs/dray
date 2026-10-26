@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { handoffActions } from "./handoff";
+import {
+  BUILTIN_HANDOFF,
+  DEFAULT_HANDOFF_BUTTONS,
+  handoffActions,
+  labelFromPrompt,
+  readHandoffButtons,
+} from "./handoff";
+import type { HandoffButton } from "./handoff";
 import type { WorkStatus } from "@/types/events";
 
 const status = (over: Partial<WorkStatus> = {}): WorkStatus => ({
@@ -33,8 +40,9 @@ describe("handoffActions", () => {
 
   // The row has a width: the composer shrinks with its column, and the zone
   // that draws these is bound by nothing, so a row too wide draws over the
-  // panel beside it rather than clipping. Three is what fits.
-  it("never draws more than three buttons", () => {
+  // panel beside it rather than clipping. Three is what fits. A reader's own
+  // buttons can go past it; the row truncates those.
+  it("never draws more than three buttons as shipped", () => {
     for (const over of [
       { dirty: 1 },
       { ahead: 2 },
@@ -160,5 +168,116 @@ describe("handoffActions", () => {
       const drawn = ids(status(over), false);
       expect(new Set(drawn).size).toBe(drawn.length);
     }
+  });
+});
+
+describe("handoffActions with the reader's buttons", () => {
+  const custom = (id: string, label: string, prompt: string): HandoffButton => ({
+    id,
+    label,
+    prompt,
+  });
+  const dirty = status({ dirty: 1 });
+
+  // A Commit renamed "Ship it" still has nothing to ship on a clean tree.
+  it("keeps a built-in's rule when it is relabelled and re-prompted", () => {
+    const buttons = [custom("commit", "Ship it", "commit and push")];
+    expect(handoffActions(status(), false, true, buttons)).toEqual([]);
+    expect(handoffActions(dirty, false, true, buttons)).toEqual([
+      { id: "commit", builtin: "commit", label: "Ship it", prompt: "commit and push" },
+    ]);
+  });
+
+  // Empty means the shipped text, so clearing a field is how to go back to it.
+  it("falls back to the shipped label and prompt where a built-in is left empty", () => {
+    const [run] = handoffActions(null, false, true, [custom("runServer", "  ", "")]);
+    expect(run).toEqual({ ...run, label: "Run server", prompt: BUILTIN_HANDOFF.runServer.prompt });
+  });
+
+  it("hides a built-in the reader removed", () => {
+    const buttons = DEFAULT_HANDOFF_BUTTONS.filter((b) => b.id !== "commit");
+    expect(ids(dirty, false, true, buttons)).toEqual(["pr", "runServer"]);
+  });
+
+  it("draws a custom button whenever there is a session, and never without", () => {
+    const buttons = [...DEFAULT_HANDOFF_BUTTONS, custom("custom-1", "Lint", "run the linter")];
+    expect(ids(null, false, true, buttons)).toEqual(["runServer", "custom-1"]);
+    expect(ids(status({ branch: "main" }), false, true, buttons)).toEqual([
+      "runServer",
+      "custom-1",
+    ]);
+    expect(ids(dirty, false, false, buttons)).toEqual(["commit", "pr"]);
+  });
+
+  it("marks a custom button as no built-in, so it reports as one fixed name", () => {
+    const [action] = handoffActions(null, false, true, [custom("custom-1", "Lint", "lint")]);
+    expect(action.builtin).toBeNull();
+  });
+
+  // An empty prompt must never go out as a send.
+  it("drops a custom button with nothing to send", () => {
+    expect(ids(null, false, true, [custom("custom-1", "Lint", "   ")])).toEqual([]);
+  });
+
+  it("names an unlabelled custom button after its prompt's first words", () => {
+    const [action] = handoffActions(null, false, true, [
+      custom("custom-1", "", "  open a draft pull request please"),
+    ]);
+    expect(action.label).toBe("open a draft");
+    expect(action.prompt).toBe("open a draft pull request please");
+  });
+
+  it("draws in the stored order", () => {
+    const buttons = [
+      custom("custom-1", "Lint", "lint"),
+      custom("runServer", "", ""),
+      custom("commit", "", ""),
+    ];
+    expect(ids(dirty, false, true, buttons)).toEqual(["custom-1", "runServer", "commit"]);
+  });
+
+  it("draws nothing once every button is removed", () => {
+    expect(ids(dirty, false, true, [])).toEqual([]);
+  });
+});
+
+describe("readHandoffButtons", () => {
+  // Nothing stored, or a shape this build cannot read, must leave the row as
+  // shipped rather than empty or broken.
+  it("reads anything that is not a list as the defaults", () => {
+    for (const raw of [null, undefined, "commit", 3, { commit: "x" }]) {
+      expect(readHandoffButtons(raw)).toEqual(DEFAULT_HANDOFF_BUTTONS);
+    }
+  });
+
+  it("reads a list holding nothing usable as the defaults", () => {
+    expect(readHandoffButtons([null, 4, { label: "x" }])).toEqual(DEFAULT_HANDOFF_BUTTONS);
+  });
+
+  // Every button removed is an answer, not a corruption.
+  it("keeps an empty list", () => {
+    expect(readHandoffButtons([])).toEqual([]);
+  });
+
+  it("drops bad entries and repeated ids, and fills missing fields", () => {
+    expect(
+      readHandoffButtons([
+        { id: "commit", label: 5 },
+        { id: "commit", label: "again", prompt: "again" },
+        { id: "", label: "x", prompt: "x" },
+        "junk",
+        { id: "custom-1", label: "Lint", prompt: "lint" },
+      ]),
+    ).toEqual([
+      { id: "commit", label: "", prompt: "" },
+      { id: "custom-1", label: "Lint", prompt: "lint" },
+    ]);
+  });
+});
+
+describe("labelFromPrompt", () => {
+  it("takes the first three words", () => {
+    expect(labelFromPrompt("run the  tests\tin watch mode")).toBe("run the tests");
+    expect(labelFromPrompt("   ")).toBe("");
   });
 });

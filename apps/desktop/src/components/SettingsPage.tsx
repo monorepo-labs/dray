@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import {
   BoltIcon,
+  ChatBubbleBottomCenterTextIcon,
   ComputerDesktopIcon,
   InformationCircleIcon,
   MicrophoneIcon,
@@ -56,6 +57,7 @@ import AccountsSettings from "@/components/settings/AccountsSettings";
 import AppShell from "@/components/layout/AppShell";
 import { SettingsHeaderSlot } from "@/components/settings/headerAction";
 import ServersSettings from "@/components/settings/ServersSettings";
+import HandoffSettings from "@/components/settings/HandoffSettings";
 import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
 import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
@@ -199,6 +201,7 @@ export default function SettingsPage({
             </Section>
           </>
         ),
+        composer: <HandoffSettings />,
         shortcuts: <ShortcutsSettings onOpenIsland={() => goTo("island")} />,
         island: <IslandSettings />,
         spaces: (
@@ -1330,6 +1333,7 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
 /// own 14px. No keyboard in heroicons, so Shortcuts takes the bolt.
 const ALL_TABS = [
   { id: "appearance", label: "Appearance", Icon: PaintBrushIcon },
+  { id: "composer", label: "Composer", Icon: ChatBubbleBottomCenterTextIcon },
   { id: "spaces", label: "Spaces", Icon: Square3Stack3DIcon },
   { id: "servers", label: "Servers", Icon: ServerStackIcon },
   { id: "accounts", label: "Accounts", Icon: KeyIcon },
@@ -1351,6 +1355,8 @@ const SETTINGS_TABS = ALL_TABS.filter((t) => IS_MAC || t.id !== "island");
 /// which nothing on the page itself would show.
 const TAB_SUBTITLES: Partial<Record<SettingsTab, string>> = {
   accounts: "Manage each harness's sign-in. Switch one off to hide it from the model picker.",
+  composer:
+    "The buttons that rise out of the composer's top edge on hover. Each sends its prompt as if you had typed it. Commit and Create PR appear only when there is something to commit or propose.",
 };
 
 /// The page's groups as a list down the left, standing where the sidebar

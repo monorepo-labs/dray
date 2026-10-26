@@ -182,6 +182,7 @@ import {
 } from "@/lib/space";
 import { worktreeNoticeDetail } from "@/lib/worktree";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
+import { useHandoffButtons } from "@/hooks/useHandoffButtons";
 import { buildTranscript, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import { playSwipeTick } from "@/lib/tick";
@@ -740,6 +741,7 @@ function App() {
   // which branch the pull requests are looked up by. Read on the same falling
   // edge as those, since a turn is what moves all of it.
   const { status: workStatus } = useWorkStatus(selectedSession?.cwd ?? "", busy);
+  const handoffButtons = useHandoffButtons();
 
   // Filtered here rather than inside the sidebar, so the list and the ⌘⇧↑/↓ walk
   // read one array. `projectPath` on the item is the repo root, so a worktree
@@ -3194,7 +3196,7 @@ function App() {
           }
           handoff={
             <HandoffRow
-              actions={handoffActions(workStatus, sessionHasPr, !!selectedSessionId)}
+              actions={handoffActions(workStatus, sessionHasPr, !!selectedSessionId, handoffButtons)}
               // Straight out as a prompt, exactly as if it had been typed. A
               // turn already running queues it, like any other send.
               onSend={(prompt) => void handleSendMsg(prompt)}

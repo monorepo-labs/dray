@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { HANDOFF_ICONS } from "@/components/composer/handoffIcons";
+import { handoffIcon } from "@/components/composer/handoffIcons";
 import { trackFeature } from "@/lib/analytics";
 import type { HandoffAction } from "@/lib/handoff";
 
@@ -14,8 +14,10 @@ import type { HandoffAction } from "@/lib/handoff";
 /// the message with the context it already has, and whatever goes wrong is
 /// reported in the transcript like any other tool failure. Which buttons exist
 /// when is [handoffActions]' rule, and it is contextual — no commit offer on a
-/// clean tree, no pull request from the branch the work lands on. Run server is
-/// the one exception to that: it wants a session and nothing else.
+/// clean tree, no pull request from the branch the work lands on. Run server and
+/// every button the reader added are the exception: they want a session and
+/// nothing else. What each says, and which exist at all, is the reader's own,
+/// set in Settings → Composer.
 ///
 /// It hides rather than sits, and that shape is the point. A turn that touched
 /// a file is most turns, so a row drawn on "there are changes" is a row drawn
@@ -87,8 +89,10 @@ export default function HandoffRow({
           keeps that box off the rest of the transcript's bottom edge, where an
           invisible full-width strip would swallow clicks and text selection.
           `justify-end` is what pins the window below to the card's top edge, so
-          the height it gains is gained upward. */}
-      <div className="group absolute -top-7 left-3 flex h-8 w-fit flex-col justify-end">
+          the height it gains is gained upward. The `max-w` holds it inside the
+          card: the shipped three fit, but the reader can add more, and an
+          unbounded `w-fit` would draw them over the panel beside it. */}
+      <div className="group absolute -top-7 left-3 flex h-8 w-fit max-w-[calc(100%-1.5rem)] flex-col justify-end">
         <div
           className={
             "overflow-hidden " +
@@ -106,7 +110,7 @@ export default function HandoffRow({
         >
           <div className="flex gap-1">
           {actions.map((action) => {
-            const Icon = HANDOFF_ICONS[action.id];
+            const Icon = handoffIcon(action.builtin);
             return (
               <Button
                 key={action.id}
@@ -114,10 +118,11 @@ export default function HandoffRow({
                 size="sm"
                 variant="secondary"
                 disabled={disabled}
-                // Reported off `action.id`, which is already a closed union, so
-                // a fourth button cannot arrive nameless — and here rather than
-                // in `onSend`, which the composer also calls for typed prompts.
-                // The prompt text is never sent: it is a constant, and which
+                // Reported off `action.builtin`, a closed union, with every
+                // button the reader added folded into one `handoff_custom` —
+                // and here rather than in `onSend`, which the composer also
+                // calls for typed prompts. Neither label nor prompt is sent:
+                // a custom one is the reader's own words, and which kind of
                 // button was pressed is the whole question.
                 //
                 // **The one place the "report it working" rule gives way**, and
@@ -130,13 +135,16 @@ export default function HandoffRow({
                 // signal for. A send that fails past here is the agent
                 // failing, and the transcript is where that is visible.
                 onClick={() => {
-                  trackFeature(`handoff_${action.id}`);
+                  trackFeature(action.builtin ? `handoff_${action.builtin}` : "handoff_custom");
                   onSend(action.prompt);
                 }}
-                className="pointer-events-none group-focus-within:pointer-events-auto group-hover:pointer-events-auto"
+                // `min-w-0 shrink` with a cap, so a long label truncates and a
+                // row of the reader's own buttons squeezes inside the zone's
+                // width rather than wrapping or running out past it.
+                className="pointer-events-none min-w-0 max-w-48 shrink group-focus-within:pointer-events-auto group-hover:pointer-events-auto"
               >
                 <Icon className="size-3.5" strokeWidth={1.5} />
-                {action.label}
+                <span className="truncate">{action.label}</span>
               </Button>
             );
           })}
