@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useDragReorder } from "@/hooks/useDragReorder";
 import { useDigitHotkey, useHotkey } from "@/hooks/useHotkey";
-import { activateFile, closeFile, useOpenFiles } from "@/hooks/useOpenFiles";
+import { activateFile, closeFile, openInFiles, useOpenFiles } from "@/hooks/useOpenFiles";
 import {
   activateBlankTab,
   activateTab,
@@ -40,7 +40,14 @@ import {
   useRecording,
 } from "@/lib/browser";
 import { tabLabels } from "@/lib/fileTree";
-import { moveKey, reconcile, type TabKey } from "@/lib/tabOrder";
+import {
+  markClosedSlot,
+  moveKey,
+  popClosedTab,
+  pushClosedTab,
+  reconcile,
+  type TabKey,
+} from "@/lib/tabOrder";
 import BranchButton from "@/components/layout/BranchButton";
 import { cn } from "@/lib/utils";
 
@@ -158,6 +165,7 @@ export default function ViewTabs({
   };
   added.set(sessionId, shown);
   const setShown = (kind: keyof Added, on: boolean) => {
+    if (!on) pushClosedTab(sessionId, { key: kind });
     added.set(sessionId, { ...(added.get(sessionId) ?? NONE), [kind]: on });
     bump();
   };
@@ -325,6 +333,38 @@ export default function ViewTabs({
   useHotkey("tab.prev", () => step(-1));
   useHotkey("tab.next", () => step(1));
 
+  // ⌘⇧T, every browser's chord. One that cannot come back now — a page while
+  // a recording holds the strip — is skipped for the one before it.
+  const reopen = () => {
+    for (let entry = popClosedTab(sessionId); entry; entry = popClosedTab(sessionId)) {
+      const { key, at, url } = entry;
+      const place = () =>
+        at !== undefined && orders.set(sessionId, moveKey(orders.get(sessionId) ?? order, key, at));
+      if (key === "changes" || key === "files") {
+        place();
+        setShown(key, true);
+        onChange(key);
+      } else if (key.startsWith("file:")) {
+        place();
+        openInFiles(sessionId, key.slice("file:".length));
+        onChange("files");
+      } else if (recording) {
+        continue;
+      } else if (url) {
+        // Through a new tab the page then replaces, the URL bar's own route:
+        // with no page left, the view would otherwise sit unlit until
+        // Chromium answers and the row would move off it.
+        onChange("browser");
+        setPendingTab(sessionId, true);
+        void openInBrowser(sessionId, url, true).catch(() => undefined);
+      } else {
+        newTab();
+      }
+      return;
+    }
+  };
+  useHotkey("tab.reopen", reopen);
+
   // Closing the tab on screen moves to the one beside it in this row, as a
   // browser does, rather than to whatever its own kind would pick.
   // Closing the last file is the exception: Files takes its slot, so the
@@ -341,6 +381,7 @@ export default function ViewTabs({
         ?.pick();
     }
     item.close?.();
+    markClosedSlot(sessionId, item.key, i);
   };
 
   useEffect(() => {
@@ -415,14 +456,6 @@ export default function ViewTabs({
           // The chat alone is a title, not a tab: nothing beside it to pick
           // between, so no pill to say which is picked.
           plain={lone}
-          hint={
-            !lone && (
-              <>
-                Switch tabs
-                <ShortcutKeys ids={["tab.prev", "tab.next"]} />
-              </>
-            )
-          }
         />
       ))}
       {/* Last, after every tab, where a browser keeps it. Past the items, so
@@ -466,6 +499,18 @@ export default function ViewTabs({
             <ShortcutKeys ids={["browser.newTab"]} />
           </TooltipContent>
         </Tooltip>
+      )}
+      {/* The chords that step the row, said beside it once there is a row to
+          step. Wraps rather than shrinks: the zero-width opener holds the
+          first line, so a hint that does not fit whole drops to a second
+          line the fixed height clips, and no tab gives up width for it. */}
+      {!lone && (
+        <span className="flex h-7 min-w-0 flex-1 flex-wrap items-center overflow-hidden">
+          <span aria-hidden className="h-7" />
+          <span className="flex whitespace-nowrap pl-2 opacity-50">
+            <ShortcutKeys ids={["tab.prev", "tab.next"]} />
+          </span>
+        </span>
       )}
       {/* At the row's far end, where it gives way before any tab does. */}
       {branch && cwd && (

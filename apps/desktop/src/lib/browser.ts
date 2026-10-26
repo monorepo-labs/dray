@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 
 import { readLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
+import { pushClosedTab } from "@/lib/tabOrder";
 import type { BrowserVisit } from "@/lib/history";
 import type { ChromiumStatus } from "@/types/events";
 import { zoomLevel } from "@/lib/zoom";
@@ -294,6 +295,8 @@ export function moveTab(sessionId: string, id: number, to: number) {
 }
 
 export function closeTab(sessionId: string, id: number) {
+  const url = tabsBySession.get(sessionId)?.find((t) => t.id === id)?.url;
+  pushClosedTab(sessionId, { key: `page:${id}`, url: url || undefined });
   return invoke("browser_close", { sessionId, id });
 }
 
@@ -492,6 +495,7 @@ export function activateBlankTab(sessionId: string, id: number) {
 
 export function closeBlankTab(sessionId: string, id: number) {
   const b = blanks.get(sessionId) ?? NO_BLANKS;
+  pushClosedTab(sessionId, { key: `blank:${id}` });
   drafts.delete(`${sessionId}:blank:${id}`);
   if (b.active === id) openErrors.delete(sessionId);
   putBlanks(sessionId, { ids: b.ids.filter((i) => i !== id), active: b.active === id ? null : b.active });

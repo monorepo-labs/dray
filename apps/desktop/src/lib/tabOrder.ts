@@ -40,3 +40,33 @@ export function moveKey(order: readonly TabKey[], key: TabKey, to: number): TabK
   next.splice(to, 0, key);
   return next;
 }
+
+/// A tab the reader closed. A page keeps its URL, since its id went with it;
+/// `at` is the slot it sat in, where the title row knows it.
+export type ClosedTab = { key: TabKey; url?: string; at?: number };
+
+/// What ⌘⇧T brings back, per session, newest last. Filled by the reader's own
+/// closes — every store's close function pushes here — never by the agent's,
+/// which arrive from Rust and are not the reader's to undo.
+// ponytail: in memory and capped, a browser's own bargain; a restart forgets.
+const closed = new Map<string, ClosedTab[]>();
+const CLOSED_CAP = 25;
+
+export function pushClosedTab(sessionId: string, tab: ClosedTab) {
+  closed.set(sessionId, [...(closed.get(sessionId) ?? []), tab].slice(-CLOSED_CAP));
+}
+
+/// Records the row slot a close just left, on the entry that close pushed.
+export function markClosedSlot(sessionId: string, key: TabKey, at: number) {
+  const top = closed.get(sessionId)?.at(-1);
+  if (top?.key === key) top.at = at;
+}
+
+export function popClosedTab(sessionId: string): ClosedTab | undefined {
+  return closed.get(sessionId)?.pop();
+}
+
+/// Drops a deleted session's closed tabs.
+export function forgetClosedTabs(sessionId: string) {
+  closed.delete(sessionId);
+}

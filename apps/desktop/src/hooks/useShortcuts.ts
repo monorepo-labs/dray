@@ -5,6 +5,7 @@ import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import {
   type Chord,
   defaultChord,
+  mayShareChord,
   PREVIOUS_DEFAULTS,
   sameChord,
   SHORTCUTS,
@@ -56,7 +57,7 @@ export function yieldMovedDefaults(held: Overrides): Overrides {
     const clashes = (chord: Chord) =>
       SHORTCUTS.some(({ id: other }) => {
         const c = other in out ? out[other] : defaultChord(other);
-        return other !== id && !!c && sameChord(c, chord);
+        return other !== id && !mayShareChord(id, other) && !!c && sameChord(c, chord);
       });
     if (!clashes(defaultChord(id))) continue;
     out = { ...out, [id]: previous && !clashes(previous) ? previous : null };

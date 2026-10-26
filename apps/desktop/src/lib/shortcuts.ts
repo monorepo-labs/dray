@@ -32,10 +32,14 @@ export type ShortcutGroup = "General" | "Sessions" | "Panels and views" | "Compo
 /// only while a session's docs tab is on screen, the other on every composer
 /// whenever that tab is not.
 ///
+/// `tab.reopen` and `worktree.toggle` share ⌘⇧T on the same terms: the tab row
+/// is mounted only with a session up, the toggle only on the new-task composer.
+///
 /// [`IssuesView`]: ../components/IssuesView.tsx
 export const SHARED_CHORDS: [string, string][] = [
   ["issues.search", "composer.fast"],
   ["doc.save", "composer.draft"],
+  ["tab.reopen", "worktree.toggle"],
 ];
 
 /// Whether these two ids are the documented exception above.
@@ -87,6 +91,7 @@ export const SHORTCUTS = [
   { id: "subtab.next", label: "Next tab in the view or panel", group: "Panels and views", chord: k("ArrowRight", { shift: true }) },
   { id: "tab.prev", label: "Previous tab", group: "Panels and views", chord: k("{", { shift: true, code: "BracketLeft" }) },
   { id: "tab.next", label: "Next tab", group: "Panels and views", chord: k("}", { shift: true, code: "BracketRight" }) },
+  { id: "tab.reopen", label: "Reopen closed tab", group: "Panels and views", chord: k("t", { shift: true }) },
   { id: "chat.bottom", label: "Scroll chat to bottom", group: "Panels and views", chord: k("ArrowDown") },
   { id: "issues.open", label: "Open issues", group: "Panels and views", chord: k("i") },
   { id: "issues.search", label: "Search issues", group: "Panels and views", chord: k("f", { shift: true }) },
@@ -134,6 +139,7 @@ export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord | null>> = {
   // The titlebar's tabs, new with it.
   "tab.prev": null,
   "tab.next": null,
+  "tab.reopen": null,
   "mode.toggle": null,
 };
 

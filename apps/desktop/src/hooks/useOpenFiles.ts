@@ -4,6 +4,7 @@ import { invoke, listen } from "@/lib/transport";
 import { watchDocs } from "@/lib/servers";
 
 import { channel } from "@/lib/channel";
+import { pushClosedTab } from "@/lib/tabOrder";
 import type { FileBody } from "@/types/events";
 
 /// A tagged union over the read, so there is no state in which a body exists
@@ -147,6 +148,7 @@ export function closeFile(sid: string | null, path: string) {
   const { open, active } = state(sid);
   const at = open.findIndex((file) => file.path === path);
   if (at === -1) return;
+  pushClosedTab(sid, { key: `file:${path}` });
   // A read still out for this path must not write into the store after the
   // reader has closed it.
   issue(sid, path);
