@@ -1398,7 +1398,14 @@ impl SessionManager {
             crate::store::copy_pi_session_file(session_id, fork_id).await?;
         }
 
-        let item = parent.fork(fork_id, worktree_name.as_deref());
+        let mut item = parent.fork(fork_id, worktree_name.as_deref());
+        // The parent's Codex thread, taken now rather than looked up at the
+        // first send: a parent deleted in between would otherwise leave a fork
+        // that fails every send. Safe while `fork_from` stands, since that is
+        // what makes the first spawn fork this thread instead of resuming it.
+        if parent.harness == Harness::Codex {
+            item.thread_id = parent.thread_id.clone();
+        }
         append_session_index_item(item.clone()).await?;
 
         Ok(SessionSnapshot {

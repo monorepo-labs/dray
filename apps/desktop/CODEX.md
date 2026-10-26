@@ -68,9 +68,11 @@ Codex's thread id can't do that job: it doesn't exist until the child answers.
 So it's stored as one field on the index entry, `thread_id`, and read by exactly
 one thing: resume.
 
-A fork deliberately does **not** inherit it. A fork is a new conversation on
-Codex's side too, so carrying the parent's id would make the fork's first
-message write into the conversation it copied.
+A fork holds the **parent's** id until its first send, and only while
+`fork_from` stands: that is what makes the first spawn call `thread/fork` on it
+rather than resume it, and the fork's own id replaces it before the prompt goes
+out. Taken at the press rather than looked up later, so deleting the parent in
+between cannot strand the fork.
 
 ## The docs are wrong, so everything was checked against a real server
 

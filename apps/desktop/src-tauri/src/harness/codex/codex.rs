@@ -388,12 +388,13 @@ async fn open_thread(
     handshake(client).await?;
 
     // A fork's first send: the index entry exists, so this is not a new
-    // session, and it holds no thread of its own yet to resume.
-    if let Some(parent) = fork_from {
-        let parent_thread = store::get_session_index_item(parent)
+    // session, and the thread it holds is the parent's, recorded at the fork
+    // so the parent can be deleted meanwhile.
+    if fork_from.is_some() {
+        let parent_thread = store::get_session_index_item(session_id)
             .await?
             .and_then(|item| item.thread_id)
-            .context("the session this was forked from has no Codex thread")?;
+            .context("this fork has no Codex thread to fork from")?;
         let (thread, answer) = fork_thread(client, &parent_thread, settings, session_cwd).await?;
         store::set_session_thread_id(session_id, &thread).await?;
         return Ok((thread, answer));
@@ -725,7 +726,17 @@ pub async fn turn_input(
     text: &str,
     images: &[crate::attachments::PreparedImage],
 ) -> Result<Value> {
-    let mut input = match commands::skill_item(&thread.client, text).await? {
+    let skill = commands::skill_item(&thread.client, text).await?;
+    Ok(input_items(skill, text, images))
+}
+
+/// The input array, once the skill lookup has answered.
+fn input_items(
+    skill: Option<Value>,
+    text: &str,
+    images: &[crate::attachments::PreparedImage],
+) -> Value {
+    let mut input = match skill {
         None => vec![json!({"type": "text", "text": text})],
         Some(skill) => {
             let rest = commands::without_command(text);
@@ -747,7 +758,7 @@ pub async fn turn_input(
             .map(|image| json!({"type": "localImage", "path": image.stored_path})),
     );
 
-    Ok(Value::Array(input))
+    Value::Array(input)
 }
 
 /// Writes one prompt as a turn.
@@ -975,6 +986,34 @@ mod tests {
 
         settings.set_stance(ApprovalPolicy::Plan);
         assert_eq!(params(&settings)["sandboxPolicy"], json!({"type": "readOnly"}));
+    }
+
+    /// An image rides beside the text or the skill, by its archived path.
+    /// Without this, a picture drawn in the transcript never reached Codex.
+    #[test]
+    fn an_image_rides_beside_the_text_and_the_skill() {
+        let image = |path: &str| crate::attachments::PreparedImage {
+            stored_path: path.into(),
+            mime_type: "image/png".into(),
+            data: String::new(),
+        };
+        let shot = [image("/a/shot.png")];
+        let local = json!({"type": "localImage", "path": "/a/shot.png"});
+        let skill = json!({"type": "skill", "name": "s", "path": "/s"});
+
+        assert_eq!(
+            input_items(None, "look", &shot),
+            json!([{"type": "text", "text": "look"}, local])
+        );
+        assert_eq!(
+            input_items(Some(skill.clone()), "/s look", &shot),
+            json!([skill, {"type": "text", "text": "look"}, local])
+        );
+        assert_eq!(input_items(Some(skill.clone()), "/s", &shot), json!([skill, local]));
+        assert_eq!(
+            input_items(None, "look", &[]),
+            json!([{"type": "text", "text": "look"}])
+        );
     }
 
     /// The one field of `thread/start`'s answer everything after is keyed on.
