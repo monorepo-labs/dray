@@ -33,12 +33,10 @@ describe("stanceFor", () => {
     expect(stanceFor("fx", "manual")).toBe("manual");
   });
 
-  /// fx has no bypass to fall to — ACP exposes `ask` and `code` and nothing
-  /// wider — so its widest is `auto`, and recording `bypassPermissions` there
-  /// would claim a freedom the session does not have.
-  it("falls to the widest stance fx can run, not to bypass", () => {
-    expect(honoursMode("fx", "bypassPermissions")).toBe(false);
-    expect(stanceFor("fx", "bypassPermissions")).toBe("auto");
+  /// fx runs bypass as `full-access` and `dontAsk` as `auto`, so recording
+  /// `dontAsk` as a bypass would claim a freedom the session does not have.
+  it("honours bypass on fx and falls dontAsk to auto", () => {
+    expect(stanceFor("fx", "bypassPermissions")).toBe("bypassPermissions");
     expect(stanceFor("fx", "dontAsk")).toBe("auto");
   });
 

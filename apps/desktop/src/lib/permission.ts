@@ -23,14 +23,12 @@ import type { ApprovalPolicy, Harness } from "@/types/events";
 /// enforcement stays in `pi.rs`, so a session already recorded `plan` still
 /// runs read-only rather than quietly running ungated.
 ///
-/// fx exposes two modes over ACP — `ask` and `code` — and no bypass:
-/// `full-access` is neither a session mode nor reachable by env or flag on
-/// `fx acp`. So `auto` is the widest stance fx can run, and it is what an
-/// unhonoured one falls to there.
+/// fx exposes three modes over ACP — `auto`, `ask` and `full-access` — since
+/// 0.0.14; earlier builds had no bypass. It has no plan mode and no `dontAsk`.
 const HONOURED: Partial<Record<Harness, ApprovalPolicy[]>> = {
   codex: ["bypassPermissions", "manual", "auto"],
   pi: [],
-  fx: ["manual", "auto"],
+  fx: ["manual", "auto", "bypassPermissions"],
   // Three, and `plan` is the one missing: grok has a plan *mode* of its own
   // that it enters by asking (`_x.ai/exit_plan_mode` raises the card), which is
   // the model's decision rather than a stance the composer can set it to.
@@ -39,7 +37,7 @@ const HONOURED: Partial<Record<Harness, ApprovalPolicy[]>> = {
 
 /// The stance a harness actually runs when handed one it does not honour.
 ///
-/// fx: a bypass falls to `auto`, the widest it can run. `plan` is narrower
+/// fx: `dontAsk` falls to `auto`, which fx.rs runs it as. `plan` is narrower
 /// than anything fx has and falls the other way, to `manual` — fx.rs runs
 /// that as `ask`, and a spawned session inheriting `plan` must never come out
 /// freer than its parent.

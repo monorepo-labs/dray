@@ -836,18 +836,18 @@ async fn set_config(session: &FxSession, config_id: &str, value: &str) -> Result
         .await
 }
 
-/// Dray's stance onto ACP's two modes.
+/// Dray's stance onto ACP's three modes.
 ///
-/// fx exposes `ask` (its `ask`) and `code` (its `auto`) over ACP and nothing
-/// wider: `full-access` is neither a mode here nor reachable by env or flag on
-/// `fx acp`, verified against 0.0.9. So `bypassPermissions` and `dontAsk` land
-/// on `code`, the widest fx has, and the frontend's `stanceFor` records that
-/// rather than the stance that was asked for. `plan` lands on `ask`, the
-/// narrowest.
+/// fx 0.0.14 exposes `auto`, `ask` and `full-access` over ACP and answers
+/// `-32602 Unknown mode` for anything else — `code` included, the name `auto`
+/// had before 0.0.14. `dontAsk` lands on `auto` and `plan` on `ask`, the
+/// nearest fx has, and the frontend's `stanceFor` records that rather than the
+/// stance that was asked for.
 pub fn mode_for(mode: ApprovalPolicy) -> &'static str {
     match mode {
         ApprovalPolicy::Plan | ApprovalPolicy::Manual => "ask",
-        ApprovalPolicy::Auto | ApprovalPolicy::DontAsk | ApprovalPolicy::BypassPermissions => "code",
+        ApprovalPolicy::Auto | ApprovalPolicy::DontAsk => "auto",
+        ApprovalPolicy::BypassPermissions => "full-access",
     }
 }
 
@@ -1257,16 +1257,15 @@ mod tests {
     use super::*;
     use crate::harness::rpc::Outbound;
 
-    /// Every stance lands on one of fx's two modes, and the wide ones land on
-    /// the wider — recording `ask` for a `bypassPermissions` session would
-    /// stop a session that was asked not to.
+    /// Every stance lands on one of fx's three modes. A name fx does not have
+    /// is refused at spawn, which kills the child, so the session never opens.
     #[test]
     fn every_stance_lands_on_a_mode_fx_has() {
         assert_eq!(mode_for(ApprovalPolicy::Manual), "ask");
         assert_eq!(mode_for(ApprovalPolicy::Plan), "ask");
-        assert_eq!(mode_for(ApprovalPolicy::Auto), "code");
-        assert_eq!(mode_for(ApprovalPolicy::DontAsk), "code");
-        assert_eq!(mode_for(ApprovalPolicy::BypassPermissions), "code");
+        assert_eq!(mode_for(ApprovalPolicy::Auto), "auto");
+        assert_eq!(mode_for(ApprovalPolicy::DontAsk), "auto");
+        assert_eq!(mode_for(ApprovalPolicy::BypassPermissions), "full-access");
     }
 
     /// The rules go **after** the reader's text, which is what keeps fx's own
