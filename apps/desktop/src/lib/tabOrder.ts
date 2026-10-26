@@ -41,9 +41,13 @@ export function moveKey(order: readonly TabKey[], key: TabKey, to: number): TabK
   return next;
 }
 
-/// A tab the reader closed. A page keeps its URL, since its id went with it;
-/// `at` is the slot it sat in, where the title row knows it.
-export type ClosedTab = { key: TabKey; url?: string; at?: number };
+/// A tab the reader closed. A page keeps its address, title and icon, since
+/// its id went with it; `at` is the slot it sat in, where the title row knows it.
+export type ClosedTab = {
+  key: TabKey;
+  page?: { url: string; title: string; favicon: string };
+  at?: number;
+};
 
 /// What ⌘⇧T brings back, per session, newest last. Filled by the reader's own
 /// closes — every store's close function pushes here — never by the agent's,

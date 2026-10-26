@@ -131,6 +131,19 @@ export function openInFiles(sid: string | null, path: string, line?: number): vo
   read(sid, path);
 }
 
+/// Puts a closed file back without bringing it forward: ⌘⇧T restores a tab,
+/// it does not switch to one. Leaves `opened` alone, which is what moves the
+/// view.
+export function reopenFile(sid: string, path: string) {
+  const { open, active } = state(sid);
+  if (open.some((file) => file.path === path)) return;
+  write(sid, {
+    open: [...open, { path, reveal: 0, state: { status: "loading" } }],
+    active: active ?? path,
+  });
+  read(sid, path);
+}
+
 /// Brings an already-open file forward.
 export function activateFile(sid: string | null, path: string) {
   if (!sid) return;

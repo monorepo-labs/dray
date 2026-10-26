@@ -62,6 +62,13 @@ describe("clearChord", () => {
     expect(chordFor("search")).toEqual(defaultChord("search"));
   });
 
+  // ⌘⇧T is both rows' default, on screens never shown together.
+  it("lets a row reset onto a chord its shared partner holds", () => {
+    clearChord("worktree.toggle");
+    expect(resetChord("worktree.toggle")).toBeNull();
+    expect(chordFor("worktree.toggle")).toEqual(defaultChord("worktree.toggle"));
+  });
+
   it("is undone by recording the default again", () => {
     clearChord("search");
     setChord("search", defaultChord("search"));

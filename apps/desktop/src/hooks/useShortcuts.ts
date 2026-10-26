@@ -108,7 +108,12 @@ export function chordFor(id: ShortcutId): Chord | null {
 export function holderOf(chord: Chord, except?: ShortcutId): ShortcutId | null {
   const hit = SHORTCUTS.find((s) => {
     const held = chordFor(s.id);
-    return s.id !== except && held !== null && sameChord(held, chord);
+    return (
+      s.id !== except &&
+      !(except && mayShareChord(except, s.id)) &&
+      held !== null &&
+      sameChord(held, chord)
+    );
   });
   return hit?.id ?? null;
 }

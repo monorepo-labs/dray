@@ -26,16 +26,18 @@ import {
 } from "@/components/ui/tooltip";
 import { useDragReorder } from "@/hooks/useDragReorder";
 import { useDigitHotkey, useHotkey } from "@/hooks/useHotkey";
-import { activateFile, closeFile, openInFiles, useOpenFiles } from "@/hooks/useOpenFiles";
+import { activateFile, closeFile, reopenFile, useOpenFiles } from "@/hooks/useOpenFiles";
 import {
   activateBlankTab,
   activateTab,
+  addBlankTab,
   closeBlankTab,
   closeTab,
   openInBrowser,
   setPendingTab,
   useBlankTabs,
   useBrowserTabs,
+  useParkedTabs,
   usePendingTab,
   useRecording,
 } from "@/lib/browser";
@@ -149,6 +151,7 @@ export default function ViewTabs({
   const pages = loadedPages ?? [];
   const pending = usePendingTab(sessionId);
   const blanks = useBlankTabs(sessionId);
+  const parkedPages = useParkedTabs(sessionId);
   // The agent's next verb goes to whichever page is active, so the reader
   // cannot move it mid-recording — the panel strip's own rule.
   const recording = useRecording(sessionId);
@@ -227,8 +230,8 @@ export default function ViewTabs({
     })),
     ...blanks.ids.map((id) => ({
       key: `blank:${id}`,
-      icon: <GlobeFilledIcon className={MARK} />,
-      label: "New tab",
+      icon: parkedPages[id] ? <Favicon tab={parkedPages[id]} /> : <GlobeFilledIcon className={MARK} />,
+      label: parkedPages[id] ? parkedPages[id].title || hostOf(parkedPages[id].url) : "New tab",
       active: tab === "browser" && blanks.active === id,
       locked: recording,
       pick: () => {
@@ -333,35 +336,20 @@ export default function ViewTabs({
   useHotkey("tab.prev", () => step(-1));
   useHotkey("tab.next", () => step(1));
 
-  // ⌘⇧T, every browser's chord. One that cannot come back now — a page while
-  // a recording holds the strip — is skipped for the one before it.
+  // ⌘⇧T, every browser's chord. Puts the tab back and leaves the reader where
+  // they are; a page comes back parked in a blank and loads when picked, so
+  // nothing a recording holds is moved.
   const reopen = () => {
-    for (let entry = popClosedTab(sessionId); entry; entry = popClosedTab(sessionId)) {
-      const { key, at, url } = entry;
-      const place = () =>
-        at !== undefined && orders.set(sessionId, moveKey(orders.get(sessionId) ?? order, key, at));
-      if (key === "changes" || key === "files") {
-        place();
-        setShown(key, true);
-        onChange(key);
-      } else if (key.startsWith("file:")) {
-        place();
-        openInFiles(sessionId, key.slice("file:".length));
-        onChange("files");
-      } else if (recording) {
-        continue;
-      } else if (url) {
-        // Through a new tab the page then replaces, the URL bar's own route:
-        // with no page left, the view would otherwise sit unlit until
-        // Chromium answers and the row would move off it.
-        onChange("browser");
-        setPendingTab(sessionId, true);
-        void openInBrowser(sessionId, url, true).catch(() => undefined);
-      } else {
-        newTab();
-      }
-      return;
+    const entry = popClosedTab(sessionId);
+    if (!entry) return;
+    let key = entry.key;
+    if (key === "changes" || key === "files") setShown(key, true);
+    else if (key.startsWith("file:")) reopenFile(sessionId, key.slice("file:".length));
+    else key = `blank:${addBlankTab(sessionId, entry.page)}`;
+    if (entry.at !== undefined) {
+      orders.set(sessionId, moveKey(orders.get(sessionId) ?? order, key, entry.at));
     }
+    bump();
   };
   useHotkey("tab.reopen", reopen);
 

@@ -58,6 +58,7 @@ import {
   activateBlankTab,
   closeBlankTab,
   useBlankTabs,
+  useParkedTabs,
   setResponsive,
   useOpenError,
   useResponsive,
@@ -376,6 +377,7 @@ function Chrome({
   const url = current?.url ?? opening ?? "";
   const loading = current ? current.loading : opening !== null;
   const blanks = useBlankTabs(sessionId);
+  const parkedPages = useParkedTabs(sessionId);
   const draftKey = `${sessionId}:${blanks.active !== null ? `blank:${blanks.active}` : `page:${current?.id}`}`;
   // Per tab, as a browser's are: each new tab keeps what was typed into it.
   const draft = useUrlDraft(draftKey);
@@ -466,9 +468,15 @@ function Chrome({
               active={blanks.active === id}
               // No page under it, so no fill: the URL row it joins is bare too.
               paint={{ ["--card" as string]: "transparent" }}
-              title="New tab"
-              icon={<GlobeFilledIcon className="size-4 shrink-0 text-muted-foreground" />}
-              label="New tab"
+              title={parkedPages[id]?.url ?? "New tab"}
+              icon={
+                parkedPages[id] ? (
+                  <Favicon tab={parkedPages[id]} />
+                ) : (
+                  <GlobeFilledIcon className="size-4 shrink-0 text-muted-foreground" />
+                )
+              }
+              label={parkedPages[id] ? parkedPages[id].title || hostOf(parkedPages[id].url) : "New tab"}
               locked={recording}
               onPick={() =>
                 blanks.active === id ? inputRef.current?.focus() : activateBlankTab(sessionId, id)
