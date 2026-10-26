@@ -339,9 +339,9 @@ pub fn fallback() -> Vec<Model> {
         default_effort: Some(High),
         arg: id.to_string(),
         provider: String::new(),
-        // Every grok model takes an image from 1.0.70 — the build this table
-        // was last checked against.
-        accepts_images: true,
+        // Only a handshake can say: 1.0.70 takes images and 1.0.40 refused
+        // them, and this table answers exactly when no handshake did.
+        accepts_images: false,
         secondary,
         supports_fast,
     };

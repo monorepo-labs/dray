@@ -235,7 +235,12 @@ impl Mapper {
             GrokUpdate::BackgroundTasks { tasks } => {
                 // Since 1.0.70 a finished task stays in the set with `status:
                 // completed` or `failed` rather than dropping out, so status is
-                // what says it ended. Absent reads as running, the 1.0.40 shape.
+                // what says it ended — and how, which the closing run carries.
+                // Absent reads as running, the 1.0.40 shape.
+                let outcomes: HashMap<String, String> = tasks
+                    .iter()
+                    .filter_map(|task| Some((task.task_id.clone(), task.status.clone()?)))
+                    .collect();
                 let live: Vec<BackgroundTask> = tasks
                     .into_iter()
                     .filter(|task| task.status.as_deref().is_none_or(|s| s == "running"))
@@ -276,8 +281,8 @@ impl Mapper {
                 }
 
                 // grok reports the whole set each time, so a task missing from
-                // one is a task that ended — there is no closing event of its
-                // own to wait for.
+                // it, or listed as no longer running, is a task that ended —
+                // there is no closing event of its own to wait for.
                 let ids: HashSet<&str> = live.iter().map(|t| t.task_id.as_str()).collect();
                 let ended: Vec<String> = self
                     .tasks
@@ -292,7 +297,10 @@ impl Mapper {
                         SUBAGENT_LABEL.to_string(),
                         AgentEventPayload::SubagentCompleted {
                             agent_id: id.clone(),
-                            status: "completed".to_string(),
+                            status: outcomes
+                                .get(&id)
+                                .cloned()
+                                .unwrap_or_else(|| "completed".to_string()),
                             summary: None,
                             usage: None,
                         },
@@ -917,23 +925,30 @@ mod tests {
         );
         let events = replay(TASKS);
 
-        let lifecycle: Vec<(&str, &str)> = events
+        let lifecycle: Vec<(&str, &str, &str)> = events
             .iter()
             .filter_map(|e| {
                 let id = e.subagent.as_ref()?.id.as_str();
                 match &e.payload {
-                    P::SubagentStarted { agent_id, .. } => Some((id, agent_id.as_str())),
-                    P::SubagentCompleted { agent_id, .. } => Some((id, agent_id.as_str())),
+                    P::SubagentStarted { agent_id, .. } => Some((id, agent_id.as_str(), "started")),
+                    P::SubagentCompleted { agent_id, status, .. } => {
+                        Some((id, agent_id.as_str(), status.as_str()))
+                    }
                     _ => None,
                 }
             })
             .collect();
         assert_eq!(
             lifecycle,
-            vec![("t1", "t1"), ("t2", "t2"), ("t2", "t2"), ("t1", "t1")],
+            vec![
+                ("t1", "t1", "started"),
+                ("t2", "t2", "started"),
+                ("t2", "t2", "failed"),
+                ("t1", "t1", "completed"),
+            ],
             "each task opens a run and closes that same run — t2 on its status, \
-             t1 on leaving the set — and both ends name the task id, which is the \
-             handle `_x.ai/task/kill` takes"
+             carrying it, and t1 on leaving the set — and both ends name the task \
+             id, which is the handle `_x.ai/task/kill` takes"
         );
 
         // The list itself still goes out, running tasks only: it is what the
