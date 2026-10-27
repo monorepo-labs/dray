@@ -1100,6 +1100,9 @@ wrap_life_span_handler! {
                 .unwrap_or(0);
             if view != 0 {
                 let view: &NSView = unsafe { &*(view as *const NSView) };
+                // A removed responder leaves the window holding focus itself,
+                // where no chord reaches the document or Chromium until a click.
+                refocus_webview(view);
                 view.removeFromSuperview();
             }
             1
