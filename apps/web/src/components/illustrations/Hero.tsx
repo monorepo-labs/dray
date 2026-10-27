@@ -139,7 +139,7 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
 
   const answerQuestion = (label: string | null) => {
     setAnswer(label);
-    setTimeout(() => setTagged(true), 1800);
+    setTimeout(() => setTagged(true), 700);
   };
 
   const confirmMerge = () => {
@@ -169,7 +169,7 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
         setStarted((list) =>
           list.map((t) => (t.id === id ? { ...t, done: true, unread: selectedRef.current !== id } : t)),
         ),
-      2500 + Math.random() * 1500,
+      600 + Math.random() * 500,
     );
   };
 
@@ -316,10 +316,12 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
                   <Turn>
                     <UserBubble>{task.prompt}</UserBubble>
                     {task.done ? (
-                      <Enter>
-                        <ToolGroup label={GENERIC[task.reply].tools} />
-                        <AssistantText className="mt-3">{GENERIC[task.reply].text}</AssistantText>
-                      </Enter>
+                      <>
+                        <Enter>
+                          <ToolGroup label={GENERIC[task.reply].tools} />
+                        </Enter>
+                        <Streamed id={task.id} text={GENERIC[task.reply].text} />
+                      </>
                     ) : (
                       <Working />
                     )}
@@ -368,6 +370,37 @@ function Enter({ children }: { children: ReactNode }) {
   return <div className={s.enter}>{children}</div>;
 }
 
+/// Replies already streamed once, so coming back to a session shows the
+/// reply whole rather than typing it out again.
+const streamed = new Set<string>();
+
+/// A reply arriving the way the app's does: a few characters a frame, about
+/// 200 a second. Reduced motion draws it whole.
+function Streamed({ id, text }: { id: string; text: string }) {
+  const [shown, setShown] = useState(() => (streamed.has(id) ? text.length : 0));
+
+  useEffect(() => {
+    if (streamed.has(id) || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      streamed.add(id);
+      setShown(text.length);
+      return;
+    }
+    const t = setInterval(() => {
+      setShown((n) => {
+        if (n + 3 >= text.length) {
+          clearInterval(t);
+          streamed.add(id);
+          return text.length;
+        }
+        return n + 3;
+      });
+    }, 16);
+    return () => clearInterval(t);
+  }, [id, text]);
+
+  return <AssistantText>{text.slice(0, shown)}</AssistantText>;
+}
+
 /// The agent mid-turn, as the transcript draws it under the last row.
 function Working() {
   return (
@@ -411,9 +444,7 @@ function LinearSession({
       )}
       {answered &&
         (tagged ? (
-          <Enter>
-            <AssistantText>{REPLIES[answer ?? "skipped"]}</AssistantText>
-          </Enter>
+          <Streamed id="linear" text={REPLIES[answer ?? "skipped"]} />
         ) : (
           <Working />
         ))}
