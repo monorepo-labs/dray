@@ -189,6 +189,13 @@ import { buildTranscript, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import { playSwipeTick } from "@/lib/tick";
 
+/// Commits only with its Suspense siblings, so its layout effect says the lazy
+/// settings page is drawn, before paint.
+function SettingsReady({ onReady }: { onReady: (ready: boolean) => void }) {
+  useLayoutEffect(() => onReady(true), [onReady]);
+  return null;
+}
+
 /// One empty set, so clearing the rail's open rows twice is one state change.
 const NO_ROWS: ReadonlySet<string> = new Set();
 
@@ -587,9 +594,11 @@ function App() {
   // reopening the app into them would be the app remembering the wrong half of
   // a session.
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // Opening settings hides the shell at once, and a first open that still had
-  // to suspend on the lazy chunk drew a frame of bare window. Mounted closed on
-  // idle, the page is already resolved when it is wanted; closed it draws nothing.
+  // The shell hides only once the lazy page has committed (`SettingsReady`
+  // shares its Suspense boundary), or a first open drew a frame of bare window.
+  // Mounted closed on idle, it is already resolved when wanted, so the open is
+  // instant rather than a beat late; closed it draws nothing.
+  const [settingsReady, setSettingsReady] = useState(false);
   const [settingsWarm, setSettingsWarm] = useState(false);
   useEffect(() => {
     const warm = () => setSettingsWarm(true);
@@ -2767,7 +2776,7 @@ function App() {
     {/* Hidden, not unmounted, while settings take the window: transcripts,
         scroll pins and drafts wait here. `display: none` is also what takes
         the browser's native view down, its pane measuring zero. */}
-    <div className={cn("h-full w-full", settingsOpen && "hidden")}>
+    <div className={cn("h-full w-full", settingsOpen && settingsReady && "hidden")}>
     <AppShell
       sidebarOpen={!collapsed}
       tall={tallSheet}
@@ -3542,6 +3551,7 @@ function App() {
       // agents cannot use.
       cwd={composerCwd && serverOfPath(composerCwd) === LOCAL ? composerCwd : ""}
     />
+    <SettingsReady onReady={setSettingsReady} />
     </MountOnce>
     <WorktreeDialog
       prompt={worktreePrompt}
