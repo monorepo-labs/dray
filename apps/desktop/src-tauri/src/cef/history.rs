@@ -58,6 +58,7 @@ static DIRTY: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 static WRITER: OnceLock<mpsc::Sender<()>> = OnceLock::new();
 /// Strips waiting for the writer, the newest per session.
 static STRIPS: Mutex<BTreeMap<String, Strip>> = Mutex::new(BTreeMap::new());
+static FLUSHING: Mutex<()> = Mutex::new(());
 /// How long the writer gathers changes before it writes, so a page cycling
 /// its title costs one write a second rather than one per title.
 const WRITE_AFTER: Duration = Duration::from_secs(1);
@@ -105,6 +106,9 @@ fn ping() {
 /// would bring it back. A forgotten session has no list here to write.
 /// Also run at quit, or a tab opened in the last second would not come back.
 pub fn flush() {
+    // Held over the writes too, so the quit's flush waits for one the writer
+    // thread already took off the queue rather than finding it empty.
+    let _held = FLUSHING.lock().unwrap();
     let strips = std::mem::take(&mut *STRIPS.lock().unwrap());
     for (session, strip) in strips {
         if let Ok(bytes) = serde_json::to_vec(&strip) {

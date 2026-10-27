@@ -56,11 +56,18 @@ for (const [sid, saved] of Object.entries(readLocalStorage<Saved>(STORE_KEY, {})
   });
 }
 
+let lastSaved = "";
+
+/// Written only where the set, order or active file moved: a read landing
+/// patches the store too, and every open file reads on each turn's end.
 function persist() {
   const saved: Saved = {};
   for (const [sid, { open, active }] of bySession) {
     if (open.length > 0) saved[sid] = { paths: open.map((file) => file.path), active };
   }
+  const json = JSON.stringify(saved);
+  if (json === lastSaved) return;
+  lastSaved = json;
   writeLocalStorage(STORE_KEY, saved);
 }
 
