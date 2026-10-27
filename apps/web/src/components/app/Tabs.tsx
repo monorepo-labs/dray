@@ -26,6 +26,7 @@ export function ItemTab({
   active = false,
   plain = false,
   fixed = false,
+  onClick,
 }: {
   icon?: ReactNode;
   label: ReactNode;
@@ -33,17 +34,23 @@ export function ItemTab({
   plain?: boolean;
   /// Sized by its own label rather than by the row.
   fixed?: boolean;
+  /// Makes the tab a button. Hover lifts an inactive label to full strength,
+  /// as the app's strip does.
+  onClick?: () => void;
 }) {
+  const Tab = onClick ? "button" : "span";
   return (
-    <span
+    <Tab
+      {...(onClick && { type: "button" as const, onClick, "aria-current": active || undefined })}
       className={cx(
-        "flex h-7 items-center gap-1.5 rounded-md px-2 text-ui",
+        "flex h-7 items-center gap-1.5 rounded-md px-2 text-left text-ui",
+        onClick && "transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
         fixed || plain ? "shrink-0" : cx("min-w-0 basis-44", active ? "min-w-44" : "min-w-[100px]"),
         plain
           ? "text-foreground"
           : active
             ? "bg-surface-thumb text-foreground ring-1 ring-hairline"
-            : "text-muted-foreground",
+            : cx("text-muted-foreground", onClick && "hover:text-foreground"),
       )}
     >
       {icon}
@@ -56,7 +63,7 @@ export function ItemTab({
       >
         {label}
       </span>
-    </span>
+    </Tab>
   );
 }
 

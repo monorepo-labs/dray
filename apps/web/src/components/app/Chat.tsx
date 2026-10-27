@@ -256,3 +256,56 @@ export function Composer({
     </div>
   );
 }
+
+const PERMISSION_BUTTON =
+  "flex h-7 items-center rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none";
+
+/// A held tool call, as `PermissionRequest` draws it: the command, the
+/// agent's sentence for it, then the answers ordered by how much they grant.
+/// Only "allow once" is filled; the standing rule is outline, deny is red.
+export function PermissionCard({
+  argument,
+  description,
+  rule,
+  onAllow,
+  onDeny,
+}: {
+  argument: string;
+  description: string;
+  /// The standing rule's own words, e.g. `pnpm tsx`.
+  rule: string;
+  onAllow: () => void;
+  onDeny: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-border bg-card p-4">
+      <pre className="mb-3 overflow-x-auto rounded-lg border border-border px-3 py-2.5 font-mono text-xs">
+        {argument}
+      </pre>
+      <p className="text-chat leading-snug">{description}</p>
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          onClick={onAllow}
+          className={cx(PERMISSION_BUTTON, "bg-primary text-primary-foreground shadow-[0_1px_4px_rgba(0,0,0,0.35)] hover:bg-primary/90")}
+        >
+          Allow once
+        </button>
+        <button
+          type="button"
+          onClick={onAllow}
+          className={cx(PERMISSION_BUTTON, "border border-border bg-card hover:bg-muted")}
+        >
+          Always allow {rule}
+        </button>
+        <button
+          type="button"
+          onClick={onDeny}
+          className={cx(PERMISSION_BUTTON, "bg-destructive/20 text-destructive hover:bg-destructive/30")}
+        >
+          Deny
+        </button>
+      </div>
+    </div>
+  );
+}

@@ -4,7 +4,8 @@ import { ArrowLeft, ArrowRight, Globe, Plus, RotateCw, SquareDashedMousePointer 
 import { cx } from "./Window";
 
 /// The browser pane's chrome: the tab strip and the toolbar under it, as
-/// `BrowserPane` draws them. The page goes in `children`.
+/// `BrowserPane` draws them. The page goes in `children`. No `tab` drops the
+/// strip: the main column's Browser view keeps its tabs in the titlebar.
 export function BrowserChrome({
   tab,
   url,
@@ -12,7 +13,7 @@ export function BrowserChrome({
   children,
   className,
 }: {
-  tab: ReactNode;
+  tab?: ReactNode;
   url: ReactNode;
   picking?: boolean;
   children: ReactNode;
@@ -21,15 +22,17 @@ export function BrowserChrome({
   return (
     <div className={cx("flex h-full min-h-0 flex-col bg-background", className)}>
       <div className="shrink-0 border-b border-border">
-        <div className="flex h-8 items-end gap-1 bg-sidebar px-2.5 pt-1">
-          <div className="flex h-7 w-40 min-w-0 shrink-0 items-center gap-1.5 rounded-t-md bg-card px-2 text-ui text-foreground">
-            <Globe className="size-3.5 shrink-0 opacity-60" />
-            <span className="min-w-0 flex-1 truncate">{tab}</span>
+        {tab && (
+          <div className="flex h-8 items-end gap-1 bg-sidebar px-2.5 pt-1">
+            <div className="flex h-7 w-40 min-w-0 shrink-0 items-center gap-1.5 rounded-t-md bg-card px-2 text-ui text-foreground">
+              <Globe className="size-3.5 shrink-0 opacity-60" />
+              <span className="min-w-0 flex-1 truncate">{tab}</span>
+            </div>
+            <span className="mb-0.5 grid size-7 shrink-0 place-items-center text-muted-foreground">
+              <Plus className="size-3.5" />
+            </span>
           </div>
-          <span className="mb-0.5 grid size-7 shrink-0 place-items-center text-muted-foreground">
-            <Plus className="size-3.5" />
-          </span>
-        </div>
+        )}
         <div className="flex h-9 items-center gap-0.5 bg-card px-1.5 text-muted-foreground">
           <ToolButton>
             <ArrowLeft className="size-3.5" />

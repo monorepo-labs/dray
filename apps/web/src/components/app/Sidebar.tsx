@@ -138,6 +138,7 @@ export function SessionRow({
   pr,
   unreadClassName,
   trailing,
+  onClick,
   className,
 }: {
   title: string;
@@ -154,22 +155,30 @@ export function SessionRow({
   /// On the mark alone, so an animation can light it apart from the row.
   unreadClassName?: string;
   trailing?: ReactNode;
+  /// Makes the row a button, with the app's hover fill. Absent, it is a
+  /// picture of a row and takes no pointer.
+  onClick?: () => void;
   className?: string;
 }) {
+  const Row = onClick ? "button" : "div";
   // The rail this row elbows onto is its parent's, one step left of the one it
   // opens for its own children.
   const ownRail = RAIL_X + (depth - 1) * STEP;
   const parentCarriesOn = guides[depth - 1] ?? false;
 
   return (
-    <div
+    <Row
+      {...(onClick && { type: "button" as const, onClick, "aria-current": active || undefined })}
       className={cx(
         // No left padding and no `gap`: the unread rail's own 8px slot is the
         // indent that padding used to provide.
-        "group relative flex min-h-7 w-full items-center rounded-md pl-0 pr-0.5",
+        "group relative flex min-h-7 w-full items-center rounded-md pl-0 pr-0.5 text-left",
         active
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
           : "text-sidebar-foreground/80",
+        onClick &&
+          "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+        onClick && !active && "hover:bg-sidebar-accent/50",
         className,
       )}
     >
@@ -242,7 +251,7 @@ export function SessionRow({
           {trailing}
         </span>
       </div>
-    </div>
+    </Row>
   );
 }
 

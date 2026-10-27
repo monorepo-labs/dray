@@ -110,6 +110,7 @@ export function Readiness({
   base,
   detail,
   ready,
+  onMerge,
   className,
 }: {
   label: ReactNode;
@@ -117,8 +118,12 @@ export function Readiness({
   base: string;
   detail?: ReactNode;
   ready: boolean;
+  /// Makes the button's main half a button. Clickable even when not ready,
+  /// the app's rule: the verdict beside it is the reason, not a lock.
+  onMerge?: () => void;
   className?: string;
 }) {
+  const Merge = onMerge ? "button" : "span";
   return (
     <section className={cx("px-3", className)}>
       <div className="flex min-h-7 items-center gap-2">
@@ -143,9 +148,16 @@ export function Readiness({
               !ready && "opacity-60",
             )}
           >
-            <span className="flex h-7 items-center rounded-l-[min(var(--radius-md),12px)] bg-accent-merge px-2.5 text-[0.8rem] font-medium text-accent-merge-foreground">
+            <Merge
+              {...(onMerge && { type: "button" as const, onClick: onMerge })}
+              className={cx(
+                "flex h-7 items-center rounded-l-[min(var(--radius-md),12px)] bg-accent-merge px-2.5 text-[0.8rem] font-medium text-accent-merge-foreground",
+                onMerge &&
+                  "transition-colors hover:bg-accent-merge-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+              )}
+            >
               Squash and merge
-            </span>
+            </Merge>
             <span className="flex h-7 items-center rounded-r-[min(var(--radius-md),12px)] bg-accent-merge px-1.5 text-accent-merge-foreground shadow-[inset_1px_0_1px_rgba(255,255,255,0.1)]">
               <ChevronDown className="size-3.5" />
             </span>
