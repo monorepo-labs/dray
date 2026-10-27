@@ -19,6 +19,22 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.29.11 · 2026-10-27
+
+### Improved
+
+- Claude Code's model picker lists previous model generations, each with its
+  own effort levels and fast mode.
+- A PR opened or a commit pushed mid-turn shows up in the PR tab and sidebar
+  right away.
+
+### Fixed
+
+- Keyboard shortcuts work again after closing a browser tab, without a click.
+- Shift-to-draw keeps drawing over the browser after the first stroke.
+- The Island comes back after the Mac wakes, even over a fullscreen app.
+- ↑ and ↓ in the Island only open the session list from the main input.
+
 ## 0.29.10 · 2026-10-27
 
 ### New
