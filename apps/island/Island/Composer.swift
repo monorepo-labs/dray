@@ -139,6 +139,9 @@ final class Composer {
         }
     }
     var openMenu: MenuID?
+    /// The view's focus, mirrored for the key monitor: `nil` is a row's or a card's
+    /// own text box, or no field at all, where ↑/↓ are not the list's.
+    var field: Field?
 
     // The session list.
     /// Hidden until asked for — the title, ⌘F or ↑/↓ — and again once the
@@ -572,6 +575,10 @@ final class Composer {
             lastUsed = k.id
             UserDefaults.standard.set(k.id, forKey: "island.lastSession")
         }
+    }
+
+    var arrowsMoveList: Bool {
+        ask == nil && openMenu == nil && field != nil && (listShown || typing.isEmpty)
     }
 
     /// ↑/↓ through the list; from a new session, ↓ lands on the first row.

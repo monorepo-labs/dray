@@ -56,6 +56,7 @@ struct IslandView: View {
         .environment(\.colorScheme, .dark)
         .onChange(of: composer.placement) { composer.reposition() }
         .onChange(of: composer.opens) { focus = .input }
+        .onChange(of: focus) { composer.field = focus }
         // The input leaves the panel while recording, and its focus with it.
         .onChange(of: composer.dictation) { if !composer.listening { focus = .input } }
         .onChange(of: composer.searches) {

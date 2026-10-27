@@ -228,9 +228,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
             case (35, [.command, .shift]) where composer.target == .new: composer.nextProject()
             case (48, .shift) where composer.target == .new: composer.nextModel()
             // A closed list opens on an arrow only over an empty input; over
-            // text, the arrows belong to the caret.
-            case (125, []) where composer.openMenu == nil && (composer.listShown || composer.typing.isEmpty): composer.move(1)
-            case (126, []) where composer.openMenu == nil && (composer.listShown || composer.typing.isEmpty): composer.move(-1)
+            // text, and in a row's or a card's own box, the arrows belong to the caret.
+            case (125, []) where composer.arrowsMoveList: composer.move(1)
+            case (126, []) where composer.arrowsMoveList: composer.move(-1)
             default: return e
             }
             return nil
