@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FileCode2 } from "lucide-react";
 
 import { BrowserChrome } from "@/components/app/Browser";
@@ -44,8 +44,17 @@ const HEIGHT = 720;
 /// the list is scenery.
 type Fixed = "linear" | "speedrun" | "comments" | "background";
 
-/// One the visitor started from the new task page.
-type Started = { id: string; prompt: string; branch: string };
+/// One the visitor started from the new task page. No agent reads the
+/// prompt, so it answers with one of `GENERIC` once `done`.
+type Started = {
+  id: string;
+  prompt: string;
+  branch: string;
+  reply: number;
+  done: boolean;
+  /// Finished while the visitor was looking elsewhere.
+  unread: boolean;
+};
 
 const TITLES: Record<Fixed, string> = {
   linear: "Linear agent tags issues",
@@ -62,6 +71,15 @@ const BRANCHES: Record<Fixed, string> = {
 };
 
 const NEW_BRANCHES = ["calm-owl-ridge", "brisk-jade-cove", "quiet-lime-fen", "bold-sage-reef"];
+
+/// What a started session says when it finishes. Written so it fits any
+/// prompt, since none of them is read.
+const GENERIC = [
+  { tools: "9 tool calls · 2 files changed", text: "Done. I kept the change small, ran the tests, and they pass. Want me to open a PR?" },
+  { tools: "14 tool calls · 4 files changed", text: "That's in. Typecheck and tests are green, and nothing outside the files it needed was touched." },
+  { tools: "6 tool calls · 1 file changed", text: "Finished. One call is yours: the simplest version changes a default, so I left the default as it was and noted where to flip it." },
+  { tools: "11 tool calls · 3 files changed", text: "All set. I tried it in the browser and it behaves the way you described. Say the word and I'll push it." },
+];
 
 const CONTEXT: Record<string, number> = { linear: 0.18, speedrun: 0.52, comments: 0.4, background: 0.31 };
 
@@ -102,6 +120,9 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
   const [tagged, setTagged] = useState(false);
   const [started, setStarted] = useState<Started[]>([]);
   const [draft, setDraft] = useState("");
+  // Read when a started session finishes, which is after the render that
+  // started it: a state value captured then would be the session it opened on.
+  const selectedRef = useRef(selected);
 
   useEffect(() => {
     const t = setTimeout(() => setChecksPassed(true), 3000);
@@ -109,7 +130,9 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
   }, []);
 
   const open = (id: string) => {
+    selectedRef.current = id;
     setSelected(id);
+    setStarted((list) => list.map((t) => (t.id === id ? { ...t, unread: false } : t)));
     setView("chat");
     if (id === "speedrun") setSpeedrunRead(true);
   };
@@ -130,11 +153,24 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
     const id = `task-${Date.now()}`;
     // Newest three kept, so the list never runs past the sidebar's
     // foot and takes the scripted sessions with it; scroll it if more matter.
-    setStarted((list) =>
-      [{ id, prompt, branch: NEW_BRANCHES[list.length % NEW_BRANCHES.length] }, ...list].slice(0, 3),
-    );
+    const task = {
+      id,
+      prompt,
+      branch: NEW_BRANCHES[started.length % NEW_BRANCHES.length],
+      reply: Math.floor(Math.random() * GENERIC.length),
+      done: false,
+      unread: false,
+    };
+    setStarted((list) => [task, ...list].slice(0, 3));
     setDraft("");
     open(id);
+    setTimeout(
+      () =>
+        setStarted((list) =>
+          list.map((t) => (t.id === id ? { ...t, done: true, unread: selectedRef.current !== id } : t)),
+        ),
+      2500 + Math.random() * 1500,
+    );
   };
 
   const merged = merge === "merged";
@@ -174,7 +210,8 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
               <SessionRow
                 key={t.id}
                 title={t.prompt}
-                trailing={<Orb />}
+                unread={t.unread ? "add" : undefined}
+                trailing={t.done ? "now" : <Orb />}
                 active={selected === t.id}
                 onClick={() => open(t.id)}
               />
@@ -278,7 +315,14 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
                 {task && (
                   <Turn>
                     <UserBubble>{task.prompt}</UserBubble>
-                    <Working />
+                    {task.done ? (
+                      <Enter>
+                        <ToolGroup label={GENERIC[task.reply].tools} />
+                        <AssistantText className="mt-3">{GENERIC[task.reply].text}</AssistantText>
+                      </Enter>
+                    ) : (
+                      <Working />
+                    )}
                   </Turn>
                 )}
               </Transcript>
