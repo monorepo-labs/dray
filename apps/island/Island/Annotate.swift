@@ -22,7 +22,7 @@ final class Annotation {
     private let land: (Capture.Shot) async -> Void
     private let window: IslandPanel
     private let ink = Ink()
-    private var monitors: [Any] = []
+    private var poll: Timer?
     private var rest: Task<Void, Never>?
     /// The moment being drawn: its held row, and the cut placing the words said before it.
     private var moment: (slot: UUID, cut: Task<Void, Never>)?
@@ -44,32 +44,35 @@ final class Annotation {
         window.ignoresMouseEvents = true
         // A stroke must not take the keyboard from the page it is drawn on.
         window.becomesKeyOnlyIfNeeded = true
-        window.contentView = NSHostingView(rootView: InkView(ink: ink, size: screen.frame.size))
+        window.contentView = NSHostingView(rootView: InkView(ink: ink, frame: screen.frame))
         window.setFrame(screen.frame, display: true)
         // Never key: the page keeps the keyboard.
         window.orderFrontRegardless()
 
         ink.began = { [weak self] in self?.strokeBegan() }
         ink.ended = { [weak self] in self?.strokeEnded() }
-        // ⇧ alone arms the pen. Modifier changes need no grant to watch, where keys would.
-        let arm: (NSEvent.ModifierFlags) -> Void = { [weak self] flags in
+        // ⇧ alone arms the pen. Polled off the keyboard's own state, needing no
+        // grant: `flagsChanged` monitors could miss a press and leave ⇧ looking dead.
+        let arm = { [weak self] in
             guard let self else { return }
-            ink.armed = flags.intersection([.shift, .command, .option, .control]) == .shift
+            let flags = NSEvent.ModifierFlags(rawValue: UInt(CGEventSource.flagsState(.hidSystemState).rawValue))
+            let armed = flags.intersection([.shift, .command, .option, .control]) == .shift
+            guard armed != ink.armed else { return }
+            ink.armed = armed
             // A stroke in progress keeps the mouse until it lets go.
-            if !ink.drawing { window.ignoresMouseEvents = !ink.armed }
+            if !ink.drawing { window.ignoresMouseEvents = !armed }
         }
         // ⇧ may already be down from before the microphone opened.
-        arm(NSEvent.modifierFlags)
-        monitors = [
-            NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { arm($0.modifierFlags) } as Any,
-            NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { arm($0.modifierFlags); return $0 } as Any,
-        ]
+        arm()
+        let poll = Timer(timeInterval: 1.0 / 30, repeats: true) { _ in MainActor.assumeIsolated { arm() } }
+        RunLoop.main.add(poll, forMode: .common)
+        self.poll = poll
     }
 
     /// Takes any moment still being drawn, then leaves the screen.
     func end() async {
-        monitors.forEach(NSEvent.removeMonitor)
-        monitors = []
+        poll?.invalidate()
+        poll = nil
         window.ignoresMouseEvents = true
         rest?.cancel()
         await take()
@@ -142,8 +145,9 @@ final class Ink {
 /// moment's marks fade as it is taken.
 private struct InkView: View {
     let ink: Ink
-    let size: CGSize
+    let frame: CGRect
     @State private var pointer: CGPoint?
+    private var size: CGSize { frame.size }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -164,6 +168,12 @@ private struct InkView: View {
         .contentShape(Rectangle())
         .onContinuousHover { phase in
             if case .active(let p) = phase { pointer = p } else { pointer = nil }
+        }
+        // The tip shows where the cursor already is: a hover only arrives once it moves.
+        .onChange(of: ink.armed) { _, armed in
+            guard armed else { return }
+            let m = NSEvent.mouseLocation
+            pointer = CGPoint(x: m.x - frame.minX, y: frame.maxY - m.y)
         }
         .gesture(
             DragGesture(minimumDistance: 0)
