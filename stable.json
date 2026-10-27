@@ -1,23 +1,23 @@
 {
-  "version": "0.29.10",
-  "notes": "### New\n\n- **Fork Codex sessions.** Codex sessions now fork like Claude Code ones.\n- Codex and Grok take images in your prompts.\n\n### Improved\n\n- GPT-6.1 Sol is the default Codex model. Haiku 5.5 and Sonnet 5.5 join\n  the Claude Code list.\n- Changing a Codex session's model, effort, mode or fast mode takes effect\n  on the next turn without restarting the agent.\n- fx fast mode is set per session and can change mid-session. Dray no\n  longer writes it into your fx settings.\n- Stop now ends Grok background tasks and subagents.\n- When Claude Code switches to a fallback model, the transcript says so\n  and the model picker follows.\n\n### Fixed\n\n- fx sessions open again on fx 0.0.14.\n- Stop no longer leaves a Claude Code turn stuck in progress, and neither\n  does an agent that quits mid-turn.\n- pi commands like `/mcp` no longer leave the session working forever.\n- The Island stays on every desktop after switching Spaces.",
-  "pub_date": "2026-10-26T18:14:47.884Z",
+  "version": "0.29.11",
+  "notes": "### Improved\n\n- Claude Code's model picker lists previous model generations, each with its\n  own effort levels and fast mode.\n- A PR opened or a commit pushed mid-turn shows up in the PR tab and sidebar\n  right away.\n\n### Fixed\n\n- Keyboard shortcuts work again after closing a browser tab, without a click.\n- Shift-to-draw keeps drawing over the browser after the first stroke.\n- The Island comes back after the Mac wakes, even over a fullscreen app.\n- ↑ and ↓ in the Island only open the session list from the main input.",
+  "pub_date": "2026-10-27T10:54:18.533Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW02SjdwbE5vbld3MXE1Qm9DeklaZmJpamkwa2NleEhyV0ZpaVkvOVh6elVpMUF2UWtYSDNLMjBIdERCTkZCWHRkRzlQeFVDS2V1eXpqSXptYTFJOHdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDM4NDc3CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xMApOSVdsZVZEYUJIeW9LKzIrcmRhaVk4akkvZnlxOXlmNGZZLzQvQm5sbFFtYkU4NjB2Ymh6VjhWQkg4TGJHRmlmTXRaYWVhak8vbFA5TjZpV1lQWmNCdz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.29.10/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW5iOWxXdGpvdklKZjgvM0Y2TDV2dE5WeHptOFhaa2I3RzRnRjNwRm5TbDBqb0ZxZHFKMnk5dHJRZkx4dDB2d29UeGVXN2VLR285STRRV1pFRkhYYXd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDk4NDQ4CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xMQpWM1FuVEpZaVVZZndGQzA3Mis0ZTI2ME1kSEpuazQ3MkxHbVZWUStFcTJsSGViRGtjb29HWHZRaXVMMzNMTWZxWXI2MlFBRkdLS29Uc2xybG1TeCtEdz09Cg==",
+      "url": "https://downloads.drayhq.com/v0.29.11/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW02SjdwbE5vbld3MXE1Qm9DeklaZmJpamkwa2NleEhyV0ZpaVkvOVh6elVpMUF2UWtYSDNLMjBIdERCTkZCWHRkRzlQeFVDS2V1eXpqSXptYTFJOHdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDM4NDc3CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xMApOSVdsZVZEYUJIeW9LKzIrcmRhaVk4akkvZnlxOXlmNGZZLzQvQm5sbFFtYkU4NjB2Ymh6VjhWQkg4TGJHRmlmTXRaYWVhak8vbFA5TjZpV1lQWmNCdz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.29.10/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW5iOWxXdGpvdklKZjgvM0Y2TDV2dE5WeHptOFhaa2I3RzRnRjNwRm5TbDBqb0ZxZHFKMnk5dHJRZkx4dDB2d29UeGVXN2VLR285STRRV1pFRkhYYXd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDk4NDQ4CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xMQpWM1FuVEpZaVVZZndGQzA3Mis0ZTI2ME1kSEpuazQ3MkxHbVZWUStFcTJsSGViRGtjb29HWHZRaXVMMzNMTWZxWXI2MlFBRkdLS29Uc2xybG1TeCtEdz09Cg==",
+      "url": "https://downloads.drayhq.com/v0.29.11/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW02SjdwbE5vbld3MXE1Qm9DeklaZmJpamkwa2NleEhyV0ZpaVkvOVh6elVpMUF2UWtYSDNLMjBIdERCTkZCWHRkRzlQeFVDS2V1eXpqSXptYTFJOHdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDM4NDc3CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xMApOSVdsZVZEYUJIeW9LKzIrcmRhaVk4akkvZnlxOXlmNGZZLzQvQm5sbFFtYkU4NjB2Ymh6VjhWQkg4TGJHRmlmTXRaYWVhak8vbFA5TjZpV1lQWmNCdz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.29.10/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW5iOWxXdGpvdklKZjgvM0Y2TDV2dE5WeHptOFhaa2I3RzRnRjNwRm5TbDBqb0ZxZHFKMnk5dHJRZkx4dDB2d29UeGVXN2VLR285STRRV1pFRkhYYXd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDk4NDQ4CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xMQpWM1FuVEpZaVVZZndGQzA3Mis0ZTI2ME1kSEpuazQ3MkxHbVZWUStFcTJsSGViRGtjb29HWHZRaXVMMzNMTWZxWXI2MlFBRkdLS29Uc2xybG1TeCtEdz09Cg==",
+      "url": "https://downloads.drayhq.com/v0.29.11/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW02SjdwbE5vbld3MXE1Qm9DeklaZmJpamkwa2NleEhyV0ZpaVkvOVh6elVpMUF2UWtYSDNLMjBIdERCTkZCWHRkRzlQeFVDS2V1eXpqSXptYTFJOHdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDM4NDc3CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xMApOSVdsZVZEYUJIeW9LKzIrcmRhaVk4akkvZnlxOXlmNGZZLzQvQm5sbFFtYkU4NjB2Ymh6VjhWQkg4TGJHRmlmTXRaYWVhak8vbFA5TjZpV1lQWmNCdz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.29.10/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVW5iOWxXdGpvdklKZjgvM0Y2TDV2dE5WeHptOFhaa2I3RzRnRjNwRm5TbDBqb0ZxZHFKMnk5dHJRZkx4dDB2d29UeGVXN2VLR285STRRV1pFRkhYYXd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMDk4NDQ4CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xMQpWM1FuVEpZaVVZZndGQzA3Mis0ZTI2ME1kSEpuazQ3MkxHbVZWUStFcTJsSGViRGtjb29HWHZRaXVMMzNMTWZxWXI2MlFBRkdLS29Uc2xybG1TeCtEdz09Cg==",
+      "url": "https://downloads.drayhq.com/v0.29.11/Dray_universal.app.tar.gz"
     }
   }
 }
