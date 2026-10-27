@@ -320,7 +320,7 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
                         <Enter>
                           <ToolGroup label={GENERIC[task.reply].tools} />
                         </Enter>
-                        <Streamed id={task.id} text={GENERIC[task.reply].text} />
+                        <Streamed key={task.id} id={task.id} text={GENERIC[task.reply].text} />
                       </>
                     ) : (
                       <Working />
