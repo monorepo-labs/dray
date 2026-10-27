@@ -170,7 +170,7 @@ private struct InkView: View {
             if case .active(let p) = phase { pointer = p } else { pointer = nil }
         }
         // The tip shows where the cursor already is: a hover only arrives once it moves.
-        .onChange(of: ink.armed) { _, armed in
+        .onChange(of: ink.armed, initial: true) { _, armed in
             guard armed else { return }
             let m = NSEvent.mouseLocation
             pointer = CGPoint(x: m.x - frame.minX, y: frame.maxY - m.y)
