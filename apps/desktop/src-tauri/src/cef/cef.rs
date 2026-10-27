@@ -572,7 +572,78 @@ fn set_active(session: &str, id: Option<i32>) {
     }
 }
 
+/// Sessions whose saved strip has been put back this run.
+static RESTORED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// Puts back the tabs a session had when the app last quit, as discarded
+/// tabs: drawn in the strip, loaded only once shown (`apply_layout` wakes
+/// the active one) or clicked. Once per session per run, and before anything
+/// else lands in its strip, or the first save would write the saved one over.
+fn restore(session: &str) {
+    if !RESTORED.lock().unwrap().insert(session.to_string()) {
+        return;
+    }
+    let Some(strip) = history::read_strip(session) else { return };
+    let ids: Vec<i32> = {
+        let mut tabs = TABS.lock().unwrap();
+        strip
+            .tabs
+            .into_iter()
+            .map(|saved| {
+                let id = NEXT_TAB.fetch_add(1, Ordering::SeqCst);
+                tabs.push(Tab {
+                    id,
+                    session: session.to_string(),
+                    browser: None,
+                    _devtools: None,
+                    view: 0,
+                    url: saved.url,
+                    title: saved.title,
+                    favicon: saved.favicon,
+                    background: None,
+                    loading: false,
+                    can_go_back: false,
+                    can_go_forward: false,
+                    error: None,
+                    seen: Instant::now(),
+                    discarded: true,
+                    opener: None,
+                    waking: false,
+                    closing: false,
+                });
+                id
+            })
+            .collect()
+    };
+    if active_id(session).is_none() {
+        set_active(session, strip.active.and_then(|i| ids.get(i)).or(ids.last()).copied());
+    }
+}
+
+/// Queues the session's strip for disk. Tabs on their way out are left off,
+/// so a settle writes an empty strip rather than the one it is closing.
+fn remember(session: &str) {
+    let active = active_id(session);
+    let tabs = TABS.lock().unwrap();
+    let mine: Vec<&Tab> = tabs.iter().filter(|t| t.session == session && !t.closing).collect();
+    let strip = history::Strip {
+        active: mine.iter().position(|t| Some(t.id) == active),
+        tabs: mine
+            .iter()
+            .map(|t| history::SavedTab { url: t.url.clone(), title: t.title.clone(), favicon: t.favicon.clone() })
+            .collect(),
+    };
+    drop(tabs);
+    history::save_strip(session, strip);
+}
+
+/// Writes every strip and history list still waiting, for the quit.
+pub fn save_now() {
+    history::flush();
+}
+
 fn tabs_of(session: &str) -> Vec<TabInfo> {
+    restore(session);
     let active = active_id(session);
     TABS.lock()
         .unwrap()
@@ -603,6 +674,7 @@ fn publish(session: &str) {
             TabsEvent { session_id: session.to_string(), tabs: tabs_of(session) },
         );
     }
+    remember(session);
 }
 
 fn session_of(id: i32) -> Option<String> {
@@ -661,6 +733,8 @@ fn child_window_info() -> Result<WindowInfo, String> {
 /// one. Its tab appears in `on_after_created`, which is where CEF hands the
 /// browser back. Main thread.
 fn create_tab(session: &str, url: &str, activate: bool, tab: Option<i32>) -> Result<(), String> {
+    // The saved tabs go first, so a new one lands after them as it would have.
+    restore(session);
     // Before `ensure_started`, which remembers a failure for the life of the
     // process: a tab asked for mid-download must wait, not write CEF off.
     if paths().is_none() {
@@ -2007,6 +2081,7 @@ pub fn browser_move(session_id: String, id: i32, to: usize) -> Vec<TabInfo> {
             TabsEvent { session_id: session_id.clone(), tabs: tabs.clone() },
         );
     }
+    remember(&session_id);
     tabs
 }
 

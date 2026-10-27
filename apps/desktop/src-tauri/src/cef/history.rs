@@ -6,15 +6,38 @@
 //! Chromium's**: Chromium keeps one in the profile's `History`, but that is
 //! SQLite held under an exclusive lock while the profile is open, so reading
 //! it would cost a new dependency and a file copy per read.
+//!
+//! **The session's tab strip lives beside it** (`dray-tabs.json`), written by
+//! the same thread, so a quit — an update's relaunch included — reopens on
+//! the tabs it left rather than on an empty pane.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const FILE: &str = "dray-history.json";
 const CAP: usize = 200;
+const STRIP_FILE: &str = "dray-tabs.json";
+
+/// A session's tabs as they stood, in strip order.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Strip {
+    pub tabs: Vec<SavedTab>,
+    /// Index into `tabs`.
+    #[serde(default)]
+    pub active: Option<usize>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SavedTab {
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub favicon: String,
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +56,8 @@ static HISTORY: Mutex<Option<HashMap<String, Vec<Visit>>>> = Mutex::new(None);
 /// Sessions whose list changed since the writer last ran.
 static DIRTY: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 static WRITER: OnceLock<mpsc::Sender<()>> = OnceLock::new();
+/// Strips waiting for the writer, the newest per session.
+static STRIPS: Mutex<BTreeMap<String, Strip>> = Mutex::new(BTreeMap::new());
 /// How long the writer gathers changes before it writes, so a page cycling
 /// its title costs one write a second rather than one per title.
 const WRITE_AFTER: Duration = Duration::from_secs(1);
@@ -53,10 +78,14 @@ fn with<R>(session: &str, f: impl FnOnce(&mut Vec<Visit>) -> R) -> R {
 
 /// Marks the list for the writer, which is a thread of its own: these are
 /// called from CEF's display handlers on the main thread, where a disk
-/// write is a pause in the whole window. Changes in the last second before
-/// a quit are lost, which history can afford.
+/// write is a pause in the whole window. The quit writes whatever is still
+/// waiting (`flush`).
 fn save(session: &str) {
     DIRTY.lock().unwrap().insert(session.to_string());
+    ping();
+}
+
+fn ping() {
     let tx = WRITER.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<()>();
         let _ = std::thread::Builder::new().name("browser-history".into()).spawn(move || {
@@ -74,7 +103,14 @@ fn save(session: &str) {
 /// No `create_dir_all`: Chromium makes the profile before any page commits,
 /// so a missing directory is a profile settle just removed, and writing
 /// would bring it back. A forgotten session has no list here to write.
-fn flush() {
+/// Also run at quit, or a tab opened in the last second would not come back.
+pub fn flush() {
+    let strips = std::mem::take(&mut *STRIPS.lock().unwrap());
+    for (session, strip) in strips {
+        if let Ok(bytes) = serde_json::to_vec(&strip) {
+            let _ = std::fs::write(super::browser_dir().join(&session).join(STRIP_FILE), bytes);
+        }
+    }
     let dirty = std::mem::take(&mut *DIRTY.lock().unwrap());
     for session in dirty {
         let list = HISTORY.lock().unwrap().as_ref().and_then(|m| m.get(&session).cloned());
@@ -144,9 +180,22 @@ pub fn list(session: &str) -> Vec<Visit> {
 /// the history it was settled with.
 pub fn forget(session: &str) {
     DIRTY.lock().unwrap().remove(session);
+    STRIPS.lock().unwrap().remove(session);
     if let Some(map) = HISTORY.lock().unwrap().as_mut() {
         map.remove(session);
     }
+}
+
+/// Queues a session's strip for the writer.
+pub fn save_strip(session: &str, strip: Strip) {
+    STRIPS.lock().unwrap().insert(session.to_string(), strip);
+    ping();
+}
+
+/// The strip a session had when it was last written.
+pub fn read_strip(session: &str) -> Option<Strip> {
+    let bytes = std::fs::read(super::browser_dir().join(session).join(STRIP_FILE)).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 #[cfg(test)]
