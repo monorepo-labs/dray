@@ -48,19 +48,37 @@ const STRIP_BUTTON =
 /// beside it is the only thing raised.
 export default function Sidebar({
   children,
+  onNewTask,
   className,
 }: {
   children?: ReactNode;
+  /// Makes New Task a button, with the hover fill the app's strip has.
+  onNewTask?: () => void;
   className?: string;
 }) {
   return (
     <aside className={cx("relative flex shrink-0 flex-col", className)} style={{ width: SIDEBAR_WIDTH }}>
       <div className="flex flex-col gap-px px-2 pt-3">
-        <div className={STRIP_BUTTON}>
-          <Plus />
-          New Task
-          <Keys caps={["⌘", "N"]} className="ml-auto" />
-        </div>
+        {onNewTask ? (
+          <button
+            type="button"
+            onClick={onNewTask}
+            className={cx(
+              STRIP_BUTTON,
+              "transition-colors hover:bg-sidebar-accent/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+            )}
+          >
+            <Plus />
+            New Task
+            <Keys caps={["⌘", "N"]} className="ml-auto" />
+          </button>
+        ) : (
+          <div className={STRIP_BUTTON}>
+            <Plus />
+            New Task
+            <Keys caps={["⌘", "N"]} className="ml-auto" />
+          </div>
+        )}
         <div className={STRIP_BUTTON}>
           <CircleDot />
           Issues
