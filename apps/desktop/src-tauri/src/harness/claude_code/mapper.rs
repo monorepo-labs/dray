@@ -525,8 +525,8 @@ impl Mapper {
             SystemEvent::Notification { key, text, .. } if key.starts_with("fast-mode-") => {
                 Ok(Some(AgentEventPayload::FastModeNotice { text }))
             }
-            // Only a session-scoped move is recorded, and only onto a model the
-            // table names — an id the picker cannot draw would be repaired
+            // Only a session-scoped move is recorded, and only onto a model
+            // this build names — an id the picker cannot draw would be repaired
             // straight back to the default.
             SystemEvent::ModelRefusalFallback {
                 scope,
@@ -539,7 +539,7 @@ impl Mapper {
                     .unwrap_or_else(|| format!("Switched to {fallback_model}."));
                 let model = (scope.as_deref() == Some("session"))
                     .then(|| crate::models::ModelId::new(fallback_model))
-                    .filter(|id| crate::models::runs_on(id, Harness::ClaudeCode));
+                    .filter(|id| super::models::known().iter().any(|m| &m.id == id));
                 Ok(Some(AgentEventPayload::Notice { text, model }))
             }
             SystemEvent::ModelRefusalNoFallback {
@@ -555,6 +555,12 @@ impl Mapper {
             }
             SystemEvent::Informational { content, .. } => {
                 Ok(Some(AgentEventPayload::Notice { text: content, model: None }))
+            }
+            SystemEvent::VcsStateChanged { .. } => {
+                Ok(Some(AgentEventPayload::RepoChanged { pull_request: false }))
+            }
+            SystemEvent::CodeChangePublished { .. } => {
+                Ok(Some(AgentEventPayload::RepoChanged { pull_request: true }))
             }
             _ => Ok(None),
         }
@@ -1171,7 +1177,13 @@ fn system_event_session_id(e: &SystemEvent) -> &str {
         | SystemEvent::Notification { session_id, .. }
         | SystemEvent::ModelRefusalFallback { session_id, .. }
         | SystemEvent::ModelRefusalNoFallback { session_id, .. }
-        | SystemEvent::Informational { session_id, .. } => session_id,
+        | SystemEvent::Informational { session_id, .. }
+        | SystemEvent::VcsStateChanged { session_id }
+        | SystemEvent::CodeChangePublished { session_id }
+        | SystemEvent::PermissionCheckStatus { session_id }
+        | SystemEvent::CommandsChanged { session_id }
+        | SystemEvent::DevIntent { session_id }
+        | SystemEvent::HookProgress { session_id } => session_id,
         // No fields survive the catch-all. Harmless: an unrecognized subtype
         // maps to `None`, so no envelope is ever built from this value.
         SystemEvent::Unrecognized => "",
@@ -1858,6 +1870,26 @@ mod tests {
             notices.iter().map(|(_, m)| *m).collect::<Vec<_>>(),
             [None, None, Some("claude-opus-4-8")]
         );
+    }
+
+    /// The four subtypes that say nothing draw nothing; the two that move the
+    /// repo become one signal, flagged where a pull request moved.
+    #[test]
+    fn maps_repo_signals_and_drops_the_rest() {
+        let events = map_fixture(
+            &mut Mapper::default(),
+            include_str!("fixtures/system_signals.jsonl"),
+        );
+
+        let signals: Vec<bool> = events
+            .iter()
+            .map(|event| match &event.payload {
+                AgentEventPayload::RepoChanged { pull_request } => *pull_request,
+                other => panic!("expected a repo signal, got {other:?}"),
+            })
+            .collect();
+
+        assert_eq!(signals, [false, true, false]);
     }
 
     /// A fallback for this turn alone leaves the session where it was, and one

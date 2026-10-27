@@ -373,6 +373,7 @@ async fn list_models(sink: Sink, harness: Option<harness::Harness>) -> Vec<Model
         }
         harness::Harness::Grok => harness::grok::models::list().await,
         harness::Harness::Codex => harness::codex::models::list().await,
+        harness::Harness::ClaudeCode => harness::claude_code::models::list(&sink).await,
         other => models::models_for(other),
     }
 }
@@ -392,6 +393,7 @@ async fn refresh_models() {
     // asks again.
     harness::grok::models::forget();
     harness::codex::models::forget();
+    harness::claude_code::models::forget();
 }
 
 /// Switches fx's active provider, which is what its model list is drawn from.

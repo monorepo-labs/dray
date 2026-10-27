@@ -304,7 +304,7 @@ enum Payload: Decodable {
 
     /// Superseded or running counters the server never logs either.
     var isTransient: Bool {
-        if case .other(let t) = self { return ["delta", "usage_update", "model_request_started"].contains(t) }
+        if case .other(let t) = self { return ["delta", "usage_update", "model_request_started", "repo_changed"].contains(t) }
         return false
     }
 

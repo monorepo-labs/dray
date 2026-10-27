@@ -453,6 +453,36 @@ pub enum SystemEvent {
         content: String,
         session_id: String,
     },
+    /// The agent committed, pushed, merged or rebased (`kind`). Read as a
+    /// signal to re-read the checkout, so nothing on it is modelled.
+    VcsStateChanged {
+        session_id: String,
+    },
+    /// The agent created, pushed to, readied, edited or commented on a pull
+    /// request (`action`, `url`). A signal too, for the same reason.
+    CodeChangePublished {
+        session_id: String,
+    },
+    /// Auto mode judging a tool call, `checking` then `done`. The tool row
+    /// already shimmers while the call is pending.
+    PermissionCheckStatus {
+        session_id: String,
+    },
+    /// The slash command list moved mid-session. The picker reads its own
+    /// probe, cached for the process.
+    CommandsChanged {
+        session_id: String,
+    },
+    /// The CLI's guess at what the project is (`ios_app` from an Xcode
+    /// project).
+    DevIntent {
+        session_id: String,
+    },
+    /// A hook's output while it runs. `hook_started`/`hook_response` already
+    /// say nothing to the reader.
+    HookProgress {
+        session_id: String,
+    },
     /// A subtype this build doesn't model. The CLI adds subtypes over time
     /// (`thinking_tokens` arrived unannounced), and without this every such
     /// line failed whole — the loop logged a parse error and dropped it.
@@ -1263,6 +1293,19 @@ mod tests {
             parse_line(r#"{"type":"brand_new","session_id":"s"}"#).unwrap(),
             ClaudeCodeEvent::Unrecognized
         ));
+    }
+
+    /// The six subtypes that were 4,600 lines of `parse_failures.jsonl`, one
+    /// real line each (long strings trimmed). None may fall to the catch-all,
+    /// or the log fills with them again.
+    #[test]
+    fn parses_the_high_volume_system_subtypes() {
+        let events = parse_fixture(include_str!("fixtures/system_signals.jsonl"));
+
+        assert_eq!(events.len(), 8);
+        assert!(events
+            .iter()
+            .all(|e| matches!(e, ClaudeCodeEvent::System(s) if !matches!(s, SystemEvent::Unrecognized))));
     }
 
     /// The notice channel, captured on the one key Dray reads. `priority` and

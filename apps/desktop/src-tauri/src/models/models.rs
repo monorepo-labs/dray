@@ -4,6 +4,7 @@
 //! latest Opus, so pinning a dated id here would silently freeze sessions to an
 //! old model as new ones ship.
 
+use crate::harness::claude_code::models as claude_code_models;
 use crate::harness::Harness;
 use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;
@@ -255,7 +256,10 @@ impl Model {
     }
 }
 
-/// The full model list the UI's picker is built from.
+/// Claude Code's model table — the fallback since v2.1.310, whose `initialize`
+/// lists the models itself (`harness/claude_code/models.rs`). It is what the
+/// picker draws until that answer lands, and what decides a listed row's
+/// shortlist tier.
 ///
 /// Two in the default shortlist and the rest off until the reader turns them
 /// on, which is what keeps Shift+Tab worth a chord — it cycles the shortlist
@@ -268,9 +272,8 @@ impl Model {
 /// model — `fable` resolves to `claude-fable-5-1` today, and to whatever ships
 /// next without anything here changing — which is what the top level wants and
 /// what makes a dated id wrong there. But following the latest is exactly what
-/// a reader pinning a previous generation is asking *not* to do, and the CLI's
-/// own picker offers no such row: it says "for other/previous model names,
-/// specify with `--model`". So a pinned id is a row here or it is nowhere.
+/// a reader pinning a previous generation is asking *not* to do, so pinned ids
+/// sit in the second tier — as every pinned row the CLI lists does.
 pub fn claude_models() -> Vec<Model> {
     use Effort::*;
 
@@ -471,7 +474,7 @@ pub fn runs_on(id: &ModelId, harness: Harness) -> bool {
     }
 
     match harness {
-        Harness::ClaudeCode => claude_models().iter().any(|m| &m.id == id),
+        Harness::ClaudeCode => claude_code_models::find(id).is_some(),
         Harness::Codex => every_codex_model().iter().any(|m| &m.id == id),
         Harness::Pi | Harness::Fx | Harness::Grok => find_model(id).is_none(),
         // Nothing runs on a harness this build cannot spawn, and `false` is
@@ -494,10 +497,7 @@ pub fn find_model(id: &ModelId) -> Option<Model> {
         return None;
     }
 
-    claude_models()
-        .into_iter()
-        .chain(every_codex_model())
-        .find(|m| &m.id == id)
+    claude_code_models::find(id).or_else(|| every_codex_model().into_iter().find(|m| &m.id == id))
 }
 
 /// The id for a `--model` alias arriving from outside the app — the `dray`
@@ -515,11 +515,13 @@ pub fn id_for_arg(alias: &str, harness: Harness) -> Option<ModelId> {
 
     let id = match harness {
         Harness::Pi | Harness::Fx | Harness::Grok => ModelId::new(alias),
-        _ => claude_models()
+        _ => claude_code_models::known()
             .into_iter()
             .chain(every_codex_model())
             .find(|m| m.arg == alias)
-            .map(|m| m.id)?,
+            .map(|m| m.id)
+            // A pinned Claude id nothing has listed yet, taken as written.
+            .or_else(|| claude_code_models::find(&ModelId::new(alias)).map(|m| m.id))?,
     };
 
     // One gate for all three, so an alias can never resolve to a model its own

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { invoke } from "@/lib/transport";
 
@@ -12,11 +12,12 @@ const cache = new Map<string, WorkStatus>();
 
 /// What is left to do with this session's work — see [handoffActions].
 ///
-/// Read on the **falling edge of a turn** and on arriving at a session, and
-/// nowhere else — every action the row draws is a prompt now, so a turn is the
-/// only thing that moves any of this from inside the app. The agent writes,
-/// commits and pushes during one, and nothing between turns moves the tree
-/// except the reader in another window. Polling for that
+/// Read on the **falling edge of a turn**, on arriving at a session, and on
+/// `refresh` — which `App` calls when Claude Code says the agent committed or
+/// pushed mid-turn. Every action the row draws is a prompt now, so a turn is
+/// the only thing that moves any of this from inside the app, and nothing
+/// between turns moves the tree except the reader in another window. Polling
+/// for that
 /// would be several `git` spawns a second to catch something rare — the row
 /// going one turn stale is the trade, and the same one every other read in
 /// this app makes.
@@ -56,5 +57,7 @@ export function useWorkStatus(cwd: string, busy: boolean) {
     if (fell) read(cwd);
   }, [busy, cwd, read]);
 
-  return { status };
+  const refresh = useCallback(() => read(cwd), [cwd, read]);
+
+  return { status, refresh };
 }

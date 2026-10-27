@@ -62,10 +62,9 @@ pub fn first_sentence(description: &str) -> String {
 }
 
 /// The `initialize` reply, which carries far more than this — agents, models,
-/// output styles, the account. Only `commands` is read: everything else here is
-/// already sourced from somewhere this app trusts more (`models` from
-/// [`crate::models`], the permission mode from the user's own pick), and a field
-/// modeled but unused is one more shape to keep in step with the CLI.
+/// output styles, the account. Only `commands` is read here; `models` is read
+/// by [`super::models`] off the same request, and a field modeled but unused is
+/// one more shape to keep in step with the CLI.
 #[derive(Debug, Deserialize)]
 struct InitializeResponse {
     #[serde(default)]
@@ -114,11 +113,20 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 pub async fn list_commands(cwd: &str) -> Result<Vec<SlashCommand>> {
     CACHE
         .get_or_probe(cwd, || async {
-            timeout(PROBE_TIMEOUT, probe(cwd))
-                .await
-                .context("timed out asking the CLI for its slash commands")?
+            let response: InitializeResponse = serde_json::from_value(initialize(cwd).await?)
+                .context("the CLI's initialize reply had an unfamiliar shape")?;
+            // Filtered before the cache, so the hidden set is applied once
+            // rather than at every read.
+            Ok(supported(response.commands))
         })
         .await
+}
+
+/// The `initialize` reply's payload, from a throwaway child started in `cwd`.
+pub(super) async fn initialize(cwd: &str) -> Result<Value> {
+    timeout(PROBE_TIMEOUT, probe(cwd))
+        .await
+        .context("timed out asking the CLI to initialize")?
 }
 
 /// Spawns a throwaway child purely to ask it what it can do, then kills it.
@@ -127,7 +135,7 @@ pub async fn list_commands(cwd: &str) -> Result<Vec<SlashCommand>> {
 /// how a turn runs — no model, no permission mode, no session id — because none
 /// of it changes the answer and every flag is one more way the probe can fail
 /// where a session would not.
-async fn probe(cwd: &str) -> Result<Vec<SlashCommand>> {
+async fn probe(cwd: &str) -> Result<Value> {
     let mut child = Command::new(crate::binpath::claude().await)
         .args([
             "-p",
@@ -146,7 +154,7 @@ async fn probe(cwd: &str) -> Result<Vec<SlashCommand>> {
         // enough to reap it.
         .kill_on_drop(true)
         .spawn()
-        .context("couldn't start claude to list its commands")?;
+        .context("couldn't start claude to initialize")?;
 
     let mut stdin = child.stdin.take().context("failed to take stdin")?;
     let stdout = child.stdout.take().context("failed to take stdout")?;
@@ -159,15 +167,9 @@ async fn probe(cwd: &str) -> Result<Vec<SlashCommand>> {
 
     let mut lines = BufReader::new(stdout).lines();
     while let Some(line) = lines.next_line().await? {
-        let Some(response) = matching_response(&line, &request.request_id) else {
-            continue;
-        };
-
-        let response: InitializeResponse = serde_json::from_value(response)
-            .context("the CLI's initialize reply had an unfamiliar shape")?;
-        // Filtered before the cache, so the hidden set is applied once rather
-        // than at every read.
-        return Ok(supported(response.commands));
+        if let Some(response) = matching_response(&line, &request.request_id) {
+            return Ok(response);
+        }
     }
 
     // Stdout closed with no reply. The child is holding a stdin we never
