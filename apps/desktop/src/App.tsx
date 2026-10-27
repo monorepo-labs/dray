@@ -587,6 +587,19 @@ function App() {
   // reopening the app into them would be the app remembering the wrong half of
   // a session.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Opening settings hides the shell at once, and a first open that still had
+  // to suspend on the lazy chunk drew a frame of bare window. Mounted closed on
+  // idle, the page is already resolved when it is wanted; closed it draws nothing.
+  const [settingsWarm, setSettingsWarm] = useState(false);
+  useEffect(() => {
+    const warm = () => setSettingsWarm(true);
+    if ("requestIdleCallback" in window) {
+      const id = window.requestIdleCallback(warm);
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = setTimeout(warm, 2000);
+    return () => clearTimeout(id);
+  }, []);
   // Which tab the *next* open lands on. Reset to Appearance as settings close,
   // so a mic press that sent the reader to Transcription does not leave every
   // later ⌘, opening there too.
@@ -3490,9 +3503,9 @@ function App() {
     <QuitDialog />
     <LinkDialog />
     {/* Mounted here rather than in the sidebar, which unmounts whole when it
-        collapses and would take ⌘, with it. Not before its first open, which
-        is also the only place a transcription download can start. */}
-    <MountOnce when={settingsOpen}>
+        collapses and would take ⌘, with it. Not before idle, see
+        `settingsWarm`. */}
+    <MountOnce when={settingsOpen || settingsWarm}>
     <SettingsPage
       open={settingsOpen}
       onClose={closeSettings}
