@@ -46,15 +46,20 @@ extension NSWindow {
     /// tag still set, so it never shows over a fullscreen app (#650). Clearing the
     /// behavior and setting it back rejoins every Space, but only once the cleared
     /// one has reached WindowServer while the window is ordered in: done in one
-    /// turn, AppKit coalesces the pair into nothing. Call after ordering front, and
-    /// on every Space change: a window stranded on the Space it came up on only
-    /// shows the loss once the reader leaves it. An empty behavior is a repair
-    /// still pending, and saving it would restore nothing.
-    func rejoinAllSpacesIfLost() {
-        guard isVisible, !isOnActiveSpace, !collectionBehavior.isEmpty else { return }
+    /// turn, AppKit coalesces the pair into nothing, and from a fullscreen Space
+    /// even one turn apart lost the race once in four, so it waits 0.1s and checks
+    /// again until the window is back. Call after ordering front, on every Space
+    /// change and on wake: a window stranded on the Space it came up on only shows
+    /// the loss once the reader leaves it. An empty behavior is a repair still
+    /// pending, and saving it would restore nothing.
+    func rejoinAllSpacesIfLost(tries: Int = 5) {
+        guard tries > 0, isVisible, !isOnActiveSpace, !collectionBehavior.isEmpty else { return }
         let behavior = collectionBehavior
         collectionBehavior = []
-        DispatchQueue.main.async { self.collectionBehavior = behavior }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.collectionBehavior = behavior
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.rejoinAllSpacesIfLost(tries: tries - 1) }
+        }
     }
 }
 
@@ -190,10 +195,13 @@ final class Delegate: NSObject, NSApplicationDelegate {
         pills.hasShadow = false
         pills.contentView = FirstClickHostingView(rootView: PillsView(composer: composer).environment(composer.store))
         self.pills = pills
-        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak panel, weak pills] _ in
-            MainActor.assumeIsolated {
-                panel?.rejoinAllSpacesIfLost()
-                pills?.rejoinAllSpacesIfLost()
+        // Waking strands a window without moving the reader off their Space.
+        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+            NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak panel, weak pills] _ in
+                MainActor.assumeIsolated {
+                    panel?.rejoinAllSpacesIfLost()
+                    pills?.rejoinAllSpacesIfLost()
+                }
             }
         }
         // Only losing the keys moves the hint; getting them back waits for the next open, so it never flickers.
@@ -339,6 +347,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
             // rather than dictating; the new visit cancels the pending close.
             composer.opened()
             panel?.makeKeyAndOrderFront(nil)
+        } else if composer.shown, panel?.isOnActiveSpace == false {
+            // Open on a Space the reader cannot see: bring it here rather than dictate unseen.
+            panel?.rejoinAllSpacesIfLost()
         } else if composer.shown {
             Task { await composer.toggleDictation() }
         } else if askingApp {
@@ -418,7 +429,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
     }
 
     func show() {
-        guard let panel, let composer, !composer.shown else { return }
+        guard let panel, let composer else { return }
+        // Already open, perhaps on a Space the reader left.
+        if composer.shown { return panel.rejoinAllSpacesIfLost() }
         composer.opened()
         place()
         panel.makeKeyAndOrderFront(nil)
