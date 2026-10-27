@@ -127,8 +127,12 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
   const send = () => {
     const prompt = draft.trim();
     if (!prompt) return;
-    const id = `task-${started.length}`;
-    setStarted((list) => [{ id, prompt, branch: NEW_BRANCHES[list.length % NEW_BRANCHES.length] }, ...list]);
+    const id = `task-${Date.now()}`;
+    // Newest three kept, so the list never runs past the sidebar's
+    // foot and takes the scripted sessions with it; scroll it if more matter.
+    setStarted((list) =>
+      [{ id, prompt, branch: NEW_BRANCHES[list.length % NEW_BRANCHES.length] }, ...list].slice(0, 3),
+    );
     setDraft("");
     open(id);
   };

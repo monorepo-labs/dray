@@ -381,7 +381,8 @@ export function NewTaskComposer({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
+            // An IME's Enter picks a character; it is not a send.
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               onSend();
             }
