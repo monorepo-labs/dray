@@ -3,6 +3,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { invoke, listen } from "@/lib/transport";
 import { watchDocs } from "@/lib/servers";
 
+import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
 import { pushClosedTab } from "@/lib/tabOrder";
 import type { FileBody } from "@/types/events";
@@ -38,8 +39,37 @@ type SessionFiles = { open: OpenFile[]; active: string | null };
 /// rather than unmounts, so a session's own tabs survive being switched away
 /// from and back either way.
 ///
-/// In memory only, like `viewTabs` — a restart opens on an empty pane.
+/// The paths and the active one are kept in local storage, so a quit — an
+/// update's relaunch included — reopens on the same tabs. Their text is read
+/// again when the session's view first mounts (`useOpenFilesWatcher`).
 const bySession = new Map<string, SessionFiles>();
+
+const STORE_KEY = "ade.openFiles";
+
+type Saved = Record<string, { paths: string[]; active: string | null }>;
+
+for (const [sid, saved] of Object.entries(readLocalStorage<Saved>(STORE_KEY, {}))) {
+  if (!Array.isArray(saved?.paths) || saved.paths.length === 0) continue;
+  bySession.set(sid, {
+    open: saved.paths.map((path) => ({ path, reveal: 0, state: { status: "loading" } })),
+    active: saved.paths.includes(saved.active ?? "") ? saved.active : saved.paths[0],
+  });
+}
+
+let lastSaved = "";
+
+/// Written only where the set, order or active file moved: a read landing
+/// patches the store too, and every open file reads on each turn's end.
+function persist() {
+  const saved: Saved = {};
+  for (const [sid, { open, active }] of bySession) {
+    if (open.length > 0) saved[sid] = { paths: open.map((file) => file.path), active };
+  }
+  const json = JSON.stringify(saved);
+  if (json === lastSaved) return;
+  lastSaved = json;
+  writeLocalStorage(STORE_KEY, saved);
+}
 
 /// Shared by every session that has opened nothing, so an untouched session
 /// costs no entry and keeps one snapshot identity across its renders.
@@ -86,6 +116,7 @@ function state(sid: string): SessionFiles {
 
 function write(sid: string, next: Partial<SessionFiles>) {
   bySession.set(sid, { ...state(sid), ...next });
+  persist();
   emit();
 }
 
@@ -94,6 +125,7 @@ function write(sid: string, next: Partial<SessionFiles>) {
 export function forgetOpenFiles(sid: string) {
   if (!bySession.delete(sid)) return;
   for (const key of seqByPath.keys()) if (key.startsWith(`${sid}\n`)) seqByPath.delete(key);
+  persist();
   emit();
 }
 
@@ -248,6 +280,12 @@ export function useOpenFilesWatcher(sid: string | null) {
   const key = open.map((file) => file.path).join("\n");
 
   useEffect(() => {
+    // A tab put back from the last run has had no read issued yet.
+    if (sid) {
+      for (const file of state(sid).open) {
+        if (!seqByPath.has(`${sid}\n${file.path}`)) read(sid, file.path);
+      }
+    }
     void watch(openFilesFor(sid).open.map((file) => file.path));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, sid]);
