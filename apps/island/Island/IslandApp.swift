@@ -471,8 +471,14 @@ final class Delegate: NSObject, NSApplicationDelegate {
     /// Key codes of 1 through 9, which are not in order on the keyboard.
     private static let digits: [UInt16: Int] = [18: 0, 19: 1, 20: 2, 21: 3, 23: 4, 22: 5, 26: 6, 28: 7, 25: 8]
 
-    /// The ⌘ and ⌘⇧ chords a text box answers: A C V X Z, ⌫ and ⌦, and the arrows.
-    private static let editing: Set<UInt16> = [0, 8, 9, 7, 6, 51, 117, 123, 124, 125, 126]
+    /// The ⌘ and ⌘⇧ chords a text box answers: A C V X Z by letter, so any
+    /// layout's ⌘V still pastes here, and ⌫, ⌦ and the arrows by key.
+    private static let editingLetters: Set<String> = ["a", "c", "v", "x", "z"]
+    private static let editingKeys: Set<UInt16> = [51, 117, 123, 124, 125, 126]
+
+    private static func editing(_ e: NSEvent) -> Bool {
+        editingKeys.contains(e.keyCode) || editingLetters.contains(e.charactersIgnoringModifiers?.lowercased() ?? "")
+    }
 
     /// Hands a chord the panel has no use for to the app beneath, the one
     /// macOS still counts as frontmost behind a nonactivating panel, so ⌘⇧]
@@ -483,7 +489,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         // ⌃Tab and ⌃⇧Tab too; every other ⌃ chord is the text box's own Emacs keys.
         let mods = e.modifierFlags.intersection([.command, .shift, .option, .control])
         let unused = mods.contains(.command)
-            ? !mods.isDisjoint(with: [.option, .control]) || !editing.contains(e.keyCode)
+            ? !mods.isDisjoint(with: [.option, .control]) || !editing(e)
             : mods.subtracting(.shift) == .control && e.keyCode == 48
         guard unused, let cg = e.cgEvent, let app = NSWorkspace.shared.frontmostApplication,
               app.processIdentifier != getpid() else { return false }
