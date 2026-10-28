@@ -239,7 +239,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             // text, and in a row's or a card's own box, the arrows belong to the caret.
             case (125, []) where composer.arrowsMoveList: composer.move(1)
             case (126, []) where composer.arrowsMoveList: composer.move(-1)
-            default: return e
+            default: return Self.forward(e) ? nil : e
             }
             return nil
         }
@@ -382,7 +382,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     }
 
     /// The shot flies into the notch and joins the draft. Mid-recording the
-    /// panel stays up over the overlay, so dictation can be seen running on,
+    /// panel stays up under the overlay, so dictation can be seen running on,
     /// and the words so far are cut off ahead of the shot with the microphone
     /// left open, so speech and shots land in the order they came. Otherwise
     /// the panel steps aside, and comes back only if it was open.
@@ -395,10 +395,11 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let slot = composer.reserveShot()
         let cut = recording ? Task { await composer.cutDictation(before: slot) } : nil
         if recording {
-            panel.level = Self.overOverlay
-            // Shown, not touched: its frame is far wider than its card, and over
-            // it its own arrow beat the overlay's crosshair.
-            panel.ignoresMouseEvents = true
+            // Shown under the overlay, which is ordered in after it, so the
+            // overlay takes the mouse. Never `ignoresMouseEvents`: once set
+            // either way, the panel's clear part stops passing clicks through
+            // for good, and the whole frame swallows every click.
+            panel.level = .screenSaver
         } else if wasShown {
             composer.hide()
         }
@@ -417,7 +418,6 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 failed = error.localizedDescription
             }
             panel.level = annotation == nil ? .statusBar : Self.overOverlay
-            panel.ignoresMouseEvents = false
             if recording { panel.makeKeyAndOrderFront(nil) } else if wasShown { show() } else { place() }
             if let shot { await Capture.fly(shot.image, from: shot.frame, to: flyTarget()) }
             // The cut transcribes while the overlay is up; its words go first.
@@ -470,6 +470,41 @@ final class Delegate: NSObject, NSApplicationDelegate {
 
     /// Key codes of 1 through 9, which are not in order on the keyboard.
     private static let digits: [UInt16: Int] = [18: 0, 19: 1, 20: 2, 21: 3, 23: 4, 22: 5, 26: 6, 28: 7, 25: 8]
+
+    /// The ⌘ and ⌘⇧ chords a text box answers: A C V X Z by letter, so any
+    /// layout's ⌘V still pastes here, and ⌫, ⌦ and the arrows by key.
+    private static let editingLetters: Set<String> = ["a", "c", "v", "x", "z"]
+    private static let editingKeys: Set<UInt16> = [51, 117, 123, 124, 125, 126]
+
+    private static func editing(_ e: NSEvent) -> Bool {
+        editingKeys.contains(e.keyCode) || editingLetters.contains(e.charactersIgnoringModifiers?.lowercased() ?? "")
+    }
+
+    /// Hands a chord the panel has no use for to the app beneath, the one
+    /// macOS still counts as frontmost behind a nonactivating panel, so ⌘⇧]
+    /// switches its tab as if the panel were not there. Posting into another
+    /// app takes Accessibility; without it the chord stays here, unanswered,
+    /// as it always was, and the first one asks for the grant.
+    private static func forward(_ e: NSEvent) -> Bool {
+        // ⌃Tab and ⌃⇧Tab too; every other ⌃ chord is the text box's own Emacs keys.
+        let mods = e.modifierFlags.intersection([.command, .shift, .option, .control])
+        let unused = mods.contains(.command)
+            ? !mods.isDisjoint(with: [.option, .control]) || !editing(e)
+            : mods.subtracting(.shift) == .control && e.keyCode == 48
+        guard unused, let cg = e.cgEvent, let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != getpid() else { return false }
+        guard CGPreflightPostEventAccess() else {
+            CGRequestPostEventAccess()
+            return false
+        }
+        cg.postToPid(app.processIdentifier)
+        // The release too, which the panel would otherwise keep.
+        if let up = cg.copy() {
+            up.type = .keyUp
+            up.postToPid(app.processIdentifier)
+        }
+        return true
+    }
 
     /// Where a shot flies: into the open card's rows, or into the notch itself
     /// while the panel is away.
