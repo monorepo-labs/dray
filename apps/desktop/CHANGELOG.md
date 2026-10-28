@@ -19,6 +19,20 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.29.12 · 2026-10-28
+
+### Improved
+
+- Browser and Files tabs come back after quitting Dray or installing an
+  update. Browser tabs load when you open them.
+
+### Fixed
+
+- Settings no longer flashes a blank window the first time it opens.
+- Clicks pass through the open Island again after a screenshot.
+- Shortcuts the Island doesn't use reach the app underneath on the first
+  press.
+
 ## 0.29.11 · 2026-10-27
 
 ### Improved
