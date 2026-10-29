@@ -1781,7 +1781,7 @@ impl SessionManager {
             Some(session) => session.kill_tree().await,
             None => Ok(()),
         };
-        #[cfg(all(feature = "cef", target_os = "macos"))]
+        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
         if !crate::is_server() {
             crate::cef::close_session(session_id);
         }
@@ -1796,7 +1796,7 @@ impl SessionManager {
         crate::share::close_session(session_id);
         // Settled is done with, so the profile goes too: an unsettled session's
         // browser starts signed out. Both, whichever browser made one.
-        #[cfg(all(feature = "cef", target_os = "macos"))]
+        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
         crate::cef::automation::delete_profile(session_id);
         #[cfg(any(feature = "serve", feature = "desktop"))]
         crate::headless::automation::delete_profile(session_id);
@@ -1847,7 +1847,7 @@ impl SessionManager {
         }
         // Files on this disk whichever browser made them, so both are swept
         // whether or not the app that filmed one is open.
-        #[cfg(all(feature = "cef", target_os = "macos"))]
+        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
         crate::cef::automation::delete_recordings(session_id);
         #[cfg(any(feature = "serve", feature = "desktop"))]
         crate::headless::automation::delete_recordings(session_id);

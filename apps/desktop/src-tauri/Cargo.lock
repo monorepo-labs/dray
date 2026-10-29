@@ -1418,6 +1418,8 @@ dependencies = [
  "flate2",
  "form_urlencoded",
  "futures-util",
+ "gdkx11",
+ "gtk",
  "hyper",
  "hyper-util",
  "libc",
@@ -1447,6 +1449,7 @@ dependencies = [
  "transcribe-cpp",
  "ts-rs",
  "uuid",
+ "x11",
  "zip 9.0.5",
 ]
 

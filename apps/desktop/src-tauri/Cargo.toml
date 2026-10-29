@@ -121,7 +121,7 @@ transcribe-cpp = { version = "0.4", default-features = false, features = [
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 transcribe-cpp = { version = "0.4", default-features = false, optional = true }
 
-# Embedded Chromium for the in-app browser, macOS only for now. Behind a
+# Embedded Chromium for the in-app browser, on macOS and Linux (X11). Behind a
 # feature so a build without the CEF binaries on disk still compiles: the
 # `cef-dll-sys` build script downloads ~130MB and runs CMake, which is not
 # something `cargo check` should need. See cef/cef.rs.
@@ -158,13 +158,29 @@ desktop = [
   "dep:zip",
   "dep:flate2",
 ]
-cef = ["desktop", "dep:cef"]
+cef = ["desktop", "dep:cef", "dep:gtk", "dep:gdkx11", "dep:x11"]
 serve = ["dep:tokio-tungstenite", "dep:form_urlencoded", "dep:zip", "dep:flate2"]
 
-[target.'cfg(target_os = "macos")'.dependencies.cef]
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies.cef]
 version = "154.5.0"
 optional = true
 default-features = false
+
+# A tab on Linux is an X11 window parented into the main window's, moved and
+# shown through Xlib on GDK's own connection. All three are already in the
+# lock under tao, so they cost no build. See cef/x11.rs.
+[target.'cfg(target_os = "linux")'.dependencies.gtk]
+version = "0.18"
+optional = true
+
+[target.'cfg(target_os = "linux")'.dependencies.gdkx11]
+version = "0.18"
+optional = true
+
+[target.'cfg(target_os = "linux")'.dependencies.x11]
+version = "2.21"
+optional = true
+features = ["xlib"]
 
 # Unconditional, not CEF's alone: the composer's paste reads NSPasteboard
 # (attachments.rs). tao already compiles all three, so this costs no build.

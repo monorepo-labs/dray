@@ -347,7 +347,7 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
             Ok(serde_json::json!(focused.then(crate::apps::app_selection).flatten()))
         }
         "close_session" => {
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             if let Some(id) = args["sessionId"].as_str() {
                 crate::cef::close_session(id);
             }
@@ -568,7 +568,7 @@ async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
         Ok((output, data)) => Response::Browser { output, data },
         Err(message) => Response::error(message),
     };
-    #[cfg(all(feature = "cef", target_os = "macos"))]
+    #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
     if !crate::is_server() {
         return Ok(answered(crate::cef::automation::run(&request.session_id, request.action).await));
     }

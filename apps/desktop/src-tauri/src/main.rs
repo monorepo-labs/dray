@@ -1,8 +1,19 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+fn main() {
+    // Chromium's renderer, GPU and zygote processes on Linux: this binary
+    // again, run with `--type=`. Before tokio, since the zygote forks every
+    // renderer and refuses to with other threads alive.
+    #[cfg(all(feature = "cef", target_os = "linux"))]
+    if let Some(code) = ade_lib::cef::subprocess() {
+        std::process::exit(code);
+    }
+    run()
+}
+
 #[tokio::main]
-async fn main() {
+async fn run() {
     // The Mac's background server: this same binary, run by launchd with no
     // window. Read before Tauri is touched, so no `NSApplication` exists and
     // macOS never counts it as the app running. See MAC-SERVER-PLAN.md.
