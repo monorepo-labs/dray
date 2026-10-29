@@ -523,7 +523,7 @@ The two menus live on `IssueRow`'s header in [IssuePanel](apps/desktop/src/compo
 
 **Weights come from HuggingFace, pinned to a revision.** [catalog.rs](apps/desktop/src-tauri/src/transcription/catalog.rs) = the list, compiled in. Not `blob.handy.computer`, which is Handy's own CDN — same files, but their bandwidth is not ours to spend. `resolve/<revision>`, never `resolve/main`, or the bytes move out from under the `sha256` and every download fail verification at once. Catalog change = manual edit; nothing tell us when a better model land.
 
-**Recommendation read the arch, where Handy's is editorial.** Their `recommended_rank` is a static catalog field and nothing there probe hardware. `recommended()` answer Parakeet Unified EN on Apple Silicon and Canary 180M elsewhere. Suggestion only — every model stay selectable.
+**Recommendation read the arch, where Handy's is editorial.** Their `recommended_rank` is a static catalog field and nothing there probe hardware. `recommended()` answer Parakeet Unified EN on Apple Silicon and x86_64 Linux, Canary 180M elsewhere — Linux because BLAS is off there, which leaves Canary's decoder a scalar loop and Parakeet as fast on CPU and more accurate. Suggestion only — every model stay selectable.
 
 - **Installed = present at the catalog's exact size.** Hash is checked once, before a fresh download is renamed into place, never on the settings read — hashing 700MB every open is felt. A truncated GGUF **load far enough to produce garbage** rather than erroring, which is the failure the size check exist for.
 - **Download land via `.part` + rename**, so the real path only ever hold a file that already passed verification. A killed process leave a `.part` and nothing [`is_installed`] would believe.

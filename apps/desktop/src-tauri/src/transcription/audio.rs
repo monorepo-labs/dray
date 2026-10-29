@@ -147,7 +147,11 @@ fn open_device(preferred: Option<&str>) -> Result<cpal::Device> {
 ///
 /// Module-level rather than on the `Recording`, because a recording that is
 /// dropped rather than stopped must still put the sound back.
-static PRIOR_MUTED: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+///
+/// The output rides with the reading, so the restore puts back the output that
+/// was muted even where the default moved meanwhile — headphones plugged in
+/// mid-recording would otherwise take the unmute and leave the speakers silent.
+static PRIOR_MUTED: std::sync::Mutex<Option<(Output, bool)>> = std::sync::Mutex::new(None);
 
 /// Which recording a pending mute is for. The mute lands a moment after the
 /// microphone opens, so the start tone is heard; a restore or a newer start
@@ -187,12 +191,12 @@ pub fn mute_other_audio(ticket: u64) {
         return;
     }
 
-    let Some(was_muted) = read_muted() else {
+    let Some((output, was_muted)) = read_output() else {
         return;
     };
 
-    if set_muted(true) {
-        *prior = Some(was_muted);
+    if set_output(&output, true) {
+        *prior = Some((output, was_muted));
     }
 }
 
@@ -206,7 +210,7 @@ pub fn restore_other_audio() {
 
     // Restored to what it was, never unconditionally unmuted: a reader who was
     // already muted before they started talking stays that way.
-    let Some(was_muted) = *prior else {
+    let Some((output, was_muted)) = prior.as_ref() else {
         return;
     };
 
@@ -214,7 +218,7 @@ pub fn restore_other_audio() {
     // first read as tidier and was the one way to leave somebody silent for
     // good: a single failed `osascript` would drop the only record of what to
     // restore, and every later stop would then find nothing to do.
-    if set_muted(was_muted) {
+    if set_output(output, *was_muted) {
         *prior = None;
     }
 }
@@ -262,27 +266,70 @@ fn osascript(line: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// The output a reading was taken from. A Mac's is the system output, which
+/// needs no name.
+#[cfg(not(target_os = "linux"))]
+type Output = ();
+
+#[cfg(not(target_os = "linux"))]
+fn read_output() -> Option<(Output, bool)> {
+    read_muted().map(|muted| ((), muted))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_output(_output: &Output, muted: bool) -> bool {
+    set_muted(muted)
+}
+
+/// A Linux output, named by the tool that read it so the restore asks the same
+/// server about the same device.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+enum Output {
+    /// A Pulse sink name, through `pactl`.
+    Pactl(String),
+    /// A PipeWire node id, through `wpctl`.
+    Wpctl(String),
+}
+
 /// Linux asks `pactl` first and PipeWire's own `wpctl` only where that is
 /// missing or refuses. `pactl` speaks the Pulse protocol, so it reaches
 /// whichever server apps actually play through — PulseAudio, or PipeWire by
 /// way of `pipewire-pulse`. `wpctl` reaches PipeWire alone, and a machine can
 /// run both: measured on one where PulseAudio owned the sound and `wpctl`
-/// happily read and muted PipeWire's idle dummy sink instead. Each names the
-/// default output rather than a device, so a set lands where the read looked.
+/// happily read and muted PipeWire's idle dummy sink instead.
+///
+/// The default output is resolved to a name first, so the restore can name it.
 #[cfg(target_os = "linux")]
-fn read_muted() -> Option<bool> {
-    run("pactl", &["get-sink-mute", "@DEFAULT_SINK@"])
-        .and_then(|out| parse_pactl_muted(&out))
-        .or_else(|| {
-            run("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"]).and_then(|out| parse_wpctl_muted(&out))
-        })
+fn read_output() -> Option<(Output, bool)> {
+    let pactl = run("pactl", &["get-default-sink"])
+        .map(|sink| sink.trim().to_string())
+        .filter(|sink| !sink.is_empty())
+        .and_then(|sink| {
+            let muted = run("pactl", &["get-sink-mute", &sink]).and_then(|out| parse_pactl_muted(&out))?;
+            Some((Output::Pactl(sink), muted))
+        });
+    pactl.or_else(|| {
+        let id = run("wpctl", &["inspect", "@DEFAULT_AUDIO_SINK@"]).and_then(|out| parse_wpctl_id(&out))?;
+        let muted = run("wpctl", &["get-volume", &id]).and_then(|out| parse_wpctl_muted(&out))?;
+        Some((Output::Wpctl(id), muted))
+    })
 }
 
 #[cfg(target_os = "linux")]
-fn set_muted(muted: bool) -> bool {
+fn set_output(output: &Output, muted: bool) -> bool {
     let flag = if muted { "1" } else { "0" };
-    run("pactl", &["set-sink-mute", "@DEFAULT_SINK@", flag]).is_some()
-        || run("wpctl", &["set-mute", "@DEFAULT_AUDIO_SINK@", flag]).is_some()
+    match output {
+        Output::Pactl(sink) => run("pactl", &["set-sink-mute", sink, flag]).is_some(),
+        Output::Wpctl(id) => run("wpctl", &["set-mute", id, flag]).is_some(),
+    }
+}
+
+/// The node id off `wpctl inspect`'s first line, `id 33, type PipeWire:…`.
+#[cfg(any(target_os = "linux", test))]
+fn parse_wpctl_id(answer: &str) -> Option<String> {
+    let id = answer.trim_start().strip_prefix("id ")?.split(',').next()?.trim();
+    (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())).then(|| id.to_string())
 }
 
 /// `Volume: 0.40`, with ` [MUTED]` on the end while muted. Anything not opening
@@ -304,14 +351,45 @@ fn parse_pactl_muted(answer: &str) -> Option<bool> {
     }
 }
 
-/// Runs a sound-server CLI, answering its stdout where it ran and succeeded.
+/// How long a sound-server CLI may take. They answer in milliseconds; one
+/// stuck on a hung server would otherwise hold the mute lock, and with it Stop,
+/// Cancel and Quit, which restores synchronously.
+#[cfg(target_os = "linux")]
+const SOUND_CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Runs a sound-server CLI, answering its stdout where it ran and succeeded in
+/// time. A child past the deadline is killed and reaped.
 #[cfg(target_os = "linux")]
 fn run(program: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(program).args(args).output().ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + SOUND_CLI_TIMEOUT;
+    // Every answer here is a line or a short inspect, well inside a pipe's
+    // buffer, so waiting before reading cannot deadlock on a full pipe.
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    status.success().then_some(out)
 }
 
 /// Every other target answers as though there were nothing to mute. The
@@ -782,6 +860,13 @@ mod tests {
         assert_eq!(default_server(conf).as_deref(), Some("unix:/run/a/native"));
         assert_eq!(default_server("autospawn = no"), None);
         assert_eq!(default_server("default-server = tcp:somewhere"), None);
+    }
+
+    #[test]
+    fn wpctl_node_id_parses() {
+        assert_eq!(parse_wpctl_id("id 33, type PipeWire:Interface:Node\n  a = b").as_deref(), Some("33"));
+        assert_eq!(parse_wpctl_id("Object not found"), None);
+        assert_eq!(parse_wpctl_id("id , type x"), None);
     }
 
     #[test]
