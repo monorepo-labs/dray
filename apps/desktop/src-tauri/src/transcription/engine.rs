@@ -359,6 +359,8 @@ async fn load(path: &Path) -> Result<Session> {
     let path = path.to_path_buf();
 
     tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        init_backends()?;
         let model = Model::load_with(&path, &ModelOptions::default())
             .context("could not load the transcription model")?;
 
@@ -366,6 +368,30 @@ async fn load(path: &Path) -> Result<Session> {
     })
     .await
     .context("the model loader panicked")?
+}
+
+/// Registers Linux's backend modules, which sit beside libtranscribe (build.rs
+/// puts them there). Once per process, since the native call cannot be retried,
+/// and before any load, which is why it rides the load itself.
+///
+/// A missing Vulkan loader or driver is not an error here: that module fails to
+/// register and the CPU module answers. Only a directory holding no usable
+/// module at all is, and every dictation then says so.
+#[cfg(target_os = "linux")]
+fn init_backends() -> Result<()> {
+    static INIT: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    INIT.get_or_init(|| {
+        transcribe_cpp::init_backends_default().map_err(|e| e.to_string())?;
+        let devices: Vec<String> = transcribe_cpp::devices()
+            .iter()
+            .map(|d| format!("{} ({})", d.name, d.description))
+            .collect();
+        let devices = devices.join(", ");
+        eprintln!("[transcription] compute devices: {devices}");
+        Ok(())
+    })
+    .clone()
+    .map_err(|e| anyhow::anyhow!("could not load the transcription backends: {e}"))
 }
 
 #[cfg(test)]
