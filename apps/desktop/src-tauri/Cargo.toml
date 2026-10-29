@@ -110,15 +110,26 @@ flate2 = { version = "1", optional = true }
 # The This Mac row's pairing QR for the phone. SVG alone: no `image` tree.
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 
-# Metal on macOS, CPU everywhere else — the backend is chosen at *build* time,
-# so it cannot be switched per model or per machine. Split across two tables
-# rather than one entry, since the `metal` feature does not compile elsewhere.
+# Metal on macOS, compiled in. Split across tables rather than one entry, since
+# the `metal` feature does not compile elsewhere.
 [target.'cfg(target_os = "macos")'.dependencies]
 transcribe-cpp = { version = "0.4", default-features = false, features = [
   "metal",
 ], optional = true }
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+# Linux loads its backends at runtime, from modules shipped beside a shared
+# libtranscribe (build.rs copies them out). Compiled in, Vulkan would make
+# `libvulkan.so.1` a link-time need of the whole app, so a machine without the
+# loader could not start Dray at all; as a module, a missing loader or driver
+# leaves the CPU. And a static build tunes ggml to the *build* machine's CPU,
+# where the modules ship one CPU variant per x86 tier and pick at runtime.
+[target.'cfg(target_os = "linux")'.dependencies]
+transcribe-cpp = { version = "0.4", default-features = false, features = [
+  "vulkan",
+  "dynamic-backends",
+], optional = true }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "linux")))'.dependencies]
 transcribe-cpp = { version = "0.4", default-features = false, optional = true }
 
 # Embedded Chromium for the in-app browser, macOS only for now. Behind a

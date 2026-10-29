@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { invoke, listen } from "@/lib/transport";
 
+import { IS_MAC } from "@/lib/platform";
 import { playDictationSound } from "@/lib/sound";
 import type { DownloadProgress, TranscribeOutcome, TranscriptionStatus } from "@/types/events";
 
@@ -305,7 +306,11 @@ export function useRecorder<T>({
         // The one failure with a cure the reader can act on, and the one that
         // used to be invisible.
         handlers.current.onMessage(
-          "No sound was recorded. Check microphone access in System Settings › Privacy & Security › Microphone.",
+          IS_MAC
+            ? "No sound was recorded. Check microphone access in System Settings › Privacy & Security › Microphone."
+            // Linux gates no app's microphone, so silence there is a muted
+            // or missing input, which the sound settings show.
+            : "No sound was recorded. Check the microphone is connected and not muted in your sound settings.",
         );
         break;
       case "empty":

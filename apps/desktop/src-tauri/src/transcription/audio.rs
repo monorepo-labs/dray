@@ -206,14 +206,66 @@ fn osascript(line: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Linux asks `pactl` first and PipeWire's own `wpctl` only where that is
+/// missing or refuses. `pactl` speaks the Pulse protocol, so it reaches
+/// whichever server apps actually play through — PulseAudio, or PipeWire by
+/// way of `pipewire-pulse`. `wpctl` reaches PipeWire alone, and a machine can
+/// run both: measured on one where PulseAudio owned the sound and `wpctl`
+/// happily read and muted PipeWire's idle dummy sink instead. Each names the
+/// default output rather than a device, so a set lands where the read looked.
+#[cfg(target_os = "linux")]
+fn read_muted() -> Option<bool> {
+    run("pactl", &["get-sink-mute", "@DEFAULT_SINK@"])
+        .and_then(|out| parse_pactl_muted(&out))
+        .or_else(|| {
+            run("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"]).and_then(|out| parse_wpctl_muted(&out))
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn set_muted(muted: bool) -> bool {
+    let flag = if muted { "1" } else { "0" };
+    run("pactl", &["set-sink-mute", "@DEFAULT_SINK@", flag]).is_some()
+        || run("wpctl", &["set-mute", "@DEFAULT_AUDIO_SINK@", flag]).is_some()
+}
+
+/// `Volume: 0.40`, with ` [MUTED]` on the end while muted. Anything not opening
+/// `Volume:` is no reading — a `wpctl` with no PipeWire behind it prints an
+/// error, and taking that as "not muted" would leave the sound off afterwards.
+#[cfg(any(target_os = "linux", test))]
+fn parse_wpctl_muted(answer: &str) -> Option<bool> {
+    let answer = answer.trim();
+    answer.starts_with("Volume:").then(|| answer.ends_with("[MUTED]"))
+}
+
+/// `Mute: yes` or `Mute: no`.
+#[cfg(any(target_os = "linux", test))]
+fn parse_pactl_muted(answer: &str) -> Option<bool> {
+    match answer.trim().strip_prefix("Mute:")?.trim() {
+        "yes" => Some(true),
+        "no" => Some(false),
+        _ => None,
+    }
+}
+
+/// Runs a sound-server CLI, answering its stdout where it ran and succeeded.
+#[cfg(target_os = "linux")]
+fn run(program: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(program).args(args).output().ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 /// Every other target answers as though there were nothing to mute. The
 /// setting still draws, since a row that vanishes reads as one the app forgot.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn read_muted() -> Option<bool> {
     None
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn set_muted(_muted: bool) -> bool {
     false
 }
@@ -666,6 +718,24 @@ mod tests {
     fn an_unreadable_output_reads_as_nothing() {
         assert_eq!(parse_muted("missing value"), None);
         assert_eq!(parse_muted(""), None);
+    }
+
+    #[test]
+    fn linux_mute_state_parses() {
+        assert_eq!(parse_pactl_muted("Mute: yes\n"), Some(true));
+        assert_eq!(parse_pactl_muted("Mute: no"), Some(false));
+        assert_eq!(parse_wpctl_muted("Volume: 0.40 [MUTED]\n"), Some(true));
+        assert_eq!(parse_wpctl_muted("Volume: 1.00"), Some(false));
+    }
+
+    /// What either CLI prints with no sound server behind it. Read as "not
+    /// muted", the restore would turn off sound that was on.
+    #[test]
+    fn a_linux_answer_that_is_no_reading_reads_as_nothing() {
+        assert_eq!(parse_pactl_muted("Connection failure: Connection refused"), None);
+        assert_eq!(parse_pactl_muted(""), None);
+        assert_eq!(parse_wpctl_muted("Could not connect to PipeWire"), None);
+        assert_eq!(parse_wpctl_muted(""), None);
     }
 
     /// "Hello there", 2.5s of nothing, "Goodbye". The pause goes, minus the
