@@ -89,7 +89,7 @@ pub const MODELS: &[TranscriptionModel] = &[
     TranscriptionModel {
         id: "parakeet-unified-en-0.6b",
         name: "Parakeet Unified EN 0.6B",
-        description: "Fast and accurate English. The best pick on Apple Silicon.",
+        description: "Fast and accurate English. The best pick on Apple Silicon and Linux.",
         repo: "handy-computer/parakeet-unified-en-0.6b-gguf",
         revision: "7e948f21b7bdbac698d3318db9d350f1096f3b6c",
         filename: "parakeet-unified-en-0.6b-Q8_0.gguf",
@@ -171,10 +171,19 @@ pub fn require(id: &str) -> Result<&'static TranscriptionModel, String> {
 /// unified memory and the accelerated backend to earn the larger model,
 /// everything else gets the one that "runs well on any hardware".
 ///
+/// Linux on x86_64 gets Parakeet too, measured rather than reasoned: Canary's
+/// edge is its decoder, which there runs a scalar loop because system BLAS is
+/// off (see `.cargo/config.toml`), and on CPU Parakeet matched it on an 11s
+/// clip while being the only one to get every word right. Parakeet also
+/// streams, so most of the work is done before the reader stops talking.
+///
 /// A suggestion only. Nothing downloads without the reader pressing something,
 /// and every model stays selectable whatever this answers.
 pub fn recommended() -> &'static TranscriptionModel {
-    let id = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+    let id = if cfg!(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "linux", target_arch = "x86_64"),
+    )) {
         "parakeet-unified-en-0.6b"
     } else {
         "canary-180m-flash"
