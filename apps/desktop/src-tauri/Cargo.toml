@@ -158,7 +158,7 @@ desktop = [
   "dep:zip",
   "dep:flate2",
 ]
-cef = ["desktop", "dep:cef", "dep:gtk", "dep:gdkx11", "dep:x11"]
+cef = ["desktop", "dep:cef", "dep:gtk", "dep:gdkx11", "dep:x11", "dep:bzip2", "dep:tar"]
 serve = ["dep:tokio-tungstenite", "dep:form_urlencoded", "dep:zip", "dep:flate2"]
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies.cef]
@@ -181,6 +181,18 @@ optional = true
 version = "2.21"
 optional = true
 features = ["xlib", "xinput"]
+
+# Chromium's tarball unpacked in-process on Linux: an AppImage cannot declare
+# `bzip2`, and a desktop without it would fail every download. Both already
+# in the lock — `bzip2` on the pure-Rust libbz2 under `download-cef`, `tar`
+# under the updater. See chromium.rs.
+[target.'cfg(target_os = "linux")'.dependencies.bzip2]
+version = "0.6"
+optional = true
+
+[target.'cfg(target_os = "linux")'.dependencies.tar]
+version = "0.4"
+optional = true
 
 # Unconditional, not CEF's alone: the composer's paste reads NSPasteboard
 # (attachments.rs). tao already compiles all three, so this costs no build.

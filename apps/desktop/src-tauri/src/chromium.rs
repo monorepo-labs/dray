@@ -254,11 +254,9 @@ async fn download(app: &AppHandle) -> Result<()> {
     let stage = dir.join(format!("{VERSION}.part"));
     let _ = fs::remove_dir_all(&stage).await;
     fs::create_dir_all(&stage).await?;
-    let out = unpack(tarball, &part, &stage).await?;
+    let unpacked = unpack(tarball, &part, &stage).await;
     let _ = fs::remove_file(&part).await;
-    if !out.status.success() {
-        bail!("could not unpack the archive: {}", String::from_utf8_lossy(&out.stderr).trim());
-    }
+    unpacked?;
     let framework = stage.join(FRAMEWORK);
     if !framework.join(LIBRARY).is_file() {
         bail!("the archive did not contain the framework");
@@ -277,8 +275,8 @@ async fn download(app: &AppHandle) -> Result<()> {
 /// bsdtar, which every Mac has, reads bzip2 itself. Only the framework is
 /// taken: the rest of the archive is the SDK the build already used.
 #[cfg(target_os = "macos")]
-async fn unpack(tarball: &Tarball, part: &Path, stage: &Path) -> Result<std::process::Output> {
-    tokio::process::Command::new("/usr/bin/tar")
+async fn unpack(tarball: &Tarball, part: &Path, stage: &Path) -> Result<()> {
+    let out = tokio::process::Command::new("/usr/bin/tar")
         .arg("-xjf")
         .arg(part)
         .arg("-C")
@@ -287,28 +285,59 @@ async fn unpack(tarball: &Tarball, part: &Path, stage: &Path) -> Result<std::pro
         .arg(format!("{}/Release/{FRAMEWORK}", tarball.root()))
         .output()
         .await
-        .context("could not run tar")
+        .context("could not run tar")?;
+    if !out.status.success() {
+        bail!("could not unpack the archive: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(())
 }
 
-/// GNU tar, through the system's `bzip2`. `Release` and `Resources` both
-/// land in [`FRAMEWORK`]. `chrome-sandbox` is left out: it is only of use
-/// installed setuid root, and Chromium runs unsandboxed here as on the Mac.
+/// In-process, since nothing promises a Linux desktop has `bzip2`. `Release`
+/// and `Resources` both land in [`FRAMEWORK`]. `chrome-sandbox` is left
+/// out: it is only of use installed setuid root, and Chromium runs
+/// unsandboxed here as on the Mac.
 #[cfg(target_os = "linux")]
-async fn unpack(tarball: &Tarball, part: &Path, stage: &Path) -> Result<std::process::Output> {
-    let lib = stage.join(FRAMEWORK);
-    fs::create_dir_all(&lib).await?;
-    tokio::process::Command::new("tar")
-        .arg("-xjf")
-        .arg(part)
-        .arg("-C")
-        .arg(&lib)
-        .arg("--strip-components=2")
-        .arg("--exclude=chrome-sandbox")
-        .arg(format!("{}/Release", tarball.root()))
-        .arg(format!("{}/Resources", tarball.root()))
-        .output()
+async fn unpack(tarball: &Tarball, part: &Path, stage: &Path) -> Result<()> {
+    let root = PathBuf::from(tarball.root());
+    let (part, lib) = (part.to_path_buf(), stage.join(FRAMEWORK));
+    tokio::task::spawn_blocking(move || unpack_runtime(&part, &root, &lib))
         .await
-        .context("could not run tar")
+        .context("unpack task failed")?
+        .context("could not unpack the archive")
+}
+
+/// The archive's `<root>/Release/*` and `<root>/Resources/*` into `lib`, one
+/// level up. Paths are taken apart by component, so an entry naming `..`
+/// or an absolute path is refused rather than written outside `lib`.
+#[cfg(target_os = "linux")]
+fn unpack_runtime(part: &Path, root: &Path, lib: &Path) -> Result<()> {
+    use std::path::Component;
+    std::fs::create_dir_all(lib)?;
+    let file = std::fs::File::open(part)?;
+    let mut archive = tar::Archive::new(bzip2::read::BzDecoder::new(std::io::BufReader::new(file)));
+    archive.set_preserve_permissions(true);
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        let Ok(inside) = path.strip_prefix(root) else { continue };
+        let mut parts = inside.components();
+        if !matches!(parts.next(), Some(Component::Normal(d)) if d == "Release" || d == "Resources") {
+            continue;
+        }
+        let rel = parts.as_path();
+        if rel.as_os_str().is_empty() || rel == Path::new("chrome-sandbox") {
+            continue;
+        }
+        if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
+            bail!("the archive names a path outside its own: {}", path.display());
+        }
+        let dest = lib.join(rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        entry.unpack(&dest)?;
+    }
+    Ok(())
 }
 
 /// Everything in `~/.dray/cef` but the current version: older frameworks,
