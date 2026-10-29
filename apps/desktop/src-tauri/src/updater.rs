@@ -300,7 +300,22 @@ fn relaunch(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    std::process::Command::new(&exe)
+    let mut command = std::process::Command::new(&exe);
+    // The new AppImage's AppRun adds its own; inheriting this one's too would
+    // pin the old mount under the new instance.
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(dir) = crate::serve::appimage_safe_cwd() {
+            command.current_dir(dir);
+        }
+        for (key, value) in crate::serve::appimage_env_undo() {
+            match value {
+                Some(value) => command.env(key, value),
+                None => command.env_remove(key),
+            };
+        }
+    }
+    command
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("could not launch {}: {e}", exe.display()))
