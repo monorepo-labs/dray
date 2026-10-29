@@ -6,6 +6,7 @@ import {
   type Chord,
   defaultChord,
   mayShareChord,
+  offered,
   PREVIOUS_DEFAULTS,
   sameChord,
   SHORTCUTS,
@@ -109,6 +110,7 @@ export function holderOf(chord: Chord, except?: ShortcutId): ShortcutId | null {
   const hit = SHORTCUTS.find((s) => {
     const held = chordFor(s.id);
     return (
+      offered(s.id) &&
       s.id !== except &&
       !(except && mayShareChord(except, s.id)) &&
       held !== null &&

@@ -17,6 +17,7 @@ import {
 import {
   chordFromKey,
   isReserved,
+  offered,
   SHORTCUT_GROUPS,
   SHORTCUTS,
   type ShortcutId,
@@ -39,7 +40,7 @@ import {
   useAnyModsOverride,
   useMods,
 } from "@/lib/digitChords";
-import { HAS_DICTATION, IS_MAC } from "@/lib/platform";
+import { IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /// Who already answers `mods` plus one of the first `slots` digits: another
@@ -197,9 +198,7 @@ export default function ShortcutsSettings({ onOpenIsland }: { onOpenIsland: () =
     !q || label.toLowerCase().includes(q) || group.toLowerCase().includes(q);
   const shown = SHORTCUT_GROUPS.map((group) => ({
     group,
-    rows: SHORTCUTS.filter(
-      (s) => s.group === group && matches(s.label, group) && (HAS_DICTATION || s.id !== "dictate"),
-    ),
+    rows: SHORTCUTS.filter((s) => s.group === group && matches(s.label, group) && offered(s.id)),
     digits: DIGIT_CHORDS.filter((c) => c.group === group && matches(c.label, group)),
   })).filter((g) => g.rows.length + g.digits.length > 0);
   const islandShown = IS_MAC && matches("Open Dray Island", "Dray Island");
