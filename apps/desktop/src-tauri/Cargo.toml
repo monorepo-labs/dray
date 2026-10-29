@@ -157,8 +157,12 @@ desktop = [
   # MAC-SERVER-PLAN.md.
   "dep:zip",
   "dep:flate2",
+  # Chromium's download unpacks in-process on Linux; `chromium` compiles
+  # with `desktop` alone. See chromium.rs.
+  "dep:bzip2",
+  "dep:tar",
 ]
-cef = ["desktop", "dep:cef", "dep:gtk", "dep:gdkx11", "dep:x11", "dep:bzip2", "dep:tar"]
+cef = ["desktop", "dep:cef", "dep:gtk", "dep:gdkx11", "dep:x11"]
 serve = ["dep:tokio-tungstenite", "dep:form_urlencoded", "dep:zip", "dep:flate2"]
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies.cef]
