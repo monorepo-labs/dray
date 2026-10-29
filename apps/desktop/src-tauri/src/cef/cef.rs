@@ -1510,6 +1510,12 @@ mod string_list_tests {
     use super::*;
 
     /// Needs the framework loaded, found the way the build found it: `CEF_PATH`.
+    #[cfg(target_os = "linux")]
+    fn load_framework() {
+        libcef::load(&sys::get_cef_dir().expect("CEF not found")).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
     fn load_framework() {
         use std::os::unix::ffi::OsStrExt;
         let dir = sys::get_cef_dir().expect("CEF not found").join(sys::FRAMEWORK_PATH);
