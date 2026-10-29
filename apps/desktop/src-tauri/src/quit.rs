@@ -14,10 +14,9 @@
 
 use std::sync::Mutex;
 
-use tauri::{
-    menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
-    AppHandle, Emitter, Manager, Runtime,
-};
+#[cfg(target_os = "macos")]
+use tauri::menu::{AboutMetadata, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::{menu::Menu, AppHandle, Emitter, Manager, Runtime};
 
 pub const QUIT_ID: &str = "quit";
 
