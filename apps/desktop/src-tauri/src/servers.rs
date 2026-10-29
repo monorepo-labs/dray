@@ -437,7 +437,9 @@ async fn admit(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
     // `counts`: this app reports the sessions it starts there, so the server
     // must not. This Mac's own server is reached through `admit_as_host`
     // instead and counts its sessions itself.
-    admit_with(url, json!({ "v": PROTOCOL, "token": token, "counts": true })).await
+    // `deflate`: a remote link can be slow enough that a transcript's bytes
+    // are most of the wait. Loopback below leaves it off, as pure CPU.
+    admit_with(url, json!({ "v": PROTOCOL, "token": token, "counts": true, "deflate": true })).await
 }
 
 /// This Mac's own server, which may call back into the app: browser steps go
@@ -708,10 +710,10 @@ async fn serve(id: &str, ws: Socket) {
     });
     let silence = if remote { SILENCE } else { Duration::MAX };
     while let Ok(Some(Ok(message))) = tokio::time::timeout(silence, read.next()).await {
-        let Message::Text(text) = message else {
-            if matches!(message, Message::Close(_)) {
-                break;
-            }
+        if matches!(message, Message::Close(_)) {
+            break;
+        }
+        let Some(text) = crate::serve::frame_in(message) else {
             continue;
         };
         let Ok(frame) = serde_json::from_str::<Value>(&text) else {

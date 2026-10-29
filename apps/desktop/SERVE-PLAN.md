@@ -92,6 +92,14 @@ frontend wrapper is a few lines:
 ← {"event":"agent_event","payload":{…}}       every event, to every client
 ```
 
+**A hello carrying `"deflate":true` gets large frames compressed** (#712): every
+frame from 16KB up arrives as a binary frame of raw-deflated JSON, everything
+smaller stays text. A transcript page is 0.6–4MB of JSON and deflates about 5×,
+which on a slow link is most of the wait; tungstenite has no permessage-deflate
+to do it. The app offers it to remote servers only, never to loopback. A server
+that never heard of the field ignores it, so no version moved, and the iOS app
+and the browser transport simply never ask.
+
 **The version is checked before anything else in the first frame**, and the
 refusal names which side is behind — `update the Dray app` or
 `update dray-serve` — the rule `dray_proto::PROTOCOL_VERSION` already follows.

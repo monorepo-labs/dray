@@ -10,6 +10,10 @@
 //! ← {"event":"agent_event","payload":{…}}       every event, to every client
 //! ```
 //!
+//! A hello carrying `"deflate":true` gets every frame from [`DEFLATE_FLOOR`]
+//! up as a binary frame of raw-deflated JSON — see [`frame_out`]. A server
+//! that never heard of the field ignores it, so no version moves.
+//!
 //! The Mac app connects to its own server with `"host":{"browser":…}` in the
 //! hello, which lets the server call back into it — see [`host_call`]:
 //!
@@ -29,6 +33,7 @@ use crate::{
     store,
 };
 use anyhow::{Context, Result};
+use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -53,6 +58,41 @@ use tokio_tungstenite::tungstenite::{
 /// thing without saying so — the rule `dray_proto::PROTOCOL_VERSION` follows.
 /// The frontend states it again in `transport.ts`.
 pub const PROTOCOL: u32 = 1;
+
+/// Frames shorter than this go out as text even to a client that asked for
+/// deflate: an event or a short reply saves too little to be worth the CPU.
+const DEFLATE_FLOOR: usize = 16 * 1024;
+
+/// One outgoing frame. A transcript page is 0.6–1.3MB of JSON and deflates
+/// about 4.7×, which on a slow link is most of the wait — and tungstenite
+/// has no permessage-deflate to do it for us.
+pub fn frame_out(text: String, deflate: bool) -> Message {
+    // Scoped here: `std::io::Read` at module level collides with tokio's
+    // `AsyncReadExt::chain` in the upload path.
+    use std::io::Write;
+    if !deflate || text.len() < DEFLATE_FLOOR {
+        return Message::text(text);
+    }
+    let mut encoder = DeflateEncoder::new(Vec::with_capacity(text.len() / 4), Compression::default());
+    match encoder.write_all(text.as_bytes()).and_then(|()| encoder.finish()) {
+        Ok(bytes) => Message::binary(bytes),
+        Err(_) => Message::text(text),
+    }
+}
+
+/// The JSON text an incoming frame carries, inflating a binary one.
+pub fn frame_in(message: Message) -> Option<String> {
+    use std::io::Read;
+    match message {
+        Message::Text(text) => Some(text.to_string()),
+        Message::Binary(bytes) => {
+            let mut text = String::new();
+            DeflateDecoder::new(&bytes[..]).read_to_string(&mut text).ok()?;
+            Some(text)
+        }
+        _ => None,
+    }
+}
 
 /// How far one client may fall behind the event stream before it is dropped.
 /// A dropped client reconnects and re-reads; a silently skipped `agent_event`
@@ -535,6 +575,9 @@ struct Hello {
     /// app on another machine — so this server must not count them too.
     #[serde(default)]
     counts: bool,
+    /// The client inflates binary frames: see [`frame_out`].
+    #[serde(default)]
+    deflate: bool,
 }
 
 /// What the app can answer when it connects as the host.
@@ -972,8 +1015,12 @@ async fn connection(
         // Read by the app to tag a session it starts here, as a closed value.
         "os": std::env::consts::OS,
     });
+    // The welcome stays text whatever was asked: a client reads it before it
+    // knows whether this server understood `deflate` at all.
+    let hello = serde_json::from_str::<Hello>(&hello).ok();
+    let deflate = hello.as_ref().is_some_and(|h| h.deflate);
     write.send(Message::text(welcome.to_string())).await?;
-    write.send(Message::text(snapshot)).await?;
+    write.send(frame_out(snapshot, deflate)).await?;
 
     // Replies come back from concurrent tasks, so one writer owns the socket.
     let (replies, mut outgoing) = mpsc::unbounded_channel::<String>();
@@ -993,7 +1040,7 @@ async fn connection(
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
             };
-            if write.send(Message::text(frame)).await.is_err() {
+            if write.send(frame_out(frame, deflate)).await.is_err() {
                 break;
             }
         }
@@ -1001,7 +1048,6 @@ async fn connection(
     });
 
     let connection = NEXT_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let hello = serde_json::from_str::<Hello>(&hello).ok();
     // Read before the filter: a remote reader's app reaches this server
     // through the tunnel or a `dray-serve` listener too, neither of them hosts.
     let counts = hello.as_ref().is_some_and(|h| h.counts);
@@ -1544,6 +1590,47 @@ mod tests {
 
         assert_eq!(post("nope", "data.csv").await.status(), 401);
         assert_eq!(post("tok", "..").await.status(), 400);
+    }
+
+    #[test]
+    fn a_frame_deflates_only_when_asked_and_large() {
+        let big = json!({ "id": 1, "ok": "tool output ".repeat(4000) }).to_string();
+        let Message::Binary(bytes) = frame_out(big.clone(), true) else { panic!("a large frame stayed text") };
+        assert!(bytes.len() * 10 < big.len(), "{} of {}", bytes.len(), big.len());
+        assert_eq!(frame_in(Message::binary(bytes)).as_deref(), Some(big.as_str()));
+        assert!(matches!(frame_out(big, false), Message::Text(_)));
+        assert!(matches!(frame_out(r#"{"id":1,"ok":null}"#.into(), true), Message::Text(_)));
+        assert_eq!(frame_in(Message::binary(b"not deflate".to_vec())), None);
+    }
+
+    /// The whole path: a client's hello asks, the writer compresses an event
+    /// past the floor, and only that one; one that never asked reads text.
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn a_client_that_asks_gets_large_events_deflated() {
+        for deflate in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("ws://{}", listener.local_addr().unwrap());
+            let hub = Hub::default();
+            let served = hub.clone();
+            tokio::spawn(async move {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let sink = Sink::new(|_, _| {});
+                connection(tcp, sink, served, "tok", Path::new("/nonexistent"), false).await.ok();
+            });
+            let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+            ws.send(Message::text(json!({ "v": PROTOCOL, "token": "tok", "deflate": deflate }).to_string()))
+                .await
+                .unwrap();
+            assert!(matches!(ws.next().await, Some(Ok(Message::Text(_)))), "welcome");
+            assert!(matches!(ws.next().await, Some(Ok(Message::Text(_)))), "a small snapshot");
+
+            let big = json!({ "event": "agent_event", "payload": "x".repeat(DEFLATE_FLOOR * 2) }).to_string();
+            hub.events.send(big.as_str().into()).unwrap();
+            let frame = ws.next().await.unwrap().unwrap();
+            assert_eq!(matches!(frame, Message::Binary(_)), deflate);
+            assert_eq!(frame_in(frame).as_deref(), Some(big.as_str()));
+        }
     }
 
     #[tokio::test]
