@@ -6,6 +6,14 @@
 //! nothing else, which is why `main.rs` forces GDK onto X11 (XWayland on a
 //! Wayland desktop) and Chromium is told `ozone-platform=x11` too.
 //!
+//! **Tabs live in a frame of ours, not in the main window itself.** tao gives
+//! that window a 32-bit ARGB visual, transparent or not, and CEF creates its
+//! window at the default depth with no colormap — which X refuses with
+//! `BadMatch`, so CEF handed back the id of a window that never existed.
+//! The frame is a 24-bit child of the main window with a colormap of its
+//! own; it sits on the pane's rect and every tab fills it, while a tab not
+//! on screen is parked off its edge as on the Mac.
+//!
 //! Every call goes through GDK's own Xlib connection inside an error trap.
 //! A tab's window can be gone by the time a call lands — CEF destroys it on
 //! close — and GDK's default handler answers an unexpected `BadWindow` by
@@ -16,8 +24,13 @@
 use super::APP;
 use gtk::prelude::*;
 use std::os::raw::{c_int, c_uint, c_ulong};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::Manager;
 use x11::xlib;
+
+/// The frame every tab is parented into, made on first use and kept for the
+/// app's life. 0 until then.
+static FRAME: AtomicU64 = AtomicU64::new(0);
 
 /// Where tabs live: the main window's X window, and where its webview sits
 /// inside it in X pixels.
@@ -60,37 +73,88 @@ fn with_display<T>(f: impl FnOnce(&Host) -> T) -> Option<T> {
     Some(out)
 }
 
-/// The main window's X id, and a rect in window points turned into X pixels
-/// inside it: `(parent, x, y, width, height)`.
-pub(super) fn parent_and_rect(x: f64, y: f64, width: f64, height: f64) -> Option<(c_ulong, i32, i32, i32, i32)> {
-    let host = host()?;
-    let s = host.scale;
-    Some((
-        host.window,
-        host.origin.0 + (x * s).round() as i32,
-        host.origin.1 + (y * s).round() as i32,
-        ((width * s).round() as i32).max(1),
-        ((height * s).round() as i32).max(1),
-    ))
+/// The frame tabs are made in, and a size in window points turned into X
+/// pixels: `(frame, width, height)`.
+pub(super) fn frame_and_size(width: f64, height: f64) -> Option<(c_ulong, i32, i32)> {
+    let frame = with_display(frame)??;
+    let s = host()?.scale;
+    Some((frame, ((width * s).round() as i32).max(1), ((height * s).round() as i32).max(1)))
 }
 
-/// Moves and sizes a tab's window to a rect in window points.
+/// The frame, made now if it is not yet: 24-bit TrueColor, its own colormap
+/// and border pixel (both required once the visual differs from the
+/// parent's), no background so a tab switch paints nothing in between.
+/// Mapped from the start and stowed off-screen until a tab is shown.
+fn frame(h: &Host) -> Option<c_ulong> {
+    let made = FRAME.load(Ordering::Relaxed);
+    if made != 0 {
+        return Some(made);
+    }
+    unsafe {
+        let screen = xlib::XDefaultScreen(h.display);
+        let mut info: xlib::XVisualInfo = std::mem::zeroed();
+        if xlib::XMatchVisualInfo(h.display, screen, 24, xlib::TrueColor, &mut info) == 0 {
+            return None;
+        }
+        let root = xlib::XRootWindow(h.display, screen);
+        let mut attrs: xlib::XSetWindowAttributes = std::mem::zeroed();
+        attrs.colormap = xlib::XCreateColormap(h.display, root, info.visual, xlib::AllocNone);
+        attrs.border_pixel = 0;
+        attrs.background_pixmap = 0;
+        let frame = xlib::XCreateWindow(
+            h.display,
+            h.window,
+            -20000,
+            0,
+            800,
+            600,
+            0,
+            24,
+            xlib::InputOutput as c_uint,
+            info.visual,
+            xlib::CWColormap | xlib::CWBorderPixel | xlib::CWBackPixmap,
+            &mut attrs,
+        );
+        if frame == 0 {
+            return None;
+        }
+        xlib::XMapWindow(h.display, frame);
+        FRAME.store(frame, Ordering::Relaxed);
+        Some(frame)
+    }
+}
+
+/// Puts the frame on a rect in window points and fills it with the tab.
 pub(super) fn place(view: usize, x: f64, y: f64, width: f64, height: f64) {
     with_display(|h| unsafe {
+        let Some(frame) = frame(h) else { return };
         let s = h.scale;
+        let (w, hgt) = (((width * s).round() as c_uint).max(1), ((height * s).round() as c_uint).max(1));
         xlib::XMoveResizeWindow(
             h.display,
-            view as xlib::Window,
+            frame,
             h.origin.0 + (x * s).round() as c_int,
             h.origin.1 + (y * s).round() as c_int,
-            ((width * s).round() as c_uint).max(1),
-            ((height * s).round() as c_uint).max(1),
+            w,
+            hgt,
         );
+        xlib::XMoveResizeWindow(h.display, view as xlib::Window, 0, 0, w, hgt);
     });
 }
 
-/// Moves a tab's window off-screen, keeping its size unless one is given in
-/// X pixels: the Mac's park at x = -20000.
+/// Takes the frame off the main window when no tab is on screen. Moved, not
+/// unmapped, so a tab parked inside it for a recording stays viewable.
+pub(super) fn stow() {
+    with_display(|h| unsafe {
+        let made = FRAME.load(Ordering::Relaxed);
+        if made != 0 {
+            xlib::XMoveWindow(h.display, made, -20000, 0);
+        }
+    });
+}
+
+/// Moves a tab's window off the frame's edge, keeping its size unless one is
+/// given in X pixels: the Mac's park at x = -20000.
 pub(super) fn park(view: usize, size: Option<(u32, u32)>) {
     with_display(|h| unsafe {
         match size {

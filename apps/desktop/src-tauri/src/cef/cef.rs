@@ -820,14 +820,14 @@ fn context_for(session: &str) -> Option<RequestContext> {
     Some(ctx)
 }
 
-/// A tab's window: a child of the main window's, made off-screen since
-/// CEF's `hidden` is not honoured on Linux, until `apply_layout` decides it
-/// is the one on screen. Main thread.
+/// A tab's window: a child of the frame in the main window (`x11.rs`), made
+/// off its edge since CEF's `hidden` is not honoured on Linux, until
+/// `apply_layout` decides it is the one on screen. Main thread.
 #[cfg(target_os = "linux")]
 fn child_window_info() -> Result<WindowInfo, String> {
     let layout = LAYOUT.lock().unwrap().as_ref().map(|(_, l)| *l);
     let (w, h) = layout.map(|l| (l.width, l.height)).unwrap_or((800.0, 600.0));
-    let (parent, _, _, width, height) = x11::parent_and_rect(0.0, 0.0, w, h).ok_or("no main window")?;
+    let (parent, width, height) = x11::frame_and_size(w, h).ok_or("no main window")?;
     let bounds = Rect { x: -20000, y: 0, width, height };
     Ok(WindowInfo::default().set_as_child(parent, &bounds))
 }
@@ -949,6 +949,10 @@ fn apply_layout() {
         } else if hidden == show {
             x11::set_hidden(view, !show);
         }
+    }
+    #[cfg(target_os = "linux")]
+    if shown.is_none() {
+        x11::stow();
     }
     #[cfg(target_os = "macos")]
     for (id, view, browser) in views {
