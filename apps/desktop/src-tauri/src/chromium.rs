@@ -2,7 +2,8 @@
 //!
 //! The in-app browser is CEF, and the framework it loads is ~330MB unpacked.
 //! Shipped in the bundle it would ride every download and every update, so the
-//! bundle carries only the five helper apps and this fetches the framework a
+//! bundle carries only the five helper apps (on Linux, nothing: the app's own
+//! binary is the subprocess) and this fetches the framework a
 //! few seconds after the window first opens — from the CDN the `cef` crate's
 //! own build script reads, pinned to the crate's CEF version. Same shape as the
 //! transcription models: `.part` + rename, size and hash checked before
@@ -25,8 +26,17 @@ use ts_rs::TS;
 pub const VERSION: &str = "154.0.34";
 const BUILD: &str = "154.0.34+g14c5a08+chromium-154.0.8037.98";
 const CDN: &str = "https://cef-builds.spotifycdn.com";
+#[cfg(target_os = "macos")]
 pub const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
+#[cfg(target_os = "macos")]
 const LIBRARY: &str = "Chromium Embedded Framework";
+/// Linux has no framework bundle: libcef.so wants its `.pak`s, `icudtl.dat`
+/// and `locales/` in one directory, so the archive's `Release` and
+/// `Resources` are unpacked together into this one.
+#[cfg(target_os = "linux")]
+pub const FRAMEWORK: &str = "lib";
+#[cfg(target_os = "linux")]
+const LIBRARY: &str = "libcef.so";
 
 /// One minimal tarball per architecture. Size and hash are of the file as
 /// downloaded and checked by hand; the CDN publishes only a sha1.
@@ -36,16 +46,32 @@ struct Tarball {
     sha256: &'static str,
 }
 
+#[cfg(target_os = "macos")]
 const ARM64: Tarball = Tarball {
     platform: "macosarm64",
     size: 132_210_884,
     sha256: "b7efb24bcce34b94e836a9f545005aea210e08abdf4ee1483ea03b8daf93f080",
 };
 
+#[cfg(target_os = "macos")]
 const X64: Tarball = Tarball {
     platform: "macosx64",
     size: 138_623_289,
     sha256: "ebcb691252c9ccde63488a913e2381bce4e275acbbb96ce4763b318b7f0b781a",
+};
+
+#[cfg(target_os = "linux")]
+const ARM64: Tarball = Tarball {
+    platform: "linuxarm64",
+    size: 423_940_526,
+    sha256: "4598b350e5a43519dbb9f1c732e8b184333572da53244ff55cc063003c34c5e4",
+};
+
+#[cfg(target_os = "linux")]
+const X64: Tarball = Tarball {
+    platform: "linux64",
+    size: 326_489_962,
+    sha256: "e87e2c76304372dd28b899ceb6efa4b353f52700594ddc358a8237ec07ec6492",
 };
 
 fn tarball() -> Option<&'static Tarball> {
@@ -102,12 +128,19 @@ fn set(app: &AppHandle, status: ChromiumStatus) {
     let _ = app.emit("chromium_status", status);
 }
 
-/// `~/.dray/cef/` (`cef-dev/` under `tauri dev`), one version directory at a time.
+/// `~/.dray/cef/` (`cef-dev/` under `tauri dev`, `~/.dray-dev/cef` on
+/// Linux), one version directory at a time.
 fn cef_dir() -> PathBuf {
     // Split like the profile root: the sweep deletes every version but its
     // own, so a dev build on a newer CEF would take the release app's
     // framework out from under its running helpers.
+    #[cfg(target_os = "macos")]
     let dir = if tauri::is_dev() { ".dray/cef-dev" } else { ".dray/cef" };
+    // Linux dev builds keep out of `~/.dray` altogether: that home is the
+    // release server's, the only one a Linux box may be running — sharing
+    // `~/.dray-dev` the way every dev build shares projects and settings.
+    #[cfg(target_os = "linux")]
+    let dir = if tauri::is_dev() { ".dray-dev/cef" } else { ".dray/cef" };
     std::env::home_dir().unwrap_or_default().join(dir)
 }
 
@@ -221,22 +254,9 @@ async fn download(app: &AppHandle) -> Result<()> {
     let stage = dir.join(format!("{VERSION}.part"));
     let _ = fs::remove_dir_all(&stage).await;
     fs::create_dir_all(&stage).await?;
-    // bsdtar, which every Mac has, reads bzip2 itself. Only the framework is
-    // taken: the rest of the archive is the SDK the build already used.
-    let out = tokio::process::Command::new("/usr/bin/tar")
-        .arg("-xjf")
-        .arg(&part)
-        .arg("-C")
-        .arg(&stage)
-        .arg("--strip-components=2")
-        .arg(format!("{}/Release/{FRAMEWORK}", tarball.root()))
-        .output()
-        .await
-        .context("could not run tar")?;
+    let unpacked = unpack(tarball, &part, &stage).await;
     let _ = fs::remove_file(&part).await;
-    if !out.status.success() {
-        bail!("could not unpack the archive: {}", String::from_utf8_lossy(&out.stderr).trim());
-    }
+    unpacked?;
     let framework = stage.join(FRAMEWORK);
     if !framework.join(LIBRARY).is_file() {
         bail!("the archive did not contain the framework");
@@ -249,6 +269,74 @@ async fn download(app: &AppHandle) -> Result<()> {
     sweep(&dir).await;
 
     set(app, ready(&version_dir().join(FRAMEWORK)).await);
+    Ok(())
+}
+
+/// bsdtar, which every Mac has, reads bzip2 itself. Only the framework is
+/// taken: the rest of the archive is the SDK the build already used.
+#[cfg(target_os = "macos")]
+async fn unpack(tarball: &Tarball, part: &Path, stage: &Path) -> Result<()> {
+    let out = tokio::process::Command::new("/usr/bin/tar")
+        .arg("-xjf")
+        .arg(part)
+        .arg("-C")
+        .arg(stage)
+        .arg("--strip-components=2")
+        .arg(format!("{}/Release/{FRAMEWORK}", tarball.root()))
+        .output()
+        .await
+        .context("could not run tar")?;
+    if !out.status.success() {
+        bail!("could not unpack the archive: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(())
+}
+
+/// In-process, since nothing promises a Linux desktop has `bzip2`. `Release`
+/// and `Resources` both land in [`FRAMEWORK`]. `chrome-sandbox` is left
+/// out: it is only of use installed setuid root, and Chromium runs
+/// unsandboxed here as on the Mac.
+#[cfg(target_os = "linux")]
+async fn unpack(tarball: &Tarball, part: &Path, stage: &Path) -> Result<()> {
+    let root = PathBuf::from(tarball.root());
+    let (part, lib) = (part.to_path_buf(), stage.join(FRAMEWORK));
+    tokio::task::spawn_blocking(move || unpack_runtime(&part, &root, &lib))
+        .await
+        .context("unpack task failed")?
+        .context("could not unpack the archive")
+}
+
+/// The archive's `<root>/Release/*` and `<root>/Resources/*` into `lib`, one
+/// level up. Paths are taken apart by component, so an entry naming `..`
+/// or an absolute path is refused rather than written outside `lib`.
+#[cfg(target_os = "linux")]
+fn unpack_runtime(part: &Path, root: &Path, lib: &Path) -> Result<()> {
+    use std::path::Component;
+    std::fs::create_dir_all(lib)?;
+    let file = std::fs::File::open(part)?;
+    let mut archive = tar::Archive::new(bzip2::read::BzDecoder::new(std::io::BufReader::new(file)));
+    archive.set_preserve_permissions(true);
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        let Ok(inside) = path.strip_prefix(root) else { continue };
+        let mut parts = inside.components();
+        if !matches!(parts.next(), Some(Component::Normal(d)) if d == "Release" || d == "Resources") {
+            continue;
+        }
+        let rel = parts.as_path();
+        if rel.as_os_str().is_empty() || rel == Path::new("chrome-sandbox") {
+            continue;
+        }
+        if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
+            bail!("the archive names a path outside its own: {}", path.display());
+        }
+        let dest = lib.join(rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        entry.unpack(&dest)?;
+    }
     Ok(())
 }
 
@@ -352,6 +440,7 @@ mod tests {
 
     /// The file names are what the CDN's index lists for this version, spelled
     /// out here so a re-pin cannot drift from the hashes beside them.
+    #[cfg(target_os = "macos")]
     #[test]
     fn tarball_names_match_the_cdn_index() {
         assert_eq!(
@@ -366,12 +455,25 @@ mod tests {
         assert!(!ARM64.url().contains('+'));
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn tarball_names_match_the_cdn_index() {
+        assert_eq!(
+            ARM64.name(),
+            "cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_linuxarm64_minimal.tar.bz2"
+        );
+        assert_eq!(X64.name(), "cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_linux64_minimal.tar.bz2");
+    }
+
     #[test]
     fn version_is_the_crate_build_prefix() {
         assert!(BUILD.starts_with(VERSION));
         // Tests run as a dev build, so this also pins the split from the
         // release app's `.dray/cef`.
+        #[cfg(target_os = "macos")]
         assert!(version_dir().ends_with(Path::new(".dray/cef-dev").join(VERSION)));
+        #[cfg(target_os = "linux")]
+        assert!(version_dir().ends_with(Path::new(".dray-dev/cef").join(VERSION)));
     }
 
     #[test]

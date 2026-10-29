@@ -443,7 +443,7 @@ async fn admit(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
 /// This Mac's own server, which may call back into the app: browser steps go
 /// to the app's Chromium where this build has one.
 async fn admit_as_host(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
-    let browser = cfg!(all(feature = "cef", target_os = "macos"));
+    let browser = cfg!(all(feature = "cef", any(target_os = "macos", target_os = "linux")));
     admit_with(url, json!({ "v": PROTOCOL, "token": token, "host": { "browser": browser } })).await
 }
 

@@ -1,4 +1,5 @@
 import { invoke, listen, LOCAL, serverOfSession } from "@/lib/transport";
+import { IS_MAC } from "@/lib/platform";
 import { useSyncExternalStore } from "react";
 
 import { readLocalStorage } from "@/hooks/useLocalStorage";
@@ -75,17 +76,18 @@ function start() {
   // A ⌘-chord pressed inside the page. Chromium's view has focus, so the
   // document never saw the key; re-raise it as a synthetic event, which is
   // all `useHotkey` needs. Shifted letters arrive upper-cased, as a real
-  // event carries them.
+  // event carries them. Off a Mac the accelerator is Ctrl, raised as Ctrl:
+  // the digit chords take exactly one of the two, never Meta there.
   void listen<{ key: string; code: string; shift: boolean; alt: boolean; ctrl: boolean }>("cef_key", (e) => {
     const { key, code, shift, alt, ctrl } = e.payload;
     document.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: shift && key.length === 1 ? key.toUpperCase() : key,
         code,
-        metaKey: true,
+        metaKey: IS_MAC,
         shiftKey: shift,
         altKey: alt,
-        ctrlKey: ctrl,
+        ctrlKey: IS_MAC ? ctrl : true,
         bubbles: true,
         cancelable: true,
       }),

@@ -2,11 +2,22 @@
 //! child processes, and on macOS each is a separate app bundle beside the
 //! framework — this binary, copied under five names. It loads the framework
 //! and hands control to CEF; nothing of Dray's runs here.
+//!
+//! macOS alone: on Linux the app's own binary is the subprocess (`main.rs`).
 
+#[cfg(target_os = "macos")]
 use std::path::PathBuf;
 
+#[cfg(target_os = "macos")]
 const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
 
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    eprintln!("dray-helper is macOS only; on Linux the app's binary runs Chromium's subprocesses");
+    std::process::exit(1);
+}
+
+#[cfg(target_os = "macos")]
 fn main() {
     let args = cef::args::Args::new();
     // CEF hands every child the browser's `framework_dir_path` as this

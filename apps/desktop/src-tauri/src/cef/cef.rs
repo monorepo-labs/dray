@@ -8,6 +8,11 @@
 //! CEF's message loop is pumped from the main thread without owning it
 //! (`start_pump`), since Tao already runs the run loop.
 //!
+//! **On Linux a tab is an X11 window, not an `NSView`** (`x11.rs`), libcef.so
+//! is opened at run time rather than linked (`libcef.rs`), and the app's own
+//! binary is every Chromium subprocess (`subprocess`). The pump is the same:
+//! `run_on_main_thread` lands on GTK's main loop there.
+//!
 //! **One native view is ever visible: the presented session's active tab.**
 //! The frontend says which session is presented and where (`browser_layout`),
 //! from whichever pane is on screen — the Browser tab or the right panel's
@@ -21,9 +26,13 @@
 // traits unqualified, so this is the one place a glob is load-bearing.
 use cef::args::Args;
 use cef::*;
+#[cfg(target_os = "macos")]
 use objc2::runtime::{AnyClass, AnyObject, Bool, NSObjectProtocol, Sel};
+#[cfg(target_os = "macos")]
 use objc2::{msg_send, sel};
+#[cfg(target_os = "macos")]
 use objc2_app_kit::{NSApplication, NSEvent, NSView};
+#[cfg(target_os = "macos")]
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -31,14 +40,24 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
+#[cfg(target_os = "macos")]
+use tauri::Manager;
 
 #[path = "../browser/automation.rs"]
 pub mod automation;
 #[path = "history.rs"]
 mod history;
+#[cfg(target_os = "linux")]
+#[path = "libcef.rs"]
+mod libcef;
+#[cfg(target_os = "linux")]
+#[path = "x11.rs"]
+mod x11;
 
+#[cfg(target_os = "macos")]
 const FRAMEWORK: &str = "Chromium Embedded Framework.framework";
+#[cfg(target_os = "macos")]
 const HELPER: &str = "Dray Helper.app/Contents/MacOS/Dray Helper";
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
@@ -85,7 +104,8 @@ struct Tab {
     browser: Option<Browser>,
     /// Keeps `dray browser`'s DevTools observer attached for the tab's life.
     _devtools: Option<Registration>,
-    /// The `NSView` CEF created, as a pointer. Main thread only.
+    /// The `NSView` CEF created, as a pointer — on Linux its X window id.
+    /// Main thread only.
     view: usize,
     url: String,
     title: String,
@@ -158,10 +178,20 @@ struct TabsEvent {
 /// script links it in; a release loads the one `chromium` downloaded.
 struct Paths {
     framework: PathBuf,
+    #[cfg(target_os = "macos")]
     helpers: PathBuf,
+    #[cfg(target_os = "macos")]
     bundle: PathBuf,
 }
 
+/// Linux has no helpers to find and no dev layout: the subprocess is this
+/// binary, and the framework is the download, under `tauri dev` too.
+#[cfg(target_os = "linux")]
+fn paths() -> Option<Paths> {
+    Some(Paths { framework: crate::chromium::installed_framework()? })
+}
+
+#[cfg(target_os = "macos")]
 fn paths() -> Option<Paths> {
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?;
@@ -178,6 +208,13 @@ fn paths() -> Option<Paths> {
 }
 
 /// A framework beside the helpers is the dev layout, and nothing to fetch.
+#[cfg(target_os = "linux")]
+fn dev_framework() -> Option<PathBuf> {
+    None
+}
+
+/// A framework beside the helpers is the dev layout, and nothing to fetch.
+#[cfg(target_os = "macos")]
 fn dev_framework() -> Option<PathBuf> {
     paths().filter(|p| p.framework.starts_with(&p.helpers)).map(|p| p.framework)
 }
@@ -231,11 +268,19 @@ fn start() -> Option<bool> {
         eprintln!("cef: no Chromium framework on disk yet");
         return None;
     };
-    let framework = paths.framework;
-    let library = framework.join("Chromium Embedded Framework");
-    let c_path = std::ffi::CString::new(library.as_os_str().as_encoded_bytes()).expect("path");
-    if cef::load_library(Some(unsafe { &*c_path.as_ptr() })) != 1 {
-        eprintln!("cef: could not load {}", library.display());
+    let framework = paths.framework.clone();
+    #[cfg(target_os = "macos")]
+    {
+        let library = framework.join("Chromium Embedded Framework");
+        let c_path = std::ffi::CString::new(library.as_os_str().as_encoded_bytes()).expect("path");
+        if cef::load_library(Some(unsafe { &*c_path.as_ptr() })) != 1 {
+            eprintln!("cef: could not load {}", library.display());
+            return Some(false);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if let Err(e) = libcef::load(&framework) {
+        eprintln!("cef: {e}");
         return Some(false);
     }
     *loaded = true;
@@ -253,9 +298,25 @@ fn start() -> Option<bool> {
         return Some(false);
     }
 
-    let mtm = MainThreadMarker::new().expect("cef::start off the main thread");
-    unsafe { patch_nsapp(&NSApplication::sharedApplication(mtm)) };
+    #[cfg(target_os = "macos")]
+    {
+        let mtm = MainThreadMarker::new().expect("cef::start off the main thread");
+        unsafe { patch_nsapp(&NSApplication::sharedApplication(mtm)) };
+    }
 
+    #[cfg(target_os = "linux")]
+    let settings = Settings {
+        no_sandbox: 1,
+        external_message_pump: 1,
+        // This binary, which `main.rs` hands to `subprocess` on `--type=`.
+        browser_subprocess_path: path_str(&std::env::current_exe().ok()?),
+        resources_dir_path: path_str(&framework),
+        locales_dir_path: path_str(&framework.join("locales")),
+        root_cache_path: path_str(&browser_dir()),
+        cache_path: path_str(&browser_dir().join("default")),
+        ..Default::default()
+    };
+    #[cfg(target_os = "macos")]
     let settings = Settings {
         no_sandbox: 1,
         external_message_pump: 1,
@@ -277,6 +338,8 @@ fn start() -> Option<bool> {
         return Some(false);
     }
     start_pump(app.clone());
+    #[cfg(target_os = "linux")]
+    x11::watch_presses(pressed);
     let sweeper = app.clone();
     std::thread::Builder::new()
         .name("cef-sweep".into())
@@ -287,6 +350,29 @@ fn start() -> Option<bool> {
         .expect("cef sweep thread");
     eprintln!("cef: initialized");
     Some(true)
+}
+
+/// Chromium's renderer, GPU, utility and zygote processes on Linux, which
+/// are this binary run again with `--type=`: loads libcef.so and hands the
+/// process to CEF, answering its exit code. `None` for the app itself.
+/// Before tokio or GTK: the zygote forks every renderer and refuses to with
+/// a second thread alive.
+#[cfg(target_os = "linux")]
+pub fn subprocess() -> Option<i32> {
+    if !std::env::args().any(|a| a.starts_with("--type=")) {
+        return None;
+    }
+    let Some(framework) = crate::chromium::installed_framework() else {
+        eprintln!("cef: subprocess started with no Chromium on disk");
+        return Some(1);
+    };
+    if let Err(e) = libcef::load(&framework) {
+        eprintln!("cef: {e}");
+        return Some(1);
+    }
+    let _ = api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
+    let args = Args::new();
+    Some(execute_process(Some(args.as_main_args()), None::<&mut App>, std::ptr::null_mut()))
 }
 
 fn path_str(path: &Path) -> CefString {
@@ -384,18 +470,22 @@ fn on_main(f: impl FnOnce() + Send + 'static) -> Result<(), String> {
 
 // --- NSApplication ---------------------------------------------------------
 
+#[cfg(target_os = "macos")]
 static HANDLING_SEND_EVENT: AtomicBool = AtomicBool::new(false);
 
+#[cfg(target_os = "macos")]
 extern "C" fn is_handling_send_event(_this: &AnyObject, _sel: Sel) -> Bool {
     Bool::new(HANDLING_SEND_EVENT.load(Ordering::Relaxed))
 }
 
+#[cfg(target_os = "macos")]
 extern "C" fn set_handling_send_event(_this: &AnyObject, _sel: Sel, value: Bool) {
     HANDLING_SEND_EVENT.store(value.as_bool(), Ordering::Relaxed);
 }
 
 /// The swapped-in `sendEvent:`. Marks the flag around the original, which is
 /// reachable under the selector this was registered as before the swap.
+#[cfg(target_os = "macos")]
 extern "C" fn dray_send_event(this: &AnyObject, _sel: Sel, event: &NSEvent) {
     let was = HANDLING_SEND_EVENT.swap(true, Ordering::Relaxed);
     let _: () = unsafe { msg_send![this, draySendEvent: event] };
@@ -407,6 +497,7 @@ extern "C" fn dray_send_event(this: &AnyObject, _sel: Sel, event: &NSEvent) {
 /// `NSApplication` for it. Tao already subclassed it (`TaoApp`), and the
 /// class is registered before anything here runs, so the methods are added
 /// to that class at runtime and `sendEvent:` is swizzled to wrap Tao's.
+#[cfg(target_os = "macos")]
 unsafe fn patch_nsapp(app: &NSApplication) {
     use objc2::ffi::{
         class_addMethod, class_addProtocol, class_getInstanceMethod, method_exchangeImplementations,
@@ -534,8 +625,25 @@ wrap_app! {
             let is_browser = process_type.map(|p| p.to_string().is_empty()).unwrap_or(true);
             let Some(command_line) = command_line.filter(|_| is_browser) else { return };
             command_line.append_switch(Some(&CefString::from("disable-backgrounding-occluded-windows")));
+            #[cfg(target_os = "macos")]
             if cfg!(debug_assertions) {
                 command_line.append_switch(Some(&CefString::from("use-mock-keychain")));
+            }
+            // Chromium 140+ picks its display backend from the session, so on
+            // a Wayland desktop it would go native and open every tab as a
+            // window of its own: CEF parents into X11 alone. And the cookie
+            // key in a plain file, since the keyring would otherwise ask the
+            // reader to unlock it — the Mac's mock keychain, for every build.
+            #[cfg(target_os = "linux")]
+            {
+                command_line.append_switch_with_value(
+                    Some(&CefString::from("ozone-platform")),
+                    Some(&CefString::from("x11")),
+                );
+                command_line.append_switch_with_value(
+                    Some(&CefString::from("password-store")),
+                    Some(&CefString::from("basic")),
+                );
             }
         }
     }
@@ -714,8 +822,26 @@ fn context_for(session: &str) -> Option<RequestContext> {
     Some(ctx)
 }
 
+/// A tab's window: a child of the frame in the main window (`x11.rs`), made
+/// off its edge since CEF's `hidden` is not honoured on Linux, until
+/// `apply_layout` decides it is the one on screen. Main thread.
+#[cfg(target_os = "linux")]
+fn child_window_info() -> Result<WindowInfo, String> {
+    let layout = LAYOUT.lock().unwrap().as_ref().map(|(_, l)| *l);
+    let (w, h) = layout.map(|l| (l.width, l.height)).unwrap_or((800.0, 600.0));
+    let (parent, width, height) = x11::frame_and_size(w, h).ok_or("no main window")?;
+    let bounds = Rect { x: -20000, y: 0, width, height };
+    // Alloy, not CEF's default Chrome style: Chrome's host window takes
+    // its activation from the root's `_NET_ACTIVE_WINDOW`, which names the
+    // main window, so it ignored every key even holding X's focus. Alloy's
+    // host reads `FocusIn` on its own window and focuses the page from it.
+    let info = WindowInfo { runtime_style: RuntimeStyle::ALLOY, ..WindowInfo::default() };
+    Ok(info.set_as_child(parent, &bounds))
+}
+
 /// A tab's view: a child of the main window, hidden until `apply_layout`
 /// decides it is the one on screen. Main thread.
+#[cfg(target_os = "macos")]
 fn child_window_info() -> Result<WindowInfo, String> {
     let app = APP.get().ok_or("Chromium is not available in this build")?;
     let window = app.get_webview_window("main").ok_or("no main window")?;
@@ -804,6 +930,38 @@ fn apply_layout() {
         }
         warm.iter().copied().collect()
     };
+    #[cfg(target_os = "linux")]
+    for (id, view, browser) in views {
+        let show = shown == Some(id);
+        if show {
+            if let Some(layout) = layout {
+                x11::place(view, layout.x, layout.y, layout.width, layout.height);
+            }
+            if let Some(host) = browser.host() {
+                host.notify_move_or_resize_started();
+            }
+        }
+        let parked = if show { None } else { automation::parked(id) };
+        let hidden = x11::is_hidden(view);
+        if !show && !hidden {
+            x11::refocus_webview(view);
+        }
+        if let Some((w, h)) = parked {
+            x11::park(view, Some((w, h)));
+            x11::set_hidden(view, false);
+        } else if !show && warm.contains(&id) {
+            // At its own size, so coming back is a move and never a relayout.
+            x11::park(view, None);
+            x11::set_hidden(view, false);
+        } else if hidden == show {
+            x11::set_hidden(view, !show);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if shown.is_none() {
+        x11::stow();
+    }
+    #[cfg(target_os = "macos")]
     for (id, view, browser) in views {
         let view: &NSView = unsafe { &*(view as *const NSView) };
         let show = shown == Some(id);
@@ -842,7 +1000,8 @@ fn apply_layout() {
 /// The page sits at the foot of a rounded sheet, and being a native view it
 /// draws over the DOM's own corners, which no CSS clip reaches. Its layer
 /// takes the sheet's radius on the two bottom corners; the top sits under the
-/// URL row and stays square.
+/// URL row and stays square. Mac alone: an X window has no corner radius.
+#[cfg(target_os = "macos")]
 fn round_foot(view: &NSView) {
     /// `kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner`: the bottom two,
     /// since an `NSView`'s layer has its origin at the bottom.
@@ -958,6 +1117,7 @@ fn sweep() {
 ///
 /// Only when the responder is inside *this* view: a `reveal`ed off-screen
 /// tab being put back must not take focus off the presented page.
+#[cfg(target_os = "macos")]
 fn refocus_webview(from: &NSView) {
     let Some(window) = from.window() else { return };
     let holds = window
@@ -976,8 +1136,18 @@ fn refocus_webview(from: &NSView) {
     }
 }
 
+/// Whether X's input focus sits inside one of the session's tab windows.
+/// Main thread only.
+#[cfg(target_os = "linux")]
+fn browser_holds_focus(session: &str) -> bool {
+    let views: Vec<usize> =
+        TABS.lock().unwrap().iter().filter(|t| t.session == session && t.view != 0).map(|t| t.view).collect();
+    views.into_iter().any(x11::holds_focus)
+}
+
 /// Whether the first responder sits inside one of the session's tab views.
 /// Main thread only.
+#[cfg(target_os = "macos")]
 fn browser_holds_focus(session: &str) -> bool {
     let views: Vec<usize> =
         TABS.lock().unwrap().iter().filter(|t| t.session == session && t.view != 0).map(|t| t.view).collect();
@@ -994,6 +1164,7 @@ fn browser_holds_focus(session: &str) -> bool {
 /// delivers the input `dray browser` dispatches: a hidden `NSView` marks the
 /// widget hidden, and a hidden widget drops mouse and key events (measured:
 /// a page listener saw nothing). `apply_layout` puts it back.
+#[cfg(target_os = "macos")]
 fn reveal(id: i32) {
     let view = TABS.lock().unwrap().iter().find(|t| t.id == id).map(|t| t.view).unwrap_or(0);
     if view == 0 {
@@ -1007,6 +1178,45 @@ fn reveal(id: i32) {
     let size = if size.width < 1.0 || size.height < 1.0 { NSSize::new(800.0, 600.0) } else { size };
     view.setFrame(NSRect::new(NSPoint::new(-20000.0, 0.0), size));
     view.setHidden(false);
+}
+
+/// Click-to-focus on X11, which nothing else gives an embedded window (see
+/// `x11::watch_presses`): a press on the page hands the shown tab the
+/// keyboard, and one anywhere else in the window takes it back from a tab
+/// holding it. Main thread.
+#[cfg(target_os = "linux")]
+fn pressed() {
+    match x11::under_pointer() {
+        x11::Pressed::Page => {
+            let Some(id) = shown_tab() else { return };
+            let view = TABS.lock().unwrap().iter().find(|t| t.id == id).map_or(0, |t| t.view);
+            if view != 0 && !x11::holds_focus(view) {
+                x11::focus_page(view);
+            }
+            if let Some(host) = browser_of(id).and_then(|b| b.host()) {
+                host.set_focus(1);
+            }
+        }
+        x11::Pressed::App => {
+            let views: Vec<usize> = TABS.lock().unwrap().iter().filter(|t| t.view != 0).map(|t| t.view).collect();
+            if views.into_iter().any(x11::holds_focus) {
+                x11::focus_app();
+            }
+        }
+        x11::Pressed::Elsewhere => {}
+    }
+}
+
+/// `reveal` on X11, where an unmapped window drops input the same way.
+#[cfg(target_os = "linux")]
+fn reveal(id: i32) {
+    let view = TABS.lock().unwrap().iter().find(|t| t.id == id).map(|t| t.view).unwrap_or(0);
+    if view == 0 || !x11::is_hidden(view) {
+        return;
+    }
+    let size = x11::size(view).filter(|&(w, h)| w > 1 && h > 1).unwrap_or((800, 600));
+    x11::park(view, Some(size));
+    x11::set_hidden(view, false);
 }
 
 wrap_client! {
@@ -1172,6 +1382,11 @@ wrap_life_span_handler! {
                 .and_then(|b| b.host())
                 .map(|h| h.window_handle() as usize)
                 .unwrap_or(0);
+            #[cfg(target_os = "linux")]
+            if view != 0 {
+                x11::destroy(view);
+            }
+            #[cfg(target_os = "macos")]
             if view != 0 {
                 let view: &NSView = unsafe { &*(view as *const NSView) };
                 // A removed responder leaves the window holding focus itself,
@@ -1295,6 +1510,12 @@ mod string_list_tests {
     use super::*;
 
     /// Needs the framework loaded, found the way the build found it: `CEF_PATH`.
+    #[cfg(target_os = "linux")]
+    fn load_framework() {
+        libcef::load(&sys::get_cef_dir().expect("CEF not found")).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
     fn load_framework() {
         use std::os::unix::ffi::OsStrExt;
         let dir = sys::get_cef_dir().expect("CEF not found").join(sys::FRAMEWORK_PATH);
@@ -1672,6 +1893,12 @@ struct ForwardedKey {
     ctrl: bool,
 }
 
+/// The platform's own key event, which CEF hands over beside its own.
+#[cfg(target_os = "macos")]
+type OsEvent<'a> = *mut u8;
+#[cfg(target_os = "linux")]
+type OsEvent<'a> = Option<&'a mut sys::_XEvent>;
+
 wrap_keyboard_handler! {
     struct DrayKeyboard;
 
@@ -1680,19 +1907,28 @@ wrap_keyboard_handler! {
             &self,
             browser: Option<&mut Browser>,
             event: Option<&KeyEvent>,
-            _os_event: *mut u8,
+            _os_event: OsEvent<'_>,
             _is_keyboard_shortcut: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
             let Some(event) = event else { return 0 };
             let raw_down = sys::cef_key_event_type_t::from(event.type_)
                 == sys::cef_key_event_type_t::KEYEVENT_RAWKEYDOWN;
-            let meta = event.modifiers & 128 != 0;
+            // The app's accelerator is ⌘ on a Mac and Ctrl elsewhere, and
+            // `useHotkey` takes either, so Linux reads Ctrl as the ⌘ here.
+            #[cfg(target_os = "macos")]
+            let (meta, ctrl) = (event.modifiers & 128 != 0, event.modifiers & 4 != 0);
+            #[cfg(target_os = "linux")]
+            let (meta, ctrl) = (event.modifiers & 4 != 0, false);
             if !raw_down || !meta {
                 return 0;
             }
             let shift = event.modifiers & 2 != 0;
-            let ctrl = event.modifiers & 4 != 0;
             let alt = event.modifiers & 8 != 0;
+            // Ctrl+←/→ moves a word in a Linux text field, and no app chord
+            // takes it, so the page keeps it.
+            if cfg!(target_os = "linux") && !shift && !alt && matches!(event.windows_key_code, 0x25 | 0x27) {
+                return 0;
+            }
             let ch = char::from_u32(event.unmodified_character as u32)
                 .unwrap_or('\0')
                 .to_ascii_lowercase();
