@@ -124,6 +124,11 @@ transcribe-cpp = { version = "0.4", default-features = false, features = [
 # leaves the CPU. And a static build tunes ggml to the *build* machine's CPU,
 # where the modules ship one CPU variant per x86 tier and pick at runtime.
 [target.'cfg(target_os = "linux")'.dependencies]
+# Capture through PulseAudio where its socket answers, PipeWire's included:
+# `default_host` then prefers it, and a source is named by its description
+# ("Built-in Audio Analog Stereo"). ALSA alone lists its plugin hints as
+# devices — "Rate Converter Plugin Using Speex Resampler" among them.
+cpal = { version = "0.18", features = ["pulseaudio"], optional = true }
 transcribe-cpp = { version = "0.4", default-features = false, features = [
   "vulkan",
   "dynamic-backends",

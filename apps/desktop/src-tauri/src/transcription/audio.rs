@@ -48,6 +48,7 @@ pub fn list_input_devices() -> Result<Vec<InputDevice>> {
     let devices = host
         .input_devices()
         .context("could not enumerate input devices")?
+        .filter(|d| !is_monitor(d))
         .filter_map(|d| device_name(&d))
         .map(|name| InputDevice {
             is_default: Some(&name) == default.as_ref(),
@@ -63,6 +64,61 @@ pub fn list_input_devices() -> Result<Vec<InputDevice>> {
 /// older builds still match.
 fn device_name(device: &cpal::Device) -> Option<String> {
     device.description().ok().map(|d| d.name().to_string())
+}
+
+/// Sets `PULSE_SERVER` from Pulse's own client config where the environment
+/// names none. Call before any thread reads the environment.
+///
+/// cpal's PulseAudio host speaks the protocol itself and reads only the
+/// environment, where libpulse — so `pactl`, the ALSA plugin and every other
+/// app — also honours `default-server` in `client.conf`. Measured on a machine
+/// whose config named a second server: capture reached the idle one, found no
+/// microphone, while the mute (`pactl`) reached the real one.
+#[cfg(target_os = "linux")]
+pub fn adopt_pulse_server() {
+    if std::env::var_os("PULSE_SERVER").is_some() {
+        return;
+    }
+    let user = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::home_dir().map(|h| h.join(".config")))
+        .map(|c| c.join("pulse/client.conf"));
+    let mut files: Vec<std::path::PathBuf> = user.into_iter().collect();
+    // Drop-ins override the main file, so they are asked first.
+    if let Ok(dir) = std::fs::read_dir("/etc/pulse/client.conf.d") {
+        let mut dropins: Vec<_> = dir.flatten().map(|e| e.path()).collect();
+        dropins.sort();
+        files.extend(dropins.into_iter().rev());
+    }
+    files.push("/etc/pulse/client.conf".into());
+
+    let server = files
+        .iter()
+        .filter_map(|f| std::fs::read_to_string(f).ok())
+        .find_map(|text| default_server(&text));
+    if let Some(server) = server {
+        std::env::set_var("PULSE_SERVER", server);
+    }
+}
+
+/// The first `unix:` address under `default-server`, the one shape the Rust
+/// client can dial.
+#[cfg(any(target_os = "linux", test))]
+fn default_server(conf: &str) -> Option<String> {
+    conf.lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with([';', '#']))
+        .filter_map(|l| l.split_once('='))
+        .filter(|(key, _)| key.trim() == "default-server")
+        .flat_map(|(_, value)| value.split_whitespace())
+        .find(|s| s.starts_with("unix:"))
+        .map(str::to_string)
+}
+
+/// A PulseAudio sink's monitor, which records what the speakers play. Listed
+/// as an input, and never the microphone anybody is looking for.
+fn is_monitor(device: &cpal::Device) -> bool {
+    device.id().is_ok_and(|id| id.to_string().ends_with(".monitor"))
 }
 
 /// Resolves a stored device name to a live device, falling back to the system
@@ -718,6 +774,14 @@ mod tests {
     fn an_unreadable_output_reads_as_nothing() {
         assert_eq!(parse_muted("missing value"), None);
         assert_eq!(parse_muted(""), None);
+    }
+
+    #[test]
+    fn pulse_default_server_is_read_from_client_conf() {
+        let conf = "; default-server = unix:/commented\nautospawn = no\ndefault-server = tcp:host unix:/run/a/native\n";
+        assert_eq!(default_server(conf).as_deref(), Some("unix:/run/a/native"));
+        assert_eq!(default_server("autospawn = no"), None);
+        assert_eq!(default_server("default-server = tcp:somewhere"), None);
     }
 
     #[test]
