@@ -213,29 +213,27 @@ fn undo_mount_entries(
     undo
 }
 
-/// Marks every descriptor this process holds into an AppImage mount
-/// close-on-exec. The runtime holds its mountpoint open (fd 1023) and AppRun
-/// hands it down without the flag, so every child inherits it and keeps the
-/// mount alive: measured, a relaunched app pinned the replaced AppImage's mount
-/// after the old app had exited. Call before anything is spawned.
+/// Marks every descriptor this process inherited close-on-exec, when it runs
+/// from an AppImage. The runtime hands the app its keepalive pipe and its
+/// mountpoint (fds 3 and 1023) without the flag, and it unmounts only once
+/// every holder is gone — so a relaunched app, the server and every agent
+/// kept the replaced AppImage's mount alive, measured. Nothing spawned from
+/// here needs an inherited descriptor, and what Rust opens has the flag
+/// already. Call before anything is spawned.
 #[cfg(all(target_os = "linux", feature = "desktop"))]
 pub fn appimage_cloexec() {
-    let mount = std::env::temp_dir().join(".mount_");
+    if appimage().is_none() {
+        return;
+    }
     let Ok(fds) = std::fs::read_dir("/proc/self/fd") else {
         return;
     };
-    for entry in fds.flatten() {
-        let Some(fd) = entry.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else {
-            continue;
-        };
-        let into_mount = std::fs::read_link(entry.path())
-            .is_ok_and(|target| target.to_string_lossy().starts_with(&*mount.to_string_lossy()));
-        if into_mount {
-            unsafe {
-                let flags = libc::fcntl(fd, libc::F_GETFD);
-                if flags >= 0 {
-                    libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
-                }
+    let fds: Vec<i32> = fds.flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).collect();
+    for fd in fds.into_iter().filter(|fd| *fd > 2) {
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 {
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
             }
         }
     }
