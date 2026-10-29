@@ -1,7 +1,7 @@
 import { GitHubGlyph } from "@/components/GitHubGlyph";
 import { Wordmark } from "@/components/Wordmark";
 import { XGlyph } from "@/components/XGlyph";
-import { COMPANY, DOWNLOAD, FEEDBACK, REPO, SPONSOR } from "@/lib/links";
+import { COMPANY, DOWNLOAD, DOWNLOAD_LINUX, FEEDBACK, REPO, SPONSOR } from "@/lib/links";
 
 /// Every link here goes somewhere real: a route on this site, the docs, or
 /// the same addresses the nav and the CTA already use.
@@ -10,6 +10,7 @@ const COLUMNS: { title: string; links: { label: string; href: string; out?: bool
     title: "Product",
     links: [
       { label: "Download for macOS", href: DOWNLOAD, out: true },
+      { label: "Download for Linux", href: DOWNLOAD_LINUX, out: true },
       { label: "Run it on Linux", href: "/docs/server" },
       { label: "What's new", href: "/changelog" },
     ],

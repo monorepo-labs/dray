@@ -154,7 +154,29 @@ async fn write_port_file(home: &Path, port: u16) -> Result<()> {
 /// rebuilds. The server writes the one it started from under its port; the
 /// app compares it with the file now to tell a server running old code.
 pub fn exe_stamp() -> Option<String> {
-    stamp_of(&std::env::current_exe().ok()?)
+    stamp_of(&executable()?)
+}
+
+/// The file this process was started from. An AppImage's binary runs out of a
+/// FUSE mount that lives only as long as the app, so the server is started from
+/// the AppImage itself and judged by its stamp — the file an update replaces.
+pub fn executable() -> Option<PathBuf> {
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
+    if let Some(image) = appimage() {
+        return Some(image);
+    }
+    std::env::current_exe().ok()
+}
+
+/// `$APPIMAGE`, only while this binary really runs from an AppImage's mount —
+/// Tauri's own test. A terminal started from some other AppImage hands the
+/// variable down to anything run in it.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+fn appimage() -> Option<PathBuf> {
+    let image = std::env::var_os("APPIMAGE").filter(|v| !v.is_empty())?;
+    let mount = std::env::temp_dir().join(".mount_");
+    let exe = std::env::current_exe().ok()?;
+    exe.to_string_lossy().starts_with(&*mount.to_string_lossy()).then(|| PathBuf::from(image))
 }
 
 fn stamp_of(path: &Path) -> Option<String> {

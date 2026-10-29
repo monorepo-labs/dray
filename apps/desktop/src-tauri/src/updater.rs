@@ -279,7 +279,9 @@ async fn install(app: AppHandle) -> Result<(), InstallError> {
 /// want a handshake from the child.
 ///
 /// Falling through to the executable covers a dev build, which is a bare Mach-O
-/// with no bundle around it.
+/// with no bundle around it, and Linux, where `current_binary` answers the
+/// AppImage the update was just written over rather than the binary inside the
+/// old one's mount.
 fn relaunch(app: &AppHandle) -> Result<(), String> {
     let exe = tauri::process::current_binary(&app.env())
         .map_err(|e| format!("could not resolve this binary: {e}"))?;

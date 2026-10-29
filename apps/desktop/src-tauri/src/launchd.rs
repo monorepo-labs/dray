@@ -84,7 +84,7 @@ static PENDING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// exception and moves at once: that server keeps its port in the other home,
 /// so the app could never reach it to ask.
 pub async fn ensure() -> Result<()> {
-    let exe = std::env::current_exe().context("no path to this binary")?;
+    let exe = crate::serve::executable().context("no path to this binary")?;
     let log = crate::store::get_home_app_dir().await?.join(crate::serve::SERVER_LOG);
     if as_child() {
         return spawn_dev(&exe, &log);
