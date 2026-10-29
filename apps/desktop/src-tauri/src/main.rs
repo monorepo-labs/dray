@@ -3,10 +3,21 @@
 
 #[tokio::main]
 async fn main() {
+    #[cfg(target_os = "linux")]
+    ade_lib::serve::appimage_cloexec();
     // The Mac's background server: this same binary, run by launchd with no
     // window. Read before Tauri is touched, so no `NSApplication` exists and
     // macOS never counts it as the app running. See MAC-SERVER-PLAN.md.
     if std::env::args().nth(1).as_deref() == Some("--serve") {
+        // Headless, so it needs none of what AppRun added for GTK, and every
+        // agent it starts would otherwise inherit the bundle's libraries.
+        #[cfg(target_os = "linux")]
+        for (key, value) in ade_lib::serve::appimage_env_undo() {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
         ade_lib::analytics::install_panic_hook();
         if let Err(e) = ade_lib::serve::run_mac().await {
             eprintln!("dray --serve: {e:#}");

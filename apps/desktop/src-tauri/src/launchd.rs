@@ -84,7 +84,7 @@ static PENDING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// exception and moves at once: that server keeps its port in the other home,
 /// so the app could never reach it to ask.
 pub async fn ensure() -> Result<()> {
-    let exe = std::env::current_exe().context("no path to this binary")?;
+    let exe = crate::serve::executable().context("no path to this binary")?;
     let log = crate::store::get_home_app_dir().await?.join(crate::serve::SERVER_LOG);
     if as_child() {
         return spawn_dev(&exe, &log);
@@ -182,14 +182,27 @@ fn spawn_dev(exe: &std::path::Path, log: &std::path::Path) -> Result<()> {
     let out = std::fs::OpenOptions::new().create(true).append(true).open(log)?;
     // Its own process group, so Ctrl-C on `pnpm tauri dev` leaves it running
     // the way quitting the release app does.
-    Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .arg("--serve")
         .stdin(std::process::Stdio::null())
         .stdout(out.try_clone()?)
         .stderr(out)
-        .process_group(0)
-        .spawn()
-        .context("could not start the dev server")?;
+        .process_group(0);
+    // Off the app's AppImage mount, which goes when the app quits.
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(dir) = crate::serve::appimage_safe_cwd() {
+            command.current_dir(dir);
+        }
+        for (key, value) in crate::serve::appimage_env_undo() {
+            match value {
+                Some(value) => command.env(key, value),
+                None => command.env_remove(key),
+            };
+        }
+    }
+    command.spawn().context("could not start the dev server")?;
     Ok(())
 }
 

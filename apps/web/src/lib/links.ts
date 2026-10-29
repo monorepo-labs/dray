@@ -6,6 +6,9 @@ export const REPO = "https://github.com/monorepo-labs/dray";
 /// it alone, the beta channel being the updater's and not this page's.
 export const DOWNLOAD = "https://downloads.drayhq.com/Dray_universal.dmg";
 
+/// The Linux app, x86_64, moved beside the dmg by the same release step.
+export const DOWNLOAD_LINUX = "https://downloads.drayhq.com/Dray_amd64.AppImage";
+
 /// The server install. `public/install.sh` resolves the newest `cli-v*` tag
 /// itself, so this line never needs a version in it.
 export const INSTALL_LINE = "curl -fsSL https://www.drayhq.com/install.sh | sh";

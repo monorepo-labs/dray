@@ -154,7 +154,108 @@ async fn write_port_file(home: &Path, port: u16) -> Result<()> {
 /// rebuilds. The server writes the one it started from under its port; the
 /// app compares it with the file now to tell a server running old code.
 pub fn exe_stamp() -> Option<String> {
-    stamp_of(&std::env::current_exe().ok()?)
+    stamp_of(&executable()?)
+}
+
+/// The file this process was started from. An AppImage's binary runs out of a
+/// FUSE mount that lives only as long as the app, so the server is started from
+/// the AppImage itself and judged by its stamp — the file an update replaces.
+pub fn executable() -> Option<PathBuf> {
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
+    if let Some(image) = appimage() {
+        return Some(image);
+    }
+    std::env::current_exe().ok()
+}
+
+/// `$APPIMAGE`, only while this binary really runs from an AppImage's mount —
+/// Tauri's own test. A terminal started from some other AppImage hands the
+/// variable down to anything run in it.
+/// The environment changes that take back what an AppImage's AppRun added:
+/// every entry pointing into an AppImage mount, dropped from every variable,
+/// and a variable left with nothing removed. `None` means remove.
+///
+/// AppRun prepends its mount to `PATH`, `LD_LIBRARY_PATH`, GStreamer's and
+/// GTK's paths and more, and keeps no copy of what was there. Inherited as is,
+/// an agent's `git` loads the bundle's libraries, and a relaunched app reads
+/// the old mount's — which pins that mount, and the replaced AppImage under
+/// it, for as long as the new one runs. The app itself needs them, so this is
+/// for what it spawns, and for the headless server's own.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+pub fn appimage_env_undo() -> Vec<(std::ffi::OsString, Option<std::ffi::OsString>)> {
+    use std::os::unix::ffi::OsStringExt;
+    let mount = std::env::temp_dir().join(".mount_").into_os_string().into_vec();
+    undo_mount_entries(std::env::vars_os(), &mount)
+}
+
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+fn undo_mount_entries(
+    vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    mount: &[u8],
+) -> Vec<(std::ffi::OsString, Option<std::ffi::OsString>)> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let mut undo = Vec::new();
+    for (key, value) in vars {
+        if key == "APPIMAGE" {
+            continue;
+        }
+        let bytes = value.as_bytes();
+        if !bytes.windows(mount.len()).any(|w| w == mount) {
+            continue;
+        }
+        let kept: Vec<&[u8]> = bytes
+            .split(|b| *b == b':')
+            .filter(|entry| !entry.is_empty() && !entry.starts_with(mount))
+            .collect();
+        let value = (!kept.is_empty()).then(|| std::ffi::OsString::from_vec(kept.join(&b':')));
+        undo.push((key, value));
+    }
+    undo
+}
+
+/// Marks every descriptor this process inherited close-on-exec, when it runs
+/// from an AppImage. The runtime hands the app its keepalive pipe and its
+/// mountpoint (fds 3 and 1023) without the flag, and it unmounts only once
+/// every holder is gone — so a relaunched app, the server and every agent
+/// kept the replaced AppImage's mount alive, measured. Nothing spawned from
+/// here needs an inherited descriptor, and what Rust opens has the flag
+/// already. Call before anything is spawned.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+pub fn appimage_cloexec() {
+    if appimage().is_none() {
+        return;
+    }
+    let Ok(fds) = std::fs::read_dir("/proc/self/fd") else {
+        return;
+    };
+    let fds: Vec<i32> = fds.flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).collect();
+    for fd in fds.into_iter().filter(|fd| *fd > 2) {
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 {
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
+        }
+    }
+}
+
+/// Home, where this process runs inside an AppImage mount: AppRun starts the
+/// app there, and a child keeping it as its cwd keeps the mount busy.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+pub fn appimage_safe_cwd() -> Option<PathBuf> {
+    let mount = std::env::temp_dir().join(".mount_");
+    let cwd = std::env::current_dir().ok()?;
+    cwd.to_string_lossy()
+        .starts_with(&*mount.to_string_lossy())
+        .then(|| std::env::home_dir().unwrap_or_else(|| PathBuf::from("/")))
+}
+
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+fn appimage() -> Option<PathBuf> {
+    let image = std::env::var_os("APPIMAGE").filter(|v| !v.is_empty())?;
+    let mount = std::env::temp_dir().join(".mount_");
+    let exe = std::env::current_exe().ok()?;
+    exe.to_string_lossy().starts_with(&*mount.to_string_lossy()).then(|| PathBuf::from(image))
 }
 
 fn stamp_of(path: &Path) -> Option<String> {
@@ -1357,6 +1458,33 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Shapes measured off a real AppImage's environment: AppRun prepends its
+    /// mount and appends what was there, a hook replaces a value outright, and
+    /// a variable that was unset comes back as the mount alone.
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
+    #[test]
+    fn appimage_entries_are_taken_back_out() {
+        use std::ffi::OsString;
+        let m = "/tmp/.mount_Dray.Ab";
+        let vars = [
+            ("PATH", format!("{m}/usr/bin/:{m}/usr/sbin/:/usr/local/bin:/usr/bin")),
+            ("LD_LIBRARY_PATH", format!("{m}/usr/lib/:{m}/usr/lib/x86_64-linux-gnu/:")),
+            ("GTK_PATH", format!("{m}//usr/lib/gtk-3.0")),
+            ("APPIMAGE", "/home/me/Dray.AppImage".into()),
+            ("HOME", "/home/me".into()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)));
+        let undo = undo_mount_entries(vars, b"/tmp/.mount_");
+        let get = |k: &str| undo.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
+        assert_eq!(get("PATH"), Some(Some("/usr/local/bin:/usr/bin".into())));
+        assert_eq!(get("LD_LIBRARY_PATH"), Some(None));
+        assert_eq!(get("GTK_PATH"), Some(None));
+        // The server's own stamp reads it, and it names no mount.
+        assert_eq!(get("APPIMAGE"), None);
+        assert_eq!(get("HOME"), None);
+    }
 
     #[test]
     fn a_second_start_keeps_the_token() {
