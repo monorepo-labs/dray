@@ -3,6 +3,8 @@
 
 #[tokio::main]
 async fn main() {
+    #[cfg(target_os = "linux")]
+    ade_lib::serve::appimage_cloexec();
     // The Mac's background server: this same binary, run by launchd with no
     // window. Read before Tauri is touched, so no `NSApplication` exists and
     // macOS never counts it as the app running. See MAC-SERVER-PLAN.md.

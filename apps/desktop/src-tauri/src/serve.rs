@@ -213,6 +213,34 @@ fn undo_mount_entries(
     undo
 }
 
+/// Marks every descriptor this process holds into an AppImage mount
+/// close-on-exec. The runtime holds its mountpoint open (fd 1023) and AppRun
+/// hands it down without the flag, so every child inherits it and keeps the
+/// mount alive: measured, a relaunched app pinned the replaced AppImage's mount
+/// after the old app had exited. Call before anything is spawned.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+pub fn appimage_cloexec() {
+    let mount = std::env::temp_dir().join(".mount_");
+    let Ok(fds) = std::fs::read_dir("/proc/self/fd") else {
+        return;
+    };
+    for entry in fds.flatten() {
+        let Some(fd) = entry.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else {
+            continue;
+        };
+        let into_mount = std::fs::read_link(entry.path())
+            .is_ok_and(|target| target.to_string_lossy().starts_with(&*mount.to_string_lossy()));
+        if into_mount {
+            unsafe {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags >= 0 {
+                    libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+                }
+            }
+        }
+    }
+}
+
 /// Home, where this process runs inside an AppImage mount: AppRun starts the
 /// app there, and a child keeping it as its cwd keeps the mount busy.
 #[cfg(all(target_os = "linux", feature = "desktop"))]
