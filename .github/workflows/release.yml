@@ -217,18 +217,109 @@ jobs:
           put "$(ls "$BUNDLE"/macos/*.app.tar.gz)" "${GITHUB_REF_NAME}/Dray_universal.app.tar.gz"
           echo "dmg=$(basename "$DMG")" >> "$GITHUB_OUTPUT"
 
+  # The Linux app, as one AppImage. Beside the Mac build rather than inside
+  # it, so nothing there moves; the manifest job puts its entry in.
+  #
+  # 22.04 because an AppImage carries no glibc of its own: it runs on the
+  # distros whose glibc is at least the one it was built against, and 24.04's
+  # would refuse Debian 12 and Ubuntu 22.04 outright.
+  #
+  # No cache. warm-cache.yml warms the Mac's, and a tag build's own cache is
+  # unreadable to the next tag (see there), so this compiles cold — still
+  # inside the Mac job's notarization wait.
+  linux:
+    runs-on: ubuntu-22.04
+    outputs:
+      appimage: ${{ steps.mirror.outputs.appimage }}
+      signature: ${{ steps.mirror.outputs.signature }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # WebKitGTK and the tray for Tauri; ALSA and cmake for dictation's
+      # engine, which compiles here though the app hides it off a Mac; FUSE to
+      # run linuxdeploy, which the bundler fetches as an AppImage itself.
+      # GStreamer's plugins are copied into the AppImage from here
+      # (`bundleMediaFramework`): without them the WebProcess dies on the
+      # first <audio> the page makes, and the window stays black.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev libasound2-dev cmake file patchelf libfuse2 \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pnpm install --frozen-lockfile
+
+      # `createUpdaterArtifacts` signs the AppImage itself into a `.sig`
+      # beside it, with the same minisign key as the Mac's — the one public
+      # key in tauri.conf.json verifies both. No `cef`: the Linux browser is
+      # its own piece of work, and turns up here as a feature flag.
+      - run: pnpm tauri build --bundles appimage
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+          POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
+
+      # The same mirror as the Mac's. The signature rides out as an output
+      # for the manifest; the file goes to the release from there, since the
+      # Mac job is what creates the release and may not have yet.
+      - name: Mirror to R2
+        id: mirror
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          : "${AWS_ACCESS_KEY_ID:?}" "${R2_ACCOUNT_ID:?}" "${R2_BUCKET:?}"
+          IMAGE="$(ls apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage)"
+          test -s "$IMAGE.sig"
+          aws s3 cp "$IMAGE" "s3://${R2_BUCKET}/${GITHUB_REF_NAME}/$(basename "$IMAGE")" \
+            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --cache-control "public, max-age=31536000, immutable"
+          echo "appimage=$(basename "$IMAGE")" >> "$GITHUB_OUTPUT"
+          echo "signature=$(cat "$IMAGE.sig")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          retention-days: 1
+
   # The manifests live on a branch rather than in the release, because
   # `/releases/latest/` skips prereleases — so beta would have no fixed URL.
   # GitHub Pages serves this branch; the artifact URLs inside are rewritten
   # onto the R2 mirror the build job uploaded to.
+  #
+  # A failed Linux build holds back nothing of the Mac's: the manifest is
+  # written without a Linux entry, so Linux readers stay where they are, and
+  # the red job says why.
   manifest:
-    needs: build
+    needs: [build, linux]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: updates
           fetch-depth: 1
+
+      - if: needs.linux.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: appimage
+          path: ${{ runner.temp }}/appimage
 
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -241,6 +332,9 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ vars.R2_BUCKET }}
           DMG: ${{ needs.build.outputs.dmg }}
+          APPIMAGE: ${{ needs.linux.outputs.appimage }}
+          APPIMAGE_SIG: ${{ needs.linux.outputs.signature }}
+          APPIMAGE_DIR: ${{ runner.temp }}/appimage
         run: |
           set -euo pipefail
           : "${DOWNLOADS_URL:?}" "${DMG:?}"
@@ -259,6 +353,20 @@ jobs:
           if jq -e '[.platforms[].url] | any(startswith("https://github.com/"))' manifest.json >/dev/null; then
             echo "manifest still points at GitHub" >&2
             exit 1
+          fi
+
+          # The updater asks for `linux-x86_64-appimage` first and then
+          # `linux-x86_64`; both name the one file. Attached to the release
+          # here, where the release is known to exist.
+          if [ -n "${APPIMAGE:-}" ]; then
+            : "${APPIMAGE_SIG:?}"
+            gh release upload "${GITHUB_REF_NAME}" "${APPIMAGE_DIR}/${APPIMAGE}" \
+              --repo "${GITHUB_REPOSITORY}" --clobber
+            jq --arg url "${DOWNLOADS_URL%/}/${GITHUB_REF_NAME}/${APPIMAGE}" --arg sig "${APPIMAGE_SIG}" \
+               '.platforms["linux-x86_64"] = {signature: $sig, url: $url}
+                | .platforms["linux-x86_64-appimage"] = {signature: $sig, url: $url}' \
+               manifest.json > manifest.tmp
+            mv manifest.tmp manifest.json
           fi
 
           # Writes the release over a channel manifest unless that would move
@@ -318,4 +426,11 @@ jobs:
               --metadata-directive REPLACE \
               --content-type application/x-apple-diskimage \
               --cache-control "public, max-age=300"
+            if [ -n "${APPIMAGE:-}" ]; then
+              aws s3 cp "s3://${R2_BUCKET}/${GITHUB_REF_NAME}/${APPIMAGE}" "s3://${R2_BUCKET}/Dray_amd64.AppImage" \
+                --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+                --metadata-directive REPLACE \
+                --content-type application/vnd.appimage \
+                --cache-control "public, max-age=300"
+            fi
           fi
