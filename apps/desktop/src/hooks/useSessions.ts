@@ -2314,13 +2314,14 @@ asksBySessionRef.current = asksBySession;
 /// Appends what a session's log gained since `held` — what the socket to a
 /// `dray-serve` missed while down, or what a kept transcript missed while
 /// evicted. Deltas are not logged and need nothing, being previews of what
-/// this delivers.
+/// this delivers. Answers false where the server no longer has the session.
 const catchUp = async (
   sessionId: string,
   held = sessionsRef.current.find((s) => s.sessionId === sessionId)?.events ?? [],
 ) => {
   const fresh = (await newSince(sessionId, held)) ?? (await missedFromTail(sessionId, held));
-  if (!fresh?.length) return;
+  if (!fresh) return false;
+  if (!fresh.length) return true;
 
   setSessions((prev) =>
     prev.map((s) => {
@@ -2335,6 +2336,7 @@ const catchUp = async (
       prev[sessionId]?.length ? { ...prev, [sessionId]: prev[sessionId].slice(flushed) } : prev,
     );
   }
+  return true;
 };
 
 /// The events logged after the newest one `held` names, asked of the server
@@ -2510,7 +2512,18 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
     if (touch) lastViewedRef.current.set(sessionId, Date.now());
     const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
     upsertSession(item ? { ...copy, ...item } : copy);
-    catchUp(sessionId, copy.events).catch((e) => console.error("could not catch up", sessionId, e));
+    catchUp(sessionId, copy.events)
+      .then((found) => {
+        if (found) return;
+        // Deleted on the server while kept: the copy is all that is left of
+        // it, and drawing it would resume a session that is gone.
+        setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+        if (selectionRequestRef.current !== sessionId) return;
+        selectionRequestRef.current = null;
+        setSelectedSessionId(null);
+        setError("Session not found.");
+      })
+      .catch((e) => console.error("could not catch up", sessionId, e));
     evictSessionsRef.current();
     return Promise.resolve(true);
   }
