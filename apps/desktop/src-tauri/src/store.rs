@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -1717,8 +1718,23 @@ async fn read_page(
     file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
     end: u64,
     turns: u32,
-    mut chunk: u64,
+    chunk: u64,
 ) -> Result<SessionPage> {
+    let cut = |buf: &[u8], at_top: bool| turn_cut(buf, at_top, turns.max(1)).or(at_top.then_some(0));
+    let (events, begins) = read_back(file, end, chunk, cut).await?.unwrap_or_default();
+
+    Ok(SessionPage { events, older_before: (begins > 0).then_some(begins) })
+}
+
+/// Reads backwards from byte `end` in doubling chunks until `cut` names where
+/// in what is in hand to start, and parses only from there. `None` where `cut`
+/// finds nothing all the way to the top.
+async fn read_back(
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    end: u64,
+    mut chunk: u64,
+    cut: impl Fn(&[u8], bool) -> Option<usize>,
+) -> Result<Option<(Vec<AgentEvent>, u64)>> {
     use std::io::SeekFrom;
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
@@ -1733,11 +1749,11 @@ async fn read_page(
         buf = head;
         start = from;
         chunk *= 2;
-        if let Some(cut) = turn_cut(&buf, start == 0, turns.max(1)) {
+        if let Some(cut) = cut(&buf, start == 0) {
             break cut;
         }
         if start == 0 {
-            break 0;
+            return Ok(None);
         }
     };
 
@@ -1747,16 +1763,14 @@ async fn read_page(
         .map(serde_json::from_str::<AgentEvent>)
         .collect::<Result<Vec<_>, _>>()
         .context("malformed session file")?;
-    let begins = start + cut as u64;
 
-    Ok(SessionPage { events, older_before: (begins > 0).then_some(begins) })
+    Ok(Some((events, start + cut as u64)))
 }
 
-/// Where in `buf` the `turns`-th newest turn opens, walking lines from the end.
-/// `None` until that many are in hand: the first line is only known whole where
-/// `at_top` says `buf` starts the file.
-fn turn_cut(buf: &[u8], at_top: bool, turns: u32) -> Option<usize> {
-    let mut found = 0;
+/// The newest whole line in `buf` that `matches`, as its start and its end
+/// past the newline, walking from the end. The first line is only known whole
+/// where `at_top` says `buf` starts the file.
+fn newest_line(buf: &[u8], at_top: bool, mut matches: impl FnMut(&[u8]) -> bool) -> Option<(usize, usize)> {
     let mut end = buf.len();
     while end > 0 {
         let body_end = if buf[end - 1] == b'\n' { end - 1 } else { end };
@@ -1765,15 +1779,62 @@ fn turn_cut(buf: &[u8], at_top: bool, turns: u32) -> Option<usize> {
             None if at_top => 0,
             None => return None,
         };
-        if opens_turn(&buf[start..body_end]) {
-            found += 1;
-            if found == turns {
-                return Some(start);
-            }
+        if matches(&buf[start..body_end]) {
+            return Some((start, end));
         }
         end = start;
     }
     None
+}
+
+/// Where in `buf` the `turns`-th newest turn opens, walking lines from the end.
+/// `None` until that many are in hand.
+fn turn_cut(buf: &[u8], at_top: bool, turns: u32) -> Option<usize> {
+    let mut found = 0;
+    newest_line(buf, at_top, |line| {
+        found += opens_turn(line) as u32;
+        found == turns
+    })
+    .map(|(start, _)| start)
+}
+
+/// Just past the newest line whose event id is in `held`.
+fn after_held(buf: &[u8], at_top: bool, held: &HashSet<String>) -> Option<usize> {
+    #[derive(Deserialize)]
+    struct Line {
+        id: String,
+    }
+    newest_line(buf, at_top, |line| {
+        serde_json::from_slice::<Line>(line).is_ok_and(|line| held.contains(&line.id))
+    })
+    .map(|(_, end)| end)
+}
+
+/// Everything logged after the newest event in `held`, for a client that kept
+/// a copy of the transcript and wants only what is new. `None` where no line
+/// names one — nothing held was ever logged — and the client reads the tail
+/// instead.
+///
+/// Keyed on event ids rather than a byte offset: a kept copy goes on taking
+/// live events long after the read that gave it an offset, so an offset would
+/// re-send all of those, where the ids the copy ends on say exactly where it
+/// stops. Never `seq`, which a subagent restarts.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn get_session_since(session_id: &str, after: Vec<String>) -> Result<Option<Vec<AgentEvent>>, Fail> {
+    Ok(read_since(session_id, after.into_iter().collect()).await?)
+}
+
+async fn read_since(session_id: &str, held: HashSet<String>) -> Result<Option<Vec<AgentEvent>>> {
+    let path = get_session_path(session_id).await?;
+    let mut file = match fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).context("could not open session file"),
+    };
+    let len = file.metadata().await?.len();
+    let found = read_back(&mut file, len, 64 * 1024, |buf, at_top| after_held(buf, at_top, &held)).await?;
+
+    Ok(found.map(|(events, _)| events))
 }
 
 /// A main-thread prompt that is not queued — the cut `buildTranscript` makes,
@@ -3219,5 +3280,29 @@ mod page_tests {
 
         assert_eq!(pages, 3);
         assert_eq!(seqs, (0..10).collect::<Vec<_>>());
+    }
+
+    /// A kept copy gets back what follows the newest event it holds, whatever
+    /// older ids it also names, and nothing where none of them were logged.
+    #[tokio::test]
+    async fn reads_only_what_follows_the_newest_held_event() {
+        let events: Vec<String> = (0..6u64).map(|t| prompt(t, false)).collect();
+        let log: String = events.concat();
+        let id = |line: &str| serde_json::from_str::<Value>(line).unwrap()["id"].as_str().unwrap().to_owned();
+        let since = |held: &[String]| {
+            let mut file = std::io::Cursor::new(log.clone().into_bytes());
+            let held: HashSet<String> = held.iter().cloned().collect();
+            let len = log.len() as u64;
+            async move {
+                read_back(&mut file, len, 7, |buf, top| after_held(buf, top, &held))
+                    .await
+                    .unwrap()
+                    .map(|(events, _)| events.iter().map(|e| e.seq).collect::<Vec<_>>())
+            }
+        };
+
+        assert_eq!(since(&[id(&events[1]), id(&events[3]), "unlogged".into()]).await, Some(vec![4, 5]));
+        assert_eq!(since(&[id(&events[5])]).await, Some(vec![]));
+        assert_eq!(since(&["unlogged".into()]).await, None);
     }
 }

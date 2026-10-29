@@ -1252,6 +1252,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         list_session_index_items(archived: bool) => store::list_session_index_items(archived).await;
         get_session_by_id(session_id: String, turns: Option<u32>) => store::get_session_by_id(&session_id, turns).await;
         get_session_page(session_id: String, before: u64, turns: u32) => store::get_session_page(&session_id, before, turns).await;
+        get_session_since(session_id: String, after: Vec<String>) => store::get_session_since(&session_id, after).await;
 
         // Agents and models.
         agent_availability() => ok(crate::agent_availability().await);

@@ -31,6 +31,7 @@ import { stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId, retireOldestProvisional } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
 import { mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
+import { forgetTranscript, keepTranscript, takeTranscript } from "@/lib/keptTranscripts";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KEY, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { FIRST_MOUNT } from "@/lib/turnWindow";
@@ -1746,6 +1747,7 @@ const deleteSession = async (sessionId: string) => {
   setTasksBySession(({ [sessionId]: _, ...rest }) => rest);
   setQueuedBySession(({ [sessionId]: _, ...rest }) => rest);
   deletedRef.current.add(sessionId);
+  forgetTranscript(sessionId);
   forgetDocs(sessionId);
   forgetOpenFiles(sessionId);
   forgetClosedTabs(sessionId);
@@ -2309,26 +2311,16 @@ sessionsRef.current = sessions;
 const asksBySessionRef = useRef(asksBySession);
 asksBySessionRef.current = asksBySession;
 
-/// Appends what a session's log gained while the socket to a `dray-serve` was
-/// down. Paged back until the log meets an event already held; deltas are not
-/// logged and need nothing, being previews of what this delivers.
-const catchUp = async (sessionId: string) => {
-  const held = sessionsRef.current.find((s) => s.sessionId === sessionId)?.events ?? [];
-  const tail = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId, turns: FIRST_MOUNT });
-  if (!tail) return;
-  let fetched = tail.events;
-  let before = tail.olderBefore;
-  let missed = missedEvents(held, fetched);
-  while (missed === null && before != null) {
-    const older = await invoke<SessionPage>("get_session_page", { sessionId, before, turns: 16 });
-    fetched = [...older.events, ...fetched];
-    before = older.olderBefore;
-    missed = missedEvents(held, fetched);
-  }
-  // Nothing held was ever logged — a session whose only event is the
-  // provisional prompt — so the whole log is news.
-  const fresh = missed ?? fetched;
-  if (!fresh.length) return;
+/// Appends what a session's log gained since `held` — what the socket to a
+/// `dray-serve` missed while down, or what a kept transcript missed while
+/// evicted. Deltas are not logged and need nothing, being previews of what
+/// this delivers.
+const catchUp = async (
+  sessionId: string,
+  held = sessionsRef.current.find((s) => s.sessionId === sessionId)?.events ?? [],
+) => {
+  const fresh = (await newSince(sessionId, held)) ?? (await missedFromTail(sessionId, held));
+  if (!fresh?.length) return;
 
   setSessions((prev) =>
     prev.map((s) => {
@@ -2343,6 +2335,38 @@ const catchUp = async (sessionId: string) => {
       prev[sessionId]?.length ? { ...prev, [sessionId]: prev[sessionId].slice(flushed) } : prev,
     );
   }
+};
+
+/// The events logged after the newest one `held` names, asked of the server
+/// directly. The ids sent are the newest few, since the last held events may
+/// be unlogged ones — a card, a provisional prompt. `null` where none of them
+/// were logged, or the server predates the command, and `missedFromTail`
+/// answers instead.
+const newSince = (sessionId: string, held: AgentEvent[]): Promise<AgentEvent[] | null> =>
+  held.length
+    ? invoke<AgentEvent[] | null>("get_session_since", {
+        sessionId,
+        after: held.slice(-64).map((e) => e.id),
+      }).catch(() => null)
+    : Promise.resolve(null);
+
+/// The same answer from the tail, paged back until the log meets an event
+/// already held: what an older server is asked.
+const missedFromTail = async (sessionId: string, held: AgentEvent[]) => {
+  const tail = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId, turns: FIRST_MOUNT });
+  if (!tail) return null;
+  let fetched = tail.events;
+  let before = tail.olderBefore;
+  let missed = missedEvents(held, fetched);
+  while (missed === null && before != null) {
+    const older = await invoke<SessionPage>("get_session_page", { sessionId, before, turns: 16 });
+    fetched = [...older.events, ...fetched];
+    before = older.olderBefore;
+    missed = missedEvents(held, fetched);
+  }
+  // Nothing held was ever logged — a session whose only event is the
+  // provisional prompt — so the whole log is news.
+  return missed ?? fetched;
 };
 
 /// A `dray-serve` sends this on every connect, the first included, and it
@@ -2479,6 +2503,17 @@ const deletedRef = useRef(new Set<string>());
 const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
   const running = tailReads.current.get(sessionId);
   if (running) return running;
+  // An evicted remote transcript draws now and asks only for what is new. Its
+  // index fields are taken from the live index, which may have moved since.
+  const copy = takeTranscript(sessionId);
+  if (copy) {
+    if (touch) lastViewedRef.current.set(sessionId, Date.now());
+    const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
+    upsertSession(item ? { ...copy, ...item } : copy);
+    catchUp(sessionId, copy.events).catch((e) => console.error("could not catch up", sessionId, e));
+    evictSessionsRef.current();
+    return Promise.resolve(true);
+  }
   const read = invoke<SessionSnapshot | null>("get_session_by_id", {
     sessionId,
     turns: FIRST_MOUNT,
@@ -2609,6 +2644,8 @@ const LOADED_CAP = 8;
 /// would drop the one just picked, leaving a selection with no snapshot and
 /// nothing to reload it.
 const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) => {
+  // Settled or archived: nothing comes back for it soon, so no copy is kept.
+  if (force) forgetTranscript(force.sessionId);
   const now = Date.now();
   const viewed = (id: string) => lastViewedRef.current.get(id) ?? 0;
   // Never the session on screen, one mid-turn (its live events would land in
@@ -2645,7 +2682,15 @@ const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) =>
       );
       kept = kept.filter((s) => !drop.has(s.sessionId));
     }
-    return kept.length === prev.length ? prev : kept;
+    if (kept.length === prev.length) return prev;
+    // Inside the updater, and idempotent by id, so a second invocation keeps
+    // the same copy again.
+    for (const s of prev) {
+      if (!kept.includes(s) && s.sessionId !== force?.sessionId && serverOfSession(s.sessionId) !== LOCAL) {
+        keepTranscript(s);
+      }
+    }
+    return kept;
   });
 };
 const evictSessionsRef = useRef(evictSessions);
