@@ -14,13 +14,14 @@ import { DOWNLOAD, DOWNLOAD_LINUX } from "@/lib/links";
 /// goes. It costs nothing now and it is what stops the event disappearing
 /// silently if `target` is ever dropped again.
 ///
-/// A Linux visitor gets the AppImage. Read after mount, so the server render
-/// and the first client one agree on the Mac's.
+/// An x86_64 Linux visitor gets the AppImage, the only Linux build there is.
+/// Read after mount, so the server render and the first client one agree on
+/// the Mac's.
 export function DownloadButton({ className, label }: { className?: string; label?: string }) {
   const [linux, setLinux] = useState(false);
   useEffect(() => {
     const ua = navigator.userAgent;
-    setLinux(/Linux/.test(ua) && !/Android/.test(ua));
+    setLinux(/Linux (x86_64|amd64)/.test(ua) && !/Android/.test(ua));
   }, []);
 
   return (
