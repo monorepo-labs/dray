@@ -262,3 +262,117 @@ pub(super) fn destroy(view: usize) {
         xlib::XDestroyWindow(h.display, view as xlib::Window);
     });
 }
+
+/// Where a mouse button went down, as far as keyboard focus cares.
+pub(super) enum Pressed {
+    /// On the page.
+    Page,
+    /// Somewhere else in the main window.
+    App,
+    /// In another app.
+    Elsewhere,
+}
+
+/// Calls `on_press` on the main thread after every left, middle or right
+/// button press anywhere on the display. Started once.
+///
+/// **This is click-to-focus, and nobody else provides it.** A tab's window
+/// is a child of a foreign window, so a click on the page never moves X's
+/// input focus — the window manager focuses top-level windows alone, and
+/// Chromium asks it for nothing (watched: no `_NET_ACTIVE_WINDOW` on a
+/// click). Keys then went on landing in the webview, and the reverse held
+/// once the page had them: clicking the composer left them in the page.
+/// CEF's own GTK sample moves focus from the host the same way. Raw XI2
+/// events because they reach every client whoever holds the button's
+/// selection — Chromium does, and only one client may — and grab nothing,
+/// so a stalled main loop can never freeze the pointer.
+pub(super) fn watch_presses(on_press: fn()) {
+    std::thread::Builder::new()
+        .name("cef-x11-presses".into())
+        .spawn(move || unsafe {
+            use x11::xinput2 as xi;
+            // A connection of its own: GDK's belongs to the main thread.
+            let display = xlib::XOpenDisplay(std::ptr::null());
+            if display.is_null() {
+                eprintln!("cef: no X display to watch clicks on");
+                return;
+            }
+            let (mut opcode, mut event, mut error) = (0, 0, 0);
+            if xlib::XQueryExtension(display, c"XInputExtension".as_ptr(), &mut opcode, &mut event, &mut error) == 0 {
+                eprintln!("cef: no XInput2, so a click on the page will not take the keyboard");
+                return;
+            }
+            let mut bits = [0u8; 4];
+            bits[(xi::XI_RawButtonPress / 8) as usize] |= 1 << (xi::XI_RawButtonPress % 8);
+            let mut mask = xi::XIEventMask {
+                deviceid: xi::XIAllMasterDevices,
+                mask_len: bits.len() as c_int,
+                mask: bits.as_mut_ptr(),
+            };
+            xi::XISelectEvents(display, xlib::XDefaultRootWindow(display), &mut mask, 1);
+            xlib::XFlush(display);
+            loop {
+                let mut ev: xlib::XEvent = std::mem::zeroed();
+                xlib::XNextEvent(display, &mut ev);
+                let mut cookie = ev.generic_event_cookie;
+                if cookie.type_ != xlib::GenericEvent || cookie.extension != opcode {
+                    continue;
+                }
+                if xlib::XGetEventData(display, &mut cookie) == 0 {
+                    continue;
+                }
+                // 1–3 alone: 4–7 are the wheel, and scrolling over the page
+                // must not take the keyboard from the composer.
+                let pressed = cookie.evtype == xi::XI_RawButtonPress
+                    && (1..=3).contains(&(*(cookie.data as *const xi::XIRawEvent)).detail);
+                xlib::XFreeEventData(display, &mut cookie);
+                if pressed {
+                    let _ = super::on_main(on_press);
+                }
+            }
+        })
+        .expect("cef click thread");
+}
+
+/// What lies under the pointer now: walked down from the root to the
+/// deepest window, then placed against the frame and the main window.
+pub(super) fn under_pointer() -> Pressed {
+    with_display(|h| unsafe {
+        let frame = FRAME.load(Ordering::Relaxed);
+        let mut window = xlib::XDefaultRootWindow(h.display);
+        loop {
+            let (mut root, mut child) = (0, 0);
+            let (mut rx, mut ry, mut x, mut y, mut mask) = (0, 0, 0, 0, 0);
+            if xlib::XQueryPointer(h.display, window, &mut root, &mut child, &mut rx, &mut ry, &mut x, &mut y, &mut mask) == 0
+                || child == 0
+            {
+                break;
+            }
+            window = child;
+        }
+        if frame != 0 && is_within(h.display, window, frame) {
+            Pressed::Page
+        } else if is_within(h.display, window, h.window) {
+            Pressed::App
+        } else {
+            Pressed::Elsewhere
+        }
+    })
+    .unwrap_or(Pressed::Elsewhere)
+}
+
+/// Gives X's input focus to a tab's window. CEF reads the `FocusIn` and
+/// passes it to Chromium's own window under it; the host's `set_focus`
+/// alone moves nothing on X11.
+pub(super) fn focus_page(view: usize) {
+    with_display(|h| unsafe {
+        xlib::XSetInputFocus(h.display, view as xlib::Window, xlib::RevertToParent, xlib::CurrentTime);
+    });
+}
+
+/// Gives X's input focus to the main window, from wherever it is.
+pub(super) fn focus_app() {
+    with_display(|h| unsafe {
+        xlib::XSetInputFocus(h.display, h.window, xlib::RevertToParent, xlib::CurrentTime);
+    });
+}

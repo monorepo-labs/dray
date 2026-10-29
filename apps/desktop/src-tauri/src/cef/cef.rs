@@ -338,6 +338,8 @@ fn start() -> Option<bool> {
         return Some(false);
     }
     start_pump(app.clone());
+    #[cfg(target_os = "linux")]
+    x11::watch_presses(pressed);
     let sweeper = app.clone();
     std::thread::Builder::new()
         .name("cef-sweep".into())
@@ -829,7 +831,12 @@ fn child_window_info() -> Result<WindowInfo, String> {
     let (w, h) = layout.map(|l| (l.width, l.height)).unwrap_or((800.0, 600.0));
     let (parent, width, height) = x11::frame_and_size(w, h).ok_or("no main window")?;
     let bounds = Rect { x: -20000, y: 0, width, height };
-    Ok(WindowInfo::default().set_as_child(parent, &bounds))
+    // Alloy, not CEF's default Chrome style: Chrome's host window takes
+    // its activation from the root's `_NET_ACTIVE_WINDOW`, which names the
+    // main window, so it ignored every key even holding X's focus. Alloy's
+    // host reads `FocusIn` on its own window and focuses the page from it.
+    let info = WindowInfo { runtime_style: RuntimeStyle::ALLOY, ..WindowInfo::default() };
+    Ok(info.set_as_child(parent, &bounds))
 }
 
 /// A tab's view: a child of the main window, hidden until `apply_layout`
@@ -1171,6 +1178,33 @@ fn reveal(id: i32) {
     let size = if size.width < 1.0 || size.height < 1.0 { NSSize::new(800.0, 600.0) } else { size };
     view.setFrame(NSRect::new(NSPoint::new(-20000.0, 0.0), size));
     view.setHidden(false);
+}
+
+/// Click-to-focus on X11, which nothing else gives an embedded window (see
+/// `x11::watch_presses`): a press on the page hands the shown tab the
+/// keyboard, and one anywhere else in the window takes it back from a tab
+/// holding it. Main thread.
+#[cfg(target_os = "linux")]
+fn pressed() {
+    match x11::under_pointer() {
+        x11::Pressed::Page => {
+            let Some(id) = shown_tab() else { return };
+            let view = TABS.lock().unwrap().iter().find(|t| t.id == id).map_or(0, |t| t.view);
+            if view != 0 && !x11::holds_focus(view) {
+                x11::focus_page(view);
+            }
+            if let Some(host) = browser_of(id).and_then(|b| b.host()) {
+                host.set_focus(1);
+            }
+        }
+        x11::Pressed::App => {
+            let views: Vec<usize> = TABS.lock().unwrap().iter().filter(|t| t.view != 0).map(|t| t.view).collect();
+            if views.into_iter().any(x11::holds_focus) {
+                x11::focus_app();
+            }
+        }
+        x11::Pressed::Elsewhere => {}
+    }
 }
 
 /// `reveal` on X11, where an unmapped window drops input the same way.

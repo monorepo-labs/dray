@@ -180,7 +180,7 @@ optional = true
 [target.'cfg(target_os = "linux")'.dependencies.x11]
 version = "2.21"
 optional = true
-features = ["xlib"]
+features = ["xlib", "xinput"]
 
 # Unconditional, not CEF's alone: the composer's paste reads NSPasteboard
 # (attachments.rs). tao already compiles all three, so this costs no build.
