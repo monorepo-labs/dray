@@ -713,7 +713,13 @@ async fn serve(id: &str, ws: Socket) {
         if matches!(message, Message::Close(_)) {
             break;
         }
+        let binary = matches!(message, Message::Binary(_));
         let Some(text) = crate::serve::frame_in(message) else {
+            // A frame that will not inflate within the cap is a broken or
+            // hostile server, not one to keep reading from.
+            if binary {
+                break;
+            }
             continue;
         };
         let Ok(frame) = serde_json::from_str::<Value>(&text) else {

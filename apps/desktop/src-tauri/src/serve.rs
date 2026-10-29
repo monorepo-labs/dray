@@ -80,15 +80,25 @@ pub fn frame_out(text: String, deflate: bool) -> Message {
     }
 }
 
-/// The JSON text an incoming frame carries, inflating a binary one.
+/// The most a binary frame may inflate to: tungstenite's own default cap on a
+/// message, so a deflated frame can carry nothing a text one could not.
+const INFLATED_CAP: u64 = 64 << 20;
+
+/// The JSON text an incoming frame carries, inflating a binary one. `None`
+/// for a binary frame that is not deflate or would inflate past
+/// [`INFLATED_CAP`] — a few KB can expand to gigabytes, and the app reads
+/// these from servers it does not control.
 pub fn frame_in(message: Message) -> Option<String> {
     use std::io::Read;
     match message {
         Message::Text(text) => Some(text.to_string()),
         Message::Binary(bytes) => {
             let mut text = String::new();
-            DeflateDecoder::new(&bytes[..]).read_to_string(&mut text).ok()?;
-            Some(text)
+            DeflateDecoder::new(&bytes[..])
+                .take(INFLATED_CAP + 1)
+                .read_to_string(&mut text)
+                .ok()?;
+            (text.len() as u64 <= INFLATED_CAP).then_some(text)
         }
         _ => None,
     }
@@ -1601,6 +1611,11 @@ mod tests {
         assert!(matches!(frame_out(big, false), Message::Text(_)));
         assert!(matches!(frame_out(r#"{"id":1,"ok":null}"#.into(), true), Message::Text(_)));
         assert_eq!(frame_in(Message::binary(b"not deflate".to_vec())), None);
+
+        // A bomb: ~65KB that inflates past the cap is refused, not expanded.
+        let Message::Binary(bomb) = frame_out("0".repeat(INFLATED_CAP as usize + 1), true) else { panic!() };
+        assert!(bomb.len() < 1 << 20, "{}", bomb.len());
+        assert_eq!(frame_in(Message::binary(bomb)), None);
     }
 
     /// The whole path: a client's hello asks, the writer compresses an event
