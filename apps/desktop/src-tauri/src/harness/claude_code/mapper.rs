@@ -934,15 +934,32 @@ fn strip_tool_use_error(text: String) -> String {
 /// log, read whole every time the session is opened. The picture survives as an
 /// archived file on [`ToolResult::images`]; what is left here is the shape
 /// around it (dimensions, original size), which is small and describes it.
+///
+/// An MCP tool's sidecar carries its content blocks, so an image there sits at
+/// `source.data` wherever the tool nested it — a bare array from Paper, under
+/// `content` from computer use. Paper's screenshots put 27.5MB into one log
+/// that way, all of it sent again on every remote load. Hence a walk over the
+/// whole value rather than one shape per tool.
 fn strip_image_bytes(mut structured: Value) -> Value {
-    if structured.get("type").and_then(Value::as_str) != Some("image") {
-        return structured;
+    fn strip(value: &mut Value) {
+        match value {
+            Value::Array(items) => items.iter_mut().for_each(strip),
+            Value::Object(map) => {
+                if map.get("type").and_then(Value::as_str) == Some("image") {
+                    if let Some(file) = map.get_mut("file").and_then(Value::as_object_mut) {
+                        file.remove("base64");
+                    }
+                    if let Some(source) = map.get_mut("source").and_then(Value::as_object_mut) {
+                        source.remove("data");
+                    }
+                }
+                map.values_mut().for_each(strip);
+            }
+            _ => {}
+        }
     }
 
-    if let Some(file) = structured.get_mut("file").and_then(Value::as_object_mut) {
-        file.remove("base64");
-    }
-
+    strip(&mut structured);
     structured
 }
 
@@ -1461,6 +1478,22 @@ mod tests {
         let file = result.structured.as_ref().unwrap().get("file").unwrap();
         assert!(file.get("base64").is_none(), "the second copy survived");
         assert!(file.get("dimensions").is_some(), "the shape came off with it");
+    }
+
+    /// MCP sidecars carry their content blocks, nested however the tool likes.
+    /// Both shapes read off real session logs: Paper's `get_screenshot` is a
+    /// bare array, computer use's `get_window_state` puts it under `content`.
+    #[test]
+    fn strips_image_bytes_from_mcp_sidecars() {
+        let image = serde_json::json!({ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo" } });
+        let paper = strip_image_bytes(serde_json::json!([{ "type": "text", "text": "node 1-0" }, image]));
+        assert_eq!(paper[0]["text"], "node 1-0");
+        assert!(paper[1]["source"].get("data").is_none(), "Paper's copy survived");
+        assert_eq!(paper[1]["source"]["media_type"], "image/png");
+
+        let computer = strip_image_bytes(serde_json::json!({ "content": [image], "isError": false }));
+        assert!(computer["content"][0]["source"].get("data").is_none(), "computer use's copy survived");
+        assert_eq!(computer["isError"], false);
     }
 
     /// A prompt reaches the mapper two ways — bare string, or wrapped in a lone
