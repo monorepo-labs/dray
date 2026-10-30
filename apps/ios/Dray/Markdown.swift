@@ -9,6 +9,8 @@ enum MarkdownBlock {
     case list([(marker: String, text: String, indent: Int)])
     /// Cells by row, the first being the header.
     case table([[String]])
+    /// A line holding one image and nothing else; an image inside a sentence stays text.
+    case image(alt: String, url: String)
 }
 
 /// `| a | b |` → ["a", "b"]; `\|` is a pipe inside a cell, not a border.
@@ -66,7 +68,10 @@ func markdownBlocks(_ text: String) -> [MarkdownBlock] {
         }
         if !table.isEmpty { flush() }
         let indent = (line.prefix { $0 == " " }.count) / 2
-        if let m = trimmed.firstMatch(of: /^(#{1,6})\s+(.+)$/) {
+        if let m = trimmed.wholeMatch(of: /!\[([^\]]*)\]\(<?([^)\s>]+)>?(?:\s+"[^"]*")?\)/) {
+            flush()
+            out.append(.image(alt: String(m.1), url: String(m.2)))
+        } else if let m = trimmed.firstMatch(of: /^(#{1,6})\s+(.+)$/) {
             flush()
             out.append(.heading(m.1.count, String(m.2)))
         } else if let m = trimmed.firstMatch(of: /^[-*+]\s+(.+)$/) {

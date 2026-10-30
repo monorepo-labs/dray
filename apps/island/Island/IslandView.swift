@@ -91,7 +91,11 @@ struct IslandView: View {
             focus = .search
         }
         // A card opens with no field focused, so its keys are the card's; the input takes them back after.
-        .onChange(of: composer.ask?.event.id) { focus = composer.ask == nil ? .input : nil }
+        .onChange(of: composer.ask?.event.id) {
+            focus = composer.ask == nil ? .input : nil
+            // A card wants an answer; the picture would sit over it.
+            if composer.ask != nil { composer.viewing = nil }
+        }
         .onChange(of: composer.listShown) { if !composer.listShown { focus = .input } }
         .onChange(of: composer.typing) {
             if !composer.typing.isEmpty { composer.listShown = false }
@@ -121,6 +125,17 @@ struct IslandView: View {
         // A row leaving fades where it stood while the card shrinks under it; kept inside the
         // card. Not while bare: the recording orb grows past it.
         .clipShape(Rectangle().inset(by: bare ? -200 : 0))
+        // A transcript image at the card's size, over everything on it.
+        .overlay {
+            if composer.viewing != nil {
+                ImageViewer(composer: composer)
+                    .padding(6)
+                    .padding(.top, composer.notchHeight)
+                    .environment(\.imageServer, store.connection(composer.server))
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: composer.viewing)
         // Faded rather than removed, so it animates.
         .background {
             shape.fill((denied ? Color.red : .black).opacity(bare ? 0 : 1))
@@ -220,6 +235,7 @@ struct IslandView: View {
                 .gone(recording)
             if composer.transcript {
                 IslandTranscript(key: key) { Task { await composer.showInApp(key) } }
+                    .environment(\.viewImage) { composer.viewing = .init(images: $0, index: $1) }
                     // A view per session: an older page still loading for the last one
                     // lands in state nobody draws, not in this session's count.
                     .id(key)
@@ -442,6 +458,64 @@ struct IslandView: View {
         let row = composer.rows.remove(at: from)
         composer.rows.insert(row, at: to)
         return true
+    }
+}
+
+/// One transcript image over the card, its neighbours peeking in at the sides
+/// and the whole set under it. ←/→ or a sideways swipe slides to the next;
+/// a click on a neighbour goes there, any other click or Esc closes.
+private struct ImageViewer: View {
+    let composer: Composer
+
+    var body: some View {
+        if let v = composer.viewing {
+            let many = v.images.count > 1
+            VStack(spacing: 8) {
+                GeometryReader { geo in
+                    // A fifth of the width left over, so a tenth of each neighbour shows.
+                    let width = many ? geo.size.width * 0.8 : geo.size.width - 16
+                    let gap: CGFloat = 8
+                    HStack(spacing: gap) {
+                        ForEach(Array(v.images.enumerated()), id: \.offset) { i, ref in
+                            RemoteImage(ref: ref)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .frame(width: width, height: geo.size.height)
+                                .opacity(i == v.index ? 1 : 0.4)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    if i == v.index { composer.viewing = nil } else { composer.viewing?.index = i }
+                                }
+                        }
+                    }
+                    .offset(x: (geo.size.width - width) / 2 - CGFloat(v.index) * (width + gap))
+                    .animation(.spring(duration: 0.35, bounce: 0.15), value: v.index)
+                }
+                if many {
+                    ThumbnailRow(spacing: 4) {
+                        ForEach(Array(v.images.enumerated()), id: \.offset) { i, ref in
+                            Button { composer.viewing?.index = i } label: {
+                                RemoteImage(ref: ref, fill: true)
+                                    .frame(width: 32, height: 32)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    .opacity(i == v.index ? 1 : 0.45)
+                                    .overlay {
+                                        if i == v.index { RoundedRectangle(cornerRadius: 6).strokeBorder(.white, lineWidth: 1.5) }
+                                    }
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                }
+            }
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.black)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .contentShape(Rectangle())
+            .onTapGesture { composer.viewing = nil }
+        }
     }
 }
 

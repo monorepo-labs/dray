@@ -94,6 +94,7 @@ struct IslandTranscript: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .environment(\.imageServer, store.connection(key.server))
         // Follows without marking read: looking at the island is not opening the session.
         .task(id: key) { await store.load(key) }
         // Spent by whichever of the two lists drew this count, or by nobody where it
@@ -143,7 +144,7 @@ struct IslandTranscript: View {
         // An interrupted turn has no `finalText`, so its newest message ends it.
         let answer = turn.finalText ?? work.reversed().lazy.compactMap { if case .text(_, let t) = $0 { t } else { nil } }.first
         return VStack(alignment: .leading, spacing: 8) {
-            if let p = turn.prompt { PromptBubble(text: p.text) }
+            if let p = turn.prompt { PromptBubble(text: p.text, images: p.images) }
             // The work is Dray's to show: the line leads there and the island closes.
             if !work.isEmpty {
                 Button(action: openInApp) {
@@ -155,6 +156,9 @@ struct IslandTranscript: View {
                 .buttonStyle(.plain)
                 .help("Open in Dray")
             }
+            // The fold hides the calls, not what they showed.
+            let shown = foldedImages(work)
+            if !shown.isEmpty { Thumbnails(images: shown) }
             if let answer { MessageText(text: answer) }
             if let failure = turn.failure { FailureLine(text: failure) }
         }
@@ -175,7 +179,7 @@ private struct LiveTurn: View {
             }
         }.first
         VStack(alignment: .leading, spacing: 8) {
-            if let p = turn.prompt { PromptBubble(text: p.text) }
+            if let p = turn.prompt { PromptBubble(text: p.text, images: p.images) }
             if let text { MessageText(text: text) }
             Group {
                 if let call { CallLine(call: call) } else {
@@ -212,22 +216,54 @@ private struct CallLine: View {
 
 private struct PromptBubble: View {
     let text: String
+    let images: [ImageRef]
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 13))
-            .lineLimit(2)
-            .foregroundStyle(.white.opacity(0.85))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.leading, 64)
+        VStack(alignment: .trailing, spacing: 4) {
+            if !images.isEmpty { Thumbnails(images: images) }
+            if !text.isEmpty {
+                Text(text)
+                    .font(.system(size: 13))
+                    .lineLimit(2)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.leading, 64)
+    }
+}
+
+extension EnvironmentValues {
+    /// Draws an image over the whole card, the island's own viewer, among the ones it arrived with.
+    @Entry var viewImage: ([ImageRef], Int) -> Void = { _, _ in }
+}
+
+/// Small pictures, each opening over the card at size.
+private struct Thumbnails: View {
+    @Environment(\.viewImage) private var view
+    let images: [ImageRef]
+
+    var body: some View {
+        ThumbnailRow(spacing: 4) {
+            ForEach(Array(images.enumerated()), id: \.offset) { i, ref in
+                Button { view(images, i) } label: {
+                    RemoteImage(ref: ref, fill: true)
+                        .frame(width: 44, height: 44)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 }
 
 /// The iOS app's markdown blocks, drawn at the island's size on its black.
 private struct MessageText: View {
+    @Environment(\.viewImage) private var view
     let text: String
 
     var body: some View {
@@ -263,6 +299,15 @@ private struct MessageText: View {
                     Rectangle().fill(.white.opacity(0.15)).frame(height: 1).padding(.vertical, 2)
                 case .table(let rows):
                     MarkdownTable(rows: rows)
+                case .image(_, let url):
+                    let ref = ImageRef(path: nil, url: url, mimeType: nil)
+                    // Clipped before the frame, so the corners are the picture's and not the column's.
+                    Button { view([ref], 0) } label: {
+                        RemoteImage(ref: ref)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .frame(maxWidth: 200, maxHeight: 120, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }

@@ -44,7 +44,22 @@ final class Composer {
     // A notice is about the last thing tried, so whatever the reader does next retires it.
     var rows: [Row] = [] { didSet { notice = nil } }
     var typing = "" { didSet { if typing != oldValue { notice = nil } } }
-    var target: Target?
+    var target: Target? { didSet { viewing = nil } }
+    /// A transcript image drawn over the whole card, among the others it arrived with; X or Esc puts it away.
+    var viewing: Viewing?
+
+    struct Viewing: Equatable {
+        var images: [ImageRef]
+        var index: Int
+        var current: ImageRef { images[index] }
+    }
+
+    /// ← and → through the images the open one arrived with, round the ends.
+    func step(_ by: Int) {
+        guard var v = viewing, v.images.count > 1 else { return }
+        v.index = (v.index + by + v.images.count) % v.images.count
+        viewing = v
+    }
     var dictation = Dictation.idle {
         didSet {
             // Decided as the pill appears, so the hint arrives with it rather than a beat later.
@@ -295,6 +310,7 @@ final class Composer {
 
     /// The panel shut: what was held is shown now, as the pill, with its one sound.
     private func released() {
+        viewing = nil
         cardsFirst = false
         let ask = heldAsk && !attention.isEmpty, finished = heldDone && !done.isEmpty
         heldAsk = false
@@ -618,6 +634,10 @@ final class Composer {
     }
 
     func escape() {
+        if viewing != nil {
+            viewing = nil
+            return
+        }
         if openMenu != nil {
             openMenu = nil
             return

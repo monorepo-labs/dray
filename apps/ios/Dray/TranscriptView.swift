@@ -70,6 +70,7 @@ struct TranscriptView: View {
             }
         }
         .page()
+        .environment(\.imageServer, store.connection(key.server))
         // A card arriving is the agent stopping to ask: felt, once per card.
         .onChange(of: asks.count) { old, new in if new > old { Haptic.warning() } }
         .safeAreaInset(edge: .bottom) { Composer(key: key, busy: busy) { fixing = true } }
@@ -155,7 +156,7 @@ struct TurnView: View {
             $0.items.contains { if case .text(_, let t) = $0 { t == turn.finalText } else { false } }
         }.map(open.contains) ?? false
         VStack(alignment: .leading, spacing: 14) {
-            if let prompt = turn.prompt { UserBubble(text: prompt.text, from: prompt.from) }
+            if let prompt = turn.prompt { UserBubble(text: prompt.text, from: prompt.from, images: prompt.images) }
             if collapsible || turn.running {
                 ForEach(Array(segments.enumerated()), id: \.offset) { i, segment in
                     let isOpen = open.contains(i)
@@ -165,6 +166,10 @@ struct TurnView: View {
                     } else {
                         if !segment.items.isEmpty {
                             SummaryToggle(label: summaryLabel(segment.items), open: isOpen) { toggle(i) }
+                        }
+                        // The fold hides the calls, not what they showed; open, each row draws its own.
+                        if !isOpen, case let shown = foldedImages(segment.items), !shown.isEmpty {
+                            Thumbnails(images: shown)
                         }
                         if isOpen { ForEach(segment.items) { ItemView(item: $0) } }
                         if let prompt = segment.prompt { ItemView(item: prompt) }
@@ -288,8 +293,8 @@ struct ItemView: View {
             ToolRow(call: call)
         case .group(_, let name, let calls, let targets, let target):
             GroupRow(name: name, calls: calls, targets: targets, target: target)
-        case .prompt(_, let text, let from):
-            UserBubble(text: text, from: from)
+        case .prompt(_, let text, let from, let images):
+            UserBubble(text: text, from: from, images: images)
         case .failure(_, let text):
             FailureRow(text: text)
         }
@@ -330,6 +335,7 @@ struct ChangeCount: View {
 struct UserBubble: View {
     let text: String
     let from: String?
+    var images: [ImageRef] = []
     /// Typed into a running turn and not yet read by it: held back, dimmed.
     var queued = false
 
@@ -339,13 +345,16 @@ struct UserBubble: View {
                 Label("From \(from)", systemImage: "arrow.turn.down.right")
                     .font(Theme.Font.micro).foregroundStyle(Theme.tertiary)
             }
-            Text(text)
-                .font(Theme.Font.body)
-                .foregroundStyle(Theme.text)
-                .textSelection(.enabled)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+            if !images.isEmpty { Thumbnails(images: images) }
+            if !text.isEmpty {
+                Text(text)
+                    .font(Theme.Font.body)
+                    .foregroundStyle(Theme.text)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+            }
             if queued {
                 Text("Queued").font(Theme.Font.micro).foregroundStyle(Theme.tertiary)
             }
@@ -353,6 +362,58 @@ struct UserBubble: View {
         .opacity(queued ? 0.55 : 1)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 48)
+    }
+}
+
+/// Square thumbnails, each opening full screen on tap.
+struct Thumbnails: View {
+    let images: [ImageRef]
+
+    var body: some View {
+        ThumbnailRow(spacing: Theme.Space.xs) {
+            ForEach(Array(images.enumerated()), id: \.offset) { _, ref in
+                ZoomableImage(ref: ref) {
+                    RemoteImage(ref: ref, fill: true)
+                        .frame(width: 72, height: 72)
+                        .clipShape(.rect(cornerRadius: Theme.Radius.md, style: .continuous))
+                }
+            }
+        }
+    }
+}
+
+/// A picture in the reading column, at most a screen's width and a little less tall.
+struct InlineImage: View {
+    let ref: ImageRef
+
+    var body: some View {
+        // Clipped before the frame, so the corners are the picture's and not the column's.
+        RemoteImage(ref: ref)
+            .clipShape(.rect(cornerRadius: Theme.Radius.md, style: .continuous))
+            .frame(maxWidth: 320, maxHeight: 320, alignment: .leading)
+    }
+}
+
+/// A picture that opens full screen on tap, and closes on the next.
+struct ZoomableImage<Content: View>: View {
+    @Environment(\.imageServer) private var server
+    let ref: ImageRef
+    @ViewBuilder let content: Content
+    @State private var open = false
+
+    var body: some View {
+        Button { open = true } label: { content }
+            .buttonStyle(.plain)
+            .fullScreenCover(isPresented: $open) {
+                RemoteImage(ref: ref)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.black)
+                    .contentShape(Rectangle())
+                    .onTapGesture { open = false }
+                    .environment(\.imageServer, server)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel("Close image")
+            }
     }
 }
 
@@ -396,6 +457,10 @@ struct ToolRow: View {
                 .font(Theme.Font.callout)
             }
             .buttonStyle(RowButtonStyle())
+            // A picture the tool handed back is the result itself, so it shows unasked.
+            ForEach(Array(call.images.enumerated()), id: \.offset) { _, ref in
+                ZoomableImage(ref: ref) { InlineImage(ref: ref) }
+            }
             if open, let output = call.output {
                 ScrollView(.horizontal) {
                     Text(output.count > 6000 ? String(output.prefix(6000)) + "\n…" : output)
@@ -502,6 +567,9 @@ struct MarkdownText: View {
                     MarkdownTable(rows: rows)
                         .font(Theme.Font.body)
                         .foregroundStyle(Theme.text)
+                case .image(_, let url):
+                    let ref = ImageRef(path: nil, url: url, mimeType: nil)
+                    ZoomableImage(ref: ref) { InlineImage(ref: ref) }
                 }
             }
         }

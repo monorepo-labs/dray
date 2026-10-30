@@ -101,6 +101,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var composer: Composer?
     private var hotkey: ModifierTap?
     private var keys: Any?
+    private var swipes: Any?
+    /// One sideways swipe's travel so far, and whether it has stepped the open image yet.
+    private var swiped: CGFloat = 0
+    private var swipeStepped = false
     /// One pinch's magnification so far: the event carries only each step's change.
     private var pinched: CGFloat = 0
     /// The pinch under way began over the card.
@@ -268,6 +272,17 @@ final class Delegate: NSObject, NSApplicationDelegate {
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak composer, weak panel] e in
             // A capture's overlay holds the keys while it runs: Esc there cancels it, not the panel.
             guard panel?.isVisible == true, let composer, composer.shown, !composer.capturing else { return e }
+            // An open image takes every key: ← → step it, Esc closes it, and nothing
+            // reaches the draft under it, or Return would send what the reader cannot see.
+            if composer.viewing != nil {
+                switch e.keyCode {
+                case 53: composer.viewing = nil
+                case 123: composer.step(-1)
+                case 124: composer.step(1)
+                default: break
+                }
+                return nil
+            }
             let mods = e.modifierFlags.intersection([.command, .shift, .option, .control])
             switch (e.keyCode, mods) {
             // Throwing away speech takes ⌘Esc, the hot key below: a bare Esc is too easy a slip mid-sentence.
@@ -295,6 +310,21 @@ final class Delegate: NSObject, NSApplicationDelegate {
             case (125, []) where composer.arrowsMoveList: composer.move(1)
             case (126, []) where composer.arrowsMoveList: composer.move(-1)
             default: return Self.forward(e) ? nil : e
+            }
+            return nil
+        }
+        // A two-finger sideways swipe steps an open image, once a swipe, the way
+        // the fingers went: left for the next. Its momentum is swallowed too.
+        swipes = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self, weak composer] e in
+            guard let self, let composer else { return e }
+            guard composer.viewing != nil else { return Self.sidewaysGoesSomewhere(e) ? e : nil }
+            if e.phase == .began { swiped = 0; swipeStepped = false }
+            guard e.phase == .changed, !swipeStepped, abs(e.scrollingDeltaX) > abs(e.scrollingDeltaY) else { return nil }
+            // Natural scrolling reports the fingers' own direction; the other setting flips it.
+            swiped += e.isDirectionInvertedFromDevice ? e.scrollingDeltaX : -e.scrollingDeltaX
+            if abs(swiped) > 30 {
+                swipeStepped = true
+                composer.step(swiped < 0 ? 1 : -1)
             }
             return nil
         }
@@ -524,6 +554,19 @@ final class Delegate: NSObject, NSApplicationDelegate {
     }
 
     /// Key codes of 1 through 9, which are not in order on the keyboard.
+    /// False for a sideways swipe over nothing that scrolls sideways, which is
+    /// dropped: AppKit rubber-bands whatever scroll view sits under it, and the
+    /// whole transcript slid with the fingers. A wide code block still scrolls.
+    private static func sidewaysGoesSomewhere(_ e: NSEvent) -> Bool {
+        guard abs(e.scrollingDeltaX) > abs(e.scrollingDeltaY) else { return true }
+        var view = e.window?.contentView?.hitTest(e.locationInWindow)
+        while let v = view {
+            if let s = v as? NSScrollView, (s.documentView?.frame.width ?? .infinity) > s.contentSize.width + 1 { return true }
+            view = v.superview
+        }
+        return false
+    }
+
     private static let digits: [UInt16: Int] = [18: 0, 19: 1, 20: 2, 21: 3, 23: 4, 22: 5, 26: 6, 28: 7, 25: 8]
 
     /// The ⌘ and ⌘⇧ chords a text box answers: A C V X Z by letter, so any
