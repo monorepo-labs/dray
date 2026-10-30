@@ -1118,7 +1118,7 @@ function IslandSettings() {
         <SettingRow id={layoutId} asGroup stacked label="Layout">
           <PictureRadio
             options={ISLAND_LAYOUTS}
-            value={prefs["island.mode"] === "expanded" ? "expanded" : "compact"}
+            value={prefs["island.mode"] === "compact" ? "compact" : "expanded"}
             onPick={(v) => save("island.mode", v)}
             labelledBy={layoutId}
           />

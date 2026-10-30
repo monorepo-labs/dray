@@ -85,7 +85,7 @@ final class Composer {
     @ObservationIgnored var recordingChanged: (Bool) -> Void = { _ in }
     /// When the microphone opened, for the timer; `nil` unless recording.
     var recordingSince: Date?
-    var mode = InputMode(rawValue: UserDefaults.standard.string(forKey: "island.mode") ?? "") ?? .compact {
+    var mode = InputMode(rawValue: UserDefaults.standard.string(forKey: "island.mode") ?? "") ?? .expanded {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: "island.mode") }
     }
     /// The session's newest turn over the input, or the input alone.
