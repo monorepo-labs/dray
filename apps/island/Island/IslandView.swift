@@ -201,7 +201,7 @@ struct IslandView: View {
             TitleRow(title: title, marks: store.marks(key), close: composer.closeHint,
                      list: { composer.searches += 1 },
                      openInApp: { Task { await composer.showInApp(key) } },
-                     hint: composer.pinchHint ? "Pinch to \(composer.transcript ? "hide" : "show") transcript" : nil)
+                     hint: composer.pinchHint ? (composer.transcript ? "Pinch to hide messages" : "Spread fingers to see messages") : nil)
             if composer.transcript {
                 IslandTranscript(key: key) { Task { await composer.showInApp(key) } }
                     // Gone before the input slides up through it.
