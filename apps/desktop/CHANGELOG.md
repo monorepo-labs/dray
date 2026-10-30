@@ -19,6 +19,12 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.29.14 · 2026-10-30
+
+### Improved
+
+- Images in a session show up in the Island's transcript.
+
 ## 0.29.13 · 2026-10-30
 
 ### New
