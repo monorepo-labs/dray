@@ -127,7 +127,10 @@ export function stopWaiting(eventId: string) {
 
 /// One tile's upload, or `undefined` where nothing has been sent for it.
 export function useUpload(server: ServerId, path: string): Upload | undefined {
-  return useSyncExternalStore(subscribe, () => uploads.get(keyOf(server, path)));
+  const entry = useSyncExternalStore(subscribe, () => uploads.get(keyOf(server, path)));
+  // A server's own copy is there already, which `upload` never records.
+  const own = splitPath(path);
+  return own.server === server ? { sent: 0, total: 0, path: own.path, error: null } : entry;
 }
 
 /// How far a send held on its uploads has got, 0–1 by bytes, or `null` for a
