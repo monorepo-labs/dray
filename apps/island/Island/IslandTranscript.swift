@@ -23,6 +23,15 @@ struct IslandTranscript: View {
         let earlier = count < turns.count || store.transcripts[key]?.olderBefore != nil
         // A stack, not a Group: a Group hands `.task` to its children, and with no turns yet it has none.
         VStack(spacing: 0) {
+            if shown.isEmpty, let error = store.transcriptErrors[key] {
+                HStack(spacing: 8) {
+                    FailureLine(text: error)
+                    Button("Retry") { Task { await store.retryLoad(key) } }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
             if !shown.isEmpty {
                 ViewThatFits(in: .vertical) {
                     // Fitting, there is no top to scroll to, so earlier turns are a line to click.

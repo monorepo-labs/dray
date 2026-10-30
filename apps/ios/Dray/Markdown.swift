@@ -31,6 +31,8 @@ func markdownBlocks(_ text: String) -> [MarkdownBlock] {
     var prose: [Substring] = [], code: [Substring] = [], quote: [String] = []
     var list: [(marker: String, text: String, indent: Int)] = []
     var table: [[String]] = []
+    // Set once the header's delimiter is skipped, so a data row of dashes stays a row.
+    var delimited = false
     var fenced = false
     func flush() {
         let p = prose.joined(separator: "\n").trimmingCharacters(in: .newlines)
@@ -38,7 +40,7 @@ func markdownBlocks(_ text: String) -> [MarkdownBlock] {
         if !list.isEmpty { out.append(.list(list)) }
         if !quote.isEmpty { out.append(.quote(quote.joined(separator: "\n"))) }
         if !table.isEmpty { out.append(.table(table)) }
-        prose = []; list = []; quote = []; table = []
+        prose = []; list = []; quote = []; table = []; delimited = false
     }
     let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
     for (i, line) in lines.enumerated() {
@@ -58,7 +60,7 @@ func markdownBlocks(_ text: String) -> [MarkdownBlock] {
         // that happens to start with a pipe stays prose.
         if trimmed.hasPrefix("|"), !table.isEmpty || (i + 1 < lines.count && isDelimiter(lines[i + 1])) {
             if table.isEmpty { flush() }
-            if table.count == 1, isDelimiter(trimmed) { continue }
+            if table.count == 1, !delimited, isDelimiter(trimmed) { delimited = true; continue }
             table.append(cells(trimmed))
             continue
         }
