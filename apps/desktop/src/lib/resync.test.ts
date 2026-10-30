@@ -31,6 +31,21 @@ describe("mergeMissed", () => {
     ]);
   });
 
+  it("fills a kept copy back in log order around what arrived while it was evicted", () => {
+    // Kept as [a, b]; `c` arrived live while evicted and was merged on return;
+    // `e` arrived during the catch-up read, which answered what follows `b`.
+    const kept = [ev("a", 1), ev("b", 2)];
+    const current = [...kept, ev("c", 3), ev("e", 5)];
+    const since = [ev("c", 3), ev("d", 4)];
+    expect(mergeMissed(current, kept, since).map((e) => e.id)).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  it("leaves an older page prepended during the read above what it held", () => {
+    const kept = [ev("c", 3), ev("d", 4)];
+    const current = [ev("a", 1), ev("b", 2), ...kept];
+    expect(mergeMissed(current, kept, [ev("e", 5)]).map((e) => e.id)).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
   it("answers the same array when nothing was missed", () => {
     const current = [ev("a", 1)];
     expect(mergeMissed(current, current, [ev("a", 1)])).toBe(current);

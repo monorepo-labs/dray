@@ -32,13 +32,20 @@ export function missedEvents(held: AgentEvent[], fetched: AgentEvent[]): AgentEv
 /// read did not return arrived after it, so it goes after every event the read
 /// did. Appended instead, older events sat behind newer ones and a backward
 /// walk read the wrong one as the newest.
+///
+/// Arrived means *after* the newest held event: one before it is an older page
+/// prepended during the read, and stays where it is.
 export function mergeMissed(current: AgentEvent[], held: AgentEvent[], fresh: AgentEvent[]): AgentEvent[] {
   const have = new Set(current.map((e) => e.id));
   if (fresh.every((e) => have.has(e.id))) return current;
   const heldIds = new Set(held.map((e) => e.id));
   const freshIds = new Set(fresh.map((e) => e.id));
-  let events = current.filter((e) => heldIds.has(e.id) && !freshIds.has(e.id));
-  const arrived = current.filter((e) => !heldIds.has(e.id) && !freshIds.has(e.id));
+  let lastHeld = -1;
+  current.forEach((e, i) => {
+    if (heldIds.has(e.id)) lastHeld = i;
+  });
+  let events = current.filter((e, i) => i <= lastHeld && !freshIds.has(e.id));
+  const arrived = current.filter((e, i) => i > lastHeld && !freshIds.has(e.id));
   for (const e of fresh) {
     // One that arrived live already retired its own provisional prompt.
     const retire = e.payload.type === "user_message" && !have.has(e.id);
