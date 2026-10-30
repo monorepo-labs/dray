@@ -342,7 +342,7 @@ struct UserBubble: View {
                     .font(Theme.Font.micro).foregroundStyle(Theme.tertiary)
             }
             if !images.isEmpty {
-                HStack(spacing: Theme.Space.xs) {
+                ThumbnailRow(spacing: Theme.Space.xs) {
                     ForEach(Array(images.enumerated()), id: \.offset) { _, ref in
                         ZoomableImage(ref: ref) {
                             RemoteImage(ref: ref, fill: true)

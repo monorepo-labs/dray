@@ -63,6 +63,21 @@ enum ImageLoader {
     }
 }
 
+/// A prompt's thumbnails in a row, scrolling sideways only where they outgrow the column,
+/// so a short row keeps the bubble's trailing alignment.
+struct ThumbnailRow<Content: View>: View {
+    let spacing: CGFloat
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: spacing) { content }
+            ScrollView(.horizontal) { HStack(spacing: spacing) { content } }
+                .scrollIndicators(.never)
+        }
+    }
+}
+
 /// One image, loaded on appear. A faint box stands in while it loads, and a
 /// glyph where it could not be read. Callers size and clip it.
 struct RemoteImage: View {
@@ -86,10 +101,16 @@ struct RemoteImage: View {
                     }
             }
         }
+        // A few spaced tries ride out a socket coming back; scrolling away and back tries afresh.
         .task(id: ref) {
             guard ImageLoader.cached(ref, server) == nil else { return }
-            loaded = await ImageLoader.load(ref, from: server)
-            failed = loaded == nil
+            for wait in [0, 2, 5, 15] {
+                try? await Task.sleep(for: .seconds(wait))
+                if Task.isCancelled { return }
+                loaded = await ImageLoader.load(ref, from: server)
+                failed = loaded == nil
+                if loaded != nil { return }
+            }
         }
     }
 }

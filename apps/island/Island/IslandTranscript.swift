@@ -220,7 +220,7 @@ private struct PromptBubble: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
             if !images.isEmpty {
-                HStack(spacing: 4) {
+                ThumbnailRow(spacing: 4) {
                     // Seen at size in Dray: a click leads there, as the summary line does.
                     ForEach(Array(images.enumerated()), id: \.offset) { _, ref in
                         Button(action: openInApp) {
