@@ -116,6 +116,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var captureKey: HotKey?
     /// ⌘⏎ from anywhere, held while the done pill is up: Open in app on the newest.
     private var openKey: HotKey?
+    /// Bare Esc from anywhere, held while the done pill is up: the pill is never key, so no key monitor sees it.
+    private var dismissKey: HotKey?
     private static weak var shared: Delegate?
     /// The first of a double tap, while the panel is shut.
     private var lastTap: Date?
@@ -340,6 +342,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
             guard let composer, composer.donePillUp, let key = composer.done.last else { return }
             composer.openDoneInApp(key)
         }
+        dismissKey = HotKey(key: kVK_Escape, mods: 0) { [weak composer] in
+            guard let composer, composer.donePillUp else { return }
+            composer.done = []
+        }
         composer.recordingChanged = { [weak self] recording in
             if recording { self?.startAnnotation() } else { self?.endAnnotation() }
         }
@@ -476,6 +482,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         // is still reading the displays would otherwise start a second overlay.
         guard let composer, let panel, !composer.capturing, [.idle, .recording].contains(composer.dictation) else { return }
         composer.capturing = true
+        dismissKey?.held = false
         let recording = composer.dictation == .recording, wasShown = composer.shown
         let slot = composer.reserveShot()
         let cut = recording ? Task { await composer.cutDictation(before: slot) } : nil
@@ -491,6 +498,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         Task {
             defer {
                 composer.capturing = false
+                dismissKey?.held = composer.donePillUp
                 // Dictation may have stopped during the flight or the cut, where `endAnnotation` left the level to this.
                 panel.level = annotation == nil ? .statusBar : Self.overOverlay
                 if updatePending { updateIfReplaced() }
@@ -524,6 +532,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         composer.shown = true
         closeKey?.held = true
         openKey?.held = false
+        dismissKey?.held = false
     }
 
     /// Takes the window down once the close animation has run, unless
@@ -541,6 +550,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private func showPills() {
         guard let pills, let composer else { return }
         openKey?.held = composer.donePillUp
+        // A capture's overlay takes Esc to cancel; a hot key would get it first.
+        dismissKey?.held = composer.donePillUp && !composer.capturing
         if composer.hasPill {
             pills.orderFrontRegardless()
             pills.rejoinAllSpacesIfLost()
