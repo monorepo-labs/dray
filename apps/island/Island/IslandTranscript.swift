@@ -94,6 +94,7 @@ struct IslandTranscript: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .environment(\.imageServer, store.connection(key.server))
         // Follows without marking read: looking at the island is not opening the session.
         .task(id: key) { await store.load(key) }
         // Spent by whichever of the two lists drew this count, or by nobody where it
@@ -114,7 +115,7 @@ struct IslandTranscript: View {
             }
             ForEach(turns) { turn in
                 Group {
-                    if live && turn.id == turns.last?.id { LiveTurn(turn: turn) } else { settled(turn) }
+                    if live && turn.id == turns.last?.id { LiveTurn(turn: turn, openInApp: openInApp) } else { settled(turn) }
                 }
                 .id(turn.id)
             }
@@ -143,7 +144,7 @@ struct IslandTranscript: View {
         // An interrupted turn has no `finalText`, so its newest message ends it.
         let answer = turn.finalText ?? work.reversed().lazy.compactMap { if case .text(_, let t) = $0 { t } else { nil } }.first
         return VStack(alignment: .leading, spacing: 8) {
-            if let p = turn.prompt { PromptBubble(text: p.text) }
+            if let p = turn.prompt { PromptBubble(text: p.text, images: p.images, openInApp: openInApp) }
             // The work is Dray's to show: the line leads there and the island closes.
             if !work.isEmpty {
                 Button(action: openInApp) {
@@ -164,6 +165,7 @@ struct IslandTranscript: View {
 /// A running turn: the newest message over the latest call.
 private struct LiveTurn: View {
     let turn: Turn
+    let openInApp: () -> Void
 
     var body: some View {
         let text = turn.work.reversed().lazy.compactMap { if case .text(_, let t) = $0 { t } else { nil } }.first
@@ -175,7 +177,7 @@ private struct LiveTurn: View {
             }
         }.first
         VStack(alignment: .leading, spacing: 8) {
-            if let p = turn.prompt { PromptBubble(text: p.text) }
+            if let p = turn.prompt { PromptBubble(text: p.text, images: p.images, openInApp: openInApp) }
             if let text { MessageText(text: text) }
             Group {
                 if let call { CallLine(call: call) } else {
@@ -212,17 +214,38 @@ private struct CallLine: View {
 
 private struct PromptBubble: View {
     let text: String
+    let images: [ImageRef]
+    let openInApp: () -> Void
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 13))
-            .lineLimit(2)
-            .foregroundStyle(.white.opacity(0.85))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.leading, 64)
+        VStack(alignment: .trailing, spacing: 4) {
+            if !images.isEmpty {
+                HStack(spacing: 4) {
+                    // Seen at size in Dray: a click leads there, as the summary line does.
+                    ForEach(Array(images.enumerated()), id: \.offset) { _, ref in
+                        Button(action: openInApp) {
+                            RemoteImage(ref: ref, fill: true)
+                                .frame(width: 44, height: 44)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open in Dray")
+                    }
+                }
+            }
+            if !text.isEmpty {
+                Text(text)
+                    .font(.system(size: 13))
+                    .lineLimit(2)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.leading, 64)
     }
 }
 
@@ -263,6 +286,11 @@ private struct MessageText: View {
                     Rectangle().fill(.white.opacity(0.15)).frame(height: 1).padding(.vertical, 2)
                 case .table(let rows):
                     MarkdownTable(rows: rows)
+                case .image(_, let url):
+                    // Clipped before the frame, so the corners are the picture's and not the column's.
+                    RemoteImage(ref: ImageRef(path: nil, url: url, mimeType: nil))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .frame(maxWidth: 200, maxHeight: 120, alignment: .leading)
                 }
             }
         }
