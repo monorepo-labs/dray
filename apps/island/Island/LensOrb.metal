@@ -31,7 +31,6 @@
                          back.sample(sm, 0.5 + uv * scale.g / (2.0 * span)).g,
                          back.sample(sm, 0.5 + uv * scale.b / (2.0 * span)).b);
     float fresnel = 0.04 + 0.96 * pow(1.0 - z, 5.0);
-    float3 glass = mix(seen * 0.85, float3(0.92, 0.95, 1.0), fresnel * 0.55);
 
     // From here on, the prism, at its shipped settings: clear glass, the true
     // rainbow, and the size past where its small-orb lift applies.
@@ -52,6 +51,10 @@
 
     // Solid dark glass above the band, the lens below it, so the line between
     // waves with the voice; curled, the arc's inside is solid and its rim the lens.
+    // Smoked glass: darkest just under the band and toward the rim, so on a
+    // white screen the lens still reads as grey glass rather than a hole.
+    float shade = mix(0.42, 0.78, smoothstep(0.0, 0.75, d)) * (1.0 - 0.3 * smoothstep(0.55, 0.9, r / R));
+    float3 glass = mix(seen * shade, float3(0.92, 0.95, 1.0), fresnel * 0.4);
     float lens = has * smoothstep(-0.02, 0.06, d);
     float3 body = mix(float3(0.03), glass, lens) * (1.0 + 0.2 * rec);
     float rim = smoothstep(0.7, R, r);
