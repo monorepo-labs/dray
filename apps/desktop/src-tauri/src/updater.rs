@@ -138,10 +138,27 @@ pub async fn check_update(
     // frontend's local storage, out of reach of `setup`.
     tauri::async_runtime::spawn(sync_cli(channel));
 
+    // A bundle already downloaded is the version to beat, not the one running:
+    // judged against the running one, a newer release than the bundle could
+    // never be found until the reader restarted onto the stale one.
+    let pending = app
+        .state::<PendingUpdate>()
+        .0
+        .lock()
+        .map_err(|_| "pending update lock poisoned".to_string())?
+        .as_ref()
+        .map(|(update, _)| update.version.clone());
+    // A newer bundle downloads under the one already ready, so its row keeps
+    // its button rather than turning into a bar that a failed download strands.
+    let quiet = pending.is_some();
+
     let updater = app
         .updater_builder()
         .endpoints(vec![channel.manifest().parse().map_err(|e| format!("{e}"))?])
         .map_err(|e| e.to_string())?
+        .version_comparator(move |running, release| {
+            release.version > version_to_beat(running, pending.as_deref())
+        })
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -152,13 +169,15 @@ pub async fn check_update(
     let version = update.version.clone();
     let notes = update.body.clone();
 
-    emit_status(
-        &app,
-        UpdateStatus::Downloading {
-            version: version.clone(),
-            percent: None,
-        },
-    );
+    if !quiet {
+        emit_status(
+            &app,
+            UpdateStatus::Downloading {
+                version: version.clone(),
+                percent: None,
+            },
+        );
+    }
 
     // Chunks land every few KB, which is thousands of events over one bundle.
     // Only a change in whole percent is worth a render.
@@ -171,6 +190,9 @@ pub async fn check_update(
         .download(
             move |chunk, total| {
                 downloaded += chunk as u64;
+                if quiet {
+                    return;
+                }
                 let Some(total) = total.filter(|t| *t > 0) else {
                     return;
                 };
@@ -233,8 +255,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), InstallError> {
 async fn install(app: AppHandle) -> Result<(), InstallError> {
     // Cloned rather than taken, so a failed install leaves the bundle in place
     // to be retried. Taking it would strand the row on a button that can only
-    // ever error: the frontend stops checking once an update is ready, so
-    // nothing would ever download a replacement.
+    // ever error until the next check found something newer.
     let pending = app
         .state::<PendingUpdate>()
         .0
@@ -431,6 +452,15 @@ fn takes_channel_flag(version: &str) -> bool {
     (parts.next().unwrap_or(0), parts.next().unwrap_or(0)) >= (0, 12)
 }
 
+/// The running version, or the downloaded bundle's where one is newer. A pending
+/// version that will not parse is ignored, which costs a repeat download and
+/// never a missed release.
+fn version_to_beat(running: semver::Version, pending: Option<&str>) -> semver::Version {
+    pending
+        .and_then(|v| semver::Version::parse(v).ok())
+        .map_or(running.clone(), |p| p.max(running))
+}
+
 fn emit_status(app: &AppHandle, status: UpdateStatus) {
     if let Err(e) = app.emit("update_status", &status) {
         eprintln!("[update status emit err] {e}");
@@ -455,6 +485,24 @@ mod tests {
         ] {
             assert_eq!(super::takes_channel_flag(version), takes, "{version}");
         }
+    }
+
+    /// A ready bundle must not be fetched again, nor replaced by anything but a
+    /// newer release — a stable one older than a beta already downloaded
+    /// included.
+    #[test]
+    fn a_ready_bundle_is_replaced_only_by_a_newer_release() {
+        let v = |s: &str| semver::Version::parse(s).unwrap();
+        let newer = |release: &str, pending: Option<&str>| {
+            v(release) > super::version_to_beat(v("0.29.12"), pending)
+        };
+        assert!(newer("0.29.13", None));
+        assert!(!newer("0.29.12", None));
+        assert!(!newer("0.29.13", Some("0.29.13")));
+        assert!(newer("0.29.14", Some("0.29.13")));
+        assert!(!newer("0.29.13", Some("0.30.0-beta.1")));
+        assert!(newer("0.30.0", Some("0.30.0-beta.1")));
+        assert!(newer("0.29.13", Some("not a version")));
     }
 
     #[test]
