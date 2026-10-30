@@ -141,25 +141,26 @@ pub async fn check_update(
     // A bundle already downloaded is the version to beat, not the one running:
     // judged against the running one, a newer release than the bundle could
     // never be found until the reader restarted onto the stale one.
-    let floor = app
+    let pending = app
         .state::<PendingUpdate>()
         .0
         .lock()
         .map_err(|_| "pending update lock poisoned".to_string())?
         .as_ref()
-        .and_then(|(update, _)| semver::Version::parse(&update.version).ok());
+        .map(|(update, _)| update.version.clone());
     // A newer bundle downloads under the one already ready, so its row keeps
     // its button rather than turning into a bar that a failed download strands.
-    let quiet = floor.is_some();
+    let quiet = pending.is_some();
 
-    let mut builder = app
+    let updater = app
         .updater_builder()
         .endpoints(vec![channel.manifest().parse().map_err(|e| format!("{e}"))?])
+        .map_err(|e| e.to_string())?
+        .version_comparator(move |running, release| {
+            release.version > version_to_beat(running, pending.as_deref())
+        })
+        .build()
         .map_err(|e| e.to_string())?;
-    if let Some(floor) = floor {
-        builder = builder.version_comparator(move |_, release| release.version > floor);
-    }
-    let updater = builder.build().map_err(|e| e.to_string())?;
 
     let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
         return Ok(());
@@ -451,6 +452,15 @@ fn takes_channel_flag(version: &str) -> bool {
     (parts.next().unwrap_or(0), parts.next().unwrap_or(0)) >= (0, 12)
 }
 
+/// The running version, or the downloaded bundle's where one is newer. A pending
+/// version that will not parse is ignored, which costs a repeat download and
+/// never a missed release.
+fn version_to_beat(running: semver::Version, pending: Option<&str>) -> semver::Version {
+    pending
+        .and_then(|v| semver::Version::parse(v).ok())
+        .map_or(running.clone(), |p| p.max(running))
+}
+
 fn emit_status(app: &AppHandle, status: UpdateStatus) {
     if let Err(e) = app.emit("update_status", &status) {
         eprintln!("[update status emit err] {e}");
@@ -475,6 +485,24 @@ mod tests {
         ] {
             assert_eq!(super::takes_channel_flag(version), takes, "{version}");
         }
+    }
+
+    /// A ready bundle must not be fetched again, nor replaced by anything but a
+    /// newer release — a stable one older than a beta already downloaded
+    /// included.
+    #[test]
+    fn a_ready_bundle_is_replaced_only_by_a_newer_release() {
+        let v = |s: &str| semver::Version::parse(s).unwrap();
+        let newer = |release: &str, pending: Option<&str>| {
+            v(release) > super::version_to_beat(v("0.29.12"), pending)
+        };
+        assert!(newer("0.29.13", None));
+        assert!(!newer("0.29.12", None));
+        assert!(!newer("0.29.13", Some("0.29.13")));
+        assert!(newer("0.29.14", Some("0.29.13")));
+        assert!(!newer("0.29.13", Some("0.30.0-beta.1")));
+        assert!(newer("0.30.0", Some("0.30.0-beta.1")));
+        assert!(newer("0.29.13", Some("not a version")));
     }
 
     #[test]
