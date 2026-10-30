@@ -13,7 +13,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{
         atomic::{AtomicU64, Ordering},
         LazyLock, Mutex, OnceLock,
@@ -1275,7 +1275,72 @@ fn live_forward(conn: &mut Conn, port: u16) -> Option<u16> {
 /// A file on a remote server — an attachment, a recording — fetched through
 /// its `/file` route with the token in a header, for the webview's
 /// `drayserver://` scheme. The token stays out of every URL the page holds.
+/// Attachments are kept in [`FILES`], since a transcript drawn again asks
+/// for every picture in it again and the webview keeps none of a custom
+/// scheme's answers.
 pub async fn fetch_file(server: &str, path: &str) -> Result<(String, Vec<u8>), String> {
+    let key = (server.to_string(), path.to_string());
+    let keep = is_attachment(path);
+    if keep {
+        if let Some(hit) = FILES.lock().unwrap().get(&key) {
+            return Ok(hit);
+        }
+    }
+    let (kind, body) = download_file(server, path).await?;
+    if keep {
+        FILES.lock().unwrap().put(key, kind.clone(), body.clone());
+    }
+    Ok((kind, body))
+}
+
+/// Written once under a fresh uuid (`attachments/<session>/<uuid>.<ext>`)
+/// and never rewritten, so a copy can't go stale. Recordings are kept by a
+/// name a re-recording overwrites, so they are always fetched.
+fn is_attachment(path: &str) -> bool {
+    std::path::Path::new(path)
+        .components()
+        .rev()
+        .nth(2)
+        .is_some_and(|c| c.as_os_str() == "attachments")
+}
+
+/// Most bytes [`FILES`] holds; a screenshot is 0.1–1.5MB.
+const FILES_BUDGET: usize = 64 << 20;
+
+static FILES: LazyLock<Mutex<FileCache>> = LazyLock::new(Default::default);
+
+/// Least recently used goes first. In memory only, so a relaunch fetches
+/// each picture once more.
+// ponytail: linear scan, fine at a few hundred entries.
+#[derive(Default)]
+struct FileCache {
+    entries: VecDeque<((String, String), String, Vec<u8>)>,
+    bytes: usize,
+}
+
+impl FileCache {
+    fn get(&mut self, key: &(String, String)) -> Option<(String, Vec<u8>)> {
+        let at = self.entries.iter().position(|(k, ..)| k == key)?;
+        let entry = self.entries.remove(at)?;
+        let hit = (entry.1.clone(), entry.2.clone());
+        self.entries.push_back(entry);
+        Some(hit)
+    }
+
+    fn put(&mut self, key: (String, String), kind: String, body: Vec<u8>) {
+        if body.len() > FILES_BUDGET / 4 || self.entries.iter().any(|(k, ..)| *k == key) {
+            return;
+        }
+        self.bytes += body.len();
+        self.entries.push_back((key, kind, body));
+        while self.bytes > FILES_BUDGET {
+            let Some((_, _, old)) = self.entries.pop_front() else { break };
+            self.bytes -= old.len();
+        }
+    }
+}
+
+async fn download_file(server: &str, path: &str) -> Result<(String, Vec<u8>), String> {
     let (base, token) = http_base(server)?;
     let response = crate::http()
         .get(format!("{base}/file"))
@@ -1376,6 +1441,28 @@ pub async fn upload_attachment(server: String, path: String, id: String) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeps_attachments_alone_within_budget() {
+        assert!(is_attachment("/home/u/.dray/attachments/s1/0190.png"));
+        assert!(!is_attachment("/home/u/.dray/browser/recordings/s1/flow.mp4"));
+        assert!(!is_attachment("/home/u/attachments/flow.mp4"));
+
+        let key = |n: usize| ("srv".to_string(), format!("/a/{n}"));
+        let mut cache = FileCache::default();
+        let chunk = FILES_BUDGET / 8;
+        for n in 0..8 {
+            cache.put(key(n), "image/png".into(), vec![0; chunk]);
+        }
+        assert!(cache.get(&key(0)).is_some(), "touched, so newest");
+        cache.put(key(8), "image/png".into(), vec![0; chunk]);
+        assert!(cache.get(&key(1)).is_none(), "oldest untouched goes");
+        assert!(cache.get(&key(0)).is_some());
+        assert!(cache.bytes <= FILES_BUDGET);
+
+        cache.put(key(9), "image/png".into(), vec![0; FILES_BUDGET]);
+        assert!(cache.get(&key(9)).is_none(), "one file can't empty it");
+    }
 
     #[test]
     fn tells_a_server_behind_its_channel() {
