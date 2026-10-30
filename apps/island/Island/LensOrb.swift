@@ -49,6 +49,10 @@ struct LensOrb: View {
     @ObservationIgnored private var scale: CGFloat = 2
     @ObservationIgnored private var stream: SCStream?
     @ObservationIgnored private var live = false
+    /// Which start is current. A start resolving after a stop and a newer
+    /// start would otherwise keep its stream over the newer one's, and
+    /// nothing would ever stop it.
+    @ObservationIgnored private var ticket = 0
     @ObservationIgnored private var wanted = false
     @ObservationIgnored private let context = CIContext()
     /// macOS shows its prompt once, so asking again only costs a call.
@@ -87,6 +91,7 @@ struct LensOrb: View {
 
     @MainActor private func stop() {
         live = false
+        ticket += 1
         stream?.stopCapture { _ in }
         stream = nil
         image = nil
@@ -95,17 +100,25 @@ struct LensOrb: View {
 
     @MainActor private func start(on screen: NSScreen) {
         let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+        ticket += 1
+        let mine = ticket
         Task { @MainActor in
             guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
-                  let display = content.displays.first(where: { $0.displayID == id }) else { live = false; return }
+                  let display = content.displays.first(where: { $0.displayID == id }) else {
+                if mine == ticket { live = false }
+                return
+            }
             // By window: excluding the app let the orb capture its own glow, a frame late.
             let filter = SCContentFilter(display: display,
                                          excludingWindows: content.windows.filter { $0.owningApplication?.processID == getpid() })
             let stream = SCStream(filter: filter, configuration: config(), delegate: nil)
             guard (try? stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: .global(qos: .userInteractive))) != nil,
-                  (try? await stream.startCapture()) != nil else { live = false; return }
-            // Stopped while it was starting.
-            guard live else { stream.stopCapture { _ in }; return }
+                  (try? await stream.startCapture()) != nil else {
+                if mine == ticket { live = false }
+                return
+            }
+            // Stopped, or stopped and started again, while it was starting.
+            guard mine == ticket, live else { stream.stopCapture { _ in }; return }
             self.stream = stream
         }
     }

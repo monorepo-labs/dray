@@ -25,6 +25,10 @@ struct IslandView: View {
     /// Expanded recording shows its clock while the pointer is on the orb or the pill under it.
     @State private var orbHovered = false
     @State private var pillHovered = false
+    /// The rows' height when expanded recording began, nil with none: rows
+    /// arriving mid-recording (a screenshot) would otherwise grow the hidden
+    /// list and push the orb down.
+    @State private var rowsHeight: CGFloat?
     /// The idle orb and the recording one are one orb to the reader, so a start
     /// moves it into place rather than fading a second one in.
     @Namespace private var orbSpace
@@ -68,6 +72,7 @@ struct IslandView: View {
             orbHovered = false
             pillHovered = false
         }
+        .onChange(of: composer.rows.isEmpty) { if composer.rows.isEmpty, !recording { rowsHeight = nil } }
         // A panel hidden under the pointer never hears it leave, and would open
         // next time still hovered, the screenshot button up with nothing over it.
         .onChange(of: composer.shown) { if !composer.shown { cardHovered = false } }
@@ -187,7 +192,7 @@ struct IslandView: View {
                 .gone(recording)
         }
         if composer.target == .new { NewSessionBar(composer: composer).gone(recording) }
-        if !composer.rows.isEmpty {
+        if recording ? rowsHeight != nil : !composer.rows.isEmpty {
             // Three rows tall at most, then it scrolls, held at the newest.
             ViewThatFits(in: .vertical) {
                 rowList
@@ -201,6 +206,8 @@ struct IslandView: View {
             }
             .frame(maxHeight: 3 * 32 + 2 * 10)
             .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if !recording { rowsHeight = $0 } }
+            .frame(height: recording ? rowsHeight : nil, alignment: .top)
             .gone(recording)
         }
         input
