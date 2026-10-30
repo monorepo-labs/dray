@@ -1,0 +1,48 @@
+# Notifications
+
+Three events hand a session back to the reader — it finished, it wants permission, it asked a question — and each announce itself on **exactly one channel**, chosen by where the reader is. `announce` in [useSessions](../src/hooks/useSessions.ts) is that split, written once and shared:
+
+| focused | on screen | outcome |
+|---|---|---|
+| no | either | desktop notification |
+| yes | no | in-app notice |
+| yes | yes | nothing — the transcript *is* the notification |
+
+Channels are exclusive, not additive: a card drawn for something the OS already told the reader is a second interruption for one event, and an in-app card is invisible from another app anyway.
+
+**A fourth event ignore that table entirely: a PR turning ready to merge.** [usePrReady](../src/hooks/usePrReady.ts) raise an in-app card **unconditionally** and post no banner. The table's question is "has the reader seen this happen", and for the other three the answer is on screen — the turn's own output is the notification. This one has no such moment: CI report on someone else's schedule, and the panel line going from "Checks not passing" to "Ready to merge" is a silent two-word swap, so *being on the PR tab ≠ having noticed*. Nothing retire it but its own clock — no read-marking, no rail mark.
+
+**Signal = transition, not state.** The first reading of a session is recorded silently; only a change out of it is news, since the app cannot tell a PR that turned green a second ago from one green since last week. `readyTransitions` ([pr.ts](../src/lib/pr.ts)) own that rule and the pruning with it — a session that stops being watched is **forgotten**, so it comes back as a first sighting. Re-seeding costs an announcement never made, where remembering `false` across an absence raise one for a PR that was ready the whole time.
+
+**Read off the sidebar's marks, not the panel's own fetch**, since the panel's poll gate on its tab being visible and active — exactly the case with nothing to announce. So `QUERY_MARKS` carry `mergeable mergeStateStatus` on the **open half only**: a merged PR cannot become ready, and `mergeStateStatus` is computed *on being asked*. `None` there read as **unknown, not ready**.
+
+**One ordered rule, two presentations.** `mergeVerdict` is the order; `mergeReadiness` turn it into the panel's sentence and `readyToMerge` into the one question the notice turns on — three-valued, `null` where GitHub hasn't worked it out, so `readyTransitions` hold the last reading instead of writing false over it (a merge move the base, every other open PR read UNKNOWN for a window, and settling back would read as news).
+
+**Notices key on session *and* kind.** Keyed on session alone rested on "a session cannot both be blocked on a question and have finished a turn", which is false for the fourth kind: CI report while the agent stands still waiting for permission. `ANSWERED_BY_OPENING` spell out the three kinds opening a session answers — `pr` absent, since selecting a session ≠ looking at its PR.
+
+**⌘G take the card without reaching for it**, acting on the **oldest** — the top one, next to expire — which make the key repeatable. The binding lives in `NoticeStack`, not `App`, so it exists only while a card does, and the cap is drawn **on** the card it acts on, which is also how the stack says which one the key takes.
+
+**The progress bar is the timer, not a picture of one.** The store hold no `setTimeout` at all: the bar's `animationend` call `dismissNotice`. One clock means hovering pause both, so a card cannot vanish under a cursor reaching for its button, and it can't expire while the window is occluded and the animation throttled. `completed` run 10s, `asking` 15s. **A card going away ≠ the signal going away** — the `asking` one leave the session still blocked, which is fine because the yellow rail mark stays lit until the request is answered.
+
+**Reading requires looking, so a `completed` notice on the selected session is only retired when the window has focus.** The other half is a focus listener marking it read on return, without which a session finishing in the background stay unread forever.
+
+**The sidebar rail carry both marks and they mean different things.** Green = *unread*: the turn is over, cleared when the row is viewed. Yellow = *waiting on you*: the turn is still open and only an answer clears it, so viewing the row leave it lit. Yellow wins where both apply. The waiting set is frontend-only (`asksBySession`, request ids so `permission_decided` retire the right one) and deliberately **not** folded into `SessionStatus` — the backend report these sessions `in_progress` and is right to. Cleared when status leaves `in_progress`, which is what stop a stranded request marking a dead session as waiting forever.
+
+**Dock badge = that same pair, counted** ([attention.ts](../src/lib/attention.ts), [useDockBadge.ts](../src/hooks/useDockBadge.ts)) — one predicate shared with the rail (`asking || status === "completed"`), so the number is a promise about what opening the window shows. It needs no clearing path of its own, and `0` goes out as `undefined`, which is what removes the badge. Counting read three sources, each covering a hole the others leave: `statusBySession` is empty at launch where the index carry `completed` from last run; the index list hold one side of the archived split at a time; and `asksBySession` is in neither. Live status wins over persisted.
+
+Two Tauri facts. `core:window:allow-set-badge-count` is **not** in `core:default`, so it is named in [capabilities/default.json](../src-tauri/capabilities/default.json) — with the same failure mode as `start-dragging`: the ACL refuse and report nothing. Unlike the desktop banner, this one **does** work under `pnpm tauri dev`.
+
+**Focus is read imperatively, never as state** ([focus.ts](../src/lib/focus.ts)) — the one caller that matters sits inside a Tauri listener registered once with `[]` deps, where a state value is the mount-time one forever. The source is Tauri's `onFocusChanged`, not the DOM's `blur`: a webview blur whenever focus leaves the document, which a native menu or devtools do without the user leaving the app.
+
+## The desktop banner
+
+**Posted from Rust, not from `tauri-plugin-notification`** ([notifications.rs](../src-tauri/src/notifications.rs)). The plugin cannot deliver a click on desktop and no configuration makes it: its desktop path spawn `show()` and drop the returned handle, and its `onAction` listener is wired to an event only mobile backends emit. Worth knowing because it *looks* like it works — macOS raise the app on click by itself, so the window comes forward and then sits on whatever session was already open.
+
+`notify_session` wait on the handle, and `"default"` (the body, against `"__closed"` that dismissal and expiry both report) raise the window and emit `notification_activated` with the session id. The wait block until the reader acts or the banner ages out, hence `spawn_blocking`. **Raising the window and selecting the session are separate and both needed.**
+
+- **A banner with no sound is delivered silently**, wrong here since this channel only fires when the reader is in another app. notify-rust call `setSound` only when `sound_name` is set at all, and the value is a trap: `""` reads like "no sound" and is the opposite, being the name that resolves to the **system default**. `asking` get **Ping**, since a question left unanswered holds the session open; `completed` take the default.
+- **`preview-macos-un` is not an optional feature here — without it nothing is delivered at all.** notify-rust's default macOS backend is the deprecated `NSUserNotificationCenter`, which current macOS does not deliver for an app: measured from inside the running app, every shape timed out at exactly 2.0s while the *same code* in a plain CLI process delivered a clickable banner. `tauri-plugin-notification` post the same way and would fail identically.
+- **The banner cannot work under `tauri dev`, and the guard is `is_dev()`.** `UNUserNotificationCenter` reach for the process's bundle and raise an **uncaught** `NSInternalInconsistencyException` when there isn't one, aborting the app rather than returning an error. `check_bundle` is *not* the guard to reach for — it only ask whether a bundle *identifier* exists, and the embedded `Info.plist` satisfy it right up to the frame that killed the app.
+- **The bundle need a signing identity or macOS refuse permission silently.** Tauri's bundler leave the app linker-signed under a generated identifier, and with that mismatch `request_auth` return `Ok(false)` with status `NotDetermined` and **no prompt ever shown**. `bundle.macOS.signingIdentity: "-"` in [tauri.conf.json](../src-tauri/tauri.conf.json) fix it. This is the floor below which notifications don't work at all.
+- **Every banner carries a 60s timeout, and the timeout is what ends its wait.** Without one, `mac-usernotifications` waits on a buttonless banner by polling `getDeliveredNotifications` every 500ms until it leaves Notification Center, which an unread banner never does — one parked thread each, and 105 of them pinned Dray and `usernotificationsd` at full CPU (#458). The timeout removes the banner and answers `""`, not `"__closed"`, so the click test is `== "default"`, never `!= "__closed"`.
+- **Permission is asked once per process, on the first banner** (`request_auth_once`). The call **block until the reader answers**, so a per-banner ask park a thread per notification behind one prompt. Nothing branch on the result: denial is silent and permanent, and the in-app notice cover the reader either way.
