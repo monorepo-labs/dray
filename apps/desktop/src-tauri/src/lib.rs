@@ -765,6 +765,12 @@ pub fn run() {
             cef::init(app.handle());
             #[cfg(target_os = "macos")]
             trackpad::watch(app.handle());
+            // GTK draws the menu as a bar inside the window, over the app's own
+            // titlebar strip. The webview answers the edit chords without it.
+            #[cfg(target_os = "linux")]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.remove_menu();
+            }
             // Dictations kept past a failure. Pruning on write alone left the
             // last one on disk forever, since nothing else sweeps them and a
             // reader who gives up after one failure writes no more.

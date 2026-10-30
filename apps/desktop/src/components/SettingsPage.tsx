@@ -63,7 +63,7 @@ import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
 import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
 import { useTranscriptionSettings } from "@/hooks/useTranscription";
-import { IS_MAC } from "@/lib/platform";
+import { HAS_DICTATION, IS_MAC } from "@/lib/platform";
 import { applyIsland, ISLAND_ENABLED, ISLAND_KEY, ISLAND_KEYS, type IslandKey } from "@/lib/island";
 import { captureCaps, captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/islandCapture";
 import { useWindowFocused } from "@/lib/focus";
@@ -1349,7 +1349,9 @@ const ALL_TABS = [
 export type SettingsTab = (typeof ALL_TABS)[number]["id"];
 
 /// Dray Island is a Mac app, so elsewhere its tab would be a page of controls for nothing.
-const SETTINGS_TABS = ALL_TABS.filter((t) => IS_MAC || t.id !== "island");
+const SETTINGS_TABS = ALL_TABS.filter(
+  (t) => (IS_MAC || t.id !== "island") && (HAS_DICTATION || t.id !== "transcription"),
+);
 
 /// A line under a tab's title saying what the tab is for. Accounts has one
 /// because its harness switches change what the composer's picker offers,
