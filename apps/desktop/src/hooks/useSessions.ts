@@ -1,4 +1,4 @@
-import { invoke, listen, LOCAL, noteSession, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
+import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
@@ -35,7 +35,7 @@ import { forgetTranscript, keepTranscript, takeTranscript } from "@/lib/keptTran
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KEY, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { FIRST_MOUNT } from "@/lib/turnWindow";
-import { alreadyThere, forget, stopWaiting, upload, waitFor } from "@/lib/uploads";
+import { forget, stopWaiting, upload, waitFor } from "@/lib/uploads";
 import type { Draft } from "./useDrafts";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
@@ -2897,9 +2897,6 @@ const applyQueue = async (sessionId: string, queued: QueuedMessage[]) => {
   const read = paths.length
     ? await invoke<Attachment[]>("read_attachments", { paths }, server).catch(() => [])
     : [];
-  // These are the server's own copies, so a cancel that puts them back in the
-  // tray must resend them as they are, never upload them from this Mac.
-  if (server !== LOCAL) alreadyThere(server, paths);
   if (queueReadRef.current[sessionId] !== n) return;
   setQueuedBySession((prev) => {
     const cur = prev[sessionId] ?? [];
@@ -2912,7 +2909,12 @@ const applyQueue = async (sessionId: string, queued: QueuedMessage[]) => {
       (m) =>
         cur.find((q) => q.message.id === m.id) ?? {
           message: m,
-          attachments: read.filter((a) => m.attachmentPaths.includes(a.path)),
+          // Qualified: these are the server's own copies, so a cancel that puts
+          // them back in the tray resends them as they are — `upload` passes a
+          // path already on its server through rather than reading this Mac.
+          attachments: read
+            .filter((a) => m.attachmentPaths.includes(a.path))
+            .map((a) => ({ ...a, path: qualify(a.path, server) })),
         },
     );
     return { ...prev, [sessionId]: next };

@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 import { channel } from "@/lib/channel";
-import { invoke, listen, LOCAL, type ServerId } from "@/lib/transport";
+import { invoke, listen, LOCAL, splitPath, type ServerId } from "@/lib/transport";
 
 /// The most a remote server takes per attachment — `MAX_UPLOAD_BYTES` in
 /// attachments.rs, stated again so a tile refuses before a byte moves.
@@ -49,6 +49,14 @@ let listening = false;
 /// answers where it lands. A failed upload starts over, so the send retries
 /// whatever a dropped connection lost.
 export function upload(server: ServerId, path: string, size: number): Promise<string> {
+  // Already that server's own copy, qualified as such: a prompt queued there
+  // by another client and cancelled here. Nothing on this Mac to send.
+  const own = splitPath(path);
+  if (own.server !== LOCAL) {
+    return own.server === server
+      ? Promise.resolve(own.path)
+      : Promise.reject(new Error("This file is on another server."));
+  }
   const key = keyOf(server, path);
   const current = uploads.get(key);
   if (current && !current.error) return current.done;
@@ -80,17 +88,6 @@ export function upload(server: ServerId, path: string, size: number): Promise<st
   uploads.set(key, { id, sent: 0, total: size, path: null, error: null, done: settled });
   emit();
   return settled;
-}
-
-/// Marks files already on `server` as uploaded to themselves: a prompt queued
-/// there by another client and cancelled here names the server's copies, which
-/// this Mac has no file behind.
-export function alreadyThere(server: ServerId, paths: string[]) {
-  for (const path of paths) {
-    const key = keyOf(server, path);
-    uploads.set(key, { id: `${key}\n${++transfers}`, sent: 0, total: 0, path, error: null, done: Promise.resolve(path) });
-  }
-  if (paths.length) emit();
 }
 
 /// Keeps every pinned file uploading: starts each one with no upload, now and
