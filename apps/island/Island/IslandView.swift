@@ -139,6 +139,8 @@ struct IslandView: View {
         // Faded rather than removed, so it animates.
         .background {
             shape.fill((denied ? Color.red : .black).opacity(bare ? 0 : 1))
+                // Keeps the edge visible on an all-black screen.
+                .overlay { outline.stroke(.white.opacity(bare ? 0 : 0.12), lineWidth: 0.5) }
                 .padding(.horizontal, composer.placement == .notch ? -NotchShape.ear : 0)
         }
         .shadow(color: .black.opacity(bare ? 0 : 0.35), radius: 12, y: 4)
@@ -356,6 +358,13 @@ struct IslandView: View {
         switch composer.placement {
         case .notch: AnyShape(NotchShape())
         case .bottom: AnyShape(RoundedRectangle(cornerRadius: 20))
+        }
+    }
+
+    private var outline: AnyShape {
+        switch composer.placement {
+        case .notch: AnyShape(NotchShape(closed: false))
+        case .bottom: AnyShape(RoundedRectangle(cornerRadius: 20).inset(by: 0.25))
         }
     }
 
