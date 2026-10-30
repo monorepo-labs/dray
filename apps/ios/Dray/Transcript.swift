@@ -209,10 +209,12 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
                 ?? (busy && !abandoned.contains(callId) ? .pending : .done)
             let call = ToolCall(id: e.id, name: name, toolType: toolType, input: input,
                                 title: title, output: r?.text, state: state, images: r?.images ?? [])
-            // A delegated run keeps its own row, as the desktop's panel link does.
-            if let last = calls.last, last.name != name || toolType == "subagent_spawn" { flushCalls() }
+            // A delegated run keeps its own row, as the desktop's panel link does, and so
+            // does a call carrying a picture: a closed group would hide it.
+            let alone = toolType == "subagent_spawn" || !call.images.isEmpty
+            if let last = calls.last, last.name != name || alone { flushCalls() }
             calls.append(call)
-            if toolType == "subagent_spawn" { flushCalls() }
+            if alone { flushCalls() }
         case .error(let message):
             if current == nil { current = Turn(id: "head-\(e.id)") }
             flushCalls()

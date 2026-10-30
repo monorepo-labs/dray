@@ -272,14 +272,22 @@ final class Delegate: NSObject, NSApplicationDelegate {
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak composer, weak panel] e in
             // A capture's overlay holds the keys while it runs: Esc there cancels it, not the panel.
             guard panel?.isVisible == true, let composer, composer.shown, !composer.capturing else { return e }
+            // An open image takes every key: ← → step it, Esc closes it, and nothing
+            // reaches the draft under it, or Return would send what the reader cannot see.
+            if composer.viewing != nil {
+                switch e.keyCode {
+                case 53: composer.viewing = nil
+                case 123: composer.step(-1)
+                case 124: composer.step(1)
+                default: break
+                }
+                return nil
+            }
             let mods = e.modifierFlags.intersection([.command, .shift, .option, .control])
             switch (e.keyCode, mods) {
             // Throwing away speech takes ⌘Esc, the hot key below: a bare Esc is too easy a slip mid-sentence.
             case (53, _) where composer.listening: break
             case (53, _): composer.escape()
-            // ← → step an open image; the input sits under it, so the caret wants nothing.
-            case (123, []) where composer.viewing != nil: composer.step(-1)
-            case (124, []) where composer.viewing != nil: composer.step(1)
             // A card takes Return to submit its answers, and digits to pick a permission option.
             case (36, []) where composer.isQuestions: composer.submits += 1
             case (36, []) where composer.ask == nil:
