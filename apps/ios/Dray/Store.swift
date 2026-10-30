@@ -386,7 +386,8 @@ final class Store {
                 "baseRef": nil,
                 "isNewSession": false,
             ])
-            if let q = outcome.queued { queued[key, default: []].append(q) }
+            // By id: the server's `queue_changed` usually lands before this reply.
+            if let q = outcome.queued, !(queued[key]?.contains(q) ?? false) { queued[key, default: []].append(q) }
             return true
         } catch {
             lastError = error.localizedDescription
@@ -447,6 +448,14 @@ final class Store {
             for t in live.tasks {
                 if case .backgroundTasks(let n) = t.payload { tasks[SessionKey(server: server, id: t.sessionId)] = n }
             }
+            if let held = live.queued {
+                for key in queued.keys where key.server == server { queued[key] = nil }
+                for q in held where !q.queued.isEmpty { queued[SessionKey(server: server, id: q.sessionId)] = q.queued }
+            }
+        case "queue_changed":
+            // Every client's sends, the desktop's and the CLI's included; `send_msg` answers only its caller.
+            guard let q = try? decoder.decode(EventFrame<QueueChanged>.self, from: data).payload else { return }
+            queued[SessionKey(server: server, id: q.sessionId)] = q.queued.isEmpty ? nil : q.queued
         case "session_status":
             guard let s = try? decoder.decode(EventFrame<StatusEvent>.self, from: data).payload else { return }
             let key = SessionKey(server: server, id: s.sessionId)

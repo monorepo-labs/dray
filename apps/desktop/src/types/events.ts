@@ -1517,6 +1517,13 @@ label: string, description: string | null,
 preview: string | null, };
 
 /**
+ * Emitted as `queue_changed` with a session's whole queue each time it moves.
+ * Never logged, like the queue itself; `serve.rs`'s `Live` holds the latest so
+ * a reconnect sees it too.
+ */
+export type QueueChangedEvent = { sessionId: string, queued: Array<QueuedMessage>, };
+
+/**
  * A prompt typed while a turn was running, held here until the turn reaches a
  * point where handing it to the CLI costs nothing.
  *

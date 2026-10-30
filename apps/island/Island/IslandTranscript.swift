@@ -21,6 +21,7 @@ struct IslandTranscript: View {
         let live = busy && turns.last?.running == true
         let shown = Array(turns.suffix(count))
         let earlier = count < turns.count || store.transcripts[key]?.olderBefore != nil
+        let queued = store.queued[key] ?? []
         // A stack, not a Group: a Group hands `.task` to its children, and with no turns yet it has none.
         VStack(spacing: 0) {
             if shown.isEmpty, let error = store.transcriptErrors[key] {
@@ -32,7 +33,7 @@ struct IslandTranscript: View {
                         .foregroundStyle(.white.opacity(0.7))
                 }
             }
-            if !shown.isEmpty {
+            if !shown.isEmpty || !queued.isEmpty {
                 ViewThatFits(in: .vertical) {
                     // Fitting, there is no top to scroll to, so earlier turns are a line to click.
                     list(shown, live: live, earlier: earlier ? { Task { await more(turns.count, top: shown.first?.id) } } : nil)
@@ -118,6 +119,10 @@ struct IslandTranscript: View {
                     if live && turn.id == turns.last?.id { LiveTurn(turn: turn) } else { settled(turn) }
                 }
                 .id(turn.id)
+            }
+            // Held until the running turn reaches a boundary; dimmed, the desktop's way.
+            ForEach(store.queued[key] ?? [], id: \.id) { q in
+                PromptBubble(text: q.text, images: []).opacity(0.55)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

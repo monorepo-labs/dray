@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@/types/events";
+import type { AgentEvent, QueueChangedEvent } from "@/types/events";
 import { retireOldestProvisional } from "@/lib/provisional";
 
 /// What a `dray-serve` sends on every connect: what lives in its memory and in
@@ -10,6 +10,8 @@ export type LiveState = {
   asks: AgentEvent[];
   /// The newest `background_tasks_changed` per session, which replaces.
   tasks: AgentEvent[];
+  /// Every non-empty queue. Absent from a server that predates it.
+  queued?: QueueChangedEvent[];
 };
 
 /// The logged events a client missed: everything in `fetched` (a log tail, in

@@ -97,6 +97,32 @@ pub struct QueuedMessage {
 /// boundary that flushes them is seen.
 pub type QueuedMessages = Arc<Mutex<Vec<QueuedMessage>>>;
 
+/// Emitted as `queue_changed` with a session's whole queue each time it moves.
+/// Never logged, like the queue itself; `serve.rs`'s `Live` holds the latest so
+/// a reconnect sees it too.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct QueueChangedEvent {
+    pub session_id: String,
+    pub queued: Vec<QueuedMessage>,
+}
+
+/// Tells every client what a session still holds. `send_msg` answers only the
+/// sender, so without this a prompt queued from the island or `dray session
+/// send` showed nowhere until its flush. Emitted under the lock, so two
+/// changes racing each other can never arrive in the wrong order.
+pub async fn publish_queue(session_id: &str, queued: &QueuedMessages, app: &Sink) {
+    let held = queued.lock().await;
+    let event = QueueChangedEvent {
+        session_id: session_id.to_string(),
+        queued: held.clone(),
+    };
+    if let Err(e) = app.emit("queue_changed", &event) {
+        eprintln!("[queue emit err] {e}");
+    }
+}
+
 /// What a send did. The two fields are mutually exclusive in practice — a
 /// session being created cannot already be running a turn — but they answer
 /// different questions and the frontend acts on each separately.
@@ -1270,7 +1296,7 @@ impl SessionManager {
                         });
                     }
                     if let Some(queued) = s
-                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone())
+                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), app)
                         .await
                     {
                         return Ok(SendOutcome {
@@ -1298,7 +1324,7 @@ impl SessionManager {
                         });
                     }
 
-                    let queued = s.queue_msg(prompt, attachment_paths, issues, from).await;
+                    let queued = s.queue_msg(prompt, attachment_paths, issues, from, app).await;
                     return Ok(SendOutcome {
                         snapshot: None,
                         queued: Some(queued),
@@ -1636,10 +1662,10 @@ impl SessionManager {
     /// A session with no live child answers `None` rather than erroring: the
     /// queue died with the process, which is the same "nothing to take back"
     /// the frontend already handles.
-    pub async fn cancel_queued(&self, session_id: &str) -> Option<QueuedMessage> {
+    pub async fn cancel_queued(&self, session_id: &str, app: &Sink) -> Option<QueuedMessage> {
         let slot = self.existing(session_id).await?;
         let guard = slot.lock().await;
-        guard.as_ref()?.cancel_queued().await
+        guard.as_ref()?.cancel_queued(app).await
     }
 
     /// Answers a permission request. Errors when the session has no live child:
@@ -2254,6 +2280,7 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
+        app: &Sink,
     ) -> QueuedMessage {
         let message = QueuedMessage {
             id: Uuid::now_v7().to_string(),
@@ -2264,6 +2291,7 @@ impl Session {
             issues: issues.to_vec(),
         };
         self.queued.lock().await.push(message.clone());
+        publish_queue(&self.id, &self.queued, app).await;
         message
     }
 
@@ -2289,12 +2317,13 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
+        app: &Sink,
     ) -> Option<QueuedMessage> {
         let _turn = self.status.lock().await;
         if !_turn.turn_in_flight() {
             return None;
         }
-        Some(self.queue_msg(prompt, attachment_paths, issues, from).await)
+        Some(self.queue_msg(prompt, attachment_paths, issues, from, app).await)
     }
 
     /// Takes back the newest held prompt, newest-first because that is the one
@@ -2303,8 +2332,12 @@ impl Session {
     /// `None` means the flush won the race, which needs no handling beyond
     /// leaving the composer alone: the prompt is on its way and the frontend
     /// learns so from the `user_message` that follows.
-    pub async fn cancel_queued(&self) -> Option<QueuedMessage> {
-        self.queued.lock().await.pop()
+    pub async fn cancel_queued(&self, app: &Sink) -> Option<QueuedMessage> {
+        let cancelled = self.queued.lock().await.pop();
+        if cancelled.is_some() {
+            publish_queue(&self.id, &self.queued, app).await;
+        }
+        cancelled
     }
 
     /// Sends a prompt *into* the turn already running, for a harness that takes
@@ -2383,7 +2416,7 @@ impl Session {
         from: Option<MessageSender>,
         app: &Sink,
     ) {
-        self.queue_msg(prompt, attachment_paths, issues, from).await;
+        self.queue_msg(prompt, attachment_paths, issues, from, app).await;
         flush_queued(
             &self.id,
             self.harness,
@@ -3573,6 +3606,8 @@ pub async fn flush_queued(
         batch, session_id, harness, seq, transport, app, &mut delivered,
     )
     .await;
+    // After delivery, so the pending row goes as its bubble lands.
+    publish_queue(session_id, queued, app).await;
 
     // A delivered batch at `turn_completed` opens a turn the CLI has not
     // announced yet, so without this the composer reads idle for the second or
@@ -3691,6 +3726,7 @@ async fn flush_one_per_turn(
                 }
             }
         }
+        publish_queue(session_id, queued, app).await;
 
         // One prompt, blank-line separated, because one is all fx takes. On
         // success the reservation stands as `InProgress` and the turn is this
@@ -3898,6 +3934,7 @@ pub async fn strand_queue_on_exit(
         )
         .await;
     }
+    publish_queue(session_id, queued, app).await;
 }
 
 #[cfg(test)]

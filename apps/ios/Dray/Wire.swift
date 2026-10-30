@@ -162,6 +162,14 @@ struct Snapshot: Decodable {
 struct LiveState: Decodable {
     let asks: [AgentEvent]
     let tasks: [AgentEvent]
+    /// Every non-empty queue; absent from a server that predates `queue_changed`.
+    let queued: [QueueChanged]?
+}
+
+/// A session's whole queue, sent each time it moves.
+struct QueueChanged: Decodable {
+    let sessionId: String
+    let queued: [Queued]
 }
 
 struct StatusEvent: Decodable {
