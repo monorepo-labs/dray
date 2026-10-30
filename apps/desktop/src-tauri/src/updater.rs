@@ -138,12 +138,28 @@ pub async fn check_update(
     // frontend's local storage, out of reach of `setup`.
     tauri::async_runtime::spawn(sync_cli(channel));
 
-    let updater = app
+    // A bundle already downloaded is the version to beat, not the one running:
+    // judged against the running one, a newer release than the bundle could
+    // never be found until the reader restarted onto the stale one.
+    let floor = app
+        .state::<PendingUpdate>()
+        .0
+        .lock()
+        .map_err(|_| "pending update lock poisoned".to_string())?
+        .as_ref()
+        .and_then(|(update, _)| semver::Version::parse(&update.version).ok());
+    // A newer bundle downloads under the one already ready, so its row keeps
+    // its button rather than turning into a bar that a failed download strands.
+    let quiet = floor.is_some();
+
+    let mut builder = app
         .updater_builder()
         .endpoints(vec![channel.manifest().parse().map_err(|e| format!("{e}"))?])
-        .map_err(|e| e.to_string())?
-        .build()
         .map_err(|e| e.to_string())?;
+    if let Some(floor) = floor {
+        builder = builder.version_comparator(move |_, release| release.version > floor);
+    }
+    let updater = builder.build().map_err(|e| e.to_string())?;
 
     let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
         return Ok(());
@@ -152,13 +168,15 @@ pub async fn check_update(
     let version = update.version.clone();
     let notes = update.body.clone();
 
-    emit_status(
-        &app,
-        UpdateStatus::Downloading {
-            version: version.clone(),
-            percent: None,
-        },
-    );
+    if !quiet {
+        emit_status(
+            &app,
+            UpdateStatus::Downloading {
+                version: version.clone(),
+                percent: None,
+            },
+        );
+    }
 
     // Chunks land every few KB, which is thousands of events over one bundle.
     // Only a change in whole percent is worth a render.
@@ -171,6 +189,9 @@ pub async fn check_update(
         .download(
             move |chunk, total| {
                 downloaded += chunk as u64;
+                if quiet {
+                    return;
+                }
                 let Some(total) = total.filter(|t| *t > 0) else {
                     return;
                 };
@@ -233,8 +254,7 @@ pub async fn install_update(app: AppHandle) -> Result<(), InstallError> {
 async fn install(app: AppHandle) -> Result<(), InstallError> {
     // Cloned rather than taken, so a failed install leaves the bundle in place
     // to be retried. Taking it would strand the row on a button that can only
-    // ever error: the frontend stops checking once an update is ready, so
-    // nothing would ever download a replacement.
+    // ever error until the next check found something newer.
     let pending = app
         .state::<PendingUpdate>()
         .0

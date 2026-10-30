@@ -76,12 +76,6 @@ export function useUpdater() {
   const statusRef = useRef(status);
   statusRef.current = status;
 
-  // A downloaded bundle is the end of the road until the app restarts, so the
-  // interval stops rather than re-downloading the same version every 6 hours.
-  const ready = status?.state === "ready";
-  const readyRef = useRef(ready);
-  readyRef.current = ready;
-
   // A check runs the download too, so a second one overlapping the first would
   // fetch the same bundle twice. StrictMode's double effect makes that the
   // normal case in dev rather than a race worth waving at.
@@ -102,11 +96,14 @@ export function useUpdater() {
       setStatus(event.payload);
     });
 
-    // A bundle already downloaded, or a check still running, is its own answer
-    // — so the guard returns before `manual` is touched, rather than leaving it
-    // stuck on "checking" for a run that never started.
+    // A check still running is its own answer — so the guard returns before
+    // `manual` is touched, rather than leaving it stuck on "checking" for a run
+    // that never started. A bundle already downloaded is no reason to stop:
+    // the backend judges the manifest against that bundle, so a release newer
+    // than it is still found and replaces it, and the same one is not fetched
+    // again.
     const check = (byHand = false) => {
-      if (readyRef.current || inFlight.current) return;
+      if (inFlight.current) return;
       inFlight.current = true;
       const used = channelRef.current;
       if (byHand) setManual("checking");
@@ -131,7 +128,7 @@ export function useUpdater() {
           // returned — so the answer that just settled is for the wrong
           // manifest. Ask again for the one picked now; reading the ref makes
           // this correct even though `check` belongs to an older effect.
-          if (!readyRef.current && channelRef.current !== used) check();
+          if (channelRef.current !== used) check();
         });
     };
 
@@ -179,8 +176,8 @@ export function useUpdater() {
 
   // Changing the channel re-arms the effect above, so the new manifest is
   // checked the moment the switch moves — or, when a check is mid-flight, the
-  // moment it settles (its `finally` re-asks for the channel picked now). The
-  // `ready` guard still holds: a bundle already downloaded is worth keeping
-  // whichever channel the reader lands on.
+  // moment it settles (its `finally` re-asks for the channel picked now). A
+  // bundle already downloaded is kept unless the new channel offers something
+  // newer than it.
   return { status, manual, install, checkNow, channel, setChannel };
 }
