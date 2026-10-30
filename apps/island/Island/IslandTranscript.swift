@@ -121,8 +121,12 @@ struct IslandTranscript: View {
                 .id(turn.id)
             }
             // Held until the running turn reaches a boundary; dimmed, the desktop's way.
+            // Attachments by count: a queued path can be anywhere on the Mac, out of
+            // the server's /file reach, so there is no picture to draw yet.
             ForEach(store.queued[key] ?? [], id: \.id) { q in
-                PromptBubble(text: q.text, images: []).opacity(0.55)
+                let n = q.attachmentPaths.count
+                let files = n == 0 ? "" : n == 1 ? "1 attachment" : "\(n) attachments"
+                PromptBubble(text: q.text.isEmpty ? files : q.text, images: []).opacity(0.55)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

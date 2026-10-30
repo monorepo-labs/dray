@@ -192,6 +192,16 @@ struct SendOutcome: Decodable {
 struct Queued: Decodable, Hashable {
     let id: String
     let text: String
+    let attachmentPaths: [String]
+
+    enum CodingKeys: String, CodingKey { case id, text, attachmentPaths }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        text = try c.decode(String.self, forKey: .text)
+        attachmentPaths = (try? c.decode([String].self, forKey: .attachmentPaths)) ?? []
+    }
 }
 
 // MARK: Events

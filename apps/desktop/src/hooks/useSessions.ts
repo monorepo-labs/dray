@@ -35,7 +35,7 @@ import { forgetTranscript, keepTranscript, takeTranscript } from "@/lib/keptTran
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KEY, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { FIRST_MOUNT } from "@/lib/turnWindow";
-import { forget, stopWaiting, upload, waitFor } from "@/lib/uploads";
+import { alreadyThere, forget, stopWaiting, upload, waitFor } from "@/lib/uploads";
 import type { Draft } from "./useDrafts";
 import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
@@ -2326,6 +2326,9 @@ asksBySessionRef.current = asksBySession;
 const catchUp = async (
   sessionId: string,
   held = sessionsRef.current.find((s) => s.sessionId === sessionId)?.events ?? [],
+  // The server already said what is still queued, so a missed delivery must
+  // not retire a row by position: that row is one still waiting.
+  queueKnown = false,
 ) => {
   const fresh = (await newSince(sessionId, held)) ?? (await missedFromTail(sessionId, held));
   if (!fresh) return false;
@@ -2339,7 +2342,7 @@ const catchUp = async (
     }),
   );
   const flushed = fresh.filter((e) => e.payload.type === "user_message" && e.payload.queued).length;
-  if (flushed) {
+  if (flushed && !queueKnown) {
     setQueuedBySession((prev) =>
       prev[sessionId]?.length ? { ...prev, [sessionId]: prev[sessionId].slice(flushed) } : prev,
     );
@@ -2442,7 +2445,7 @@ useEffect(() => {
     for (const s of sessionsRef.current) {
       if (!ours(s.sessionId)) continue;
       retireStreamingBlock(s.sessionId);
-      catchUp(s.sessionId).catch((e) => console.error("could not catch up", s.sessionId, e));
+      catchUp(s.sessionId, undefined, !!payload.queued).catch((e) => console.error("could not catch up", s.sessionId, e));
     }
     // A transcript opened while this server was down never loaded, so there is
     // nothing above to catch up — it is read now rather than left blank.
@@ -2890,9 +2893,13 @@ const applyQueue = async (sessionId: string, queued: QueuedMessage[]) => {
   const paths = queued
     .filter((m) => !held.some((q) => q.message.id === m.id))
     .flatMap((m) => m.attachmentPaths);
+  const server = serverOfSession(sessionId);
   const read = paths.length
-    ? await invoke<Attachment[]>("read_attachments", { paths }, serverOfSession(sessionId)).catch(() => [])
+    ? await invoke<Attachment[]>("read_attachments", { paths }, server).catch(() => [])
     : [];
+  // These are the server's own copies, so a cancel that puts them back in the
+  // tray must resend them as they are, never upload them from this Mac.
+  if (server !== LOCAL) alreadyThere(server, paths);
   if (queueReadRef.current[sessionId] !== n) return;
   setQueuedBySession((prev) => {
     const cur = prev[sessionId] ?? [];

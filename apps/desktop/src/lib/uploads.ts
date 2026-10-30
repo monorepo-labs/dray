@@ -82,6 +82,17 @@ export function upload(server: ServerId, path: string, size: number): Promise<st
   return settled;
 }
 
+/// Marks files already on `server` as uploaded to themselves: a prompt queued
+/// there by another client and cancelled here names the server's copies, which
+/// this Mac has no file behind.
+export function alreadyThere(server: ServerId, paths: string[]) {
+  for (const path of paths) {
+    const key = keyOf(server, path);
+    uploads.set(key, { id: `${key}\n${++transfers}`, sent: 0, total: 0, path, error: null, done: Promise.resolve(path) });
+  }
+  if (paths.length) emit();
+}
+
 /// Keeps every pinned file uploading: starts each one with no upload, now and
 /// whenever one is forgotten — a send elsewhere may forget a file this tray
 /// still holds. A failed one is left for the send to retry, or a file that
