@@ -19,6 +19,20 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.29.13 · 2026-10-30
+
+### New
+
+- **Transcript in the Island.** The Island shows the pinned session's latest
+  turns above the input. Scroll up for more, or pinch to hide it.
+
+### Improved
+
+- Remote sessions open much faster on slow links: transcripts and
+  screenshots are compressed, kept and fetched only when new.
+- The Island's recording orb grows in place and looks like glass.
+- A newer update is still found after one is ready to install.
+
 ## 0.29.12 · 2026-10-28
 
 ### Improved
