@@ -211,35 +211,6 @@ struct OrbLine: View {
     }
 }
 
-extension View {
-    /// The desktop's `shimmer-text`: a highlight sweeping across, the mark a
-    /// live row wears. Holds still under Reduce Motion.
-    func shimmer(_ on: Bool = true) -> some View { modifier(Shimmer(on: on)) }
-}
-
-private struct Shimmer: ViewModifier {
-    let on: Bool
-    @Environment(\.accessibilityReduceMotion) private var still
-
-    func body(content: Content) -> some View {
-        if on && !still {
-            TimelineView(.animation) { timeline in
-                let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) / 2
-                content.mask {
-                    LinearGradient(
-                        stops: [.init(color: .black.opacity(0.5), location: 0.35),
-                                .init(color: .black, location: 0.5),
-                                .init(color: .black.opacity(0.5), location: 0.65)],
-                        startPoint: UnitPoint(x: phase * 2 - 1, y: 0),
-                        endPoint: UnitPoint(x: phase * 2, y: 0))
-                }
-            }
-        } else {
-            content
-        }
-    }
-}
-
 /// How many of a running turn's newest rows stay on screen. Older ones fold
 /// behind the summary line, so a long turn stops growing down the screen and
 /// lands already in its finished shape.
