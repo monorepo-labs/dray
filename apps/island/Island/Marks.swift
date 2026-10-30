@@ -61,6 +61,8 @@ struct TitleRow: View {
     let close: String
     let list: () -> Void
     let openInApp: () -> Void
+    /// A gesture to teach, ahead of the keys, until the reader has used it.
+    var hint: String? = nil
     @State private var hovered = false
 
     var body: some View {
@@ -82,6 +84,10 @@ struct TitleRow: View {
             .onHover { hovered = $0 }
             .animation(.easeOut(duration: 0.12), value: hovered)
             .help("Tasks, ⌘-click to open in Dray")
+            if let hint {
+                Text(hint).font(.system(size: 12)).foregroundStyle(.white.opacity(0.3)).fixedSize()
+                    .transition(.opacity)
+            }
             KeyHints(new: true, close: close)
         }
     }

@@ -26,6 +26,7 @@ targets:
       - path: ../ios/Dray/Connection.swift
       - path: ../ios/Dray/Store.swift
       - path: ../ios/Dray/Transcript.swift
+      - path: ../ios/Dray/Markdown.swift
       - path: ../ios/Dray/Tools.swift
       - path: ../ios/Dray/Picks.swift
       - path: ../ios/Dray/Sidebar.swift
@@ -62,6 +63,7 @@ targets:
       - path: ../ios/Dray/Connection.swift
       - path: ../ios/Dray/Store.swift
       - path: ../ios/Dray/Transcript.swift
+      - path: ../ios/Dray/Markdown.swift
       - path: ../ios/Dray/Tools.swift
       - path: ../ios/Dray/Picks.swift
       - path: ../ios/Dray/Sidebar.swift

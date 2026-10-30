@@ -73,6 +73,19 @@ final class Composer {
     var mode = InputMode(rawValue: UserDefaults.standard.string(forKey: "island.mode") ?? "") ?? .compact {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: "island.mode") }
     }
+    /// The session's newest turn over the input, or the input alone.
+    var transcript = UserDefaults.standard.object(forKey: "island.transcript") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(transcript, forKey: "island.transcript") }
+    }
+    /// The pinch is taught in the title row until the reader has pinched this many times.
+    static let pinchHints = 3
+    var pinchHint = UserDefaults.standard.integer(forKey: "island.pinches") < Composer.pinchHints
+
+    func pinched() {
+        let n = UserDefaults.standard.integer(forKey: "island.pinches") + 1
+        UserDefaults.standard.set(n, forKey: "island.pinches")
+        pinchHint = n < Self.pinchHints
+    }
     var level: Float = 0
     var notice: String? { didSet { retryPath = nil } }
     /// The recording a failed transcription kept, offered beside its notice.
