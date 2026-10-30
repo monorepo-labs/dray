@@ -26,13 +26,20 @@ struct IslandTranscript: View {
             if !shown.isEmpty {
                 ViewThatFits(in: .vertical) {
                     // Fitting, there is no top to scroll to, so earlier turns are a line to click.
-                    list(shown, live: live, earlier: earlier ? { Task { await more(turns.count, top: nil) } } : nil)
+                    list(shown, live: live, earlier: earlier ? { Task { await more(turns.count, top: shown.first?.id) } } : nil)
                     ScrollViewReader { proxy in
                         ScrollView { list(shown, live: live) }
                             .scrollIndicators(.never)
                             // Follows a running turn as it grows.
                             .defaultScrollAnchor(.bottom)
                             .defaultScrollAnchor(.bottom, for: .sizeChanges)
+                            // "Show earlier" overflowing the cap swaps the plain list for this one,
+                            // which opens at the bottom: bring the turns asked for into view, above
+                            // the one that was on top. After the bottom anchor has had its say.
+                            .onAppear {
+                                guard let k = keep else { return }
+                                DispatchQueue.main.async { proxy.scrollTo(k, anchor: .bottom) }
+                            }
                             // Reaching the top, not a marker appearing: the edge is crossed
                             // once per scroll, where an appear can fire on every rebuild.
                             .onScrollGeometryChange(for: Bool.self, of: { $0.contentOffset.y < 24 }) { was, now in
@@ -80,6 +87,9 @@ struct IslandTranscript: View {
         }
         // Follows without marking read: looking at the island is not opening the session.
         .task(id: key) { await store.load(key) }
+        // Spent by whichever of the two lists drew this count, or by nobody where it
+        // still fits; never left for a later swap to jump to.
+        .onChange(of: count) { DispatchQueue.main.async { keep = nil } }
     }
 
     private func list(_ turns: [Turn], live: Bool, earlier: (() -> Void)? = nil) -> some View {

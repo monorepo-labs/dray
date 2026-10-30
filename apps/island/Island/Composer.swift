@@ -74,8 +74,9 @@ final class Composer {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: "island.mode") }
     }
     /// The session's newest turn over the input, or the input alone.
-    var transcript = UserDefaults.standard.object(forKey: "island.transcript") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(transcript, forKey: "island.transcript") }
+    /// A string, as Dray's Settings writes every island pick.
+    var transcript = UserDefaults.standard.string(forKey: "island.transcript") != "hidden" {
+        didSet { UserDefaults.standard.set(transcript ? "shown" : "hidden", forKey: "island.transcript") }
     }
     /// The pinch is taught in the title row until the reader has pinched this many times.
     static let pinchHints = 3
@@ -126,6 +127,8 @@ final class Composer {
         let d = UserDefaults.standard
         if let p = Placement(rawValue: d.string(forKey: "island.placement") ?? ""), p != placement { placement = p }
         if let m = InputMode(rawValue: d.string(forKey: "island.mode") ?? ""), m != mode { mode = m }
+        let t = d.string(forKey: "island.transcript") != "hidden"
+        if t != transcript { transcript = t }
     }
 
     // A new session's picks.

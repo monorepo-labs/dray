@@ -1040,6 +1040,7 @@ function IslandSettings() {
   const tapId = useId();
   const placeId = useId();
   const layoutId = useId();
+  const messagesId = useId();
   const double = prefs["island.tap"] === "double";
 
   return (
@@ -1120,6 +1121,17 @@ function IslandSettings() {
             value={prefs["island.mode"] === "expanded" ? "expanded" : "compact"}
             onPick={(v) => save("island.mode", v)}
             labelledBy={layoutId}
+          />
+        </SettingRow>
+        <SettingRow
+          id={messagesId}
+          label="Messages"
+          description="Pinch on the island to hide them, spread two fingers to bring them back."
+        >
+          <Switch
+            id={messagesId}
+            checked={prefs["island.transcript"] !== "hidden"}
+            onCheckedChange={(next) => save("island.transcript", next ? "shown" : "hidden")}
           />
         </SettingRow>
       </Section>
@@ -1358,6 +1370,8 @@ const TAB_SUBTITLES: Partial<Record<SettingsTab, string>> = {
   accounts: "Manage each harness's sign-in. Switch one off to hide it from the model picker.",
   composer:
     "The buttons that rise out of the composer's top edge on hover. Each sends its prompt as if you had typed it.",
+  // Nothing on the island says it has a menu.
+  island: "Right-click the island to change these from the island itself.",
 };
 
 /// The page's groups as a list down the left, standing where the sidebar

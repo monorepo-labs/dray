@@ -157,7 +157,7 @@ struct IslandView: View {
             }
             .pickerStyle(.inline)
             Divider()
-            Toggle("Show Transcript", isOn: $composer.transcript)
+            Toggle("Show Messages", isOn: $composer.transcript)
             Divider()
             Button("Quit Dray Island") { NSApp.terminate(nil) }
         }
