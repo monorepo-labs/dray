@@ -274,31 +274,3 @@ private struct FailureLine: View {
             .lineLimit(3)
     }
 }
-
-extension View {
-    /// The iOS app's shimmer, the mark a live row wears. Holds still under Reduce Motion.
-    func shimmer(_ on: Bool = true) -> some View { modifier(Shimmer(on: on)) }
-}
-
-private struct Shimmer: ViewModifier {
-    let on: Bool
-    @Environment(\.accessibilityReduceMotion) private var still
-
-    func body(content: Content) -> some View {
-        if on && !still {
-            TimelineView(.animation) { timeline in
-                let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) / 2
-                content.mask {
-                    LinearGradient(
-                        stops: [.init(color: .black.opacity(0.5), location: 0.35),
-                                .init(color: .black, location: 0.5),
-                                .init(color: .black.opacity(0.5), location: 0.65)],
-                        startPoint: UnitPoint(x: phase * 2 - 1, y: 0),
-                        endPoint: UnitPoint(x: phase * 2, y: 0))
-                }
-            }
-        } else {
-            content
-        }
-    }
-}

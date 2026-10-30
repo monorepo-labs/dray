@@ -12,8 +12,9 @@ struct IslandView: View {
     /// From the press, not from the microphone opening: the start is a round
     /// trip through Dray, and waiting on it read as the panel hesitating.
     private var recording: Bool { composer.listening }
-    /// The card shrinks to what it holds: the orb and clock, or the word Sent.
-    private var fits: Bool { recording || composer.sent }
+    /// The card shrinks to what it holds: compact's orb and clock, or the word Sent.
+    private var fits: Bool { (recording && composer.mode == .compact) || composer.sent }
+    /// Expanded records as the orb alone, over whatever is beneath.
     private var bare: Bool { recording && composer.mode == .expanded }
     /// A refusal's flash wears red, where every other outcome is the card's own black.
     private var denied: Bool { composer.sent && composer.sentLabel == "Denied" }
@@ -22,6 +23,13 @@ struct IslandView: View {
     /// Mid-recording, the pointer over the card shows what can be done without stopping.
     @State private var cardHovered = false
     @State private var captureHovered = false
+    /// Expanded recording shows its clock while the pointer is on the orb or the pill under it.
+    @State private var orbHovered = false
+    @State private var pillHovered = false
+    /// The rows' height when expanded recording began, nil with none: rows
+    /// arriving mid-recording (a screenshot) would otherwise grow the hidden
+    /// list and push the orb down.
+    @State private var rowsHeight: CGFloat?
     /// The idle orb and the recording one are one orb to the reader, so a start
     /// moves it into place rather than fading a second one in.
     @Namespace private var orbSpace
@@ -67,8 +75,17 @@ struct IslandView: View {
         .onChange(of: composer.placement) { composer.reposition() }
         .onChange(of: composer.opens) { focus = .input }
         .onChange(of: focus) { composer.field = focus }
-        // The input leaves the panel while recording, and its focus with it.
-        .onChange(of: composer.dictation) { if !composer.listening { focus = .input } }
+        // The input leaves the panel while recording, or sits there hidden, and
+        // its focus goes either way.
+        .onChange(of: composer.dictation) { focus = composer.listening ? nil : .input }
+        .onChange(of: recording) {
+            orbHovered = false
+            pillHovered = false
+        }
+        .onChange(of: composer.rows.isEmpty) { if composer.rows.isEmpty, !recording { rowsHeight = nil } }
+        // A panel hidden under the pointer never hears it leave, and would open
+        // next time still hovered, the screenshot button up with nothing over it.
+        .onChange(of: composer.shown) { if !composer.shown { cardHovered = false } }
         .onChange(of: composer.searches) {
             composer.listShown = true
             focus = .search
@@ -87,11 +104,11 @@ struct IslandView: View {
 
     private var composerCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if recording {
+            if recording, composer.mode == .compact {
                 recordingBar
             } else if composer.sent {
                 Label(composer.sentLabel, systemImage: denied ? "xmark" : "checkmark").font(.system(size: 13, weight: .semibold)).padding(.horizontal, 4)
-            } else if let ask = composer.ask {
+            } else if !recording, let ask = composer.ask {
                 AskCard(composer: composer, key: ask.key, event: ask.event)
                     .onAppear { composer.cardShown() }
             } else {
@@ -101,15 +118,17 @@ struct IslandView: View {
         .padding(12)
         .padding(.top, composer.notchHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // A row leaving fades where it stood while the card shrinks under it; kept inside the card.
-        .clipped()
-        // Expanded mode records as the orb alone, floating over whatever is beneath;
-        // faded rather than removed, so it animates.
+        // A row leaving fades where it stood while the card shrinks under it; kept inside the
+        // card. Not while bare: the recording orb grows past it.
+        .clipShape(Rectangle().inset(by: bare ? -200 : 0))
+        // Faded rather than removed, so it animates.
         .background {
             shape.fill((denied ? Color.red : .black).opacity(bare ? 0 : 1))
                 .padding(.horizontal, composer.placement == .notch ? -NotchShape.ear : 0)
         }
         .shadow(color: .black.opacity(bare ? 0 : 0.35), radius: 12, y: 4)
+        // What the orb leaves behind, fill and all, fades rather than blinking out.
+        .animation(.easeOut(duration: 0.2), value: recording)
         .onHover { cardHovered = $0 }
         // A file dropped anywhere on the card rides the draft as a capture does.
         .overlay {
@@ -167,31 +186,27 @@ struct IslandView: View {
         }
     }
 
-    /// Nothing to read while talking: the orb, which stops it, and the clock.
-    /// ⌘Esc throws it away.
+    /// Compact recording: the orb, which stops it, and the clock.
+    /// Expanded records in place, in `input`. ⌘Esc throws it away.
     private var recordingBar: some View {
-        Group {
-            if composer.mode == .expanded {
-                VStack(spacing: 6) {
-                    MicButton(composer: composer, big: true).matchedGeometryEffect(id: "orb", in: orbSpace)
-                    // The card's fill is gone here, so the clock carries its own.
-                    HStack(spacing: 8) {
-                        RecordingTimer(since: composer.recordingSince)
-                        tools
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(.black, in: Capsule())
-                }
-            } else {
-                HStack(spacing: 8) {
-                    MicButton(composer: composer, big: false).matchedGeometryEffect(id: "orb", in: orbSpace)
-                    RecordingTimer(since: composer.recordingSince)
-                    tools.padding(.leading, 4)
-                }
-            }
+        HStack(spacing: 8) {
+            MicButton(composer: composer, size: 24).matchedGeometryEffect(id: "orb", in: orbSpace)
+            RecordingTimer(since: composer.recordingSince)
+            tools.padding(.leading, 4)
         }
         .padding(.horizontal, 4)
+    }
+
+    /// The clock and the tools, under expanded's recording orb. The card's fill
+    /// is gone there, so it carries its own.
+    private var recordingPill: some View {
+        HStack(spacing: 8) {
+            if orbHovered || pillHovered { RecordingTimer(since: composer.recordingSince) }
+            tools
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(.black, in: Capsule())
     }
 
     @ViewBuilder private var draft: some View {
@@ -202,6 +217,7 @@ struct IslandView: View {
                      list: { composer.searches += 1 },
                      openInApp: { Task { await composer.showInApp(key) } },
                      hint: composer.pinchHint ? (composer.transcript ? "Pinch to hide messages" : "Spread fingers to see messages") : nil)
+                .gone(recording)
             if composer.transcript {
                 IslandTranscript(key: key) { Task { await composer.showInApp(key) } }
                     // A view per session: an older page still loading for the last one
@@ -209,10 +225,11 @@ struct IslandView: View {
                     .id(key)
                     // Gone before the input slides up through it.
                     .transition(.asymmetric(insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.08))))
+                    .gone(recording)
             }
         }
-        if composer.target == .new { NewSessionBar(composer: composer) }
-        if !composer.rows.isEmpty {
+        if composer.target == .new { NewSessionBar(composer: composer).gone(recording) }
+        if recording ? rowsHeight != nil : !composer.rows.isEmpty {
             // Three rows tall at most, then it scrolls, held at the newest.
             ViewThatFits(in: .vertical) {
                 rowList
@@ -226,6 +243,9 @@ struct IslandView: View {
             }
             .frame(maxHeight: 3 * 32 + 2 * 10)
             .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if !recording { rowsHeight = $0 } }
+            .frame(height: recording ? rowsHeight : nil, alignment: .top)
+            .gone(recording)
         }
         input
         if let notice = composer.notice {
@@ -237,6 +257,7 @@ struct IslandView: View {
                         .font(.caption.weight(.semibold))
                 }
             }
+            .gone(recording)
         }
         if composer.lostCut != nil {
             HStack(spacing: 8) {
@@ -246,6 +267,7 @@ struct IslandView: View {
                     .buttonStyle(.plain)
                     .font(.caption.weight(.semibold))
             }
+            .gone(recording)
         }
     }
 
@@ -325,14 +347,38 @@ struct IslandView: View {
     /// Compact: all three in one row.
     @ViewBuilder private var input: some View {
         if composer.mode == .expanded {
-            MicButton(composer: composer, big: true).matchedGeometryEffect(id: "orb", in: orbSpace).frame(maxWidth: .infinity)
+            // One orb, drawn at its recording size and scaled down at rest, in a
+            // 48 slot, so recording grows it about its own centre and moves nothing.
+            MicButton(composer: composer, size: 80, lens: true)
+                .scaleEffect(recording ? 1 : 48 / 80)
+                .onHover { orbHovered = $0 }
+                .frame(width: 48, height: 48)
+            .animation(.easeOut(duration: 0.15), value: recording)
+            // Behind the orb, so it slides down out from under it.
+            .background(alignment: .top) {
+                if recording, composer.drawHint || orbHovered || pillHovered {
+                    recordingPill
+                        // Reaches up across the gap to the orb, which overhangs
+                        // the slot by 16, so the pointer crosses without leaving both.
+                        .padding(.top, 8)
+                        .contentShape(Rectangle())
+                        .onHover { pillHovered = $0 }
+                        .fixedSize()
+                        .offset(y: 48 + 16 - 2)
+                        .transition(.offset(y: -28))
+                }
+            }
+            // The timing the hovered card's own change takes.
+            .animation(.spring(duration: 0.3, bounce: 0.2), value: orbHovered || pillHovered)
+            .frame(maxWidth: .infinity)
         }
         HStack(alignment: .center, spacing: 8) {
-            if composer.mode == .compact { MicButton(composer: composer, big: false).matchedGeometryEffect(id: "orb", in: orbSpace) }
+            if composer.mode == .compact { MicButton(composer: composer, size: 24).matchedGeometryEffect(id: "orb", in: orbSpace) }
             field
             capture
             send
         }
+        .gone(recording)
     }
 
     private var field: some View {
@@ -350,7 +396,7 @@ struct IslandView: View {
             Text("Hold Shift to draw").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
                 .transition(.opacity)
         }
-        if cardHovered {
+        if composer.mode == .expanded ? orbHovered || pillHovered : cardHovered {
             capture.transition(.scale.combined(with: .opacity))
         }
     }
@@ -368,9 +414,11 @@ struct IslandView: View {
                 // The overlay comes up under the pointer, so neither hover hears it leave.
                 cardHovered = false
                 captureHovered = false
+                orbHovered = false
+                pillHovered = false
                 composer.capture()
             } label: {
-                Image(systemName: "camera.viewfinder").font(.title3).foregroundStyle(.white.opacity(0.6))
+                Image(systemName: "camera.viewfinder").font(.title3).foregroundStyle(.white.opacity(captureHovered ? 0.8 : 0.6))
             }
             .buttonStyle(.plain)
             .onHover { h in withAnimation(.easeOut(duration: 0.15)) { captureHovered = h } }
@@ -546,14 +594,22 @@ private struct RowView: View {
 /// The orb is the microphone: a click starts dictating, another stops it.
 private struct MicButton: View {
     let composer: Composer
-    /// The centre of dictation mode, rather than a control in the row.
-    let big: Bool
+    /// 24 in the row, 48 as expanded mode's centre, larger still while it records there.
+    let size: CGFloat
+    /// The Siri-style glass ball, for the orb floating alone over the screen.
+    var lens = false
 
     var body: some View {
         Button {
             Task { await composer.toggleDictation() }
         } label: {
-            VoiceOrb(size: big ? 48 : 24, level: composer.level, state: composer.dictation)
+            Group {
+                if lens {
+                    LensOrb(size: size, level: composer.level, state: composer.dictation)
+                } else {
+                    VoiceOrb(size: size, level: composer.level, state: composer.dictation)
+                }
+            }
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -593,5 +649,12 @@ struct PillsView: View {
         // Where the card hangs from: the panel's top edge, or just above the Dock.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: anchor == .top ? .top : .bottom)
         .padding(.bottom, composer.placement == .bottom ? 12 + Composer.shadowRoom : 0)
+    }
+}
+
+private extension View {
+    /// Kept in the layout but not drawn or clickable, so what stays does not move.
+    func gone(_ hidden: Bool) -> some View {
+        opacity(hidden ? 0 : 1).allowsHitTesting(!hidden)
     }
 }

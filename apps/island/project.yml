@@ -32,6 +32,7 @@ targets:
       - path: ../ios/Dray/Sidebar.swift
       - path: ../ios/Dray/Pr.swift
       - path: ../ios/Dray/PrGlyph.swift
+      - path: ../ios/Dray/Shimmer.swift
       - path: ../desktop/src/assets/dictate-start.wav
         buildPhase: resources
       - path: ../desktop/src/assets/dictate-stop.wav
@@ -69,6 +70,7 @@ targets:
       - path: ../ios/Dray/Sidebar.swift
       - path: ../ios/Dray/Pr.swift
       - path: ../ios/Dray/PrGlyph.swift
+      - path: ../ios/Dray/Shimmer.swift
     settings:
       base:
         PRODUCT_NAME: Island Status Demo

@@ -39,18 +39,20 @@ struct Rail: View {
 /// the pull request. Each at its own width, so the title sits close behind it.
 struct LeadMark: View {
     let marks: Marks
+    /// Off where the title shimmers instead, which says the same.
+    var orb = true
 
     var body: some View {
         if marks.checksRunning {
             ChecksSpinner()
-        } else if marks.busy {
+        } else if marks.busy && orb {
             Orb(state: .working, size: 16).foregroundStyle(.white.opacity(0.7))
         } else if let pr = marks.pr {
             PrGlyph(mark: pr, size: 13)
         }
     }
 
-    var shown: Bool { marks.checksRunning || marks.busy || marks.pr != nil }
+    var shown: Bool { marks.checksRunning || (marks.busy && orb) || marks.pr != nil }
 }
 
 /// The selected session's title row: the title opens the task list behind its
@@ -71,11 +73,12 @@ struct TitleRow: View {
                 if NSEvent.modifierFlags.contains(.command) { openInApp() } else { list() }
             } label: {
                 HStack(spacing: 4) {
-                    let lead = LeadMark(marks: marks)
+                    let lead = LeadMark(marks: marks, orb: false)
                     if lead.shown { lead }
                     Text(title).lineLimit(1)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white.opacity(hovered ? 1 : 0.7))
+                        .shimmer(marks.busy, period: 1.4)
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
