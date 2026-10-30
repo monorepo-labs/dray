@@ -204,6 +204,9 @@ struct IslandView: View {
                      hint: composer.pinchHint ? (composer.transcript ? "Pinch to hide messages" : "Spread fingers to see messages") : nil)
             if composer.transcript {
                 IslandTranscript(key: key) { Task { await composer.showInApp(key) } }
+                    // A view per session: an older page still loading for the last one
+                    // lands in state nobody draws, not in this session's count.
+                    .id(key)
                     // Gone before the input slides up through it.
                     .transition(.asymmetric(insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.08))))
             }

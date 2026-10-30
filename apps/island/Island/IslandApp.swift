@@ -103,6 +103,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var keys: Any?
     /// One pinch's magnification so far: the event carries only each step's change.
     private var pinched: CGFloat = 0
+    /// The pinch under way began over the card.
+    private var pinchOnCard = false
     /// ⌘Esc from anywhere, held while the panel is open: bare Esc only reaches it while it has focus,
     /// and AppKit never hands ⌘Esc to the key monitor at all.
     private var closeKey: HotKey?
@@ -243,10 +245,15 @@ final class Delegate: NSObject, NSApplicationDelegate {
         // A trackpad pinch over the card: out opens the transcript, in puts it away.
         // Over the card only: the panel's clear part lets a pinch through to the app beneath.
         PinchTap.onPinch = { [weak self, weak composer, weak panel] zoom, phase in
-            guard let self, let composer, let panel, composer.shown,
-                  NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == panel.windowNumber
-            else { return }
-            if phase == 1 { pinched = 0 }
+            guard let self, let composer, let panel else { return }
+            // Judged once, where the pinch begins: one that starts elsewhere and
+            // drifts onto the card is not the card's, and starts its own count.
+            if phase == 1 {
+                pinched = 0
+                pinchOnCard = composer.shown
+                    && NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == panel.windowNumber
+            }
+            guard pinchOnCard, composer.shown else { return }
             pinched += zoom
             let want = pinched > 0.15 ? true : pinched < -0.15 ? false : composer.transcript
             if want != composer.transcript {

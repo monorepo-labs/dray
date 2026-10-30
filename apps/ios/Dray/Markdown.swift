@@ -7,33 +7,41 @@ import SwiftUI
 enum MarkdownBlock {
     case prose(String), code(String), heading(Int, String), quote(String), rule
     case list([(marker: String, text: String, indent: Int)])
-    /// Cells by row; `header` where a `|---|` line followed the first.
-    case table([[String]], header: Bool)
+    /// Cells by row, the first being the header.
+    case table([[String]])
 }
 
-/// `| a | b |` → ["a", "b"]; the outer pipes are optional, as GitHub reads them.
+/// `| a | b |` → ["a", "b"]; `\|` is a pipe inside a cell, not a border.
 private func cells(_ line: String) -> [String] {
-    var s = Substring(line)
+    var s = Substring(line.replacingOccurrences(of: "\\|", with: "\u{0}"))
     if s.hasPrefix("|") { s = s.dropFirst() }
     if s.hasSuffix("|") { s = s.dropLast() }
-    return s.split(separator: "|", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+    return s.split(separator: "|", omittingEmptySubsequences: false).map {
+        $0.replacingOccurrences(of: "\u{0}", with: "|").trimmingCharacters(in: .whitespaces)
+    }
+}
+
+/// The `|---|:--:|` line under a table's header.
+private func isDelimiter(_ line: some StringProtocol) -> Bool {
+    line.trimmingCharacters(in: .whitespaces).wholeMatch(of: /\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?/) != nil
 }
 
 func markdownBlocks(_ text: String) -> [MarkdownBlock] {
     var out: [MarkdownBlock] = []
     var prose: [Substring] = [], code: [Substring] = [], quote: [String] = []
     var list: [(marker: String, text: String, indent: Int)] = []
-    var table: [[String]] = [], header = false
+    var table: [[String]] = []
     var fenced = false
     func flush() {
         let p = prose.joined(separator: "\n").trimmingCharacters(in: .newlines)
         if !p.isEmpty { out.append(.prose(p)) }
         if !list.isEmpty { out.append(.list(list)) }
         if !quote.isEmpty { out.append(.quote(quote.joined(separator: "\n"))) }
-        if !table.isEmpty { out.append(.table(table, header: header)) }
-        prose = []; list = []; quote = []; table = []; header = false
+        if !table.isEmpty { out.append(.table(table)) }
+        prose = []; list = []; quote = []; table = []
     }
-    for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+    for (i, line) in lines.enumerated() {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         if trimmed.hasPrefix("```") {
             if fenced {
@@ -46,13 +54,12 @@ func markdownBlocks(_ text: String) -> [MarkdownBlock] {
             continue
         }
         if fenced { code.append(line); continue }
-        if trimmed.hasPrefix("|") {
-            if !prose.isEmpty || !list.isEmpty || !quote.isEmpty { flush() }
-            if table.count == 1, trimmed.wholeMatch(of: /\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?/) != nil {
-                header = true
-            } else {
-                table.append(cells(trimmed))
-            }
+        // A table opens only on a header with its delimiter line under it, so prose
+        // that happens to start with a pipe stays prose.
+        if trimmed.hasPrefix("|"), !table.isEmpty || (i + 1 < lines.count && isDelimiter(lines[i + 1])) {
+            if table.isEmpty { flush() }
+            if table.count == 1, isDelimiter(trimmed) { continue }
+            table.append(cells(trimmed))
             continue
         }
         if !table.isEmpty { flush() }
@@ -97,7 +104,6 @@ func inlineMarkdown(_ s: String) -> AttributedString {
 /// A table on a grid, scrolling sideways when it is wider than the message.
 struct MarkdownTable: View {
     let rows: [[String]]
-    let header: Bool
 
     var body: some View {
         let width = rows.map(\.count).max() ?? 0
@@ -107,12 +113,12 @@ struct MarkdownTable: View {
                     GridRow {
                         ForEach(0..<width, id: \.self) { c in
                             Text(inlineMarkdown(c < row.count ? row[c] : ""))
-                                .fontWeight(header && i == 0 ? .semibold : nil)
+                                .fontWeight(i == 0 ? .semibold : nil)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: 280, alignment: .leading)
                         }
                     }
-                    if header && i == 0 {
+                    if i == 0 {
                         Rectangle().fill(.primary.opacity(0.15)).frame(height: 1).gridCellUnsizedAxes(.horizontal)
                     }
                 }

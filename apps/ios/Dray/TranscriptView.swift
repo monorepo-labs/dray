@@ -527,8 +527,8 @@ struct MarkdownText: View {
                     .well()
                 case .rule:
                     Rectangle().fill(Theme.border).frame(height: 1).padding(.vertical, 4)
-                case .table(let rows, let header):
-                    MarkdownTable(rows: rows, header: header)
+                case .table(let rows):
+                    MarkdownTable(rows: rows)
                         .font(Theme.Font.body)
                         .foregroundStyle(Theme.text)
                 }
