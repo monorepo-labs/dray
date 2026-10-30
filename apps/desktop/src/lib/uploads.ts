@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 import { channel } from "@/lib/channel";
-import { invoke, listen, LOCAL, type ServerId } from "@/lib/transport";
+import { invoke, listen, LOCAL, splitPath, type ServerId } from "@/lib/transport";
 
 /// The most a remote server takes per attachment — `MAX_UPLOAD_BYTES` in
 /// attachments.rs, stated again so a tile refuses before a byte moves.
@@ -49,6 +49,14 @@ let listening = false;
 /// answers where it lands. A failed upload starts over, so the send retries
 /// whatever a dropped connection lost.
 export function upload(server: ServerId, path: string, size: number): Promise<string> {
+  // Already that server's own copy, qualified as such: a prompt queued there
+  // by another client and cancelled here. Nothing on this Mac to send.
+  const own = splitPath(path);
+  if (own.server !== LOCAL) {
+    return own.server === server
+      ? Promise.resolve(own.path)
+      : Promise.reject(new Error("This file is on another server."));
+  }
   const key = keyOf(server, path);
   const current = uploads.get(key);
   if (current && !current.error) return current.done;
@@ -119,7 +127,10 @@ export function stopWaiting(eventId: string) {
 
 /// One tile's upload, or `undefined` where nothing has been sent for it.
 export function useUpload(server: ServerId, path: string): Upload | undefined {
-  return useSyncExternalStore(subscribe, () => uploads.get(keyOf(server, path)));
+  const entry = useSyncExternalStore(subscribe, () => uploads.get(keyOf(server, path)));
+  // A server's own copy is there already, which `upload` never records.
+  const own = splitPath(path);
+  return own.server === server ? { sent: 0, total: 0, path: own.path, error: null } : entry;
 }
 
 /// How far a send held on its uploads has got, 0–1 by bytes, or `null` for a

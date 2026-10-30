@@ -162,6 +162,14 @@ struct Snapshot: Decodable {
 struct LiveState: Decodable {
     let asks: [AgentEvent]
     let tasks: [AgentEvent]
+    /// Every non-empty queue; absent from a server that predates `queue_changed`.
+    let queued: [QueueChanged]?
+}
+
+/// A session's whole queue, sent each time it moves.
+struct QueueChanged: Decodable {
+    let sessionId: String
+    let queued: [Queued]
 }
 
 struct StatusEvent: Decodable {
@@ -184,6 +192,16 @@ struct SendOutcome: Decodable {
 struct Queued: Decodable, Hashable {
     let id: String
     let text: String
+    let attachmentPaths: [String]
+
+    enum CodingKeys: String, CodingKey { case id, text, attachmentPaths }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        text = try c.decode(String.self, forKey: .text)
+        attachmentPaths = (try? c.decode([String].self, forKey: .attachmentPaths)) ?? []
+    }
 }
 
 // MARK: Events

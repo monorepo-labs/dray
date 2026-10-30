@@ -679,6 +679,7 @@ struct Live {
     asks: Vec<Value>,
     tasks: HashMap<String, Value>,
     running: std::collections::HashSet<String>,
+    queued: HashMap<String, Value>,
 }
 
 impl Live {
@@ -699,6 +700,13 @@ impl Live {
                     self.strand(&session);
                 } else {
                     self.tasks.insert(session, payload.clone());
+                }
+            }
+            ("queue_changed", _) => {
+                if payload["queued"].as_array().is_some_and(|q| q.is_empty()) {
+                    self.queued.remove(&session);
+                } else {
+                    self.queued.insert(session, payload.clone());
                 }
             }
             ("session_status", _) => {
@@ -727,7 +735,8 @@ impl Live {
 
     fn payload(&self) -> Value {
         let tasks: Vec<&Value> = self.tasks.values().collect();
-        json!({ "asks": self.asks, "tasks": tasks })
+        let queued: Vec<&Value> = self.queued.values().collect();
+        json!({ "asks": self.asks, "tasks": tasks, "queued": queued })
     }
 }
 
@@ -1288,7 +1297,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         ).await;
         interrupt_session(session_id: String) => crate::interrupt_session(&session_id, sink).await;
         stop_task(session_id: String, task_id: String) => crate::stop_task(&session_id, &task_id).await;
-        cancel_queued(session_id: String) => crate::cancel_queued(&session_id).await;
+        cancel_queued(session_id: String) => crate::cancel_queued(&session_id, sink).await;
         respond_permission(session_id: String, request_id: String, option_id: String) =>
             crate::respond_permission(&session_id, &request_id, &option_id, sink).await;
         answer_questions(session_id: String, request_id: String, answers: HashMap<String, String>) =>
@@ -1538,6 +1547,16 @@ mod tests {
         assert!(open(&live).is_empty());
         assert!(live.tasks.is_empty());
         assert!(live.snapshot().contains("\"live_state\""));
+    }
+
+    #[test]
+    fn live_state_holds_the_latest_queue() {
+        let mut live = Live::default();
+        live.note("queue_changed", &json!({ "sessionId": "s", "queued": [{ "id": "a" }] }));
+        live.note("queue_changed", &json!({ "sessionId": "s", "queued": [{ "id": "a" }, { "id": "b" }] }));
+        assert_eq!(live.payload()["queued"][0]["queued"].as_array().unwrap().len(), 2);
+        live.note("queue_changed", &json!({ "sessionId": "s", "queued": [] }));
+        assert!(live.queued.is_empty());
     }
 
     #[tokio::test]

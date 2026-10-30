@@ -658,8 +658,9 @@ async fn stop_task(
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn cancel_queued(
     session_id: &str,
+    sink: Sink,
 ) -> Result<Option<QueuedMessage>, Fail> {
-    Ok(manager().cancel_queued(session_id).await)
+    Ok(manager().cancel_queued(session_id, &sink).await)
 }
 
 /// Answers a permission request the agent is blocked on. `option_id` names one

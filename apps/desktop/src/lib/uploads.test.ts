@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 const invoke = vi.fn();
 vi.mock("@/lib/transport", () => ({
   LOCAL: "local",
+  splitPath: (path: string) => {
+    const m = /^dray:\/\/([^/]+)(\/.*)$/.exec(path);
+    return m ? { server: m[1], path: m[2] } : { server: "local", path };
+  },
   invoke: (...args: unknown[]) => invoke(...args),
   listen: () => Promise.resolve(() => {}),
 }));
@@ -19,6 +23,17 @@ describe("upload", () => {
     expect(upload("vps", "/a.png", 10)).toBe(retried);
     await expect(retried).resolves.toBe("/srv/a.png");
     expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes a server's own copy through, and never confuses it with a local file", async () => {
+    invoke.mockReset();
+    invoke.mockResolvedValueOnce("/srv/ctx.txt");
+
+    await expect(upload("vps", "dray://vps/tmp/ctx.txt", 10)).resolves.toBe("/tmp/ctx.txt");
+    await expect(upload("box", "dray://vps/tmp/ctx.txt", 10)).rejects.toThrow();
+    // The same path on this Mac is still read and sent.
+    await expect(upload("vps", "/tmp/ctx.txt", 10)).resolves.toBe("/srv/ctx.txt");
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it("sends a file again once a send has used it", async () => {

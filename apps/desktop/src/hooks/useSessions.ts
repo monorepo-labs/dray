@@ -1,4 +1,4 @@
-import { invoke, listen, LOCAL, noteSession, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
+import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
@@ -37,7 +37,7 @@ import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KE
 import { FIRST_MOUNT } from "@/lib/turnWindow";
 import { forget, stopWaiting, upload, waitFor } from "@/lib/uploads";
 import type { Draft } from "./useDrafts";
-import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
 
@@ -345,8 +345,8 @@ export function useSessions() {
     const [tasksBySession, setTasksBySession] = useState<Record<string, BackgroundTask[]>>({});
     // sessionId → prompts typed during a running turn, oldest first, still
     // waiting for the backend to hand them to the CLI. Mirrors the queue in
-    // `Session`, which is the authority; this copy exists so the composer can
-    // draw them. Nothing is persisted on either side, so both die with the
+    // `Session`, which is the authority and says so on every `queue_changed`,
+    // since a prompt queued from the island or the CLI reaches no send here. Nothing is persisted on either side, so both die with the
     // process and neither can come back stale.
     const [queuedBySession, setQueuedBySession] = useState<Record<string, QueuedPrompt[]>>({});
 
@@ -355,6 +355,9 @@ export function useSessions() {
     // and not in an effect, which would leave it a render behind.
     const queuedRef = useRef(queuedBySession);
     queuedRef.current = queuedBySession;
+    // sessionId → the newest `queue_changed` taken, so an attachment read
+    // still in flight cannot land over a later change.
+    const queueReadRef = useRef<Record<string, number>>({});
 
     // sessionId → the request ids of the consent cards and questionnaires the
     // agent is standing still behind. Ids rather than a count, so the
@@ -1017,7 +1020,11 @@ const handleSendMsg = async (
       dropProvisional(sessionId, provisional);
       setQueuedBySession((prev) => ({
         ...prev,
-        [sessionId]: [...(prev[sessionId] ?? []), { message: queued, attachments }],
+        // By id: the server's `queue_changed` usually lands before this reply.
+        [sessionId]: [
+          ...(prev[sessionId] ?? []).filter((q) => q.message.id !== queued.id),
+          { message: queued, attachments },
+        ],
       }));
       applySentIssues();
       return true;
@@ -1085,6 +1092,9 @@ const handleCancelQueued = async (): Promise<QueuedMessage | null> => {
   const fail = failUnlessLeft();
   if (!selectedSessionId) return null;
   const sessionId = selectedSessionId;
+  // Read before the await: the cancel's own `queue_changed` drops the row,
+  // and its attachments with it, before this reply arrives.
+  const before = queuedRef.current[sessionId] ?? [];
   try {
     const cancelled = await invoke<QueuedMessage | null>("cancel_queued", { sessionId });
     // Nothing to take back, so what is drawn is a row the backend no longer
@@ -1099,9 +1109,7 @@ const handleCancelQueued = async (): Promise<QueuedMessage | null> => {
     // cancel keeps the files silently — the tray was cleared on send and
     // nothing else holds them. Synchronous, so an Enter pressed straight after
     // Esc cannot send that sentence without them.
-    const held = (queuedRef.current[sessionId] ?? []).find(
-      (q) => q.message.id === cancelled.id,
-    );
+    const held = before.find((q) => q.message.id === cancelled.id);
     if (held) restoreAttachments(sessionId, held.attachments);
 
     setQueuedBySession((prev) => ({
@@ -2318,6 +2326,9 @@ asksBySessionRef.current = asksBySession;
 const catchUp = async (
   sessionId: string,
   held = sessionsRef.current.find((s) => s.sessionId === sessionId)?.events ?? [],
+  // The server already said what is still queued, so a missed delivery must
+  // not retire a row by position: that row is one still waiting.
+  queueKnown = false,
 ) => {
   const fresh = (await newSince(sessionId, held)) ?? (await missedFromTail(sessionId, held));
   if (!fresh) return false;
@@ -2331,7 +2342,7 @@ const catchUp = async (
     }),
   );
   const flushed = fresh.filter((e) => e.payload.type === "user_message" && e.payload.queued).length;
-  if (flushed) {
+  if (flushed && !queueKnown) {
     setQueuedBySession((prev) =>
       prev[sessionId]?.length ? { ...prev, [sessionId]: prev[sessionId].slice(flushed) } : prev,
     );
@@ -2418,12 +2429,23 @@ useEffect(() => {
     // the server's answer; a live reading held from before the drop would
     // outrank it.
     setStatusBySession(without);
+    // Absent from a server older than `queue_changed`, which says nothing.
+    if (payload.queued) {
+      const held = Object.fromEntries(payload.queued.map((q) => [q.sessionId, q.queued]));
+      for (const id of Object.keys(queuedRef.current)) {
+        if (ours(id) && !held[id]) void applyQueue(id, []);
+      }
+      for (const [id, queued] of Object.entries(held)) {
+        noteSession(id, server);
+        void applyQueue(id, queued);
+      }
+    }
     readServer(server);
 
     for (const s of sessionsRef.current) {
       if (!ours(s.sessionId)) continue;
       retireStreamingBlock(s.sessionId);
-      catchUp(s.sessionId).catch((e) => console.error("could not catch up", s.sessionId, e));
+      catchUp(s.sessionId, undefined, !!payload.queued).catch((e) => console.error("could not catch up", s.sessionId, e));
     }
     // A transcript opened while this server was down never loaded, so there is
     // nothing above to catch up — it is read now rather than left blank.
@@ -2861,6 +2883,53 @@ useEffect(
     }),
   [],
 );
+
+/// Takes a session's queue whole, as the server holds it. A row already drawn
+/// keeps its attachments; one queued elsewhere has its own read here.
+const applyQueue = async (sessionId: string, queued: QueuedMessage[]) => {
+  const n = (queueReadRef.current[sessionId] ?? 0) + 1;
+  queueReadRef.current[sessionId] = n;
+  const held = queuedRef.current[sessionId] ?? [];
+  const paths = queued
+    .filter((m) => !held.some((q) => q.message.id === m.id))
+    .flatMap((m) => m.attachmentPaths);
+  const server = serverOfSession(sessionId);
+  const read = paths.length
+    ? await invoke<Attachment[]>("read_attachments", { paths }, server).catch(() => [])
+    : [];
+  if (queueReadRef.current[sessionId] !== n) return;
+  setQueuedBySession((prev) => {
+    const cur = prev[sessionId] ?? [];
+    if (!queued.length) {
+      if (!cur.length) return prev;
+      const { [sessionId]: _, ...rest } = prev;
+      return rest;
+    }
+    const next = queued.map(
+      (m) =>
+        cur.find((q) => q.message.id === m.id) ?? {
+          message: m,
+          // Qualified: these are the server's own copies, so a cancel that puts
+          // them back in the tray resends them as they are — `upload` passes a
+          // path already on its server through rather than reading this Mac.
+          attachments: read
+            .filter((a) => m.attachmentPaths.includes(a.path))
+            .map((a) => ({ ...a, path: qualify(a.path, server) })),
+        },
+    );
+    return { ...prev, [sessionId]: next };
+  });
+};
+
+useEffect(() => {
+  const listenerPromise = listen<QueueChangedEvent>("queue_changed", ({ payload, server }) => {
+    noteSession(payload.sessionId, server);
+    void applyQueue(payload.sessionId, payload.queued);
+  });
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
 
 useEffect(() => {
   const listenerPromise = listen<SessionStatusEvent>("session_status", (event) => {
