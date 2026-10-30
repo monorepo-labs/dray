@@ -98,6 +98,18 @@ extension Turn {
     }
 }
 
+/// The pictures tools handed back in a folded stretch, drawn under its summary
+/// line so a fold never hides them: the desktop's `segmentMedia`.
+func foldedImages(_ items: [Item]) -> [ImageRef] {
+    items.flatMap { item -> [ImageRef] in
+        switch item {
+        case .tool(let call): call.images
+        case .group(_, _, let calls, _, _): calls.flatMap(\.images)
+        default: []
+        }
+    }
+}
+
 /// "3 tool calls · 1 message", the desktop's summary line.
 func summaryLabel(_ items: [Item]) -> String {
     var calls = 0, messages = 0

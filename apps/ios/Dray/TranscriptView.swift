@@ -167,6 +167,10 @@ struct TurnView: View {
                         if !segment.items.isEmpty {
                             SummaryToggle(label: summaryLabel(segment.items), open: isOpen) { toggle(i) }
                         }
+                        // The fold hides the calls, not what they showed; open, each row draws its own.
+                        if !isOpen, case let shown = foldedImages(segment.items), !shown.isEmpty {
+                            Thumbnails(images: shown)
+                        }
                         if isOpen { ForEach(segment.items) { ItemView(item: $0) } }
                         if let prompt = segment.prompt { ItemView(item: prompt) }
                     }
@@ -341,17 +345,7 @@ struct UserBubble: View {
                 Label("From \(from)", systemImage: "arrow.turn.down.right")
                     .font(Theme.Font.micro).foregroundStyle(Theme.tertiary)
             }
-            if !images.isEmpty {
-                ThumbnailRow(spacing: Theme.Space.xs) {
-                    ForEach(Array(images.enumerated()), id: \.offset) { _, ref in
-                        ZoomableImage(ref: ref) {
-                            RemoteImage(ref: ref, fill: true)
-                                .frame(width: 72, height: 72)
-                                .clipShape(.rect(cornerRadius: Theme.Radius.md, style: .continuous))
-                        }
-                    }
-                }
-            }
+            if !images.isEmpty { Thumbnails(images: images) }
             if !text.isEmpty {
                 Text(text)
                     .font(Theme.Font.body)
@@ -368,6 +362,23 @@ struct UserBubble: View {
         .opacity(queued ? 0.55 : 1)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 48)
+    }
+}
+
+/// Square thumbnails, each opening full screen on tap.
+struct Thumbnails: View {
+    let images: [ImageRef]
+
+    var body: some View {
+        ThumbnailRow(spacing: Theme.Space.xs) {
+            ForEach(Array(images.enumerated()), id: \.offset) { _, ref in
+                ZoomableImage(ref: ref) {
+                    RemoteImage(ref: ref, fill: true)
+                        .frame(width: 72, height: 72)
+                        .clipShape(.rect(cornerRadius: Theme.Radius.md, style: .continuous))
+                }
+            }
+        }
     }
 }
 

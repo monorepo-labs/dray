@@ -115,7 +115,7 @@ struct IslandTranscript: View {
             }
             ForEach(turns) { turn in
                 Group {
-                    if live && turn.id == turns.last?.id { LiveTurn(turn: turn, openInApp: openInApp) } else { settled(turn) }
+                    if live && turn.id == turns.last?.id { LiveTurn(turn: turn) } else { settled(turn) }
                 }
                 .id(turn.id)
             }
@@ -144,7 +144,7 @@ struct IslandTranscript: View {
         // An interrupted turn has no `finalText`, so its newest message ends it.
         let answer = turn.finalText ?? work.reversed().lazy.compactMap { if case .text(_, let t) = $0 { t } else { nil } }.first
         return VStack(alignment: .leading, spacing: 8) {
-            if let p = turn.prompt { PromptBubble(text: p.text, images: p.images, openInApp: openInApp) }
+            if let p = turn.prompt { PromptBubble(text: p.text, images: p.images) }
             // The work is Dray's to show: the line leads there and the island closes.
             if !work.isEmpty {
                 Button(action: openInApp) {
@@ -156,6 +156,9 @@ struct IslandTranscript: View {
                 .buttonStyle(.plain)
                 .help("Open in Dray")
             }
+            // The fold hides the calls, not what they showed.
+            let shown = foldedImages(work)
+            if !shown.isEmpty { Thumbnails(images: shown) }
             if let answer { MessageText(text: answer) }
             if let failure = turn.failure { FailureLine(text: failure) }
         }
@@ -165,7 +168,6 @@ struct IslandTranscript: View {
 /// A running turn: the newest message over the latest call.
 private struct LiveTurn: View {
     let turn: Turn
-    let openInApp: () -> Void
 
     var body: some View {
         let text = turn.work.reversed().lazy.compactMap { if case .text(_, let t) = $0 { t } else { nil } }.first
@@ -177,7 +179,7 @@ private struct LiveTurn: View {
             }
         }.first
         VStack(alignment: .leading, spacing: 8) {
-            if let p = turn.prompt { PromptBubble(text: p.text, images: p.images, openInApp: openInApp) }
+            if let p = turn.prompt { PromptBubble(text: p.text, images: p.images) }
             if let text { MessageText(text: text) }
             Group {
                 if let call { CallLine(call: call) } else {
@@ -215,25 +217,10 @@ private struct CallLine: View {
 private struct PromptBubble: View {
     let text: String
     let images: [ImageRef]
-    let openInApp: () -> Void
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
-            if !images.isEmpty {
-                ThumbnailRow(spacing: 4) {
-                    // Seen at size in Dray: a click leads there, as the summary line does.
-                    ForEach(Array(images.enumerated()), id: \.offset) { _, ref in
-                        Button(action: openInApp) {
-                            RemoteImage(ref: ref, fill: true)
-                                .frame(width: 44, height: 44)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open in Dray")
-                    }
-                }
-            }
+            if !images.isEmpty { Thumbnails(images: images) }
             if !text.isEmpty {
                 Text(text)
                     .font(.system(size: 13))
@@ -249,8 +236,34 @@ private struct PromptBubble: View {
     }
 }
 
+extension EnvironmentValues {
+    /// Draws an image over the whole card, the island's own viewer, among the ones it arrived with.
+    @Entry var viewImage: ([ImageRef], Int) -> Void = { _, _ in }
+}
+
+/// Small pictures, each opening over the card at size.
+private struct Thumbnails: View {
+    @Environment(\.viewImage) private var view
+    let images: [ImageRef]
+
+    var body: some View {
+        ThumbnailRow(spacing: 4) {
+            ForEach(Array(images.enumerated()), id: \.offset) { i, ref in
+                Button { view(images, i) } label: {
+                    RemoteImage(ref: ref, fill: true)
+                        .frame(width: 44, height: 44)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
 /// The iOS app's markdown blocks, drawn at the island's size on its black.
 private struct MessageText: View {
+    @Environment(\.viewImage) private var view
     let text: String
 
     var body: some View {
@@ -287,10 +300,14 @@ private struct MessageText: View {
                 case .table(let rows):
                     MarkdownTable(rows: rows)
                 case .image(_, let url):
+                    let ref = ImageRef(path: nil, url: url, mimeType: nil)
                     // Clipped before the frame, so the corners are the picture's and not the column's.
-                    RemoteImage(ref: ImageRef(path: nil, url: url, mimeType: nil))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .frame(maxWidth: 200, maxHeight: 120, alignment: .leading)
+                    Button { view([ref], 0) } label: {
+                        RemoteImage(ref: ref)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .frame(maxWidth: 200, maxHeight: 120, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }

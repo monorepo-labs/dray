@@ -85,12 +85,13 @@ struct RemoteImage: View {
     let ref: ImageRef
     /// Fill the frame and crop, for a thumbnail; otherwise fit it whole.
     var fill = false
-    @State private var loaded: PlatformImage?
+    /// Kept with its ref, so a view handed another picture never shows the last one meanwhile.
+    @State private var loaded: (ref: ImageRef, image: PlatformImage)?
     @State private var failed = false
 
     var body: some View {
         Group {
-            if let image = loaded ?? ImageLoader.cached(ref, server) {
+            if let image = ImageLoader.cached(ref, server) ?? (loaded?.ref == ref ? loaded?.image : nil) {
                 Image(platform: image)
                     .resizable()
                     .aspectRatio(contentMode: fill ? .fill : .fit)
@@ -103,13 +104,16 @@ struct RemoteImage: View {
         }
         // A few spaced tries ride out a socket coming back; scrolling away and back tries afresh.
         .task(id: ref) {
+            failed = false
             guard ImageLoader.cached(ref, server) == nil else { return }
             for wait in [0, 2, 5, 15] {
                 try? await Task.sleep(for: .seconds(wait))
                 if Task.isCancelled { return }
-                loaded = await ImageLoader.load(ref, from: server)
-                failed = loaded == nil
-                if loaded != nil { return }
+                if let image = await ImageLoader.load(ref, from: server) {
+                    loaded = (ref, image)
+                    return
+                }
+                failed = true
             }
         }
     }
