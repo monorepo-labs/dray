@@ -1295,13 +1295,21 @@ pub async fn fetch_file(server: &str, path: &str) -> Result<(String, Vec<u8>), S
 
 /// Written once under a fresh uuid (`attachments/<session>/<uuid>.<ext>`)
 /// and never rewritten, so a copy can't go stale. Recordings are kept by a
-/// name a re-recording overwrites, so they are always fetched.
+/// name a re-recording overwrites, so they are always fetched. The uuid is
+/// what tells Dray's own from a project's `attachments` folder, which the
+/// Files view also reads through `/file` and whose files do change.
 fn is_attachment(path: &str) -> bool {
-    std::path::Path::new(path)
-        .components()
-        .rev()
-        .nth(2)
-        .is_some_and(|c| c.as_os_str() == "attachments")
+    let path = std::path::Path::new(path);
+    let named_by_dray = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok());
+    named_by_dray
+        && path
+            .components()
+            .rev()
+            .nth(2)
+            .is_some_and(|c| c.as_os_str() == "attachments")
 }
 
 /// Most bytes [`FILES`] holds; a screenshot is 0.1–1.5MB.
@@ -1444,7 +1452,10 @@ mod tests {
 
     #[test]
     fn keeps_attachments_alone_within_budget() {
-        assert!(is_attachment("/home/u/.dray/attachments/s1/0190.png"));
+        assert!(is_attachment(
+            "/home/u/.dray/attachments/s1/019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b.png"
+        ));
+        assert!(!is_attachment("/repo/attachments/demo/clip.mp4"));
         assert!(!is_attachment("/home/u/.dray/browser/recordings/s1/flow.mp4"));
         assert!(!is_attachment("/home/u/attachments/flow.mp4"));
 
