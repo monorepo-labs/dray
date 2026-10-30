@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
-import { ArrowUp, ChevronRight, Mic, Plus } from "lucide-react";
+import { ArrowUp, ChevronRight, CornerDownLeft, Folder, Mic, Plus } from "lucide-react";
+
+import { Wordmark } from "@/components/Wordmark";
 
 import { cx } from "./Window";
 
@@ -253,6 +255,145 @@ export function Composer({
         </div>
         )}
       </div>
+    </div>
+  );
+}
+
+const BUTTON =
+  "flex h-7 items-center rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none";
+
+/// A question the agent is blocked on, as `QuestionRequest` draws it: no card
+/// around it, since the choices carry their own edges. Skip is a real answer,
+/// so `onAnswer` gets `null` for it, and for Send with nothing picked.
+export function QuestionCard({
+  question,
+  options,
+  onAnswer,
+}: {
+  question: string;
+  options: { label: string; description: string }[];
+  onAnswer: (label: string | null) => void;
+}) {
+  return (
+    <form
+      className="flex max-w-md flex-col gap-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const picked = new FormData(event.currentTarget).get("answer");
+        onAnswer(typeof picked === "string" ? picked : null);
+      }}
+    >
+      <p className="text-chat font-medium">{question}</p>
+      <div className="flex flex-col gap-2">
+        {options.map((option) => (
+          <label
+            key={option.label}
+            className="group relative flex cursor-pointer items-start gap-2.5 rounded-lg border border-border px-3 py-2 text-sm transition-colors select-none hover:bg-muted/50 has-checked:border-primary/40 has-checked:bg-muted has-focus-visible:ring-2 has-focus-visible:ring-ring"
+          >
+            <input type="radio" name="answer" value={option.label} className="peer sr-only" />
+            <span className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border border-border peer-checked:border-primary peer-checked:bg-primary">
+              <span className="hidden size-2 rounded-full bg-primary-foreground group-has-checked:block" />
+            </span>
+            <span className="flex min-w-0 flex-col gap-0.5 leading-snug">
+              <span className="font-medium">{option.label}</span>
+              <span className="text-muted-foreground">{option.description}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      <div className="flex items-center justify-end gap-2">
+        <button type="button" onClick={() => onAnswer(null)} className={cx(BUTTON, "hover:bg-muted/70")}>
+          Skip
+        </button>
+        <button
+          type="submit"
+          className={cx(BUTTON, "bg-primary text-primary-foreground shadow-[0_1px_4px_rgba(0,0,0,0.35)] hover:bg-primary/90")}
+        >
+          Send
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/// The composer before a session exists, standing alone mid-sheet: the
+/// wordmark, the toolbar above the box rather than under it, no card around
+/// the box, and a hint where the send button was. Enter sends.
+export function NewTaskComposer({
+  value,
+  onChange,
+  onSend,
+  agent,
+  model,
+  effort,
+  mode,
+  project,
+  base,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onSend: () => void;
+  agent?: ReactNode;
+  model: string;
+  effort?: string;
+  mode: string;
+  project: string;
+  /// What a worktree forks from, named since the CLI ignores the checkout.
+  base: string;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 items-center px-10">
+      <form
+        className="mx-auto w-full max-w-3xl"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSend();
+        }}
+      >
+        <Wordmark className="mb-4 h-auto w-30 text-foreground/10" />
+        <div className="-ml-2.5 flex min-w-0 items-center gap-0.5 px-1 pb-1.5 text-ui font-medium text-muted-foreground">
+          <span className="grid size-7 shrink-0 place-items-center">
+            <Plus className="size-4" />
+          </span>
+          <span className="flex h-7 shrink-0 items-center gap-1 px-1.5">
+            {agent}
+            <span>{model}</span>
+            {effort && <span className="text-muted-foreground/60">{effort}</span>}
+          </span>
+          <span className="flex h-7 shrink-0 items-center gap-1.5 px-1.5">
+            <Folder className="size-3.5 shrink-0 fill-current" />
+            {project}
+          </span>
+          {/* The track reads as on or off at a glance. */}
+          <span className="flex h-7 shrink-0 items-center gap-1.5 px-1.5 text-foreground">
+            <span className="flex h-3 w-5 shrink-0 items-center rounded-full bg-primary p-px">
+              <span className="size-2.5 translate-x-2 rounded-full bg-background" />
+            </span>
+            Worktree
+          </span>
+          <span className="truncate px-1.5 font-normal text-muted-foreground/60">from {base}</span>
+          <span className="flex h-7 shrink-0 items-center px-1.5">{mode}</span>
+        </div>
+        <textarea
+          rows={1}
+          autoFocus
+          aria-label="Describe a task"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            // An IME's Enter picks a character; it is not a send.
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              onSend();
+            }
+          }}
+          placeholder="Describe a task."
+          className="field-sizing-content max-h-40 w-full resize-none bg-transparent py-1 text-prompt text-foreground outline-none placeholder:text-muted-foreground"
+        />
+        <div className="flex items-center gap-1 pt-2 text-ui text-muted-foreground/60">
+          Press <CornerDownLeft className="size-3" strokeWidth={2} /> to send
+        </div>
+      </form>
     </div>
   );
 }

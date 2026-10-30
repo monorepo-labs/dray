@@ -13,11 +13,12 @@ import { HINT_KEYS, Keys } from "./Sidebar";
 import { cx } from "./Window";
 
 /// The right pane, drawn as `RightPanel` draws it: a sheet of its own with a tab row,
-/// and the PR tab's rows under it. Static; the scene animates over it.
+/// and the active tab's body under it. `onSelect` makes the tabs buttons.
 export default function Panel({
   tabs,
   active,
   counts,
+  onSelect,
   children,
   width = 460,
   className,
@@ -25,6 +26,7 @@ export default function Panel({
   tabs: string[];
   active: string;
   counts?: Record<string, number>;
+  onSelect?: (tab: string) => void;
   children: ReactNode;
   width?: number;
   className?: string;
@@ -36,20 +38,25 @@ export default function Panel({
     >
       <div className="flex h-[34px] shrink-0 items-center gap-0.5 overflow-hidden px-2 pt-1.5">
         <div className="flex h-full min-w-0 items-center gap-0.5">
-          {tabs.map((tab) => (
-            <span
-              key={tab}
-              className={cx(
-                "rounded-md px-2 py-1 text-ui",
-                tab === active
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-muted-foreground",
-              )}
-            >
-              {tab}
-              {!!counts?.[tab] && <span className="ml-1 text-muted-foreground">{counts[tab]}</span>}
-            </span>
-          ))}
+          {tabs.map((tab) => {
+            const Tab = onSelect ? "button" : "span";
+            return (
+              <Tab
+                key={tab}
+                {...(onSelect && { type: "button" as const, onClick: () => onSelect(tab) })}
+                className={cx(
+                  "rounded-md px-2 py-1 text-ui",
+                  tab === active
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : cx("text-muted-foreground", onSelect && "hover:text-foreground"),
+                  onSelect && "transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                )}
+              >
+                {tab}
+                {!!counts?.[tab] && <span className="ml-1 text-muted-foreground">{counts[tab]}</span>}
+              </Tab>
+            );
+          })}
           <Keys caps={["⌘", "⌥", "[ ]"]} className={cx("ml-1.5 shrink-0 opacity-50", HINT_KEYS)} />
         </div>
         <div className="ml-auto flex shrink-0 items-center">
@@ -110,6 +117,8 @@ export function Readiness({
   base,
   detail,
   ready,
+  onMerge,
+  action,
   className,
 }: {
   label: ReactNode;
@@ -117,8 +126,14 @@ export function Readiness({
   base: string;
   detail?: ReactNode;
   ready: boolean;
+  /// Makes the button's main half a button. Clickable even when not ready,
+  /// the app's rule: the verdict beside it is the reason, not a lock.
+  onMerge?: () => void;
+  /// Stands in for the split button: the confirm pair, or the merge in flight.
+  action?: ReactNode;
   className?: string;
 }) {
+  const Merge = onMerge ? "button" : "span";
   return (
     <section className={cx("px-3", className)}>
       <div className="flex min-h-7 items-center gap-2">
@@ -134,22 +149,33 @@ export function Readiness({
           <span className="text-muted-foreground/50">into</span> {base}
         </p>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          {/* The split merge button, drawn at reduced strength until the PR is
-              ready — the app's own reading, where the verdict beside it is the
-              reason. */}
-          <div
-            className={cx(
-              "flex items-center rounded-[min(var(--radius-md),12px)] shadow-[0_1px_4px_rgba(0,0,0,0.35)] transition-opacity duration-300",
-              !ready && "opacity-60",
-            )}
-          >
-            <span className="flex h-7 items-center rounded-l-[min(var(--radius-md),12px)] bg-accent-merge px-2.5 text-[0.8rem] font-medium text-accent-merge-foreground">
-              Squash and merge
-            </span>
-            <span className="flex h-7 items-center rounded-r-[min(var(--radius-md),12px)] bg-accent-merge px-1.5 text-accent-merge-foreground shadow-[inset_1px_0_1px_rgba(255,255,255,0.1)]">
-              <ChevronDown className="size-3.5" />
-            </span>
-          </div>
+          {action ?? (
+            <>
+              {/* The split merge button, drawn at reduced strength until the PR is
+                  ready — the app's own reading, where the verdict beside it is the
+                  reason. */}
+              <div
+                className={cx(
+                  "flex items-center rounded-[min(var(--radius-md),12px)] shadow-[0_1px_4px_rgba(0,0,0,0.35)] transition-opacity duration-300",
+                  !ready && "opacity-60",
+                )}
+              >
+                <Merge
+                  {...(onMerge && { type: "button" as const, onClick: onMerge })}
+                  className={cx(
+                    "flex h-7 items-center rounded-l-[min(var(--radius-md),12px)] bg-accent-merge px-2.5 text-[0.8rem] font-medium text-accent-merge-foreground",
+                    onMerge &&
+                      "transition-colors hover:bg-accent-merge-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                  )}
+                >
+                  Squash and merge
+                </Merge>
+                <span className="flex h-7 items-center rounded-r-[min(var(--radius-md),12px)] bg-accent-merge px-1.5 text-accent-merge-foreground shadow-[inset_1px_0_1px_rgba(255,255,255,0.1)]">
+                  <ChevronDown className="size-3.5" />
+                </span>
+              </div>
+            </>
+          )}
         </div>
       </div>
       {detail && <p className="mt-0.5 text-ui text-muted-foreground">{detail}</p>}

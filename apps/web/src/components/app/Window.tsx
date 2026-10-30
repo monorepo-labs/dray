@@ -11,8 +11,8 @@ import { SIDEBAR_WIDTH } from "./Sidebar";
 /// frame's own fill under it, and the chat and the right panel are each a
 /// card of their own, with the frame showing between.
 ///
-/// Every part of this is decoration: nothing here is interactive and the whole
-/// frame is `aria-hidden`.
+/// Decoration unless `interactive`: a still drawing is `aria-hidden` whole,
+/// where the hero's buttons have to be reachable.
 export default function Window({
   sidebar,
   tabs,
@@ -21,6 +21,7 @@ export default function Window({
   crew,
   panel,
   sidebarWidth = SIDEBAR_WIDTH,
+  interactive = false,
   className,
 }: {
   sidebar: ReactNode;
@@ -35,11 +36,12 @@ export default function Window({
   crew?: ReactNode;
   panel?: ReactNode;
   sidebarWidth?: number;
+  interactive?: boolean;
   className?: string;
 }) {
   return (
     <div
-      aria-hidden
+      aria-hidden={!interactive}
       data-app-window
       className={cx(
         "app-frame relative flex flex-col overflow-hidden rounded-xl border border-border shadow-window select-none",
