@@ -35,6 +35,36 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// Trackpad pinches, read off a listen-only event tap. AppKit hands a pinch to the
+/// active app alone, which the island never is, and a global `NSEvent` monitor
+/// hears none either (measured), so the window server's own gesture events are
+/// read instead: type 29, zoom where field 110 is 8, step in 113, phase in 132.
+enum PinchTap {
+    /// Each step's change and its phase (1 began, 2 changed, 4 ended), on the main thread.
+    nonisolated(unsafe) static var onPinch: (Double, Int64) -> Void = { _, _ in }
+    nonisolated(unsafe) private static var tap: CFMachPort?
+
+    /// False where the system refused the tap; the menu's toggle still works.
+    static func start() -> Bool {
+        guard tap == nil else { return true }
+        tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .listenOnly,
+                                eventsOfInterest: 1 << 29, callback: { _, type, e, _ in
+            // A slow callback gets the tap disabled; turn it back on.
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                if let tap = PinchTap.tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            } else if e.getIntegerValueField(CGEventField(rawValue: 110)!) == 8 {
+                let zoom = e.getDoubleValueField(CGEventField(rawValue: 113)!)
+                let phase = e.getIntegerValueField(CGEventField(rawValue: 132)!)
+                DispatchQueue.main.async { PinchTap.onPinch(zoom, phase) }
+            }
+            return Unmanaged.passUnretained(e)
+        }, userInfo: nil)
+        guard let tap else { return false }
+        CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
+        return true
+    }
+}
+
 /// A panel that takes keys without making Dray Island the active app, so the
 /// app the reader is working in keeps its place in the window order.
 final class IslandPanel: NSPanel {
@@ -71,6 +101,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var composer: Composer?
     private var hotkey: ModifierTap?
     private var keys: Any?
+    /// One pinch's magnification so far: the event carries only each step's change.
+    private var pinched: CGFloat = 0
+    /// The pinch under way began over the card.
+    private var pinchOnCard = false
     /// ⌘Esc from anywhere, held while the panel is open: bare Esc only reaches it while it has focus,
     /// and AppKit never hands ⌘Esc to the key monitor at all.
     private var closeKey: HotKey?
@@ -208,6 +242,27 @@ final class Delegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak composer] _ in
             MainActor.assumeIsolated { composer?.keyed = false }
         }
+        // A trackpad pinch over the card: out opens the transcript, in puts it away.
+        // Over the card only: the panel's clear part lets a pinch through to the app beneath.
+        PinchTap.onPinch = { [weak self, weak composer, weak panel] zoom, phase in
+            guard let self, let composer, let panel else { return }
+            // Judged once, where the pinch begins: one that starts elsewhere and
+            // drifts onto the card is not the card's, and starts its own count.
+            if phase == 1 {
+                pinched = 0
+                pinchOnCard = composer.shown
+                    && NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == panel.windowNumber
+            }
+            guard pinchOnCard, composer.shown else { return }
+            pinched += zoom
+            let want = pinched > 0.15 ? true : pinched < -0.15 ? false : composer.transcript
+            if want != composer.transcript {
+                composer.transcript = want
+                composer.pinched()
+                NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+            }
+        }
+        _ = PinchTap.start()
         // The panel's keys, here rather than on views, which answer only
         // while focus sits inside them. Key codes: Escape 53, N 45, F 3, ↓ 125, ↑ 126, A 0, E 14, T 17, P 35, Tab 48.
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak composer, weak panel] e in

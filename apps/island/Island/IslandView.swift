@@ -3,7 +3,8 @@ import SwiftUI
 enum Field { case input, search }
 
 /// Two cards: the composer, hanging from the notch or sitting above the Dock,
-/// and the session list on its far side. The transcript is Dray's.
+/// and the session list on its far side. The composer can carry the newest
+/// turn; the whole transcript is Dray's.
 struct IslandView: View {
     @Bindable var composer: Composer
     @Environment(Store.self) private var store
@@ -32,6 +33,14 @@ struct IslandView: View {
     /// The idle orb and the recording one are one orb to the reader, so a start
     /// moves it into place rather than fading a second one in.
     @Namespace private var orbSpace
+    /// Each pulse of the card, and which way the last one went.
+    @State private var pulses = 0
+    @State private var grows = true
+
+    private func pulse(grow: Bool) {
+        grows = grow
+        pulses += 1
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -54,6 +63,7 @@ struct IslandView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: composer.placement == .notch ? .top : .bottom)
         .padding(.bottom, composer.placement == .bottom ? 12 + Composer.shadowRoom : 0)
         .animation(.snappy(duration: 0.25), value: fits)
+        .animation(.snappy(duration: 0.25), value: composer.transcript)
         .animation(.snappy(duration: 0.25), value: composer.drawHint)
         // Out here, so the card's fill widens with the camera rather than snapping.
         .animation(.spring(duration: 0.3, bounce: 0.2), value: cardHovered)
@@ -108,6 +118,9 @@ struct IslandView: View {
         .padding(12)
         .padding(.top, composer.notchHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
+        // A row leaving fades where it stood while the card shrinks under it; kept inside the
+        // card. Not while bare: the recording orb grows past it.
+        .clipShape(Rectangle().inset(by: bare ? -200 : 0))
         // Faded rather than removed, so it animates.
         .background {
             shape.fill((denied ? Color.red : .black).opacity(bare ? 0 : 1))
@@ -129,6 +142,18 @@ struct IslandView: View {
         }
         .scaleEffect(dropping ? 1.04 : 1)
         .animation(.spring(duration: 0.3, bounce: 0.45), value: dropping)
+        // The card growing — the transcript shown, the expanded layout — swells it past its
+        // size and back; shrinking dips it.
+        .keyframeAnimator(initialValue: 1.0, trigger: pulses) { card, scale in
+            card.scaleEffect(scale, anchor: composer.placement == .notch ? .top : .bottom)
+        } keyframes: { _ in
+            KeyframeTrack {
+                SpringKeyframe(grows ? 1.04 : 0.96, duration: 0.14)
+                SpringKeyframe(1, duration: 0.4, spring: .bouncy)
+            }
+        }
+        .onChange(of: composer.transcript) { pulse(grow: composer.transcript) }
+        .onChange(of: composer.mode) { pulse(grow: composer.mode == .expanded) }
         .dropDestination(for: URL.self) { urls, _ in
             // The server skips a folder, so its row would send nothing.
             let files = urls.filter { $0.isFileURL && (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == false }
@@ -150,6 +175,8 @@ struct IslandView: View {
                 ForEach(InputMode.allCases, id: \.self) { Text($0.label).tag($0) }
             }
             .pickerStyle(.inline)
+            Divider()
+            Toggle("Show Messages", isOn: $composer.transcript)
             Divider()
             Button("Quit Dray Island") { NSApp.terminate(nil) }
         }
@@ -188,8 +215,18 @@ struct IslandView: View {
             // and the arrows can't open the list over text. ⌘-click is the deliberate way to Dray.
             TitleRow(title: title, marks: store.marks(key), close: composer.closeHint,
                      list: { composer.searches += 1 },
-                     openInApp: { Task { await composer.showInApp(key) } })
+                     openInApp: { Task { await composer.showInApp(key) } },
+                     hint: composer.pinchHint ? (composer.transcript ? "Pinch to hide messages" : "Spread fingers to see messages") : nil)
                 .gone(recording)
+            if composer.transcript {
+                IslandTranscript(key: key) { Task { await composer.showInApp(key) } }
+                    // A view per session: an older page still loading for the last one
+                    // lands in state nobody draws, not in this session's count.
+                    .id(key)
+                    // Gone before the input slides up through it.
+                    .transition(.asymmetric(insertion: .opacity, removal: .opacity.animation(.easeOut(duration: 0.08))))
+                    .gone(recording)
+            }
         }
         if composer.target == .new { NewSessionBar(composer: composer).gone(recording) }
         if recording ? rowsHeight != nil : !composer.rows.isEmpty {

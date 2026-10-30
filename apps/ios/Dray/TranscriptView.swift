@@ -463,19 +463,14 @@ struct GroupRow: View {
 struct MarkdownText: View {
     let text: String
 
-    private enum Block {
-        case prose(String), code(String), heading(Int, String), quote(String), rule
-        case list([(marker: String, text: String, indent: Int)])
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+            ForEach(Array(markdownBlocks(text).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .prose(let s):
-                    Text(attributed(s)).font(Theme.Font.body).foregroundStyle(Theme.text)
+                    Text(inlineMarkdown(s)).font(Theme.Font.body).foregroundStyle(Theme.text)
                 case .heading(let level, let s):
-                    Text(attributed(s))
+                    Text(inlineMarkdown(s))
                         .font(level <= 2 ? .title3.weight(.semibold) : .headline)
                         .foregroundStyle(Theme.text)
                         .padding(.top, 4)
@@ -484,14 +479,14 @@ struct MarkdownText: View {
                         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                                 Text(item.marker).monospacedDigit().foregroundStyle(Theme.tertiary)
-                                Text(attributed(item.text)).foregroundStyle(Theme.text)
+                                Text(inlineMarkdown(item.text)).foregroundStyle(Theme.text)
                             }
                             .padding(.leading, CGFloat(item.indent) * 18)
                         }
                     }
                     .font(Theme.Font.body)
                 case .quote(let s):
-                    Text(attributed(s))
+                    Text(inlineMarkdown(s))
                         .font(Theme.Font.body)
                         .foregroundStyle(Theme.secondary)
                         .padding(.leading, Theme.Space.m)
@@ -503,73 +498,15 @@ struct MarkdownText: View {
                     .well()
                 case .rule:
                     Rectangle().fill(Theme.border).frame(height: 1).padding(.vertical, 4)
+                case .table(let rows):
+                    MarkdownTable(rows: rows)
+                        .font(Theme.Font.body)
+                        .foregroundStyle(Theme.text)
                 }
             }
         }
         .tint(Theme.link)
         .textSelection(.enabled)
-    }
-
-    private var blocks: [Block] {
-        var out: [Block] = []
-        var prose: [Substring] = [], code: [Substring] = [], quote: [String] = []
-        var list: [(marker: String, text: String, indent: Int)] = []
-        var fenced = false
-        func flush() {
-            let p = prose.joined(separator: "\n").trimmingCharacters(in: .newlines)
-            if !p.isEmpty { out.append(.prose(p)) }
-            if !list.isEmpty { out.append(.list(list)) }
-            if !quote.isEmpty { out.append(.quote(quote.joined(separator: "\n"))) }
-            prose = []; list = []; quote = []
-        }
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") {
-                if fenced {
-                    out.append(.code(code.joined(separator: "\n")))
-                    code = []
-                } else {
-                    flush()
-                }
-                fenced.toggle()
-                continue
-            }
-            if fenced { code.append(line); continue }
-            let indent = (line.prefix { $0 == " " }.count) / 2
-            if let m = trimmed.firstMatch(of: /^(#{1,6})\s+(.+)$/) {
-                flush()
-                out.append(.heading(m.1.count, String(m.2)))
-            } else if let m = trimmed.firstMatch(of: /^[-*+]\s+(.+)$/) {
-                if !prose.isEmpty || !quote.isEmpty { flush() }
-                list.append(("•", String(m.1), indent))
-            } else if let m = trimmed.firstMatch(of: /^(\d+)[.)]\s+(.+)$/) {
-                if !prose.isEmpty || !quote.isEmpty { flush() }
-                list.append(("\(m.1).", String(m.2), indent))
-            } else if let m = trimmed.firstMatch(of: /^>\s?(.*)$/) {
-                if !prose.isEmpty || !list.isEmpty { flush() }
-                quote.append(String(m.1))
-            } else if trimmed.wholeMatch(of: /(-{3,}|\*{3,}|_{3,})/) != nil {
-                flush()
-                out.append(.rule)
-            } else if trimmed.isEmpty {
-                flush()
-            } else if !list.isEmpty && indent > 0 {
-                // A wrapped list item's continuation.
-                list[list.count - 1].text += " " + trimmed
-            } else {
-                if !list.isEmpty || !quote.isEmpty { flush() }
-                prose.append(line)
-            }
-        }
-        // An unclosed fence still shows what it holds.
-        if fenced, !code.isEmpty { out.append(.code(code.joined(separator: "\n"))) }
-        flush()
-        return out
-    }
-
-    private func attributed(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(s)
     }
 }
 

@@ -412,14 +412,17 @@ fn island_done_dir() -> Option<std::path::PathBuf> {
 }
 
 /// The island preferences Settings draws. The island's own right-click menu
-/// writes the first two as well, so they are read back rather than kept here,
-/// and `captureTaken` is the island's alone: the chord it could not register.
-const ISLAND_PREFS: [&str; 5] = ["island.placement", "island.mode", "island.tap", "island.captureKey", "island.captureTaken"];
+/// writes the first three as well (a pinch writes the transcript too), so they
+/// are read back rather than kept here, and `captureTaken` is the island's
+/// alone: the chord it could not register.
+const ISLAND_PREFS: [&str; 6] =
+    ["island.placement", "island.mode", "island.transcript", "island.tap", "island.captureKey", "island.captureTaken"];
 
 fn island_pref_valid(name: &str, value: &str) -> bool {
     match name {
         "island.placement" => matches!(value, "notch" | "bottom"),
         "island.mode" => matches!(value, "compact" | "expanded"),
+        "island.transcript" => matches!(value, "shown" | "hidden"),
         "island.tap" => matches!(value, "single" | "double"),
         // A Carbon key code and modifier mask, or none.
         "island.captureKey" => {
@@ -461,9 +464,9 @@ pub async fn set_island_pref(name: String, value: String) -> Result<(), String> 
         return Err(crate::git::stderr_or(&out, || "could not save the island setting".into()));
     }
     // An island that is not running reads the file when it starts. Position and
-    // layout are only judged on screen, so those open the panel to show them.
+    // layout, and the transcript, are only judged on screen, so those open the panel to show them.
     let ping = match name.as_str() {
-        "island.placement" | "island.mode" => "com.yogesh.dray.island.show",
+        "island.placement" | "island.mode" | "island.transcript" => "com.yogesh.dray.island.show",
         _ => "com.yogesh.dray.island.prefs",
     };
     Command::new("notifyutil").args(["-p", ping]).output().await.ok();

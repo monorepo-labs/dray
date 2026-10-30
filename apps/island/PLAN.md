@@ -29,8 +29,14 @@ the sessions live in `dray --serve` now, not in the window.
   or the one wanting the reader; tapped open over Dray's window, the session
   that window has open (`selected_session`, asked of the app through the
   server). "New session" is an entry in the switcher.
-- **What it draws: the input** (and, from v2, the open card). No transcript — the main
-  window is one click away.
+- **What it draws: the input** (and, from v2, the open card), with the last
+  three turns above it (#721), three more each time the reader scrolls to the
+  top. A settled turn is its last message under a "3 tool calls" line that
+  opens the turn in Dray and closes the island; a running one is its newest
+  message over the latest call, shimmering. Right-click's Show Transcript or a
+  trackpad pinch (in hides, out shows) switches it, the card pulsing as it
+  grows or shrinks. The pinch is read off a listen-only event tap: AppKit hands
+  a pinch to the active app alone, which the island never is.
 - **Everything said and done builds one message.** Each dictated line, typed
   line, screenshot, annotation or picked element is a row in a draft, in order,
   reorderable and deletable. Send turns the list into one prompt with its
