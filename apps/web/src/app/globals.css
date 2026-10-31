@@ -94,6 +94,7 @@
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-display: var(--font-aeonik);
+  --font-inter: var(--font-inter-sans);
 }
 
 html {

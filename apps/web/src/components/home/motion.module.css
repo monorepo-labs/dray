@@ -1,0 +1,85 @@
+/* One clock per drawing, 0 → 1 per loop. Every moving part reads it with
+   its own `--s` (start) and `--l` (length), both fractions of the loop, set
+   inline, so a variant is markup and timings with no keyframes of its own.
+   Registered so it interpolates; unregistered it would jump 0 → 1.
+
+   0.9 is the still: every timeline is laid out so that moment is the
+   finished picture, which is what reduced motion shows. */
+@property --home-clock {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0.9;
+}
+
+@keyframes tick {
+  from {
+    --home-clock: 0;
+  }
+  to {
+    --home-clock: 1;
+  }
+}
+
+.timeline {
+  animation: tick var(--dur, 12s) linear infinite both paused;
+}
+
+[data-play] .timeline {
+  animation-play-state: running;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline {
+    animation: none;
+  }
+}
+
+/* Fades in at --s, over 1/--ramp of a loop. */
+.appear {
+  opacity: clamp(0, (var(--home-clock) - var(--s)) * var(--ramp, 25), 1);
+}
+
+/* Fades out at --s. */
+.fadeOut {
+  opacity: calc(1 - clamp(0, (var(--home-clock) - var(--s)) * 25, 1));
+}
+
+/* Shown from --s for --l. */
+.blip {
+  opacity: calc(
+    clamp(0, (var(--home-clock) - var(--s)) * 25, 1) *
+      (1 - clamp(0, (var(--home-clock) - var(--s) - var(--l)) * 25, 1))
+  );
+}
+
+/* Slides from (--x0, --y0) to (--x1, --y1) (user units) over --l, fading in
+   as it sets off and out once it arrives. */
+.travel {
+  transform: translate(
+    calc((var(--x0) + (var(--x1) - var(--x0)) * clamp(0, (var(--home-clock) - var(--s)) / var(--l), 1)) * 1px),
+    calc((var(--y0) + (var(--y1) - var(--y0)) * clamp(0, (var(--home-clock) - var(--s)) / var(--l), 1)) * 1px)
+  );
+  opacity: calc(
+    clamp(0, (var(--home-clock) - var(--s)) * 15, 1) *
+      (1 - clamp(0, (var(--home-clock) - var(--s) - var(--l)) * 15, 1))
+  );
+}
+
+/* Stroke drawn start to end over --l. Needs pathLength="1". */
+.draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: calc(1 - clamp(0, (var(--home-clock) - var(--s)) / var(--l), 1));
+}
+
+/* A short dash travelling start to end over --l, hidden either side.
+   Needs pathLength="1"; the 2 of gap keeps a second dash off the path. */
+.pulse {
+  stroke-dasharray: var(--dash, 0.15) 2;
+  stroke-dashoffset: calc(
+    var(--dash, 0.15) - (1 + var(--dash, 0.15)) * clamp(0, (var(--home-clock) - var(--s)) / var(--l), 1)
+  );
+  opacity: calc(
+    clamp(0, (var(--home-clock) - var(--s)) * 500, 1) *
+      (1 - clamp(0, (var(--home-clock) - var(--s) - var(--l)) * 500, 1))
+  );
+}

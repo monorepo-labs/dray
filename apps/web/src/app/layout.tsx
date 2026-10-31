@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Inter } from "next/font/google";
 import localFont from "next/font/local";
 import "./globals.css";
 
@@ -10,6 +10,10 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
+
+// The homepage's face, as drawn in Paper. Variable, so one file covers the
+// light headlines and the regular body.
+const inter = Inter({ variable: "--font-inter-sans", subsets: ["latin"] });
 
 // The headline face, and only that: one weight, one file, so it costs one
 // request. Licensed per seat, not open — it stays out of the app and out of
@@ -58,7 +62,7 @@ export default function RootLayout({
       lang="en"
       data-theme="dark"
       data-scroll-behavior="smooth"
-      className={`${geistSans.variable} ${geistMono.variable} ${aeonik.variable}`}
+      className={`${geistSans.variable} ${geistMono.variable} ${aeonik.variable} ${inter.variable}`}
     >
       {/* Nothing analytics-shaped mounts here: PostHog starts from
           `src/instrumentation-client.ts`, which Next runs before hydration. */}

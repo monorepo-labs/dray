@@ -1,0 +1,370 @@
+/* Each card's loop. Every animation is declared only under `[data-play]`
+   (set by `Play` while the card is on screen) and only without reduced
+   motion, so the base styles are the still Paper frame and both "not yet in
+   view" and "reduced motion" fall back to it with nothing extra to say. */
+
+/* Registered so they interpolate as integers: the drag rectangle's size and
+   the counter under it are one value, not two animations kept in step. */
+@property --w {
+  syntax: "<integer>";
+  inherits: true;
+  initial-value: 0;
+}
+@property --h {
+  syntax: "<integer>";
+  inherits: true;
+  initial-value: 0;
+}
+
+/* Dictation, first half of its loop: ⇧ held, a freehand loop in the island's red ink. */
+.ink {
+  stroke-dasharray: 1 2;
+  stroke-dashoffset: 1;
+  opacity: 0;
+}
+.pen {
+  offset-rotate: 0deg;
+  opacity: 0;
+}
+
+/* Dictation, second half: a region dragged out, the screen dimmed around it. */
+.region {
+  width: calc(var(--w) * 1px);
+  height: calc(var(--h) * 1px);
+  box-shadow: 0 0 0 999px rgb(0 0 0 / 0.35);
+  opacity: 0;
+}
+.region::after {
+  counter-reset: w var(--w) h var(--h);
+  content: counter(w) " × " counter(h);
+  position: absolute;
+  left: 100%;
+  top: calc(100% + 20px);
+  translate: -50% -50%;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #fff;
+  color: #000;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Waiting and done: the done pill waits above the card's edge, so the still is
+   the attention pill alone. */
+.donePill {
+  transform: translateY(-100%);
+}
+
+/* Questions and permissions: the question is the still; the permission card
+   and the confirmation wait hidden behind it. */
+.perm,
+.flash {
+  opacity: 0;
+  scale: 0.95;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-play] .ink {
+    animation: ink 10s infinite;
+  }
+  [data-play] .pen {
+    animation: pen 10s infinite;
+  }
+  [data-play] .region {
+    animation: region 10s infinite;
+  }
+  [data-play] .pill {
+    animation: pill 10s infinite;
+  }
+  [data-play] .glow {
+    animation: glow 10s infinite;
+  }
+  [data-play] .donePill {
+    animation: donePill 10s infinite;
+  }
+  [data-play] .doneGlow {
+    animation: doneGlow 10s infinite;
+  }
+  [data-play] .pick1 {
+    animation: pick1 10s infinite;
+  }
+  [data-play] .pick2 {
+    animation: pick2 10s infinite;
+  }
+  [data-play] .press {
+    animation: press 10s infinite;
+  }
+  [data-play] .ask {
+    animation: ask 10s infinite;
+  }
+  [data-play] .perm {
+    animation: perm 10s infinite;
+  }
+  [data-play] .allow {
+    animation: allow 10s infinite;
+  }
+  [data-play] .flash {
+    animation: flash 10s infinite;
+  }
+}
+
+/* The stroke and the pen share one easing over one span, so the tip stays on
+   the end of the line. Ink rests 1.5s, as the island waits before taking the moment. */
+@keyframes ink {
+  0%,
+  6% {
+    opacity: 0;
+    stroke-dashoffset: 1;
+  }
+  6.5% {
+    opacity: 1;
+    stroke-dashoffset: 1;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  16.5%,
+  29% {
+    opacity: 1;
+    stroke-dashoffset: 0;
+  }
+  33%,
+  100% {
+    opacity: 0;
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes pen {
+  0%,
+  4% {
+    opacity: 0;
+    offset-distance: 0%;
+  }
+  5.5% {
+    opacity: 1;
+    offset-distance: 0%;
+  }
+  6.5% {
+    opacity: 1;
+    offset-distance: 0%;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  16.5% {
+    opacity: 1;
+    offset-distance: 100%;
+  }
+  20%,
+  100% {
+    opacity: 0;
+    offset-distance: 100%;
+  }
+}
+
+@keyframes region {
+  0%,
+  54% {
+    opacity: 0;
+    --w: 0;
+    --h: 0;
+  }
+  56% {
+    opacity: 1;
+    --w: 0;
+    --h: 0;
+    animation-timing-function: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+  }
+  67%,
+  80% {
+    opacity: 1;
+    --w: 156;
+    --h: 106;
+  }
+  84%,
+  100% {
+    opacity: 0;
+    --w: 156;
+    --h: 106;
+  }
+}
+
+/* Waiting and done: each pill drops out of the notch, glows, dims, and goes
+   back up; the attention pill in the first half, the done pill in the second. */
+@keyframes pill {
+  0% {
+    transform: translateY(-100%);
+    animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  }
+  5%,
+  43% {
+    transform: none;
+    animation-timing-function: ease-in;
+  }
+  47%,
+  100% {
+    transform: translateY(-100%);
+  }
+}
+@keyframes glow {
+  0%,
+  6% {
+    filter: drop-shadow(0 0 14px #ffe14d00);
+  }
+  14%,
+  31% {
+    filter: drop-shadow(0 0 14px #ffe14d59);
+    animation-timing-function: ease-in-out;
+  }
+  40%,
+  100% {
+    filter: drop-shadow(0 0 14px #ffe14d00);
+  }
+}
+@keyframes donePill {
+  0%,
+  50% {
+    transform: translateY(-100%);
+    animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  }
+  55%,
+  93% {
+    transform: none;
+    animation-timing-function: ease-in;
+  }
+  97%,
+  100% {
+    transform: translateY(-100%);
+  }
+}
+@keyframes doneGlow {
+  0%,
+  56% {
+    filter: drop-shadow(0 0 14px #09bb8300);
+  }
+  64%,
+  81% {
+    filter: drop-shadow(0 0 14px #09bb8359);
+    animation-timing-function: ease-in-out;
+  }
+  90%,
+  100% {
+    filter: drop-shadow(0 0 14px #09bb8300);
+  }
+}
+
+/* Questions: 2, then 1 again, as number keys would, then Send. The pick
+   holds through the rest of the loop, so the question comes back as it began. */
+@keyframes pick1 {
+  0%,
+  10% {
+    background-color: #ffffff33;
+  }
+  10.5%,
+  20% {
+    background-color: #ffffff14;
+  }
+  20.5%,
+  100% {
+    background-color: #ffffff33;
+  }
+}
+@keyframes pick2 {
+  0%,
+  10% {
+    background-color: #ffffff14;
+  }
+  10.5%,
+  20% {
+    background-color: #ffffff33;
+  }
+  20.5%,
+  100% {
+    background-color: #ffffff14;
+  }
+}
+@keyframes press {
+  0%,
+  28% {
+    transform: none;
+    opacity: 1;
+  }
+  29% {
+    transform: scale(0.92);
+    opacity: 0.8;
+  }
+  31%,
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* The question gives way to the permission card behind it, 1 answers that
+   outright, and the island says what was done before the question returns. */
+@keyframes ask {
+  0%,
+  32% {
+    opacity: 1;
+    scale: 1;
+  }
+  34.5%,
+  82% {
+    opacity: 0;
+    scale: 0.95;
+  }
+  84.5%,
+  100% {
+    opacity: 1;
+    scale: 1;
+  }
+}
+@keyframes perm {
+  0%,
+  34% {
+    opacity: 0;
+    scale: 0.95;
+  }
+  36.5%,
+  60% {
+    opacity: 1;
+    scale: 1;
+  }
+  62.5%,
+  100% {
+    opacity: 0;
+    scale: 0.95;
+  }
+}
+@keyframes allow {
+  0%,
+  55% {
+    background-color: #ffffff14;
+    scale: 1;
+  }
+  56% {
+    background-color: #ffffff33;
+    scale: 0.98;
+  }
+  58%,
+  100% {
+    background-color: #ffffff33;
+    scale: 1;
+  }
+}
+@keyframes flash {
+  0%,
+  62% {
+    opacity: 0;
+    scale: 0.9;
+  }
+  64.5%,
+  78% {
+    opacity: 1;
+    scale: 1;
+  }
+  80.5%,
+  100% {
+    opacity: 0;
+    scale: 0.9;
+  }
+}

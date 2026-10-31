@@ -1,0 +1,10 @@
+/* The reader's cursor over the live window, the one sign it is interactive: an
+   arrow with slightly rounded corners, hotspot on its tip. Forced on every child,
+   or the window's own buttons would put the system pointer back. Plain url()
+   first for browsers without image-set in cursor; the 2x copy keeps it sharp
+   on a retina screen, where an SVG cursor is otherwise drawn at 1x. */
+.liveCursor,
+.liveCursor * {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M3.9 3.05 20.1 9.45Q21.5 10 20.07 10.46L14.23 12.34Q12.8 12.8 12.34 14.23L10.46 20.07Q10 21.5 9.45 20.1L3.05 3.9Q2.5 2.5 3.9 3.05Z' fill='%23000' stroke='%23fff' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E") 3 3, auto;
+  cursor: -webkit-image-set(url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M3.9 3.05 20.1 9.45Q21.5 10 20.07 10.46L14.23 12.34Q12.8 12.8 12.34 14.23L10.46 20.07Q10 21.5 9.45 20.1L3.05 3.9Q2.5 2.5 3.9 3.05Z' fill='%23000' stroke='%23fff' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E") 1x, url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24'%3E%3Cpath d='M3.9 3.05 20.1 9.45Q21.5 10 20.07 10.46L14.23 12.34Q12.8 12.8 12.34 14.23L10.46 20.07Q10 21.5 9.45 20.1L3.05 3.9Q2.5 2.5 3.9 3.05Z' fill='%23000' stroke='%23fff' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E") 2x) 3 3, auto;
+}

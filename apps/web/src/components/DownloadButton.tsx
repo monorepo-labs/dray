@@ -12,14 +12,25 @@ import { DOWNLOAD } from "@/lib/links";
 /// default transport is a request the browser is free to cancel as the page
 /// goes. It costs nothing now and it is what stops the event disappearing
 /// silently if `target` is ever dropped again.
-export function DownloadButton({ className, label = "Download for macOS" }: { className?: string; label?: string }) {
+///
+/// `from` names the button's place on the page (`nav`, `hero`, `cta`), so
+/// downloads can be split by where people clicked.
+export function DownloadButton({
+  className,
+  label = "Download for macOS",
+  from,
+}: {
+  className?: string;
+  label?: string;
+  from?: "nav" | "hero" | "cta";
+}) {
   return (
     <a
       href={DOWNLOAD}
       target="_blank"
       rel="noopener noreferrer"
       onClick={() =>
-        posthog.capture("download", { platform: "macos" }, { transport: "sendBeacon" })
+        posthog.capture("download", { platform: "macos", from }, { transport: "sendBeacon" })
       }
       className={className ?? "inline-flex items-center gap-2 rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90"}
     >
