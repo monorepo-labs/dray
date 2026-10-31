@@ -34,6 +34,7 @@ import {
 import Window from "@/components/app/Window";
 import { ClaudeGlyph } from "@/components/ClaudeGlyph";
 import { GreptileGlyph } from "@/components/GreptileGlyph";
+import { MiniHome } from "@/components/home/MiniHome";
 import { ScaledWindow } from "./ScaledWindow";
 import s from "./Hero.module.css";
 
@@ -176,6 +177,9 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
   const merged = merge === "merged";
   const pr = merged ? <PrMergedGlyph /> : <PrOpenGlyph />;
   const hasPr = selected === "background";
+  // The dev server's tab wants the width, so the pane steps aside for it and
+  // comes back with the chat.
+  const panelOpen = hasPr && view === "chat";
   const isNew = selected === "new";
   const task = started.find((t) => t.id === selected);
   const title = task?.prompt ?? TITLES[selected as Fixed];
@@ -282,7 +286,7 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
             {!isNew && <BranchButton name={task?.branch ?? BRANCHES[selected as Fixed]} />}
             {/* The pull request stands in for the panel toggle, lit while the
                 pane is open on it. */}
-            {hasPr ? <ItemTab icon={pr} label="#44" active fixed /> : <PanelToggle />}
+            {hasPr ? <ItemTab icon={pr} label="#44" active={panelOpen} fixed /> : <PanelToggle />}
           </>
         }
         main={
@@ -341,7 +345,7 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
           )
         }
         panel={
-          hasPr && (
+          panelOpen && (
             <Panel tabs={["PR", "Changes", "Browser", "More"]} active={panelTab} onSelect={setPanelTab} width={410}>
               {panelTab === "PR" && (
                 <PrBody
@@ -354,7 +358,7 @@ export function Hero({ className, startX = 240 }: { className?: string; startX?:
                 />
               )}
               {panelTab === "Changes" && <ChangesBody />}
-              {panelTab === "Browser" && <DevServerPage tab="Dray — Every coding agent, one window" />}
+              {panelTab === "Browser" && <DevServerPage tab="Dray — Run every agent harness in one app" />}
               {panelTab === "More" && <MoreBody />}
             </Panel>
           )
@@ -385,15 +389,16 @@ function Streamed({ id, text }: { id: string; text: string }) {
       setShown(text.length);
       return;
     }
+    // Counted here rather than in a state updater, which must stay pure:
+    // Strict Mode calls one twice.
+    let n = 0;
     const t = setInterval(() => {
-      setShown((n) => {
-        if (n + 3 >= text.length) {
-          clearInterval(t);
-          streamed.add(id);
-          return text.length;
-        }
-        return n + 3;
-      });
+      n = Math.min(n + 3, text.length);
+      setShown(n);
+      if (n === text.length) {
+        clearInterval(t);
+        streamed.add(id);
+      }
     }, 16);
     return () => clearInterval(t);
   }, [id, text]);
@@ -664,23 +669,7 @@ function MoreBody() {
 function DevServerPage({ tab }: { tab?: string }) {
   return (
     <BrowserChrome tab={tab} url="localhost:3000" className="flex-1">
-      <div className="absolute inset-0 flex flex-col px-8 pt-6">
-        <div className="flex items-center gap-5 text-ui text-muted-foreground">
-          <span className="font-display text-base font-medium text-foreground">Dray</span>
-          <span>Features</span>
-          <span>Changelog</span>
-          <span>GitHub</span>
-        </div>
-        <h1 className="mt-14 font-display text-[2rem] leading-[1.1] font-medium tracking-tight text-foreground">
-          Every coding agent, one window.
-        </h1>
-        <p className="mt-3 max-w-md text-chat text-muted-foreground">
-          Claude Code, Codex, pi and fx — on your existing subscriptions.
-        </p>
-        <span className="mt-6 inline-flex h-9 items-center self-start rounded-full bg-primary px-5 text-ui font-medium text-primary-foreground">
-          Download for Mac
-        </span>
-      </div>
+      <MiniHome />
     </BrowserChrome>
   );
 }
