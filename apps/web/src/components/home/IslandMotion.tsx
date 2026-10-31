@@ -58,7 +58,9 @@ export function MessagesPanel() {
   const draft = t < SENT_AT ? DRAFT.slice(0, typed) : "";
 
   return (
-    <div ref={ref} aria-hidden="true">
+    // Fills the card: its children are all absolute, so a plain wrapper has no
+    // height and reads as offscreen once the card's top scrolls past.
+    <div ref={ref} aria-hidden="true" className="absolute inset-0">
       <div
         className={`absolute bottom-[132px] left-1/2 flex w-[400px] max-w-[calc(100%-32px)] -translate-x-1/2 origin-bottom flex-col gap-3 rounded-[20px] bg-black px-4 py-3.5 shadow-[0_4px_12px_#00000059] transition-[opacity,scale] duration-250 ${sent ? "scale-95 opacity-0" : ""}`}
       >
