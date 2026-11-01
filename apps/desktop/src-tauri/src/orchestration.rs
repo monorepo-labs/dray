@@ -238,7 +238,7 @@ async fn handle(stream: UnixStream, app: &Sink) -> Result<()> {
     let response = match refusal(&line) {
         Some(error) => Response::error(error),
         None => match serde_json::from_str::<Envelope>(&line) {
-            Ok(envelope) => match dispatch(envelope.request, app).await {
+            Ok(envelope) => match route(envelope.request, app).await {
             Ok(response) => response,
             // Reported rather than logged: the caller is an agent, and this
             // string is what it reads back as tool output.
@@ -256,16 +256,346 @@ async fn handle(stream: UnixStream, app: &Sink) -> Result<()> {
     Ok(())
 }
 
+/// What the socket answers: a request for another machine goes there, and one
+/// naming a session this index has never heard of goes to whichever connected
+/// machine holds it — asked only on that miss, so an ordinary call costs no
+/// round trip. A forwarded request never comes through here, so it cannot
+/// bounce on to a third machine.
+async fn route(request: Request, app: &Sink) -> Result<Response> {
+    if let Request::OnMachine(on) = request {
+        return on_machine(&on.machine, *on.request).await;
+    }
+    #[cfg(feature = "desktop")]
+    if let Some(id) = session_named(&request) {
+        if store::get_session_index_item(id).await?.is_none() {
+            if let Some(machine) = elsewhere::locate(id).await {
+                return on_machine(&machine, request).await;
+            }
+        }
+    }
+    dispatch(request, app).await
+}
+
+/// The session a verb acts on, for [`route`] to look for elsewhere.
+#[cfg(feature = "desktop")]
+fn session_named(request: &Request) -> Option<&str> {
+    match request {
+        Request::SendMessage(r) => Some(&r.session_id),
+        Request::LinkIssues(r) => Some(&r.session_id),
+        Request::RenameSession(r) => Some(&r.session_id),
+        Request::StopSession(r) => Some(&r.session_id),
+        Request::SettleSession(r) => Some(&r.session_id),
+        Request::SetAside(r) => Some(&r.session_id),
+        _ => None,
+    }
+}
+
+/// Requests about the machine they run on — its server list, its listener —
+/// which no other machine may make for it.
+fn this_machine_only(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::OnMachine(_)
+            | Request::AddServer(_)
+            | Request::ListServers
+            | Request::RemoveServer(_)
+            | Request::RenameServer(_)
+            | Request::SetServerOn(_)
+            | Request::SetRemoteAccess(_)
+    )
+}
+
+#[cfg(feature = "desktop")]
+async fn on_machine(machine: &str, request: Request) -> Result<Response> {
+    if this_machine_only(&request) {
+        bail!("`dray machine` and `dray server` act on this machine alone — drop --machine");
+    }
+    if machine == "all" {
+        let Request::ListSessions(list) = request else {
+            bail!("only `dray session ls` takes --machine all");
+        };
+        return elsewhere::list_everywhere(list).await;
+    }
+    elsewhere::forward(machine, &elsewhere::prepare(request).await?).await
+}
+
+/// A `dray-serve` holds no connections; the Mac app that added it does.
+#[cfg(not(feature = "desktop"))]
+async fn on_machine(_machine: &str, _request: Request) -> Result<Response> {
+    bail!("this machine reaches no others — run this on the Mac whose Dray app added them")
+}
+
+/// What a Mac forwarding a request knows and the machine it lands on cannot
+/// look up: the calling session, the sender, and which repository a path on
+/// the Mac names. The serve command `orchestrate` takes it as its arguments.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Forward {
+    /// The envelope, judged by version on the far side as the socket would.
+    pub line: String,
+    /// The project's `origin`, so the far side finds its own checkout.
+    #[serde(default)]
+    pub origin: Option<String>,
+    #[serde(default)]
+    pub caller: Option<Caller>,
+    #[serde(default)]
+    pub sender: Option<MessageSender>,
+}
+
+/// The calling session's row, carried whole with its depth, since the
+/// machine making its child has no index entry to walk.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Caller {
+    pub session: SessionIndexItem,
+    pub depth: usize,
+}
+
+/// The serve command `orchestrate`: a request a Mac forwarded, answered as the
+/// socket answers one, with what the Mac carried standing in for the lookups
+/// this index cannot make.
+pub async fn answer_forward(forward: Forward, app: Sink) -> Response {
+    let answered = async {
+        if let Some(error) = refusal(&forward.line) {
+            bail!(error);
+        }
+        let envelope: Envelope = serde_json::from_str(&forward.line).context("could not parse the request")?;
+        let mut request = envelope.request;
+        if this_machine_only(&request) {
+            bail!("that acts on the machine it runs on, so run it there");
+        }
+        localize(&mut request, forward.origin.as_deref()).await?;
+        let caller = forward.caller.as_ref();
+        match request {
+            Request::CreateSession(create) => create_session(create, caller, &app).await,
+            Request::CreateDraft(create) => create_draft(create, caller, &app).await,
+            Request::StartDraft(start) => start_draft(start, caller, &app).await,
+            Request::SendMessage(send) => send_message(send, forward.sender, &app).await,
+            other => dispatch(other, &app).await,
+        }
+    };
+    answered.await.unwrap_or_else(|e| Response::error(format!("{e:#}")))
+}
+
+/// Points a project path from the forwarding Mac at this machine's checkout of
+/// the same repository, matched on `origin`. Failing that, a path this machine
+/// has is taken as named, which is how `--project` names one here.
+async fn localize(request: &mut Request, origin: Option<&str>) -> Result<()> {
+    let slot = match request {
+        Request::CreateSession(create) => &mut create.project_path,
+        Request::CreateDraft(create) => &mut create.project_path,
+        Request::ListSessions(list) | Request::ListDrafts(list) | Request::ListShares(list) => &mut list.project_path,
+        _ => return Ok(()),
+    };
+    let Some(path) = slot.clone() else { return Ok(()) };
+    let projects = crate::projects::list_projects().await.map_err(anyhow::Error::from)?;
+    if let Some(origin) = origin {
+        for project in &projects {
+            if crate::git::origin(&project.path).await.as_deref() == Some(origin) {
+                *slot = Some(project.path.clone());
+                return Ok(());
+            }
+        }
+    }
+    if Path::new(&path).is_dir() {
+        return Ok(());
+    }
+    let attached: Vec<_> = projects.iter().map(|p| p.path.as_str()).collect();
+    bail!(
+        "this machine has no checkout of {} — attach one in Dray, or pass --project with a path here. Its projects: {}",
+        origin.unwrap_or(&path),
+        if attached.is_empty() { "none".to_string() } else { attached.join(", ") }
+    )
+}
+
+/// Reaching other machines, which only the Mac app's connections can do: the
+/// Mac's server asks the app through `host_call`, as `dray machine` does.
+#[cfg(feature = "desktop")]
+mod elsewhere {
+    use super::*;
+    use anyhow::anyhow;
+    use serde_json::{json, Value};
+
+    /// Asks the app, from the server it hosts or from inside it.
+    async fn ask_app(cmd: &str, args: Value) -> Result<Value> {
+        let answer = if crate::is_server() {
+            crate::serve::host_call(cmd, args)
+                .await
+                .context("other machines are reached through the Dray app — open it and run this again")?
+        } else {
+            answer_host(cmd, args).await.map_err(Value::from)
+        };
+        answer.map_err(|e| anyhow!(e.as_str().map(str::to_string).unwrap_or_else(|| e.to_string())))
+    }
+
+    /// The connected machine holding session `id`, where one does.
+    pub async fn locate(id: &str) -> Option<String> {
+        ask_app("locate", json!({ "sessionId": id })).await.ok()?.as_str().map(str::to_string)
+    }
+
+    pub async fn forward(machine: &str, forward: &Forward) -> Result<Response> {
+        let answer = ask_app("forward", json!({ "machine": machine, "forward": forward })).await?;
+        Ok(serde_json::from_value(answer)?)
+    }
+
+    /// Fills in what only this machine's index knows before a request leaves:
+    /// the caller and sender carried whole, a session `--base` turned into the
+    /// branch it names, and the project's `origin`.
+    pub async fn prepare(mut request: Request) -> Result<Forward> {
+        let mut forward = Forward::default();
+        let mut project = None;
+        match &mut request {
+            Request::CreateSession(create) => {
+                let parent = parent_of(create.parent_session_id.as_deref()).await?;
+                forward.caller = caller(parent.as_ref()).await?;
+                create.project_path = project_from(create.project_path.as_deref(), parent.as_ref());
+                project = create.project_path.clone();
+                create.base = branch_of(create.base.take(), project.as_deref()).await?;
+            }
+            Request::CreateDraft(create) => {
+                let parent = parent_of(create.parent_session_id.as_deref()).await?;
+                forward.caller = caller(parent.as_ref()).await?;
+                create.project_path = project_from(create.project_path.as_deref(), parent.as_ref());
+                project = create.project_path.clone();
+                create.base = branch_of(create.base.take(), project.as_deref()).await?;
+            }
+            Request::StartDraft(start) => {
+                forward.caller = caller(parent_of(start.parent_session_id.as_deref()).await?.as_ref()).await?;
+            }
+            Request::SendMessage(send) => {
+                forward.sender =
+                    sender(send).await.map(|from| MessageSender { machine: Some(this_machine()), ..from });
+            }
+            Request::ListSessions(list) | Request::ListDrafts(list) | Request::ListShares(list) => {
+                if !list.all {
+                    list.project_path = scope_of(list).await?;
+                    project = list.project_path.clone();
+                }
+                list.parent_session_id = None;
+            }
+            _ => {}
+        }
+        if let Some(path) = project {
+            forward.origin = crate::git::origin(&path).await;
+        }
+        forward.line = encode_line(&Envelope::new(request))?.trim_end().to_string();
+        Ok(forward)
+    }
+
+    async fn caller(parent: Option<&SessionIndexItem>) -> Result<Option<Caller>> {
+        let Some(parent) = parent else { return Ok(None) };
+        Ok(Some(Caller { session: parent.clone(), depth: depth_of(parent).await? }))
+    }
+
+    /// A `--base` naming a session here means its branch there, which the far
+    /// side can only find if that branch was pushed. A ref passes as written.
+    async fn branch_of(base: Option<String>, project: Option<&str>) -> Result<Option<String>> {
+        match (base, project) {
+            (Some(base), Some(project)) if store::get_session_index_item(&base).await?.is_some() => {
+                Ok(Some(resolve_base(&base, project).await?))
+            }
+            (base, _) => Ok(base),
+        }
+    }
+
+    /// The name a relayed sender gives this machine, which the far side has
+    /// no list to look up.
+    fn this_machine() -> String {
+        std::process::Command::new("scutil")
+            .args(["--get", "ComputerName"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "another machine".into())
+    }
+
+    /// `session ls --machine all`: this machine's sessions, then each
+    /// connected one's, every row naming where it runs.
+    pub async fn list_everywhere(list: ListSessions) -> Result<Response> {
+        let forward = prepare(Request::ListSessions(list.clone())).await?;
+        let Response::Listed { mut sessions } = list_sessions(list).await? else {
+            bail!("listing this machine's sessions answered something else");
+        };
+        let servers = match serde_json::from_value(ask_app("request", serde_json::to_value(Request::ListServers)?).await?)? {
+            Response::Servers { servers } => servers,
+            Response::Error { message } => bail!(message),
+            _ => bail!("the app answered the server list with something else"),
+        };
+        let asks = servers
+            .iter()
+            .filter(|s| s.id != crate::servers::LOCAL && s.status == "connected")
+            .map(|s| self::forward(&s.id, &forward));
+        // ponytail: a machine that fails to answer is skipped unsaid; give
+        // `Listed` a warnings field if agents start missing rows.
+        for answer in futures_util::future::join_all(asks).await {
+            if let Ok(Response::Listed { sessions: theirs }) = answer {
+                sessions.extend(theirs);
+            }
+        }
+        Ok(Response::Listed { sessions })
+    }
+
+    /// In the app: the connected machine holding `id`, every one asked at once.
+    pub async fn locate_here(id: &str) -> Value {
+        let servers: Vec<_> = crate::servers::list_servers()
+            .into_iter()
+            .filter(|s| s.id != crate::servers::LOCAL && s.status == crate::servers::ServerStatus::Connected)
+            .collect();
+        let asks = servers.iter().map(|s| async move {
+            let row = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                crate::servers::server_invoke(s.id.clone(), "session_index_item".into(), json!({ "sessionId": id })),
+            )
+            .await;
+            matches!(row, Ok(Ok(ref row)) if !row.is_null()).then(|| s.id.clone())
+        });
+        json!(futures_util::future::join_all(asks).await.into_iter().flatten().next())
+    }
+
+    /// In the app: runs a forwarded request on `machine`, a name or an id, and
+    /// marks every session it answers with as that machine's.
+    pub async fn forward_here(machine: &str, forward: Value) -> Result<Value> {
+        let server = server_list::find(machine)?;
+        if server.id == crate::servers::LOCAL {
+            bail!("{} is this machine — drop --machine", server.name);
+        }
+        let answer = crate::servers::server_invoke(server.id.clone(), "orchestrate".into(), forward)
+            .await
+            .map_err(|e| {
+                let e = e.as_str().map(str::to_string).unwrap_or_else(|| e.to_string());
+                match e.starts_with("unknown command") {
+                    true => anyhow!(
+                        "{}'s Dray server is too old to take dray requests — update it in Settings → Servers",
+                        server.name
+                    ),
+                    false => anyhow!(e),
+                }
+            })?;
+        let mut response: Response = serde_json::from_value(answer)?;
+        let rows: Vec<&mut SessionSummary> = match &mut response {
+            Response::Created { session, .. } | Response::Session { session } => vec![session],
+            Response::Listed { sessions } => sessions.iter_mut().collect(),
+            _ => vec![],
+        };
+        for row in rows {
+            row.machine = Some(server.name.clone());
+        }
+        Ok(serde_json::to_value(response)?)
+    }
+}
+
 async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
     match request {
-        Request::CreateSession(create) => create_session(create, app).await,
+        Request::CreateSession(create) => create_session(create, None, app).await,
         Request::ListSessions(list) => list_sessions(list).await,
-        Request::SendMessage(send) => send_message(send, app).await,
+        Request::SendMessage(send) => send_message(send, None, app).await,
         Request::LinkIssues(link) => link_issues(link, app).await,
-        Request::CreateDraft(create) => create_draft(create, app).await,
+        Request::CreateDraft(create) => create_draft(create, None, app).await,
         Request::ListDrafts(list) => list_drafts(list).await,
         Request::RemoveDraft(draft) => remove_draft(&draft.id, app).await,
-        Request::StartDraft(start) => start_draft(start, app).await,
+        Request::StartDraft(start) => start_draft(start, None, app).await,
         Request::Share(share) => share_port(share).await,
         Request::ListShares(list) => list_shares(list).await,
         Request::RenameSession(rename) => {
@@ -326,6 +656,10 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
         return reply;
     }
     match cmd {
+        "locate" => Ok(elsewhere::locate_here(args["sessionId"].as_str().unwrap_or_default()).await),
+        "forward" => elsewhere::forward_here(args["machine"].as_str().unwrap_or_default(), args["forward"].clone())
+            .await
+            .map_err(|e| format!("{e:#}")),
         "request" => {
             let request: Request = serde_json::from_value(args).map_err(|e| e.to_string())?;
             let response = answer_on_screen(request).await.unwrap_or_else(|e| Response::error(format!("{e:#}")));
@@ -428,7 +762,7 @@ mod server_list {
 
     /// By name, or by id where two servers share one. An id wins outright, or
     /// a server renamed to another's id would make the cure ambiguous too.
-    fn find(name: &str) -> Result<ServerInfo> {
+    pub(super) fn find(name: &str) -> Result<ServerInfo> {
         let list = servers::list_servers();
         if let Some(server) = list.iter().find(|s| s.id == name) {
             return Ok(server.clone());
@@ -679,21 +1013,14 @@ async fn apply_issue(link: &LinkIssues, input: &IssueInput) -> Result<Vec<IssueR
     }
 }
 
-async fn create_session(create: CreateSession, app: &Sink) -> Result<Response> {
+async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Sink) -> Result<Response> {
     if create.prompt.trim().is_empty() {
         bail!("a session needs a prompt");
     }
 
-    let parent = match create.parent_session_id.as_deref() {
-        Some(id) => Some(
-            store::get_session_index_item(id)
-                .await?
-                .with_context(|| format!("no session {id}"))?,
-        ),
-        None => None,
-    };
-
-    check_depth(parent.as_ref()).await?;
+    let calling = calling(create.parent_session_id.as_deref(), caller).await?;
+    check_depth(calling.as_ref().map(|c| c.1))?;
+    let parent = calling.map(|c| c.0);
 
     // A hidden session is drawn in its parent's crew and nowhere else, so one
     // made from a terminal would be listed nowhere at all.
@@ -781,11 +1108,11 @@ async fn create_session(create: CreateSession, app: &Sink) -> Result<Response> {
 /// Saves a task for later with the picks `dray new` would have given it, and
 /// always with a worktree: an agent that leaves work for the reader has no
 /// standing to put it in the reader's own checkout.
-async fn create_draft(create: CreateDraft, app: &Sink) -> Result<Response> {
+async fn create_draft(create: CreateDraft, caller: Option<&Caller>, app: &Sink) -> Result<Response> {
     if create.prompt.trim().is_empty() {
         bail!("a draft needs a prompt");
     }
-    let parent = parent_of(create.parent_session_id.as_deref()).await?;
+    let parent = calling(create.parent_session_id.as_deref(), caller).await?.map(|c| c.0);
     let project_path = project_from(create.project_path.as_deref(), parent.as_ref())
         .context("no project — run this inside a git repo or pass --project")?;
     let harness = resolve_harness(create.harness.as_deref(), parent.as_ref())?;
@@ -856,10 +1183,9 @@ async fn find_draft(id: &str) -> Result<StoredDraft> {
 ///
 /// The worktree is the draft's own pick: off only where a person saved it so in
 /// the app, which is the one way an agent can start work in the main checkout.
-async fn start_draft(start: StartDraft, app: &Sink) -> Result<Response> {
+async fn start_draft(start: StartDraft, caller: Option<&Caller>, app: &Sink) -> Result<Response> {
     let draft = find_draft(&start.id).await?;
-    let parent = parent_of(start.parent_session_id.as_deref()).await?;
-    check_depth(parent.as_ref()).await?;
+    check_depth(calling(start.parent_session_id.as_deref(), caller).await?.map(|c| c.1))?;
     let held = drafts::take(&draft.id)
         .await?
         .with_context(|| format!("no draft {}", draft.id))?;
@@ -1004,9 +1330,9 @@ async fn list_sessions(list: ListSessions) -> Result<Response> {
 /// The walk stops at the cap rather than counting on: anything past it is
 /// refused whatever the number, and stopping is what keeps an index that
 /// somehow points at itself from hanging the caller's turn.
-async fn check_depth(parent: Option<&SessionIndexItem>) -> Result<()> {
-    let Some(parent) = parent else { return Ok(()) };
-    let depth = depth_of(parent).await?;
+/// Refuses a create from a caller already [`MAX_DEPTH`] deep.
+fn check_depth(depth: Option<usize>) -> Result<()> {
+    let Some(depth) = depth else { return Ok(()) };
     if depth >= MAX_DEPTH {
         bail!(
             "this session is {depth} levels deep already — a spawned session may create \
@@ -1126,7 +1452,8 @@ fn resolve_fast(requested: Option<bool>, parent: Option<&SessionIndexItem>, harn
 /// review summary upward and a parent handing a child extra context are the
 /// same operation, and naming the relationship would only add a rule to get
 /// wrong — the id is the address.
-async fn send_message(send: SendMessage, app: &Sink) -> Result<Response> {
+/// `carried` is the sender a forwarding Mac looked up, which this index cannot.
+async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &Sink) -> Result<Response> {
     if send.prompt.trim().is_empty() {
         bail!("a message needs some text");
     }
@@ -1139,7 +1466,10 @@ async fn send_message(send: SendMessage, app: &Sink) -> Result<Response> {
         bail!("a session cannot send a message to itself");
     }
 
-    let from = sender(&send).await;
+    let from = match carried {
+        Some(from) => Some(from),
+        None => sender(&send).await,
+    };
     let prompt = attribute(&send.prompt, from.as_ref());
 
     let manager = manager();
@@ -1200,11 +1530,16 @@ async fn send_message(send: SendMessage, app: &Sink) -> Result<Response> {
 /// Both built from one [`MessageSender`], so the two cannot name different
 /// sessions. The id rides along because it is the address: the agent answers
 /// with `dray send <id>` rather than paying a `dray ls` to work out who asked.
+///
+/// A sender on another machine is named with it, and said to be out of reach:
+/// trust runs one way, so nothing here can message the machine that added it.
 fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
     match from {
-        Some(from) => format!(
-            "[message from the Dray session \"{}\" ({})]\n\n{prompt}",
-            from.title, from.session_id
+        Some(MessageSender { session_id, title, machine: None }) => {
+            format!("[message from the Dray session \"{title}\" ({session_id})]\n\n{prompt}")
+        }
+        Some(MessageSender { session_id, title, machine: Some(machine) }) => format!(
+            "[message from the Dray session \"{title}\" ({session_id}) on {machine}, which this machine cannot message back]\n\n{prompt}"
         ),
         None => prompt.to_string(),
     }
@@ -1226,6 +1561,7 @@ async fn sender(send: &SendMessage) -> Option<MessageSender> {
         .map(|item| MessageSender {
             session_id: item.session_id,
             title: item.title,
+            machine: None,
         })
 }
 
@@ -1268,6 +1604,19 @@ fn project_from(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> O
 
 /// The calling session, or `None` for a call from a terminal. An id that names
 /// nothing is an error, since every caller then nests or scopes by it.
+/// The calling session and how many creates deep it sits: read from this
+/// index, or carried by the Mac that forwarded the call, whose index holds it.
+// ponytail: a child made on another machine walks only edges this index holds,
+// so its own children see depth 1 there; carry depth on the row if that matters.
+async fn calling(id: Option<&str>, caller: Option<&Caller>) -> Result<Option<(SessionIndexItem, usize)>> {
+    if let Some(caller) = caller {
+        return Ok(Some((caller.session.clone(), caller.depth)));
+    }
+    let Some(parent) = parent_of(id).await? else { return Ok(None) };
+    let depth = depth_of(&parent).await?;
+    Ok(Some((parent, depth)))
+}
+
 async fn parent_of(id: Option<&str>) -> Result<Option<SessionIndexItem>> {
     match id {
         Some(id) => Ok(Some(
@@ -1307,6 +1656,7 @@ fn summarize(item: SessionIndexItem) -> SessionSummary {
         modified: item.modified,
         parent_session_id: item.parent_session_id,
         hidden: item.hidden,
+        machine: None,
     }
 }
 
@@ -1398,6 +1748,7 @@ mod tests {
         let from = MessageSender {
             session_id: "abc-123".into(),
             title: "Fix the login redirect".into(),
+            machine: None,
         };
         let prompt = attribute("review is done", Some(&from));
 
@@ -1405,6 +1756,21 @@ mod tests {
             "[message from the Dray session \"Fix the login redirect\" (abc-123)]\n\n"
         ));
         assert!(prompt.ends_with("review is done"));
+    }
+
+    /// A sender on another machine is named with it, and the agent is told it
+    /// cannot answer, since nothing here reaches the machine that added it.
+    #[test]
+    fn a_sender_on_another_machine_is_named_and_out_of_reach() {
+        let from = MessageSender {
+            session_id: "abc-123".into(),
+            title: "Fan out".into(),
+            machine: Some("Yogesh's Mac".into()),
+        };
+        assert_eq!(
+            attribute("go", Some(&from)),
+            "[message from the Dray session \"Fan out\" (abc-123) on Yogesh's Mac, which this machine cannot message back]\n\ngo"
+        );
     }
 
     /// A prompt from the user's own terminal has no sender, and must reach the

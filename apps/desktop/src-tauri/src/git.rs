@@ -45,6 +45,20 @@ async fn git_line(cwd: &str, args: &[&str]) -> Option<String> {
     (!out.is_empty()).then(|| out.to_string())
 }
 
+/// The repo's `origin` as host and path, so an SSH remote on one machine and
+/// an HTTPS one on another name the same repository.
+pub async fn origin(cwd: &str) -> Option<String> {
+    git_line(cwd, &["remote", "get-url", "origin"]).await.map(|url| repo_key(&url))
+}
+
+fn repo_key(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let rest = rest.split_once('@').map_or(rest, |(_, rest)| rest);
+    // scp form, `host:owner/repo`.
+    let rest = rest.replacen(':', "/", 1);
+    rest.trim_end_matches('/').trim_end_matches(".git").to_lowercase()
+}
+
 /// A `rev-list --count` answer, or `None` where git gave none.
 async fn git_count(cwd: &str, args: &[&str]) -> Option<u32> {
     git(cwd, args).await?.trim().parse().ok()
@@ -1631,6 +1645,20 @@ fn is_stale_worktree_error(stderr: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The match a remote create finds its checkout by: one repository, every
+    /// spelling a clone might have.
+    #[test]
+    fn one_repository_has_one_key_however_it_was_cloned() {
+        for url in [
+            "git@github.com:monorepo-labs/dray.git",
+            "https://github.com/monorepo-labs/dray",
+            "https://user@github.com/Monorepo-Labs/dray.git/",
+            "ssh://git@github.com/monorepo-labs/dray.git",
+        ] {
+            assert_eq!(repo_key(url), "github.com/monorepo-labs/dray", "{url}");
+        }
+    }
 
     /// Local and remote-tracking `worktree-*` branches both claim their name;
     /// every other ref is ignored, nested ones included, and the remote need

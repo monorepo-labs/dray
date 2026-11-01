@@ -131,7 +131,10 @@ export default function UserMessage({
           className="flex max-w-[85%] cursor-pointer items-center gap-1 text-ui text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground"
         >
           <SessionAvatar sessionId={from.sessionId} name={from.title} />
-          <span className="truncate">{from.title}</span>
+          <span className="truncate">
+            {from.title}
+            {from.machine && ` on ${from.machine}`}
+          </span>
         </button>
       )}
 

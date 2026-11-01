@@ -1310,6 +1310,13 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         fork_session(session_id: String, fork_id: String, worktree: bool) =>
             crate::fork_session(&session_id, &fork_id, worktree).await;
         session_index_item(session_id: String) => crate::session_index_item(&session_id).await;
+        // `dray --machine` from an agent on the Mac that added this machine.
+        orchestrate(
+            line: String, origin: Option<String>, caller: Option<crate::orchestration::Caller>,
+            sender: Option<crate::events::MessageSender>,
+        ) => ok(crate::orchestration::answer_forward(
+            crate::orchestration::Forward { line, origin, caller, sender }, sink,
+        ).await);
         worktree_disposition(session_id: String) => crate::worktree_disposition(&session_id).await;
         remove_session_worktree(session_id: String) => crate::remove_session_worktree(&session_id).await;
         detach_session(session_id: String) => store::detach_session(&session_id).await;

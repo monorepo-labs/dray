@@ -731,6 +731,10 @@ pub struct ToolResult {
 pub struct MessageSender {
     pub session_id: String,
     pub title: String,
+    /// The machine the sender runs on, where that is not this one. Stamped by
+    /// the forwarding app, so it names the machine it came from.
+    #[serde(default)]
+    pub machine: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

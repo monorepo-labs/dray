@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 use dray_proto::{CreateDraft, DraftId, DraftSummary, ListSessions, Request, Response, StartDraft};
 
-use super::{parent_session_id, resolve_project, send, unexpected};
+use super::{on_machine, parent_session_id, resolve_project, send, unexpected};
 
 #[derive(Subcommand)]
 pub enum DraftCommand {
@@ -125,8 +125,9 @@ pub fn run(command: DraftCommand) -> Result<(), String> {
                 Response::Created { session, base_ref } => {
                     println!("{}", session.session_id);
                     eprintln!(
-                        "Started \"{}\"{}{}",
+                        "Started \"{}\"{}{}{}",
                         session.title,
+                        on_machine(&session),
                         match &session.worktree_name {
                             Some(name) => format!(" in worktree {name}"),
                             None => " in the project checkout".to_string(),
