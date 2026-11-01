@@ -4,8 +4,9 @@ import { GrokGlyph } from "@/components/GrokGlyph";
 import { OpenAIGlyph } from "@/components/OpenAIGlyph";
 import { PiGlyph } from "@/components/PiGlyph";
 
-// Where the light page clears the field for the headline.
-const CUT = "M300 60h840v240h-840z";
+// Where the light page clears the field for the headline. Starts at 240, not
+// 300: below lg the headline loses its inset and reaches field x 240.
+const CUT = "M240 0h960v300h-960z";
 
 // How far the field runs past each side of the drawn 1440, for wide screens.
 const SIDE = 1200;

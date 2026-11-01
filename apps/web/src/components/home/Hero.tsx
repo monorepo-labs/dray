@@ -19,7 +19,8 @@ export async function Hero() {
   const stars = await fetchStars();
 
   return (
-    <header id="hero" className="relative overflow-clip bg-black px-5 pb-10 sm:px-8 light:bg-[linear-gradient(#FFFFFF_900px,#F4F4F2_900px)]">
+    <>
+    <header id="hero" className="relative overflow-clip bg-black px-5 pb-14 sm:px-8 sm:pb-10 light:bg-[linear-gradient(#FFFFFF_900px,#F4F4F2_900px)]">
       <HeroBackdrop />
 
       <div className="relative mx-auto w-full max-w-[960px]">
@@ -28,7 +29,8 @@ export async function Hero() {
             <Wordmark className="h-[11px] w-auto text-white light:text-[#0A0A0A]" />
           </Link>
           {/* The box draws its right and bottom edges; every cell draws its own
-              left, so hiding Docs and Sponsor on a phone leaves no doubled line. */}
+              left, so hiding Docs and Sponsor on a phone, and the stars on the
+              narrowest, leaves no doubled line. */}
           <div className="flex h-10 border-r border-b border-white/20 light:border-black/15">
             {/* A plain anchor: /docs is another deployment behind a rewrite, so
                 client-side routing has nothing to route to. */}
@@ -44,7 +46,7 @@ export async function Hero() {
               target="_blank"
               rel="noopener noreferrer"
               aria-label={`Dray on GitHub, ${formatStars(stars)} stars`}
-              className={`${NAV_CELL} flex w-20`}
+              className={`${NAV_CELL} flex w-20 max-[359px]:hidden`}
             >
               <GitHubGlyph className="size-3" />
               {formatStars(stars)}
@@ -87,24 +89,30 @@ export async function Hero() {
           <img
             src="/hero-mobile-light.webp"
             alt="The Dray window: sessions in the sidebar, an agent's report in the chat, and its pull request's checks in the side panel."
-            width={960}
-            height={613}
+            width={1440}
+            height={920}
             loading="lazy"
             className="hidden h-auto w-full rounded-[6px] shadow-[0_0_0_1px_#00000014] light:block light:sm:hidden"
           />
         </div>
 
-        <Sponsor />
+        <Sponsor className="mt-10 max-sm:hidden" />
       </div>
     </header>
+    {/* A phone's hero is shorter than the blue field, so the credit would land
+        on the blue; it sits under the hero instead, on the next band's fill. */}
+    <div className="bg-black px-5 pt-10 sm:hidden light:bg-[#F4F4F2]">
+      <Sponsor />
+    </div>
+    </>
   );
 }
 
 /// The grant, credited under the window. Hovering or focusing it turns the
 /// avatar into Vercel's mark, since that is where most readers know him from.
-function Sponsor() {
+function Sponsor({ className = "" }: { className?: string }) {
   return (
-    <div className="group mt-10 flex flex-col items-center gap-3">
+    <div className={`group flex flex-col items-center gap-3 ${className}`}>
       <p className="text-[11px] leading-4 font-medium tracking-[0.14em] text-[#A1A1A1] uppercase">Sponsored by</p>
       <div className="flex items-center gap-2.5 text-[14px] leading-5">
         <span className="relative size-7 shrink-0">

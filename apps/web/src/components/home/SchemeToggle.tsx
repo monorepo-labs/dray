@@ -18,6 +18,8 @@ export function SchemeToggle({ className }: { className?: string }) {
     const root = document.documentElement;
     const to = root.dataset.scheme === "light" ? "dark" : "light";
     root.dataset.scheme = to;
+    // Holds the pick for this visit even where storage refuses it.
+    root.dataset.schemePicked = "1";
     try {
       localStorage.setItem(SCHEME_KEY, to);
     } catch {}

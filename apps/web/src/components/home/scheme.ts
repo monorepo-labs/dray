@@ -11,5 +11,5 @@ export const SCHEME_SCRIPT = `(() => {
   const media = matchMedia("(prefers-color-scheme: light)");
   const saved = () => { try { return localStorage.getItem("${SCHEME_KEY}"); } catch { return null; } };
   root.dataset.scheme = saved() || (media.matches ? "light" : "dark");
-  media.addEventListener("change", (e) => { if (!saved()) root.dataset.scheme = e.matches ? "light" : "dark"; });
+  media.addEventListener("change", (e) => { if (!saved() && !root.dataset.schemePicked) root.dataset.scheme = e.matches ? "light" : "dark"; });
 })()`;
