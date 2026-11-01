@@ -17,7 +17,7 @@ export function Island() {
       <div className="mt-20 grid grid-cols-1 gap-[2px] lg:grid-cols-2">
         <Card label="Dictation" caption="Tap Control and talk, and your words land in the session. Hold Shift to circle what you mean, or drag out a screenshot.">
           <Scene>
-            <IslandOrb size={120} className="absolute top-[130px] left-[179.5px]" />
+            <IslandOrb size={120} lightBackdrop="#F4F4F5" className="absolute top-[130px] left-[179.5px]" />
             {/* ⇧ to draw: a loop, then a dragged region, one after the other. */}
             <svg width="479" height="480" viewBox="0 0 479 480" fill="none" className="absolute inset-0">
               <path
@@ -50,9 +50,9 @@ export function Island() {
           caption="When a session needs you or finishes, a pill hangs from the notch. Nothing opens until you want it to."
         >
           <div aria-hidden="true">
-            <div className="absolute inset-x-0 top-0 flex h-[30px] items-center justify-between bg-[#FFFFFF0F] px-3.5 text-[12px] leading-4 text-[#FFFFFF99]">
+            <div className="absolute inset-x-0 top-0 flex h-[30px] items-center justify-between bg-[#FFFFFF0F] px-3.5 text-[12px] leading-4 text-[#FFFFFF99] light:bg-[#0000000A] light:text-[#000000A6]">
               <div className="flex items-center gap-4">
-                <AppleGlyph className="h-[15px] w-[13px] shrink-0 text-[#FFFFFFCC]" />
+                <AppleGlyph className="h-[15px] w-[13px] shrink-0 text-[#FFFFFFCC] light:text-[#000000D9]" />
                 <span className="max-sm:hidden">File</span>
                 <span className="max-sm:hidden">Edit</span>
               </div>
@@ -174,11 +174,11 @@ export function Island() {
 /// One 479×480 tile: art above, a mono label and a caption pinned to the foot.
 function Card({ label, caption, children }: { label: string; caption: string; children: ReactNode }) {
   return (
-    <Play className="relative h-[480px] overflow-clip bg-[#FFFFFF1A]">
+    <Play className="relative h-[480px] overflow-clip bg-[#FFFFFF1A] light:bg-[#F4F4F5]">
       {children}
       <div className="absolute inset-x-6 bottom-6 flex flex-col gap-3">
         <h3 className="w-max font-mono text-[11px] leading-[14px] tracking-[0.06em] text-[#7C7C7C] uppercase">{label}</h3>
-        <p className="max-w-[431px] text-[15px] leading-[22px] text-[#FFFFFFB3]">{caption}</p>
+        <p className="max-w-[431px] text-[15px] leading-[22px] text-[#FFFFFFB3] light:text-[#3F3F46]">{caption}</p>
       </div>
     </Play>
   );

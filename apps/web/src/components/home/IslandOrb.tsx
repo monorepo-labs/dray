@@ -93,11 +93,14 @@ export function IslandOrb({
   size,
   mode = "recording",
   backdrop = "#1A1A1A",
+  lightBackdrop,
   className = "relative",
 }: {
   size: number;
   mode?: "recording" | "idle";
   backdrop?: string;
+  /// The card fill on the light homepage, where it differs from `backdrop`.
+  lightBackdrop?: string;
   className?: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
@@ -135,14 +138,18 @@ export function IslandOrb({
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     const U = (n: string) => gl.getUniformLocation(prog, n);
     const rec = mode === "recording" ? 1 : 0;
-    const hex = parseInt(backdrop.slice(1, 7), 16);
+    const fill = () => {
+      const light = lightBackdrop && document.documentElement.dataset.scheme === "light";
+      const hex = parseInt((light ? lightBackdrop : backdrop).slice(1, 7), 16);
+      gl.uniform3f(U("bg"), ((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255);
+    };
     gl.uniform2f(U("res"), cv.width, cv.height);
     gl.uniform1f(U("dpr"), cv.width / box);
     gl.uniform1f(U("M"), M);
     gl.uniform1f(U("size"), size);
     gl.uniform1f(U("rec"), rec);
     gl.uniform1f(U("has"), rec);
-    gl.uniform3f(U("bg"), ((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255);
+    fill();
     const uT = U("t"), uLevel = U("level"), uEnergy = U("energy");
 
     let phase = 0, level = 0, energy = 0, last: number | null = null, raf = 0;
@@ -191,6 +198,12 @@ export function IslandOrb({
     energy = 0.55 * rec;
     phase = 2 * (rec ? 1.3 : 0.35);
     draw();
+    // The scheme toggle repaints the card under a still or paused orb too.
+    const scheme = new MutationObserver(() => {
+      fill();
+      draw();
+    });
+    if (lightBackdrop) scheme.observe(document.documentElement, { attributeFilter: ["data-scheme"] });
     if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       io.observe(cv);
       document.addEventListener("visibilitychange", sync);
@@ -199,12 +212,13 @@ export function IslandOrb({
     return () => {
       cancelAnimationFrame(raf);
       io.disconnect();
+      scheme.disconnect();
       document.removeEventListener("visibilitychange", sync);
       cv.removeEventListener("webglcontextlost", lost);
       gl.getExtension("WEBGL_lose_context")?.loseContext();
       cv.remove();
     };
-  }, [size, mode, backdrop]);
+  }, [size, mode, backdrop, lightBackdrop]);
 
   return (
     <div

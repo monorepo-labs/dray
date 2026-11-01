@@ -44,7 +44,7 @@ export default function Window({
       aria-hidden={!interactive}
       data-app-window
       className={cx(
-        "app-frame relative flex flex-col overflow-hidden rounded-xl border border-border shadow-window select-none",
+        "app-frame relative flex flex-col overflow-hidden rounded-xl border border-border text-foreground shadow-window select-none",
         className,
       )}
     >

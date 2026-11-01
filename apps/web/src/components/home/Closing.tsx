@@ -20,7 +20,7 @@ const LINKS = [
 /// The last blue band: the closing line, both ways in, and the footer.
 export function Closing() {
   return (
-    <section className="relative flex flex-col overflow-clip bg-[#1612F8] px-5 pt-[120px] sm:px-8 lg:min-h-[960px]">
+    <section data-scheme="dark" className="relative flex flex-col overflow-clip bg-[#1612F8] px-5 pt-[120px] sm:px-8 lg:min-h-[960px]">
       <Stripes />
       <Tiles />
 
