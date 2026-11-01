@@ -1482,17 +1482,16 @@ pub fn worktrees_dir(project_path: &Path) -> PathBuf {
 
 /// `branch` as this checkout can start from it: the local branch, else the
 /// one pushed to `origin`, fetched first so a push made moments ago is there.
-/// Unchanged where neither exists, so the caller's own error names it.
-pub async fn pushed_branch(cwd: &str, branch: &str) -> String {
+/// A failed fetch is an error rather than the cached copy: a session started
+/// on yesterday's commit reviews work that is not the work asked about.
+pub async fn pushed_branch(cwd: &str, branch: &str) -> Result<String> {
     if resolve_commit(cwd, branch).await.is_some() {
-        return branch.to_string();
+        return Ok(branch.to_string());
     }
-    let remote = format!("origin/{branch}");
-    git(cwd, &["fetch", "-q", "origin", "--end-of-options", branch]).await;
-    match resolve_commit(cwd, &remote).await {
-        Some(_) => remote,
-        None => branch.to_string(),
-    }
+    exec(cwd, &[], &["fetch", "-q", "origin", "--end-of-options", branch])
+        .await
+        .with_context(|| format!("could not fetch {branch} from origin — push it, then try again"))?;
+    Ok(format!("origin/{branch}"))
 }
 
 /// The commit `base` names, or `None` when it names nothing in this repo.
@@ -2961,7 +2960,7 @@ mod tests {
     }
 
     /// A branch pushed from another machine and never fetched here resolves
-    /// to its `origin/` copy; one that exists nowhere comes back as named.
+    /// to its `origin/` copy; one that cannot be fetched is an error.
     #[tokio::test]
     async fn a_branch_pushed_elsewhere_resolves_to_its_origin_copy() {
         let dir = scratch_repo().await;
@@ -2972,10 +2971,10 @@ mod tests {
         run(at, &["remote", "add", "origin", bare.to_str().unwrap()]).await.unwrap();
         run(at, &["push", "-q", "origin", "HEAD:refs/heads/worktree-elsewhere"]).await.unwrap();
 
-        assert_eq!(pushed_branch(at, "worktree-elsewhere").await, "origin/worktree-elsewhere");
-        assert_eq!(pushed_branch(at, "worktree-nowhere").await, "worktree-nowhere");
+        assert_eq!(pushed_branch(at, "worktree-elsewhere").await.unwrap(), "origin/worktree-elsewhere");
+        assert!(pushed_branch(at, "worktree-nowhere").await.is_err());
         let here = current_branch(at).await.unwrap();
-        assert_eq!(pushed_branch(at, &here).await, here);
+        assert_eq!(pushed_branch(at, &here).await.unwrap(), here);
 
         fs::remove_dir_all(&dir).await.ok();
         fs::remove_dir_all(&bare).await.ok();

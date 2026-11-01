@@ -371,7 +371,7 @@ pub async fn answer_forward(forward: Forward, app: Sink) -> Response {
         match &mut request {
             Request::CreateSession(CreateSession { base: Some(base), project_path: Some(project), .. })
             | Request::CreateDraft(CreateDraft { base: Some(base), project_path: Some(project), .. }) => {
-                *base = crate::git::pushed_branch(project, base).await;
+                *base = crate::git::pushed_branch(project, base).await?;
             }
             _ => {}
         }
