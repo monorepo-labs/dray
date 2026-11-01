@@ -1480,6 +1480,21 @@ pub fn worktrees_dir(project_path: &Path) -> PathBuf {
     project_path.join(".claude").join("worktrees")
 }
 
+/// `branch` as this checkout can start from it: the local branch, else the
+/// one pushed to `origin`, fetched first so a push made moments ago is there.
+/// Unchanged where neither exists, so the caller's own error names it.
+pub async fn pushed_branch(cwd: &str, branch: &str) -> String {
+    if resolve_commit(cwd, branch).await.is_some() {
+        return branch.to_string();
+    }
+    let remote = format!("origin/{branch}");
+    git(cwd, &["fetch", "-q", "origin", "--end-of-options", branch]).await;
+    match resolve_commit(cwd, &remote).await {
+        Some(_) => remote,
+        None => branch.to_string(),
+    }
+}
+
 /// The commit `base` names, or `None` when it names nothing in this repo.
 ///
 /// `^{commit}` rather than a bare verify, so a tag or a tree-ish is either
@@ -2940,6 +2955,27 @@ mod tests {
             !subjects.iter().any(|s| s == "upstream work"),
             "an upstream commit the fork point predates: {subjects:?}"
         );
+
+        fs::remove_dir_all(&dir).await.ok();
+        fs::remove_dir_all(&bare).await.ok();
+    }
+
+    /// A branch pushed from another machine and never fetched here resolves
+    /// to its `origin/` copy; one that exists nowhere comes back as named.
+    #[tokio::test]
+    async fn a_branch_pushed_elsewhere_resolves_to_its_origin_copy() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+        let bare = std::env::temp_dir().join(format!("dray-origin-{}", Uuid::now_v7()));
+        fs::create_dir_all(&bare).await.unwrap();
+        run(bare.to_str().unwrap(), &["init", "-q", "--bare", "."]).await.unwrap();
+        run(at, &["remote", "add", "origin", bare.to_str().unwrap()]).await.unwrap();
+        run(at, &["push", "-q", "origin", "HEAD:refs/heads/worktree-elsewhere"]).await.unwrap();
+
+        assert_eq!(pushed_branch(at, "worktree-elsewhere").await, "origin/worktree-elsewhere");
+        assert_eq!(pushed_branch(at, "worktree-nowhere").await, "worktree-nowhere");
+        let here = current_branch(at).await.unwrap();
+        assert_eq!(pushed_branch(at, &here).await, here);
 
         fs::remove_dir_all(&dir).await.ok();
         fs::remove_dir_all(&bare).await.ok();

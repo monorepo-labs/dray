@@ -286,6 +286,8 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::StopSession(r) => Some(&r.session_id),
         Request::SettleSession(r) => Some(&r.session_id),
         Request::SetAside(r) => Some(&r.session_id),
+        Request::Share(r) => Some(&r.session_id),
+        Request::Browser(r) => Some(&r.session_id),
         _ => None,
     }
 }
@@ -364,6 +366,15 @@ pub async fn answer_forward(forward: Forward, app: Sink) -> Response {
             bail!("that acts on the machine it runs on, so run it there");
         }
         localize(&mut request, forward.origin.as_deref()).await?;
+        // A session `--base` arrives as its branch, which this checkout may
+        // hold only as the copy pushed to `origin`.
+        match &mut request {
+            Request::CreateSession(CreateSession { base: Some(base), project_path: Some(project), .. })
+            | Request::CreateDraft(CreateDraft { base: Some(base), project_path: Some(project), .. }) => {
+                *base = crate::git::pushed_branch(project, base).await;
+            }
+            _ => {}
+        }
         let caller = forward.caller.as_ref();
         match request {
             Request::CreateSession(create) => create_session(create, caller, &app).await,
@@ -383,6 +394,10 @@ async fn localize(request: &mut Request, origin: Option<&str>) -> Result<()> {
     let slot = match request {
         Request::CreateSession(create) => &mut create.project_path,
         Request::CreateDraft(create) => &mut create.project_path,
+        // `--all` names no project, whatever path rode along.
+        Request::ListSessions(list) | Request::ListDrafts(list) | Request::ListShares(list) if list.all => {
+            return Ok(());
+        }
         Request::ListSessions(list) | Request::ListDrafts(list) | Request::ListShares(list) => &mut list.project_path,
         _ => return Ok(()),
     };
@@ -466,10 +481,11 @@ mod elsewhere {
                     sender(send).await.map(|from| MessageSender { machine: Some(this_machine()), ..from });
             }
             Request::ListSessions(list) | Request::ListDrafts(list) | Request::ListShares(list) => {
-                if !list.all {
-                    list.project_path = scope_of(list).await?;
-                    project = list.project_path.clone();
-                }
+                list.project_path = match list.all {
+                    true => None,
+                    false => scope_of(list).await?,
+                };
+                project = list.project_path.clone();
                 list.parent_session_id = None;
             }
             _ => {}
