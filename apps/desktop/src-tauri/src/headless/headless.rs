@@ -185,23 +185,20 @@ fn send_cdp(tab: i32, _id: i32, mut message: Value) -> Result<(), String> {
     write(&session, &message).map(|_| ()).map_err(|_| "that tab is gone".to_string())
 }
 
-async fn open_url(session: &str, url: String, new_tab: bool) -> Result<(), String> {
-    if !new_tab {
-        if let Some(tab) = active_id(session).filter(|&t| live(t)) {
-            // An unreachable server still answers a page, Chromium's own
-            // error page, as on the Mac; `errorText` is not a refusal.
-            automation::cdp(tab, "Page.navigate", json!({ "url": url })).await?;
-            return Ok(());
-        }
+async fn open_url(session: &str, url: String, tab: Option<i32>) -> Result<(), String> {
+    if let Some(tab) = tab.filter(|&t| live(t)) {
+        // An unreachable server still answers a page, Chromium's own
+        // error page, as on the Mac; `errorText` is not a refusal.
+        automation::cdp(tab, "Page.navigate", json!({ "url": url })).await?;
+        return Ok(());
     }
     let id = create_tab(session, &url, None).await?;
     set_active(session, Some(id));
     Ok(())
 }
 
-/// Back, forward, reload or stop, on the active tab.
-async fn nav(session: &str, verb: &str) -> Result<(), String> {
-    let tab = active_id(session).ok_or("no tab is open")?;
+/// Back, forward, reload or stop.
+async fn nav(tab: i32, verb: &str) -> Result<(), String> {
     match verb {
         "back" | "forward" => {
             let history = automation::cdp(tab, "Page.getNavigationHistory", json!({})).await?;

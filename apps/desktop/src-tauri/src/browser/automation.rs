@@ -2,7 +2,7 @@
 //! browser, with agent-browser's verbs.
 //!
 //! No agent-browser and no debug port. Every tab has a DevTools channel of
-//! its own, so each action is a few CDP calls on the session's active tab,
+//! its own, so each action is a few CDP calls on the agent's tab (`DRIVEN`),
 //! and an agent can reach no other session's pages because the session is the
 //! only address there is. Pointer and key actions go through Chromium's real
 //! input path (`Input.dispatch*`) rather than `element.click()`, so what the
@@ -446,10 +446,83 @@ fn owned(session: &str, id: i32) -> Result<i32, String> {
     }
 }
 
-pub(super) fn active_tab(session: &str) -> Result<i32, String> {
-    active_id(session).ok_or_else(|| {
-        "no tab is open in this session's browser; `dray browser open <url>` first".to_string()
+/// The tab each session's agent drives, kept apart from the reader's active
+/// tab: shared, a reader who clicked or duplicated a tab moved the agent's
+/// next verb into it (#738).
+static DRIVEN: Mutex<std::collections::BTreeMap<String, Driven>> = Mutex::new(std::collections::BTreeMap::new());
+
+struct Driven {
+    tab: i32,
+    /// Where it last was, to find it again once closed.
+    url: String,
+    /// The agent closed it itself, so its next verb asks for `open` rather
+    /// than bring the tab back. A flag rather than the tab leaving the list,
+    /// since CEF's close lands later and the closing tab is still listed.
+    closed: bool,
+}
+
+fn drive(session: &str, tab: i32) {
+    let url = tab_state(tab).map(|(url, _, _)| url).unwrap_or_default();
+    DRIVEN.lock().unwrap().insert(session.into(), Driven { tab, url, closed: false });
+}
+
+fn closed_by_agent(session: &str, tab: i32) {
+    if let Some(d) = DRIVEN.lock().unwrap().get_mut(session).filter(|d| d.tab == tab) {
+        d.closed = true;
+    }
+}
+
+/// The agent's tab, while open.
+fn driven_id(session: &str) -> Option<i32> {
+    let tab = DRIVEN.lock().unwrap().get(session).filter(|d| !d.closed)?.tab;
+    tabs_of(session).iter().any(|t| t.id == tab).then_some(tab)
+}
+
+/// The tab a verb acts on: the agent's, or the reader's active tab before
+/// the agent has driven any — the reader handing a page over.
+fn current(session: &str) -> Option<i32> {
+    if DRIVEN.lock().unwrap().contains_key(session) {
+        driven_id(session)
+    } else {
+        active_id(session)
+    }
+}
+
+fn driven_tab(session: &str) -> Result<i32, String> {
+    current(session).ok_or_else(|| {
+        "you have no tab open in this session's browser; `dray browser open <url>` first".to_string()
     })
+}
+
+/// Finds the agent's tab again once it closed: a tab on the same origin —
+/// the reader's copy of its dev server — or else a new tab at its last URL.
+/// Never a tab on another site, which is the reader's own.
+async fn resolve(session: &str) -> Result<(), String> {
+    if current(session).is_some() {
+        return Ok(());
+    }
+    let Some(url) = DRIVEN.lock().unwrap().get(session).filter(|d| !d.closed).map(|d| d.url.clone()) else {
+        return Ok(());
+    };
+    let tabs = tabs_of(session);
+    let tab = match tabs.iter().filter(|t| same_origin(&t.url, &url)).max_by_key(|t| t.active) {
+        Some(t) => t.id,
+        None if web_url(&url).is_ok() => {
+            let before: Vec<i32> = tabs.iter().map(|t| t.id).collect();
+            open_url(session, url, None).await?;
+            let tab = new_tab(session, &before).await?;
+            wait_loaded(tab).await?;
+            tab
+        }
+        None => return Ok(()),
+    };
+    drive(session, tab);
+    Ok(())
+}
+
+fn same_origin(a: &str, b: &str) -> bool {
+    let origin = |u: &str| reqwest::Url::parse(u).ok().map(|u| u.origin()).filter(|o| o.is_tuple());
+    origin(a).is_some_and(|o| Some(o) == origin(b))
 }
 
 fn page(tab: i32) -> (String, Value) {
@@ -564,7 +637,7 @@ async fn set_checked(tab: i32, at: &Locator, on: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// The whole of `dray browser`: one action on the session's active tab.
+/// The whole of `dray browser`: one action on the agent's tab.
 ///
 /// An input verb first brings the tab's view out of hiding, off-screen —
 /// see `reveal` — and the layout is put back after, whatever the outcome.
@@ -581,11 +654,10 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
             | BrowserAction::Uncheck { .. }
     );
     let _driving = Driving::start(session);
-    let tab = active_id(session);
     // The verb's wire name — `click`, `screenshot` — which the pane words.
     let verb = serde_json::to_value(&action).ok().and_then(|v| Some(v["action"].as_str()?.to_string()));
     // Every verb counts as the tab being seen. All but these act on the
-    // active tab, so a discarded one is woken first.
+    // agent's tab, so a discarded one is woken first.
     let wakes = !matches!(
         action,
         BrowserAction::Tabs
@@ -594,6 +666,16 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
             | BrowserAction::TabClose { .. }
             | BrowserAction::Close
     );
+    // `open` never lands in a tab the agent did not drive: with none of its
+    // own it opens one, rather than navigate the reader's page away.
+    let tab = if matches!(action, BrowserAction::Open { .. }) {
+        driven_id(session)
+    } else {
+        if wakes {
+            resolve(session).await?;
+        }
+        current(session)
+    };
     if let Some(tab) = tab {
         touch(tab);
         if wakes {
@@ -612,11 +694,12 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
         if input {
             let _ = relayout();
         }
-        let after = active_id(session);
+        let after = current(session);
         if let Some(tab) = after {
             touch(tab);
+            drive(session, tab);
         }
-        // Closes every mark this run made, wherever the active tab went.
+        // Closes every mark this run made, wherever the agent's tab went.
         emit_driven(session, after, None);
         answer
     })
@@ -676,15 +759,16 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
     match action {
         BrowserAction::Open { url } => {
             web_url(&url)?;
-            let tab = match active_id(session) {
+            let tab = match driven_id(session) {
                 Some(tab) => {
-                    open_url(session, url, false).await?;
+                    open_url(session, url, Some(tab)).await?;
                     tab
                 }
                 None => {
                     let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
-                    open_url(session, url, true).await?;
+                    open_url(session, url, None).await?;
                     let tab = new_tab(session, &before).await?;
+                    drive(session, tab);
                     // Marked before it loads: `run` had no tab to mark.
                     emit_driven(session, Some(tab), Some("open"));
                     tab
@@ -694,29 +778,32 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             Ok(page(tab))
         }
         BrowserAction::Back | BrowserAction::Forward | BrowserAction::Reload => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             let verb = match action {
                 BrowserAction::Back => "back",
                 BrowserAction::Forward => "forward",
                 _ => "reload",
             };
-            nav(session, verb).await?;
+            nav(tab, verb).await?;
             wait_loaded(tab).await?;
             Ok(page(tab))
         }
         BrowserAction::Close => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             close_tab(session, tab).await?;
+            closed_by_agent(session, tab);
             ok(format!("closed tab {tab}"))
         }
         BrowserAction::Tabs => {
             let tabs = tabs_of(session);
+            // `*` is the agent's tab, the one its verbs act on.
+            let mine = current(session);
             let text = if tabs.is_empty() {
                 "no tabs".to_string()
             } else {
                 tabs.iter()
                     .map(|t| {
-                        let mark = if t.active { "* " } else { "  " };
+                        let mark = if Some(t.id) == mine { "* " } else { "  " };
                         let asleep = if t.discarded { " (discarded, reloads when used)" } else { "" };
                         format!("{} {mark}{}{asleep}", t.id, page(t.id).0)
                     })
@@ -725,7 +812,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             };
             let data = tabs
                 .iter()
-                .map(|t| json!({ "id": t.id, "active": t.active, "url": t.url, "title": t.title, "discarded": t.discarded }))
+                .map(|t| json!({ "id": t.id, "active": Some(t.id) == mine, "url": t.url, "title": t.title, "discarded": t.discarded }))
                 .collect();
             Ok((text, Value::Array(data)))
         }
@@ -733,8 +820,9 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let url = url.unwrap_or_else(|| "about:blank".into());
             web_url(&url)?;
             let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
-            open_url(session, url, true).await?;
+            open_url(session, url, None).await?;
             let tab = new_tab(session, &before).await?;
+            drive(session, tab);
             // Marked before it loads: `run` marked the tab it was opened from.
             emit_driven(session, Some(tab), Some("tab_new"));
             wait_loaded(tab).await?;
@@ -745,46 +833,48 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         BrowserAction::TabSwitch { id } => {
             let id = owned(session, id)?;
             activate_tab(session, id).await?;
+            drive(session, id);
             Ok(page(id))
         }
         BrowserAction::TabClose { id } => {
             let id = match id {
                 Some(id) => owned(session, id)?,
-                None => active_tab(session)?,
+                None => driven_tab(session)?,
             };
             close_tab(session, id).await?;
+            closed_by_agent(session, id);
             ok(format!("closed tab {id}"))
         }
         BrowserAction::Snapshot { interactive, compact, selector } => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             let opts = json!({ "interactive": interactive, "compact": compact, "selector": selector });
             let text = eval(tab, &format!("(() => {{ {HELPERS_JS} return __snapshot({opts}); }})()")).await?;
             let text = clip(text.as_str().unwrap_or(""));
             Ok((text.clone(), json!({ "snapshot": text })))
         }
         BrowserAction::Click { at } => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             click(tab, &at, 1).await?;
             wait_loaded(tab).await?;
             ok(format!("clicked {}", describe_locator(&at)))
         }
         BrowserAction::DblClick { at } => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             click(tab, &at, 2).await?;
             ok(format!("double-clicked {}", describe_locator(&at)))
         }
         BrowserAction::Focus { at } => {
-            focus(active_tab(session)?, &at, false).await?;
+            focus(driven_tab(session)?, &at, false).await?;
             ok(format!("focused {}", describe_locator(&at)))
         }
         BrowserAction::Hover { at } => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             let (x, y) = center(tab, &at).await?;
             mouse(tab, "mouseMoved", x, y, json!({})).await?;
             ok(format!("hovering {}", describe_locator(&at)))
         }
         BrowserAction::Type { at, text } | BrowserAction::Fill { at, text } => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             focus(tab, &at, clear).await?;
             if parked(tab).is_some() {
                 // Keyed in a character at a time while filmed, or the video
@@ -801,7 +891,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             ok(format!("{} {}", if clear { "filled" } else { "typed into" }, describe_locator(&at)))
         }
         BrowserAction::Press { key } => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             let (down, up) = key_events(&key)?;
             cdp(tab, "Input.dispatchKeyEvent", down).await?;
             cdp(tab, "Input.dispatchKeyEvent", up).await?;
@@ -809,15 +899,15 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             ok(format!("pressed {key}"))
         }
         BrowserAction::Check { at } => {
-            set_checked(active_tab(session)?, &at, true).await?;
+            set_checked(driven_tab(session)?, &at, true).await?;
             ok(format!("checked {}", describe_locator(&at)))
         }
         BrowserAction::Uncheck { at } => {
-            set_checked(active_tab(session)?, &at, false).await?;
+            set_checked(driven_tab(session)?, &at, false).await?;
             ok(format!("unchecked {}", describe_locator(&at)))
         }
         BrowserAction::Select { at, value } => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             let body = format!(
                 "const want = {}; const opt = [...el.options || []].find(o => o.value === want || o.label.trim() === want); \
                  if (!opt) return {{ found: false }}; el.value = opt.value; \
@@ -832,7 +922,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             ok(format!("selected {value} in {}", describe_locator(&at)))
         }
         BrowserAction::Scroll { direction, amount } => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             let (dx, dy) = match direction.as_str() {
                 "up" => (0.0, -amount),
                 "down" => (0.0, amount),
@@ -846,11 +936,11 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             ok(format!("scrolled {direction} {amount}"))
         }
         BrowserAction::ScrollIntoView { at } => {
-            with_element(active_tab(session)?, &at, "el.scrollIntoView({ block: 'center' }); return true;").await?;
+            with_element(driven_tab(session)?, &at, "el.scrollIntoView({ block: 'center' }); return true;").await?;
             ok(format!("scrolled to {}", describe_locator(&at)))
         }
         BrowserAction::Get { what, at } => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             let at = at.unwrap_or(Locator::Target { target: "html".into() });
             let value = match what {
                 Get::Title => page(tab).1["title"].clone(),
@@ -886,7 +976,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             Ok((text, json!({ "value": value })))
         }
         BrowserAction::Is { what, at } => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             let body = match what {
                 Is::Visible => "return __visible(el);",
                 Is::Enabled => "return !el.disabled && el.getAttribute('aria-disabled') !== 'true';",
@@ -903,7 +993,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             Ok((yes.to_string(), json!({ "value": yes })))
         }
         BrowserAction::Wait { selector, ms, url, text, load } => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             if let Some(ms) = ms {
                 tokio::time::sleep(Duration::from_millis(ms.min(60_000))).await;
                 return ok(format!("waited {ms}ms"));
@@ -935,7 +1025,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             Err(format!("{what} did not appear within {}s", LOAD_TIMEOUT.as_secs()))
         }
         BrowserAction::Screenshot { path, full } => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             let (w, h) = screenshot_size(session);
             let held = CAPTURING.lock().await;
             // A recording already holds this session's shutter open, so the
@@ -985,7 +1075,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             Ok((shown.clone(), json!({ "path": shown })))
         }
         BrowserAction::Eval { js } => {
-            let value = eval(active_tab(session)?, &js).await?;
+            let value = eval(driven_tab(session)?, &js).await?;
             let text = match &value {
                 Value::String(s) => s.clone(),
                 Value::Null => "undefined".into(),
@@ -994,7 +1084,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             Ok((text, json!({ "value": value })))
         }
         BrowserAction::Console | BrowserAction::Errors => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             let errors_only = matches!(action, BrowserAction::Errors);
             let lines: Vec<(bool, String)> = CONSOLE
                 .lock()
@@ -1021,7 +1111,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             Ok((text, Value::Array(data)))
         }
         BrowserAction::RecordStart => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             let (w, h) = screenshot_size(session);
             let held = CAPTURING.lock().await;
             if RECORDING.lock().unwrap().contains_key(session) {
@@ -1083,12 +1173,12 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             Ok((text, json!({ "path": shown, "truncated": truncated })))
         }
         BrowserAction::SetViewport { width, height } => {
-            active_tab(session)?;
+            driven_tab(session)?;
             remember_viewport(session, width, height);
             ok(format!("viewport {width}×{height}"))
         }
         BrowserAction::SetDevice { name } => {
-            active_tab(session)?;
+            driven_tab(session)?;
             let (label, w, h) = DEVICES
                 .iter()
                 .find(|(n, _, _)| n.eq_ignore_ascii_case(&name))
@@ -1100,7 +1190,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             ok(format!("{label} {w}×{h}"))
         }
         BrowserAction::Zoom { percent } => {
-            let tab = active_tab(session)?;
+            let tab = driven_tab(session)?;
             // Chromium's own zoom range.
             if !(25..=500).contains(&percent) {
                 return Err(format!("zoom {percent}? between 25 and 500"));
@@ -1424,6 +1514,15 @@ mod tests {
         assert_eq!(js, r#"{"by":"role","role":"button","name":"Go","exact":false}"#);
         let js = serde_json::to_string(&Locator::TestId { id: "x".into() }).unwrap();
         assert!(js.contains(r#""by":"test_id""#), "the switch in HELPERS_JS spells it test_id");
+    }
+
+    #[test]
+    fn a_closed_tab_is_found_again_on_its_origin_alone() {
+        assert!(same_origin("http://localhost:3000/a?b", "http://localhost:3000/"));
+        assert!(!same_origin("http://localhost:3000/", "http://localhost:3001/"));
+        assert!(!same_origin("http://localhost:3000/", "https://localhost:3000/"));
+        assert!(!same_origin("about:blank", "about:blank"));
+        assert!(!same_origin("", ""));
     }
 
     #[test]
