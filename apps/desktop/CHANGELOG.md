@@ -19,6 +19,25 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.29.15 · 2026-11-01
+
+### New
+
+- **Sessions on other machines.** Agents can reach sessions on servers you
+  added with `dray --machine <name>`, and `dray session ls --machine all`
+  lists them all.
+
+### Improved
+
+- The agent keeps its own browser tab, so clicking or duplicating tabs no
+  longer moves its work into yours.
+- Prompts queued from the Island or `dray session send` show up in the chat
+  right away.
+- Double-click selects a whole bit of inline code in the chat.
+- Esc dismisses the Island's done pill.
+- The Island's lens is a grey smoked glass, expanded is its default layout,
+  and its card has a thin outline so it shows on black.
+
 ## 0.29.14 · 2026-10-30
 
 ### Improved
