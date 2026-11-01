@@ -1830,12 +1830,12 @@ async fn awake(tab: i32) -> Result<(), String> {
     automation::wait_loaded(tab).await
 }
 
-async fn open_url(session: &str, url: String, new_tab: bool) -> Result<(), String> {
-    browser_open(session.to_string(), url, new_tab)
+async fn open_url(session: &str, url: String, tab: Option<i32>) -> Result<(), String> {
+    load(session.to_string(), url, tab)
 }
 
-async fn nav(session: &str, verb: &str) -> Result<(), String> {
-    browser_nav(session.to_string(), verb.to_string())
+async fn nav(tab: i32, verb: &str) -> Result<(), String> {
+    go(Some(tab), verb.to_string())
 }
 
 async fn close_tab(session: &str, id: i32) -> Result<(), String> {
@@ -2003,24 +2003,27 @@ pub fn browser_shutter_ready(shot: u64) {
 /// its pending tab standing otherwise, with nothing to say why.
 #[tauri::command]
 pub fn browser_open(session_id: String, url: String, new_tab: bool) -> Result<(), String> {
+    let tab = if new_tab { None } else { active_id(&session_id) };
+    load(session_id, url, tab)
+}
+
+/// Loads `url` in `tab`, or in a new tab where that is `None` or has no
+/// browser. `dray browser` names the agent's tab, which is not the reader's.
+fn load(session_id: String, url: String, tab: Option<i32>) -> Result<(), String> {
     let (tx, rx) = mpsc::channel();
     on_main(move || {
-        if !new_tab {
-            if let Some((id, frame)) = active_id(&session_id)
-                .and_then(|id| Some((id, browser_of(id)?.main_frame()?)))
-            {
-                frame.load_url(Some(&CefString::from(url.as_str())));
-                // Drawn at once, as a browser does: the address otherwise
-                // waits for the commit, and a page that never answers never
-                // shows what was asked for.
-                update_tab(id, |t| {
-                    t.url = url;
-                    t.loading = true;
-                    t.error = None;
-                });
-                let _ = tx.send(Ok(()));
-                return;
-            }
+        if let Some((id, frame)) = tab.and_then(|id| Some((id, browser_of(id)?.main_frame()?))) {
+            frame.load_url(Some(&CefString::from(url.as_str())));
+            // Drawn at once, as a browser does: the address otherwise
+            // waits for the commit, and a page that never answers never
+            // shows what was asked for.
+            update_tab(id, |t| {
+                t.url = url;
+                t.loading = true;
+                t.error = None;
+            });
+            let _ = tx.send(Ok(()));
+            return;
         }
         let _ = tx.send(create_tab(&session_id, &url, true, None));
     })?;
@@ -2143,8 +2146,12 @@ pub fn browser_close(session_id: String, id: i32) -> Result<(), String> {
 /// Back, forward, reload or stop, on the active tab.
 #[tauri::command]
 pub fn browser_nav(session_id: String, action: String) -> Result<(), String> {
+    go(active_id(&session_id), action)
+}
+
+fn go(tab: Option<i32>, action: String) -> Result<(), String> {
     on_main(move || {
-        let Some(browser) = active_id(&session_id).and_then(browser_of) else { return };
+        let Some(browser) = tab.and_then(browser_of) else { return };
         match action.as_str() {
             "back" => browser.go_back(),
             "forward" => browser.go_forward(),
@@ -2241,7 +2248,8 @@ pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
                 .map_err(|_| "a screenshot is in progress")?,
         )
     };
-    let tab = automation::active_tab(&session_id)?;
+    // The reader's tab, never the agent's: this is the still the pane covers itself with.
+    let tab = active_id(&session_id).ok_or("no tab is open")?;
     // `innerWidth`, not the layout viewport's `clientWidth`: that one stops
     // at the scrollbar, and a picture a scrollbar short of the view is
     // stretched across it. The clip is in page coordinates, hence the
