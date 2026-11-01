@@ -403,6 +403,32 @@ key on their behalf. A token never goes on the command line. Remove only
 machines the user named. On a server with no app — Linux, or a headless Mac —
 `dray machine` is refused: the list lives in the Mac app.
 
+## Working on another machine
+
+```bash
+dray --machine vps session new "Run the load test" --title "Load test"
+dray --machine vps session ls                # that machine's sessions
+dray session ls --machine all                # this one's and every connected machine's
+dray session send <session-id> "Use the staging DB"   # finds the machine on its own
+```
+
+`--machine <name>` runs a `session`, `draft`, `issue`, `browser` or `share`
+command on a machine from `dray machine ls`, through the Dray app's own
+connection to it — so it works only from the Mac whose app added that machine,
+and only while that app is open. A session id needs no `--machine`: one this
+machine has never heard of is looked for on every connected machine.
+
+A new session there runs in that machine's checkout of the same repository,
+found by its `origin` remote; pass `--project <path on that machine>` where it
+has none. `--base <session-id>` names that session's branch, which the other
+machine can only see once it is pushed. Model, effort, agent and fast mode
+inherit from you as they do here.
+
+**Trust runs one way.** You can reach a machine the app added; nothing on that
+machine can reach this one. So a session you start there cannot message you
+back — its prompt says so. Check on it with `dray session ls --machine <name>`,
+and ask it to open a PR or push a branch when its result should come back.
+
 ## This machine's server
 
 ```bash
@@ -490,6 +516,8 @@ the cure is safe.
   dialogs are out of reach.
 - **No reading transcripts.** You can create, list and message. You cannot read
   what another session said — ask it to send you a summary instead.
+- **Other machines cannot answer.** A session on another machine can be
+  started, messaged and listed from here, but cannot message you back.
 - **Two levels deep.** A session you create may create sessions of its own; those
   may not. If you hit this, say so — the user can start the next batch from a
   top-level session.

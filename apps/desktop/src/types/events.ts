@@ -1143,7 +1143,12 @@ export type MergeMethod = "merge" | "squash" | "rebase";
  * replayed from the log, so attribution that lived only in memory would be
  * gone on the next open.
  */
-export type MessageSender = { sessionId: string, title: string, };
+export type MessageSender = { sessionId: string, title: string, 
+/**
+ * The machine the sender runs on, where that is not this one. Stamped by
+ * the forwarding app, so it names the machine it came from.
+ */
+machine: string | null, };
 
 export type Model = { 
 /**

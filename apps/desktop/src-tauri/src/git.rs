@@ -45,6 +45,20 @@ async fn git_line(cwd: &str, args: &[&str]) -> Option<String> {
     (!out.is_empty()).then(|| out.to_string())
 }
 
+/// The repo's `origin` as host and path, so an SSH remote on one machine and
+/// an HTTPS one on another name the same repository.
+pub async fn origin(cwd: &str) -> Option<String> {
+    git_line(cwd, &["remote", "get-url", "origin"]).await.map(|url| repo_key(&url))
+}
+
+fn repo_key(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let rest = rest.split_once('@').map_or(rest, |(_, rest)| rest);
+    // scp form, `host:owner/repo`.
+    let rest = rest.replacen(':', "/", 1);
+    rest.trim_end_matches('/').trim_end_matches(".git").to_lowercase()
+}
+
 /// A `rev-list --count` answer, or `None` where git gave none.
 async fn git_count(cwd: &str, args: &[&str]) -> Option<u32> {
     git(cwd, args).await?.trim().parse().ok()
@@ -1466,6 +1480,25 @@ pub fn worktrees_dir(project_path: &Path) -> PathBuf {
     project_path.join(".claude").join("worktrees")
 }
 
+/// `branch` as this checkout can start from it: the local branch, else the
+/// one pushed to `origin`, fetched first so a push made moments ago is there.
+/// A failed fetch is an error rather than the cached copy: a session started
+/// on yesterday's commit reviews work that is not the work asked about.
+pub async fn pushed_branch(cwd: &str, branch: &str) -> Result<String> {
+    if resolve_commit(cwd, branch).await.is_some() {
+        return Ok(branch.to_string());
+    }
+    exec(cwd, &[], &["fetch", "-q", "origin", "--end-of-options", branch])
+        .await
+        .with_context(|| format!("could not fetch {branch} from origin — push it, then try again"))?;
+    let remote = format!("origin/{branch}");
+    match resolve_commit(cwd, &remote).await {
+        Some(_) => Ok(remote),
+        // A tag, which a fetch brings in under its own name.
+        None => Ok(branch.to_string()),
+    }
+}
+
 /// The commit `base` names, or `None` when it names nothing in this repo.
 ///
 /// `^{commit}` rather than a bare verify, so a tag or a tree-ish is either
@@ -1631,6 +1664,20 @@ fn is_stale_worktree_error(stderr: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The match a remote create finds its checkout by: one repository, every
+    /// spelling a clone might have.
+    #[test]
+    fn one_repository_has_one_key_however_it_was_cloned() {
+        for url in [
+            "git@github.com:monorepo-labs/dray.git",
+            "https://github.com/monorepo-labs/dray",
+            "https://user@github.com/Monorepo-Labs/dray.git/",
+            "ssh://git@github.com/monorepo-labs/dray.git",
+        ] {
+            assert_eq!(repo_key(url), "github.com/monorepo-labs/dray", "{url}");
+        }
+    }
 
     /// Local and remote-tracking `worktree-*` branches both claim their name;
     /// every other ref is ignored, nested ones included, and the remote need
@@ -2912,6 +2959,31 @@ mod tests {
             !subjects.iter().any(|s| s == "upstream work"),
             "an upstream commit the fork point predates: {subjects:?}"
         );
+
+        fs::remove_dir_all(&dir).await.ok();
+        fs::remove_dir_all(&bare).await.ok();
+    }
+
+    /// A branch pushed from another machine and never fetched here resolves
+    /// to its `origin/` copy; one that cannot be fetched is an error.
+    #[tokio::test]
+    async fn a_branch_pushed_elsewhere_resolves_to_its_origin_copy() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+        let bare = std::env::temp_dir().join(format!("dray-origin-{}", Uuid::now_v7()));
+        fs::create_dir_all(&bare).await.unwrap();
+        run(bare.to_str().unwrap(), &["init", "-q", "--bare", "."]).await.unwrap();
+        run(at, &["remote", "add", "origin", bare.to_str().unwrap()]).await.unwrap();
+        run(at, &["push", "-q", "origin", "HEAD:refs/heads/worktree-elsewhere"]).await.unwrap();
+
+        assert_eq!(pushed_branch(at, "worktree-elsewhere").await.unwrap(), "origin/worktree-elsewhere");
+        assert!(pushed_branch(at, "worktree-nowhere").await.is_err());
+        run(at, &["tag", "v-elsewhere"]).await.unwrap();
+        run(at, &["push", "-q", "origin", "v-elsewhere"]).await.unwrap();
+        run(at, &["tag", "-d", "v-elsewhere"]).await.unwrap();
+        assert_eq!(pushed_branch(at, "v-elsewhere").await.unwrap(), "v-elsewhere");
+        let here = current_branch(at).await.unwrap();
+        assert_eq!(pushed_branch(at, &here).await.unwrap(), here);
 
         fs::remove_dir_all(&dir).await.ok();
         fs::remove_dir_all(&bare).await.ok();

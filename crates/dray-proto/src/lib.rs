@@ -39,8 +39,11 @@ use std::path::PathBuf;
 /// draft naming one goes out as v10, since an older app ignores the field and
 /// starts the worktree at `origin/<default>` as if it had been honoured.
 /// v11 added `set_remote_access`, which `dray server tunnel` sends now that
-/// the server runs the tunnel itself.
-pub const PROTOCOL_VERSION: u32 = 11;
+/// the server runs the tunnel itself. v12 added `on_machine`: an older app
+/// cannot parse it, and one that could ignore the machine would run the
+/// request here, a create meant for a VPS starting on the Mac as if it had
+/// gone where it was sent.
+pub const PROTOCOL_VERSION: u32 = 12;
 
 /// The oldest envelope the app still answers. Rises only when a shape is
 /// *renamed*, never for an addition: v4 renamed `LinkIssues.identifiers` to
@@ -116,6 +119,7 @@ impl Request {
             | Request::SetAside(_)
             | Request::ListShares(_) => 10,
             Request::SetRemoteAccess(_) => 11,
+            Request::OnMachine(_) => 12,
         }
     }
 }
@@ -144,6 +148,19 @@ pub enum Request {
     SetAside(SetAside),
     ListShares(ListSessions),
     SetRemoteAccess(SetRemoteAccess),
+    OnMachine(OnMachine),
+}
+
+/// Any other request, run on a machine the app connects to rather than here.
+/// The app forwards it over its own connection to that server, so the CLI
+/// never learns an address or a token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnMachine {
+    /// As `dray machine ls` names it, or `all` for a listing across every
+    /// connected machine and this one.
+    pub machine: String,
+    pub request: Box<Request>,
 }
 
 /// Remote access on or off: the server's own listener behind a public
@@ -743,6 +760,9 @@ pub struct SessionSummary {
     /// predates the flag, which reads as `false` — the truth there.
     #[serde(default)]
     pub hidden: bool,
+    /// The machine the session runs on, where that is not the one answering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 
 /// One issue a session is tagged with, as the CLI prints it.
@@ -1000,8 +1020,20 @@ mod tests {
         }
         let remote = Request::SetRemoteAccess(Default::default());
         assert_eq!(Envelope::new(remote.clone()).v, 11);
-        let newest =
-            old.iter().chain(&drafts).chain([&share]).chain(&servers).chain(&sessions).chain([&remote]).map(Request::version).max();
+        let elsewhere = Request::OnMachine(OnMachine {
+            machine: "vps".into(),
+            request: Box::new(Request::ListSessions(Default::default())),
+        });
+        assert_eq!(Envelope::new(elsewhere.clone()).v, 12);
+        let newest = old
+            .iter()
+            .chain(&drafts)
+            .chain([&share])
+            .chain(&servers)
+            .chain(&sessions)
+            .chain([&remote, &elsewhere])
+            .map(Request::version)
+            .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));
         assert!(OLDEST_SPOKEN <= PROTOCOL_VERSION);
     }
@@ -1014,6 +1046,17 @@ mod tests {
         assert_eq!(line.trim(), r#"{"v":9,"cmd":"list_servers"}"#);
         let back: Envelope = serde_json::from_str(&line).unwrap();
         assert!(matches!(back.request, Request::ListServers));
+    }
+
+    /// The wrapped request nests whole, its own tag and all.
+    #[test]
+    fn a_request_on_another_machine_round_trips() {
+        let send = Request::SendMessage(SendMessage { session_id: "s".into(), prompt: "hi".into(), from_session_id: None });
+        let line = encode_line(&Envelope::new(Request::OnMachine(OnMachine { machine: "vps".into(), request: Box::new(send) }))).unwrap();
+        let back: Envelope = serde_json::from_str(&line).unwrap();
+        let Request::OnMachine(on) = back.request else { panic!("wrong variant") };
+        assert_eq!(on.machine, "vps");
+        assert!(matches!(*on.request, Request::SendMessage(ref s) if s.prompt == "hi"));
     }
 
     #[test]

@@ -9,7 +9,8 @@ import type { MessageSender } from "@/types/events";
 /// exact string from the same `MessageSender` the backend built it from can
 /// only fail the safe way: no match, nothing stripped, the line stays drawn.
 export function senderPrefix(from: MessageSender): string {
-  return `[message from the Dray session "${from.title}" (${from.sessionId})]\n\n`;
+  const where = from.machine ? ` on ${from.machine}, which this machine cannot message back` : "";
+  return `[message from the Dray session "${from.title}" (${from.sessionId})${where}]\n\n`;
 }
 
 /// The relayed text as the reader wants it — the sender's line taken off.

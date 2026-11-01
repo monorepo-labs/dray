@@ -16,7 +16,7 @@ mod setup;
 use draft::DraftCommand;
 use dray_proto::{
     encode_line, BrowserAction, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
-    LinkIssues, ListSessions, Locator, RenameSession, Request, Response, SendMessage, SessionRef,
+    LinkIssues, ListSessions, Locator, OnMachine, RenameSession, Request, Response, SendMessage, SessionRef,
     SessionSummary, SetAside, SettleSession, ShareAction, ShareRequest,
 };
 use std::io::{BufRead, BufReader, ErrorKind, Write};
@@ -44,7 +44,16 @@ const INSTALLER_URL: &str = "https://www.drayhq.com/install.sh";
 struct Cli {
     #[command(subcommand)]
     command: Command,
+
+    /// Run this on another machine the Dray app connects to, as `dray machine
+    /// ls` names it. `session ls` also takes `all`. A session id finds its
+    /// machine on its own.
+    #[arg(long, global = true, value_name = "NAME")]
+    machine: Option<String>,
 }
+
+/// `--machine`, read by [`send`] so every request can carry it.
+static MACHINE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 #[derive(Subcommand)]
 enum Command {
@@ -376,7 +385,25 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    if let Some(machine) = cli.machine {
+        // These act on this machine, or on nothing a server answers.
+        if !matches!(
+            cli.command,
+            Command::Session(_)
+                | Command::Issue(_)
+                | Command::Draft(_)
+                | Command::Browser(_)
+                | Command::Share(_)
+                | Command::New(_)
+                | Command::Ls(_)
+                | Command::Send(_)
+        ) {
+            return Err("--machine takes session, draft, issue, browser and share commands".into());
+        }
+        let _ = MACHINE.set(machine);
+    }
+    match cli.command {
         Command::Session(command) => session(command),
         Command::Issue(IssueCommand::Link(args)) => link_issues(args, false),
         Command::Issue(IssueCommand::Unlink(args)) => link_issues(args, true),
@@ -464,8 +491,9 @@ fn new(args: New) -> Result<(), String> {
             // usable; everything a human wants goes to stderr beside it.
             println!("{}", session.session_id);
             eprintln!(
-                "Started \"{}\"{}{}",
+                "Started \"{}\"{}{}{}",
                 session.title,
+                on_machine(&session),
                 match &session.worktree_name {
                     Some(name) => format!(" in worktree {name}"),
                     None => String::new(),
@@ -915,8 +943,9 @@ fn print_table(sessions: &[SessionSummary]) {
             .map(|id| format!("  spawned by {id}"))
             .unwrap_or_default();
         let hidden = if s.hidden { "  hidden" } else { "" };
+        let machine = on_machine(s);
         println!(
-            "{}  {:<12} {:<40.40}  {:<24}{parent}{hidden}",
+            "{}  {:<12} {:<40.40}  {:<24}{parent}{hidden}{machine}",
             s.session_id,
             s.status,
             s.title,
@@ -1057,9 +1086,19 @@ fn connect_failure(error: &std::io::Error, endpoint: &str) -> String {
     }
 }
 
-/// One request, one response, connection closed.
+/// `" on <machine>"` for a session another machine runs, else nothing.
+fn on_machine(session: &SessionSummary) -> String {
+    session.machine.as_deref().map(|m| format!(" on {m}")).unwrap_or_default()
+}
+
+/// One request, one response, connection closed. With `--machine` the request
+/// rides inside `on_machine`, and this machine's app carries it there.
 fn send(request: Request) -> Result<Response, String> {
     let endpoint = dray_proto::endpoint().ok_or("could not work out where Dray is listening")?;
+    let request = match MACHINE.get() {
+        Some(machine) => Request::OnMachine(OnMachine { machine: machine.clone(), request: Box::new(request) }),
+        None => request,
+    };
     send_to(&endpoint, request)
 }
 
@@ -1451,12 +1490,20 @@ mod tests {
         for group in ["session", "server", "machine", "share", "draft"] {
             assert_eq!(parses(&["dray", group]), help, "{group}");
         }
-        let Ok(Cli { command: Command::Session(SessionCommand::New(new)) }) =
+        let Ok(Cli { command: Command::Session(SessionCommand::New(new)), .. }) =
             Cli::try_parse_from(["dray", "session", "new", "x", "--from", "main"])
         else {
             panic!("not a create");
         };
         assert_eq!(new.base.as_deref(), Some("main"));
+        // Global, so it reads after the verb as well as before it.
+        for argv in [
+            &["dray", "--machine", "vps", "session", "ls"][..],
+            &["dray", "session", "send", "id", "hi", "--machine", "vps"],
+        ] {
+            let cli = Cli::try_parse_from(argv).unwrap();
+            assert_eq!(cli.machine.as_deref(), Some("vps"), "{argv:?}");
+        }
     }
 
     #[test]
