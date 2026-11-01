@@ -310,6 +310,13 @@ pub(super) fn log(tab: i32, error: bool, text: String) {
 }
 
 pub(super) fn forget(tab: i32) {
+    // The page it ended on, not the one the agent's last verb saw: a redirect
+    // or the reader may have moved it since, and this is where it is found again.
+    if let Some((url, _, _)) = tab_state(tab) {
+        for d in DRIVEN.lock().unwrap().values_mut().filter(|d| d.tab == tab) {
+            d.url = url.clone();
+        }
+    }
     if let Some(m) = CONSOLE.lock().unwrap().as_mut() {
         m.remove(&tab);
     }
@@ -677,6 +684,9 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
         current(session)
     };
     if let Some(tab) = tab {
+        // Claimed before the verb runs: a handed-over tab claimed after would
+        // be whichever the reader clicked meanwhile.
+        drive(session, tab);
         touch(tab);
         if wakes {
             awake(tab).await?;

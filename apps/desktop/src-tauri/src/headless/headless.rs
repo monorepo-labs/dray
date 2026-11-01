@@ -377,6 +377,8 @@ async fn create_tab(session: &str, url: &str, id: Option<i32>) -> Result<i32, St
 /// Takes a tab's entry out. The active tab passes to the last one left, the
 /// Mac's rule.
 fn remove_tab(session: &str, id: i32) {
+    // Before the entry goes, so it can still read the page the tab ended on.
+    automation::forget(id);
     let remaining = {
         let mut tabs = TABS.lock().unwrap();
         tabs.retain(|t| t.id != id);
@@ -385,7 +387,6 @@ fn remove_tab(session: &str, id: i32) {
     if active_id(session) == Some(id) {
         set_active(session, remaining);
     }
-    automation::forget(id);
 }
 
 /// The session's Chromium, launched if it is not running.
