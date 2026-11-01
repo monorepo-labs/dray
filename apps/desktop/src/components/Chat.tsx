@@ -153,6 +153,19 @@ function useLingeringCards(pending: PendingAsk[]): PendingAsk[] {
   return shown;
 }
 
+/// Double-click on inline code selects the whole run, not the word under the
+/// pointer — a path or command split at `/` or `-` is never what was wanted.
+/// Code inside `pre` keeps the browser's word selection.
+function selectInlineCode(e: React.MouseEvent) {
+  const code = (e.target as Element).closest?.("code");
+  if (!code || code.closest("pre")) return;
+  const range = document.createRange();
+  range.selectNodeContents(code);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
 export default function Chat({
   session,
   onOpenSubagent,
@@ -654,6 +667,7 @@ export default function Chat({
           ref={scrollRef}
           onScroll={onScroll}
           onWheel={onWheel}
+          onDoubleClick={selectInlineCode}
           className="h-full overflow-y-auto"
         >
           <div
