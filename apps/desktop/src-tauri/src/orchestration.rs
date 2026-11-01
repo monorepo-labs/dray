@@ -366,11 +366,14 @@ pub async fn answer_forward(forward: Forward, app: Sink) -> Response {
             bail!("that acts on the machine it runs on, so run it there");
         }
         localize(&mut request, forward.origin.as_deref()).await?;
-        // A session `--base` arrives as its branch, which this checkout may
-        // hold only as the copy pushed to `origin`.
+        // A session `--base` from the Mac arrives as its branch, which this
+        // checkout may hold only as the copy pushed to `origin`. A session id
+        // this index holds is left for `resolve_base`.
         match &mut request {
             Request::CreateSession(CreateSession { base: Some(base), project_path: Some(project), .. })
-            | Request::CreateDraft(CreateDraft { base: Some(base), project_path: Some(project), .. }) => {
+            | Request::CreateDraft(CreateDraft { base: Some(base), project_path: Some(project), .. })
+                if store::get_session_index_item(base).await?.is_none() =>
+            {
                 *base = crate::git::pushed_branch(project, base).await?;
             }
             _ => {}

@@ -1491,7 +1491,12 @@ pub async fn pushed_branch(cwd: &str, branch: &str) -> Result<String> {
     exec(cwd, &[], &["fetch", "-q", "origin", "--end-of-options", branch])
         .await
         .with_context(|| format!("could not fetch {branch} from origin — push it, then try again"))?;
-    Ok(format!("origin/{branch}"))
+    let remote = format!("origin/{branch}");
+    match resolve_commit(cwd, &remote).await {
+        Some(_) => Ok(remote),
+        // A tag, which a fetch brings in under its own name.
+        None => Ok(branch.to_string()),
+    }
 }
 
 /// The commit `base` names, or `None` when it names nothing in this repo.
@@ -2973,6 +2978,10 @@ mod tests {
 
         assert_eq!(pushed_branch(at, "worktree-elsewhere").await.unwrap(), "origin/worktree-elsewhere");
         assert!(pushed_branch(at, "worktree-nowhere").await.is_err());
+        run(at, &["tag", "v-elsewhere"]).await.unwrap();
+        run(at, &["push", "-q", "origin", "v-elsewhere"]).await.unwrap();
+        run(at, &["tag", "-d", "v-elsewhere"]).await.unwrap();
+        assert_eq!(pushed_branch(at, "v-elsewhere").await.unwrap(), "v-elsewhere");
         let here = current_branch(at).await.unwrap();
         assert_eq!(pushed_branch(at, &here).await.unwrap(), here);
 
