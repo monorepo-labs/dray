@@ -10,7 +10,7 @@ export function Faq() {
       <div className="flex flex-col gap-10 lg:flex-row lg:gap-24">
         <div className="flex shrink-0 flex-col gap-3 lg:w-72">
           <p className="font-mono text-[11px] leading-[14px] tracking-[0.06em] text-[#7C7C7C] uppercase">FAQ</p>
-          <h2 className="font-inter text-[28px] leading-[32px] font-light tracking-[-0.03em] text-white sm:text-[36px] sm:leading-[40px]">
+          <h2 className="font-inter text-[28px] leading-[32px] font-light tracking-[-0.03em] text-white sm:text-[36px] sm:leading-[40px] light:text-[#0A0A0A]">
             Questions, answered.
           </h2>
         </div>
@@ -58,7 +58,7 @@ function Item({ question, answer }: { question: string; answer: string }) {
     // A shared `name` makes the group exclusive: opening one closes the rest.
     <details
       name="faq"
-      className="group bg-[#FFFFFF1A] px-6 py-5 [interpolate-size:allow-keywords] open:bg-[#1612F8] details-content:h-0 details-content:overflow-clip open:details-content:h-auto motion-safe:transition-colors motion-safe:details-content:transition-[height,content-visibility] motion-safe:details-content:transition-discrete motion-safe:details-content:duration-300 motion-safe:details-content:ease-out"
+      className="group bg-[#FFFFFF1A] px-6 py-5 not-open:hover:bg-[#FFFFFF24] light:bg-[#F4F4F5] light:not-open:hover:bg-[#EBEBEB] light:open:bg-[#1612F8] [interpolate-size:allow-keywords] open:bg-[#1612F8] details-content:h-0 details-content:overflow-clip open:details-content:h-auto motion-safe:transition-colors motion-safe:details-content:transition-[height,content-visibility] motion-safe:details-content:transition-discrete motion-safe:details-content:duration-300 motion-safe:details-content:ease-out"
     >
       {/* Counted on the click, not on toggle: opening one closes another, and
           that close is no reader's choice. */}
@@ -67,7 +67,7 @@ function Item({ question, answer }: { question: string; answer: string }) {
           posthog.capture("faq_toggle", { question, open: !e.currentTarget.parentElement?.hasAttribute("open") })
         }
         className="flex cursor-pointer list-none items-center justify-between gap-6 [&::-webkit-details-marker]:hidden">
-        <span className="text-lg leading-6 tracking-[-0.02em] text-white">{question}</span>
+        <span className="text-lg leading-6 tracking-[-0.02em] text-white light:text-[#0A0A0A] light:group-open:text-white">{question}</span>
         {/* A plus whose upright bar turns flat when open, leaving Paper's minus. */}
         <span aria-hidden className="relative size-[11px] shrink-0 text-[#8A8A8A] group-open:text-white">
           <span className="absolute inset-x-0 top-1/2 h-[1.5px] -translate-y-1/2 bg-current" />

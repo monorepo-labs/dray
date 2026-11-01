@@ -89,7 +89,7 @@ export function UserBubble({
 }) {
   return (
     <div className={cx("flex flex-col items-end gap-1.5", className)}>
-      <div className="max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground">
+      <div className="max-w-[85%] rounded-xl bg-card px-3 py-2 text-card-foreground light:bg-[oklch(0.65_0.17_250)] light:text-[oklch(0.99_0_0)]">
         <div className="text-chat">{children}</div>
       </div>
     </div>

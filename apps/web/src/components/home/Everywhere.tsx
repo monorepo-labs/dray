@@ -110,9 +110,9 @@ function MacMini() {
     <>
       <rect x="562.5" y="682.4" width="160" height="57.6" rx="12" fill="#2A2A2A" />
       <path d="M574.5 683.4H710.5" fill="#000000" stroke="#4A4A4A" />
-      <rect x="582.5" y="708.2" width="14" height="6" rx="3" fill="#0A0A0A" />
-      <rect x="604.5" y="708.2" width="14" height="6" rx="3" fill="#0A0A0A" />
-      <circle cx="632.5" cy="711.2" r="3.5" fill="#0A0A0A" />
+      <rect x="582.5" y="708.2" width="14" height="6" rx="3" fill="#0B0B0B" />
+      <rect x="604.5" y="708.2" width="14" height="6" rx="3" fill="#0B0B0B" />
+      <circle cx="632.5" cy="711.2" r="3.5" fill="#0B0B0B" />
       <circle cx="700.5" cy="711.2" r="2.5" fill={LED_DIM} />
       <rect x="578.5" y="740" width="128" height="3" fill="#141414" />
       <svg x="661" y="704" width="11" height="14" viewBox="0 0 384 512">
@@ -135,9 +135,9 @@ function Server() {
           <g key={cy}>
             <rect x="745" y={y} width="180" height="40" rx="5" fill="#2A2A2A" />
             <path d={`M751 ${y + 1}H919`} fill="#000000" stroke="#4A4A4A" />
-            <rect x="819" y={y + 15} width="20" height="12" rx="2" fill="#0A0A0A" />
-            <rect x="845" y={y + 15} width="20" height="12" rx="2" fill="#0A0A0A" />
-            <rect x="871" y={y + 15} width="20" height="12" rx="2" fill="#0A0A0A" />
+            <rect x="819" y={y + 15} width="20" height="12" rx="2" fill="#0B0B0B" />
+            <rect x="845" y={y + 15} width="20" height="12" rx="2" fill="#0B0B0B" />
+            <rect x="871" y={y + 15} width="20" height="12" rx="2" fill="#0B0B0B" />
             <circle cx="899" cy={cy} r="2.5" fill={LED_DIM} />
             <path d={Array.from({ length: 8 }, (_, i) => `M${759 + i * 6} ${y + 12}h2v18h-2z`).join("")} fill="#1A1A1A" />
           </g>
@@ -211,6 +211,7 @@ function Machines({ layout: { id, viewBox, className, place, bus, bands, glow, s
     ));
   return (
     <svg
+      data-art="everywhere"
       viewBox={viewBox}
       className={`h-auto overflow-visible ${className} ${m.timeline}`}
       style={{ "--dur": "10s" } as CSSProperties}
@@ -296,7 +297,7 @@ export function Everywhere() {
       <PlayWhenVisible className="mt-10 sm:mt-[70px]">
         <Machines layout={WIDE} />
       </PlayWhenVisible>
-      <p className="mt-10 font-inter text-[22px] leading-[28px] font-light tracking-[-0.02em] text-balance text-[#7C7C7C] sm:hidden">
+      <p className="mt-10 font-inter text-[22px] leading-[28px] font-light tracking-[-0.02em] text-balance text-[#7C7C7C] sm:hidden light:text-[#8A8A8A]">
         {REST}
       </p>
     </Section>

@@ -22,7 +22,7 @@ const OPENAI =
 
 const ICONS: Record<string, { viewBox: string; opacity?: number; body: ReactNode }> = {
   claude: { viewBox: "-7.2 -7.2 33.6 33.6", body: <path d={CLAUDE} fill="#D97757" /> },
-  openai: { viewBox: "-7.2 -7.2 33.6 33.6", opacity: 0.8, body: <path d={OPENAI} fill="#FFFFFF" /> },
+  openai: { viewBox: "-7.2 -7.2 33.6 33.6", opacity: 0.8, body: <path d={OPENAI} fill="#FFFFFF" className="light:fill-[#0A0A0A]" /> },
   grok: {
     viewBox: "-7.2 -7.2 33.6 33.6",
     opacity: 0.8,
@@ -31,6 +31,7 @@ const ICONS: Record<string, { viewBox: string; opacity?: number; body: ReactNode
         fillRule="evenodd"
         d="M5.778 14.206l11.169-8.255c0.548-0.406 1.33-0.248 1.592 0.38 1.372 3.316 0.759 7.301-1.974 10.036-2.732 2.735-6.534 3.335-10.009 1.969l-3.795 1.76c5.444 3.726 12.056 2.804 16.186-1.335 3.278-3.281 4.293-7.754 3.344-11.788l0.008 0.011c-1.376-5.925 0.339-8.293 3.85-13.136 0.084-0.115 0.168-0.229 0.251-0.348l-4.622 4.627v-0.014L5.773 14.209M3.472 16.213c-3.909-3.738-3.234-9.522 0.099-12.859 2.466-2.468 6.506-3.476 10.033-1.995l3.787-1.75a10.931 10.931 90 0 0-2.561-1.4A12.565 12.565 0 0 0 1.177 0.962c-3.546 3.551-4.662 9.011-2.747 13.669 1.431 3.482-0.914 5.945-3.276 8.432-0.838 0.882-1.678 1.762-2.354 2.695l10.668-9.541"
         fill="#FFFFFF"
+        className="light:fill-[#0A0A0A]"
       />
     ),
   },
@@ -58,9 +59,17 @@ const ICONS: Record<string, { viewBox: string; opacity?: number; body: ReactNode
         clipRule="evenodd"
         d="M219.779 0.005C227.185 0.005 235.865 1.993 240.975 4.303L243.859 5.619 236.845 26.087 233.485 24.855C229.593 23.413 225.449 22.125 220.619 22.125 215.705 22.125 212.639 23.189 210.245 25.653 207.655 28.327 205.415 33.101 203.455 41.669L203.455 41.669 203.455 41.669 201.929 48.795H225.071L251.335 48.935 251.699 48.935 251.909 49.243 277.123 86.287 302.169 48.935H335.951L295.085 107.441 337.673 167.655H305.795L305.585 167.375 224.329 56.677 221.823 69.165H197.631L174.699 178.099C172.235 189.999 168.399 199.981 162.225 207.023 155.911 214.219 147.413 218.055 136.409 218.055 130.585 218.055 125.783 217.159 121.807 215.759L119.469 214.933V192.057L120.393 192.365 124.075 193.597C127.785 194.829 130.907 195.725 134.729 195.725 136.675 195.725 138.313 195.347 139.755 194.577 141.197 193.807 142.485 192.645 143.661 191.021 146.153 187.591 148.141 182.187 149.793 174.543L171.997 69.165H152.551L155.197 55.221 155.589 55.095 176.281 48.263 178.143 40.101C181.461 25.499 186.011 15.321 192.927 8.853 199.969 2.259 208.915 0.005 219.779 0.005ZM270.319 138.717L250.831 168.355H215.089L252.133 114.833 270.319 138.717Z"
         fill="#FFFFFF"
+        className="light:fill-[#0A0A0A]"
       />
     ),
   },
+};
+
+// Light greys for the agents' tiles, with their marks drawn dark to suit; the
+// root keeps its blue.
+const LIGHT_TILE: Record<string, string> = {
+  "#2E2E2E": "light:fill-[#E4E4E4]",
+  "#1F1F1F": "light:fill-[#D9D9D9]",
 };
 
 type Node = { tile: string; icon: keyof typeof ICONS; model: string; task: string };
@@ -176,16 +185,16 @@ function Session({ n, at: [x, y], className, style }: { n: Node; at: Point; clas
   const icon = ICONS[n.icon];
   return (
     <g className={className} style={style}>
-      <rect x={x + 60} y={y} width="180" height="60" fill="#161616" />
-      <rect x={x} y={y} width="60" height="60" fill={n.tile} />
-      <path d={stripes(x, y)} fill="#0000008C" />
+      <rect x={x + 60} y={y} width="180" height="60" fill="#161616" className="light:fill-white" />
+      <rect x={x} y={y} width="60" height="60" fill={n.tile} className={LIGHT_TILE[n.tile]} />
+      <path d={stripes(x, y)} fill="#0000008C" className={LIGHT_TILE[n.tile] && "light:fill-[#0000000F]"} />
       <svg x={x + 16} y={y + 16} width="28" height="28" viewBox={icon.viewBox} opacity={icon.opacity}>
         {icon.body}
       </svg>
       <text x={x + 72} y={y + 18} dominantBaseline="central" fontSize="11" letterSpacing="-0.04em" fill="#8A8A8A" className="font-mono">
         {n.model}
       </text>
-      <text x={x + 72} y={y + 38} dominantBaseline="central" fontSize="13" letterSpacing="-0.04em" fill="#FFFFFF" className="font-mono">
+      <text x={x + 72} y={y + 38} dominantBaseline="central" fontSize="13" letterSpacing="-0.04em" fill="#FFFFFF" className="font-mono light:fill-[#0A0A0A]">
         {n.task}
       </text>
     </g>
@@ -206,7 +215,7 @@ function Graph({ layout: { viewBox, className, at: pos, edge, mesh } }: { layout
       aria-label="A session graph. Opus 5.5 on “Ship file uploads” starts four sessions: Sol 6.1 on “Upload API”, Opus 5.5 on “Retry uploads”, Grok 4.7 on “Progress UI” and Kimi K3 on “CLI docs”. Two Sol 6.1 sessions then review the upload API and the CLI docs."
     >
       <g className={m.fadeOut} style={at(0.94)}>
-        {mesh && <path d={mesh} fill="none" stroke="#FFFFFF1F" className={m.appear} style={at(0.09)} />}
+        {mesh && <path d={mesh} fill="none" stroke="#FFFFFF1F" className={`${m.appear} light:stroke-[#0000001A]`} style={at(0.09)} />}
         {CHILDREN.map((k) => (
           <path
             key={k}
@@ -216,7 +225,7 @@ function Graph({ layout: { viewBox, className, at: pos, edge, mesh } }: { layout
             // Opaque rather than translucent white: the tree's lines share a trunk, which would brighten where they overlap.
             stroke="#B3B3B3"
             strokeWidth="1.5"
-            className={m.draw}
+            className={`${m.draw} light:stroke-[#C4C4C4]`}
             style={at(SPAWN[k] - 0.01, 0.01)}
           />
         ))}
@@ -226,7 +235,7 @@ function Graph({ layout: { viewBox, className, at: pos, edge, mesh } }: { layout
           fill="none"
           stroke="#FFFFFF6B"
           strokeWidth="1.5"
-          className={m.draw}
+          className={`${m.draw} light:stroke-[#C4C4C4]`}
           style={at(SPAWN.progress - 0.01, 0.01)}
         />
         {PULSES.map((p) => (
@@ -238,7 +247,7 @@ function Graph({ layout: { viewBox, className, at: pos, edge, mesh } }: { layout
             stroke="#FFFFFF"
             strokeWidth="2.5"
             strokeLinecap="round"
-            className={m.pulse}
+            className={`${m.pulse} light:stroke-[#1612F8]`}
             style={at(p.at, TRAVEL)}
           />
         ))}
@@ -271,6 +280,16 @@ function Graph({ layout: { viewBox, className, at: pos, edge, mesh } }: { layout
 
 const COL0 = ["#141414", "#141414", "#262626", "#262626", "#3D3D3D", "#6B6B6B", "#6B6B6B", "#A3A3A3", "#1612F8", "#1612F8", "#1612F8", "#F2F2F2", "#F2F2F2", "#F2F2F2"];
 const COL1 = ["#262626", "#6B6B6B", "#1612F8", "#F2F2F2"];
+// The grey ramp turned over for the light page, so the column still runs from
+// the page's own shade into the blue and out the far side.
+const LIGHT: Record<string, string> = {
+  "#141414": "light:fill-[#F5F5F5]",
+  "#262626": "light:fill-[#E6E6E6]",
+  "#3D3D3D": "light:fill-[#CFCFCF]",
+  "#6B6B6B": "light:fill-[#9A9A9A]",
+  "#A3A3A3": "light:fill-[#5C5C5C]",
+  "#F2F2F2": "light:fill-[#141414]",
+};
 
 /// The pixel column on the window's left edge. Off below xl, where the
 /// content column would run into it.
@@ -285,11 +304,11 @@ function Tiles() {
       // The inner column is centred, so its left edge sits half the spare width in from the window's.
       className="pointer-events-none absolute -bottom-[100px] left-[calc(480px-50vw)] hidden xl:block"
     >
-      <rect width="60" height="40" fill="#141414" />
+      <rect width="60" height="40" fill="#141414" className={LIGHT["#141414"]} />
       {tiles.map((t) => (
-        <rect key={`${t.x}-${t.y}`} x={t.x} y={t.y} width="60" height="60" fill={t.fill} />
+        <rect key={`${t.x}-${t.y}`} x={t.x} y={t.y} width="60" height="60" fill={t.fill} className={LIGHT[t.fill]} />
       ))}
-      <path d={stripes(0, 0, 40) + tiles.map((t) => stripes(t.x, t.y)).join("")} fill="#0000008C" />
+      <path d={stripes(0, 0, 40) + tiles.map((t) => stripes(t.x, t.y)).join("")} fill="#0000008C" className="light:fill-[#00000024]" />
     </svg>
   );
 }
@@ -302,7 +321,7 @@ const REST =
 /// headline's grey rest under it.
 export function Orchestrate() {
   return (
-    <Section id="orchestrate" className="pt-20 pb-[100px]">
+    <Section id="orchestrate" className="pt-20 pb-[100px] light:bg-[#F4F4F2]">
       <Tiles />
       <Title lead="Orchestrate agents however you work.">
         <span className="max-sm:hidden">{REST}</span>
@@ -311,7 +330,7 @@ export function Orchestrate() {
         <Graph layout={WIDE} />
         <Graph layout={TALL} />
       </PlayWhenVisible>
-      <p className="mt-10 font-inter text-[22px] leading-[28px] font-light tracking-[-0.02em] text-balance text-[#7C7C7C] sm:hidden">
+      <p className="mt-10 font-inter text-[22px] leading-[28px] font-light tracking-[-0.02em] text-balance text-[#7C7C7C] sm:hidden light:text-[#8A8A8A]">
         {REST}
       </p>
     </Section>

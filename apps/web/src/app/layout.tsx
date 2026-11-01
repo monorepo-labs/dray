@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter } from "next/font/google";
 import localFont from "next/font/local";
+import Script from "next/script";
+import { SCHEME_SCRIPT } from "@/components/home/scheme";
 import "./globals.css";
 
 // The app loads these through fontsource; here they come from next/font so the
@@ -58,15 +60,23 @@ export default function RootLayout({
     // to the system stack. `data-scroll-behavior` keeps a route change jumping
     // to the top rather than gliding there: Next 16 no longer overrides the
     // smooth scroll `globals.css` sets for anchor links unless asked.
+    // `data-scheme` is set by the script below before paint, so it differs
+    // from the server's HTML by design.
     <html
       lang="en"
       data-theme="dark"
+      suppressHydrationWarning
       data-scroll-behavior="smooth"
       className={`${geistSans.variable} ${geistMono.variable} ${aeonik.variable} ${inter.variable}`}
     >
       {/* Nothing analytics-shaped mounts here: PostHog starts from
           `src/instrumentation-client.ts`, which Next runs before hydration. */}
-      <body className="font-sans">{children}</body>
+      <body className="font-sans">
+        <Script id="scheme" strategy="beforeInteractive">
+          {SCHEME_SCRIPT}
+        </Script>
+        {children}
+      </body>
     </html>
   );
 }

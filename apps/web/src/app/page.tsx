@@ -9,7 +9,10 @@ import { Testimonials } from "@/components/home/Testimonials";
 
 export default function Home() {
   return (
-    <div className="min-h-screen overflow-x-clip bg-black font-inter text-white antialiased">
+    <div
+      data-home
+      className="min-h-screen overflow-x-clip bg-black font-inter text-white antialiased light:bg-white light:text-[#0A0A0A]"
+    >
       <Hero />
       <main>
         <Orchestrate />
