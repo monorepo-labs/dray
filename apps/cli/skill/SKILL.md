@@ -381,27 +381,30 @@ without publishing anything. The link shows on that server's row in the app,
 where the user can stop it, and it goes when the session is settled or deleted.
 Sharing the same port from the same session again gives the same link.
 
-## The app's machines
+## Other machines
 
 ```bash
 dray machine add vps root@203.0.113.7                   # or ssh -p 2222 …, or an ~/.ssh/config alias
 dray machine add --token-file t vps ws://127.0.0.1:7317  # a token from stdin works too
+dray machine add --token-file t mac wss://….opentunnel.xyz   # a Mac, by its Remote access address
 dray machine ls                                          # name, address, connected or not; --json
 dray machine rename vps box                              # '' puts back the host
-dray machine disconnect vps                              # stays listed; the app stops connecting
+dray machine disconnect vps                              # stays listed; requests to it are refused
 dray machine connect vps                                 # tries now, says if it worked
 dray machine rm vps
 ```
 
-The same list as Settings → Servers on the user's Mac, and it moves there as
-you run these. A name belongs to one machine: `add` and `rename` refuse one
-another machine already has. Reach for it after you have set a machine up and the user wants
-it in the app. `add` connects before it saves, so a refusal is the app telling
-you what is wrong — an unknown host key, a password login, no Dray on the
-server — and its fix is the user's to make, never yours: do not accept a host
-key on their behalf. A token never goes on the command line. Remove only
-machines the user named. On a server with no app — Linux, or a headless Mac —
-`dray machine` is refused: the list lives in the Mac app.
+The machines this one can reach, on any Dray server — a Mac, a Linux box, a
+headless Mac. On a Mac it is the same list as Settings → Servers. A name
+belongs to one machine: `add` and `rename` refuse one another machine already
+has. Reach for it after you have set a machine up and the user wants it
+reachable. A Mac is reached by its Remote access address and token (Settings →
+This Mac), never over SSH. `add` connects before it saves, so a refusal is the
+machine telling you what is wrong — an unknown host key, a password login, no
+Dray on the server — and its fix is the user's to make, never yours: do not
+accept a host key on their behalf. An SSH add uses this machine's own `ssh`,
+so its key must already be authorized there. A token never goes on the command
+line. Remove only machines the user named.
 
 ## Working on another machine
 
@@ -413,10 +416,9 @@ dray session send <session-id> "Use the staging DB"   # finds the machine on its
 ```
 
 `--machine <name>` runs a `session`, `draft`, `issue`, `browser` or `share`
-command on a machine from `dray machine ls`, through the Dray app's own
-connection to it — so it works only from the Mac whose app added that machine,
-and only while that app is open. A session id needs no `--machine`: one this
-machine has never heard of is looked for on every connected machine.
+command on a machine from `dray machine ls`, through this machine's Dray
+server — app open or not. A session id needs no `--machine`: one this machine
+has never heard of is looked for on every machine it reaches.
 
 A new session there runs in that machine's checkout of the same repository,
 found by its `origin` remote; pass `--project <path on that machine>` where it
@@ -424,10 +426,11 @@ has none. `--base <session-id>` names that session's branch, which the other
 machine can only see once it is pushed. Model, effort, agent and fast mode
 inherit from you as they do here.
 
-**Trust runs one way.** You can reach a machine the app added; nothing on that
-machine can reach this one. So a session you start there cannot message you
-back — its prompt says so. Check on it with `dray session ls --machine <name>`,
-and ask it to open a PR or push a branch when its result should come back.
+**Reach follows tokens.** You reach a machine this one added; it reaches you
+only if it added this one too. A session you start there can message you back
+with `dray session send <your-id>` where it can — otherwise check on it with
+`dray session ls --machine <name>`, and ask it to open a PR or push a branch
+when its result should come back.
 
 ## This machine's server
 

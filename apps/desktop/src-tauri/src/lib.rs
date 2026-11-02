@@ -71,12 +71,15 @@ pub mod launchd;
 pub mod serve;
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod remote_access;
+// Every server reaches other machines on its own (#760).
+#[cfg(any(feature = "serve", feature = "desktop"))]
+pub mod machines;
 #[cfg(feature = "desktop")]
 pub mod servers;
 pub mod session;
 pub mod share;
 pub mod tunnel;
-#[cfg(feature = "desktop")]
+#[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod ssh;
 pub mod settings;
 pub mod sink;

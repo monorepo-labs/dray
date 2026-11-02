@@ -8,6 +8,7 @@
 //! each token sits in `credentials.json` under `server:<id>`, never on a
 //! struct the frontend is handed.
 
+use crate::machines::{admit_with, credential_name, default_name, normalize, Saved, Socket, Welcome, ADMIT};
 use crate::{sink::Sink, ssh, store};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -21,14 +22,11 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{mpsc, oneshot};
-use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+use tokio_tungstenite::tungstenite::Message;
 use ts_rs::TS;
 
 /// Stated again from serve.rs's `PROTOCOL`, which this build may not compile.
 const PROTOCOL: u32 = 1;
-
-/// How long a probe or a reconnect may take to be admitted.
-const ADMIT: Duration = Duration::from_secs(5);
 
 /// Reconnect backoff ceiling. Agents keep running on a server the app cannot
 /// reach, so coming back soon matters more than sparing a refused connect.
@@ -41,35 +39,6 @@ const MAX_BACKOFF: Duration = Duration::from_secs(10);
 /// blocks on a command.
 const PING: Duration = if cfg!(test) { Duration::from_millis(100) } else { Duration::from_secs(15) };
 const SILENCE: Duration = if cfg!(test) { Duration::from_millis(500) } else { Duration::from_secs(45) };
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Saved {
-    id: String,
-    name: String,
-    /// Empty for an SSH server, whose address is a port forwarded per connect.
-    /// Always written: a build from before SSH requires it, and one entry it
-    /// cannot parse is the whole list gone.
-    #[serde(default)]
-    url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    ssh: Option<ssh::Target>,
-    /// The reader turned the connection off; the row stays.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    off: bool,
-    /// The server takes beta releases, which also means stable ones. Its own,
-    /// never the app's. A bool rather than a channel enum: a value an older
-    /// build cannot spell fails the line, and one line is the whole list.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    beta: bool,
-    /// A release the reader chose to ignore. Only that one: a newer release
-    /// is offered again.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    ignored: Option<String>,
-    /// Fields a newer build wrote, carried back untouched — the index's own
-    /// `unknown` bargain, since this file is rewritten whole too.
-    #[serde(flatten)]
-    unknown: serde_json::Map<String, Value>,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
@@ -182,22 +151,16 @@ impl Conn {
 static CONNS: LazyLock<Mutex<Vec<Conn>>> = LazyLock::new(Default::default);
 static SINK: OnceLock<Sink> = OnceLock::new();
 static NEXT_CALL: AtomicU64 = AtomicU64::new(1);
-/// Serializes `servers.json` rewrites, like every other whole-file write here.
-static SAVE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn conns() -> std::sync::MutexGuard<'static, Vec<Conn>> {
     CONNS.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-fn credential_name(id: &str) -> String {
-    format!("server:{id}")
 }
 
 fn info(conn: &Conn) -> ServerInfo {
     ServerInfo {
         id: conn.saved.id.clone(),
         name: conn.saved.name.clone(),
-        named: conn.saved.name != unnamed(&conn.saved),
+        named: conn.saved.name != conn.saved.unnamed(),
         url: conn.saved.url.clone(),
         ssh: conn.saved.ssh.as_ref().map(ssh::Target::line),
         on: !conn.saved.off,
@@ -345,28 +308,47 @@ async fn local_address() -> Result<(String, String, bool), String> {
     Ok((format!("ws://127.0.0.1:{port}"), token.trim().to_string(), stale))
 }
 
-async fn servers_path() -> anyhow::Result<std::path::PathBuf> {
-    Ok(store::get_home_app_dir().await?.join("servers.json"))
+async fn save() -> Result<(), String> {
+    let list: Vec<Saved> = conns().iter().filter(|c| c.saved.id != LOCAL).map(|c| c.saved.clone()).collect();
+    crate::machines::save(&list).await
 }
 
-async fn save() -> Result<(), String> {
-    let _guard = SAVE.lock().await;
-    let list: Vec<Saved> = conns().iter().filter(|c| c.saved.id != LOCAL).map(|c| c.saved.clone()).collect();
-    let path = servers_path().await.map_err(|e| e.to_string())?;
-    let body = serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?;
-    store::write_atomic(&path, body).await.map_err(|e| format!("{e:#}"))
+/// Brings the connections in line with `servers.json`, which the Mac's server
+/// writes itself while this app is not connected to it (#760). Its server
+/// asks for this as the app connects, and after any write landing meanwhile.
+pub async fn reload() {
+    let saved = crate::machines::load().await;
+    {
+        let mut list = conns();
+        list.retain_mut(|conn| {
+            let kept = conn.saved.id == LOCAL || saved.iter().any(|s| s.id == conn.saved.id);
+            if !kept {
+                if let Some(task) = conn.task.take() {
+                    task.abort();
+                }
+            }
+            kept
+        });
+        for saved in saved {
+            match list.iter_mut().find(|c| c.saved.id == saved.id) {
+                Some(conn) => {
+                    let moved = conn.saved.url != saved.url || conn.saved.ssh != saved.ssh || conn.saved.off != saved.off;
+                    conn.saved = saved;
+                    if moved {
+                        conn.restart();
+                    }
+                }
+                None => list.push(Conn::new(saved)),
+            }
+        }
+    }
+    announce();
 }
 
 /// Reads `servers.json` and opens a connection to each. Called once, at setup.
 pub async fn start(sink: Sink) {
     let _ = SINK.set(sink);
-    let saved: Vec<Saved> = match servers_path().await {
-        Ok(path) => store::read_json(&path).await.unwrap_or_else(|e| {
-            eprintln!("[servers read err] {e:#}");
-            Vec::new()
-        }),
-        Err(_) => Vec::new(),
-    };
+    let saved = crate::machines::load().await;
     {
         let mut list = conns();
         let this_mac = Saved {
@@ -394,44 +376,6 @@ pub async fn start(sink: Sink) {
     });
 }
 
-/// Spelled the way a reader types it — `host:port`, `http://…`, `ws://…`, or
-/// a tunnel's `https://…`/`wss://…` — and answered as the URL the socket opens.
-fn normalize(url: &str) -> Result<String, String> {
-    let url = url.trim().trim_end_matches('/');
-    let url = if let Some(rest) = url.strip_prefix("http://") {
-        format!("ws://{rest}")
-    } else if let Some(rest) = url.strip_prefix("https://") {
-        format!("wss://{rest}")
-    } else if url.starts_with("ws://") || url.starts_with("wss://") {
-        url.to_string()
-    } else {
-        format!("ws://{url}")
-    };
-    let request = url.as_str().into_client_request().map_err(|e| format!("not an address: {e}"))?;
-    if request.uri().host().is_none() {
-        return Err("not an address: no host".into());
-    }
-    Ok(url)
-}
-
-type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
-/// The server's first frame once admitted: its core version, the CLI release
-/// it shipped in, and whether an update already landed on disk that it is not
-/// running yet. A server from before sends none of them.
-#[derive(Debug, Default, Deserialize)]
-struct Welcome {
-    #[serde(default)]
-    version: Option<String>,
-    #[serde(default)]
-    release: Option<String>,
-    #[serde(default)]
-    stale: bool,
-    /// `std::env::consts::OS` on the server.
-    #[serde(default)]
-    os: Option<String>,
-}
-
 /// Connects and says hello. Answers the admitted socket, or why not.
 async fn admit(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
     // `counts`: this app reports the sessions it starts there, so the server
@@ -447,34 +391,6 @@ async fn admit(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
 async fn admit_as_host(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
     let browser = cfg!(all(feature = "cef", target_os = "macos"));
     admit_with(url, json!({ "v": PROTOCOL, "token": token, "host": { "browser": browser } })).await
-}
-
-async fn admit_with(url: &str, hello: Value) -> Result<(Socket, Welcome), String> {
-    let attempt = async {
-        let (mut ws, _) = tokio_tungstenite::connect_async(url)
-            .await
-            .map_err(|e| format!("could not reach {url}: {e}"))?;
-        ws.send(Message::text(hello.to_string()))
-            .await
-            .map_err(|e| e.to_string())?;
-        loop {
-            match ws.next().await {
-                Some(Ok(Message::Text(text))) => {
-                    let frame: Value = serde_json::from_str(&text).unwrap_or_default();
-                    return match frame.get("err").and_then(Value::as_str) {
-                        Some(err) => Err(format!("the server refused: {err}")),
-                        None => Ok((ws, serde_json::from_value(frame).unwrap_or_default())),
-                    };
-                }
-                Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
-                Some(Err(e)) => return Err(e.to_string()),
-                _ => return Err("the server closed the connection".to_string()),
-            }
-        }
-    };
-    tokio::time::timeout(ADMIT, attempt)
-        .await
-        .unwrap_or_else(|_| Err(format!("{url} did not answer in time")))
 }
 
 fn set_status(id: &str, status: ServerStatus, error: Option<String>) {
@@ -828,11 +744,11 @@ pub async fn set_server_address(id: String, url: String) -> Result<(), String> {
     {
         let mut list = conns();
         let conn = list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?;
-        let was_default = conn.saved.name == unnamed(&conn.saved);
+        let was_default = conn.saved.name == conn.saved.unnamed();
         conn.saved.url = url;
         // A name nobody picked was the old address's host; it follows.
         if was_default {
-            conn.saved.name = unnamed(&conn.saved);
+            conn.saved.name = conn.saved.unnamed();
         }
         conn.saved.off = false;
         conn.restart();
@@ -849,22 +765,6 @@ fn refuse_taken(list: &[Conn], name: &str, except: Option<&str>) -> Result<(), S
         true => Err(format!("another server is already named {name} — pick another name")),
         false => Ok(()),
     }
-}
-
-/// The name a server gets when the reader gives none.
-fn unnamed(saved: &Saved) -> String {
-    match &saved.ssh {
-        Some(target) => target.host().to_string(),
-        None => default_name(&saved.url),
-    }
-}
-
-/// The host, which is what a reader would call it if asked.
-fn default_name(url: &str) -> String {
-    url.into_client_request()
-        .ok()
-        .and_then(|r| r.uri().host().map(str::to_string))
-        .unwrap_or_else(|| url.to_string())
 }
 
 /// Forgets a server and its token. Its agents keep running there; only this
@@ -966,7 +866,7 @@ pub async fn rename_server(id: String, name: String) -> Result<(), String> {
     {
         let mut list = conns();
         let saved = &list.iter().find(|c| c.saved.id == id).ok_or("no such server")?.saved;
-        let name = Some(name.trim()).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| unnamed(saved));
+        let name = Some(name.trim()).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| saved.unnamed());
         refuse_taken(&list, &name, Some(&id))?;
         list.iter_mut().find(|c| c.saved.id == id).expect("found above").saved.name = name;
     }
