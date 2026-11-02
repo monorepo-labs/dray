@@ -6,10 +6,8 @@ import { Section, Title } from "./Section";
 /// Inline timing for a `motion.module.css` class, as fractions of one loop.
 const at = (s: number, l = 0.06) => ({ "--s": s, "--l": l }) as CSSProperties;
 
-type Point = [x: number, y: number];
 // The iPad and iPhone move as one, the "coming soon" bracket spanning them.
 type Place = "macbook" | "mini" | "server" | "soon";
-type Stop = Exclude<Place, "soon">;
 
 // One per machine, in Paper's frame: where its line drops from the bus, and where it stops.
 const DROPS: { x: number; to: number; on: Place }[] = [
@@ -26,14 +24,14 @@ const MINI_LED = { cx: 700.5, cy: 711.2 };
 const LED_DIM = "#1B5E2E";
 const LED_ON = "#30D158";
 
-// The task's trips, all through the MacBook: out to the Mac mini, out to the
-// server, and back. Each lands where its machine's arrival lights, at s + TRIP.
-const TRIPS: { from: Stop; to: Stop; s: number }[] = [
-  { from: "macbook", to: "mini", s: 0.05 },
-  { from: "macbook", to: "server", s: 0.35 },
-  { from: "server", to: "macbook", s: 0.65 },
-];
-const TRIP = 0.2;
+// A pulse runs left to right along every ridge once a loop, each starting at
+// a random-looking moment. A hash, not Math.random: server and client must agree.
+const PULSE = 0.38;
+const pulseStart = (i: number) => {
+  let h = Math.imul(i ^ 0x9e3779b9, 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return ((h ^ (h >>> 16)) >>> 0) / 2 ** 32;
+};
 
 /// Where the machines sit; the drawings and timings are shared by every layout.
 type Layout = {
@@ -45,9 +43,6 @@ type Layout = {
   bus: string;
   /// Terrain bands, each from its row's bus down to its machines' feet.
   bands: [x: number, y: number, w: number, h: number][];
-  glow: [rx: number, ry: number];
-  /// Where the travelling glow centres on each machine a trip calls at.
-  stops: Record<Stop, Point>;
 };
 
 /// Paper's frame as drawn: one bus, the machines in a row beneath it.
@@ -58,8 +53,6 @@ const WIDE: Layout = {
   place: { macbook: [0, 0, 280], mini: [0, 0, 280], server: [0, 0, 280], soon: [0, 0, 280] },
   bus: "M390 280H1155",
   bands: [[240, 280, 960, 460]],
-  glow: [150, 260],
-  stops: { macbook: [390, 580], mini: [642.5, 580], server: [835, 580] },
 };
 
 /// A status LED switching to full green for a moment.
@@ -67,13 +60,28 @@ function Led({ cx, cy, s }: { cx: number; cy: number; s: number }) {
   return <circle cx={cx} cy={cy} r="2.5" fill={LED_ON} className={m.blip} style={at(s, 0.12)} />;
 }
 
-/// The terrain, darkened toward the top as in Paper. Drawn twice: once at rest,
-/// once lit and seen only through the travelling glow.
-function Ridges({ id, stroke }: { id: string; stroke: string }) {
+/// The terrain, darkened toward the top as in Paper. Each ridge's pulse is drawn
+/// before the next ridge, so a nearer ridge hides it as it hides the line.
+function Ridges({ id }: { id: string }) {
   return (
     <>
       {RIDGES.map((d, i) => (
-        <path key={i} d={d} fill="#000000" stroke={stroke} />
+        <g key={i}>
+          <path d={d} fill="#000000" stroke="#FFFFFF0F" />
+          {/* Off on phones: scaled that small, a pulse reads as flicker. The second
+              copy, a loop earlier, finishes a pulse the loop's end cut short. */}
+          {[0, -1].map((shift) => (
+            <path
+              key={shift}
+              d={d.slice(0, d.lastIndexOf("L964 464"))}
+              pathLength={1}
+              fill="none"
+              stroke="#FFFFFF26"
+              className={`${m.pulse} max-sm:hidden`}
+              style={{ ...at(pulseStart(i) + shift, PULSE), "--dash": 0.12 } as CSSProperties}
+            />
+          ))}
+        </g>
       ))}
       <rect width="960" height="460" fill={`url(#${id}-shade)`} />
       <rect width="960" height="460" fill={`url(#${id}-lift)`} />
@@ -99,7 +107,7 @@ function MacBook() {
       <path d="M244 727H536" fill="#000000" stroke="#4A4A4A" />
       <rect x="363" y="726" width="54" height="4" rx="2" fill="#1F1F1F" />
       <rect x="256" y="740" width="268" height="3" fill="#141414" />
-      {/* The selected row lights as the last trip lands. */}
+      {/* The selected row lights as the sweep ends. */}
       <rect x="276" y="608" width="52" height="6" fill="#1612F8" className={m.blip} style={at(0.85, 0.08)} />
     </>
   );
@@ -200,15 +208,8 @@ function ComingSoon() {
 }
 
 /// The machines, drawn in Paper's coordinates and moved into place by the layout.
-function Machines({ layout: { id, viewBox, className, place, bus, bands, glow, stops } }: { layout: Layout }) {
+function Machines({ layout: { id, viewBox, className, place, bus, bands } }: { layout: Layout }) {
   const shift = (p: Place) => `translate(${place[p][0]} ${place[p][1]})`;
-  const terrain = (stroke: string) =>
-    bands.map(([x, y, w, h]) => (
-      // Slice keeps the terrain's proportions in a band shaped unlike Paper's, cropping its sides.
-      <svg key={y} x={x} y={y} width={w} height={h} viewBox="0 0 960 460" preserveAspectRatio="xMidYMax slice">
-        <Ridges id={id} stroke={stroke} />
-      </svg>
-    ));
   return (
     <svg
       data-art="everywhere"
@@ -229,33 +230,14 @@ function Machines({ layout: { id, viewBox, className, place, bus, bands, glow, s
           <stop offset="0.8033" stopColor="#FFFFFF" stopOpacity="0.1" />
           <stop offset="1" stopColor="#FFFFFF" stopOpacity="0" />
         </linearGradient>
-        <radialGradient id={`${id}-glow`}>
-          <stop offset="0" stopColor="#FFFFFF" />
-          <stop offset="1" stopColor="#FFFFFF" stopOpacity="0" />
-        </radialGradient>
-        <mask id={`${id}-trips`}>
-          {TRIPS.map((t) => {
-            const [x0, y0] = stops[t.from];
-            const [x1, y1] = stops[t.to];
-            return (
-              <ellipse
-                key={t.s}
-                rx={glow[0]}
-                ry={glow[1]}
-                fill={`url(#${id}-glow)`}
-                className={m.travel}
-                style={{ ...at(t.s, TRIP), "--x0": x0, "--y0": y0, "--x1": x1, "--y1": y1 } as CSSProperties}
-              />
-            );
-          })}
-        </mask>
       </defs>
 
-      {terrain("#FFFFFF0F")}
-      {/* Off on phones: scaled that small, the glow reads as flicker, not travel. */}
-      <g mask={`url(#${id}-trips)`} className="max-sm:hidden">
-        {terrain("#FFFFFF80")}
-      </g>
+      {bands.map(([x, y, w, h]) => (
+        // Slice keeps the terrain's proportions in a band shaped unlike Paper's, cropping its sides.
+        <svg key={y} x={x} y={y} width={w} height={h} viewBox="0 0 960 460" preserveAspectRatio="xMidYMax slice">
+          <Ridges id={id} />
+        </svg>
+      ))}
 
       <path d={bus} fill="none" stroke="#FFFFFF4D" strokeWidth="1.5" />
       {DROPS.map((d) => {
