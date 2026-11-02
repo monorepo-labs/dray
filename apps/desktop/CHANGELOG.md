@@ -19,6 +19,15 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.29.16 · 2026-11-02
+
+### Improved
+
+- Every Dray server reaches other machines on its own, so
+  `dray --machine` works from a Linux server and with the app closed.
+- The Island uses far less CPU: it stops animating at rest and when it's
+  out of sight.
+
 ## 0.29.15 · 2026-11-01
 
 ### New
