@@ -1,23 +1,14 @@
-import Link from "next/link";
 import { preload } from "react-dom";
 import { DownloadButton } from "@/components/DownloadButton";
-import { GitHubGlyph } from "@/components/GitHubGlyph";
 import { Hero as AppWindow } from "@/components/illustrations/Hero";
 import { SponsorLink } from "@/components/SponsorLink";
-import { Wordmark } from "@/components/Wordmark";
-import { fetchStars, formatStars } from "@/lib/github";
-import { REPO, SPONSOR } from "@/lib/links";
 import h from "./hero.module.css";
 import { HeroBackdrop } from "./HeroBackdrop";
-import { SchemeToggle } from "./SchemeToggle";
-
-const NAV_CELL =
-  "h-full shrink-0 items-center justify-center gap-1.5 border-l border-white/20 font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white uppercase transition-colors hover:bg-white/10 light:border-black/15 light:text-[#0A0A0A] light:hover:bg-black/5";
+import { SiteNav } from "./SiteNav";
 
 /// The top of the page: nav, headline, the live app window and the sponsor line,
 /// over the pixel-blue backdrop.
-export async function Hero() {
-  const stars = await fetchStars();
+export function Hero() {
   // The phone still is the page's LCP, and lazy loading started it only after
   // layout. A preload in <head> starts it at once for the system's scheme; a
   // saved pick that disagrees falls back to the lazy <img> below.
@@ -30,40 +21,7 @@ export async function Hero() {
       <HeroBackdrop />
 
       <div className="relative mx-auto w-full max-w-[960px]">
-        <nav aria-label="Main" className="flex h-10 items-start justify-between">
-          <Link href="/" aria-label="Dray home" className="flex h-10 w-[120px] items-center bg-black pl-4 light:bg-white">
-            <Wordmark className="h-[11px] w-auto text-white light:text-[#0A0A0A]" />
-          </Link>
-          {/* The box draws its right and bottom edges; every cell draws its own
-              left, so hiding Docs and Sponsor on a phone, and the stars on the
-              narrowest, leaves no doubled line. */}
-          <div className="flex h-10 border-r border-b border-white/20 light:border-black/15">
-            {/* A plain anchor: /docs is another deployment behind a rewrite, so
-                client-side routing has nothing to route to. */}
-            <SchemeToggle className={`${NAV_CELL} flex w-10 cursor-pointer`} />
-            <a href="/docs" className={`${NAV_CELL} hidden w-[72px] sm:flex`}>
-              Docs
-            </a>
-            <a href={SPONSOR} target="_blank" rel="noopener noreferrer" className={`${NAV_CELL} hidden w-24 sm:flex`}>
-              Sponsor
-            </a>
-            <a
-              href={REPO}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label={`Dray on GitHub, ${formatStars(stars)} stars`}
-              className={`${NAV_CELL} flex w-20 max-[359px]:hidden`}
-            >
-              <GitHubGlyph className="size-3" />
-              {formatStars(stars)}
-            </a>
-            <DownloadButton
-              from="nav"
-              label="Download"
-              className={`${NAV_CELL} flex w-[115px] [&>svg]:-mt-0.5 [&>svg]:size-[11px]`}
-            />
-          </div>
-        </nav>
+        <SiteNav />
 
         <div className="pt-16 sm:pt-[101px] lg:ml-[102px] lg:max-w-[756px]">
           <h1 className="font-inter text-[36px] leading-[40px] font-normal tracking-[-0.03em] text-balance text-white sm:text-[46px] light:text-[#0A0A0A] sm:leading-[46px]">
