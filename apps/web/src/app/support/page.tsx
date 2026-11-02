@@ -20,13 +20,15 @@ export default function SupportPage() {
       <main className="px-5 pb-[120px] sm:px-8">
         <div className="mx-auto w-full max-w-[960px]">
           <SiteNav />
-          <div className="lg:ml-[102px] lg:max-w-[756px]">
-            <h1 className="pt-16 font-inter text-[36px] leading-[40px] font-normal tracking-[-0.03em] text-balance sm:pt-[101px] sm:text-[46px] sm:leading-[46px]">
-              Support Dray.
-            </h1>
-            <p className="mt-4 text-[16px] leading-6 tracking-[-0.01em] text-[#7C7C7C] light:text-[#8A8A8A]">
-              Free and open source, kept going by the people who use it.
-            </p>
+          <div>
+            <div className="lg:ml-[102px] lg:max-w-[756px]">
+              <h1 className="pt-16 font-inter text-[36px] leading-[40px] font-normal tracking-[-0.03em] text-balance sm:pt-[101px] sm:text-[46px] sm:leading-[46px]">
+                Support Dray.
+              </h1>
+              <p className="mt-4 text-[16px] leading-6 tracking-[-0.01em] text-[#7C7C7C] light:text-[#8A8A8A]">
+                Free and open source, kept going by the people who use it.
+              </p>
+            </div>
             <div className="mt-12">
               <Support from="support" />
             </div>

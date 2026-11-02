@@ -45,21 +45,23 @@ export default async function Download() {
         <div className="mx-auto w-full max-w-[960px]">
           <SiteNav />
 
-          <div className="text-[15px] leading-6 tracking-[-0.01em] text-[#A1A1A1] lg:ml-[102px] lg:max-w-[756px] light:text-[#5C5C5C]">
-            <h1 className="pt-16 font-inter text-[36px] leading-[40px] font-normal tracking-[-0.03em] text-balance text-white sm:pt-[101px] sm:text-[46px] sm:leading-[46px] light:text-[#0A0A0A]">
-              Thanks for downloading Dray.
-            </h1>
-            <p className="mt-4 text-[16px] text-[#7C7C7C] light:text-[#8A8A8A]">
-              The download starts on its own. If it didn't,{" "}
-              <SupportLink
-                href={DOWNLOAD}
-                to="dmg"
-                className="text-white underline decoration-white/30 underline-offset-4 transition-colors hover:decoration-white light:text-[#0A0A0A] light:decoration-black/30 light:hover:decoration-black"
-              >
-                download it again
-              </SupportLink>
-              .
-            </p>
+          <div className="text-[15px] leading-6 tracking-[-0.01em] text-[#A1A1A1] light:text-[#5C5C5C]">
+            <div className="lg:ml-[102px] lg:max-w-[756px]">
+              <h1 className="pt-16 font-inter text-[36px] leading-[40px] font-normal tracking-[-0.03em] text-balance text-white sm:pt-[101px] sm:text-[46px] sm:leading-[46px] light:text-[#0A0A0A]">
+                Thanks for downloading Dray.
+              </h1>
+              <p className="mt-4 text-[16px] text-[#7C7C7C] light:text-[#8A8A8A]">
+                The download starts on its own. If it didn't,{" "}
+                <SupportLink
+                  href={DOWNLOAD}
+                  to="dmg"
+                  className="text-white underline decoration-white/30 underline-offset-4 transition-colors hover:decoration-white light:text-[#0A0A0A] light:decoration-black/30 light:hover:decoration-black"
+                >
+                  download it again
+                </SupportLink>
+                .
+              </p>
+            </div>
 
             <div className="mt-12">
               <Support from="download" />
