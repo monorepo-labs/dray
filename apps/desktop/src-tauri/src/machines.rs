@@ -290,8 +290,11 @@ async fn connect(saved: &Saved) -> Result<Socket, String> {
     match admit(&url, &token).await {
         Ok((ws, _)) => Ok(ws),
         Err(e) => {
-            if saved.ssh.is_some() {
-                forget(&saved.id).await;
+            // Only the login that failed: a retry may have replaced it with
+            // a working one meanwhile.
+            let mut tunnels = tunnels();
+            if tunnels.get(&saved.id).is_some_and(|t| format!("ws://127.0.0.1:{}", t.port) == url) {
+                tunnels.remove(&saved.id);
             }
             Err(e)
         }
