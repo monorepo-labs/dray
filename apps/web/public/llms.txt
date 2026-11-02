@@ -1,0 +1,29 @@
+# Dray
+
+> Dray is a free, open-source macOS app for running coding agents: Claude Code, Codex, pi, fx and Grok Build. It runs the official agent CLIs on your existing subscriptions, many sessions at once, on your Mac or on remote machines.
+
+## Features
+
+- Parallel sessions: run many agents at once, each optionally in its own git worktree.
+- Orchestration: agents start and message other sessions through the `dray` CLI, and can have a second model review their work.
+- Remote machines: run agents on a Linux server or another Mac, driven from the Mac app. Sessions keep running after the app quits.
+- Pull requests and issues: checks, review comments and merge beside the chat. Start sessions from GitHub or Linear issues.
+- Built-in browser: agents open, test and screenshot your dev server. `dray share` gives it a public link.
+- Notch: from any app on your Mac, dictate to a session, read and reply to it, answer its questions and approve tool calls.
+- Dictation: on-device speech to text, in the app or from the notch.
+- Privacy: your data stays on your machine.
+
+## FAQ
+
+- Is Dray free? Yes. Apache 2.0.
+- Is Dray safe to use with a Claude subscription? Yes. Dray runs Anthropic's own Claude Code CLI, so it works within Anthropic's terms.
+- Does Dray run on Linux? Yes, as a server, driven from the Mac app.
+
+## Links
+
+- [Download for Mac](https://downloads.drayhq.com/Dray_universal.dmg)
+- [Install on a server](https://www.drayhq.com/install.sh): `curl -fsSL https://www.drayhq.com/install.sh | sh`
+- [GitHub](https://github.com/monorepo-labs/dray)
+- [Docs](https://www.drayhq.com/docs)
+- [Docs llms.txt](https://www.drayhq.com/docs/llms.txt): every docs page, one line each.
+- [Changelog](https://www.drayhq.com/changelog)

@@ -39,11 +39,7 @@ const config: NextConfig = {
             // No trailing slash: `blume dev` redirects `/docs/` to `/docs`,
             // which comes back here and loops.
             { source: "/docs", destination: DOCS_ORIGIN },
-            { source: "/docs/:path*", destination: `${DOCS_ORIGIN}/:path*` },
-            // Crawlers look for llms.txt at the root; the docs' copy already
-            // describes the whole product, so serve that one rather than a second.
-            { source: "/llms.txt", destination: `${DOCS_ORIGIN}/llms.txt` },
-          ]
+            { source: "/docs/:path*", destination: `${DOCS_ORIGIN}/:path*` },          ]
         : []),
     ];
   },
