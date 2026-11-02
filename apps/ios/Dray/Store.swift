@@ -308,6 +308,14 @@ final class Store {
     }
 
     /// Starts following a transcript without marking the session read.
+    /// Lets go of every transcript held but `kept`'s. The Island's close: held, each
+    /// grew by every event its session sent, and a day of them stayed in memory.
+    func dropTranscripts(keeping kept: SessionKey?) {
+        transcripts = transcripts.filter { $0.key == kept }
+        transcriptErrors = [:]
+        olderErrors = [:]
+    }
+
     func load(_ key: SessionKey) async {
         if transcripts[key] == nil { await reload(key) }
     }
