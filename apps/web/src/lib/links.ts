@@ -22,8 +22,20 @@ export const FEEDBACK = "https://x.com/yogesharc";
 
 export const COMPANY = "Monorepo Labs";
 
-/// Where the next sponsor signs up.
-export const SPONSOR = "https://www.patreon.com/c/yogesharc/membership";
+/// Where the next sponsor signs up: the site's own page, which sends them on
+/// to Dodo's checkout.
+export const SPONSOR = "/support";
+
+/// Dodo checkout for a one-time gift. `paymentAmount` is whole dollars, not
+/// cents, measured against the live link; Dodo raises anything under $5.
+export const GIVE_ONCE = "https://checkout.dodopayments.com/buy/pdt_0Nr3TIt1S5EknDdqXtkz6?quantity=1&showDiscounts=false";
+
+/// Dodo's monthly plans, cheapest first.
+export const MONTHLY = [
+  { name: "Coffee", price: "$9.99", href: "https://checkout.dodopayments.com/buy/pdt_0Nr3TUpvqIitzXs9Fu8iH?quantity=1&showDiscounts=false" },
+  { name: "Supporter", price: "$19.99", href: "https://checkout.dodopayments.com/buy/pdt_0Nr3U3A56BDcjWAanib29?quantity=1&showDiscounts=false" },
+  { name: "Angel", price: "$100", href: "https://checkout.dodopayments.com/buy/pdt_0Nr3U7XSvvd1wQR7RifpC?quantity=1&showDiscounts=false" },
+] as const;
 
 /// What the nav shows when GitHub cannot be asked. Bump it now and then so a
 /// rate-limited render does not undercount by much.

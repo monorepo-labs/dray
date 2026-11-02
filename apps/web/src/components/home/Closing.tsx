@@ -15,7 +15,7 @@ const LINKS = [
   { label: "llms.txt", href: "/llms.txt" },
   { label: "GitHub", href: REPO, out: true },
   { label: "X", href: FEEDBACK, out: true },
-  { label: "Sponsor", href: SPONSOR, out: true },
+  { label: "Support", href: SPONSOR },
 ];
 
 /// The last blue band: the closing line, both ways in, and the footer.
