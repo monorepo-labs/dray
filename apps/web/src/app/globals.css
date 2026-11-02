@@ -372,7 +372,7 @@ body {
   [stroke="#FFFFFF4D"] { stroke: #00000052; }
   [stroke="#FFFFFF0F"] { stroke: #0000001f; }
   /* The ridges the glow lights, blue on white. */
-  [stroke="#FFFFFF80"] { stroke: #1612f899; }
+  [stroke="#FFFFFF26"] { stroke: #1612f859; }
   [id$="-shade"] stop { stop-color: #fff; }
   [id$="-lift"] stop { stop-color: #000; }
   [id$="-lift"] stop:not(:last-child) { stop-opacity: 0.035; }
