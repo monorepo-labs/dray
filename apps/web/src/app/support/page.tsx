@@ -26,7 +26,7 @@ export default function SupportPage() {
                 Support Dray.
               </h1>
               <p className="mt-4 text-[16px] leading-6 tracking-[-0.01em] text-[#7C7C7C] light:text-[#8A8A8A]">
-                Your support helps keep building new features and fixing bugs.
+                Your support helps Yogesh keep building new features and fixing bugs.
               </p>
             </div>
             <div className="mt-12">

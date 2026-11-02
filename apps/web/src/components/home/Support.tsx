@@ -5,10 +5,9 @@ import { useState } from "react";
 import { GitHubGlyph } from "@/components/GitHubGlyph";
 import { GreptileGlyph } from "@/components/GreptileGlyph";
 import { SponsorLink } from "@/components/SponsorLink";
-import { XGlyph } from "@/components/XGlyph";
 import { formatStars } from "@/lib/github";
 import { posthog } from "@/lib/posthog";
-import { FEEDBACK, GIVE_ONCE, MONTHLY, REPO, SPONSOR } from "@/lib/links";
+import { FEEDBACK, GIVE_ONCE, MONTHLY, REPO } from "@/lib/links";
 
 const LABEL = "font-mono text-[11px] leading-[14px] tracking-[0.06em] uppercase";
 const RULE = "border-[#FFFFFF26] light:border-black/15";
@@ -28,7 +27,7 @@ export function Support({ from, stars = 0 }: { from: "download" | "support"; sta
   const give = custom ? Math.round(Number(custom)) : amount;
   const valid = Number.isFinite(give) && give >= MIN;
 
-  const tell = (to: "github" | "x") => posthog.capture("support_click", { to, from }, { transport: "sendBeacon" });
+  const tell = (to: "github") => posthog.capture("support_click", { to, from }, { transport: "sendBeacon" });
   const track = (plan: string, value?: number) =>
     posthog.capture("support_click", { to: "dodo", plan, amount: value, from }, { transport: "sendBeacon" });
 
@@ -75,13 +74,10 @@ export function Support({ from, stars = 0 }: { from: "download" | "support"; sta
         </div>
 
         <div className="bg-[#141414] p-6 sm:p-8 light:bg-white">
-          {/* /support carries the heading and this line as its page headline. */}
-          {from === "download" && (
-            <h2 className="mb-2 text-[20px] leading-[26px] tracking-[-0.02em] text-white light:text-[#0A0A0A]">Support Dray.</h2>
-          )}
+          {/* /support carries this line as its page headline. */}
           {from === "download" && (
             <p className="mb-6 text-[16px] leading-6 tracking-[-0.01em] text-[#CFCFCF] light:text-[#3D3D3D]">
-              Your support helps keep building new features and fixing bugs.
+              Your support helps Yogesh keep building new features and fixing bugs.
             </p>
           )}
           <div role="group" aria-label="How to support" className={`inline-flex border ${RULE}`}>
@@ -192,50 +188,38 @@ export function Support({ from, stars = 0 }: { from: "download" | "support"; sta
               </div>
             </div>
           )}
-          {/* Most people want to use it before they back it, so the download
-              page says where the ask lives for later. */}
-          {from === "download" && (
-            <p className="mt-6 text-[15px] leading-[22px] text-[#7C7C7C] light:text-[#8A8A8A]">
-              Support it later any time from the{" "}
-              <a href={SPONSOR} className={NAME}>
-                Support page
-              </a>
-              .
-            </p>
-          )}
         </div>
       </section>
 
       {from === "download" && (
         <section aria-label="Other ways to help" className="mt-4 text-[15px] leading-6 tracking-[-0.01em] text-[#A1A1A1] light:text-[#5C5C5C]">
-          <div className={`grid border sm:grid-cols-2 ${RULE} divide-y divide-[#FFFFFF26] sm:divide-x sm:divide-y-0 light:divide-black/15`}>
+          <div className={`border ${RULE}`}>
             <Way href={REPO} onClick={() => tell("github")} icon={<GitHubGlyph className="size-4" />} title="Star it on GitHub">
               {formatStars(stars)} stars so far. Each one helps someone else find Dray.
-            </Way>
-            <Way href={FEEDBACK} onClick={() => tell("x")} icon={<XGlyph className="size-3.5" />} title="Follow on X">
-              New releases and what comes next, as they happen.
             </Way>
           </div>
         </section>
       )}
 
-      <p className={`mt-6 lg:ml-[102px] ${CREDIT}`}>
-        <span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#28E99F]">
-          <GreptileGlyph className="h-3.5 w-auto text-[#0A0A0A]" />
-        </span>
-        <span>
-          Every PR is reviewed by{" "}
-          <SponsorLink
-            href="https://www.greptile.com/open-source"
-            sponsor="greptile"
-            destination="open_source"
-            className={NAME}
-          >
-            Greptile
-          </SponsorLink>
-          , free through their open source program.
-        </span>
-      </p>
+      {from === "support" && (
+        <p className={`mt-6 lg:ml-[102px] ${CREDIT}`}>
+          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#28E99F]">
+            <GreptileGlyph className="h-3.5 w-auto text-[#0A0A0A]" />
+          </span>
+          <span>
+            Every PR is reviewed by{" "}
+            <SponsorLink
+              href="https://www.greptile.com/open-source"
+              sponsor="greptile"
+              destination="open_source"
+              className={NAME}
+            >
+              Greptile
+            </SponsorLink>
+            , free through their open source program.
+          </span>
+        </p>
+      )}
     </>
   );
 }
@@ -284,7 +268,7 @@ function Way({
       target="_blank"
       rel="noopener noreferrer"
       onClick={onClick}
-      className="flex flex-col gap-2 p-6 transition-colors hover:bg-white/[0.04] light:hover:bg-black/[0.03]"
+      className="flex flex-col gap-2 p-6 transition-colors duration-200 ease-out hover:bg-white/[0.06] light:hover:bg-black/[0.04]"
     >
       <span className="flex items-center gap-2 text-white light:text-[#0A0A0A]">
         {icon}
