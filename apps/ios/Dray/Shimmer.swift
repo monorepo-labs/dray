@@ -10,10 +10,12 @@ private struct Shimmer: ViewModifier {
     let on: Bool
     let period: Double
     @Environment(\.accessibilityReduceMotion) private var still
+    @Environment(\.motionPaused) private var hidden
 
     func body(content: Content) -> some View {
         if on && !still {
-            TimelineView(.animation) { timeline in
+            // 30fps: a soft sweep reads the same, and each frame costs the island a whole-panel layout.
+            TimelineView(.animation(minimumInterval: 1 / 30, paused: hidden)) { timeline in
                 let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
                 content.mask {
                     LinearGradient(

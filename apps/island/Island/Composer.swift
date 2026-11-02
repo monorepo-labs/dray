@@ -129,6 +129,8 @@ final class Composer {
             if shown != oldValue { Sound.keepAwake(shown) }
         }
     }
+    /// The panel can be seen: open on a Space the reader left, or covered, it is not, and nothing on it animates.
+    var onScreen = true
     /// Whether the panel has held the keys since it opened, which is when a bare Esc reaches it.
     var keyed = false
     var closeHint: String { keyed ? "Esc" : "⌘Esc" }

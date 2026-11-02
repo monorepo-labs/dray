@@ -41,12 +41,13 @@ struct LeadMark: View {
     let marks: Marks
     /// Off where the title shimmers instead, which says the same.
     var orb = true
+    @Environment(\.motionPaused) private var hidden
 
     var body: some View {
         if marks.checksRunning {
             ChecksSpinner()
         } else if marks.busy && orb {
-            Orb(state: .working, size: 16).foregroundStyle(.white.opacity(0.7))
+            Orb(state: .working, size: 16, paused: hidden).foregroundStyle(.white.opacity(0.7))
         } else if let pr = marks.pr {
             PrGlyph(mark: pr, size: 13)
         }

@@ -50,6 +50,9 @@ final class Store {
     @ObservationIgnored private var connections: [UUID: Connection] = [:]
     @ObservationIgnored private var marksAt: [ProjectKey: Date] = [:]
     @ObservationIgnored private var marking: Set<ProjectKey> = []
+    /// `dropTranscripts` calls so far, and the session the last one kept, so a read out across a drop knows.
+    @ObservationIgnored private var drops = 0
+    @ObservationIgnored private var kept: SessionKey?
 
     init() {
         if let data = UserDefaults.standard.data(forKey: "servers"),
@@ -307,6 +310,16 @@ final class Store {
         }
     }
 
+    /// Lets go of every transcript held but `kept`'s. The Island's close: held, each
+    /// grew by every event its session sent, and a day of them stayed in memory.
+    func dropTranscripts(keeping kept: SessionKey?) {
+        transcripts = transcripts.filter { $0.key == kept }
+        transcriptErrors = [:]
+        olderErrors = [:]
+        drops += 1
+        self.kept = kept
+    }
+
     /// Starts following a transcript without marking the session read.
     func load(_ key: SessionKey) async {
         if transcripts[key] == nil { await reload(key) }
@@ -325,9 +338,11 @@ final class Store {
     private func reload(_ key: SessionKey) async {
         guard let c = connections[key.server] else { return }
         let before = transcripts[key]?.ids ?? []
+        let drop = drops
         do {
             let snap: Snapshot? = try await c.call("get_session_by_id", ["sessionId": .string(key.id), "turns": 8])
-            guard let snap else { return }
+            // Dropped while the read was out: writing it back would hold it, growing, until the next drop.
+            guard let snap, drop == drops || key == kept else { return }
             let read = Set(snap.events.map(\.id))
             let held = transcripts[key]?.events ?? []
             let live = held.filter { !before.contains($0.id) && !read.contains($0.id) }

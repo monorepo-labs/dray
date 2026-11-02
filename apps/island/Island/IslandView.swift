@@ -72,6 +72,7 @@ struct IslandView: View {
             DropMenus(composer: composer, anchors: anchors, upward: composer.placement == .bottom)
         }
         .environment(\.colorScheme, .dark)
+        .environment(\.motionPaused, !composer.onScreen)
         .onChange(of: composer.placement) { composer.reposition() }
         .onChange(of: composer.opens) { focus = .input }
         .onChange(of: focus) { composer.field = focus }
