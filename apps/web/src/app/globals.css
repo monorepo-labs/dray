@@ -103,7 +103,7 @@
   --radius: 0.625rem;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --font-display: var(--font-aeonik);
+  --font-display: var(--font-inter-sans);
   --font-inter: var(--font-inter-sans);
 }
 
