@@ -380,6 +380,7 @@ impl Mapper {
         });
         self.turn_open = false;
         self.outputs.clear();
+        self.shells.clear();
         event
     }
 
@@ -605,7 +606,10 @@ mod tests {
     /// Replays one capture's first prompt through the mapper: every
     /// `session/update`, then the prompt's own response.
     fn replay(fixture: &str) -> Vec<AgentEvent> {
-        let mut mapper = Mapper::new("s".into(), Arc::new(AtomicU64::new(0)));
+        replay_into(&mut Mapper::new("s".into(), Arc::new(AtomicU64::new(0))), fixture)
+    }
+
+    fn replay_into(mapper: &mut Mapper, fixture: &str) -> Vec<AgentEvent> {
         let mut out = Vec::new();
         for line in fixture.lines().filter_map(|l| l.strip_prefix("<< ")) {
             let value: Value = serde_json::from_str(line).unwrap();
@@ -966,6 +970,21 @@ mod tests {
     /// shape `shellUpdateContentText` writes, in fx's own tests. The stream
     /// carried all of it, so the stream wins; a shell refused before it ran
     /// streamed nothing, and its close is the only reason there is.
+    /// A shell whose closing update never comes — the turn ended under it —
+    /// leaves nothing behind for the life of the session.
+    #[test]
+    fn a_turn_ending_under_a_shell_forgets_it() {
+        let unclosed: String = SHELL_CUT
+            .lines()
+            .filter(|l| !l.contains(r#""status":"completed""#))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let mut mapper = Mapper::new("s".into(), Arc::new(AtomicU64::new(0)));
+        replay_into(&mut mapper, &unclosed);
+        assert!(mapper.shells.is_empty());
+        assert!(mapper.outputs.is_empty());
+    }
+
     /// fx 0.0.16, live: the close carries the first 200 bytes and fx's cut
     /// marker, the stream carried all 378. The row draws the stream.
     #[test]
