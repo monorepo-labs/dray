@@ -84,13 +84,12 @@ export function Support({ from, stars = 0 }: { from: "download" | "support"; sta
               Your support helps keep building new features and fixing bugs.
             </p>
           )}
-          <div role="tablist" aria-label="How to support" className={`inline-flex border ${RULE}`}>
+          <div role="group" aria-label="How to support" className={`inline-flex border ${RULE}`}>
             {[false, true].map((m) => (
               <button
                 key={String(m)}
                 type="button"
-                role="tab"
-                aria-selected={monthly === m}
+                aria-pressed={monthly === m}
                 onClick={() => setMonthly(m)}
                 className={`${LABEL} h-9 px-4 font-medium transition-colors ${m ? `border-l ${RULE}` : ""} ${
                   monthly === m
