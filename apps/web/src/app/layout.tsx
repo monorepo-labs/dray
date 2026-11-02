@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter } from "next/font/google";
-import localFont from "next/font/local";
 import Script from "next/script";
 import { SCHEME_SCRIPT } from "@/components/home/scheme";
 import "./globals.css";
@@ -16,16 +15,6 @@ const geistMono = Geist_Mono({
 // The homepage's face, as drawn in Paper. Variable, so one file covers the
 // light headlines and the regular body.
 const inter = Inter({ variable: "--font-inter-sans", subsets: ["latin"] });
-
-// The headline face, and only that: one weight, one file, so it costs one
-// request. Licensed per seat, not open — it stays out of the app and out of
-// body text, where Geist already does the job.
-const aeonik = localFont({
-  src: "../fonts/AeonikPro-Medium.ttf",
-  weight: "500",
-  variable: "--font-aeonik",
-  display: "swap",
-});
 
 const title = "Dray - Run every coding agent in one app.";
 const description =
@@ -67,7 +56,7 @@ export default function RootLayout({
       data-theme="dark"
       suppressHydrationWarning
       data-scroll-behavior="smooth"
-      className={`${geistSans.variable} ${geistMono.variable} ${aeonik.variable} ${inter.variable}`}
+      className={`${geistSans.variable} ${geistMono.variable} ${inter.variable}`}
     >
       {/* Nothing analytics-shaped mounts here: PostHog starts from
           `src/instrumentation-client.ts`, which Next runs before hydration. */}
