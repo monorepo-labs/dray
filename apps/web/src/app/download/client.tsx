@@ -27,7 +27,7 @@ export function SupportLink({
   children,
 }: {
   href: string;
-  to: "github" | "x" | "dmg";
+  to: "dmg";
   className: string;
   children: React.ReactNode;
 }) {

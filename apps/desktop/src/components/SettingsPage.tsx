@@ -84,7 +84,7 @@ const CONTACT_URL = "https://x.com/yogesharc";
 const REPO_URL = "https://github.com/monorepo-labs/dray";
 const ISSUES_URL = `${REPO_URL}/issues/new`;
 // The landing page's own link, so both ask through one door.
-const SPONSOR_URL = "https://www.patreon.com/c/yogesharc/membership";
+const SPONSOR_URL = "https://www.drayhq.com/support";
 
 /// People who sponsor Dray, drawn in About — the landing page's "Supported by"
 /// list, kept in step by hand. Avatars are bundled rather than fetched, so the

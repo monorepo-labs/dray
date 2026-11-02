@@ -12,7 +12,7 @@ its own worktree, diff view, PR panel, issue panel and embedded browser.
 
 [![Greptile: The War on Bugs](https://www.greptile.com/badge.svg)](https://www.greptile.com/?utm_source=oss_badge&utm_medium=readme&utm_campaign=greptile_for_open_source)
 
-Want to sponsor Dray? [patreon.com/yogesharc](https://patreon.com/yogesharc)
+Want to sponsor Dray? [drayhq.com/support](https://www.drayhq.com/support)
 
 ## Layout
 
