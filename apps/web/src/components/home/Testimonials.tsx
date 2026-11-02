@@ -20,7 +20,7 @@ export function Testimonials() {
             <blockquote className="text-[17px] leading-6 tracking-[-0.01em] text-white light:text-[#0A0A0A]">{t.text}</blockquote>
             <span className="flex items-center gap-2.5">
               {t.avatar ? (
-                <img src={t.avatar} alt="" width={28} height={28} className="size-7 shrink-0 rounded-full object-cover" />
+                <img src={t.avatar} alt="" width={28} height={28} loading="lazy" className="size-7 shrink-0 rounded-full object-cover" />
               ) : (
                 <span className="grid size-7 shrink-0 place-items-center rounded-full bg-white/10 text-xs light:bg-black/10">{t.name.charAt(0)}</span>
               )}

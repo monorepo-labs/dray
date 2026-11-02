@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { preload } from "react-dom";
 import { DownloadButton } from "@/components/DownloadButton";
 import { GitHubGlyph } from "@/components/GitHubGlyph";
 import { Hero as AppWindow } from "@/components/illustrations/Hero";
@@ -17,6 +18,11 @@ const NAV_CELL =
 /// over the pixel-blue backdrop.
 export async function Hero() {
   const stars = await fetchStars();
+  // The phone still is the page's LCP, and lazy loading started it only after
+  // layout. A preload in <head> starts it at once for the system's scheme; a
+  // saved pick that disagrees falls back to the lazy <img> below.
+  preload("/hero-mobile.webp", { as: "image", fetchPriority: "high", media: "(max-width: 639px) and (prefers-color-scheme: dark)" });
+  preload("/hero-mobile-light.webp", { as: "image", fetchPriority: "high", media: "(max-width: 639px) and (prefers-color-scheme: light)" });
 
   return (
     <>

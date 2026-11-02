@@ -17,14 +17,17 @@ const geistMono = Geist_Mono({
 // light headlines and the regular body.
 const inter = Inter({ variable: "--font-inter-sans", subsets: ["latin"] });
 
-// The headline face, and only that: one weight, one file, so it costs one
-// request. Licensed per seat, not open — it stays out of the app and out of
+// The changelog's headline face, and only that: one weight, one file, so it
+// costs one request. Licensed per seat, not open — it stays out of the app and out of
 // body text, where Geist already does the job.
 const aeonik = localFont({
   src: "../fonts/AeonikPro-Medium.ttf",
   weight: "500",
   variable: "--font-aeonik",
   display: "swap",
+  // The homepage never draws it, and a preload made every page fetch its 62KB
+  // ahead of the hero image. Pages that do use it load it on first paint.
+  preload: false,
 });
 
 const title = "Dray - Run every coding agent in one app.";
