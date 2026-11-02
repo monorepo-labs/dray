@@ -10,6 +10,19 @@
   }
 }
 
+/* One ray of the scheme toggle's hover wave: lit at once, fading while the
+   next few take over. `--shine` is set per scheme: sun bright, moon dim. */
+@keyframes ray-shine {
+  0%,
+  6% {
+    opacity: var(--shine);
+  }
+  30%,
+  100% {
+    opacity: 0;
+  }
+}
+
 /* The palette is copied from the desktop app's `[data-theme="neutral"]
    [data-mode="dark"]` block, value for value. Dark is every page's look and
    the homepage's in a dark appearance; its light twin is at the foot of this
