@@ -109,10 +109,11 @@ struct OrbDriver<Content: View>: View {
             }
         }
         .frame(width: size, height: size)
-        // A lap home takes at most ~1.6s and the uncurl a fraction more after it.
-        .task(id: state) {
+        // A lap home takes at most ~1.6s and the uncurl a fraction more after it. Hidden,
+        // the clock stands still too, so the wait starts again once the orb is seen.
+        .task(id: hidden ? nil : state) {
             resting = false
-            guard state == .idle else { return }
+            guard state == .idle, !hidden else { return }
             try? await Task.sleep(for: .seconds(3))
             if !Task.isCancelled { resting = true }
         }
