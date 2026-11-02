@@ -179,6 +179,7 @@ fn set_muted(muted: bool) -> bool {
 /// Split from the spawn so it is testable, since the failure it guards is
 /// silent: a machine with no output device answers `missing value`, and taking
 /// that as "not muted" would leave the sound off on the way back out.
+#[cfg(any(target_os = "macos", test))]
 fn parse_muted(answer: &str) -> Option<bool> {
     answer.trim().parse().ok()
 }

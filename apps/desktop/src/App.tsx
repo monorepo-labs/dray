@@ -105,6 +105,7 @@ import {
 } from "@/lib/groups";
 import ComposerToolbar from "@/components/composer/ComposerToolbar";
 import DictateControl from "@/components/composer/DictateControl";
+import { HAS_DICTATION } from "@/lib/platform";
 import AppShell from "@/components/layout/AppShell";
 import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
@@ -675,7 +676,7 @@ function App() {
   // shortcut is for. Enabled always: pressed with nothing downloaded it opens
   // settings, which is the answer the reader needs rather than a dead key.
   // Off for a remote session, like every Mac-only feature.
-  useHotkey("dictate", () => void recorder.toggle(), { platformOnly: true, enabled: activeServer === LOCAL });
+  useHotkey("dictate", () => void recorder.toggle(), { platformOnly: true, enabled: activeServer === LOCAL && HAS_DICTATION });
 
   const [worktreePrompt, setWorktreePrompt] = useState<WorktreePrompt | null>(null);
 
@@ -3196,7 +3197,7 @@ function App() {
           }}
           dictating={recorder.state !== "idle"}
           dictation={
-            activeServer === LOCAL && <DictateControl
+            activeServer === LOCAL && HAS_DICTATION && <DictateControl
               state={recorder.state}
               level={recorder.level}
               savedAudio={recorder.savedAudio}

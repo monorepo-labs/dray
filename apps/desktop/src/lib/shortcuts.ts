@@ -1,4 +1,4 @@
-import { IS_MAC } from "@/lib/platform";
+import { HAS_DICTATION, IS_MAC } from "@/lib/platform";
 
 /// One key combination, as `useHotkey` matches it.
 ///
@@ -161,6 +161,13 @@ export function defaultChord(id: ShortcutId): Chord {
 
 export function shortcutLabel(id: ShortcutId): string {
   return SHORTCUTS.find((s) => s.id === id)!.label;
+}
+
+/// Whether this platform has the action at all. One that is not is left off
+/// the Shortcuts tab and holds no chord, or a hidden row nobody can unbind
+/// would refuse its chord to every other action.
+export function offered(id: ShortcutId): boolean {
+  return HAS_DICTATION || id !== "dictate";
 }
 
 /// Chords the platform already means something by, which the recorder refuses.

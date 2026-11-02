@@ -14,5 +14,14 @@ async fn main() {
         }
         return;
     }
+    // X11 even on a Wayland desktop, through XWayland: the embedded browser
+    // needs a window id to parent its view into, which Wayland never hands out.
+    // Only where an X display exists and the reader picked no backend, or a
+    // desktop without XWayland could not open the window at all. Set before
+    // GTK starts, since GTK reads it once at init.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("GDK_BACKEND").is_none() {
+        std::env::set_var("GDK_BACKEND", "x11");
+    }
     ade_lib::run()
 }

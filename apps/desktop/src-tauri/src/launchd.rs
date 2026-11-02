@@ -14,6 +14,12 @@ fn label() -> &'static str {
     if crate::is_dev() { "com.yogesh.dray.server.dev" } else { "com.yogesh.dray.server" }
 }
 
+/// Whether the server is this app's child rather than a launchd job: a dev
+/// build, and any build off a Mac, where there is no launchd to run one.
+pub(crate) fn as_child() -> bool {
+    crate::is_dev() || cfg!(not(target_os = "macos"))
+}
+
 fn target() -> String {
     format!("gui/{}/{}", unsafe { libc::getuid() }, label())
 }
@@ -80,7 +86,7 @@ static PENDING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 pub async fn ensure() -> Result<()> {
     let exe = std::env::current_exe().context("no path to this binary")?;
     let log = crate::store::get_home_app_dir().await?.join(crate::serve::SERVER_LOG);
-    if crate::is_dev() {
+    if as_child() {
         return spawn_dev(&exe, &log);
     }
     let env: Vec<(&str, String)> = ["DRAY_HOME", "DRAY_NO_ANALYTICS"]
@@ -191,7 +197,7 @@ fn spawn_dev(exe: &std::path::Path, log: &std::path::Path) -> Result<()> {
 /// the next launch of the app, or the next login. A dev server has no agent,
 /// so it is signalled by the pid it wrote beside its port.
 pub async fn stop() -> Result<()> {
-    if crate::is_dev() {
+    if as_child() {
         let home = crate::store::get_home_app_dir().await?;
         let written = tokio::fs::read_to_string(home.join(crate::serve::PORT_FILE)).await?;
         let pid: i32 = written.lines().nth(2).and_then(|l| l.trim().parse().ok()).context("no pid in serve-port")?;
