@@ -887,8 +887,8 @@ mod wire_tests {
     }
 
     /// Opus alone, which is the CLI's own gate rather than a taste — it refuses
-    /// fast mode to anything whose resolved model does not name `opus-5` or
-    /// `opus-4-8`. Pinned because `send_msg` clamps the pick against this: a row
+    /// fast mode to anything whose resolved model does not name `opus-5`, and
+    /// Opus 4.8's is retired. Pinned because `send_msg` clamps the pick against this: a row
     /// wrongly marked here would persist `fast: true` on a session running at
     /// ordinary speed, and `dray new` hands that down to every child.
     #[test]
@@ -905,7 +905,7 @@ mod wire_tests {
                 ("opus".to_string(), true),
                 ("claude-fable-5".to_string(), false),
                 ("claude-opus-5".to_string(), true),
-                ("claude-opus-4-8".to_string(), true),
+                ("claude-opus-4-8".to_string(), false),
                 ("sonnet".to_string(), false),
                 ("haiku".to_string(), false),
             ]
