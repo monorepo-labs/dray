@@ -7,11 +7,11 @@ import { Section } from "@/components/home/Section";
 export function Faq() {
   return (
     <Section id="faq" className="py-20">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: FAQ_SCHEMA }} />
       <div className="flex flex-col gap-10 lg:flex-row lg:gap-24">
         <div className="flex shrink-0 flex-col gap-3 lg:w-72">
-          <p className="font-mono text-[11px] leading-[14px] tracking-[0.06em] text-[#7C7C7C] uppercase">FAQ</p>
           <h2 className="font-inter text-[28px] leading-[32px] font-light tracking-[-0.03em] text-white sm:text-[36px] sm:leading-[40px] light:text-[#0A0A0A]">
-            Questions, answered.
+            Frequently Asked Questions
           </h2>
         </div>
         <div className="flex min-w-0 flex-1 flex-col gap-px">
@@ -27,29 +27,40 @@ export function Faq() {
 const FAQ: [string, string][] = [
   [
     "What is Dray?",
-    "One app for every coding agent: Claude Code, Codex, Grok Build and more. Run them on any of your machines, a Mac mini or a Linux server, and use them all from your Mac.",
+    "Dray is one Mac app for every coding agent. Run them on your Mac or on your other machines.",
   ],
   [
-    "Is it free?",
-    "Yes. Dray is free and open source under the Apache 2.0 licence, and runs on the agent subscriptions you already have.",
+    "Is Dray free?",
+    "Yes. Dray is free and open source under Apache 2.0.",
   ],
   [
-    "Which agents does it support?",
-    "Claude Code, Codex, pi, fx and Grok Build. Dray runs the agent CLIs you already use, many sessions at once.",
+    "Which agents does Dray support?",
+    "Dray supports Claude Code, Codex, pi, fx and Grok Build.",
   ],
   [
-    "Do I need new accounts or API keys?",
-    "No. Each agent keeps its own login, and Dray stores none of them. Sign in to an agent once and Dray uses it.",
+    "Is Dray safe to use with my Claude subscription?",
+    "Yes. Dray runs Anthropic's own Claude Code CLI so it works within their terms.",
   ],
   [
-    "Does my code leave my machine?",
-    "Not through Dray. Transcripts, settings and attachments stay in ~/.dray on your machine, and its anonymous usage analytics never carry prompts, code or file paths. Your agents talk to their own providers, as they always do.",
+    "Does Dray send my code off my machine?",
+    "No. Dray keeps your data on your machine. Your agents talk to their own providers, as usual.",
   ],
   [
-    "Does it run on Linux?",
-    "The app is Mac only. Connect a Linux server over SSH and your agents run there, driven from the Mac app.",
+    "Does Dray run on Linux?",
+    "Yes, as a server. Your agents run on Linux, and you drive them from the Dray app on your Mac.",
   ],
 ];
+
+// Google's FAQ rich result; `<` escaped so no answer can close the script tag.
+const FAQ_SCHEMA = JSON.stringify({
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: FAQ.map(([name, text]) => ({
+    "@type": "Question",
+    name,
+    acceptedAnswer: { "@type": "Answer", text },
+  })),
+}).replace(/</g, "\\u003c");
 
 // Height animates through `::details-content` with `interpolate-size`; a
 // browser lacking either just toggles, and reduced motion drops the transition.

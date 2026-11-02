@@ -12,6 +12,7 @@ const LABEL = "font-mono text-[11px] leading-[14px] tracking-[0.06em] text-white
 const LINKS = [
   { label: "Docs", href: "/docs" },
   { label: "Changelog", href: "/changelog" },
+  { label: "llms.txt", href: "/llms.txt" },
   { label: "GitHub", href: REPO, out: true },
   { label: "X", href: FEEDBACK, out: true },
   { label: "Sponsor", href: SPONSOR, out: true },
