@@ -19,6 +19,10 @@
 - Is Dray safe to use with a Claude subscription? Yes. Dray runs Anthropic's own Claude Code CLI, so it works within Anthropic's terms.
 - Does Dray run on Linux? Yes, as a server, driven from the Mac app.
 
+## Sponsored by
+
+- Guillermo Rauch, CEO of Vercel, through his [OSS Grants](https://rauchg-oss-grants.vercel.app/).
+
 ## Links
 
 - [Download for Mac](https://downloads.drayhq.com/Dray_universal.dmg)
