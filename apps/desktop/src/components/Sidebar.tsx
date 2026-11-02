@@ -1,5 +1,5 @@
 import { Cog6ToothIcon } from "@heroicons/react/16/solid";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -1050,6 +1050,14 @@ export default function Sidebar({
   // index is one file parsed whole however few entries are asked for.
   const [settledLimit, setSettledLimit] = useState(SETTLED_STEP);
   const listRef = useRef<HTMLDivElement>(null);
+  // Overlay scrollbars (macOS "Automatic") reserve no gutter, so the list
+  // needs right padding of its own. Measured when the list mounts, which a
+  // collapsed sidebar defers since it renders nothing.
+  const [noGutter, setNoGutter] = useState(false);
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (el) setNoGutter(el.offsetWidth === el.clientWidth);
+  }, [collapsed]);
   // Reset on the press, not on the rows landing: the request moves first, so
   // the window is already at its first step by the time the settled rows
   // arrive, and the read's commit draws one step rather than wherever the
@@ -1337,11 +1345,15 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* No right padding: the scrollbar gutter is the right-hand spacing. The
-          rows balance the track's extra width themselves with `pr-0.5`. */}
+      {/* With classic scrollbars the reserved gutter is the right-hand spacing,
+          and the rows balance the track's extra width with `pr-0.5`. Overlay
+          scrollbars reserve none, so the list takes `pr-2` to match above. */}
       <div
         ref={listRef}
-        className="scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2 pr-0"
+        className={cn(
+          "scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2",
+          noGutter ? "pr-2" : "pr-0",
+        )}
         // Nearing the bottom opens the settled window further. Bound to the
         // container that already scrolls rather than to a sentinel row and an
         // observer, which is one more thing to mount per step.
