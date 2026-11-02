@@ -8,10 +8,14 @@ import type { MessageSender } from "@/types/events";
 /// *silently* — taking part of what was actually said with it. Building the
 /// exact string from the same `MessageSender` the backend built it from can
 /// only fail the safe way: no match, nothing stripped, the line stays drawn.
-export function senderPrefix(from: MessageSender): string {
-  const where = from.machine ? ` on ${from.machine}, which this machine cannot message back` : "";
+export function senderPrefix(from: MessageSender, wording = ""): string {
+  const where = from.machine ? ` on ${from.machine}${wording}` : "";
   return `[message from the Dray session "${from.title}" (${from.sessionId})${where}]\n\n`;
 }
+
+/// What a remote sender's line said before #760, when trust ran one way.
+/// Still in transcripts, so still taken off.
+const ONE_WAY = ", which this machine cannot message back";
 
 /// The relayed text as the reader wants it — the sender's line taken off.
 ///
@@ -21,6 +25,8 @@ export function senderPrefix(from: MessageSender): string {
 export function stripSenderPrefix(text: string, from: MessageSender | null | undefined): string {
   if (!from) return text;
 
-  const prefix = senderPrefix(from);
-  return text.startsWith(prefix) ? text.slice(prefix.length) : text;
+  for (const prefix of [senderPrefix(from), senderPrefix(from, ONE_WAY)]) {
+    if (text.startsWith(prefix)) return text.slice(prefix.length);
+  }
+  return text;
 }

@@ -22,6 +22,9 @@ const SSH: &str = "/usr/bin/ssh";
 const KEYSCAN: &str = "/usr/bin/ssh-keyscan";
 const KEYGEN: &str = "/usr/bin/ssh-keygen";
 
+/// The machine logging in, in a failure's words: a Linux server runs this too.
+const HERE: &str = if cfg!(target_os = "macos") { "This Mac" } else { "This machine" };
+
 /// Where `dray-serve` listens on the server, as `dray setup` leaves it.
 const REMOTE_PORT: u16 = dray_proto::SERVE_PORT;
 
@@ -168,7 +171,7 @@ impl Failure {
 /// A live login carrying the forward. Dropping it kills `ssh`, which closes the
 /// forwarded socket, which is how the connection on top of it learns.
 pub struct Tunnel {
-    _child: Child,
+    child: Child,
     // Held open: the remote script ends in `exec cat`, which exits on EOF.
     _stdin: ChildStdin,
     _stdout: BufReader<ChildStdout>,
@@ -180,6 +183,11 @@ pub struct Tunnel {
 }
 
 impl Tunnel {
+    /// Whether `ssh` is still up, and with it the forward.
+    pub fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
     /// ssh's last word, for a connection that dropped while this was up — a
     /// refused forward, a dead link.
     pub fn said(&self) -> Option<String> {
@@ -267,7 +275,7 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
     let host = target.host();
     match outcome {
         Ok(Ok(Ok(token))) if !token.is_empty() => {
-            Ok(Tunnel { _child: child, _stdin: stdin, _stdout: stdout, port, token, address, stderr })
+            Ok(Tunnel { child, _stdin: stdin, _stdout: stdout, port, token, address, stderr })
         }
         Ok(Ok(Ok(_) | Err("notoken"))) => Err(Failure::new(
             format!("Dray is on {host} but its server has never run there."),
@@ -318,11 +326,11 @@ async fn classify(stderr: &str, target: &Target) -> Failure {
     if stderr.contains("Host key verification failed") {
         return match scan(target).await {
             Ok(key) => Failure::new(
-                format!("This Mac has never connected to {host}."),
+                format!("{HERE} has never connected to {host}."),
                 Some(Fix::TrustHost { host: key.host, key_type: key.key_type, fingerprint: key.fingerprint }),
                 true,
             ),
-            Err(e) => Failure::new(format!("This Mac has never connected to {host}, and {e}"), None, true),
+            Err(e) => Failure::new(format!("{HERE} has never connected to {host}, and {e}"), None, true),
         };
     }
     if stderr.contains("Permission denied") {

@@ -45,8 +45,7 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 
-    /// Run this on another machine the Dray app connects to, as `dray machine
-    /// ls` names it. `session ls` also takes `all`. A session id finds its
+    /// Run this on another machine, as `dray machine ls` names it. `session ls` also takes `all`. A session id finds its
     /// machine on its own.
     #[arg(long, global = true, value_name = "NAME")]
     machine: Option<String>,
@@ -72,7 +71,7 @@ enum Command {
     /// live ones, or stop one.
     #[command(arg_required_else_help = true, args_conflicts_with_subcommands = true)]
     Share(ShareArgs),
-    /// The machines the app connects to: add, list, rename, connect, remove.
+    /// The machines this one reaches: add, list, rename, connect, remove.
     #[command(subcommand, arg_required_else_help = true)]
     Machine(machine::MachineCommand),
     /// This machine's Dray server: install, start, stop, run in the foreground.
@@ -1092,7 +1091,7 @@ fn on_machine(session: &SessionSummary) -> String {
 }
 
 /// One request, one response, connection closed. With `--machine` the request
-/// rides inside `on_machine`, and this machine's app carries it there.
+/// rides inside `on_machine`, and this machine's server carries it there.
 fn send(request: Request) -> Result<Response, String> {
     let endpoint = dray_proto::endpoint().ok_or("could not work out where Dray is listening")?;
     let request = match MACHINE.get() {

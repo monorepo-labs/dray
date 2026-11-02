@@ -265,7 +265,7 @@ async fn route(request: Request, app: &Sink) -> Result<Response> {
     if let Request::OnMachine(on) = request {
         return on_machine(&on.machine, *on.request).await;
     }
-    #[cfg(feature = "desktop")]
+    #[cfg(any(feature = "serve", feature = "desktop"))]
     if let Some(id) = session_named(&request) {
         if store::get_session_index_item(id).await?.is_none() {
             if let Some(machine) = elsewhere::locate(id).await {
@@ -277,7 +277,7 @@ async fn route(request: Request, app: &Sink) -> Result<Response> {
 }
 
 /// The session a verb acts on, for [`route`] to look for elsewhere.
-#[cfg(feature = "desktop")]
+#[cfg(any(feature = "serve", feature = "desktop"))]
 fn session_named(request: &Request) -> Option<&str> {
     match request {
         Request::SendMessage(r) => Some(&r.session_id),
@@ -307,7 +307,7 @@ fn this_machine_only(request: &Request) -> bool {
     )
 }
 
-#[cfg(feature = "desktop")]
+#[cfg(any(feature = "serve", feature = "desktop"))]
 async fn on_machine(machine: &str, request: Request) -> Result<Response> {
     if this_machine_only(&request) {
         bail!("`dray machine` and `dray server` act on this machine alone — drop --machine");
@@ -321,15 +321,15 @@ async fn on_machine(machine: &str, request: Request) -> Result<Response> {
     elsewhere::forward(machine, &elsewhere::prepare(request).await?).await
 }
 
-/// A `dray-serve` holds no connections; the Mac app that added it does.
-#[cfg(not(feature = "desktop"))]
+/// A build with no serve wire has no client half to reach one with.
+#[cfg(not(any(feature = "serve", feature = "desktop")))]
 async fn on_machine(_machine: &str, _request: Request) -> Result<Response> {
-    bail!("this machine reaches no others — run this on the Mac whose Dray app added them")
+    bail!("this build reaches no other machines")
 }
 
-/// What a Mac forwarding a request knows and the machine it lands on cannot
-/// look up: the calling session, the sender, and which repository a path on
-/// the Mac names. The serve command `orchestrate` takes it as its arguments.
+/// What a machine forwarding a request knows and the one it lands on cannot
+/// look up: the calling session, the sender, and which repository a path
+/// there names. The serve command `orchestrate` takes it as its arguments.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Forward {
@@ -425,34 +425,49 @@ async fn localize(request: &mut Request, origin: Option<&str>) -> Result<()> {
     )
 }
 
-/// Reaching other machines, which only the Mac app's connections can do: the
-/// Mac's server asks the app through `host_call`, as `dray machine` does.
-#[cfg(feature = "desktop")]
+/// Reaching other machines, through this server's own links to them
+/// ([`crate::machines`]) — never the app's, so it works with the window closed
+/// and on a server that has no app at all.
+#[cfg(any(feature = "serve", feature = "desktop"))]
 mod elsewhere {
     use super::*;
+    use crate::machines;
     use anyhow::anyhow;
-    use serde_json::{json, Value};
+    use serde_json::json;
 
-    /// Asks the app, from the server it hosts or from inside it.
-    async fn ask_app(cmd: &str, args: Value) -> Result<Value> {
-        let answer = if crate::is_server() {
-            crate::serve::host_call(cmd, args)
-                .await
-                .context("other machines are reached through the Dray app — open it and run this again")?
-        } else {
-            answer_host(cmd, args).await.map_err(Value::from)
-        };
-        answer.map_err(|e| anyhow!(e.as_str().map(str::to_string).unwrap_or_else(|| e.to_string())))
-    }
-
-    /// The connected machine holding session `id`, where one does.
+    /// The machine holding session `id`, where one does. Every machine is
+    /// asked at once, each given [`machines::SWEEP`].
     pub async fn locate(id: &str) -> Option<String> {
-        ask_app("locate", json!({ "sessionId": id })).await.ok()?.as_str().map(str::to_string)
+        let list: Vec<_> = machines::load().await.into_iter().filter(|m| !m.off).collect();
+        let asks = list.iter().map(|m| async move {
+            let row =
+                tokio::time::timeout(machines::SWEEP, machines::call(m, "session_index_item", json!({ "sessionId": id })))
+                    .await;
+            matches!(row, Ok(Ok(ref row)) if !row.is_null()).then(|| m.id.clone())
+        });
+        futures_util::future::join_all(asks).await.into_iter().flatten().next()
     }
 
+    /// Runs a prepared request on `machine`, a name or an id, and marks every
+    /// session it answers with as that machine's.
     pub async fn forward(machine: &str, forward: &Forward) -> Result<Response> {
-        let answer = ask_app("forward", json!({ "machine": machine, "forward": forward })).await?;
-        Ok(serde_json::from_value(answer)?)
+        let saved = machines::on(machine).await.map_err(anyhow::Error::msg)?;
+        let answer = machines::call(&saved, "orchestrate", serde_json::to_value(forward)?).await.map_err(|e| {
+            match e.starts_with("unknown command") {
+                true => anyhow!("{}'s Dray server is too old to take dray requests — update it", saved.name),
+                false => anyhow!(e),
+            }
+        })?;
+        let mut response: Response = serde_json::from_value(answer)?;
+        let rows: Vec<&mut SessionSummary> = match &mut response {
+            Response::Created { session, .. } | Response::Session { session } => vec![session],
+            Response::Listed { sessions } => sessions.iter_mut().collect(),
+            _ => vec![],
+        };
+        for row in rows {
+            row.machine = Some(saved.name.clone());
+        }
+        Ok(response)
     }
 
     /// Fills in what only this machine's index knows before a request leaves:
@@ -480,8 +495,9 @@ mod elsewhere {
                 forward.caller = caller(parent_of(start.parent_session_id.as_deref()).await?.as_ref()).await?;
             }
             Request::SendMessage(send) => {
-                forward.sender =
-                    sender(send).await.map(|from| MessageSender { machine: Some(this_machine()), ..from });
+                if let Some(from) = sender(send).await {
+                    forward.sender = Some(MessageSender { machine: Some(this_machine().await), ..from });
+                }
             }
             Request::ListSessions(list) | Request::ListDrafts(list) | Request::ListShares(list) => {
                 list.project_path = match list.all {
@@ -516,18 +532,10 @@ mod elsewhere {
         }
     }
 
-    /// The name a relayed sender gives this machine, which the far side has
-    /// no list to look up.
-    fn this_machine() -> String {
-        std::process::Command::new("scutil")
-            .args(["--get", "ComputerName"])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|name| name.trim().to_string())
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| "another machine".into())
+    /// The name a relayed sender gives this machine, which the far side may
+    /// hold under a name of its own.
+    async fn this_machine() -> String {
+        tokio::task::spawn_blocking(dray_proto::machine_name).await.unwrap_or_else(|_| "another machine".into())
     }
 
     /// `session ls --machine all`: this machine's sessions, then each
@@ -537,71 +545,16 @@ mod elsewhere {
         let Response::Listed { mut sessions } = list_sessions(list).await? else {
             bail!("listing this machine's sessions answered something else");
         };
-        let servers = match serde_json::from_value(ask_app("request", serde_json::to_value(Request::ListServers)?).await?)? {
-            Response::Servers { servers } => servers,
-            Response::Error { message } => bail!(message),
-            _ => bail!("the app answered the server list with something else"),
-        };
-        let asks = servers
-            .iter()
-            .filter(|s| s.id != crate::servers::LOCAL && s.status == "connected")
-            .map(|s| self::forward(&s.id, &forward));
+        let list: Vec<_> = machines::load().await.into_iter().filter(|m| !m.off).collect();
+        let asks = list.iter().map(|m| tokio::time::timeout(machines::SWEEP, self::forward(&m.id, &forward)));
         // ponytail: a machine that fails to answer is skipped unsaid; give
         // `Listed` a warnings field if agents start missing rows.
         for answer in futures_util::future::join_all(asks).await {
-            if let Ok(Response::Listed { sessions: theirs }) = answer {
+            if let Ok(Ok(Response::Listed { sessions: theirs })) = answer {
                 sessions.extend(theirs);
             }
         }
         Ok(Response::Listed { sessions })
-    }
-
-    /// In the app: the connected machine holding `id`, every one asked at once.
-    pub async fn locate_here(id: &str) -> Value {
-        let servers: Vec<_> = crate::servers::list_servers()
-            .into_iter()
-            .filter(|s| s.id != crate::servers::LOCAL && s.status == crate::servers::ServerStatus::Connected)
-            .collect();
-        let asks = servers.iter().map(|s| async move {
-            let row = tokio::time::timeout(
-                std::time::Duration::from_secs(5),
-                crate::servers::server_invoke(s.id.clone(), "session_index_item".into(), json!({ "sessionId": id })),
-            )
-            .await;
-            matches!(row, Ok(Ok(ref row)) if !row.is_null()).then(|| s.id.clone())
-        });
-        json!(futures_util::future::join_all(asks).await.into_iter().flatten().next())
-    }
-
-    /// In the app: runs a forwarded request on `machine`, a name or an id, and
-    /// marks every session it answers with as that machine's.
-    pub async fn forward_here(machine: &str, forward: Value) -> Result<Value> {
-        let server = server_list::find(machine)?;
-        if server.id == crate::servers::LOCAL {
-            bail!("{} is this machine — drop --machine", server.name);
-        }
-        let answer = crate::servers::server_invoke(server.id.clone(), "orchestrate".into(), forward)
-            .await
-            .map_err(|e| {
-                let e = e.as_str().map(str::to_string).unwrap_or_else(|| e.to_string());
-                match e.starts_with("unknown command") {
-                    true => anyhow!(
-                        "{}'s Dray server is too old to take dray requests — update it in Settings → Servers",
-                        server.name
-                    ),
-                    false => anyhow!(e),
-                }
-            })?;
-        let mut response: Response = serde_json::from_value(answer)?;
-        let rows: Vec<&mut SessionSummary> = match &mut response {
-            Response::Created { session, .. } | Response::Session { session } => vec![session],
-            Response::Listed { sessions } => sessions.iter_mut().collect(),
-            _ => vec![],
-        };
-        for row in rows {
-            row.machine = Some(server.name.clone());
-        }
-        Ok(serde_json::to_value(response)?)
     }
 }
 
@@ -647,7 +600,9 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
 }
 
 /// The Mac's server hands the app what lives in it: browser steps while the
-/// app runs Chromium, the server list always. See MAC-SERVER-PLAN.md.
+/// app runs Chromium, and the machine list while the app is open, since the
+/// app holds that list in memory and rewrites the file whole. See
+/// MAC-SERVER-PLAN.md.
 #[cfg(feature = "desktop")]
 async fn ask_app(request: Request) -> Result<Response> {
     let browser = match &request {
@@ -660,11 +615,9 @@ async fn ask_app(request: Request) -> Result<Response> {
     match crate::serve::host_call("request", serde_json::to_value(&request)?).await {
         Some(Ok(answer)) => Ok(serde_json::from_value(answer)?),
         Some(Err(err)) => Ok(Response::error(err.as_str().map(str::to_string).unwrap_or_else(|| err.to_string()))),
-        // No app, or it left between the two questions.
-        None => match browser {
-            Some(browser) => browse(browser).await,
-            None => bail!("The server list lives in the Dray app. Open it and run this again."),
-        },
+        // No app, or it left between the two questions: the file is this
+        // server's alone until the app opens again and reads it.
+        None => answer_on_screen(request).await,
     }
 }
 
@@ -675,10 +628,6 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
         return reply;
     }
     match cmd {
-        "locate" => Ok(elsewhere::locate_here(args["sessionId"].as_str().unwrap_or_default()).await),
-        "forward" => elsewhere::forward_here(args["machine"].as_str().unwrap_or_default(), args["forward"].clone())
-            .await
-            .map_err(|e| format!("{e:#}")),
         "request" => {
             let request: Request = serde_json::from_value(args).map_err(|e| e.to_string())?;
             let response = answer_on_screen(request).await.unwrap_or_else(|e| Response::error(format!("{e:#}")));
@@ -710,32 +659,43 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
     }
 }
 
-/// Requests answered where the screen is: the browser and the server list.
+/// Requests answered where the screen is: the browser, and the machine list —
+/// the app's own in the app, else this server's file.
 async fn answer_on_screen(request: Request) -> Result<Response> {
     match request {
         Request::Browser(browser) => browse(browser).await,
         #[cfg(feature = "desktop")]
-        Request::AddServer(add) => server_list::add(add).await,
-        #[cfg(feature = "desktop")]
-        Request::ListServers => Ok(Response::Servers {
-            servers: crate::servers::list_servers().into_iter().map(server_list::summarize).collect(),
-        }),
-        #[cfg(feature = "desktop")]
-        Request::RemoveServer(server) => server_list::remove(&server.name).await,
-        #[cfg(feature = "desktop")]
-        Request::RenameServer(rename) => server_list::rename(rename).await,
-        #[cfg(feature = "desktop")]
-        Request::SetServerOn(set) => server_list::set_on(set).await,
-        #[cfg(not(feature = "desktop"))]
-        Request::AddServer(_)
-        | Request::ListServers
-        | Request::RemoveServer(_)
-        | Request::RenameServer(_)
-        | Request::SetServerOn(_) => {
-            bail!("this Dray is a server, and the server list lives in the Mac app — run `dray machine` there")
-        }
+        list if !crate::is_server() => server_list::answer(list).await,
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        list => machine_list(list).await,
+        #[cfg(not(any(feature = "serve", feature = "desktop")))]
         other => bail!("{other:?} is not answered here"),
     }
+}
+
+/// `dray machine` on a server with no app to ask: a Linux `dray-serve`, a
+/// headless Mac, the Mac's own server while the window is closed.
+#[cfg(any(feature = "serve", feature = "desktop"))]
+async fn machine_list(request: Request) -> Result<Response> {
+    use crate::machines;
+    let summarize = |row: machines::Row| dray_proto::ServerSummary {
+        address: row.saved.address(),
+        id: row.saved.id,
+        name: row.saved.name,
+        status: row.status.into(),
+        error: row.error,
+    };
+    let row = match request {
+        Request::ListServers => {
+            return Ok(Response::Servers { servers: machines::list().await.into_iter().map(summarize).collect() });
+        }
+        Request::AddServer(add) => machines::add(add.name, add.address, add.token).await,
+        Request::RemoveServer(server) => machines::remove(&server.name).await,
+        Request::RenameServer(rename) => machines::rename(&rename.name, &rename.new_name).await,
+        Request::SetServerOn(set) => machines::set_on(&set.name, set.on).await,
+        other => bail!("{other:?} is not answered here"),
+    };
+    Ok(Response::Server { server: summarize(row.map_err(anyhow::Error::msg)?) })
 }
 
 /// `dray machine`, through Settings → Servers' own commands, so the CLI is
@@ -744,11 +704,21 @@ async fn answer_on_screen(request: Request) -> Result<Response> {
 #[cfg(feature = "desktop")]
 mod server_list {
     use crate::servers::{self, ServerInfo, ServerStatus};
-    use crate::ssh::{Failure, Fix};
     use anyhow::{bail, Context, Result};
-    use dray_proto::{AddServer, Response, ServerSummary};
+    use dray_proto::{AddServer, Request, Response, ServerSummary};
 
-    pub async fn add(add: AddServer) -> Result<Response> {
+    pub async fn answer(request: Request) -> Result<Response> {
+        match request {
+            Request::AddServer(add) => self::add(add).await,
+            Request::ListServers => Ok(Response::Servers { servers: servers::list_servers().into_iter().map(summarize).collect() }),
+            Request::RemoveServer(server) => remove(&server.name).await,
+            Request::RenameServer(rename) => self::rename(rename).await,
+            Request::SetServerOn(set) => set_on(set).await,
+            other => bail!("{other:?} is not answered here"),
+        }
+    }
+
+    async fn add(add: AddServer) -> Result<Response> {
         let name = Some(add.name);
         let added = match add.token {
             Some(token) => servers::add_server(add.address, token, name).await.map_err(anyhow::Error::msg)?,
@@ -756,32 +726,17 @@ mod server_list {
                 // The whole login, port and user included: `[box]:2222` is the
                 // key the add needs trusted, not `box`'s.
                 let login = crate::ssh::parse(&add.address).map(|t| t.line()).unwrap_or_else(|_| add.address.clone());
-                servers::add_ssh_server(add.address, name).await.map_err(|f| anyhow::anyhow!(ssh_failure(f, &login)))?
+                servers::add_ssh_server(add.address, name)
+                    .await
+                    .map_err(|f| anyhow::anyhow!(crate::machines::explain(f, &login)))?
             }
         };
         Ok(Response::Server { server: summarize(added) })
     }
 
-    /// The Add dialog draws a failure's fix as a control; a terminal gets it as
-    /// words. Trusting a host key stays a person's decision, made in their own
-    /// `ssh`, never on an agent's say-so.
-    fn ssh_failure(failure: Failure, login: &str) -> String {
-        let message = failure.message;
-        match failure.fix {
-            Some(Fix::Copy { command }) => format!("{message}\n  {command}"),
-            Some(Fix::TrustHost { key_type, fingerprint, .. }) => format!(
-                "{message} Its {key_type} key is {fingerprint}. If that is right, run `{login}` once in a \
-                 terminal to trust it, then add it again."
-            ),
-            Some(Fix::Install) => format!("{message} Add it from the app's Settings → Servers, which can install it."),
-            // A reconnect's fix, never an add's; the sentence already says it.
-            Some(Fix::NewAddress) | None => message,
-        }
-    }
-
     /// By name, or by id where two servers share one. An id wins outright, or
     /// a server renamed to another's id would make the cure ambiguous too.
-    pub(super) fn find(name: &str) -> Result<ServerInfo> {
+    fn find(name: &str) -> Result<ServerInfo> {
         let list = servers::list_servers();
         if let Some(server) = list.iter().find(|s| s.id == name) {
             return Ok(server.clone());
@@ -802,13 +757,13 @@ mod server_list {
     }
 
     /// Takes the token with it.
-    pub async fn remove(name: &str) -> Result<Response> {
+    async fn remove(name: &str) -> Result<Response> {
         let server = find(name)?;
         servers::remove_server(server.id.clone()).await.map_err(anyhow::Error::msg)?;
         Ok(Response::Server { server: summarize(server) })
     }
 
-    pub async fn rename(rename: dray_proto::RenameServer) -> Result<Response> {
+    async fn rename(rename: dray_proto::RenameServer) -> Result<Response> {
         let id = find(&rename.name)?.id;
         servers::rename_server(id.clone(), rename.new_name).await.map_err(anyhow::Error::msg)?;
         Ok(Response::Server { server: summarize(current(&id)?) })
@@ -817,7 +772,7 @@ mod server_list {
     /// On waits for the attempt to settle, so `dray machine connect` answers
     /// whether it connected rather than "connecting". A whole SSH connect is
     /// capped at 45s; past that the answer is the row as it stands.
-    pub async fn set_on(set: dray_proto::SetServerOn) -> Result<Response> {
+    async fn set_on(set: dray_proto::SetServerOn) -> Result<Response> {
         let id = find(&set.name)?.id;
         servers::set_server_on(id.clone(), set.on).await.map_err(anyhow::Error::msg)?;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(50);
@@ -827,19 +782,12 @@ mod server_list {
         Ok(Response::Server { server: summarize(current(&id)?) })
     }
 
-    pub fn summarize(server: ServerInfo) -> ServerSummary {
+    fn summarize(server: ServerInfo) -> ServerSummary {
         let status = match server.on {
             true => serde_json::to_value(server.status).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
             false => "off".to_string(),
         };
         ServerSummary { id: server.id, name: server.name, address: server.ssh.unwrap_or(server.url), status, error: server.error }
-    }
-
-    #[test]
-    fn trust_advice_names_the_whole_login() {
-        let fix = Fix::TrustHost { host: "box".into(), key_type: "ED25519".into(), fingerprint: "SHA256:x".into() };
-        let said = ssh_failure(Failure { message: "Never met box.".into(), fix: Some(fix), permanent: true }, "ssh -p 2222 me@box");
-        assert!(said.contains("run `ssh -p 2222 me@box` once"), "{said}");
     }
 }
 
@@ -1550,16 +1498,16 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
 /// sessions. The id rides along because it is the address: the agent answers
 /// with `dray send <id>` rather than paying a `dray ls` to work out who asked.
 ///
-/// A sender on another machine is named with it, and said to be out of reach:
-/// trust runs one way, so nothing here can message the machine that added it.
+/// A sender on another machine is named with it. `dray session send <id>`
+/// finds that machine where this one holds a token for it.
 fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
     match from {
         Some(MessageSender { session_id, title, machine: None }) => {
             format!("[message from the Dray session \"{title}\" ({session_id})]\n\n{prompt}")
         }
-        Some(MessageSender { session_id, title, machine: Some(machine) }) => format!(
-            "[message from the Dray session \"{title}\" ({session_id}) on {machine}, which this machine cannot message back]\n\n{prompt}"
-        ),
+        Some(MessageSender { session_id, title, machine: Some(machine) }) => {
+            format!("[message from the Dray session \"{title}\" ({session_id}) on {machine}]\n\n{prompt}")
+        }
         None => prompt.to_string(),
     }
 }
@@ -1777,10 +1725,10 @@ mod tests {
         assert!(prompt.ends_with("review is done"));
     }
 
-    /// A sender on another machine is named with it, and the agent is told it
-    /// cannot answer, since nothing here reaches the machine that added it.
+    /// A sender on another machine is named with it, so the agent knows where
+    /// its answer goes.
     #[test]
-    fn a_sender_on_another_machine_is_named_and_out_of_reach() {
+    fn a_sender_on_another_machine_is_named() {
         let from = MessageSender {
             session_id: "abc-123".into(),
             title: "Fan out".into(),
@@ -1788,7 +1736,7 @@ mod tests {
         };
         assert_eq!(
             attribute("go", Some(&from)),
-            "[message from the Dray session \"Fan out\" (abc-123) on Yogesh's Mac, which this machine cannot message back]\n\ngo"
+            "[message from the Dray session \"Fan out\" (abc-123) on Yogesh's Mac]\n\ngo"
         );
     }
 
