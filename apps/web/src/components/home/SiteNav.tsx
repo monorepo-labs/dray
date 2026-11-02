@@ -29,7 +29,7 @@ export async function SiteNav() {
         <a href="/docs" className={`${NAV_CELL} hidden w-[72px] sm:flex`}>
           Docs
         </a>
-        <a href={SPONSOR} target="_blank" rel="noopener noreferrer" className={`${NAV_CELL} hidden w-24 sm:flex`}>
+        <a href={SPONSOR} className={`${NAV_CELL} hidden w-24 sm:flex`}>
           Sponsor
         </a>
         <a

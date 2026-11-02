@@ -27,7 +27,7 @@ export function SupportLink({
   children,
 }: {
   href: string;
-  to: "patreon" | "github" | "x" | "dmg";
+  to: "github" | "x" | "dmg";
   className: string;
   children: React.ReactNode;
 }) {

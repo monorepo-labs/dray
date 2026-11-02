@@ -4,9 +4,10 @@ import type { ReactNode } from "react";
 import { GitHubGlyph } from "@/components/GitHubGlyph";
 import { Closing } from "@/components/home/Closing";
 import { SiteNav } from "@/components/home/SiteNav";
+import { Support } from "@/components/home/Support";
 import { XGlyph } from "@/components/XGlyph";
 import { fetchStars, formatStars } from "@/lib/github";
-import { DOWNLOAD, FEEDBACK, REPO, SPONSOR } from "@/lib/links";
+import { DOWNLOAD, FEEDBACK, REPO } from "@/lib/links";
 
 import { StartDownload, SupportLink } from "./client";
 
@@ -30,7 +31,7 @@ const STEPS: ReactNode[] = [
 ];
 
 /// Where every Download button lands: the dmg starts on its own, and the wait
-/// is spent on install steps and the one ask the site makes.
+/// is spent on the one ask the site makes, then install steps.
 export default async function Download() {
   const stars = await fetchStars();
 
@@ -60,6 +61,10 @@ export default async function Download() {
               .
             </p>
 
+            <div className="mt-12">
+              <Support from="download" />
+            </div>
+
             <section className="mt-16">
               <h2 className={LABEL}>Install</h2>
               <ol className={`mt-4 border-t ${RULE}`}>
@@ -72,26 +77,6 @@ export default async function Download() {
               </ol>
             </section>
 
-            <section className={`mt-16 border p-6 sm:p-8 ${RULE} bg-white/[0.04] light:bg-[#F4F4F5]`}>
-              <h2 className={LABEL}>A note from Yogesh</h2>
-              <div className="mt-4 max-w-[560px] space-y-4 text-[16px] leading-[26px] text-[#CFCFCF] light:text-[#3D3D3D]">
-                <p>
-                  Dray is free and open source, and I build it on my own. Every harness, every release and every fix
-                  comes from one person.
-                </p>
-                <p>
-                  If it saves you time, sponsoring it on Patreon is what keeps it going. Any amount helps, and it means
-                  I can spend more of my days on Dray.
-                </p>
-              </div>
-              <SupportLink
-                href={SPONSOR}
-                to="patreon"
-                className="mt-8 inline-flex h-10 items-center rounded-[6px] bg-white px-4 text-[14px] leading-5 font-medium text-[#0B0B0F] shadow-[inset_0_-1px_0_#4D4C4C,0_1px_2px_#00000040] transition-opacity hover:opacity-90 light:bg-[#0A0A0A] light:text-white light:shadow-[inset_0_-1px_0_#000,0_1px_2px_#00000040]"
-              >
-                Sponsor on Patreon
-              </SupportLink>
-            </section>
 
             <section className="mt-16">
               <h2 className={LABEL}>Other ways to help</h2>
