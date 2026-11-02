@@ -101,10 +101,15 @@ pub async fn save(list: &[Saved]) -> Result<(), String> {
     write(list).await
 }
 
+/// The server's own write, made only while no app is connected to it. One
+/// that connected meanwhile read its list before this landed, so it is told
+/// to read again; [`crate::serve`] tells every app that connects the same.
 async fn write(list: &[Saved]) -> Result<(), String> {
     let path = path().await.map_err(|e| e.to_string())?;
     let body = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
-    store::write_atomic(&path, body).await.map_err(|e| format!("{e:#}"))
+    store::write_atomic(&path, body).await.map_err(|e| format!("{e:#}"))?;
+    tokio::spawn(crate::serve::host_call("reload_servers", Value::Null));
+    Ok(())
 }
 
 /// Spelled the way a reader types it — `host:port`, `http://…`, `ws://…`, or
@@ -195,6 +200,18 @@ fn tunnels() -> std::sync::MutexGuard<'static, HashMap<String, ssh::Tunnel>> {
     TUNNELS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+fn opening(id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    OPENING.lock().unwrap_or_else(|e| e.into_inner()).entry(id.to_string()).or_default().clone()
+}
+
+/// Drops `id`'s kept login, after any login still opening for it, so one
+/// finishing late cannot put itself back.
+async fn forget(id: &str) {
+    let opening = opening(id);
+    let _opening = opening.lock().await;
+    tunnels().remove(id);
+}
+
 /// A live tunnel's address and token.
 fn kept(id: &str) -> Option<(String, String)> {
     let mut tunnels = tunnels();
@@ -216,7 +233,7 @@ async fn reach(saved: &Saved) -> Result<(String, String), String> {
     let Some(target) = &saved.ssh else {
         return Ok((saved.url.clone(), token));
     };
-    let opening = OPENING.lock().unwrap_or_else(|e| e.into_inner()).entry(saved.id.clone()).or_default().clone();
+    let opening = opening(&saved.id);
     let _opening = opening.lock().await;
     if let Some(reach) = kept(&saved.id) {
         return Ok(reach);
@@ -224,7 +241,15 @@ async fn reach(saved: &Saved) -> Result<(String, String), String> {
     match ssh::open(target, |_| {}).await {
         Ok(tunnel) => {
             let reach = (format!("ws://127.0.0.1:{}", tunnel.port), tunnel.token.clone());
-            tunnels().insert(saved.id.clone(), tunnel);
+            // Removed or turned off while this logged in: used once, not kept.
+            if load().await.iter().any(|s| s.id == saved.id && !s.off) {
+                tunnels().insert(saved.id.clone(), tunnel);
+            } else {
+                tokio::spawn(async move {
+                    tokio::time::sleep(CALL).await;
+                    drop(tunnel);
+                });
+            }
             Ok(reach)
         }
         Err(_) if !saved.url.is_empty() => Ok((saved.url.clone(), token)),
@@ -258,10 +283,24 @@ async fn admit(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
     admit_with(url, json!({ "v": crate::serve::PROTOCOL, "token": token })).await
 }
 
+/// An admitted socket to `saved`. A kept login the server refuses — its token
+/// moved, its forward died — is dropped, so the next call logs in afresh.
+async fn connect(saved: &Saved) -> Result<Socket, String> {
+    let (url, token) = reach(saved).await?;
+    match admit(&url, &token).await {
+        Ok((ws, _)) => Ok(ws),
+        Err(e) => {
+            if saved.ssh.is_some() {
+                forget(&saved.id).await;
+            }
+            Err(e)
+        }
+    }
+}
+
 /// Runs serve command `cmd` on `saved`: connect, ask, close.
 pub async fn call(saved: &Saved, cmd: &str, args: Value) -> Result<Value, String> {
-    let (url, token) = reach(saved).await?;
-    let (mut ws, _) = admit(&url, &token).await.map_err(|e| format!("{}: {e}", saved.name))?;
+    let mut ws = connect(saved).await.map_err(|e| format!("{}: {e}", saved.name))?;
     ws.send(Message::text(json!({ "id": 1, "cmd": cmd, "args": args }).to_string()))
         .await
         .map_err(|e| e.to_string())?;
@@ -328,13 +367,11 @@ async fn probe(saved: Saved) -> Row {
     if saved.off {
         return Row { saved, status: "off", error: None };
     }
-    let reached = async {
-        let (url, token) = reach(&saved).await?;
-        admit(&url, &token).await?.0.close(None).await.ok();
-        Ok::<_, String>(())
-    };
-    match reached.await {
-        Ok(()) => Row { saved, status: "connected", error: None },
+    match connect(&saved).await {
+        Ok(mut ws) => {
+            ws.close(None).await.ok();
+            Row { saved, status: "connected", error: None }
+        }
         Err(e) => Row { saved, status: "disconnected", error: Some(e) },
     }
 }
@@ -357,6 +394,8 @@ fn refuse_taken(list: &[Saved], name: &str, except: Option<&str>) -> Result<(), 
 /// `None`. It must admit us first; only a machine that did is saved.
 pub async fn add(name: String, address: String, token: Option<String>) -> Result<Row, String> {
     let name = Some(name.trim().to_string()).filter(|n| !n.is_empty());
+    // A fresh login, which replaces any kept one once the row is saved.
+    let mut fresh = None;
     let (mut saved, token) = match token {
         Some(token) => {
             let url = normalize(&address)?;
@@ -388,6 +427,7 @@ pub async fn add(name: String, address: String, token: Option<String>) -> Result
             // later login fails; without one there is nothing to keep.
             let url = tunnel.address.as_deref().and_then(|a| normalize(a).ok()).unwrap_or_default();
             let token = (!url.is_empty()).then(|| tunnel.token.clone());
+            fresh = Some(tunnel);
             let saved = Saved {
                 id: String::new(),
                 name: String::new(),
@@ -425,6 +465,11 @@ pub async fn add(name: String, address: String, token: Option<String>) -> Result
     }
     crate::issues::set_credential(&credential_name(&saved.id), token.as_deref()).await?;
     write(&list).await?;
+    drop(_guard);
+    forget(&saved.id).await;
+    if let Some(tunnel) = fresh {
+        tunnels().insert(saved.id.clone(), tunnel);
+    }
     Ok(Row { saved, status: "connected", error: None })
 }
 
@@ -436,7 +481,8 @@ pub async fn remove(name: &str) -> Result<Row, String> {
     list.retain(|s| s.id != saved.id);
     write(&list).await?;
     crate::issues::set_credential(&credential_name(&saved.id), None).await?;
-    tunnels().remove(&saved.id);
+    drop(_guard);
+    forget(&saved.id).await;
     Ok(Row { saved, status: "off", error: None })
 }
 
@@ -470,7 +516,7 @@ pub async fn set_on(name: &str, on: bool) -> Result<Row, String> {
         list.swap_remove(at)
     };
     if !on {
-        tunnels().remove(&saved.id);
+        forget(&saved.id).await;
     }
     Ok(probe(saved).await)
 }

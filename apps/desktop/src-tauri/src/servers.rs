@@ -313,6 +313,38 @@ async fn save() -> Result<(), String> {
     crate::machines::save(&list).await
 }
 
+/// Brings the connections in line with `servers.json`, which the Mac's server
+/// writes itself while this app is not connected to it (#760). Its server
+/// asks for this as the app connects, and after any write landing meanwhile.
+pub async fn reload() {
+    let saved = crate::machines::load().await;
+    {
+        let mut list = conns();
+        list.retain_mut(|conn| {
+            let kept = conn.saved.id == LOCAL || saved.iter().any(|s| s.id == conn.saved.id);
+            if !kept {
+                if let Some(task) = conn.task.take() {
+                    task.abort();
+                }
+            }
+            kept
+        });
+        for saved in saved {
+            match list.iter_mut().find(|c| c.saved.id == saved.id) {
+                Some(conn) => {
+                    let moved = conn.saved.url != saved.url || conn.saved.ssh != saved.ssh || conn.saved.off != saved.off;
+                    conn.saved = saved;
+                    if moved {
+                        conn.restart();
+                    }
+                }
+                None => list.push(Conn::new(saved)),
+            }
+        }
+    }
+    announce();
+}
+
 /// Reads `servers.json` and opens a connection to each. Called once, at setup.
 pub async fn start(sink: Sink) {
     let _ = SINK.set(sink);

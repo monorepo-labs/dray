@@ -633,6 +633,10 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
             let response = answer_on_screen(request).await.unwrap_or_else(|e| Response::error(format!("{e:#}")));
             serde_json::to_value(response).map_err(|e| e.to_string())
         }
+        "reload_servers" => {
+            crate::servers::reload().await;
+            Ok(serde_json::Value::Null)
+        }
         "show_session" => {
             let id = args["sessionId"].as_str().ok_or("show_session wants a sessionId")?;
             let app = crate::transcription::app().ok_or("Dray is not ready yet.")?;

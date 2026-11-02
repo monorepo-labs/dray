@@ -1076,6 +1076,9 @@ async fn connection(
     let offer = hello.and_then(|h| h.host);
     if let Some(offer) = offer {
         *host() = Some(Host { connection, browser: offer.browser, frames: replies.clone(), waiting: HashMap::new() });
+        // This server writes the machine list itself while no app is
+        // connected, so the copy the app read at launch may be stale (#760).
+        tokio::spawn(host_call("reload_servers", Value::Null));
     }
 
     // Not `?`: a reset must still reach the cleanup below, or a call
