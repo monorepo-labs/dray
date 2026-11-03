@@ -3,6 +3,8 @@ import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import Spinner from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import ShortcutKeys from "@/components/ShortcutKeys";
+import { useHotkey } from "@/hooks/useHotkey";
 import {
   updateAgent,
   updateAgentInTerminal,
@@ -27,6 +29,12 @@ export default function AgentUpdateLine({
   waiting: boolean;
 }) {
   const { updates, running, done, failed } = useAgentUpdates();
+  const update = updates.find((u) => u.harness === harness);
+  const held = waiting || running !== null;
+  // Bound only while the Update button is up and clickable, so ⌘U stays free
+  // everywhere else.
+  const ready = done !== harness && !!update && failed?.harness !== harness;
+  useHotkey("agent.update", () => void updateAgent(harness), { enabled: ready && !held });
 
   if (done === harness) {
     return (
@@ -37,7 +45,6 @@ export default function AgentUpdateLine({
     );
   }
 
-  const update = updates.find((u) => u.harness === harness);
   if (!update) return null;
 
   if (failed?.harness === harness) {
@@ -61,7 +68,6 @@ export default function AgentUpdateLine({
   const busy = running === harness;
   // `aria-disabled` rather than `disabled`, `UpdateRow`'s reason: the wait is
   // explained in a tooltip, and a disabled button opens none.
-  const held = waiting || running !== null;
   const button = (
     <Button
       type="button"
@@ -81,6 +87,7 @@ export default function AgentUpdateLine({
       <span className="min-w-0 truncate text-accent-add">
         {update.label} update available
       </span>
+      {!busy && <ShortcutKeys ids={["agent.update"]} className={held ? "opacity-50" : undefined} />}
       {waiting && !busy ? (
         <Tooltip>
           <TooltipTrigger asChild>{button}</TooltipTrigger>

@@ -106,6 +106,7 @@ export const SHORTCUTS = [
   { id: "project.next", label: "Next project in picker", group: "Composer", chord: k("p", { shift: true }) },
   { id: "queue.send", label: "Send queued prompts now", group: "Composer", chord: k("Enter") },
   { id: "composer.draft", label: "Save as draft", group: "Composer", chord: k("s") },
+  { id: "agent.update", label: "Update the agent's CLI", group: "Composer", chord: k("u") },
 
   { id: "notice.take", label: "Open the notification", group: "Notifications", chord: k("g") },
   { id: "notice.delete", label: "Delete worktree from notification", group: "Notifications", chord: k("d", { shift: true }) },
@@ -141,6 +142,7 @@ export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord | null>> = {
   "tab.next": null,
   "tab.reopen": null,
   "mode.toggle": null,
+  "agent.update": null,
 };
 
 export const SHORTCUT_GROUPS: ShortcutGroup[] = [
