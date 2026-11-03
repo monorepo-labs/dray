@@ -34,6 +34,8 @@ pub mod cef;
 pub mod chromium;
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 mod trackpad;
+#[cfg(all(feature = "desktop", target_os = "macos"))]
+mod cli;
 // `dray browser` on a server: a headless Chromium under the same verbs the
 // Mac's CEF answers. In the desktop build too, since that binary is also the
 // Mac's background server. See HEADLESS-PLAN.md.
@@ -769,6 +771,8 @@ pub fn run() {
             cef::init(app.handle());
             #[cfg(target_os = "macos")]
             trackpad::watch(app.handle());
+            #[cfg(target_os = "macos")]
+            cli::install();
             // Dictations kept past a failure. Pruning on write alone left the
             // last one on disk forever, since nothing else sweeps them and a
             // reader who gives up after one failure writes no more.

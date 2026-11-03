@@ -50,12 +50,12 @@ The `dray` command line and the app must speak the same version. The message nam
 
 | Message | Fix |
 |---|---|
-| "this dray CLI speaks protocol vN, the app speaks vM — run `dray update`" | The CLI is behind. Run `dray update`. |
+| "this dray CLI speaks protocol vN, the app speaks vM — run `dray update`" | The CLI is behind. On a Mac, quit and reopen Dray, which puts its own CLI back in `~/.local/bin`. Elsewhere, run `dray update`. |
 | "… — update the Dray app" | The app is behind. Update it in Settings → About → Updates. |
 | "Dray isn't running. Start the app and try again." | Open Dray. On a Linux server, start it with `dray server start`. |
 | "permission denied reaching Dray at …" | Dray may well be running. A sandbox around the command, or the folder's permissions, blocked it. Run that one command outside the sandbox. |
 
-The app updates an installed `dray` CLI by itself on the first launch of each new app version. See [the dray CLI](/cli).
+On a Mac, the app ships the `dray` CLI and installs it each time it starts. See [the dray CLI](/cli).
 
 ## Dictation records nothing
 

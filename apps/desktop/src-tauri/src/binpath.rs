@@ -292,10 +292,10 @@ async fn speaks_app_server(bin: &Path) -> bool {
     String::from_utf8_lossy(&output.stdout).contains("app-server")
 }
 
-/// The installed `dray` CLI, or `None`. Uncached: it is asked once per app
-/// version, and the reader may install it between two asks.
-pub async fn dray() -> Option<PathBuf> {
-    resolve("dray").await
+/// The `dray` the reader's own shell runs, which a CLI installed with
+/// `DRAY_INSTALL_DIR` can put ahead of the app's copy in `~/.local/bin`.
+pub async fn shell_dray() -> Option<PathBuf> {
+    login_shell_which("dray").await
 }
 
 /// Looks for `bin` on the inherited `PATH`, then in the usual install

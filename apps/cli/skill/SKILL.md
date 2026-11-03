@@ -473,6 +473,10 @@ have.
 have, which repairs a damaged binary. A beta build updates to betas and a stable
 one to stable releases; `--channel beta` or `--channel stable` switches.
 
+On a Mac with the Dray app, the app ships this CLI and puts it in
+`~/.local/bin` each launch, so `dray update` there says so and does nothing.
+Updating the app is how the CLI moves.
+
 The app and this CLI ship separately, so they can drift. When they disagree about
 the protocol the app **refuses the command** — every command, not just whichever
 one is new — rather than doing something you cannot see is wrong. You do not need
