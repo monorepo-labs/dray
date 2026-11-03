@@ -2,7 +2,7 @@
 //! (tauri.cli.conf.json), put where agents and shells find it.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// Copies the bundled CLI to `~/.local/bin/dray` where the bytes there differ,
@@ -17,14 +17,16 @@ pub fn install() {
     if tauri::is_dev() || cfg!(debug_assertions) {
         return;
     }
-    tauri::async_runtime::spawn_blocking(|| {
-        if let Err(e) = install_bundled() {
+    tauri::async_runtime::spawn(async {
+        let shell = crate::binpath::shell_dray().await;
+        let done = tauri::async_runtime::spawn_blocking(move || install_bundled(shell)).await;
+        if let Ok(Err(e)) = done {
             eprintln!("[cli install] {e}");
         }
     });
 }
 
-fn install_bundled() -> Result<(), String> {
+fn install_bundled(shell: Option<PathBuf>) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("no exe path: {e}"))?;
     // Absent from a bundle built without the CLI overlay, which is every
     // local `tauri build`.
@@ -33,9 +35,19 @@ fn install_bundled() -> Result<(), String> {
     };
     let home = std::env::home_dir().ok_or("no home directory")?;
     let dest = home.join(".local/bin/dray");
-    if !copy_if_changed(&bundled, &dest).map_err(|e| format!("{}: {e}", dest.display()))? {
-        return Ok(());
+    copy_if_changed(&bundled, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+
+    // A CLI installed elsewhere with `DRAY_INSTALL_DIR` sits ahead of this copy
+    // on the reader's PATH, and would keep answering stale. A symlink is left
+    // alone: somebody pointed it at a build of their own on purpose.
+    if let Some(shell) = shell.filter(|p| *p != dest && is_plain_dray(p)) {
+        if let Err(e) = copy_if_changed(&bundled, &shell) {
+            eprintln!("[cli install] {}: {e}", shell.display());
+        }
     }
+
+    // Every launch, not only after a copy: a failed write would otherwise
+    // never be retried, the bytes matching from then on.
     let status = Command::new(&dest)
         .args(["skill", "install"])
         .stdin(Stdio::null())
@@ -47,6 +59,18 @@ fn install_bundled() -> Result<(), String> {
         .success()
         .then_some(())
         .ok_or_else(|| format!("dray skill install failed ({status})"))
+}
+
+/// A regular file answering `--version` the way Dray's CLI does — the name is
+/// generic enough for something else on PATH to carry it.
+fn is_plain_dray(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
+        && Command::new(path)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .is_ok_and(|out| out.status.success() && out.stdout.starts_with(b"dray "))
 }
 
 /// Writes `bytes` to `dest` unless it holds them already, answering whether it

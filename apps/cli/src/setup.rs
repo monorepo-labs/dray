@@ -109,22 +109,28 @@ pub struct Run {
 }
 
 const LINUX: bool = cfg!(target_os = "linux");
-pub(crate) const MAC: bool = cfg!(target_os = "macos");
+const MAC: bool = cfg!(target_os = "macos");
 
 /// Whether this machine may run a server of its own: Linux always, a Mac only
 /// where no Dray app runs one on the same home. A `DRAY_HOME` of its own is
 /// the way round that `serve.lock`'s refusal already names.
 fn may_serve() -> Result<(), String> {
-    let own_home = std::env::var_os("DRAY_HOME").is_some_and(|v| !v.is_empty());
-    if MAC && !own_home && app_on_this_mac() {
+    if app_runs_this_home() {
         return Err("the Dray app runs this Mac's server".into());
     }
     Ok(())
 }
 
+/// Whether the Dray app owns this Mac's server and CLI for the home this runs
+/// on. A server on a `DRAY_HOME` of its own is set up and updated apart from it.
+pub(crate) fn app_runs_this_home() -> bool {
+    let own_home = std::env::var_os("DRAY_HOME").is_some_and(|v| !v.is_empty());
+    MAC && !own_home && app_on_this_mac()
+}
+
 /// The app's login agent, which every launch installs, or its bundle, for one
 /// installed and never opened. install.sh asks the same three paths.
-pub(crate) fn app_on_this_mac() -> bool {
+fn app_on_this_mac() -> bool {
     let home = std::env::home_dir().unwrap_or_default();
     [
         home.join("Library/LaunchAgents/com.yogesh.dray.server.plist"),

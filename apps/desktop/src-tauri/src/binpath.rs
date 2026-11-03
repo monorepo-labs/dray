@@ -292,6 +292,12 @@ async fn speaks_app_server(bin: &Path) -> bool {
     String::from_utf8_lossy(&output.stdout).contains("app-server")
 }
 
+/// The `dray` the reader's own shell runs, which a CLI installed with
+/// `DRAY_INSTALL_DIR` can put ahead of the app's copy in `~/.local/bin`.
+pub async fn shell_dray() -> Option<PathBuf> {
+    login_shell_which("dray").await
+}
+
 /// Looks for `bin` on the inherited `PATH`, then in the usual install
 /// locations, then by asking a login shell. Ordered by cost: the first two are
 /// filesystem checks, the last spawns a shell that reads the user's rc files.

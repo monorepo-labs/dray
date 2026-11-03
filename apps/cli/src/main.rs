@@ -962,8 +962,9 @@ fn print_table(sessions: &[SessionSummary]) {
 fn update(args: Update) -> Result<(), String> {
     // The app writes the CLI it ships to ~/.local/bin on every launch, so an
     // update here would fight it: undone at the next launch, and until then
-    // a CLI the app was not released beside.
-    if setup::MAC && setup::app_on_this_mac() {
+    // a CLI the app was not released beside. A server on its own `DRAY_HOME`
+    // still updates its `dray-serve` here.
+    if setup::app_runs_this_home() {
         eprintln!("The Dray app keeps this CLI up to date. Update the app to update it.");
         return Ok(());
     }
