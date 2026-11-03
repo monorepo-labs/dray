@@ -32,9 +32,13 @@ export default function AgentUpdateLine({
   const update = updates.find((u) => u.harness === harness);
   const held = waiting || running !== null;
   // Bound only while the Update button is up and clickable, so ⌘U stays free
-  // everywhere else.
+  // everywhere else. Platform-only, since Ctrl+U on a Mac deletes to the line
+  // start in the composer.
   const ready = done !== harness && !!update && failed?.harness !== harness;
-  useHotkey("agent.update", () => void updateAgent(harness), { enabled: ready && !held });
+  useHotkey("agent.update", () => void updateAgent(harness), {
+    enabled: ready && !held,
+    platformOnly: true,
+  });
 
   if (done === harness) {
     return (
