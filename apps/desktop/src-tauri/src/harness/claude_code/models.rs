@@ -144,6 +144,17 @@ async fn probe() -> anyhow::Result<Vec<Model>> {
     Ok(models)
 }
 
+/// Whether fast mode is retired on the model this id runs as.
+///
+/// Opus 4.8's was deprecated in v2.1.316 and is removed on 2026-11-30, after
+/// which a fast request there fails the turn with no fallback to standard
+/// speed. v2.1.316 still lists the row with `supportsFastMode: true`, so the
+/// flag alone would keep offering a switch that breaks the session. Matched on
+/// the resolved id, so an alias pointed at Opus 4.8 is caught too.
+fn fast_retired(resolved: &str) -> bool {
+    resolved.contains("opus-4-8")
+}
+
 /// One `models` row. Read row by row, so a shape the CLI changes costs that row
 /// and not the list.
 #[derive(Debug, Deserialize)]
@@ -157,6 +168,9 @@ struct Row {
     supported_effort_levels: Vec<String>,
     #[serde(default)]
     supports_fast_mode: bool,
+    /// The id an alias runs as — `opus` is `claude-opus-5-5` today.
+    #[serde(default)]
+    resolved_model: Option<String>,
     /// A model the CLI names but will not run here — "update Claude Code to use
     /// it". Untyped since none has been captured; anything but absent, null or
     /// `false` reads as disabled.
@@ -198,7 +212,8 @@ fn read(reply: &Value) -> Vec<Model> {
                 provider: String::new(),
                 accepts_images: true,
                 secondary: known.map_or(row.value.contains('-'), |m| m.secondary),
-                supports_fast: row.supports_fast_mode,
+                supports_fast: row.supports_fast_mode
+                    && !fast_retired(row.resolved_model.as_deref().unwrap_or(&row.value)),
             }
         })
         .collect();
@@ -239,7 +254,8 @@ mod tests {
 
     /// The ladders and fast mode are per model, which is what the table could
     /// not say: Opus 4.6 has no xhigh, Haiku 4.5 has no ladder at all, and
-    /// fast mode is Opus 5.5, Opus 5 and Opus 4.8 alone.
+    /// fast mode is Opus 5.5 and Opus 5 alone. The CLI still flags Opus 4.8,
+    /// whose fast mode is retired.
     #[test]
     fn ladders_and_fast_mode_follow_each_row() {
         let models = captured();
@@ -251,8 +267,22 @@ mod tests {
         assert_eq!(row("opus").default_effort, Some(Effort::High));
 
         let fast: Vec<&str> = models.iter().filter(|m| m.supports_fast).map(|m| m.id.as_str()).collect();
-        assert_eq!(fast, ["opus", "claude-opus-5", "claude-opus-4-8"]);
+        assert_eq!(fast, ["opus", "claude-opus-5"]);
+        assert!(!claude_models().iter().any(|m| m.supports_fast && fast_retired(m.id.as_str())));
         assert_eq!(row("opus").label, "Opus 5.5");
+    }
+
+    /// An alias resolving to Opus 4.8 loses fast mode the way the pinned id
+    /// does; one resolving elsewhere keeps the CLI's word.
+    #[test]
+    fn fast_mode_follows_the_resolved_model() {
+        let reply = serde_json::json!({"models": [
+            {"value": "opus", "displayName": "Opus 4.8", "resolvedModel": "claude-opus-4-8", "supportsFastMode": true},
+            {"value": "claude-opus-5", "displayName": "Opus 5", "resolvedModel": "claude-opus-5", "supportsFastMode": true},
+        ]});
+        let fast: Vec<bool> = read(&reply).iter().map(|m| m.supports_fast).collect();
+
+        assert_eq!(fast, [false, true]);
     }
 
     /// A new bare alias is a new family and leads; a disabled row is dropped;
