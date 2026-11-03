@@ -11,6 +11,10 @@ Every command talks to the Dray app on the same machine, so the app has to be ru
 
 ## Install
 
+On a Mac, the Dray app installs `dray` for you. Each time it starts, it puts the copy it ships in `~/.local/bin`, along with the skill. Agents in Dray find it there. To run it from your own terminal, add `~/.local/bin` to your `PATH` if it is not on it already.
+
+Anywhere else, install it with:
+
 ```bash
 curl -fsSL https://www.drayhq.com/install.sh | sh
 ```
@@ -19,7 +23,7 @@ This puts `dray` (and `dray-serve`, the server) in `~/.local/bin`. Set `DRAY_INS
 
 It also installs the skill that teaches your agents to use `dray`. See [The skill](#the-skill).
 
-On a Mac with the Dray app, that is the whole install. On a machine without the app, a first install goes on to `dray server install`, which makes the machine a Dray server. See [Servers](/cli/servers).
+On a machine without the app, a first install goes on to `dray server install`, which makes the machine a Dray server. See [Servers](/cli/servers).
 
 Check what you have:
 
@@ -42,7 +46,7 @@ This finds the newest release and stops if you already have it, so it is safe to
 
 Leaving beta does not downgrade you: a beta build stays until a stable release is newer than it. To install one exact release, set `DRAY_VERSION` to its tag, like `DRAY_VERSION=cli-v0.12.1 dray update --force`.
 
-The Mac app also updates the CLI for you. On the first launch of each new app version, it runs `dray update` on the CLI you have, on the app's own channel. It installs nothing if you have no CLI.
+On a Mac with the Dray app, `dray update` does nothing and says so. The CLI comes with the app, so updating the app updates it.
 
 If a background server is installed on this machine, `dray update` does not restart it, since that stops every running agent. It prints the command that does.
 

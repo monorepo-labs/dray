@@ -960,6 +960,13 @@ fn print_table(sessions: &[SessionSummary]) {
 /// into a shell a failed download runs an empty script and reports success.
 /// curl or wget, the pair the installer itself accepts.
 fn update(args: Update) -> Result<(), String> {
+    // The app writes the CLI it ships to ~/.local/bin on every launch, so an
+    // update here would fight it: undone at the next launch, and until then
+    // a CLI the app was not released beside.
+    if setup::MAC && setup::app_on_this_mac() {
+        eprintln!("The Dray app keeps this CLI up to date. Update the app to update it.");
+        return Ok(());
+    }
     let exe = std::env::current_exe()
         .map_err(|e| format!("could not find the running dray binary: {e}"))?;
     let dir = exe

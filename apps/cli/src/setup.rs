@@ -109,7 +109,7 @@ pub struct Run {
 }
 
 const LINUX: bool = cfg!(target_os = "linux");
-const MAC: bool = cfg!(target_os = "macos");
+pub(crate) const MAC: bool = cfg!(target_os = "macos");
 
 /// Whether this machine may run a server of its own: Linux always, a Mac only
 /// where no Dray app runs one on the same home. A `DRAY_HOME` of its own is
@@ -124,7 +124,7 @@ fn may_serve() -> Result<(), String> {
 
 /// The app's login agent, which every launch installs, or its bundle, for one
 /// installed and never opened. install.sh asks the same three paths.
-fn app_on_this_mac() -> bool {
+pub(crate) fn app_on_this_mac() -> bool {
     let home = std::env::home_dir().unwrap_or_default();
     [
         home.join("Library/LaunchAgents/com.yogesh.dray.server.plist"),
