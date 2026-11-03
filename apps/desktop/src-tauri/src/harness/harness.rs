@@ -757,8 +757,10 @@ impl Harness {
             // since 0.0.14. So fx is the one harness where an effort change is
             // a request rather than a respawn.
             //
-            // Not forkable: fx has no fork and its resume handle is an id it
-            // minted, not a file to copy. No `-w` either; Dray makes the tree.
+            // Forkable by pi's route: `fx session recover` copies the
+            // conversation at the press with no child needed, so the first send
+            // is an ordinary `session/resume` of the copy. 0.0.15's `/fork` is
+            // TUI-only, with no ACP method. No `-w`; Dray makes the tree.
             Harness::Fx => Capabilities {
                 creates_own_worktree: false,
                 applies_model_in_place: true,
@@ -766,7 +768,7 @@ impl Harness {
                 applies_permission_in_place: true,
                 fast_mode: FastMode::InPlace,
                 expands_at_mentions: false,
-                forkable: false,
+                forkable: true,
                 fork_needs_cli: false,
             },
             // ACP again, and the split from fx one row up is the whole of what

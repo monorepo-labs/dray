@@ -2557,7 +2557,7 @@ mod tests {
     /// `worktree add -B`, which resets the branch and takes its commits along.
     #[test]
     fn a_fork_records_its_parent_whichever_harness_it_is_on() {
-        for harness in [Harness::ClaudeCode, Harness::Pi, Harness::Grok] {
+        for harness in [Harness::ClaudeCode, Harness::Pi, Harness::Grok, Harness::Fx] {
             let parent = SessionIndexItem::new(
                 "parent",
                 harness,
@@ -2591,6 +2591,10 @@ mod tests {
         assert!(
             Harness::Grok.caps().fork_needs_cli,
             "its copy is a request, made on the child the first send spawns"
+        );
+        assert!(
+            !Harness::Fx.caps().fork_needs_cli,
+            "`fx session recover` made the copy at the press"
         );
     }
 
