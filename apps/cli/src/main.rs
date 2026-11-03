@@ -989,7 +989,10 @@ fn update(args: Update) -> Result<(), String> {
     .env("DRAY_UPDATING", "1")
     .env("DRAY_CHANNEL", args.channel.as_deref().unwrap_or(own_channel()));
 
-    if args.force {
+    // Beside the app, its launches rewrite `dray` and never the `dray-serve`
+    // next to it, so this binary's version says nothing about the server's and
+    // the installer's "already current" shortcut could leave that one behind.
+    if args.force || setup::app_on_this_mac() {
         // Cleared rather than left alone, or a value the caller exported makes
         // the flag do nothing.
         sh.env_remove("DRAY_CURRENT_VERSION");
