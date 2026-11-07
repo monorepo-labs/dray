@@ -167,11 +167,20 @@ struct BoatRow {
     here: bool,
     /// When the timer was last read, which paces the reads.
     read: Option<std::time::Instant>,
+    /// boat did not answer last time: no CLI, logged out, offline. The row is
+    /// hidden but kept, so the timer is still read and the UI comes back, and
+    /// a resume in flight still has somewhere to report.
+    lost: bool,
 }
 
 impl BoatRow {
+    fn new(phase: BoatPhase) -> Self {
+        BoatRow { phase, stops_at: None, note: None, here: false, read: None, lost: false }
+    }
+
     fn warning(&self, connected: bool) -> bool {
         connected
+            && !self.lost
             && self.here
             && self.phase == BoatPhase::Running
             && self.stops_at.is_some_and(|at| (at - Utc::now()).to_std().is_ok_and(|left| left <= WARN))
@@ -247,7 +256,7 @@ fn info(conn: &Conn) -> ServerInfo {
         beta: conn.saved.beta,
         latest: latest(conn),
         restarting: conn.met.as_ref().is_some_and(|w| w.stale),
-        boat: conn.boat.as_ref().map(|row| BoatStatus {
+        boat: conn.boat.as_ref().filter(|row| !row.lost).map(|row| BoatStatus {
             phase: row.phase,
             stops_at: row.stops_at.map(|at| at.to_rfc3339()),
             warning: row.warning(conn.status == ServerStatus::Connected),
@@ -670,11 +679,12 @@ enum BoatStep {
 async fn boat_step(id: &str, link: Option<&BoatLink>, target: Option<&ssh::Target>, refused: bool) -> BoatStep {
     let Some(link) = link else { return BoatStep::Unknown };
     let Some(sandbox) = boat::info(&link.id).await else {
-        update_boat(id, |row| *row = None);
+        lose_boat(id);
         return BoatStep::Unknown;
     };
     update_boat(id, |row| {
-        let row = row.get_or_insert_with(|| BoatRow { phase: BoatPhase::Running, stops_at: None, note: None, here: false, read: None });
+        let row = row.get_or_insert_with(|| BoatRow::new(BoatPhase::Running));
+        row.lost = false;
         if row.phase != BoatPhase::Resuming {
             row.phase = if sandbox.stopped { BoatPhase::Stopped } else { BoatPhase::Running };
         }
@@ -727,6 +737,15 @@ fn boat_waking(id: &str) -> bool {
     conns().iter().any(|c| c.saved.id == id && c.boat.as_ref().is_some_and(|row| row.phase == BoatPhase::Resuming))
 }
 
+/// boat stopped answering for this row: hide its UI, keep what was learned.
+fn lose_boat(id: &str) {
+    update_boat(id, |row| {
+        if let Some(row) = row {
+            row.lost = true;
+        }
+    });
+}
+
 fn update_boat(id: &str, change: impl FnOnce(&mut Option<BoatRow>)) {
     if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
         change(&mut conn.boat);
@@ -750,7 +769,13 @@ async fn remember_boat(id: &str, reported: Option<&str>, target: &ssh::Target) {
     }
     let Some(reported) = reported else { return };
     let Some(sandbox) = boat::info(reported).await else {
-        update_boat(id, |row| *row = None);
+        lose_boat(id);
+        // Still this sandbox, so the timer is read again once boat answers.
+        if known.is_some() {
+            if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
+                conn.boat.get_or_insert_with(|| BoatRow { lost: true, ..BoatRow::new(BoatPhase::Running) }).here = true;
+            }
+        }
         return;
     };
     let reached = ssh::resolve(target).await.ok().map(|r| format!("{}:{}", r.hostname, r.port));
@@ -770,7 +795,7 @@ async fn remember_boat(id: &str, reported: Option<&str>, target: &ssh::Target) {
             Some(row) if row.phase == BoatPhase::Resuming => (BoatPhase::Resuming, row.note),
             _ => (BoatPhase::Running, None),
         };
-        conn.boat = Some(BoatRow { phase, stops_at: sandbox.stops_at, note, here: true, read: Some(std::time::Instant::now()) });
+        conn.boat = Some(BoatRow { stops_at: sandbox.stops_at, note, here: true, read: Some(std::time::Instant::now()), ..BoatRow::new(phase) });
     }
     if changed {
         let _ = save().await;
@@ -807,7 +832,12 @@ async fn watch_boats() {
             .collect();
         for (id, sandbox) in due {
             let Some(read) = boat::info(&sandbox).await else {
-                update_boat(&id, |row| *row = None);
+                lose_boat(&id);
+                update_boat(&id, |row| {
+                    if let Some(row) = row {
+                        row.read = Some(std::time::Instant::now());
+                    }
+                });
                 continue;
             };
             if read.stopped {
@@ -819,6 +849,7 @@ async fn watch_boats() {
                 if let Some(row) = row {
                     row.stops_at = read.stops_at;
                     row.read = Some(std::time::Instant::now());
+                    row.lost = false;
                     if read.stopped {
                         row.phase = BoatPhase::Stopped;
                     }
@@ -864,7 +895,7 @@ pub async fn resume_boat(id: String) -> Result<(), String> {
             return Ok(());
         }
         let link = conn.saved.boat.clone().ok_or("This server is not a boat sandbox.")?;
-        let row = conn.boat.get_or_insert_with(|| BoatRow { phase: BoatPhase::Stopped, stops_at: None, note: None, here: false, read: None });
+        let row = conn.boat.get_or_insert_with(|| BoatRow::new(BoatPhase::Stopped));
         row.note = None;
         match row.phase {
             BoatPhase::Resuming => None,
@@ -885,8 +916,13 @@ pub async fn resume_boat(id: String) -> Result<(), String> {
         crate::analytics::track("feature_used", json!({ "feature": "boat_resumed" }));
         tokio::spawn(wake_boat(id.clone(), link));
     }
+    // `boat resume`'s own cap and then the wake, so a waiter never outlives both.
+    let deadline = tokio::time::Instant::now() + boat::RESUMING + BOAT_WAKE;
     loop {
         tokio::time::sleep(Duration::from_millis(250)).await;
+        if tokio::time::Instant::now() > deadline {
+            return Err("The sandbox didn't come back in time.".into());
+        }
         let list = conns();
         let conn = list.iter().find(|c| c.saved.id == id).ok_or("The server was removed while it was resuming.")?;
         if conn.status == ServerStatus::Connected {
@@ -902,10 +938,9 @@ pub async fn resume_boat(id: String) -> Result<(), String> {
 async fn wake_boat(id: String, link: BoatLink) {
     let settle = |phase: BoatPhase, note: Option<String>, restart: bool| {
         if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
-            if let Some(row) = conn.boat.as_mut() {
-                row.phase = phase;
-                row.note = note;
-            }
+            let row = conn.boat.get_or_insert_with(|| BoatRow::new(phase));
+            row.phase = phase;
+            row.note = note;
             if restart {
                 conn.restart();
             }
@@ -952,6 +987,7 @@ pub async fn extend_boat(id: String, minutes: u32) -> Result<(), String> {
         if let (Some(row), Some(read)) = (row.as_mut(), read) {
             row.stops_at = read.stops_at;
             row.read = Some(std::time::Instant::now());
+            row.lost = false;
         }
     });
     Ok(())

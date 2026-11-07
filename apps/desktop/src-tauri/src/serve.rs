@@ -1209,10 +1209,17 @@ async fn connection(
 
     // Dropping its waiters answers every call still out on it.
     let mut host = host();
-    if host.as_ref().is_some_and(|h| h.connection == connection) {
+    let left = host.as_ref().is_some_and(|h| h.connection == connection);
+    if left {
         *host = None;
     }
     drop(host);
+    // Only the app reads boat timers, so its warnings go with it rather than
+    // counting down on the island past a stop nobody is watching for.
+    #[cfg(feature = "desktop")]
+    if left {
+        HUB.publish("boat_alerts", &json!({ "alerts": [] }));
+    }
     drop(replies);
     writer.abort();
     failed.map_or(Ok(()), |e| Err(e.into()))

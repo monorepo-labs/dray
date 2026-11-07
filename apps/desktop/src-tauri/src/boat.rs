@@ -13,7 +13,7 @@ const API: &str = "https://boat.dev/api/v1";
 
 /// `boat resume` waits until the sandbox can run a command, itself capped at 30
 /// minutes. Past this the row says so rather than spinning on.
-const RESUMING: Duration = Duration::from_secs(10 * 60);
+pub const RESUMING: Duration = Duration::from_secs(10 * 60);
 const QUICK: Duration = Duration::from_secs(20);
 
 /// What `boat info` says about a sandbox.
@@ -193,6 +193,10 @@ impl Refused {
 /// Refuses unless the login still points where this sandbox last was, so an
 /// alias the reader has since aimed at another machine stays theirs.
 pub async fn repoint(link: &BoatLink, target: &ssh::Target) -> Result<(BoatLink, ssh::Target, bool), Refused> {
+    // Two sandboxes resuming at once would each rewrite the whole file from the
+    // same read, and the last rename would undo the other's alias.
+    static EDITING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one_at_a_time = EDITING.lock().await;
     let before = ssh::resolve(target).await.map_err(Refused::Failed)?;
     let was = format!("{}:{}", before.hostname, before.port);
     if link.endpoint.as_deref() != Some(was.as_str()) {
@@ -208,13 +212,14 @@ pub async fn repoint(link: &BoatLink, target: &ssh::Target) -> Result<(BoatLink,
     let alias = target.host().to_string();
     let config = ssh_config().ok_or(Refused::Failed("no home directory".into()))?;
     let text = std::fs::read_to_string(&config).unwrap_or_default();
+    let mut pinned = None;
     if has_block(&text, &alias) {
         let edited = repoint_block(&text, &alias, host, port).ok_or(Refused::NotOurs)?;
-        if edited != text {
-            write_config(&config, &edited, target, host, port).await.map_err(Refused::Failed)?;
-        }
         if next.port.is_some() {
             next.port = Some(port);
+        }
+        if edited != text {
+            pinned = Some(write_config(&config, &edited, &before, &next, host, port, &host_key).await.map_err(Refused::Failed)?);
         }
     } else if alias == before.hostname {
         // Typed as an address, with no alias to edit: the row holds the address.
@@ -227,8 +232,13 @@ pub async fn repoint(link: &BoatLink, target: &ssh::Target) -> Result<(BoatLink,
         return Err(Refused::NotOurs);
     }
 
-    let after = ssh::resolve(&next).await.map_err(Refused::Failed)?;
-    let moved = ssh::pin_key(&before, &after, &host_key).await.map_err(Refused::Failed)?;
+    let moved = match pinned {
+        Some(moved) => moved,
+        None => {
+            let after = ssh::resolve(&next).await.map_err(Refused::Failed)?;
+            ssh::pin_key(&before, &after, &host_key).await.map_err(Refused::Failed)?
+        }
+    };
     let link = BoatLink { id: link.id.clone(), endpoint: Some(endpoint.clone()) };
     Ok((link, next, moved || was != endpoint))
 }
@@ -357,8 +367,17 @@ fn insert_port(out: &mut String, hostname: &Option<(usize, String, String)>, por
 /// Writes the config beside itself and renames it in, after asking `ssh` itself
 /// whether the new file reaches `host:port`: a `Host *` above the block or a
 /// `-p` on the row would beat the edit, and a config that doesn't do what it
-/// was edited for must not land.
-async fn write_config(config: &Path, text: &str, target: &ssh::Target, host: &str, port: u16) -> Result<(), String> {
+/// was edited for must not land. The key is pinned before the rename, so a
+/// failed write leaves the alias where `before` was and a retry still owns it.
+async fn write_config(
+    config: &Path,
+    text: &str,
+    before: &ssh::Resolved,
+    target: &ssh::Target,
+    host: &str,
+    port: u16,
+    key: &str,
+) -> Result<bool, String> {
     // Through a symlink, or a dotfile manager's link becomes a plain file.
     let real = std::fs::canonicalize(config).map_err(|e| format!("could not read {}: {e}", config.display()))?;
     let mode = std::fs::metadata(&real).map_err(|e| e.to_string())?.permissions();
@@ -367,13 +386,15 @@ async fn write_config(config: &Path, text: &str, target: &ssh::Target, host: &st
         std::fs::write(&tmp, text).map_err(|e| format!("could not write {}: {e}", tmp.display()))?;
         std::fs::set_permissions(&tmp, mode).map_err(|e| e.to_string())?;
         let reached = ssh::resolve_with(target, Some(&tmp)).await?;
-        if reached.hostname != host || (target.port.is_none() && reached.port != port) {
+        if reached.hostname != host || reached.port != port {
             return Err(format!(
                 "another rule in ~/.ssh/config decides where {} goes, so the edit would not take",
                 target.host()
             ));
         }
-        std::fs::rename(&tmp, &real).map_err(|e| format!("could not write {}: {e}", real.display()))
+        let moved = ssh::pin_key(before, &reached, key).await?;
+        std::fs::rename(&tmp, &real).map_err(|e| format!("could not write {}: {e}", real.display()))?;
+        Ok(moved)
     }
     .await;
     if done.is_err() {

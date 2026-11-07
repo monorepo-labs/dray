@@ -1,5 +1,5 @@
 import { Check, ChevronDown } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -83,8 +83,20 @@ export function ExtendBoat({
 
 const CARD = "pointer-events-auto flex flex-col gap-2 py-2.5 pr-2.5 pl-3 shadow-lg ring-1 ring-foreground/10 animate-in fade-in slide-in-from-bottom-2";
 
-function Warning({ server, stopsAt, now, onDismiss }: { server: ServerInfo; stopsAt: string; now: number; onDismiss: () => void }) {
-  const [failed, setFailed] = useState<string | null>(null);
+function Warning({
+  server,
+  stopsAt,
+  now,
+  autoFailed,
+  onDismiss,
+}: {
+  server: ServerInfo;
+  stopsAt: string;
+  now: number;
+  autoFailed?: string;
+  onDismiss: () => void;
+}) {
+  const [failed, setFailed] = useState<string | null>(autoFailed ?? null);
   const { offered } = useBoatPrefs();
   return (
     <Alert className={CARD}>
@@ -148,9 +160,10 @@ function AutoOffer() {
 /// Gives a sandbox about to stop more time while work runs on it, if the reader
 /// turned that on. At the warning rather than the last second: boat's timer is
 /// read once a minute, and the reader then never sees a card for it.
-function useAutoExtend(busy: (server: string) => boolean) {
+function useAutoExtend(busy: (server: string) => boolean, onFail: (key: string, why: string) => void) {
   const servers = useServers();
   const { auto } = useBoatPrefs();
+  // Tried once per deadline: a refusal is the reader's to see, not to retry.
   const done = useRef(new Set<string>());
   useEffect(() => {
     if (!auto) return;
@@ -159,9 +172,9 @@ function useAutoExtend(busy: (server: string) => boolean) {
       const key = `${server.id}:${stopsAt}`;
       if (!stopsAt || done.current.has(key) || !busy(server.id)) continue;
       done.current.add(key);
-      void extendBoat(server.id, AUTO_EXTEND_MINUTES).catch(console.error);
+      extendBoat(server.id, AUTO_EXTEND_MINUTES).catch((e) => onFail(key, String(e)));
     }
-  }, [servers, auto, busy]);
+  }, [servers, auto, busy, onFail]);
 }
 
 /// A sandbox about to auto-stop, floating at the sidebar's foot and past the
@@ -172,13 +185,16 @@ export default function BoatWarnings({ busy }: { busy: (server: string) => boole
   const servers = useServers();
   const now = useNow();
   const { auto } = useBoatPrefs();
-  useAutoExtend(busy);
+  // By deadline: the card comes back, with boat's reason, so the reader can.
+  const [autoFailed, setAutoFailed] = useState<Record<string, string>>({});
+  const onAutoFail = useCallback((key: string, why: string) => setAutoFailed((f) => ({ ...f, [key]: why })), []);
+  useAutoExtend(busy, onAutoFail);
   const offer = useSyncExternalStore(offerChanged.subscribe, () => showOffer);
   // By deadline, so an extend that runs out later warns again.
   const [dismissed, setDismissed] = useState<string[]>([]);
   const up = servers.flatMap((server) => {
     const stopsAt = server.boat?.warning ? server.boat.stopsAt : null;
-    const handled = auto && busy(server.id);
+    const handled = auto && busy(server.id) && !autoFailed[`${server.id}:${stopsAt}`];
     return stopsAt && !handled && !dismissed.includes(`${server.id}:${stopsAt}`) ? [{ server, stopsAt }] : [];
   });
   if (!up.length && !offer) return null;
@@ -191,6 +207,7 @@ export default function BoatWarnings({ busy }: { busy: (server: string) => boole
           server={server}
           stopsAt={stopsAt}
           now={now}
+          autoFailed={autoFailed[`${server.id}:${stopsAt}`]}
           onDismiss={() => setDismissed((d) => [...d, `${server.id}:${stopsAt}`])}
         />
       ))}
