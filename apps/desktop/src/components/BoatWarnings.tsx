@@ -107,10 +107,10 @@ function Warning({
       </AlertTitle>
       {failed && <p className="text-ui-sm text-destructive">{failed}</p>}
       <span className="flex items-center gap-1">
-        <ExtendBoat id={server.id} onFail={setFailed} onDone={() => !offered && setOffer(true)} />
         <Button variant="ghost" size="xs" className="text-muted-foreground" onClick={onDismiss}>
           Dismiss
         </Button>
+        <ExtendBoat id={server.id} onFail={setFailed} onDone={() => !offered && setOffer(true)} />
       </span>
     </Alert>
   );
@@ -133,15 +133,6 @@ function AutoOffer() {
       </p>
       <span className="flex items-center gap-1">
         <Button
-          size="xs"
-          onClick={() => {
-            setBoatPrefs({ auto: true, offered: true });
-            setOffer(false);
-          }}
-        >
-          Turn on
-        </Button>
-        <Button
           variant="ghost"
           size="xs"
           className="text-muted-foreground"
@@ -151,6 +142,15 @@ function AutoOffer() {
           }}
         >
           Not now
+        </Button>
+        <Button
+          size="xs"
+          onClick={() => {
+            setBoatPrefs({ auto: true, offered: true });
+            setOffer(false);
+          }}
+        >
+          Turn on
         </Button>
       </span>
     </Alert>
@@ -177,10 +177,11 @@ function useAutoExtend(busy: (server: string) => boolean, onFail: (key: string, 
   }, [servers, auto, busy, onFail]);
 }
 
-/// A sandbox about to auto-stop, floating at the sidebar's foot and past the
-/// window's own focus. Outside the sidebar, so collapsing it hides nothing, and
-/// no countdown bar unlike a notice card: it stands until the time is extended
-/// or it stops, since missing it costs running work.
+/// A sandbox about to auto-stop, floating at the sidebar's foot. Drawn outside
+/// `<aside>` so collapsing it hides nothing, but sized to the default sidebar
+/// (`SIDEBAR_MIN`, 240) less its rows' inset, so it reads as part of it. No
+/// countdown bar unlike a notice card: it stands until the time is extended or
+/// it stops, since missing it costs running work.
 export default function BoatWarnings({ busy }: { busy: (server: string) => boolean }) {
   const servers = useServers();
   const now = useNow();
@@ -199,7 +200,7 @@ export default function BoatWarnings({ busy }: { busy: (server: string) => boole
   });
   if (!up.length && !offer) return null;
   return (
-    <div className="pointer-events-none fixed bottom-12 left-3 z-50 flex w-64 flex-col gap-2">
+    <div className="pointer-events-none fixed bottom-12 left-2 z-50 flex w-56 flex-col gap-2">
       {offer && <AutoOffer />}
       {up.map(({ server, stopsAt }) => (
         <Warning
