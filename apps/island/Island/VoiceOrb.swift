@@ -4,6 +4,12 @@ import SwiftUI
 /// either composer, since the island, the Orb Lab and the iPhone app all share this file.
 enum Dictation { case idle, starting, recording, transcribing }
 
+extension EnvironmentValues {
+    /// Nothing drawn here can be seen — the island's panel on a Space the reader
+    /// left, or covered — so every timeline stops rather than drawing for no one.
+    @Entry var motionPaused = false
+}
+
 /// The dictation orb: clear dark glass with sunlight caught inside it, split
 /// into a rainbow band with a white filament through it (#568). A wave flows
 /// along the band, swelling with the voice; transcribing curls the band into
@@ -76,6 +82,10 @@ struct OrbDriver<Content: View>: View {
     let level: Float
     let state: Dictation
     @ViewBuilder let draw: (OrbFrame) -> Content
+    @Environment(\.motionPaused) private var hidden
+    /// Idle long enough that the orbit has wound home and uncurled, so the orb holds still:
+    /// every frame re-lays out the whole island panel, 18% of a core at 30fps (#759).
+    @State private var resting = false
 
     var body: some View {
         let voice = state == .recording ? loudness(level) : 0
@@ -86,8 +96,7 @@ struct OrbDriver<Content: View>: View {
             Smooth(value: voice, animation: .spring(duration: 1)) { energy in
                 Smooth(value: rec, animation: .easeInOut(duration: 0.45)) { rec in
                     Smooth(value: work, animation: .easeInOut(duration: 0.45)) { work in
-                        // ponytail: 30fps at rest, 60 while dictating; pause at rest if it ever shows up in Activity Monitor.
-                        TimelineView(.animation(minimumInterval: state == .idle ? 1 / 30 : 1 / 60)) { context in
+                        TimelineView(.animation(minimumInterval: 1 / 60, paused: hidden || resting)) { context in
                             let clock = OrbClock.advance(
                                 to: context.date.timeIntervalSinceReferenceDate,
                                 rate: 0.35 + 0.8 * rec + 0.6 * work + 0.3 * energy,
@@ -100,6 +109,14 @@ struct OrbDriver<Content: View>: View {
             }
         }
         .frame(width: size, height: size)
+        // A lap home takes at most ~1.6s and the uncurl a fraction more after it. Hidden,
+        // the clock stands still too, so the wait starts again once the orb is seen.
+        .task(id: hidden ? nil : state) {
+            resting = false
+            guard state == .idle, !hidden else { return }
+            try? await Task.sleep(for: .seconds(3))
+            if !Task.isCancelled { resting = true }
+        }
     }
 }
 

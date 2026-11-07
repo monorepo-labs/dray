@@ -1546,10 +1546,11 @@ impl SessionManager {
             );
         }
 
-        // `thread/fork` names the parent's thread, so a Codex parent that never
-        // got one has nothing to fork — refused before a row exists.
-        if parent.harness == Harness::Codex && parent.thread_id.is_none() {
-            bail!("this Codex session has no conversation to fork yet");
+        // `thread/fork` and `session recover` both name the parent's own id, so
+        // a Codex or fx parent that never got one has nothing to fork — refused
+        // before a row exists.
+        if matches!(parent.harness, Harness::Codex | Harness::Fx) && parent.thread_id.is_none() {
+            bail!("this {} session has no conversation to fork yet", parent.harness.label());
         }
 
         // Resolved against the project rather than the parent's own name, so a
@@ -1589,7 +1590,17 @@ impl SessionManager {
             crate::store::copy_pi_session_file(session_id, fork_id).await?;
         }
 
+        // fx's copy is made here, like pi's, since `session recover` needs no
+        // child: the first send then resumes the copy in the fork's directory.
+        let fx_copy = match (&parent.harness, &parent.thread_id) {
+            (Harness::Fx, Some(thread)) => Some(crate::harness::fx::fork_conversation(thread).await?),
+            _ => None,
+        };
+
         let mut item = parent.fork(fork_id, worktree_name.as_deref());
+        if fx_copy.is_some() {
+            item.thread_id = fx_copy;
+        }
         // The parent's Codex thread, taken now rather than looked up at the
         // first send: a parent deleted in between would otherwise leave a fork
         // that fails every send. Safe while `fork_from` stands, since that is
@@ -2137,12 +2148,13 @@ impl Session {
             }
             Harness::Fx => {
                 // Same two refusals as pi's, for the same reasons: fx has no
-                // `-w`, so the tree is made before this; and it has no fork.
+                // `-w`, so the tree is made before this; and its fork was made
+                // at the press, so the first send is an ordinary resume.
                 if worktree_name.is_some() {
                     bail!("fx cannot create a worktree — it has to be made first");
                 }
                 if fork_from.is_some() {
-                    bail!("fx sessions cannot be forked");
+                    bail!("an fx fork is the copy made when it was forked — there is nothing to fork on spawn");
                 }
 
                 crate::harness::fx::init(

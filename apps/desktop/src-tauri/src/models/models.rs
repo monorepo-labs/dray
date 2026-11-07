@@ -282,9 +282,9 @@ pub fn claude_models() -> Vec<Model> {
     vec![
         Model::new("fable", "fable", "Fable 5.1", all.clone(), Some(High)),
         // Opus alone, and that is the CLI's own rule rather than a choice here:
-        // it gates fast mode on the resolved model naming `opus-5` or
-        // `opus-4-8`, and reports `fast_mode_state: "off"` beside a reason for
-        // anything else. Verified against v2.1.270.
+        // it gates fast mode on the resolved model naming `opus-5`, and reports
+        // `fast_mode_state: "off"` beside a reason for anything else. Verified
+        // against v2.1.270.
         Model::new("opus", "opus", "Opus 5.5", all.clone(), Some(High)).with_fast(),
         Model::new(
             "claude-fable-5",
@@ -305,6 +305,7 @@ pub fn claude_models() -> Vec<Model> {
         .under_more(),
         // The model a refusal falls back to (`model_refusal_fallback` names
         // `claude-opus-4-8`), listed so the session can record where it went.
+        // No fast mode: retired there (`claude_code::models::fast_retired`).
         Model::new(
             "claude-opus-4-8",
             "claude-opus-4-8",
@@ -312,7 +313,6 @@ pub fn claude_models() -> Vec<Model> {
             all.clone(),
             Some(High),
         )
-        .with_fast()
         .under_more(),
         Model::new("sonnet", "sonnet", "Sonnet 5.5", all.clone(), Some(High)).under_more(),
         // Haiku 5.5 takes the whole ladder (v2.1.310's `initialize`), where
@@ -887,8 +887,8 @@ mod wire_tests {
     }
 
     /// Opus alone, which is the CLI's own gate rather than a taste — it refuses
-    /// fast mode to anything whose resolved model does not name `opus-5` or
-    /// `opus-4-8`. Pinned because `send_msg` clamps the pick against this: a row
+    /// fast mode to anything whose resolved model does not name `opus-5`, and
+    /// Opus 4.8's is retired. Pinned because `send_msg` clamps the pick against this: a row
     /// wrongly marked here would persist `fast: true` on a session running at
     /// ordinary speed, and `dray new` hands that down to every child.
     #[test]
@@ -905,7 +905,7 @@ mod wire_tests {
                 ("opus".to_string(), true),
                 ("claude-fable-5".to_string(), false),
                 ("claude-opus-5".to_string(), true),
-                ("claude-opus-4-8".to_string(), true),
+                ("claude-opus-4-8".to_string(), false),
                 ("sonnet".to_string(), false),
                 ("haiku".to_string(), false),
             ]

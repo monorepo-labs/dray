@@ -1,6 +1,6 @@
 [package]
 name = "dray"
-version = "0.29.15"
+version = "0.29.17"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -159,7 +159,15 @@ desktop = [
   "dep:flate2",
 ]
 cef = ["desktop", "dep:cef"]
-serve = ["dep:tokio-tungstenite", "dep:form_urlencoded", "dep:zip", "dep:flate2"]
+# `connect` and TLS: a server reaches other machines too (machines.rs).
+serve = [
+  "dep:tokio-tungstenite",
+  "tokio-tungstenite/connect",
+  "tokio-tungstenite/rustls-tls-native-roots",
+  "dep:form_urlencoded",
+  "dep:zip",
+  "dep:flate2",
+]
 
 [target.'cfg(target_os = "macos")'.dependencies.cef]
 version = "154.5.0"

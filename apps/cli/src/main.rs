@@ -45,8 +45,7 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 
-    /// Run this on another machine the Dray app connects to, as `dray machine
-    /// ls` names it. `session ls` also takes `all`. A session id finds its
+    /// Run this on another machine, as `dray machine ls` names it. `session ls` also takes `all`. A session id finds its
     /// machine on its own.
     #[arg(long, global = true, value_name = "NAME")]
     machine: Option<String>,
@@ -72,7 +71,7 @@ enum Command {
     /// live ones, or stop one.
     #[command(arg_required_else_help = true, args_conflicts_with_subcommands = true)]
     Share(ShareArgs),
-    /// The machines the app connects to: add, list, rename, connect, remove.
+    /// The machines this one reaches: add, list, rename, connect, remove.
     #[command(subcommand, arg_required_else_help = true)]
     Machine(machine::MachineCommand),
     /// This machine's Dray server: install, start, stop, run in the foreground.
@@ -960,6 +959,14 @@ fn print_table(sessions: &[SessionSummary]) {
 /// into a shell a failed download runs an empty script and reports success.
 /// curl or wget, the pair the installer itself accepts.
 fn update(args: Update) -> Result<(), String> {
+    // The app writes the CLI it ships to ~/.local/bin on every launch, so an
+    // update here would fight it: undone at the next launch, and until then
+    // a CLI the app was not released beside. A server on its own `DRAY_HOME`
+    // still updates its `dray-serve` here.
+    if setup::app_runs_this_home() {
+        eprintln!("The Dray app keeps this CLI up to date. Update the app to update it.");
+        return Ok(());
+    }
     let exe = std::env::current_exe()
         .map_err(|e| format!("could not find the running dray binary: {e}"))?;
     let dir = exe
@@ -981,12 +988,16 @@ fn update(args: Update) -> Result<(), String> {
     .env("DRAY_UPDATING", "1")
     .env("DRAY_CHANNEL", args.channel.as_deref().unwrap_or(own_channel()));
 
-    if args.force {
+    let current = if setup::app_on_this_mac() { serve_tag_beside(dir) } else { Some(current_tag()) };
+    match current.filter(|_| !args.force) {
+        Some(tag) => {
+            sh.env("DRAY_CURRENT_VERSION", tag);
+        }
         // Cleared rather than left alone, or a value the caller exported makes
         // the flag do nothing.
-        sh.env_remove("DRAY_CURRENT_VERSION");
-    } else {
-        sh.env("DRAY_CURRENT_VERSION", current_tag());
+        None => {
+            sh.env_remove("DRAY_CURRENT_VERSION");
+        }
     }
 
     match sh.status() {
@@ -1004,6 +1015,27 @@ fn update(args: Update) -> Result<(), String> {
         Ok(status) => Err(format!("the installer failed ({status})")),
         Err(e) => Err(format!("could not run the installer: {e}")),
     }
+}
+
+/// The release the `dray-serve` beside this binary was built as, for a Mac with
+/// the app: its launches rewrite `dray` and never `dray-serve`, so this binary's
+/// version would stop the installer at "already current" with the server left
+/// behind. No `dray-serve` there is no pair to keep, so this binary's tag; one
+/// too old to say is reinstalled.
+fn serve_tag_beside(dir: &std::path::Path) -> Option<String> {
+    let serve = dir.join("dray-serve");
+    if !serve.exists() {
+        return Some(current_tag());
+    }
+    let out = std::process::Command::new(serve)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let version = String::from_utf8_lossy(&out.stdout);
+    let version = version.trim().strip_prefix("dray-serve ")?;
+    (out.status.success() && version != "dev").then(|| format!("cli-v{version}"))
 }
 
 /// The release tag this binary was built as — the one fact the installer cannot
@@ -1092,7 +1124,7 @@ fn on_machine(session: &SessionSummary) -> String {
 }
 
 /// One request, one response, connection closed. With `--machine` the request
-/// rides inside `on_machine`, and this machine's app carries it there.
+/// rides inside `on_machine`, and this machine's server carries it there.
 fn send(request: Request) -> Result<Response, String> {
     let endpoint = dray_proto::endpoint().ok_or("could not work out where Dray is listening")?;
     let request = match MACHINE.get() {
@@ -1244,6 +1276,28 @@ fn main_worktree(porcelain: &str) -> Option<String> {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    /// A wrong answer either stops the installer with the server left behind
+    /// or lets leaving beta downgrade it.
+    #[test]
+    fn hands_the_installer_the_servers_version() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("dray-serve-tag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(serve_tag_beside(&dir), Some(current_tag()), "no server: no pair");
+
+        let serve = dir.join("dray-serve");
+        let answer = |script: &str| {
+            std::fs::write(&serve, format!("#!/bin/sh\n{script}\n")).unwrap();
+            std::fs::set_permissions(&serve, std::fs::Permissions::from_mode(0o755)).unwrap();
+            serve_tag_beside(&dir)
+        };
+        assert_eq!(answer("echo 'dray-serve 0.14.0-beta.1'").as_deref(), Some("cli-v0.14.0-beta.1"));
+        assert_eq!(answer("echo 'dray-serve dev'"), None, "a local build says nothing");
+        assert_eq!(answer("echo usage >&2; exit 2"), None, "too old to answer");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     /// Collapses every run of whitespace to one space, so an assertion about
     /// prose cannot fail over a line break.

@@ -927,6 +927,50 @@ pub fn cancel(session: &FxSession) -> Result<()> {
         .notify("session/cancel", json!({"sessionId": session.id}))
 }
 
+/// Bounds `fx session recover`, a copy on local disk that answers in
+/// milliseconds; a hang here would hold the fork menu item for good.
+const RECOVER_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Copies fx's conversation `thread_id` onto a new fx session and answers its
+/// id — the CLI half of an fx fork, done at the press.
+///
+/// `fx session recover` and not 0.0.15's `/fork`: that is a TUI picker with no
+/// ACP method behind it. Recover copies every turn up to the last one that
+/// ended cleanly, rules, fast and provider included, needs no child, and works
+/// with the parent open in another `fx acp` (0.0.16, measured). Where the copy
+/// runs is `session/resume`'s `cwd`, so a worktree fork needs nothing more.
+pub async fn fork_conversation(thread_id: &str) -> Result<String> {
+    let bin = crate::binpath::fx().await;
+    let output = tokio::time::timeout(
+        RECOVER_TIMEOUT,
+        Command::new(&bin)
+            .args(["session", "recover", thread_id, "--json"])
+            .env("PATH", crate::harness::agent_path(&bin))
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .context("fx took too long to copy the conversation")?
+    .context("couldn't run fx to copy the conversation")?;
+    recovered_id(&output.stdout)
+}
+
+/// The new id out of `fx session recover --json`, or fx's own reason.
+fn recovered_id(stdout: &[u8]) -> Result<String> {
+    let answer: Value =
+        serde_json::from_slice(stdout).context("fx answered the fork with something else")?;
+    if let Some(error) = answer["error"].as_str() {
+        anyhow::bail!("fx could not copy this conversation: {error}");
+    }
+    match (answer["status"].as_str(), answer["recovered_id"].as_str()) {
+        (Some("recovered"), Some(id)) if !id.is_empty() => Ok(id.to_string()),
+        (status, _) => anyhow::bail!(
+            "fx could not copy this conversation ({})",
+            status.unwrap_or("no status")
+        ),
+    }
+}
+
 /// Ends the child cleanly: `session/close`, EOF, then a kill if it lingers.
 pub async fn shutdown(child: &mut Child, session: &FxSession) {
     let _ = session
@@ -1233,6 +1277,20 @@ async fn raise_permission(
 mod tests {
     use super::*;
     use crate::harness::rpc::Outbound;
+
+    /// Both answers `fx session recover --json` gave on 0.0.16, verbatim. The
+    /// failure exits 1 with its reason on stdout, so stdout is read either way.
+    #[test]
+    fn a_recover_answer_names_the_copy_or_says_why_not() {
+        let copied = br#"{"kind":"session_recovery","source_id":"xCR4bqpArwSG","recovered_id":"H8O_cjX69-8i","status":"recovered","history_turns":1,"permission_rules_dropped":false}"#;
+        assert_eq!(recovered_id(copied).unwrap(), "H8O_cjX69-8i");
+
+        let missing = br#"{"kind":"session","error":"record not found","code":"SessionNotFound"}"#;
+        let error = recovered_id(missing).unwrap_err().to_string();
+        assert!(error.contains("record not found"), "{error}");
+
+        assert!(recovered_id(b"").is_err());
+    }
 
     /// Every stance lands on one of fx's three modes. A name fx does not have
     /// is refused at spawn, which kills the child, so the session never opens.

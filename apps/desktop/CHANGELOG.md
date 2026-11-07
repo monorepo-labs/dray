@@ -19,6 +19,35 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.29.17 · 2026-11-03
+
+### New
+
+- **The `dray` CLI comes with the app.** Dray keeps `~/.local/bin/dray` up
+  to date on every launch, so there's nothing to install or update by hand.
+- fx sessions can be forked.
+
+### Improved
+
+- ⌘U updates the agent's CLI from the new-task composer when an update is
+  available.
+- fx shell commands show their whole output.
+
+### Fixed
+
+- Fast mode is off for Opus 4.8, where Claude Code has retired it.
+- Session titles no longer run to the sidebar's edge with overlay
+  scrollbars.
+
+## 0.29.16 · 2026-11-02
+
+### Improved
+
+- Every Dray server reaches other machines on its own, so
+  `dray --machine` works from a Linux server and with the app closed.
+- The Island uses far less CPU: it stops animating at rest and when it's
+  out of sight.
+
 ## 0.29.15 · 2026-11-01
 
 ### New

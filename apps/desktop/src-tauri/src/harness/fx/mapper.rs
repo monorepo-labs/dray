@@ -60,9 +60,11 @@ pub struct Mapper {
     /// `UsageUpdate` is not persisted.
     occupancy: Option<ContextWindow>,
     /// Text a running call has streamed, by call id. A shell's stdout arrives
-    /// one `in_progress` update per line and its closing update carries only
-    /// fx's replay blob, so the result is what accumulated here.
+    /// one `in_progress` update per line, whole, so for a shell the result is
+    /// what accumulated here — see [`result_text`].
     outputs: HashMap<String, String>,
+    /// Calls fx ran as `execute`, whose stream is their output.
+    shells: HashSet<String>,
     /// Message ids whose chunks are fx diagnostics, not the answer — kept so a
     /// diagnostic streamed over several chunks is dropped whole, not only its
     /// first fragment.
@@ -91,6 +93,7 @@ impl Mapper {
             outputs: HashMap::new(),
             suppressed: HashSet::new(),
             subagents: HashSet::new(),
+            shells: HashSet::new(),
         }
     }
 
@@ -159,6 +162,9 @@ impl Mapper {
                 let tool_type = tool_type(kind, &name);
                 let input = tool_input(kind, raw_input);
                 let task = (name == "subagent").then(|| subagent_task(&input)).flatten();
+                if kind == ToolKind::Execute {
+                    self.shells.insert(tool_call_id.clone());
+                }
                 out.push(self.event(AgentEventPayload::ToolCallStarted {
                     call_id: tool_call_id.clone(),
                     name,
@@ -223,8 +229,9 @@ impl Mapper {
                 };
 
                 let streamed = self.outputs.remove(&tool_call_id).unwrap_or_default();
+                let shell = self.shells.remove(&tool_call_id);
                 let result = ToolResult {
-                    text: result_text(streamed, text),
+                    text: result_text(shell, streamed, text),
                     is_error: status == ToolStatus::Failed,
                     structured: None,
                     exit_code: command_result
@@ -373,6 +380,7 @@ impl Mapper {
         });
         self.turn_open = false;
         self.outputs.clear();
+        self.shells.clear();
         event
     }
 
@@ -526,17 +534,25 @@ fn tool_input(kind: ToolKind, raw: Option<Value>) -> Value {
     input
 }
 
-/// What a finished call reports: its closing text, falling back to what it
-/// streamed where the closing update carried nothing a reader wants.
+/// What a finished call reports. A shell's is what it streamed; anything
+/// else's is its closing text, falling back to the stream where the close
+/// carried nothing a reader wants.
 ///
-/// The closing text wins because a streamed update is not always output. A
-/// shell's is — stdout arrives line by line and its closing update carries only
-/// `{"session_id":null,"state":"completed","backend":"captured",…}`, fx's own
-/// bookkeeping for `fx background`, which drawn read as the command having
-/// printed JSON it never printed. But `web_fetch` streams `Fetching <url>` and
-/// `Converting <url>` as progress and puts the page in its closing update, so
-/// preferring the stream drew the progress chatter and dropped the answer.
-fn result_text(streamed: String, closing: String) -> String {
+/// A shell streams its output whole, and its close is never better. Up to
+/// 0.0.14 the close was `{"session_id":null,…,"backend":"captured",…}`, fx's
+/// own bookkeeping, which drawn read as the command having printed JSON it
+/// never printed. From 0.0.15 it is the output itself, but cut at 200 bytes
+/// and marked `... output truncated ...` — so letting it win showed a long
+/// `cargo test` as its first two lines. A shell that streamed nothing (fx's
+/// own refusals: bad `cwd`, bad profile, a denied call) answers with its close.
+///
+/// Everything else goes the other way, since a streamed update is not always
+/// output: `web_fetch` streams `Fetching <url>` and `Converting <url>` as
+/// progress and puts the page in its closing update.
+fn result_text(shell: bool, streamed: String, closing: String) -> String {
+    if shell && !streamed.is_empty() {
+        return streamed;
+    }
     if !closing.is_empty() && !is_replay_blob(&closing) {
         return unwrap_report(&closing).unwrap_or(closing);
     }
@@ -567,8 +583,8 @@ fn unwrap_report(text: &str) -> Option<String> {
         .find_map(|end| serde_json::from_str::<String>(&format!("\"{}\"", &body[..end])).ok())
 }
 
-// ponytail: prefix sniff on fx's private blob shape; a typed field would need
-// fx to promote it out of the text content first.
+// ponytail: prefix sniff on fx ≤0.0.14's private blob shape, still reached by
+// a shell that printed nothing there; drop it once Dray requires fx 0.0.15.
 fn is_replay_blob(text: &str) -> bool {
     text.starts_with("{\"session_id\":") && text.contains("\"backend\":")
 }
@@ -585,11 +601,15 @@ mod tests {
     const EDIT: &str = include_str!("fixtures/edit_file.jsonl");
     const TOOLS: &str = include_str!("fixtures/tools.jsonl");
     const REASONING: &str = include_str!("fixtures/reasoning.jsonl");
+    const SHELL_CUT: &str = include_str!("fixtures/shell_cut.jsonl");
 
     /// Replays one capture's first prompt through the mapper: every
     /// `session/update`, then the prompt's own response.
     fn replay(fixture: &str) -> Vec<AgentEvent> {
-        let mut mapper = Mapper::new("s".into(), Arc::new(AtomicU64::new(0)));
+        replay_into(&mut Mapper::new("s".into(), Arc::new(AtomicU64::new(0))), fixture)
+    }
+
+    fn replay_into(mapper: &mut Mapper, fixture: &str) -> Vec<AgentEvent> {
         let mut out = Vec::new();
         for line in fixture.lines().filter_map(|l| l.strip_prefix("<< ")) {
             let value: Value = serde_json::from_str(line).unwrap();
@@ -934,15 +954,66 @@ mod tests {
     #[test]
     fn the_replay_blob_is_not_a_result() {
         const BLOB: &str = r#"{"session_id":null,"state":"completed","backend":"captured"}"#;
-        assert_eq!(result_text(String::new(), BLOB.into()), "");
-        assert_eq!(result_text(String::new(), "wrote x".into()), "wrote x");
+        assert_eq!(result_text(true, String::new(), BLOB.into()), "");
+        assert_eq!(result_text(false, String::new(), "wrote x".into()), "wrote x");
         // The stream is what a shell says; the blob is what closes it.
-        assert_eq!(result_text("out\n".into(), BLOB.into()), "out\n");
+        assert_eq!(result_text(true, "out\n".into(), BLOB.into()), "out\n");
         // And the other way for a call that streams progress and answers at the
         // close — the answer wins over what it said while working.
         assert_eq!(
-            result_text("Fetching x".into(), "the page".into()),
+            result_text(false, "Fetching x".into(), "the page".into()),
             "the page"
+        );
+    }
+
+    /// fx 0.0.15's close is the output, cut at 200 bytes and marked — the
+    /// shape `shellUpdateContentText` writes, in fx's own tests. The stream
+    /// carried all of it, so the stream wins; a shell refused before it ran
+    /// streamed nothing, and its close is the only reason there is.
+    /// A shell whose closing update never comes — the turn ended under it —
+    /// leaves nothing behind for the life of the session.
+    #[test]
+    fn a_turn_ending_under_a_shell_forgets_it() {
+        let unclosed: String = SHELL_CUT
+            .lines()
+            .filter(|l| !l.contains(r#""status":"completed""#))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let mut mapper = Mapper::new("s".into(), Arc::new(AtomicU64::new(0)));
+        replay_into(&mut mapper, &unclosed);
+        assert!(mapper.shells.is_empty());
+        assert!(mapper.outputs.is_empty());
+    }
+
+    /// fx 0.0.16, live: the close carries the first 200 bytes and fx's cut
+    /// marker, the stream carried all 378. The row draws the stream.
+    #[test]
+    fn a_shell_row_draws_the_whole_stream_not_the_cut_close() {
+        let events = replay(SHELL_CUT);
+        let result = events
+            .iter()
+            .find_map(|e| match &e.payload {
+                P::ToolCallCompleted { result, .. } => Some(result),
+                _ => None,
+            })
+            .expect("the shell closes");
+        assert!(result.text.ends_with("118 119 120 \nDONE\n"), "{}", result.text);
+        assert!(!result.text.contains("output truncated"));
+        assert_eq!(result.exit_code, Some(0));
+    }
+
+    #[test]
+    fn a_shell_keeps_its_stream_over_fxs_cut_close() {
+        let long = "x".repeat(500);
+        let cut = format!("{}\n... output truncated ...", &long[..200]);
+        assert_eq!(result_text(true, long.clone(), cut), long);
+        assert_eq!(
+            result_text(true, "hello-42\n".into(), "hello-42\n".into()),
+            "hello-42\n"
+        );
+        assert_eq!(
+            result_text(true, String::new(), "shell run cwd is invalid: NotFound".into()),
+            "shell run cwd is invalid: NotFound"
         );
     }
 

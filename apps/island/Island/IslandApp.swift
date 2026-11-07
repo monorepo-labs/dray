@@ -244,6 +244,11 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        // SwiftUI keeps every timeline ticking in a window nobody can see: an open panel left
+        // on another Space burned 11% of a core for a day (#759).
+        NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: panel, queue: .main) { [weak composer, weak panel] _ in
+            MainActor.assumeIsolated { composer?.onScreen = panel?.occlusionState.contains(.visible) ?? false }
+        }
         // Only losing the keys moves the hint; getting them back waits for the next open, so it never flickers.
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak composer] _ in
             MainActor.assumeIsolated { composer?.keyed = false }
@@ -541,6 +546,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self, let panel, let composer, !composer.shown else { return }
             panel.orderOut(nil)
+            // A held transcript takes every event its session sends. The pinned one stays,
+            // or every open would read it again and the card grow under the reader.
+            composer.store.dropTranscripts(keeping: composer.key)
             if updatePending { updateIfReplaced() }
         }
     }
