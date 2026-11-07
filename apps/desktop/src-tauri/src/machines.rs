@@ -156,6 +156,10 @@ pub struct Welcome {
     /// `std::env::consts::OS` on the server.
     #[serde(default)]
     pub os: Option<String>,
+    /// The server took a hello's `forward`. One from before reads that hello as
+    /// an ordinary client's and says nothing of it.
+    #[serde(default)]
+    pub forwarding: bool,
 }
 
 /// Connects and says `hello`. Answers the admitted socket, or why not.

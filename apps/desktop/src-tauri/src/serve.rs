@@ -118,6 +118,12 @@ const ADMIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// path; nothing a real client sends comes near this.
 const FILE_HEAD_LIMIT: u64 = 16 * 1024;
 
+/// A piped port's socket can die without closing, as any remote socket can, and
+/// nothing else would ever end a page's idle hot-reload connection. Both ends
+/// ping, so each hears the other however one-way the traffic is.
+const PIPE_PING: std::time::Duration = std::time::Duration::from_secs(15);
+const PIPE_SILENCE: std::time::Duration = std::time::Duration::from_secs(45);
+
 /// Where a server writes the port it listens on for the app, then its
 /// [`exe_stamp`], then its pid. The Mac's background server lets the OS pick
 /// its port each start, so it never collides with a `dray-serve` on 7317.
@@ -588,6 +594,10 @@ struct Hello {
     /// The client inflates binary frames: see [`frame_out`].
     #[serde(default)]
     deflate: bool,
+    /// This socket carries one connection to a port on this machine, rather
+    /// than being a client: see [`pipe`].
+    #[serde(default)]
+    forward: Option<u16>,
 }
 
 /// What the app can answer when it connects as the host.
@@ -759,6 +769,54 @@ async fn request_line(stream: &TcpStream) -> Option<String> {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     None
+}
+
+/// Passes bytes between an admitted socket and a TCP connection until either
+/// ends. The two directions run side by side, or a peer sending a large body
+/// before it reads could stall against one sending a large answer.
+// ponytail: either side's EOF ends both directions, where a half-closed TCP
+// connection could still be answered. Browsers don't half-close.
+pub async fn pipe<W, R, E>(mut write: W, mut read: R, tcp: TcpStream)
+where
+    W: futures_util::Sink<Message> + Unpin,
+    R: futures_util::Stream<Item = Result<Message, E>> + Unpin,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (mut from_tcp, mut to_tcp) = tcp.into_split();
+    let outbound = async {
+        let mut chunk = vec![0; 64 * 1024];
+        let mut ping = tokio::time::interval(PIPE_PING);
+        loop {
+            let frame = tokio::select! {
+                read = from_tcp.read(&mut chunk) => match read {
+                    Ok(n) if n > 0 => Message::binary(chunk[..n].to_vec()),
+                    _ => break,
+                },
+                _ = ping.tick() => Message::Ping(Default::default()),
+            };
+            if write.send(frame).await.is_err() {
+                return;
+            }
+        }
+        write.close().await.ok();
+    };
+    let inbound = async {
+        while let Ok(Some(Ok(frame))) = tokio::time::timeout(PIPE_SILENCE, read.next()).await {
+            match frame {
+                Message::Binary(bytes) => {
+                    if to_tcp.write_all(&bytes).await.is_err() {
+                        break;
+                    }
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+    };
+    tokio::select! {
+        _ = outbound => {}
+        _ = inbound => {}
+    }
 }
 
 /// An HTTP request head: its target, the bearer token if one was sent, and
@@ -1012,6 +1070,23 @@ async fn connection(
             .await
             .ok();
         write.close().await.ok();
+        return Ok(());
+    }
+    if let Some(port) = serde_json::from_str::<Hello>(&hello).ok().and_then(|h| h.forward) {
+        // `localhost` rather than 127.0.0.1: every address it resolves to is
+        // tried, and Vite binds `::1` alone on some machines. Any port is
+        // allowed, since this token already runs shells here.
+        match TcpStream::connect(("localhost", port)).await {
+            Ok(tcp) => {
+                write.send(Message::text(json!({ "v": PROTOCOL, "forwarding": true }).to_string())).await?;
+                pipe(write, read, tcp).await;
+            }
+            Err(_) => {
+                let refusal = format!("nothing is listening on port {port}");
+                write.send(Message::text(json!({ "err": refusal }).to_string())).await.ok();
+                write.close().await.ok();
+            }
+        }
         return Ok(());
     }
     // Subscribed only once admitted, so nothing reaches a client the token

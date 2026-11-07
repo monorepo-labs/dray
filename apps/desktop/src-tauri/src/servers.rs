@@ -83,6 +83,30 @@ pub struct ServerInfo {
 
 type Reply = Result<Value, Value>;
 
+/// What carries one forwarded dev-server port. Dropping it takes the port down.
+enum Forward {
+    Ssh(ssh::Forward),
+    /// A server with no login: see [`forward_over_dray`]. The set holds the
+    /// accepting task, and dropping a set aborts what it holds.
+    Dray { port: u16, _accepting: tokio::task::JoinSet<()> },
+}
+
+impl Forward {
+    fn port(&self) -> u16 {
+        match self {
+            Forward::Ssh(forward) => forward.port,
+            Forward::Dray { port, .. } => *port,
+        }
+    }
+
+    fn alive(&mut self) -> bool {
+        match self {
+            Forward::Ssh(forward) => forward.alive(),
+            Forward::Dray { .. } => true,
+        }
+    }
+}
+
 struct Conn {
     saved: Saved,
     status: ServerStatus,
@@ -98,7 +122,7 @@ struct Conn {
     task: Option<tokio::task::JoinHandle<()>>,
     /// Dev-server ports forwarded for the Mac's browser, by remote port. They
     /// last as long as the connection does.
-    forwards: HashMap<u16, ssh::Forward>,
+    forwards: HashMap<u16, Forward>,
     /// What the server said when last admitted, kept across a drop so the row
     /// still says what it last knew. `None` until it first connects.
     met: Option<Welcome>,
@@ -1132,7 +1156,7 @@ pub async fn set_server_beta(id: String, beta: bool) -> Result<(), String> {
 /// the row again reuses it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn forward_port(server: String, port: u16) -> Result<u16, String> {
-    let target = {
+    let (target, live, name) = {
         let mut list = conns();
         let conn = list.iter_mut().find(|c| c.saved.id == server).ok_or("that server is no longer on the list")?;
         if let Some(open) = live_forward(conn, port) {
@@ -1141,15 +1165,13 @@ pub async fn forward_port(server: String, port: u16) -> Result<u16, String> {
         if conn.status != ServerStatus::Connected {
             return Err(format!("{} is not connected", conn.saved.name));
         }
-        conn.saved.ssh.clone().ok_or_else(|| {
-            format!(
-                "{} was added by address, so there is no SSH login to forward port {port} over. \
-                 Add it again from its SSH line to open its dev servers here.",
-                conn.saved.name
-            )
-        })?
+        (conn.saved.ssh.clone(), conn.live.clone(), conn.saved.name.clone())
     };
-    let forward = ssh::forward(&target, port).await?;
+    let forward = match (target, live) {
+        (Some(target), _) => Forward::Ssh(ssh::forward(&target, port).await?),
+        (None, Some((url, token))) => forward_over_dray(url, token, &name, port).await?,
+        (None, None) => return Err(format!("{name} is not connected")),
+    };
     let mut list = conns();
     let conn = list
         .iter_mut()
@@ -1160,7 +1182,7 @@ pub async fn forward_port(server: String, port: u16) -> Result<u16, String> {
     if let Some(open) = live_forward(conn, port) {
         return Ok(open);
     }
-    let local = forward.port;
+    let local = forward.port();
     conn.forwards.insert(port, forward);
     Ok(local)
 }
@@ -1169,7 +1191,53 @@ pub async fn forward_port(server: String, port: u16) -> Result<u16, String> {
 /// replaced.
 fn live_forward(conn: &mut Conn, port: u16) -> Option<u16> {
     let forward = conn.forwards.get_mut(&port)?;
-    forward.alive().then_some(forward.port)
+    forward.alive().then(|| forward.port())
+}
+
+/// A free local port for a server with no SSH login, which a Mac never has.
+/// Each connection to it opens a socket of its own to the server, admitted by
+/// the token, and is piped to `remote` there.
+// ponytail: a full TLS handshake per browser connection, about a second through
+// the relay. Multiplex over one socket if pages feel slow to load.
+async fn forward_over_dray(url: String, token: String, name: &str, remote: u16) -> Result<Forward, String> {
+    // Once before the port opens, so a stopped dev server or an old Dray is a
+    // sentence rather than a blank page.
+    open_pipe(&url, &token, name, remote).await?.close(None).await.ok();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| format!("no free local port: {e}"))?;
+    let port = listener.local_addr().map_err(|e| format!("no free local port: {e}"))?.port();
+    let name = name.to_string();
+    let mut accepting = tokio::task::JoinSet::new();
+    accepting.spawn(async move {
+        let mut pipes = tokio::task::JoinSet::new();
+        loop {
+            let accepted = tokio::select! {
+                accepted = listener.accept() => accepted,
+                // Reaps finished pipes, so the set holds live ones alone.
+                Some(_) = pipes.join_next() => continue,
+            };
+            let Ok((tcp, _)) = accepted else { continue };
+            let (url, token, name) = (url.clone(), token.clone(), name.clone());
+            pipes.spawn(async move {
+                match open_pipe(&url, &token, &name, remote).await {
+                    Ok(ws) => {
+                        let (write, read) = ws.split();
+                        crate::serve::pipe(write, read, tcp).await;
+                    }
+                    Err(e) => eprintln!("[forward {remote}] {e}"),
+                }
+            });
+        }
+    });
+    Ok(Forward::Dray { port, _accepting: accepting })
+}
+
+/// A socket the server has joined to `remote` on its own machine.
+async fn open_pipe(url: &str, token: &str, name: &str, remote: u16) -> Result<Socket, String> {
+    let (ws, welcome) = admit_with(url, json!({ "v": PROTOCOL, "token": token, "forward": remote })).await?;
+    if !welcome.forwarding {
+        return Err(format!("Update Dray on {name} to open its dev servers here."));
+    }
+    Ok(ws)
 }
 
 /// A file on a remote server — an attachment, a recording — fetched through
@@ -1383,7 +1451,7 @@ mod tests {
         assert_eq!(out.stable.as_ref().map(ToString::to_string).as_deref(), Some("0.11.1"));
         assert_eq!(out.beta.as_ref().map(ToString::to_string).as_deref(), Some("0.12.0-beta.10"), "numeric, not lexical");
 
-        let on = |release: &str| Welcome { version: Some("0.28.0".into()), release: Some(release.into()), stale: false, os: None };
+        let on = |release: &str| Welcome { version: Some("0.28.0".into()), release: Some(release.into()), stale: false, ..Default::default() };
         assert!(behind(&on("0.11.0"), false, &out));
         assert!(!behind(&on("0.11.1"), false, &out));
         assert!(!behind(&on("0.11.1"), false, &Releases::default()), "nothing out is nothing to update to");
@@ -1396,7 +1464,7 @@ mod tests {
 
         let old = Welcome::default();
         assert!(behind(&old, false, &out), "a server that says nothing predates saying");
-        let local = Welcome { version: Some("0.28.0".into()), release: None, stale: false, os: None };
+        let local = Welcome { version: Some("0.28.0".into()), release: None, stale: false, ..Default::default() };
         assert!(!behind(&local, true, &out), "a local build is never offered one");
     }
 
@@ -1464,6 +1532,102 @@ mod tests {
         url
     }
 
+    /// A real server, token "t", and what it can reach: a TCP service that
+    /// answers each read with the same bytes, then ends on "bye".
+    async fn forwarding_server() -> (String, u16) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let file = std::env::temp_dir().join("dray-no-tunnel-url");
+        tokio::spawn(crate::serve::listen(
+            listener,
+            Default::default(),
+            Sink::new(|_, _| {}),
+            "t".into(),
+            file.into(),
+            false,
+        ));
+        let service = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = service.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut tcp, _)) = service.accept().await {
+                tokio::spawn(async move {
+                    let mut chunk = vec![0; 64 * 1024];
+                    while let Ok(n) = tcp.read(&mut chunk).await {
+                        if n == 0 || &chunk[..n] == b"bye" {
+                            break;
+                        }
+                        tcp.write_all(&chunk[..n]).await.unwrap();
+                    }
+                });
+            }
+        });
+        (url, port)
+    }
+
+    #[tokio::test]
+    async fn a_port_is_forwarded_without_ssh() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (url, remote) = forwarding_server().await;
+        // A row with no login, the way a Mac added by address is one.
+        let id = "forward-no-ssh";
+        let saved = Saved { id: id.into(), name: "box".into(), url: url.clone(), ssh: None, off: true, beta: false, ignored: None, unknown: Default::default() };
+        let mut conn = Conn::new(saved);
+        conn.status = ServerStatus::Connected;
+        conn.live = Some((url, "t".into()));
+        conns().push(conn);
+        let local = forward_port(id.into(), remote).await.unwrap();
+        assert_eq!(forward_port(id.into(), remote).await.unwrap(), local, "a second click reuses the port");
+
+        // Far past one frame, and past what the socket buffers hold, so a pipe
+        // that stops reading while it writes would stall here.
+        let sent: Vec<u8> = (0..8 << 20).map(|i: u32| (i % 251) as u8).collect();
+        let tcp = tokio::net::TcpStream::connect(("127.0.0.1", local)).await.unwrap();
+        let (mut reader, mut writer) = tcp.into_split();
+        let writing = {
+            let sent = sent.clone();
+            tokio::spawn(async move {
+                writer.write_all(&sent).await.unwrap();
+                writer
+            })
+        };
+        let mut got = vec![0; sent.len()];
+        tokio::time::timeout(Duration::from_secs(30), reader.read_exact(&mut got)).await.unwrap().unwrap();
+        assert!(got == sent, "the bytes came back changed");
+
+        // The service hanging up reaches the local connection, and the port
+        // stays open for the next one.
+        let mut writer = writing.await.unwrap();
+        writer.write_all(b"bye").await.unwrap();
+        let ended = tokio::time::timeout(Duration::from_secs(5), reader.read(&mut got)).await.unwrap();
+        assert_eq!(ended.unwrap(), 0);
+        let mut again = tokio::net::TcpStream::connect(("127.0.0.1", local)).await.unwrap();
+        again.write_all(b"hi").await.unwrap();
+        let mut two = [0; 2];
+        tokio::time::timeout(Duration::from_secs(5), again.read_exact(&mut two)).await.unwrap().unwrap();
+        assert_eq!(&two, b"hi");
+        // `CONNS` is shared, and the live tests read it from row 0.
+        conns().retain(|c| c.saved.id != id);
+    }
+
+    #[tokio::test]
+    async fn a_forward_that_cannot_work_says_why() {
+        let (url, remote) = forwarding_server().await;
+        let refused = |f: Result<Forward, String>| f.err().expect("should have refused");
+        let wrong = refused(forward_over_dray(url.clone(), "nope".into(), "box", remote).await);
+        assert!(wrong.contains("wrong token"), "{wrong}");
+
+        let unused = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead = unused.local_addr().unwrap().port();
+        drop(unused);
+        let stopped = refused(forward_over_dray(url, "t".into(), "box", dead).await);
+        assert!(stopped.contains(&format!("nothing is listening on port {dead}")), "{stopped}");
+
+        // A server from before reads the hello as a client's and welcomes it.
+        let old = refused(forward_over_dray(fake_server(true).await, "t".into(), "box", remote).await);
+        assert!(old.contains("Update Dray on box"), "{old}");
+    }
+
     async fn served_for(id: &str, answers: bool) -> Option<()> {
         let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, unknown: Default::default() };
         conns().push(Conn::new(saved));
@@ -1496,6 +1660,43 @@ mod tests {
         })
         .await
         .expect("no such event in time")
+    }
+
+    /// A real dev server behind a running `dray-serve`, usually through the
+    /// relay: its page, and the hot-reload socket a page keeps open.
+    ///
+    /// ```text
+    /// DRAY_TEST_SERVER=wss://… DRAY_TEST_TOKEN=$(cat …/serve-token) DRAY_TEST_PORT=5173 \
+    ///   cargo test servers::tests::forwards_a_real_vite_server -- --ignored --nocapture
+    /// ```
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn forwards_a_real_vite_server() {
+        let url = std::env::var("DRAY_TEST_SERVER").expect("DRAY_TEST_SERVER");
+        let token = std::env::var("DRAY_TEST_TOKEN").expect("DRAY_TEST_TOKEN");
+        let remote: u16 = std::env::var("DRAY_TEST_PORT").expect("DRAY_TEST_PORT").parse().unwrap();
+
+        let started = std::time::Instant::now();
+        let forward = forward_over_dray(url, token, "box", remote).await.unwrap();
+        println!("forward up in {:?}", started.elapsed());
+        let local = forward.port();
+
+        let started = std::time::Instant::now();
+        let page = crate::http().get(format!("http://localhost:{local}/")).send().await.unwrap();
+        assert!(page.status().is_success(), "{}", page.status());
+        let page = page.text().await.unwrap();
+        assert!(page.contains("/@vite/client"), "{page}");
+        println!("page in {:?}", started.elapsed());
+        let script = crate::http().get(format!("http://localhost:{local}/@vite/client")).send().await.unwrap();
+        println!("/@vite/client: {} bytes", script.text().await.unwrap().len());
+
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut hmr = format!("ws://localhost:{local}/").into_client_request().unwrap();
+        hmr.headers_mut().insert("sec-websocket-protocol", "vite-hmr".parse().unwrap());
+        let (mut hmr, _) = tokio_tungstenite::connect_async(hmr).await.unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(10), hmr.next()).await.unwrap().unwrap().unwrap();
+        assert!(first.to_text().unwrap().contains("connected"), "{first}");
+        println!("hot reload connected: {first}");
     }
 
     /// Against a running `dray-serve`, in a throwaway `DRAY_HOME`:
