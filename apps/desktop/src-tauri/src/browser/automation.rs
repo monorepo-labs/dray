@@ -17,7 +17,7 @@
 
 use super::{
     activate_tab, active_id, awake, browser_dir, close_tab, cover, emit, nav, open_url, relayout,
-    reveal_for_input, send_cdp, set_zoom, tab_state, tabs_of, touch, uncover,
+    reveal_for_input, send_cdp, set_zoom, tab_state, tabs_of, touch, uncover, INPUT_IN_DEVICE_PIXELS,
 };
 use base64::Engine;
 use dray_proto::{BrowserAction, Get, Is, Locator};
@@ -557,7 +557,8 @@ async fn new_tab(session: &str, before: &[i32]) -> Result<i32, String> {
 }
 
 async fn mouse(tab: i32, kind: &str, x: f64, y: f64, extra: Value) -> Result<(), String> {
-    let mut params = json!({ "type": kind, "x": x, "y": y });
+    let scale = if INPUT_IN_DEVICE_PIXELS && parked(tab).is_some() { f64::from(RECORD_SCALE) } else { 1.0 };
+    let mut params = json!({ "type": kind, "x": x * scale, "y": y * scale });
     params.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
     cdp(tab, "Input.dispatchMouseEvent", params).await.map(|_| ())
 }

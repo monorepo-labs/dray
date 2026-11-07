@@ -288,6 +288,7 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::SetAside(r) => Some(&r.session_id),
         Request::Share(r) => Some(&r.session_id),
         Request::Browser(r) => Some(&r.session_id),
+        Request::AddVideo(r) => Some(&r.session_id),
         _ => None,
     }
 }
@@ -568,6 +569,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::ListDrafts(list) => list_drafts(list).await,
         Request::RemoveDraft(draft) => remove_draft(&draft.id, app).await,
         Request::StartDraft(start) => start_draft(start, None, app).await,
+        Request::AddVideo(video) => add_video(video).await,
         Request::Share(share) => share_port(share).await,
         Request::ListShares(list) => list_shares(list).await,
         Request::RenameSession(rename) => {
@@ -876,6 +878,22 @@ async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
         return Ok(answered(crate::cef::automation::run(&request.session_id, request.action).await));
     }
     Ok(answered(crate::headless::automation::run(&request.session_id, request.action).await))
+}
+
+/// Files a video for a session's chat. The folder is worked out here because
+/// only the server knows its home, and it is the one the session's delete sweeps.
+async fn add_video(request: dray_proto::AddVideo) -> Result<Response> {
+    let dray_proto::AddVideo { session_id, path, name } = request;
+    store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
+    let dir = store::get_home_app_dir().await?.join("browser/recordings").join(&session_id);
+    let filed = tokio::task::spawn_blocking(move || {
+        crate::recording::add(Path::new(&path), &dir, name.as_deref())
+    })
+    .await?;
+    Ok(match filed {
+        Ok(path) => Response::Video { path: path.to_string_lossy().into_owned() },
+        Err(message) => Response::error(message),
+    })
 }
 
 /// Tags a session that already exists, or untags it.

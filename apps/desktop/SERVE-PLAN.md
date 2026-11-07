@@ -143,8 +143,8 @@ socket retries every second while anything listens.
 in the app — attachments and browser recordings — confined to those two
 directories by canonical path, so `..` and symlinks reach nothing else. The
 token rides the query because an `<img>` cannot set a header. Absent and
-forbidden both answer 404. `fileSrc` in `transport.ts` builds the URL. No Range
-support yet, so a long video plays but cannot seek. A video the Files view
+forbidden both answer 404. `fileSrc` in `transport.ts` builds the URL. It answers `Range`,
+so a video seeks and AVPlayer can read it. A video the Files view
 opened is let through too: `read_file` records its canonical path, the remote
 copy of the app's `allow_file` grant.
 
