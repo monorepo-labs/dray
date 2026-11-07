@@ -585,8 +585,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             Ok(Response::RemoteAccess { on: now.on })
         }
         Request::SetAside(aside) => {
-            crate::set_session_flags(&aside.session_id, None, None, None, Some(aside.aside)).await?;
-            announce_change(&[aside.session_id.clone()], app).await;
+            crate::set_session_flags(&aside.session_id, None, None, None, Some(aside.aside), app.clone()).await?;
             answer_session(&aside.session_id).await
         }
         on_screen => {
@@ -837,23 +836,22 @@ async fn settle_session(settle: dray_proto::SettleSession, app: &Sink) -> Result
     if settle.settled && settle.delete_worktree && item.worktree_name.is_none() {
         bail!("session {id} has no worktree of its own to delete");
     }
-    crate::set_session_flags(id, Some(settle.settled), None, None, None).await?;
-    let mut changed = vec![id.to_string()];
-    changed.extend(store::hidden_descendants(id).await?);
-    let removed = match settle.settled && settle.delete_worktree {
-        true => manager().remove_worktree(id).await.map(drop),
-        false => Ok(()),
-    };
-    // The settle has landed whatever the removal answered, so the sidebar
-    // hears of it before a failed removal is reported.
-    announce_change(&changed, app).await;
-    removed.context("settled, but the worktree was not deleted")?;
+    crate::set_session_flags(id, Some(settle.settled), None, None, None, app.clone()).await?;
+    if settle.settled && settle.delete_worktree {
+        let removed = manager().remove_worktree(id).await;
+        // Removal moves `cwd` out of each tree, hidden children's first, so even
+        // a refusal partway has entries past what the settle announced.
+        let mut moved = vec![id.to_string()];
+        moved.extend(store::hidden_descendants(id).await?);
+        announce_change(&moved, app).await;
+        removed.context("settled, but the worktree was not deleted")?;
+    }
     answer_session(id).await
 }
 
 /// Index entries changed from here, re-read and handed to the sidebar, which
 /// otherwise only learns of a change it made itself.
-async fn announce_change(ids: &[String], app: &Sink) {
+pub(crate) async fn announce_change(ids: &[String], app: &Sink) {
     for id in ids {
         if let Ok(Some(item)) = store::get_session_index_item(id).await {
             app.emit(SESSION_CHANGED, &item).ok();

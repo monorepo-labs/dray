@@ -150,6 +150,11 @@ const pathOfProject = (p: Project) => p.path;
 /// server that cannot be asked still draws the side the reader picks.
 const lastIndex = new Map<string, SessionIndexItem[]>();
 
+/// Per session, how many index entries have landed. A server's replies and
+/// events leave on separate queues, so a read can answer after a newer change
+/// and has to be able to tell.
+const indexWrites = new Map<string, number>();
+
 /// Per session, a send still waiting on its uploads. A later send there waits
 /// behind it, or a prompt typed after one carrying a screenshot would arrive
 /// first.
@@ -1434,6 +1439,7 @@ const detachSession = async (sessionId: string) => {
 /// the ones `dray session settle` and friends make.
 const applyIndexItem = (updated: SessionIndexItem) => {
   const { sessionId } = updated;
+  indexWrites.set(sessionId, (indexWrites.get(sessionId) ?? 0) + 1);
   setSessionIndexItems((prev) => {
     // The ref, not the closure: this runs after the write, and the reader can
     // toggle the split while one is in flight. Judged against the captured
@@ -2446,6 +2452,14 @@ useEffect(() => {
       if (!ours(s.sessionId)) continue;
       retireStreamingBlock(s.sessionId);
       catchUp(s.sessionId, undefined, !!payload.queued).catch((e) => console.error("could not catch up", s.sessionId, e));
+      // The list read covers the sidebar alone. An open transcript holds its
+      // own flags, and a settle made while the socket was down reached nobody.
+      const writes = indexWrites.get(s.sessionId);
+      invoke<SessionIndexItem | null>("session_index_item", { sessionId: s.sessionId }, server)
+        .then((item) => {
+          if (item && indexWrites.get(s.sessionId) === writes) applyIndexItemRef.current(item);
+        })
+        .catch((e) => console.error("could not reread", s.sessionId, e));
     }
     // A transcript opened while this server was down never loaded, so there is
     // nothing above to catch up — it is read now rather than left blank.

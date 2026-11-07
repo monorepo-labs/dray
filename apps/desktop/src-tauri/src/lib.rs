@@ -576,6 +576,7 @@ async fn set_session_flags(
     pinned: Option<bool>,
     hidden: Option<bool>,
     aside: Option<bool>,
+    sink: Sink,
 ) -> Result<Option<SessionIndexItem>, Fail> {
     let updated = store::set_session_flags(session_id, archived, pinned, hidden, aside).await?;
     if updated.is_none() {
@@ -588,6 +589,9 @@ async fn set_session_flags(
     if let Some(archived) = archived {
         settling.extend(store::archive_hidden_descendants(session_id, archived).await?);
     }
+    // The answer reaches the caller alone, and a server has other clients.
+    // Ahead of the stop, which can take seconds.
+    orchestration::announce_change(&settling, &sink).await;
     if archived == Some(true) {
         for id in &settling {
             if let Err(e) = manager().settle(id).await {
