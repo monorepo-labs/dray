@@ -121,8 +121,10 @@ const FILE_HEAD_LIMIT: u64 = 16 * 1024;
 /// A piped port's socket can die without closing, as any remote socket can, and
 /// nothing else would ever end a page's idle hot-reload connection. Both ends
 /// ping, so each hears the other however one-way the traffic is.
-const PIPE_PING: std::time::Duration = std::time::Duration::from_secs(15);
-const PIPE_SILENCE: std::time::Duration = std::time::Duration::from_secs(45);
+const PIPE_PING: std::time::Duration =
+    if cfg!(test) { std::time::Duration::from_millis(100) } else { std::time::Duration::from_secs(15) };
+const PIPE_SILENCE: std::time::Duration =
+    if cfg!(test) { std::time::Duration::from_secs(3) } else { std::time::Duration::from_secs(45) };
 
 /// Where a server writes the port it listens on for the app, then its
 /// [`exe_stamp`], then its pid. The Mac's background server lets the OS pick
@@ -794,7 +796,10 @@ where
                 },
                 _ = ping.tick() => Message::Ping(Default::default()),
             };
-            if write.send(frame).await.is_err() {
+            // Bounded, since nothing else ends a pipe stuck writing both ways: a
+            // reader blocked on TCP is not listening for the silence. A page that
+            // pauses a large answer this long loses the connection and asks again.
+            if !matches!(tokio::time::timeout(PIPE_SILENCE, write.send(frame)).await, Ok(Ok(()))) {
                 return;
             }
         }
@@ -1508,6 +1513,24 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The local peer reads nothing and the socket takes nothing, so both
+    /// directions sit in a write.
+    #[tokio::test]
+    async fn a_pipe_stuck_writing_both_ways_ends() {
+        use tokio::io::AsyncWriteExt;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut peer = TcpStream::connect(addr).await.unwrap();
+        let (tcp, _) = listener.accept().await.unwrap();
+        tokio::spawn(async move { while peer.write_all(&[0; 1024]).await.is_ok() {} });
+
+        let stuck = Box::pin(futures_util::sink::unfold((), |_, _: Message| {
+            std::future::pending::<Result<(), std::io::Error>>()
+        }));
+        let flood = futures_util::stream::repeat_with(|| Ok::<_, std::io::Error>(Message::binary(vec![0; 1 << 20])));
+        tokio::time::timeout(PIPE_SILENCE * 3, pipe(stuck, flood, tcp)).await.expect("the pipe never ended");
+    }
 
     #[test]
     fn a_second_start_keeps_the_token() {
