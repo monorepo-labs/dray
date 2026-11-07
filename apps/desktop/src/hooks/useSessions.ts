@@ -2446,6 +2446,13 @@ useEffect(() => {
       if (!ours(s.sessionId)) continue;
       retireStreamingBlock(s.sessionId);
       catchUp(s.sessionId, undefined, !!payload.queued).catch((e) => console.error("could not catch up", s.sessionId, e));
+      // The list read covers the sidebar alone. An open transcript holds its
+      // own flags, and a settle made while the socket was down reached nobody.
+      invoke<SessionIndexItem | null>("session_index_item", { sessionId: s.sessionId }, server)
+        .then((item) => {
+          if (item) applyIndexItemRef.current(item);
+        })
+        .catch((e) => console.error("could not reread", s.sessionId, e));
     }
     // A transcript opened while this server was down never loaded, so there is
     // nothing above to catch up — it is read now rather than left blank.
