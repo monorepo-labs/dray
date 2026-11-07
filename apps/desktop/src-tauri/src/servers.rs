@@ -773,7 +773,12 @@ async fn remember_boat(id: &str, reported: Option<&str>, target: &ssh::Target) {
         // Still this sandbox, so the timer is read again once boat answers.
         if known.is_some() {
             if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
-                conn.boat.get_or_insert_with(|| BoatRow { lost: true, ..BoatRow::new(BoatPhase::Running) }).here = true;
+                let row = conn.boat.get_or_insert_with(|| BoatRow { lost: true, ..BoatRow::new(BoatPhase::Running) });
+                row.here = true;
+                // It just let a login in, so it is not stopped, whatever was last seen.
+                if row.phase == BoatPhase::Stopped {
+                    row.phase = BoatPhase::Running;
+                }
             }
         }
         return;
@@ -852,6 +857,8 @@ async fn watch_boats() {
                     row.lost = false;
                     if read.stopped {
                         row.phase = BoatPhase::Stopped;
+                    } else if row.phase == BoatPhase::Stopped {
+                        row.phase = BoatPhase::Running;
                     }
                 }
             });
