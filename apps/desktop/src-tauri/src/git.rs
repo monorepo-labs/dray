@@ -55,8 +55,19 @@ pub async fn origin(cwd: &str) -> Option<String> {
 /// remote that is a path here says nothing about a path there, and two machines
 /// merged on `/srv/x.git` would hide a checkout.
 pub async fn shared_remote(cwd: &str) -> Option<String> {
-    let url = git_line(cwd, &["remote", "get-url", "origin"]).await?;
-    is_network_url(&url).then(|| repo_key(&url))
+    // Killed when a caller's timeout drops it, or a stalled checkout gathers one
+    // git per list. Only here: other reads and writes must not die half way.
+    let out = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(cwd)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .kill_on_drop(true)
+        .output()
+        .await
+        .ok()?;
+    let url = String::from_utf8_lossy(&out.stdout);
+    let url = url.trim();
+    (out.status.success() && is_network_url(url)).then(|| repo_key(url))
 }
 
 /// Git's own rule: a scheme, or scp form's colon ahead of any slash. A lone
