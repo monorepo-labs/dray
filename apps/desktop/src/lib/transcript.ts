@@ -180,21 +180,22 @@ export function segmentWork(turn: Turn, resultByCallId?: Map<string, ToolResult>
   return segments;
 }
 
-/// Every `dray browser record` video named in a text, absolute paths only —
-/// the asset protocol reads nothing else. Unanchored where Markdown's own test
-/// is anchored, since this searches prose and tool output rather than judging
-/// one path.
+/// Every recording named in a text, absolute paths only — the asset protocol
+/// reads nothing else. Unanchored where Markdown's own test is anchored, since
+/// this searches prose and tool output rather than judging one path. Any home,
+/// since `DRAY_HOME` moves it. The group is the path, and what it must follow
+/// is what keeps `~/.dray/…` from reading as `/.dray/…`.
 const RECORDING_IN_TEXT =
-  /\/[^\s"'`()<>]*\/\.dray(?:-dev|-worktrees\/[^/\s"'`()<>]+)?\/browser(?:-dev)?\/recordings\/[^/\s"'`()<>]+\/[^/\s"'`()<>]+\.mp4/g;
+  /(?:^|[\s"'`(<>\[=:])(\/[^\s"'`()<>]*\/browser(?:-dev)?\/recordings\/[^/\s"'`()<>]+\/[^/\s"'`()<>]+\.mp4)/gm;
 
-/// `dray browser record stop` run as a command: opening it, after a shell
-/// separator, or quoted after `-c` the way Codex wraps every command.
-/// `rg 'dray browser record stop'` only quotes it, and prints a fixture's fake
-/// path beside it.
-const RECORD_STOP = /(?:^|[;&|(\n]|\s-\w*c\s+['"])\s*dray\s+browser\s+record\s+stop\b/;
+/// A command that prints a recording's path, run as a command: opening it,
+/// after a shell separator, or quoted after `-c` the way Codex wraps every
+/// command. `rg 'dray browser record stop'` only quotes it, and prints a
+/// fixture's fake path beside it.
+const RECORD_STOP = /(?:^|[;&|(\n]|\s-\w*c\s+['"])\s*dray\s+(?:browser\s+record\s+stop|video\s+add)\b/;
 
-/// The call's id where it is a `dray browser record stop`, which prints the
-/// MP4's path. No other tool's output is read for one, or a file that merely
+/// The call's id where it is a `dray browser record stop` or `dray video add`,
+/// which print the MP4's path. No other tool's output is read for one, or a file that merely
 /// mentions a path — a test fixture read back — draws a player for a video
 /// that was never made. Every string in the input is tried, since each harness
 /// shapes a shell command its own way.
@@ -225,9 +226,9 @@ export function segmentMedia(
   const media: Media[] = [];
   // Seeded with the final message's own, which it plays itself — wherever else
   // in the stretch the same path turns up.
-  const seen = new Set(finalText ? [...finalText.matchAll(RECORDING_IN_TEXT)].map(([path]) => path) : []);
+  const seen = new Set(finalText ? [...finalText.matchAll(RECORDING_IN_TEXT)].map(([, path]) => path) : []);
   const scan = (text: string) => {
-    for (const [path] of text.matchAll(RECORDING_IN_TEXT)) {
+    for (const [, path] of text.matchAll(RECORDING_IN_TEXT)) {
       if (seen.has(path)) continue;
       seen.add(path);
       media.push({ video: path });
@@ -261,7 +262,7 @@ export function sessionMedia(events: AgentEvent[]): SessionMedia[] {
     media.push(m);
   };
   const scan = (text: string) => {
-    for (const [path] of text.matchAll(RECORDING_IN_TEXT)) add(path, { video: path, byYou: false });
+    for (const [, path] of text.matchAll(RECORDING_IN_TEXT)) add(path, { video: path, byYou: false });
   };
   const images = (list: ImageRef[], byYou: boolean) => {
     for (const image of list) {

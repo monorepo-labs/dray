@@ -15,7 +15,7 @@ mod machine;
 mod setup;
 use draft::DraftCommand;
 use dray_proto::{
-    encode_line, BrowserAction, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
+    encode_line, AddVideo, BrowserAction, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
     LinkIssues, ListSessions, Locator, OnMachine, RenameSession, Request, Response, SendMessage, SessionRef,
     SessionSummary, SetAside, SettleSession, ShareAction, ShareRequest,
 };
@@ -67,6 +67,9 @@ enum Command {
     Draft(DraftCommand),
     /// Drive this session's browser: open pages, read them, click and type.
     Browser(BrowserCommand),
+    /// Put a video where this session's chat plays it.
+    #[command(subcommand, arg_required_else_help = true)]
+    Video(VideoCommand),
     /// Publish one of this session's dev servers as a public link, list the
     /// live ones, or stop one.
     #[command(arg_required_else_help = true, args_conflicts_with_subcommands = true)]
@@ -367,6 +370,26 @@ enum ShareCommand {
 }
 
 #[derive(Subcommand)]
+enum VideoCommand {
+    /// File a video on this machine for the chat, converting it to MP4 if it
+    /// needs it, and print the path to put in your reply.
+    Add(VideoAdd),
+}
+
+#[derive(Args)]
+struct VideoAdd {
+    /// The video. It must be on this machine: copy one made elsewhere here first.
+    file: PathBuf,
+    /// What to call it, since the file travels by its name. Defaults to the
+    /// file's own.
+    name: Option<String>,
+    /// The session whose chat it plays in. Defaults to the session running this
+    /// command.
+    #[arg(long)]
+    session: Option<String>,
+}
+
+#[derive(Subcommand)]
 enum SkillCommand {
     /// Write the skill to ~/.claude/skills/dray/ and ~/.codex/skills/dray/,
     /// where Claude Code and Codex find it.
@@ -408,6 +431,7 @@ fn run() -> Result<(), String> {
         Command::Issue(IssueCommand::Unlink(args)) => link_issues(args, true),
         Command::Draft(command) => draft::run(command),
         Command::Browser(args) => browser(args),
+        Command::Video(VideoCommand::Add(args)) => add_video(args),
         Command::Share(args) => share(args),
         Command::Machine(command) => machine::run(command),
         Command::Server(command) => setup::server(command),
@@ -615,6 +639,31 @@ fn browser(args: BrowserCommand) -> Result<(), String> {
             } else {
                 println!("{output}");
             }
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
+    }
+}
+
+/// Resolved here, not by the server: a relative path means this shell's
+/// directory, and the server stands in another.
+fn add_video(args: VideoAdd) -> Result<(), String> {
+    let session_id = args
+        .session
+        .or_else(parent_session_id)
+        .ok_or("which session? Pass --session <id>, or run this from inside a Dray session.")?;
+    let path = std::fs::canonicalize(&args.file).map_err(|e| {
+        format!("{}: {e}. A video made on another machine has to be copied here first.", args.file.display())
+    })?;
+    let request = Request::AddVideo(AddVideo {
+        session_id,
+        path: path.to_string_lossy().into_owned(),
+        name: args.name,
+    });
+    match send(request)? {
+        Response::Video { path } => {
+            println!("{path}");
             Ok(())
         }
         Response::Error { message } => Err(message),

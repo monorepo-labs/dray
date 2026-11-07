@@ -42,8 +42,9 @@ use std::path::PathBuf;
 /// the server runs the tunnel itself. v12 added `on_machine`: an older app
 /// cannot parse it, and one that could ignore the machine would run the
 /// request here, a create meant for a VPS starting on the Mac as if it had
-/// gone where it was sent.
-pub const PROTOCOL_VERSION: u32 = 12;
+/// gone where it was sent. v13 added `add_video`, which an older app reads as a
+/// broken CLI rather than as an app to update.
+pub const PROTOCOL_VERSION: u32 = 13;
 
 /// The oldest envelope the app still answers. Rises only when a shape is
 /// *renamed*, never for an addition: v4 renamed `LinkIssues.identifiers` to
@@ -120,6 +121,7 @@ impl Request {
             | Request::ListShares(_) => 10,
             Request::SetRemoteAccess(_) => 11,
             Request::OnMachine(_) => 12,
+            Request::AddVideo(_) => 13,
         }
     }
 }
@@ -132,6 +134,7 @@ pub enum Request {
     SendMessage(SendMessage),
     LinkIssues(LinkIssues),
     Browser(BrowserRequest),
+    AddVideo(AddVideo),
     CreateDraft(CreateDraft),
     ListDrafts(ListSessions),
     RemoveDraft(DraftId),
@@ -257,6 +260,18 @@ pub struct ServerSummary {
     /// Why the last connect failed.
     #[serde(default)]
     pub error: Option<String>,
+}
+
+/// A video on the machine serving the session, to be filed where that
+/// session's chat can play it. `path` is absolute: the CLI resolves it, since
+/// the server stands in another directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddVideo {
+    pub session_id: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// A public link to one of a session's dev servers, made where the server
@@ -710,6 +725,8 @@ pub enum Response {
     /// What a browser action answers: `output` as text for the agent to
     /// read, `data` the same answer for `--json`.
     Browser { output: String, data: serde_json::Value },
+    /// Where a video landed, the path the chat plays.
+    Video { path: String },
     /// The session's live links after the change, whichever verb asked.
     Shared { shares: Vec<SharedPort> },
     /// The session a verb acted on, as it stands after.
@@ -1025,13 +1042,15 @@ mod tests {
             request: Box::new(Request::ListSessions(Default::default())),
         });
         assert_eq!(Envelope::new(elsewhere.clone()).v, 12);
+        let video = Request::AddVideo(AddVideo { session_id: "s".into(), path: "/v.mov".into(), name: None });
+        assert_eq!(Envelope::new(video.clone()).v, 13);
         let newest = old
             .iter()
             .chain(&drafts)
             .chain([&share])
             .chain(&servers)
             .chain(&sessions)
-            .chain([&remote, &elsewhere])
+            .chain([&remote, &elsewhere, &video])
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));

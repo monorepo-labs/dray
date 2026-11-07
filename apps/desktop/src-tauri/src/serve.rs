@@ -824,12 +824,13 @@ where
     }
 }
 
-/// An HTTP request head: its target, the bearer token if one was sent, and
-/// the body length it declared.
+/// An HTTP request head: its target, the bearer token if one was sent, the
+/// body length it declared, and the byte range it asked for.
 struct Head {
     target: String,
     bearer: Option<String>,
     length: Option<u64>,
+    range: Option<String>,
 }
 
 /// Reads a request head off `stream`, bounded in size and time. The reader
@@ -841,7 +842,7 @@ async fn read_head(
 
     let mut reader = BufReader::new(stream.take(FILE_HEAD_LIMIT));
     let mut line = String::new();
-    let (mut bearer, mut length) = (None, None);
+    let (mut bearer, mut length, mut range) = (None, None, None);
     // The rest of the head is read too, so closing does not reset the
     // connection under a response the client has not finished reading.
     let head = async {
@@ -856,6 +857,8 @@ async fn read_head(
                     bearer = value.trim().strip_prefix("Bearer ").map(str::to_string);
                 } else if name.eq_ignore_ascii_case("content-length") {
                     length = value.trim().parse().ok();
+                } else if name.eq_ignore_ascii_case("range") {
+                    range = Some(value.trim().to_string());
                 }
             }
         }
@@ -865,7 +868,7 @@ async fn read_head(
         anyhow::bail!("request head over {FILE_HEAD_LIMIT} bytes");
     }
     let target = line.split(' ').nth(1).unwrap_or_default().to_string();
-    Ok((Head { target, bearer, length }, reader))
+    Ok((Head { target, bearer, length, range }, reader))
 }
 
 /// `POST /upload?name=…`: a file attached on another machine, written under
@@ -932,12 +935,14 @@ async fn upload(stream: TcpStream, token: &str) -> Result<()> {
 /// Confined to those three directories, plus videos `read_file` handed out, by
 /// **canonical** path, so neither `..` nor a symlink inside one reaches
 /// anything else.
-// ponytail: no Range support, so a long video plays but cannot seek; add it
-// when recordings are viewed remotely.
+///
+/// Answers a `Range`, without which a video cannot seek and iOS's AVPlayer will
+/// not play at all.
 async fn file(stream: TcpStream, token: &str) -> Result<()> {
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
     let (head, reader) = read_head(stream).await?;
+    let range = head.range.clone();
     let mut stream = reader.into_inner().into_inner();
     let query = head.target.split_once('?').map(|(_, q)| q).unwrap_or_default();
     // A header where the client can set one — the desktop app's proxy — so the
@@ -963,14 +968,74 @@ async fn file(stream: TcpStream, token: &str) -> Result<()> {
 
     let mut body = tokio::fs::File::open(&path).await?;
     let len = body.metadata().await?.len();
-    let head = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n",
-        content_type(&path)
-    );
+    let kind = content_type(&path);
+    let (head, sending) = match byte_span(range.as_deref(), len) {
+        ByteSpan::Whole => (
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {len}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
+            ),
+            len,
+        ),
+        ByteSpan::Part(start, end) => {
+            body.seek(std::io::SeekFrom::Start(start)).await?;
+            let sending = end - start + 1;
+            (
+                format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Type: {kind}\r\nContent-Length: {sending}\r\nContent-Range: bytes {start}-{end}/{len}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
+                ),
+                sending,
+            )
+        }
+        ByteSpan::Unsatisfiable => {
+            let refusal = format!(
+                "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{len}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(refusal.as_bytes()).await?;
+            return Ok(());
+        }
+    };
     stream.write_all(head.as_bytes()).await?;
-    tokio::io::copy(&mut body, &mut stream).await?;
+    tokio::io::copy(&mut body.take(sending), &mut stream).await?;
     stream.shutdown().await.ok();
     Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+enum ByteSpan {
+    Whole,
+    /// First and last byte, both inclusive, as the header writes them.
+    Part(u64, u64),
+    Unsatisfiable,
+}
+
+/// What a `Range` header asks of a file `len` bytes long. Anything but a single
+/// `bytes` range answers the whole file, which HTTP allows and every client
+/// here takes.
+fn byte_span(range: Option<&str>, len: u64) -> ByteSpan {
+    let Some((first, last)) = range.and_then(|r| r.strip_prefix("bytes=")).and_then(|r| r.split_once('-')) else {
+        return ByteSpan::Whole;
+    };
+    let (first, last) = (first.trim(), last.trim());
+    if first.is_empty() {
+        return match last.parse::<u64>() {
+            Ok(0) => ByteSpan::Unsatisfiable,
+            Ok(_) if len == 0 => ByteSpan::Unsatisfiable,
+            Ok(tail) => ByteSpan::Part(len.saturating_sub(tail), len - 1),
+            Err(_) => ByteSpan::Whole,
+        };
+    }
+    let Ok(first) = first.parse::<u64>() else { return ByteSpan::Whole };
+    let last = match last {
+        "" => len.saturating_sub(1),
+        last => match last.parse::<u64>() {
+            Ok(last) => last.min(len.saturating_sub(1)),
+            Err(_) => return ByteSpan::Whole,
+        },
+    };
+    if first >= len || first > last {
+        return ByteSpan::Unsatisfiable;
+    }
+    ByteSpan::Part(first, last)
 }
 
 /// The canonical path where it sits inside a servable directory, else `None`
@@ -1512,6 +1577,22 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_range_is_read_as_http_writes_it() {
+        use super::{byte_span, ByteSpan::*};
+        assert_eq!(byte_span(None, 100), Whole);
+        assert_eq!(byte_span(Some("bytes=0-1"), 100), Part(0, 1));
+        assert_eq!(byte_span(Some("bytes=10-"), 100), Part(10, 99));
+        assert_eq!(byte_span(Some("bytes=90-500"), 100), Part(90, 99), "the end is clamped");
+        assert_eq!(byte_span(Some("bytes=-10"), 100), Part(90, 99));
+        assert_eq!(byte_span(Some("bytes=-500"), 100), Part(0, 99));
+        assert_eq!(byte_span(Some("bytes=100-"), 100), Unsatisfiable);
+        assert_eq!(byte_span(Some("bytes=5-2"), 100), Unsatisfiable);
+        assert_eq!(byte_span(Some("bytes=0-1,5-6"), 100), Whole, "many ranges answer whole");
+        assert_eq!(byte_span(Some("items=0-1"), 100), Whole);
+        assert_eq!(byte_span(Some("bytes=0-"), 0), Unsatisfiable);
+    }
+
     use super::*;
 
     /// The local peer reads nothing and the socket takes nothing, so both

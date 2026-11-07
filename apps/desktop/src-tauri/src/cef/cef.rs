@@ -182,6 +182,9 @@ fn dev_framework() -> Option<PathBuf> {
     paths().filter(|p| p.framework.starts_with(&p.helpers)).map(|p| p.framework)
 }
 
+/// See the headless module's: this Chromium reads CSS pixels under a recording's override.
+const INPUT_IN_DEVICE_PIXELS: bool = false;
+
 /// A dev build's profile root is in its own home, as its socket is:
 /// Chromium holds a singleton lock on the root, so a dev build sharing the
 /// release app's, or another worktree's, would fail to initialize and exit

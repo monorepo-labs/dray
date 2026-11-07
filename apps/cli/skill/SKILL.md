@@ -361,6 +361,28 @@ so the user checks your work by watching instead of redoing it. Clicks are
 marked with a ring and pauses between your actions are cut to a second, so
 don't rush or pad. Screenshots work while recording.
 
+**Every other video goes through `dray video add`.** A screen recording, a clip
+from a test run: the chat plays nothing else, and a path of your own draws a link.
+
+```bash
+dray video add ~/Desktop/run.mov "login flow"  # prints the path to put in your reply
+```
+
+It works out the folder and the session itself, keeps an MP4 as it is and
+converts anything else: with `avconvert` on a Mac, `ffmpeg` where that cannot read
+it and on Linux. A machine with no way to convert it says so; `dray server
+install` offers ffmpeg on a server. **It runs on the machine serving this session**,
+so a video made on another machine, a VM or a remote box has to be copied here
+first. Name no environment variable to find any of this, and don't build the path
+by hand: the home moves. It is deleted with the session.
+
+**Keep a video of the test that confirms UI work or work on another machine**,
+and show it the same way, so the user can watch it pass.
+
+**On a Mac, `screencapture -v` needs Screen Recording for Dray.** Until the user
+turns it on in System Settings it exits 1 and prints nothing, and raises a prompt
+only they can answer. Say so rather than retrying.
+
 `open` waits for the page to load; `click` and `press` wait for any navigation
 they cause. A local dev server is the usual page — start it in the background
 first, then open it. `--json` on any verb answers as JSON for scripting.

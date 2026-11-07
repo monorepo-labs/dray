@@ -1288,11 +1288,18 @@ pub async fn fetch_file(server: &str, path: &str) -> Result<(String, Vec<u8>), S
             return Ok(hit);
         }
     }
-    let (kind, body) = download_file(server, path).await?;
+    let fetched = download_file(server, path, None).await?;
+    let (kind, body) = (fetched.kind, fetched.body);
     if keep {
         FILES.lock().unwrap().put(key, kind.clone(), body.clone());
     }
     Ok((kind, body))
+}
+
+/// One span of a remote file, the `Range` the webview's `<video>` asked for
+/// passed through, so a video seeks and is not held whole in memory per read.
+pub async fn fetch_range(server: &str, path: &str, range: &str) -> Result<FetchedFile, String> {
+    download_file(server, path, Some(range)).await
 }
 
 /// Written once under a fresh uuid (`attachments/<session>/<uuid>.<ext>`)
@@ -1350,26 +1357,30 @@ impl FileCache {
     }
 }
 
-async fn download_file(server: &str, path: &str) -> Result<(String, Vec<u8>), String> {
+/// What a remote server's `/file` answered.
+pub struct FetchedFile {
+    pub status: u16,
+    pub kind: String,
+    pub content_range: Option<String>,
+    pub body: Vec<u8>,
+}
+
+async fn download_file(server: &str, path: &str, range: Option<&str>) -> Result<FetchedFile, String> {
     let (base, token) = http_base(server)?;
-    let response = crate::http()
-        .get(format!("{base}/file"))
-        .query(&[("path", path)])
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut request = crate::http().get(format!("{base}/file")).query(&[("path", path)]).bearer_auth(token);
+    if let Some(range) = range {
+        request = request.header(reqwest::header::RANGE, range);
+    }
+    let response = request.send().await.map_err(|e| e.to_string())?;
     if !response.status().is_success() {
         return Err(response.status().to_string());
     }
-    let kind = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/octet-stream")
-        .to_string();
+    let status = response.status().as_u16();
+    let header = |name| response.headers().get(name).and_then(|v: &reqwest::header::HeaderValue| v.to_str().ok()).map(str::to_string);
+    let kind = header(reqwest::header::CONTENT_TYPE).unwrap_or_else(|| "application/octet-stream".to_string());
+    let content_range = header(reqwest::header::CONTENT_RANGE);
     let body = response.bytes().await.map_err(|e| e.to_string())?;
-    Ok((kind, body.to_vec()))
+    Ok(FetchedFile { status, kind, content_range, body: body.to_vec() })
 }
 
 /// The `http(s)://` address and token of a connected server, for the routes

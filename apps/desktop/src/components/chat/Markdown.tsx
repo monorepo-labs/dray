@@ -229,9 +229,10 @@ function MarkdownImpl({
   );
 }
 
-/// Where `dray browser record` writes, the one place the asset protocol lets
-/// a video be read from.
-const RECORDING = /\/\.dray(?:-dev|-worktrees\/[^/]+)?\/browser(-dev)?\/recordings\/[^/]+\/[^/]+\.mp4$/;
+/// Where `dray browser record` and `dray video add` write, the one place the
+/// asset protocol lets a video be read from. Any home, since `DRAY_HOME` moves
+/// it; one that holds no video draws no player.
+const RECORDING = /\/browser(-dev)?\/recordings\/[^/]+\/[^/]+\.mp4$/;
 
 /// Every `span` in the rendered markdown, passed through untouched unless
 /// `rehypeFilePaths` marked it.
@@ -285,7 +286,7 @@ function FilePathSpan({
       </FileLink>
     );
     if (!RECORDING.test(path)) return link;
-    // A `dray browser record` video plays where the agent names it, so
+    // A recording plays where the agent names it, so
     // checking its work is watching, not finding a file.
     return (
       <>
