@@ -79,8 +79,8 @@ const FAIL = {
     fix: { kind: "trust_host", host, keyType: "ED25519", fingerprint: "SHA256:Jq3kYw7c2X0d9p5mO1nqVf8vR4bL6tZ0yHs2eWuA9gk" },
   }),
   changedKey: (host: string): Failure => ({
-    message: `${host} is answering with a different host key than last time. That can mean someone is in the middle. If you know why it changed, remove the old key and try again:`,
-    fix: { kind: "copy", command: `ssh-keygen -R ${host}` },
+    message: `${host} is answering with a different host key than last time. That can mean someone is in the middle, or that its address now belongs to another machine. If you know why it changed, remove the old key and try again:`,
+    fix: { kind: "copy", command: `ssh-keygen -R ${host} -f /Users/you/.ssh/known_hosts` },
   }),
   password: (host: string, line: string): Failure => ({
     message: `${host} wants a password. Set up a key first, then try again:`,

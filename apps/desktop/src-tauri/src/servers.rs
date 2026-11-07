@@ -449,7 +449,8 @@ fn set(id: &str, status: ServerStatus, stage: Option<ssh::Stage>, error: Option<
 ///
 /// An SSH server opens a fresh login each time round, which also reads the
 /// token, so a cut pipe is this same loop plus one `ssh`. A failure retrying
-/// cannot fix — a refused key, an unknown host — parks the row instead.
+/// cannot fix — a refused key, an unknown host — parks the row instead, unless
+/// a tunnel address is saved: then only that is retried, [`wait_for_address`].
 async fn run(id: String) {
     let mut backoff = Duration::from_secs(1);
     loop {
@@ -492,7 +493,7 @@ async fn run(id: String) {
         let (url, token, tunnel, admitted) = match &saved.ssh {
             Some(target) => match ssh::open(target, |stage| set(&id, ServerStatus::Connecting, Some(stage), None, None)).await {
                 Ok(tunnel) => {
-                    remember_address(&id, tunnel.address.as_deref(), &tunnel.token).await;
+                    remember_address(&id, tunnel.address.as_deref(), tunnel.address_coming, &tunnel.token).await;
                     (format!("ws://127.0.0.1:{}", tunnel.port), tunnel.token.clone(), Some(tunnel), None)
                 }
                 Err(failure) => {
@@ -501,6 +502,13 @@ async fn run(id: String) {
                     let fallback =
                         if saved.url.is_empty() { None } else { admit(&saved.url, &kept_token).await.ok() };
                     if let Some(ws) = fallback {
+                        (saved.url, kept_token, None, Some(ws))
+                    } else if failure.permanent && !saved.url.is_empty() {
+                        // The warning stays up throughout. The key is never
+                        // accepted here; only the reader can settle that.
+                        let waiting = format!("Waiting for its tunnel address to answer. {}", failure.message);
+                        set(&id, ServerStatus::Disconnected, None, Some(waiting), failure.fix);
+                        let ws = wait_for_address(&saved.url, &kept_token, &mut backoff).await;
                         (saved.url, kept_token, None, Some(ws))
                     } else {
                         set(&id, ServerStatus::Disconnected, None, Some(failure.message), failure.fix);
@@ -569,17 +577,34 @@ async fn run(id: String) {
     }
 }
 
+/// Retries a saved tunnel address until it answers, with `ssh` left alone: a
+/// refused key tried every few seconds is what fail2ban bans. A server coming
+/// back attaches its tunnel well after it starts — measured at 7s from a clean
+/// stop, 66s to 183s where the old machine vanished with its session open —
+/// so one failed try says little.
+async fn wait_for_address(url: &str, token: &str, backoff: &mut Duration) -> (Socket, Welcome) {
+    loop {
+        tokio::time::sleep(*backoff).await;
+        *backoff = (*backoff * 2).min(MAX_BACKOFF);
+        if let Ok(admitted) = admit(url, token).await {
+            return admitted;
+        }
+    }
+}
+
 /// Keeps an SSH server's tunnel address beside its login, with the token the
 /// login read, so the next connect can go by tunnel where SSH cannot. No
-/// tunnel up there forgets both: a stale address would only ever fail.
-async fn remember_address(id: &str, address: Option<&str>, token: &str) {
-    let url = address.and_then(|a| normalize(a).ok()).unwrap_or_default();
-    let moved = {
+/// tunnel up there forgets both: a stale address would only ever fail. One
+/// still attaching forgets neither, or a login landing just after a restart
+/// leaves nothing to fall back on when the host key next changes (#781).
+async fn remember_address(id: &str, address: Option<&str>, coming: bool, token: &str) {
+    let (url, moved) = {
         let mut list = conns();
         let Some(conn) = list.iter_mut().find(|c| c.saved.id == id) else { return };
+        let url = address_to_keep(&conn.saved.url, address, coming);
         let moved = conn.saved.url != url;
         conn.saved.url = url.clone();
-        moved
+        (url, moved)
     };
     let stored = (!url.is_empty()).then_some(token);
     if crate::issues::credential(&credential_name(id)).await.as_deref() != stored {
@@ -587,6 +612,15 @@ async fn remember_address(id: &str, address: Option<&str>, token: &str) {
     }
     if moved {
         let _ = save().await;
+    }
+}
+
+/// The address to save after a login: what it read, or `saved` while the
+/// tunnel it found no address for is still attaching.
+fn address_to_keep(saved: &str, address: Option<&str>, coming: bool) -> String {
+    match address {
+        None if coming => saved.to_string(),
+        _ => address.and_then(|a| normalize(a).ok()).unwrap_or_default(),
     }
 }
 
@@ -1530,6 +1564,41 @@ mod tests {
             }
         });
         url
+    }
+
+    #[test]
+    fn a_tunnel_still_attaching_keeps_the_address() {
+        let saved = "wss://kept.example";
+        assert_eq!(address_to_keep(saved, None, true), saved, "still attaching");
+        assert_eq!(address_to_keep(saved, None, false), "", "turned off");
+        assert_eq!(address_to_keep(saved, Some("https://new.example"), false), "wss://new.example", "moved");
+        assert_eq!(address_to_keep("", None, true), "", "none yet to keep");
+    }
+
+    #[tokio::test]
+    async fn waits_for_a_tunnel_address_to_come_back() {
+        let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = free.local_addr().unwrap();
+        drop(free);
+        let mut backoff = Duration::from_millis(5);
+        let waiting = tokio::spawn(async move {
+            let admitted = wait_for_address(&format!("ws://{addr}"), "t", &mut backoff).await;
+            (admitted.1.version, backoff)
+        });
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(!waiting.is_finished(), "nothing is listening yet");
+
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            ws.next().await;
+            ws.send(Message::text(json!({ "v": PROTOCOL, "version": "back" }).to_string())).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let (version, backoff) = tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap();
+        assert_eq!(version.as_deref(), Some("back"));
+        assert!(backoff > Duration::from_millis(5), "the wait backs off");
     }
 
     /// A real server, token "t", and what it can reach: a TCP service that
