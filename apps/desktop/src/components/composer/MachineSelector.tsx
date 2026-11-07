@@ -1,3 +1,4 @@
+import ServerFilledIcon from "@/components/icons/ServerFilledIcon";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -39,8 +40,9 @@ export default function MachineSelector({
           variant="ghost"
           size="sm"
           disabled={only}
-          className="max-w-40 px-1.5 text-ui text-muted-foreground"
+          className="max-w-40 gap-1.5 px-1.5 text-ui text-muted-foreground disabled:opacity-100"
         >
+          <ServerFilledIcon className="size-3.5 shrink-0" />
           <span className="truncate">{checkoutLabel(current, checkouts, basename)}</span>
         </Button>
       </DropdownMenuTrigger>
