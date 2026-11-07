@@ -288,7 +288,8 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::SetAside(r) => Some(&r.session_id),
         Request::Share(r) => Some(&r.session_id),
         Request::Browser(r) => Some(&r.session_id),
-        Request::AddVideo(r) => Some(&r.session_id),
+        // Never `AddVideo`: its path is this machine's, and forwarded it would
+        // name a file the other machine does not have, or a different one.
         _ => None,
     }
 }

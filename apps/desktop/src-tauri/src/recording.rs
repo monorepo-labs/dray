@@ -146,14 +146,35 @@ fn unclaimed(dir: &Path, stem: &str) -> PathBuf {
     path
 }
 
+/// `<stem>.mp4` in `dir` or the first free `<stem>-n.mp4`, created empty so
+/// two `dray video add`s running at once, each on its own connection, can
+/// never pick the same name.
+fn claim(dir: &Path, stem: &str) -> Result<PathBuf, String> {
+    for n in 1.. {
+        let path = match n {
+            1 => dir.join(format!("{stem}.mp4")),
+            n => dir.join(format!("{stem}-{n}.mp4")),
+        };
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => return Ok(path),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("could not create {}: {e}", path.display())),
+        }
+    }
+    unreachable!()
+}
+
 /// Files a video the agent made some other way into `dir`, for `dray video
 /// add`, and answers the `.mp4` the chat plays. An MP4 is copied and anything
-/// else converted, built under a hidden name so a failed run leaves no player
-/// on half a video. One already in `dir` is answered as it stands.
+/// else converted, built under a hidden name of its own so a failed run leaves
+/// no player on half a video. One already in `dir` under a name the players
+/// match is answered as it stands.
 pub fn add(source: &Path, dir: &Path, name: Option<&str>) -> Result<PathBuf, String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let mp4 = holds_mp4(source);
     std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
-    if mp4 && name.is_none() && source.parent().is_some_and(|parent| same_dir(parent, dir)) {
+    let lowercase = source.extension().is_some_and(|e| e == "mp4");
+    if mp4 && lowercase && name.is_none() && source.parent().is_some_and(|parent| same_dir(parent, dir)) {
         return Ok(source.to_path_buf());
     }
     let stem = name
@@ -161,8 +182,9 @@ pub fn add(source: &Path, dir: &Path, name: Option<&str>) -> Result<PathBuf, Str
         .filter(|s| !s.is_empty())
         .or_else(|| source.file_stem().map(|s| slug(&s.to_string_lossy())).filter(|s| !s.is_empty()))
         .unwrap_or_else(|| "video".into());
-    let dest = unclaimed(dir, &stem);
-    let part = dir.join(format!(".{stem}.part.mp4"));
+    let dest = claim(dir, &stem)?;
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let part = dir.join(format!(".{stem}.{}-{n}.part.mp4", std::process::id()));
     let built = if mp4 {
         std::fs::copy(source, &part).map(drop).map_err(|e| format!("could not copy {}: {e}", source.display()))
     } else {
@@ -173,6 +195,7 @@ pub fn add(source: &Path, dir: &Path, name: Option<&str>) -> Result<PathBuf, Str
     });
     if let Err(e) = filed {
         let _ = std::fs::remove_file(&part);
+        let _ = std::fs::remove_file(&dest);
         return Err(e);
     }
     Ok(dest)
@@ -459,6 +482,40 @@ mod tests {
         assert_eq!(add(&source, &filed, None).unwrap(), filed.join("login-flow-2.mp4"));
         assert_eq!(add(&source, &filed, Some("the checkout")).unwrap(), filed.join("the-checkout.mp4"));
         assert!(source.exists(), "the source stays where the agent left it");
+    }
+
+    #[test]
+    fn an_uppercase_mp4_in_place_is_filed_under_a_name_the_players_match() {
+        let dir = temp_dir("upper");
+        let source = dir.join("FLOW.MP4");
+        std::fs::write(&source, MP4_HEAD).unwrap();
+        let filed = add(&source, &dir, None).unwrap();
+        // `flow-2.mp4` on a case-insensitive disk, where `FLOW.MP4` is `flow.mp4`.
+        let name = filed.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("flow") && name.ends_with(".mp4"), "{name}");
+        assert_eq!(std::fs::read(&filed).unwrap(), MP4_HEAD);
+    }
+
+    #[test]
+    fn adds_at_once_never_share_a_name() {
+        let dir = temp_dir("race");
+        let filed = dir.join("recordings");
+        let source = dir.join("clip.mp4");
+        std::fs::write(&source, MP4_HEAD).unwrap();
+        let runs: Vec<_> = (0..8)
+            .map(|_| {
+                let (source, filed) = (source.clone(), filed.clone());
+                std::thread::spawn(move || add(&source, &filed, None).unwrap())
+            })
+            .collect();
+        let mut paths: Vec<_> = runs.into_iter().map(|r| r.join().unwrap()).collect();
+        paths.sort();
+        paths.dedup();
+        assert_eq!(paths.len(), 8);
+        for path in &paths {
+            assert_eq!(std::fs::read(path).unwrap(), MP4_HEAD);
+        }
+        assert_eq!(std::fs::read_dir(&filed).unwrap().count(), 8, "no part file left behind");
     }
 
     #[test]
