@@ -55,7 +55,20 @@ pub async fn origin(cwd: &str) -> Option<String> {
 /// remote that is a path here says nothing about a path there, and two machines
 /// merged on `/srv/x.git` would hide a checkout.
 pub async fn shared_remote(cwd: &str) -> Option<String> {
-    origin(cwd).await.filter(|key| !key.starts_with(['/', '.']))
+    let url = git_line(cwd, &["remote", "get-url", "origin"]).await?;
+    is_network_url(&url).then(|| repo_key(&url))
+}
+
+/// Git's own rule: a scheme, or scp form's colon ahead of any slash. A lone
+/// letter before that colon is a Windows drive.
+fn is_network_url(url: &str) -> bool {
+    if let Some((scheme, _)) = url.split_once("://") {
+        return !scheme.eq_ignore_ascii_case("file");
+    }
+    match url.split_once(':') {
+        Some((host, _)) => !host.contains(['/', '\\']) && host.len() > 1,
+        None => false,
+    }
 }
 
 fn repo_key(url: &str) -> String {
@@ -1687,10 +1700,26 @@ mod tests {
     }
 
     #[test]
-    fn a_remote_that_is_a_path_keeps_its_leading_mark() {
-        // What `shared_remote` refuses on.
-        for url in ["/srv/x.git", "file:///srv/x.git", "../x.git", "./x"] {
-            assert!(repo_key(url).starts_with(['/', '.']), "{url}");
+    fn only_a_network_remote_names_a_shared_repository() {
+        for url in [
+            "git@github.com:a/b.git",
+            "github.com:a/b",
+            "https://github.com/a/b",
+            "ssh://git@github.com/a/b.git",
+        ] {
+            assert!(is_network_url(url), "{url}");
+        }
+        for url in [
+            "/srv/x.git",
+            "../x.git",
+            "./x",
+            "repos/x.git",
+            "repos/a:b",
+            "file:///srv/x.git",
+            "file://localhost/srv/x.git",
+            "C:\\repos\\x.git",
+        ] {
+            assert!(!is_network_url(url), "{url}");
         }
     }
 

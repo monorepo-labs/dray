@@ -526,7 +526,7 @@ function App() {
   const sameProject = (a: string, b: string) => a === b || keyOfPath(projects, a) === keyOfPath(projects, b);
   /// Points the composer at a project, on the machine it last ran on.
   const selectLastUsed = (path: string) => {
-    const checkouts = checkoutsOf(projects, path);
+    const checkouts = checkoutsOf(spaceProjects, path);
     handleSelectProject(checkouts.length ? lastUsedCheckout(checkouts).path : path);
   };
   const {

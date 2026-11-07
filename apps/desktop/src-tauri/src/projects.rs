@@ -52,6 +52,7 @@ pub struct Project {
 }
 
 static PROJECTS_LOCK: Mutex<()> = Mutex::const_new(());
+const REMOTE_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Resolves symlinks and drops any trailing slash, so `/x/proj` and `/x/proj/`
 /// can't become two projects and split the sidebar's grouping. A leading `~/`
@@ -92,9 +93,14 @@ pub async fn list_projects() -> Result<Vec<Project>, Fail> {
 }
 
 /// One `git` per project at once. Every command answering a list goes through
-/// here, or a client merging that answer forgets its remotes.
+/// here, or a client merging that answer forgets its remotes. Call it with no
+/// project lock held. A checkout on a stalled disk answers no remote rather than
+/// holding every project back, and groups on its path until it recovers.
 async fn with_remotes(projects: Vec<Project>) -> Vec<Project> {
-    let remotes = futures_util::future::join_all(projects.iter().map(|p| git::shared_remote(&p.path))).await;
+    let remote = |path: String| async move {
+        tokio::time::timeout(REMOTE_WAIT, git::shared_remote(&path)).await.ok().flatten()
+    };
+    let remotes = futures_util::future::join_all(projects.iter().map(|p| remote(p.path.clone()))).await;
     projects
         .into_iter()
         .zip(remotes)
@@ -137,6 +143,7 @@ pub async fn add_project(path: &str) -> Result<Vec<Project>, Fail> {
 
     write_projects(&projects).await?;
 
+    drop((_guard, _across));
     Ok(with_remotes(projects).await)
 }
 
@@ -151,6 +158,7 @@ pub async fn remove_project(path: &str) -> Result<Vec<Project>, Fail> {
     projects.retain(|p| p.path != path);
     write_projects(&projects).await?;
 
+    drop((_guard, _across));
     Ok(with_remotes(projects).await)
 }
 
@@ -184,12 +192,14 @@ pub async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<
     // By index, not `iter_mut().find()`: the borrow checker will not let the
     // not-found arm hand the list back while a mutable borrow of it is alive.
     let Some(i) = projects.iter().position(|p| p.path == path) else {
+        drop((_guard, _across));
         return Ok(with_remotes(projects).await);
     };
 
     projects[i].space = normalize_space(space);
     write_projects(&projects).await?;
 
+    drop((_guard, _across));
     Ok(with_remotes(projects).await)
 }
 
@@ -205,6 +215,7 @@ pub async fn move_project(path: &str, delta: isize) -> Result<Vec<Project>, Fail
         write_projects(&projects).await?;
     }
 
+    drop((_guard, _across));
     Ok(with_remotes(projects).await)
 }
 
@@ -267,6 +278,7 @@ pub async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>,
         write_projects(&projects).await?;
     }
 
+    drop((_guard, _across));
     Ok(with_remotes(projects).await)
 }
 

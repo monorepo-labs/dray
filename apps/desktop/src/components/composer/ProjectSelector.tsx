@@ -1,4 +1,4 @@
-import { Check, Folder, FolderPlus } from "lucide-react";
+import { Folder, FolderPlus } from "lucide-react";
 import { useState } from "react";
 
 import AttachProjectDialog from "@/components/composer/AttachProjectDialog";
@@ -9,9 +9,6 @@ import {
   DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ShortcutKeys from "@/components/ShortcutKeys";
@@ -38,7 +35,6 @@ export default function ProjectSelector({
   onAttached: (server: ServerId, list: Project[]) => void;
 }) {
   const [attaching, setAttaching] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   const onAttach = () => setAttaching(true);
   // Rendered beside whichever trigger is drawn, in the same slot, so it
   // survives the list going from none to one.
@@ -52,10 +48,15 @@ export default function ProjectSelector({
     />
   );
 
-  // One row per project. Picking it picks its machine, the one last used, so
-  // the reader only meets machines by hovering a project that has several.
+  // One row per project. Picking it picks the machine last used, and
+  // `MachineSelector` beside this is where that is changed.
   useServers();
   const groups = groupProjects(projects);
+  const group = groups.find((g) => g.checkouts.some((p) => p.path === value));
+
+  // `MachineSelector` names an attached project's machine, so this is only for
+  // a path nothing lists any more.
+  const trailing = !group && value && serverOfPath(value) !== LOCAL ? serverOfPath(value) : null;
 
   // Nothing to choose between yet, so the trigger does the only useful thing
   // rather than opening a menu whose sole item is the same action.
@@ -79,7 +80,7 @@ export default function ProjectSelector({
 
   return (
     <>
-      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+      <DropdownMenu>
         <Tooltip>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
@@ -95,10 +96,8 @@ export default function ProjectSelector({
                     open shape reads as a shard rather than a folder. */}
                 <Folder className="size-3.5 shrink-0 fill-current" />
                 <span className="truncate">
-                  {value ? basename(displayPath(value)) : "Attach project"}
-                  {value && serverOfPath(value) !== LOCAL && (
-                    <span className="text-muted-foreground/50">-{serverName(serverOfPath(value))}</span>
-                  )}
+                  {group?.name ?? (value ? basename(displayPath(value)) : "Attach project")}
+                  {trailing && <span className="text-muted-foreground/50">-{serverName(trailing)}</span>}
                 </span>
               </Button>
             </DropdownMenuTrigger>
@@ -114,69 +113,29 @@ export default function ProjectSelector({
         </Tooltip>
   
         <DropdownMenuContent align="start" className="w-auto min-w-52">
-          <DropdownMenuRadioGroup value={value ?? ""} onValueChange={onSelect}>
+          <DropdownMenuRadioGroup
+            value={group?.key ?? ""}
+            onValueChange={(key) => {
+              const picked = groups.find((g) => g.key === key);
+              if (picked) onSelect(lastUsedCheckout(picked.checkouts).path);
+            }}
+          >
             {groups.map(({ key, name, checkouts }) => {
-              const label = projectLabel(name, soleServer(checkouts));
               const reachable = checkouts.some((p) => serverConnected(serverOfPath(p.path)));
-              const down = !reachable && <span className="ml-auto shrink-0 pl-3 opacity-70">disconnected</span>;
-              if (checkouts.length === 1) {
-                // Two projects can share a folder name, so the full path is the
-                // tooltip rather than the label. A disconnected server's
-                // projects stay listed and cannot be picked: nothing could send.
-                return (
-                  <DropdownMenuRadioItem
-                    key={key}
-                    value={checkouts[0].path}
-                    title={displayPath(checkouts[0].path)}
-                    disabled={!reachable}
-                    className="text-ui"
-                  >
-                    <span className="truncate">{label}</span>
-                    {down}
-                  </DropdownMenuRadioItem>
-                );
-              }
-              const pickLastUsed = () => {
-                onSelect(lastUsedCheckout(checkouts).path);
-                setMenuOpen(false);
-              };
+              // Two projects can share a folder name, so the full path is the
+              // tooltip rather than the label. A project with no machine up
+              // stays listed and cannot be picked: nothing could send.
               return (
-                <DropdownMenuSub key={key}>
-                  {/* A click or Enter takes the last machine used, so a new task
-                      costs nothing extra. The submenu is only for changing it. */}
-                  <DropdownMenuSubTrigger
-                    disabled={!reachable}
-                    onClick={pickLastUsed}
-                    onKeyDown={(e) => {
-                      if (e.key !== "Enter") return;
-                      e.preventDefault();
-                      pickLastUsed();
-                    }}
-                    trailingIcon={
-                      checkouts.some((p) => p.path === value) ? <Check className="ml-auto" /> : down || undefined
-                    }
-                    className="text-ui data-disabled:pointer-events-none data-disabled:opacity-50"
-                  >
-                    <span className="truncate">{label}</span>
-                  </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent className="max-w-96 min-w-40">
-                    {checkouts.map((checkout) => {
-                      const server = serverOfPath(checkout.path);
-                      return (
-                        <DropdownMenuRadioItem
-                          key={checkout.path}
-                          value={checkout.path}
-                          title={displayPath(checkout.path)}
-                          disabled={!serverConnected(server)}
-                          className="text-ui"
-                        >
-                          <span className="truncate">{checkoutLabel(checkout, checkouts)}</span>
-                          {!serverConnected(server) && <span className="ml-auto pl-3 opacity-70">disconnected</span>}
-                        </DropdownMenuRadioItem>
-                      );
-                    })}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
+                <DropdownMenuRadioItem
+                  key={key}
+                  value={key}
+                  title={checkouts.length === 1 ? displayPath(checkouts[0].path) : undefined}
+                  disabled={!reachable}
+                  className="text-ui"
+                >
+                  <span className="truncate">{projectLabel(name, soleServer(checkouts))}</span>
+                  {!reachable && <span className="ml-auto shrink-0 pl-3 opacity-70">disconnected</span>}
+                </DropdownMenuRadioItem>
               );
             })}
           </DropdownMenuRadioGroup>
@@ -190,14 +149,4 @@ export default function ProjectSelector({
       {dialog}
     </>
   );
-}
-
-/// A checkout among its project's others: its machine, its path where that
-/// machine holds two, and the path alone where every one is on one machine.
-function checkoutLabel(checkout: Project, checkouts: Project[]): string {
-  const server = serverOfPath(checkout.path);
-  const path = displayPath(checkout.path);
-  if (soleServer(checkouts)) return path;
-  const twoHere = checkouts.filter((p) => serverOfPath(p.path) === server).length > 1;
-  return twoHere ? `${serverName(server)} · ${path}` : serverName(server);
 }

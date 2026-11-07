@@ -2317,8 +2317,9 @@ const sessionIndexItemsRef = useRef(sessionIndexItems);
 sessionIndexItemsRef.current = sessionIndexItems;
 // A space is a tag on the project, so `announce` needs the live project list to
 // answer whether the session that just spoke is one the reader has put away.
-const projectsRef = useRef(projects);
-projectsRef.current = projects;
+// The inherited tags, or a copy drawn in a space would be refused its notices.
+const projectsRef = useRef(orderedProjects);
+projectsRef.current = orderedProjects;
 const statusBySessionRef = useRef(statusBySession);
 statusBySessionRef.current = statusBySession;
 const tasksBySessionRef = useRef(tasksBySession);
