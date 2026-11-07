@@ -1,6 +1,6 @@
 import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { invoke, listen, LOCAL, serverOfPath } from "@/lib/transport";
+import { invoke, listen, LOCAL, serverOfPath, serverOfSession } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { CircleDashed, Plus } from "lucide-react";
 import PrStateIcon from "@/components/PrStateIcon";
@@ -151,10 +151,11 @@ import ServerOfflineNotice from "@/components/composer/ServerOfflineNotice";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { useServers } from "@/lib/servers";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
-import { useAgentUpdates } from "@/hooks/useAgentUpdates";
+import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
+import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
-import type { Attachment, IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/events";
+import type { Attachment, Harness, IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -445,9 +446,9 @@ function App() {
   const offlineServer = useServers().find(
     (s) => !!selectedSessionId && s.id === activeServer && s.status !== "connected",
   );
-  // Held on a new task for every agent, so the session starts on the new
-  // version. A live session only for pi and fx, whose update overwrites files
-  // its child reads; the other three install beside the running binary.
+  // Only pi and fx, whose update overwrites files a child reads. The other three
+  // install beside the running binary, and an update can land at any moment, so
+  // holding Send for them blocks the reader to save one old-version session.
   // Keyed on the running update alone, never on the update list, which a
   // check landing mid-update may already have cleared.
   const agentUpdates = useAgentUpdates();
@@ -455,7 +456,7 @@ function App() {
   const sendHeld =
     agentUpdates.running === harness &&
     activeServer === LOCAL &&
-    (!selectedSessionId || harness === "pi" || harness === "fx")
+    overwritesInPlace(harness)
       ? `Updating ${agentLabel}. Send once it finishes.`
       : null;
   // A new CLI version can ship new models, and every list but Claude's table is
@@ -2672,6 +2673,9 @@ function App() {
   // Steps the picker's own row in its own order, rather than toggling between
   // two — a toggle written when there were two silently never reached pi.
   const enabledAgents = useEnabledAgents();
+  const agentTurnRunning = (agent: Harness) =>
+    turnRunningOn(agent, statusBySession, sessionIndexItems, (id) => serverOfSession(id) === LOCAL);
+  useAutoUpdateAgents(enabledAgents, agentTurnRunning);
   useHotkey("harness.next", () => setHarness(nextHarness(harness, enabledAgents)), {
     enabled: composingNewSession,
   });
@@ -3292,15 +3296,7 @@ function App() {
             !selectedSessionId && (
               <AgentUpdateLine
                 harness={harness}
-                // pi and fx overwrite files a live child reads; the other three
-                // install beside it, so only these two wait on a running turn.
-                waiting={
-                  (harness === "pi" || harness === "fx") &&
-                  sessionIndexItems.some(
-                    (s) =>
-                      s.harness === harness && statusBySession[s.sessionId] === "in_progress",
-                  )
-                }
+                waiting={overwritesInPlace(harness) && agentTurnRunning(harness)}
               />
             )
           }

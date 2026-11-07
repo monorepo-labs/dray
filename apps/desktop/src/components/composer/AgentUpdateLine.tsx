@@ -4,23 +4,27 @@ import { Button } from "@/components/ui/button";
 import Spinner from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import ShortcutKeys from "@/components/ShortcutKeys";
+import { HINT_KEYS } from "@/components/Sidebar";
 import { useHotkey } from "@/hooks/useHotkey";
 import {
   updateAgent,
   updateAgentInTerminal,
   useAgentUpdates,
 } from "@/hooks/useAgentUpdates";
+import { cn } from "@/lib/utils";
 import type { Harness } from "@/types/events";
 
-/// The picked agent's CLI being behind, under the new-task composer.
+/// The picked agent's CLI updating, under the new-task composer.
 ///
 /// Drawn only while there is something to say, the app's own update row's
 /// reading. Same muted metrics as the "Press ⏎ to send" hint above it, since it
 /// is a fact about the machine and not something the prompt is waiting on.
 ///
-/// `waiting` holds Update while a turn on this agent is running. pi and
-/// fx write over files a live session is reading, so they wait for a running
-/// turn; the other three install beside the running binary and never wait.
+/// Updates run on their own, so this says one is running, finished or failed.
+/// With that setting off it offers the Update button instead, and `waiting`
+/// holds the button while a turn on this agent is running. pi and fx write over
+/// files a live session is reading, so they wait for a running turn; the other
+/// three install beside the running binary and never wait.
 export default function AgentUpdateLine({
   harness,
   waiting,
@@ -28,13 +32,14 @@ export default function AgentUpdateLine({
   harness: Harness;
   waiting: boolean;
 }) {
-  const { updates, running, done, failed } = useAgentUpdates();
+  const { updates, running, done, failed, auto } = useAgentUpdates();
   const update = updates.find((u) => u.harness === harness);
   const held = waiting || running !== null;
   // Bound only while the Update button is up and clickable, so ⌘U stays free
   // everywhere else. Platform-only, since Ctrl+U on a Mac deletes to the line
   // start in the composer.
-  const ready = done !== harness && !!update && failed?.harness !== harness;
+  const failure = failed[harness];
+  const ready = !auto && done !== harness && !!update && !failure;
   useHotkey("agent.update", () => void updateAgent(harness), {
     enabled: ready && !held,
     platformOnly: true,
@@ -51,11 +56,11 @@ export default function AgentUpdateLine({
 
   if (!update) return null;
 
-  if (failed?.harness === harness) {
+  if (failure) {
     return (
       <Line>
-        <span className="min-w-0 truncate" title={failed.message}>
-          {update.label} update failed: {failed.message}
+        <span className="min-w-0 truncate" title={failure}>
+          {update.label} update failed: {failure}
         </span>
         <Button
           type="button"
@@ -70,6 +75,15 @@ export default function AgentUpdateLine({
   }
 
   const busy = running === harness;
+  if (auto) {
+    return busy ? (
+      <Line>
+        <Spinner className="size-3" />
+        Updating {update.label}…
+      </Line>
+    ) : null;
+  }
+
   // `aria-disabled` rather than `disabled`, `UpdateRow`'s reason: the wait is
   // explained in a tooltip, and a disabled button opens none.
   const button = (
@@ -91,7 +105,6 @@ export default function AgentUpdateLine({
       <span className="min-w-0 truncate text-accent-add">
         {update.label} update available
       </span>
-      {!busy && <ShortcutKeys ids={["agent.update"]} className={held ? "opacity-50" : undefined} />}
       {waiting && !busy ? (
         <Tooltip>
           <TooltipTrigger asChild>{button}</TooltipTrigger>
@@ -101,6 +114,15 @@ export default function AgentUpdateLine({
         </Tooltip>
       ) : (
         button
+      )}
+      {!busy && (
+        <ShortcutKeys
+          ids={["agent.update"]}
+          className={cn(
+            "[&_kbd]:h-4 [&_kbd]:min-w-4 [&_kbd]:text-[10px]",
+            held && HINT_KEYS,
+          )}
+        />
       )}
     </Line>
   );
