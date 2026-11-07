@@ -1412,6 +1412,13 @@ name: string,
  */
 space: string | null, 
 /**
+ * The repository this checkout is of, so one repo on several machines reads
+ * as one project. Read from git on every list and never saved, since a
+ * remote can change under us. Absent from a server older than this field
+ * and from a repo with no shared remote, both of which group on `path`.
+ */
+remote?: string, 
+/**
  * Which project launch reopens, and nothing else. It was the sort key too,
  * which moved every picker's rows on each pick; order is now the file's
  * own, set by the reader in Settings.

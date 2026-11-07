@@ -772,7 +772,7 @@ function AddServerDialog({
               </Field>
             </>
           )}
-          <Field label="Name" hint="Optional. Drawn after its projects' names in the sidebar.">
+          <Field label="Name" hint="Optional. Names this server in a session's tab and after its projects.">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="vps" />
           </Field>
           {failure && (

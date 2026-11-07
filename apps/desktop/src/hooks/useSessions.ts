@@ -1,4 +1,5 @@
 import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
+import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
@@ -310,7 +311,7 @@ export function useSessions() {
     const [fastState, setFastState] = useState(() => prefs.fast);
     const [projects, setProjects] = useState<Project[]>([]);
     const [projectOrder, setProjectOrder] = useLocalStorage<string[]>(PROJECT_ORDER_KEY, []);
-    const orderedProjects = useMemo(() => orderProjects(projects, projectOrder), [projects, projectOrder]);
+    const orderedProjects = useMemo(() => inheritSpaces(orderProjects(projects, projectOrder)), [projects, projectOrder]);
     const [projectPath, setProjectPath] = useState<string | null>(null);
     // Derived from the selected project, not a preference — refetched on switch
     // and never persisted.
@@ -544,12 +545,22 @@ const handleRemoveProject = async (path: string) => {
 // Files a project under a space, or clears it with `null`. Settings is the only
 // caller: the sidebar's switcher moves the reader between spaces, never a
 // project between them.
+//
+// A project on several machines is filed on all of them. One written after
+// another, since each answer is its server's whole list and two clones on one
+// server would otherwise race. A dropped machine is skipped and inherits it.
 const setProjectSpace = async (path: string, space: string | null) => {
-  try {
-    const list = await invoke<Project[]>("set_project_space", { path, space });
-    setProjects((prev) => mergeFrom(prev, serverOfPath(path), list, pathOfProject));
-  } catch (e) {
-    setError(String(e));
+  const key = keyOfPath(projects, path);
+  const targets = projects.filter(
+    (p) => p.path === path || (projectKey(p) === key && serverConnected(serverOfPath(p.path))),
+  );
+  for (const target of targets) {
+    try {
+      const list = await invoke<Project[]>("set_project_space", { path: target.path, space });
+      setProjects((prev) => mergeFrom(prev, serverOfPath(target.path), list, pathOfProject));
+    } catch (e) {
+      setError(String(e));
+    }
   }
 };
 
@@ -618,6 +629,10 @@ const retagSpace = async (from: string, to: string | null) => {
 const handleSelectProject = (path: string | null) => {
   setProjectPath(path);
   if (path === null) return;
+  // Held here too, since this stamp is what picks a project's machine next time
+  // and the list is only read again on connect.
+  const stamp = new Date().toISOString();
+  setProjects((prev) => prev.map((p) => (p.path === path ? { ...p, lastSelected: stamp } : p)));
   // Fire and forget: losing the remembered pick costs one dropdown next launch.
   void invoke("set_last_selected_project", { path }).catch(() => {});
 };
@@ -2301,8 +2316,9 @@ const sessionIndexItemsRef = useRef(sessionIndexItems);
 sessionIndexItemsRef.current = sessionIndexItems;
 // A space is a tag on the project, so `announce` needs the live project list to
 // answer whether the session that just spoke is one the reader has put away.
-const projectsRef = useRef(projects);
-projectsRef.current = projects;
+// The inherited tags, or a copy drawn in a space would be refused its notices.
+const projectsRef = useRef(orderedProjects);
+projectsRef.current = orderedProjects;
 const statusBySessionRef = useRef(statusBySession);
 statusBySessionRef.current = statusBySession;
 const tasksBySessionRef = useRef(tasksBySession);

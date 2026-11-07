@@ -10,6 +10,7 @@ import {
   sessionInSpace,
   spaceNames,
 } from "@/lib/space";
+import { qualify } from "@/lib/transport";
 import type { Project } from "@/types/events";
 
 const project = (path: string, space: string | null): Project => ({
@@ -89,6 +90,7 @@ describe("spaces", () => {
   it("drops the leading slash and nothing else", () => {
     expect(displayPath("/Users/y/proj")).toBe("Users/y/proj");
     expect(displayPath("C:/proj")).toBe("C:/proj");
+    expect(displayPath(qualify("/srv/proj", "box"))).toBe("srv/proj");
   });
 });
 

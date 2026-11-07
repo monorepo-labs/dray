@@ -44,13 +44,17 @@ Press **Add server** at the top of the tab. There are two ways in:
 - **SSH.** Paste the line you log in with, like `ssh root@203.0.113.7`. `-p` and names from `~/.ssh/config` work. This is the usual way; [Connect a server](/server) walks through it, including installing Dray there.
 - **Address and token.** Press **Use an address and token instead**, then fill in **Address** and **Token**. Use this for a server reached through Remote access (below) or any running Dray server. Paste the whole line that `dray server tunnel on` prints into **Address** and the token fills in too.
 
-**Name** is optional. It is drawn after that server's project names in the sidebar.
+**Name** is optional. It names the server in a session's tab, and after the name of any project that is only on that server.
 
 The first time the app meets a server over SSH, it asks **Is this the right server?** and shows the host key fingerprint, with the command to check it on the server. **Trust and connect** saves the key the way `ssh` would.
 
 ### Use several servers at once
 
-There is nothing to switch between. Every connected server's projects sit in one sidebar together. A project belongs to one server, and a session runs on the server its project is on. To start work on a server, attach a project there and start a session in it.
+There is nothing to switch between. Every connected server's projects sit in one sidebar together. To start work on a server, attach a project there and start a session in it.
+
+A repo with the same `origin` on several machines is one project, wherever it runs. Clones over SSH and HTTPS count as the same repo. A repo with no remote stays its own project on each machine.
+
+Pick the project in the composer and a new task starts on the machine you used last. A second dropdown beside it names the machine, and on a project with several, picks another. A project only on This Mac has none. A session runs on the machine it started on, and its tab names that machine. A tab with no name is on This Mac.
 
 ### Manage a server
 

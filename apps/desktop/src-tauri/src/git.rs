@@ -51,6 +51,37 @@ pub async fn origin(cwd: &str) -> Option<String> {
     git_line(cwd, &["remote", "get-url", "origin"]).await.map(|url| repo_key(&url))
 }
 
+/// [`origin`], where it names a repository another machine could also have. A
+/// remote that is a path here says nothing about a path there, and two machines
+/// merged on `/srv/x.git` would hide a checkout.
+pub async fn shared_remote(cwd: &str) -> Option<String> {
+    // Killed when a caller's timeout drops it, or a stalled checkout gathers one
+    // git per list. Only here: other reads and writes must not die half way.
+    let out = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(cwd)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .kill_on_drop(true)
+        .output()
+        .await
+        .ok()?;
+    let url = String::from_utf8_lossy(&out.stdout);
+    let url = url.trim();
+    (out.status.success() && is_network_url(url)).then(|| repo_key(url))
+}
+
+/// Git's own rule: a scheme, or scp form's colon ahead of any slash. A lone
+/// letter before that colon is a Windows drive.
+fn is_network_url(url: &str) -> bool {
+    if let Some((scheme, _)) = url.split_once("://") {
+        return !scheme.eq_ignore_ascii_case("file");
+    }
+    match url.split_once(':') {
+        Some((host, _)) => !host.contains(['/', '\\']) && host.len() > 1,
+        None => false,
+    }
+}
+
 fn repo_key(url: &str) -> String {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let rest = rest.split_once('@').map_or(rest, |(_, rest)| rest);
@@ -1676,6 +1707,30 @@ mod tests {
             "ssh://git@github.com/monorepo-labs/dray.git",
         ] {
             assert_eq!(repo_key(url), "github.com/monorepo-labs/dray", "{url}");
+        }
+    }
+
+    #[test]
+    fn only_a_network_remote_names_a_shared_repository() {
+        for url in [
+            "git@github.com:a/b.git",
+            "github.com:a/b",
+            "https://github.com/a/b",
+            "ssh://git@github.com/a/b.git",
+        ] {
+            assert!(is_network_url(url), "{url}");
+        }
+        for url in [
+            "/srv/x.git",
+            "../x.git",
+            "./x",
+            "repos/x.git",
+            "repos/a:b",
+            "file:///srv/x.git",
+            "file://localhost/srv/x.git",
+            "C:\\repos\\x.git",
+        ] {
+            assert!(!is_network_url(url), "{url}");
         }
     }
 

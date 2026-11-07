@@ -12,7 +12,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { serverName, useServers } from "@/lib/servers";
 import { displayPath } from "@/lib/space";
+import { LOCAL, serverOfPath } from "@/lib/transport";
 import type { Project } from "@/types/events";
 
 /// Where spaces are made and projects filed into them.
@@ -60,6 +62,7 @@ export default function SpacesSettings({
   // One at a time and held here rather than per row, so opening a second closes
   // the first instead of leaving two half-typed names on screen.
   const [naming, setNaming] = useState<string | null>(startNaming ? "" : null);
+  useServers();
   // Which space has been asked about. Removal takes projects out of a space, so
   // it asks first — in the row, since a modal takes the whole window over
   // something that costs one dropdown to put back.
@@ -225,6 +228,7 @@ export default function SpacesSettings({
                       rather than hovered for — a native tooltip appears a second
                       late, in the OS's own type, over the row below it. */}
                   <span className="truncate text-ui text-muted-foreground">
+                    {serverOfPath(project.path) !== LOCAL && `${serverName(serverOfPath(project.path))} · `}
                     {displayPath(project.path)}
                   </span>
                 </div>
