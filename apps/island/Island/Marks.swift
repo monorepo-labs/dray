@@ -243,7 +243,9 @@ struct BoatPill: View {
                     Circle().fill(StatusDot.waiting).frame(width: 6, height: 6)
                     // Redrawn each second, or the count would stand still.
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        // White outright: the pills' window takes the system's appearance, not the panel's dark.
                         Text(alert.sentence).font(.system(size: 13, weight: .semibold).monospacedDigit()).lineLimit(1)
+                            .foregroundStyle(.white)
                     }
                 }
                 HStack(spacing: 10) {
@@ -252,6 +254,7 @@ struct BoatPill: View {
                         Button("\(hours)h") { extend(hours) }
                             .buttonStyle(.plain)
                             .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white)
                     }
                     Button("Dismiss", action: dismiss)
                         .buttonStyle(.plain)
