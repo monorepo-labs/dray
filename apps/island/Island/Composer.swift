@@ -386,7 +386,18 @@ final class Composer {
 
     /// Dray says a session finished where its banner would have.
     func finished(_ id: String) {
-        let key = key(of: id)
+        guard let key = store.items.keys.first(where: { $0.id == id }) else {
+            // Dray reports a remote session over its own socket, which can be ahead
+            // of this island's read of that machine. A pill keyed to a guess opens
+            // nothing, so it waits for the index a while and is dropped after.
+            Task {
+                for _ in 0..<20 {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    if store.items.keys.contains(where: { $0.id == id }) { return finished(id) }
+                }
+            }
+            return
+        }
         done.removeAll { $0 == key }
         done.append(key)
         if shown || !attention.isEmpty { unseenDone.insert(key) } else { unseenDone.remove(key) }
@@ -600,13 +611,16 @@ final class Composer {
     func adoptAppSelection() async {
         guard case .string(let id)? = try? await store.call(server, "selected_session", as: JSON.self, timeout: .milliseconds(500))
         else { return }
-        let k = key(of: id)
-        if store.items[k] != nil { pick(.session(k)) }
+        // By id alone, which is unique across machines.
+        if let k = store.items.keys.first(where: { $0.id == id }) { pick(.session(k)) }
     }
 
-    /// The key of a session Dray named by id alone, which is unique across machines.
-    private func key(of id: String) -> SessionKey {
-        store.items.keys.first { $0.id == id } ?? SessionKey(server: server, id: id)
+    /// A project path as Dray keys it: as is on This Mac, `dray://<machine>/…`
+    /// on another. Drafts are Dray's own list on This Mac, so a remote one is
+    /// saved there under this spelling, as the app saves its own.
+    private func qualified(_ path: String, on: UUID) -> String {
+        guard on != server, let machine = machineIds.first(where: { $0.value == on })?.key else { return path }
+        return "dray://\(machine)\(path)"
     }
 
     /// Takes the machines Dray's window is connected to as this island's own. The
@@ -717,12 +731,15 @@ final class Composer {
         let up = store.servers.filter { store.serverState[$0.id] == .connected }.map(\.id)
         var read: [UUID: [Project]] = [:]
         var failure: Error?
+        let home = server
         await withTaskGroup(of: (UUID, Result<([Project], [AgentAvailability]), Error>).self) { group in
             for id in up {
                 group.addTask { @MainActor [store] in
                     do {
-                        async let p: [Project] = store.call(id, "list_projects")
-                        async let a: [AgentAvailability] = store.call(id, "agent_availability")
+                        // A stalled remote must not hold This Mac's projects for the default minute.
+                        let wait: Duration = id == home ? .seconds(60) : .seconds(5)
+                        async let p: [Project] = store.call(id, "list_projects", timeout: wait)
+                        async let a: [AgentAvailability] = store.call(id, "agent_availability", timeout: wait)
                         return (id, .success(try await (p, a)))
                     } catch {
                         return (id, .failure(error))
@@ -989,7 +1006,6 @@ final class Composer {
         }
         saving = true
         defer { saving = false }
-        let dest = key?.server ?? pickedServer
         var draft: [String: JSON] = [
             "id": .string(UUID().uuidString.lowercased()),
             "prompt": .string(text),
@@ -998,7 +1014,7 @@ final class Composer {
         switch target {
         case .session(let k):
             guard let item = store.items[k] else { return }
-            draft["projectPath"] = .string(item.projectPath)
+            draft["projectPath"] = .string(qualified(item.projectPath, on: k.server))
             draft["harness"] = .string(item.harness)
             draft["model"] = .string(item.model)
             draft["effort"] = JSON(item.effort)
@@ -1010,7 +1026,7 @@ final class Composer {
                 notice = "Pick a project first."
                 return
             }
-            draft["projectPath"] = .string(projectPath)
+            draft["projectPath"] = .string(qualified(projectPath, on: pickedServer))
             draft["harness"] = .string(harness)
             draft["model"] = .string(modelId)
             draft["effort"] = JSON(effort)
@@ -1020,7 +1036,7 @@ final class Composer {
         }
         let savedRows = Set(rows.map(\.id)), savedTyping = typing
         do {
-            let _: JSON = try await store.call(dest, "create_draft", ["draft": .object(draft)])
+            let _: JSON = try await store.call(server, "create_draft", ["draft": .object(draft)])
         } catch {
             notice = error.localizedDescription
             return
@@ -1037,26 +1053,27 @@ final class Composer {
             return nil
         }
         let id = UUID().uuidString.lowercased()
-        let on = checkout.server, cwd = checkout.project.path
-        do {
-            let files = try await landed(files, on: on)
-            let outcome: SendOutcome = try await store.call(on, "send_msg", [
+        let on = checkout.server
+        // Read before the upload's await: the reader may change a pick meanwhile.
+        var args: [String: JSON] = [
                 "sessionId": .string(id),
                 "prompt": .string(text),
-                "attachmentPaths": .array(files.map { .string($0) }),
                 "harness": .string(harness),
                 "model": .string(modelId),
                 "effort": JSON(effort),
                 "permissionMode": .string(Picks.stanceFor(harness, stance)),
                 "fast": .bool(false),
-                "cwd": .string(cwd),
+                "cwd": .string(checkout.project.path),
                 // No branch picker here, so the server reads the checkout's own at creation.
                 "branch": nil,
                 "useWorktree": .bool(worktree),
                 "worktreeName": nil,
                 "baseRef": nil,
                 "isNewSession": true,
-            ])
+        ]
+        do {
+            args["attachmentPaths"] = .array(try await landed(files, on: on).map { .string($0) })
+            let outcome: SendOutcome = try await store.call(on, "send_msg", args)
             if let item = outcome.snapshot { store.created(on, item) }
             return SessionKey(server: on, id: id)
         } catch {
