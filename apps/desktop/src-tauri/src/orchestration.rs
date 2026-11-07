@@ -838,9 +838,13 @@ async fn settle_session(settle: dray_proto::SettleSession, app: &Sink) -> Result
     }
     crate::set_session_flags(id, Some(settle.settled), None, None, None, app.clone()).await?;
     if settle.settled && settle.delete_worktree {
-        // Removal moves `cwd` out of the tree, past what the settle announced.
-        let moved = manager().remove_worktree(id).await.context("settled, but the worktree was not deleted")?;
-        app.emit(SESSION_CHANGED, &moved).ok();
+        let removed = manager().remove_worktree(id).await;
+        // Removal moves `cwd` out of each tree, hidden children's first, so even
+        // a refusal partway has entries past what the settle announced.
+        let mut moved = vec![id.to_string()];
+        moved.extend(store::hidden_descendants(id).await?);
+        announce_change(&moved, app).await;
+        removed.context("settled, but the worktree was not deleted")?;
     }
     answer_session(id).await
 }
