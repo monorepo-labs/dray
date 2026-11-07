@@ -11,16 +11,20 @@ export function overwritesInPlace(harness: Harness): boolean {
 ///
 /// Walks the statuses, not `rows`: the archived view swaps the running sessions
 /// out of the sidebar's list. A running session with no row could be on any
-/// agent, so it counts, which delays an update and never breaks a turn.
+/// agent, so it counts, which delays an update and never breaks a turn. One on
+/// another machine does not: it reads none of this Mac's files.
 export function turnRunningOn(
   harness: Harness,
   statuses: Record<string, SessionStatus>,
   rows: Pick<SessionIndexItem, "sessionId" | "harness">[],
+  isLocal: (sessionId: string) => boolean,
 ): boolean {
   const harnessOf = new Map(rows.map((row) => [row.sessionId, row.harness]));
   return Object.entries(statuses).some(
     ([sessionId, status]) =>
-      status === "in_progress" && (harnessOf.get(sessionId) ?? harness) === harness,
+      status === "in_progress" &&
+      isLocal(sessionId) &&
+      (harnessOf.get(sessionId) ?? harness) === harness,
   );
 }
 

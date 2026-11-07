@@ -20,20 +20,28 @@ describe("turnRunningOn", () => {
     { sessionId: "b", harness: "codex" as const },
   ];
 
+  const local = () => true;
+
   it("reads the running session's own agent", () => {
-    expect(turnRunningOn("pi", { a: "in_progress" }, rows)).toBe(true);
-    expect(turnRunningOn("fx", { a: "in_progress" }, rows)).toBe(false);
+    expect(turnRunningOn("pi", { a: "in_progress" }, rows, local)).toBe(true);
+    expect(turnRunningOn("fx", { a: "in_progress" }, rows, local)).toBe(false);
   });
 
   it("ignores sessions that are not running", () => {
-    expect(turnRunningOn("pi", { a: "idle", b: "completed" }, rows)).toBe(false);
+    expect(turnRunningOn("pi", { a: "idle", b: "completed" }, rows, local)).toBe(false);
   });
 
   // The archived view takes running sessions out of the list, and an update
   // landing then overwrites files their child is reading.
   it("counts a running session with no row, whichever agent is asked about", () => {
-    expect(turnRunningOn("pi", { gone: "in_progress" }, rows)).toBe(true);
-    expect(turnRunningOn("fx", { gone: "in_progress" }, [])).toBe(true);
+    expect(turnRunningOn("pi", { gone: "in_progress" }, rows, local)).toBe(true);
+    expect(turnRunningOn("fx", { gone: "in_progress" }, [], local)).toBe(true);
+  });
+
+  it("ignores a session on another machine, row or no row", () => {
+    const remote = () => false;
+    expect(turnRunningOn("pi", { a: "in_progress" }, rows, remote)).toBe(false);
+    expect(turnRunningOn("pi", { gone: "in_progress" }, rows, remote)).toBe(false);
   });
 });
 

@@ -1,6 +1,6 @@
 import { lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { invoke, listen, LOCAL, serverOfPath } from "@/lib/transport";
+import { invoke, listen, LOCAL, serverOfPath, serverOfSession } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { CircleDashed, Plus } from "lucide-react";
 import PrStateIcon from "@/components/PrStateIcon";
@@ -2674,7 +2674,7 @@ function App() {
   // two — a toggle written when there were two silently never reached pi.
   const enabledAgents = useEnabledAgents();
   const agentTurnRunning = (agent: Harness) =>
-    turnRunningOn(agent, statusBySession, sessionIndexItems);
+    turnRunningOn(agent, statusBySession, sessionIndexItems, (id) => serverOfSession(id) === LOCAL);
   useAutoUpdateAgents(enabledAgents, agentTurnRunning);
   useHotkey("harness.next", () => setHarness(nextHarness(harness, enabledAgents)), {
     enabled: composingNewSession,
