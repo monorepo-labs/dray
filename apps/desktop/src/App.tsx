@@ -150,7 +150,9 @@ import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import ServerOfflineNotice from "@/components/composer/ServerOfflineNotice";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout } from "@/lib/projectGroups";
-import { serverName, useServers } from "@/lib/servers";
+import { serverConnected, serverName, useServers } from "@/lib/servers";
+import { canTagFrom } from "@/lib/sessionTag";
+import { useReachableSessions } from "@/hooks/useReachableSessions";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
 import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
@@ -1583,14 +1585,21 @@ function App() {
   // this follows where the prompt is actually going, and the two come apart the
   // moment a session is open in a project the reader has filtered away.
   const composerProject = selectedSession?.projectPath ?? projectPath;
+  const composerServer = composerProject ? serverOfPath(composerProject) : LOCAL;
+  const { reachable: reachableSessions, refresh: refreshReachableSessions } = useReachableSessions(composerServer);
+  const connectedServers = useServers();
   const composerSessions = useMemo(
     () =>
       sessionIndexItems.filter(
         (i) =>
           sessionInSpace(projects, space, i.projectPath) &&
-          (!composerProject || i.projectPath === composerProject),
+          (!composerProject || sameProject(i.projectPath, composerProject)) &&
+          serverConnected(serverOfPath(i.projectPath)) &&
+          canTagFrom(composerServer, i.sessionId, i.projectPath, reachableSessions),
       ),
-    [sessionIndexItems, projects, space, composerProject],
+    // `sameProject` follows `projects`, and `serverConnected` follows the list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionIndexItems, projects, space, composerProject, composerServer, reachableSessions, connectedServers],
   );
   const { commands: slashCommands, loading: slashCommandsLoading } = useSlashCommands(
     composerCwd,
@@ -3234,6 +3243,7 @@ function App() {
           issuesConnected={issuesConnected}
           issueTrackers={integrations.connected}
           sessions={composerSessions}
+          onSessionPickerOpen={refreshReachableSessions}
           modelTakesImages={modelTakesImages}
           error={error}
           onDismissError={() => setError(null)}

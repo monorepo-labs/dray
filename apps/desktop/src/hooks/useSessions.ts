@@ -2865,15 +2865,15 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
   if (!isWindowFocused()) {
     // A card is the island's to raise while it runs: its pill counts what waits
     // and answers it in place, so a banner beside it says the same thing twice.
-    // The island watches This Mac alone, so a remote session keeps its banner.
-    if (kind === "asking" && serverOfSession(sessionId) === LOCAL) {
+    // Every machine: the island follows this app's connections.
+    if (kind === "asking") {
       void islandOn().then((on) => on || notifyOS(sessionId, kind, label, item?.title ?? ""));
       return false;
     }
     // A finished turn is the island's done pill, which names the session and
     // offers Open in app, so the banner would say it twice. A failed hand-off
     // falls back to the banner rather than saying nothing.
-    if (kind === "completed" && serverOfSession(sessionId) === LOCAL) {
+    if (kind === "completed") {
       void islandOn().then((on) =>
         on
           ? invoke("island_done", { sessionId }).catch(() => notifyOS(sessionId, kind, label, item?.title ?? ""))

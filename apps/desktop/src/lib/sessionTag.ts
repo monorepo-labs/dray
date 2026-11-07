@@ -20,6 +20,7 @@
 /// [slash.ts]: ./slash.ts
 /// [mention.ts]: ./mention.ts
 /// [issue.ts]: ./issue.ts
+import { LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
 import type { SessionIndexItem } from "@/types/events";
 
 /// The tag token the caret is sitting in.
@@ -127,6 +128,20 @@ export function applySession(
     text: `${text.slice(0, span.start)}${tag}${spaced}`,
     caret: span.start + tag.length + 1,
   };
+}
+
+/// Whether an agent on `from` could message `sessionPath`'s session, since a tag
+/// nothing can deliver is a dead end the reader only meets after sending. This
+/// Mac's server reads the same machine list as the app, so it reaches every
+/// connected machine; a remote reaches itself and what it answered to
+/// `reachable_sessions`.
+export function canTagFrom(
+  from: ServerId,
+  sessionId: string,
+  sessionPath: string,
+  reachable: ReadonlySet<string>,
+): boolean {
+  return from === LOCAL || serverOfPath(sessionPath) === from || reachable.has(sessionId);
 }
 
 /// What the picker offers, out of the list the sidebar is already drawing.

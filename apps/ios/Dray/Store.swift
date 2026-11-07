@@ -44,6 +44,11 @@ final class Store {
 
     /// For a client that reacts beside drawing: the Island opens itself on a card.
     @ObservationIgnored var asksChanged: () -> Void = {}
+    /// The Island's: its own server came up, or Dray's window came or went, so
+    /// the machines it follows may have moved.
+    @ObservationIgnored var linksMayHaveMoved: () -> Void = {}
+    /// The Island's This Mac; the phone has none.
+    @ObservationIgnored private var home: UUID?
     @ObservationIgnored private let path = NWPathMonitor()
     @ObservationIgnored private var reading: Set<UUID> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
@@ -67,6 +72,7 @@ final class Store {
     /// Keychain — the Island's This Mac, whose port and token are files.
     init(local s: Server, read: @escaping () -> (url: String, token: String)?) {
         servers = [s]
+        home = s.id
         start(s, read: read, client: "island")
         watchNetwork()
     }
@@ -100,17 +106,42 @@ final class Store {
     }
 
     func removeServer(_ s: Server) {
-        connections.removeValue(forKey: s.id)?.stop()
+        forget(s.id)
         Keychain.delete(s.id.uuidString)
-        servers.removeAll { $0.id == s.id }
-        serverState[s.id] = nil
-        for key in items.keys where key.server == s.id { items[key] = nil }
-        for key in transcripts.keys where key.server == s.id { transcripts[key] = nil }
-        for key in asks.keys where key.server == s.id { asks[key] = nil }
-        for key in marks.keys where key.server == s.id { marks[key] = nil }
-        projects[s.id] = nil
-        loadErrors[s.id] = nil
         save()
+    }
+
+    private func forget(_ id: UUID) {
+        connections.removeValue(forKey: id)?.stop()
+        servers.removeAll { $0.id == id }
+        serverState[id] = nil
+        for key in items.keys where key.server == id { items[key] = nil }
+        for key in transcripts.keys where key.server == id { transcripts[key] = nil }
+        for key in asks.keys where key.server == id { asks[key] = nil }
+        for key in marks.keys where key.server == id { marks[key] = nil }
+        for key in tasks.keys where key.server == id { tasks[key] = nil }
+        for key in queued.keys where key.server == id { queued[key] = nil }
+        projects[id] = nil
+        loadErrors[id] = nil
+    }
+
+    /// The Island's machines beyond This Mac, as Dray's window last listed them:
+    /// nothing saved, since the window is the list. A login that moved its port
+    /// or token reconnects and keeps what is held.
+    func follow(_ links: [(server: Server, url: String, token: String)]) {
+        for s in servers where s.id != home && !links.contains(where: { $0.server.id == s.id }) { forget(s.id) }
+        for link in links {
+            let s = link.server
+            if let i = servers.firstIndex(where: { $0.id == s.id }) { servers[i].name = s.name } else { servers.append(s) }
+            if let held = connections[s.id], held.url == link.url, held.token == link.token { continue }
+            connections[s.id]?.stop()
+            start(s, read: { (link.url, link.token) })
+        }
+    }
+
+    /// The name a remote machine goes by beside a title. This Mac has none, which is what says local.
+    func machine(_ server: UUID) -> String? {
+        server == home ? nil : name(of: server)
     }
 
     func renameServer(_ id: UUID, to name: String) {
@@ -191,6 +222,7 @@ final class Store {
     /// A fresh connection re-reads the index and the tail of every open
     /// transcript, so nothing that happened while it was down is missed.
     private func connected(_ server: UUID) async {
+        if server == home { linksMayHaveMoved() }
         // Heard on the old socket, so older than the read below — and a read
         // never moves `modified`, so a stale `completed` would win the tie.
         for key in statuses.keys where key.server == server { statuses[key] = nil }
@@ -489,6 +521,8 @@ final class Store {
         case "clone_progress":
             guard let p = try? decoder.decode(EventFrame<CloneProgress>.self, from: data).payload else { return }
             cloneProgress[server, default: [:]][p.slug] = p.line
+        case "host_changed":
+            linksMayHaveMoved()
         case "session_created", "session_changed":
             guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload else { return }
             items[SessionKey(server: server, id: item.sessionId)] = item

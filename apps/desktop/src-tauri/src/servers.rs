@@ -311,6 +311,47 @@ fn announce() {
         let _ = sink.emit("servers_changed", snapshot());
         let _ = sink.emit("local_server_changed", local_server());
     }
+    tell_island();
+}
+
+/// A machine this app is connected to, and how Dray Island opens a socket of its
+/// own over the same link. The island is the app's companion, so it follows this
+/// list rather than holding one (#784).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IslandLink {
+    id: String,
+    name: String,
+    url: String,
+    token: String,
+}
+
+/// The server's `island_links`, asked by the island over its local listener.
+pub fn island_links() -> Vec<IslandLink> {
+    conns()
+        .iter()
+        .filter(|c| c.saved.id != LOCAL && c.status == ServerStatus::Connected)
+        .filter_map(|c| {
+            let (url, token) = c.live.clone()?;
+            Some(IslandLink { id: c.saved.id.clone(), name: c.saved.name.clone(), url, token })
+        })
+        .collect()
+}
+
+/// Pings the island when the list moved, which most status changes do not: one
+/// server connecting is several of them.
+fn tell_island() {
+    static TOLD: Mutex<Vec<IslandLink>> = Mutex::new(Vec::new());
+    let links = island_links();
+    {
+        let mut told = TOLD.lock().unwrap_or_else(|e| e.into_inner());
+        if *told == links {
+            return;
+        }
+        *told = links;
+    }
+    tokio::spawn(async {
+        let _ = tokio::process::Command::new("notifyutil").args(["-p", "com.yogesh.dray.island.links"]).output().await;
+    });
 }
 
 /// This Mac's server, as the remote ones are drawn.

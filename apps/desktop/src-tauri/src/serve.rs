@@ -1156,6 +1156,7 @@ async fn connection(
     let offer = hello.and_then(|h| h.host);
     if let Some(offer) = offer {
         *host() = Some(Host { connection, browser: offer.browser, frames: replies.clone(), waiting: HashMap::new() });
+        let _ = sink.emit("host_changed", Value::Null);
         // This server writes the machine list itself while no app is
         // connected, so the copy the app read at launch may be stale (#760).
         tokio::spawn(host_call("reload_servers", Value::Null));
@@ -1191,7 +1192,11 @@ async fn connection(
         let (sink, replies) = (sink.clone(), replies.clone());
         tokio::spawn(crate::analytics::CLIENT_COUNTS.scope(counts, async move {
             let args = tag_dictation(&call.cmd, call.args, island);
-            let reply = match dispatch(&call.cmd, args, sink).await {
+            let answer = match call.cmd.as_str() {
+                "island_links" => island_links(island).await,
+                _ => dispatch(&call.cmd, args, sink).await,
+            };
+            let reply = match answer {
                 Ok(ok) => {
                     if island {
                         island_used(&call.cmd);
@@ -1206,13 +1211,29 @@ async fn connection(
 
     // Dropping its waiters answers every call still out on it.
     let mut host = host();
-    if host.as_ref().is_some_and(|h| h.connection == connection) {
+    let left = host.as_ref().is_some_and(|h| h.connection == connection);
+    if left {
         *host = None;
     }
     drop(host);
+    if left {
+        // The island follows the app's links, so it drops them with the app.
+        let _ = sink.emit("host_changed", Value::Null);
+    }
     drop(replies);
     writer.abort();
     failed.map_or(Ok(()), |e| Err(e.into()))
+}
+
+/// The app's links to other machines, tokens included, for the island alone.
+/// Decided off the connection rather than in [`dispatch`]: `island` is only ever
+/// set on the local listener, so nothing reaching this server from another
+/// machine can be handed a way into a third. No app connected is no links.
+async fn island_links(island: bool) -> Result<Value, Value> {
+    if !island {
+        return Err(json!("unknown command island_links"));
+    }
+    host_call("island_links", Value::Null).await.unwrap_or_else(|| Ok(json!([])))
 }
 
 /// Dictation forwarded to the app carries `via`, set here off the hello and
@@ -1405,6 +1426,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         detach_session(session_id: String) => store::detach_session(&session_id).await;
         set_auto_continue(session_id: String, on: bool) => crate::auto_continue::set_auto_continue(session_id, on, sink).await;
         list_session_index_items(archived: bool) => store::list_session_index_items(archived).await;
+        reachable_sessions() => ok(crate::machines::reachable_sessions().await);
         get_session_by_id(session_id: String, turns: Option<u32>) => store::get_session_by_id(&session_id, turns).await;
         get_session_page(session_id: String, before: u64, turns: u32) => store::get_session_page(&session_id, before, turns).await;
         get_session_since(session_id: String, after: Vec<String>) => store::get_session_since(&session_id, after).await;
@@ -1588,6 +1610,12 @@ mod tests {
         std::fs::write(&file, "").unwrap();
         assert!(!tunnel_origin("", &file), "an empty file names nothing");
         std::fs::remove_file(&file).ok();
+    }
+
+    #[tokio::test]
+    async fn only_the_island_is_handed_the_apps_links() {
+        assert!(island_links(false).await.is_err());
+        assert_eq!(island_links(true).await, Ok(json!([])), "no app connected is no links");
     }
 
     #[cfg(feature = "desktop")]
