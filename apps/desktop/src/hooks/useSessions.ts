@@ -28,9 +28,9 @@ import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
 import { setOlderLoader } from "@/lib/olderPages";
 import { stanceFor } from "@/lib/permission";
-import { isProvisional, nextMainSeq, provisionalId, retireOldestProvisional } from "@/lib/provisional";
+import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
-import { mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
+import { appendLive, mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
 import { forgetTranscript, keepTranscript, takeTranscript } from "@/lib/keptTranscripts";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KEY, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
@@ -1347,6 +1347,7 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   }
 
   if (sessions.some((s) => s.sessionId === sessionId)) {
+    refreshHeld(sessionId);
     return true;
   }
 
@@ -2016,11 +2017,9 @@ useEffect(() => {
                 return prev;
             }
 
-            // The real prompt retires the provisional one drawn at send.
-            const settled = agentEvent.payload.type === "user_message";
             return prev.map((s) =>
                 s.sessionId === agentEvent.sessionId
-                ? { ...s, events: [...(settled ? retireOldestProvisional(s.events) : s.events), agentEvent] }
+                ? { ...s, events: appendLive(s.events, agentEvent) }
                 : s,
             );
             });
@@ -2356,6 +2355,38 @@ const catchUp = async (
   return true;
 };
 
+/// `catchUp` for a transcript already drawn, where nobody waits on the answer.
+const catchUpOrDrop = (sessionId: string, held?: AgentEvent[], queueKnown?: boolean) => {
+  catchUp(sessionId, held, queueKnown)
+    .then((found) => {
+      if (found) return;
+      // Deleted on the server while held: the copy is all that is left of it,
+      // and drawing it would resume a session that is gone.
+      setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+      if (selectionRequestRef.current !== sessionId) return;
+      selectionRequestRef.current = null;
+      setSelectedSessionId(null);
+      setError("Session not found.");
+    })
+    .catch((e) => console.error("could not catch up", sessionId, e));
+};
+
+/// A held remote transcript coming on screen asks for what it lacks, since
+/// nothing else repairs one that missed events on a socket that stayed up (#780).
+/// Never from a hover, which stays free.
+///
+/// The queue counts as known: `queue_changed` keeps it current over the live
+/// socket, so a flush that also arrived live must not retire a second row. A
+/// session with no index row is mid-send, its log not written yet, and would
+/// read as deleted. A server that is down catches up when it reconnects.
+const refreshHeld = (sessionId: string) => {
+  const server = serverOfSession(sessionId);
+  if (server === LOCAL || !serverConnected(server)) return;
+  if (!sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
+  if (!sessionIndexItemsRef.current.some((i) => i.sessionId === sessionId)) return;
+  catchUpOrDrop(sessionId, undefined, true);
+};
+
 /// The events logged after the newest one `held` names, asked of the server
 /// directly. The ids sent are the newest few, since the last held events may
 /// be unlogged ones — a card, a provisional prompt. `null` where none of them
@@ -2507,6 +2538,8 @@ const setOnScreen = (ids: string[]) => {
       statusBySessionRef.current[id]
       ?? sessionIndexItemsRef.current.find((i) => i.sessionId === id)?.status;
     if (isWindowFocused() && status === "completed") markSessionRead(id);
+    // Selecting a session already asked for it, and a group opens that way.
+    if (id !== selectionRequestRef.current) refreshHeld(id);
   }
   onScreenRef.current = next;
 };
@@ -2548,18 +2581,7 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
     if (touch) lastViewedRef.current.set(sessionId, Date.now());
     const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
     upsertSession(item ? { ...copy, ...item } : copy);
-    catchUp(sessionId, copy.events)
-      .then((found) => {
-        if (found) return;
-        // Deleted on the server while kept: the copy is all that is left of
-        // it, and drawing it would resume a session that is gone.
-        setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
-        if (selectionRequestRef.current !== sessionId) return;
-        selectionRequestRef.current = null;
-        setSelectedSessionId(null);
-        setError("Session not found.");
-      })
-      .catch((e) => console.error("could not catch up", sessionId, e));
+    catchUpOrDrop(sessionId, copy.events);
     evictSessionsRef.current();
     return Promise.resolve(true);
   }

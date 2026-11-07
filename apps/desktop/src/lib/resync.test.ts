@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@/types/events";
-import { mergeMissed, missedEvents } from "./resync";
+import { appendLive, mergeMissed, missedEvents } from "./resync";
 
 const ev = (id: string, seq: number) => ({ id, seq, payload: { type: "x" } }) as unknown as AgentEvent;
 
@@ -49,6 +49,26 @@ describe("mergeMissed", () => {
   it("answers the same array when nothing was missed", () => {
     const current = [ev("a", 1)];
     expect(mergeMissed(current, current, [ev("a", 1)])).toBe(current);
+  });
+});
+
+describe("catching up a session mid-turn", () => {
+  const card = (id: string) => ({ id, seq: 9, payload: { type: "permission_requested" } }) as unknown as AgentEvent;
+
+  it("keeps an open card, which no log read returns", () => {
+    const held = [ev("a", 1), card("card")];
+    expect(mergeMissed(held, held, [ev("b", 2)]).map((e) => e.id)).toEqual(["a", "card", "b"]);
+  });
+
+  it("keeps a card raised while the read was out, after what it returned", () => {
+    const current = [ev("a", 1), card("card")];
+    expect(mergeMissed(current, [ev("a", 1)], [ev("b", 2)]).map((e) => e.id)).toEqual(["a", "b", "card"]);
+  });
+
+  it("drops a live event the read's reply overtook", () => {
+    const merged = mergeMissed([ev("a", 1)], [ev("a", 1)], [ev("b", 2)]);
+    expect(appendLive(merged, ev("b", 2))).toBe(merged);
+    expect(appendLive(merged, ev("c", 3)).map((e) => e.id)).toEqual(["a", "b", "c"]);
   });
 });
 

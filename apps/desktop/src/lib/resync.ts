@@ -55,3 +55,12 @@ export function mergeMissed(current: AgentEvent[], held: AgentEvent[], fresh: Ag
   }
   return [...events, ...arrived];
 }
+
+/// A live event onto a session's events. The real prompt retires the provisional
+/// one drawn at send. One a log read already delivered is dropped: `serve.rs`'s
+/// writer picks between replies and events at random, so a read's reply can
+/// overtake an event emitted before it.
+export function appendLive(events: AgentEvent[], event: AgentEvent): AgentEvent[] {
+  if (events.some((e) => e.id === event.id)) return events;
+  return [...(event.payload.type === "user_message" ? retireOldestProvisional(events) : events), event];
+}

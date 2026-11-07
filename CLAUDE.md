@@ -123,6 +123,7 @@ Messages flow one way out to CLI and one way back in; return path = what most Ru
 - **`DRAY_HOME` moves `~/.dray` and the orchestration socket with it.** Two processes on one data dir lose each other's index writes, so a server beside the running app needs its own.
 - **Frontend imports `invoke`/`listen` from `@/lib/transport`, never `@tauri-apps/api/core`/`event`**, and loads local files through its `fileSrc`, never `convertFileSrc`. Remotely that is the server's `/file` route, confined to attachments and recordings.
 - **A reconnect resyncs from two places**: logged events from the log tail, matched on event id because subagents restart `seq`; unlogged state from the `live_state` frame the server opens every connect with. A new piece of unlogged state the reader must see after a drop — the way an open card must be — belongs in `serve.rs`'s `Live`, or a reconnect loses it silently.
+- **Opening a held remote transcript catches it up too** (#780): `refreshHeld`, from selecting a session or a split pane coming on screen, never a hover. A socket that stays up can still leave a copy short, and nothing else would repair it. It merges, so an open card stays, and the live listener drops an event a read already delivered, since `serve.rs`'s writer lets a reply overtake one.
 
 ### The Mac's background server
 
