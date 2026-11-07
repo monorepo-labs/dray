@@ -132,7 +132,7 @@ struct IslandView: View {
                 ImageViewer(composer: composer)
                     .padding(6)
                     .padding(.top, composer.notchHeight)
-                    .environment(\.imageServer, store.connection(composer.server))
+                    .environment(\.imageServer, store.connection(composer.key?.server ?? composer.server))
                     .transition(.opacity)
             }
         }
@@ -198,8 +198,8 @@ struct IslandView: View {
             Divider()
             Button("Quit Dray Island") { NSApp.terminate(nil) }
         }
-        // A panel opened before the socket was up read nothing; read again once it is.
-        .task(id: store.serverState[composer.server] == .connected) {
+        // A panel opened before a socket was up read nothing of that machine; read again once it is.
+        .task(id: store.servers.filter { store.serverState[$0.id] == .connected }.map(\.id)) {
             if store.serverState[composer.server] == .connected, composer.target == .new { await composer.loadPicks() }
         }
     }
@@ -231,7 +231,7 @@ struct IslandView: View {
         if !composer.listShown, let key = composer.key {
             // The list, not Dray: a title clicked without thinking must not switch apps,
             // and the arrows can't open the list over text. ⌘-click is the deliberate way to Dray.
-            TitleRow(title: title, marks: store.marks(key), close: composer.closeHint,
+            TitleRow(title: title, machine: store.machine(key.server), marks: store.marks(key), close: composer.closeHint,
                      list: { composer.searches += 1 },
                      openInApp: { Task { await composer.showInApp(key) } },
                      hint: composer.pinchHint ? (composer.transcript ? "Pinch to hide messages" : "Spread fingers to see messages") : nil)

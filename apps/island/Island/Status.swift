@@ -33,6 +33,10 @@ struct AskCard: View {
                         }
                         .help("⌘-click to open in Dray")
                 }
+                // Which machine a permission would run on is half the question.
+                if let machine = store.machine(key.server) {
+                    Text(machine).font(.system(size: 13)).foregroundStyle(.white.opacity(0.3)).lineLimit(1).fixedSize()
+                }
                 Spacer(minLength: 0)
                 Text(composer.closeHint).font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))
             }

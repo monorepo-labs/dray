@@ -6,7 +6,10 @@ import Foundation
 struct Project: Decodable, Hashable {
     let path: String
     let name: String
-    let lastSelected: String
+    var lastSelected: String
+    /// The repository this checkout is of; `nil` from a server too old to say,
+    /// or where it has no shared remote.
+    var remote: String? = nil
 }
 
 struct AgentAvailability: Decodable, Hashable {

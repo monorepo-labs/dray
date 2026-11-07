@@ -93,10 +93,12 @@ type ChatInputProps = {
   /// resolves to where the stored one has nothing behind it. Only `App`'s own
   /// read can answer it.
   issueTrackers?: Connected;
-  /// What the `&` picker offers: the sessions the sidebar is currently drawing,
-  /// already narrowed by space and project filter there so that one array
-  /// answers for the list, the chords and this.
+  /// What the `&` picker offers, already narrowed by `App` to this project's
+  /// sessions an agent here could reach.
   sessions?: SessionIndexItem[];
+  /// The `&` picker opened, so what a remote machine reaches is worth asking
+  /// again. Rows it adds arrive into the open list.
+  onSessionPickerOpen?: () => void;
   /// Interrupts the running turn. Reachable while `busy` and the box is empty —
   /// with something typed the same button sends, since a prompt written during a
   /// turn is queued onto it rather than refused.
@@ -240,6 +242,7 @@ export default function ChatInput({
   issuesConnected = false,
   issueTrackers = { linear: false, github: false },
   sessions = [],
+  onSessionPickerOpen,
   onStop,
   onCancelQueued,
   onCancelRecording,
@@ -420,6 +423,10 @@ export default function ChatInput({
   // Dray being broken. The placeholder already withholds `&` here, so this is
   // for somebody who reached for it anyway.
   const noSessions = session !== null && !canMentionSession;
+  const sessionPickerOpen = session !== null;
+  useEffect(() => {
+    if (sessionPickerOpen) onSessionPickerOpen?.();
+  }, [sessionPickerOpen, onSessionPickerOpen]);
 
   // Flattened in render order, so arrowing through the list and drawing it
   // can't disagree about which row an index names.

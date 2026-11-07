@@ -24,27 +24,6 @@ enum TranscribeOutcome: Decodable {
     }
 }
 
-extension Connection {
-    /// `POST /upload`, the server's own route for a file from another machine.
-    /// Answers the path it landed at, on the server's disk.
-    func upload(_ file: URL, name: String) async throws -> String {
-        guard var parts = socketURL(url).flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) }) else {
-            throw DrayError("Not an address: \(url)")
-        }
-        parts.scheme = parts.scheme == "wss" ? "https" : "http"
-        parts.path = "/upload"
-        parts.queryItems = [URLQueryItem(name: "name", value: name)]
-        var request = URLRequest(url: parts.url!)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await URLSession.shared.upload(for: request, fromFile: file)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw DrayError("The upload was refused (\((response as? HTTPURLResponse)?.statusCode ?? 0))")
-        }
-        return String(decoding: data, as: UTF8.self)
-    }
-}
-
 extension Store {
     func canDictate(_ server: UUID) -> Bool {
         serverState[server] == .connected && connection(server)?.dictation == true

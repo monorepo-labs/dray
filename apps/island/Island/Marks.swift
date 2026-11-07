@@ -60,6 +60,8 @@ struct LeadMark: View {
 /// lead mark, ⌘-click opens the session in Dray, and the hints teach the keys.
 struct TitleRow: View {
     let title: String
+    /// Beside the title rather than in it, since a long title is cut and this must not be.
+    var machine: String? = nil
     let marks: Marks
     let close: String
     let list: () -> Void
@@ -80,6 +82,9 @@ struct TitleRow: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white.opacity(hovered ? 1 : 0.7))
                         .shimmer(marks.busy, period: 1.4)
+                    if let machine {
+                        Text(machine).font(.system(size: 13)).foregroundStyle(.white.opacity(0.4)).lineLimit(1).fixedSize()
+                    }
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())

@@ -94,6 +94,20 @@ until #580, renamed since it sits above the Dock as often as at the notch.
   build's island talks to the dev server. Shares `Wire.swift` and
   `Connection.swift` with `apps/ios` by path, not by package, and lends it
   `VoiceOrb` the same way — so neither side may import the other's UI kit.
+- **Other machines: whatever Dray's window is connected to** (#784). The island
+  is the app's companion, so it keeps no machine list and opens no login. It
+  asks This Mac's server for `island_links`, answered by the app over
+  `host_call` with each connected machine's address and token, and opens a
+  socket of its own over that link (an SSH machine's being the app's
+  tunnel). The server answers only the island's own connection, since the
+  answer holds tokens. It asks again when the app pings
+  `com.yogesh.dray.island.links` (the list moved) and when the server sends
+  `host_changed` (the app came or went). With Dray quit, remote machines leave;
+  This Mac's sessions stay. Sessions, cards and done pills come from every
+  machine alike. The title row and a card name a remote machine beside the
+  title, never This Mac. A new task's project menu is one row per repository,
+  as in the app (#782), and the bar's machine control follows `MachineSelector`'s
+  rule. A file sent to a remote is uploaded through its `/upload` first.
 - **Dictation: Dray's own Parakeet, through the server to the app.** The
   transcription commands are the app's (`APP_COMMANDS`), so the island sends
   them to the server and the server forwards them over `host_call` — the
