@@ -775,10 +775,15 @@ function Demo() {
         >
           Restart
         </Button>
-        <Button size="sm" variant="outline" onClick={runMountCheck}>
-          Run mount check
-        </Button>
-        {mountCheck && <span className="text-xs tabular-nums">{mountCheck}</span>}
+        {/* The long turn alone runs past the window at the check's checkpoint. */}
+        {scenario === "long" && (
+          <>
+            <Button size="sm" variant="outline" onClick={runMountCheck}>
+              Run mount check
+            </Button>
+            {mountCheck && <span className="text-xs tabular-nums">{mountCheck}</span>}
+          </>
+        )}
         <div className="flex gap-1">
           {SPEEDS.map((s) => (
             <Button key={s} size="sm" variant={s === speed ? "secondary" : "ghost"} onClick={() => setSpeed(s)}>
