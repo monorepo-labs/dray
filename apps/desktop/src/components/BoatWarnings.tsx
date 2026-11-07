@@ -200,7 +200,7 @@ export default function BoatWarnings({ busy }: { busy: (server: string) => boole
   });
   if (!up.length && !offer) return null;
   return (
-    <div className="pointer-events-none fixed bottom-12 left-2 z-50 flex w-56 flex-col gap-2">
+    <div className="pointer-events-none fixed bottom-2 left-2 z-50 flex w-56 flex-col gap-2">
       {offer && <AutoOffer />}
       {up.map(({ server, stopsAt }) => (
         <Warning
