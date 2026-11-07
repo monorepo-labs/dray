@@ -247,6 +247,13 @@ function LiveWork({
   }, []);
 
   useLayoutEffect(measure);
+  // A window going up on a mount or a closing fold has no earlier position to
+  // slide from. With the transition on, measuring's forced style pass makes it
+  // animate from the top, replaying every row each time a session opens.
+  const slides = useRef(false);
+  useLayoutEffect(() => {
+    slides.current = view !== null && !open;
+  });
   // A row growing on its own — expanded, or a message wrapping as the pane
   // narrows — moves the window too, and no render of this one says so.
   useEffect(() => {
@@ -288,7 +295,7 @@ function LiveWork({
           // The slide runs only while windowed: opening the fold drops the clip
           // at once, and rows still sliding back down would spill over the
           // summary above for the length of it.
-          className={cn("relative flex flex-col gap-3", windowed && "transition-transform duration-300 ease-out")}
+          className={cn("relative flex flex-col gap-3", windowed && slides.current && "transition-transform duration-300 ease-out")}
           style={windowed ? { transform: `translateY(${-view.offset}px)` } : undefined}
         >
           {rows.map((item, i) => (

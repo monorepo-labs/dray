@@ -695,6 +695,37 @@ function Demo() {
   // The other explorations were judged on the long turn alone; the scenarios
   // are about what ships against what it replaces.
   const variants = scenario === "long" ? VARIANTS : VARIANTS.filter((v) => v.key === "old" || v.key === "today");
+  const [mountCheck, setMountCheck] = useState("");
+
+  /// Opening a session mounts its running turn past the window, and that must
+  /// draw at the newest row with nothing sliding. A new row must still slide.
+  const runMountCheck = async () => {
+    const wait = (ms: number) => new Promise((done) => setTimeout(done, ms));
+    const slides = () =>
+      document.getAnimations().filter((a) => (a as CSSTransition).transitionProperty === "transform").length;
+    const others = VARIANTS.filter((v) => v.key !== "today").map((v) => v.key);
+    setPlaying(false);
+    setShown(Math.floor(beats.length * 0.6));
+    setHidden(new Set(others));
+    await wait(500);
+    setHidden(new Set([...others, "today"]));
+    await wait(100);
+    setHidden(new Set(others));
+    await wait(40);
+    const windowUp = document.querySelector("[inert]") !== null;
+    const onMount = slides();
+    await wait(500);
+    // Only a call adds a row, and a beat may be the previous call's result.
+    let onRow = 0;
+    for (let i = 0; i < 4 && onRow === 0; i++) {
+      setShown((n) => n + 1);
+      await wait(40);
+      onRow = slides();
+      await wait(350);
+    }
+    const pass = windowUp && onMount === 0 && onRow > 0;
+    setMountCheck(`${pass ? "PASS" : "FAIL"} window=${windowUp} slidesOnMount=${onMount} slidesOnNewRow=${onRow}`);
+  };
 
   useEffect(() => {
     if (!playing || shown >= beats.length || beats[shown].gate) return;
@@ -744,6 +775,10 @@ function Demo() {
         >
           Restart
         </Button>
+        <Button size="sm" variant="outline" onClick={runMountCheck}>
+          Run mount check
+        </Button>
+        {mountCheck && <span className="text-xs tabular-nums">{mountCheck}</span>}
         <div className="flex gap-1">
           {SPEEDS.map((s) => (
             <Button key={s} size="sm" variant={s === speed ? "secondary" : "ghost"} onClick={() => setSpeed(s)}>
