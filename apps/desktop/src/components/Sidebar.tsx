@@ -56,6 +56,7 @@ import { startSessionDrag, type DropTarget } from "@/lib/dragSession";
 import { basename, isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
 import { sessionBranch } from "@/lib/pr";
+import { checkoutsOf, groupProjects, keyOfPath, leadPath, soleServer } from "@/lib/projectGroups";
 import { projectLabel, serverConnected, serverName, useServers } from "@/lib/servers";
 import { LOCAL, serverOfPath } from "@/lib/transport";
 import { useResizable } from "@/components/ResizeHandle";
@@ -595,7 +596,7 @@ export function sessionGroups(
 function projectRuns(nests: SessionListRow[][], projects: Project[]): SessionGroup[] {
   const byPath = new Map<string, SessionListRow[]>();
   for (const nest of nests) {
-    const path = nest[0].item.projectPath;
+    const path = leadPath(projects, nest[0].item.projectPath);
     byPath.set(path, [...(byPath.get(path) ?? []), ...nest]);
   }
   const seen = new Map([...byPath.keys()].map((path, i) => [path, i]));
@@ -646,7 +647,8 @@ export function placeDrafts(
 ): (SessionGroup | DraftRun)[] {
   const byPath = new Map<string, Draft[]>();
   for (const draft of [...drafts].sort((a, b) => b.created.localeCompare(a.created))) {
-    byPath.set(draft.projectPath, [...(byPath.get(draft.projectPath) ?? []), draft]);
+    const path = leadPath(projects, draft.projectPath);
+    byPath.set(path, [...(byPath.get(path) ?? []), draft]);
   }
   const rank = (path: string) => {
     const i = projects.findIndex((p) => p.path === path);
@@ -1145,6 +1147,17 @@ export default function Sidebar({
   // dimming on its rows and headings.
   useServers();
   const offline = (path: string) => !serverConnected(serverOfPath(path));
+  // A heading stands for every checkout of its project. It names a machine only
+  // where there is just one to name, and dims only once all of them are gone.
+  const headingServer = (path: string) => {
+    const checkouts = checkoutsOf(projects, path);
+    const server = checkouts.length ? soleServer(checkouts) : serverOfPath(path);
+    return server && server !== LOCAL ? serverName(server) : null;
+  };
+  const headingOffline = (path: string) => {
+    const checkouts = checkoutsOf(projects, path);
+    return checkouts.length ? checkouts.every((p) => offline(p.path)) : offline(path);
+  };
 
   const projectName = useMemo(() => {
     const named = new Map(projects.map((p) => [p.path, p.name]));
@@ -1407,12 +1420,8 @@ export default function Sidebar({
                         : undefined
                     }
                     label={heading}
-                    server={
-                      underProject && serverOfPath(group.projectPath) !== LOCAL
-                        ? serverName(serverOfPath(group.projectPath))
-                        : null
-                    }
-                    offline={underProject && offline(group.projectPath)}
+                    server={underProject ? headingServer(group.projectPath) : null}
+                    offline={underProject && headingOffline(group.projectPath)}
                   />
                 ),
 
@@ -1751,18 +1760,23 @@ function ProjectFilter({
   const entries = useMemo(
     () => [
       { path: null as string | null, name: "All Projects" },
-      ...projects.map((p) => ({ path: p.path as string | null, name: projectLabel(p) })),
+      ...groupProjects(projects).map((g) => ({
+        path: g.checkouts[0].path as string | null,
+        name: projectLabel(g.name, soleServer(g.checkouts)),
+      })),
     ],
     [projects],
   );
 
   // A detached project leaves its path behind in the stored filter. Falling back
   // to All is the only honest answer, and the dot track needs a real index.
-  const found = entries.findIndex((e) => e.path === value);
+  const found = entries.findIndex(
+    (e) => e.path === value || (e.path && value && keyOfPath(projects, e.path) === keyOfPath(projects, value)),
+  );
   const activeIndex = found === -1 ? 0 : found;
   const active = entries[activeIndex];
 
-  const menuMode = projects.length >= PROJECT_MENU_FROM;
+  const menuMode = entries.length - 1 >= PROJECT_MENU_FROM;
 
   // Wraps, since a tap has no direction and no dot to slide — a dead end at the
   // last entry would just look broken. Counted from the last entry asked for,

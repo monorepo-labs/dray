@@ -149,7 +149,8 @@ import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailabil
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import ServerOfflineNotice from "@/components/composer/ServerOfflineNotice";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
-import { useServers } from "@/lib/servers";
+import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout } from "@/lib/projectGroups";
+import { serverName, useServers } from "@/lib/servers";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
 import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
@@ -351,7 +352,7 @@ function App() {
       !selectedSessionId &&
       projectFilter &&
       projectPath &&
-      projectPath !== projectFilter &&
+      !sameProject(projectPath, projectFilter) &&
       spaceProjects.some((p) => p.path === projectPath)
     ) {
       filterSelection.current[projectFilter] = null;
@@ -522,6 +523,12 @@ function App() {
   // nobody asked for.
   const space = activeSpace(projects, storedSpace, declaredSpaces);
   const spaceProjects = useMemo(() => inSpace(projects, space), [projects, space]);
+  const sameProject = (a: string, b: string) => a === b || keyOfPath(projects, a) === keyOfPath(projects, b);
+  /// Points the composer at a project, on the machine it last ran on.
+  const selectLastUsed = (path: string) => {
+    const checkouts = checkoutsOf(projects, path);
+    handleSelectProject(checkouts.length ? lastUsedCheckout(checkouts).path : path);
+  };
   const {
     status: updateStatus,
     manual: updateManual,
@@ -783,7 +790,7 @@ function App() {
       sessionIndexItems.filter(
         (i) =>
           sessionInSpace(projects, space, i.projectPath) &&
-          (!projectFilter || i.projectPath === projectFilter),
+          (!projectFilter || sameProject(i.projectPath, projectFilter)),
       ),
     [sessionIndexItems, projects, space, projectFilter],
   );
@@ -893,9 +900,12 @@ function App() {
   const splitTarget = (() => {
     if (!activeGroup || !selectedSession) return null;
     const projects = new Set(paneColumns.flat().map((i) => i.projectPath));
-    return projects.size > 1
-      ? `${basename(selectedSession.projectPath)} / ${selectedSession.title}`
-      : selectedSession.title;
+    const named =
+      projects.size > 1
+        ? `${basename(selectedSession.projectPath)} / ${selectedSession.title}`
+        : selectedSession.title;
+    const server = serverOfPath(selectedSession.projectPath);
+    return server === LOCAL ? named : `${named} · ${serverName(server)}`;
   })();
 
   // The crew's anchor — the conversation whose sessions are listed — settled
@@ -1271,7 +1281,7 @@ function App() {
     return drafts.filter(
       (d) =>
         sessionInSpace(projects, space, d.projectPath) &&
-        (!projectFilter || d.projectPath === projectFilter) &&
+        (!projectFilter || sameProject(d.projectPath, projectFilter)) &&
         d.prompt.toLowerCase().includes(needle),
     );
   }, [drafts, projects, space, projectFilter, search]);
@@ -2171,7 +2181,7 @@ function App() {
     }
     const gen = ++filterGen.current;
     setProjectFilter(next);
-    if (next) handleSelectProject(next);
+    if (next) selectLastUsed(next);
 
     clearTimeout(run?.timer);
     const nav = navGen.current;
@@ -2191,7 +2201,7 @@ function App() {
     const restorable =
       remembered &&
       sessionIndexItems.some(
-        (i) => i.sessionId === remembered && (!next || i.projectPath === next),
+        (i) => i.sessionId === remembered && (!next || sameProject(i.projectPath, next)),
       );
     goToSession(() => {
       if (restorable) void handleSelectSessionIndexItem(remembered);
@@ -2220,7 +2230,7 @@ function App() {
     const path = (await indexItem(sessionId))?.projectPath;
     if (gen !== filterGen.current || nav !== navGen.current) return;
     // Outside the space, the space effect below closes it instead.
-    if (!path || path === projectFilter || !sessionInSpace(projects, space, path)) return;
+    if (!path || sameProject(path, projectFilter) || !sessionInSpace(projects, space, path)) return;
     const next = spaceProjects.some((p) => p.path === path) ? path : null;
     filterSelection.current[projectFilter] = previous;
     filterGen.current++;
@@ -2473,17 +2483,16 @@ function App() {
   useHotkey(
     "project.next",
     () => {
-      const next =
-        spaceProjects[
-          (spaceProjects.findIndex((p) => p.path === projectPath) + 1) % spaceProjects.length
-        ];
-      if (next) handleSelectProject(next.path);
+      const groups = groupProjects(spaceProjects);
+      const at = groups.findIndex((g) => g.checkouts.some((p) => p.path === projectPath));
+      const next = groups[(at + 1) % groups.length];
+      if (next) handleSelectProject(lastUsedCheckout(next.checkouts).path);
     },
     {
       // The chord steps exactly what the picker draws, which under a space is
       // that space's projects — a chord landing on one the menu never offered
       // is a session started somewhere the reader cannot see.
-      enabled: !selectedSessionId && !issuesOpen && spaceProjects.length > 1,
+      enabled: !selectedSessionId && !issuesOpen && groupProjects(spaceProjects).length > 1,
     },
   );
   // Steps the sidebar's project filter, All Projects included, in the order the
@@ -2491,8 +2500,8 @@ function App() {
   // one key with a clamp dead-ends with no way back. Bound only where there is
   // more than one entry to step between.
   const stepProjectFilter = (delta: number) => {
-    const entries: (string | null)[] = [null, ...spaceProjects.map((p) => p.path)];
-    const from = entries.indexOf(projectFilter);
+    const entries: (string | null)[] = [null, ...groupProjects(spaceProjects).map((g) => g.checkouts[0].path)];
+    const from = projectFilter ? entries.findIndex((e) => e && sameProject(e, projectFilter)) : 0;
     const at = from === -1 ? 0 : from;
     // The chords and the swipe both step through here, so both tick.
     if (entries.length > 1) playSwipeTick();
@@ -2849,7 +2858,7 @@ function App() {
           onNewSession={() => goToSession(handleNewSession)}
           onNewSessionInProject={(path) =>
             goToSession(() => {
-              handleSelectProject(path);
+              selectLastUsed(path);
               handleNewSession();
             })
           }
@@ -2972,6 +2981,7 @@ function App() {
                     ? shownSession.title
                     : `${basename(shownSession.projectPath)} / ${shownSession.title}`
               }
+              machine={mainGroup ? undefined : serverOfPath(shownSession.projectPath)}
               rename={
                 mainGroup
                   ? undefined

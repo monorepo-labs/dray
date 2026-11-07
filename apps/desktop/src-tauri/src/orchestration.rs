@@ -405,7 +405,7 @@ async fn localize(request: &mut Request, origin: Option<&str>) -> Result<()> {
         _ => return Ok(()),
     };
     let Some(path) = slot.clone() else { return Ok(()) };
-    let projects = crate::projects::list_projects().await.map_err(anyhow::Error::from)?;
+    let projects = crate::projects::read_projects().await.map_err(anyhow::Error::from)?;
     if let Some(origin) = origin {
         for project in &projects {
             if crate::git::origin(&project.path).await.as_deref() == Some(origin) {

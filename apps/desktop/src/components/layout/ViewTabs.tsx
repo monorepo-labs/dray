@@ -25,6 +25,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useDragReorder } from "@/hooks/useDragReorder";
+import { serverName, useServers } from "@/lib/servers";
+import { LOCAL, type ServerId } from "@/lib/transport";
 import { useDigitHotkey, useHotkey } from "@/hooks/useHotkey";
 import { activateFile, closeFile, reopenFile, useOpenFiles } from "@/hooks/useOpenFiles";
 import {
@@ -94,6 +96,7 @@ const MARK = "size-4 shrink-0 text-muted-foreground";
 const FOLDER = <Folder className="size-3.5 shrink-0 fill-current text-muted-foreground" />;
 
 type Item = {
+  machine?: string;
   key: TabKey;
   icon: React.ReactNode;
   label: string;
@@ -128,6 +131,7 @@ export default function ViewTabs({
   cwd,
   alignX = 0,
   rename,
+  machine,
   working = false,
 }: {
   /// Mid-turn: off Chat, the chat tab's icon says so, since the transcript
@@ -144,9 +148,14 @@ export default function ViewTabs({
   alignX?: number;
   /// The chat's tab, which stands for the session: `project / title`.
   title: string;
+  /// Which machine the session runs on. This Mac is never named: no name is
+  /// what says local.
+  machine?: ServerId;
   tab: ViewTab;
   onChange: (tab: ViewTab) => void;
 }) {
+  // Read for the re-render alone: a server renamed moves the name in the tab.
+  useServers();
   const loadedPages = useBrowserTabs(sessionId);
   const pages = loadedPages ?? [];
   const pending = usePendingTab(sessionId);
@@ -190,6 +199,7 @@ export default function ViewTabs({
           <ChatBubbleOvalLeftIcon className={MARK} />
         ),
       label: title,
+      machine: machine && machine !== LOCAL ? serverName(machine) : undefined,
       active: tab === "chat",
       pick: () => onChange("chat"),
       rename,
@@ -430,6 +440,7 @@ export default function ViewTabs({
           icon={item.icon}
           overlay={item.overlay}
           label={item.label}
+          machine={item.machine}
           active={item.active}
           locked={item.locked}
           fixed={item.fixed}
@@ -517,6 +528,7 @@ export default function ViewTabs({
 export function ItemTab({
   icon,
   label,
+  machine,
   active,
   locked = false,
   onPick,
@@ -536,6 +548,7 @@ export function ItemTab({
   /// Drawn over the whole tab, out of the row's flow: the agent's beam.
   overlay?: React.ReactNode;
   label: string;
+  machine?: string;
   active: boolean;
   /// Neither picked nor closed, while a recording holds the strip.
   locked?: boolean;
@@ -642,6 +655,12 @@ export function ItemTab({
       >
         {label}
       </span>
+      )}
+      {/* Beside the label rather than in it, so a cut title never cuts this. */}
+      {machine && (
+        <span className="min-w-0 shrink-[0.001] overflow-hidden whitespace-nowrap text-muted-foreground/60">
+          · {machine}
+        </span>
       )}
       {/* No tooltip: a cross on a tab says what it does, the way it does in
           every browser. */}

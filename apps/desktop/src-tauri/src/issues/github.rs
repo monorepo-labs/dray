@@ -174,7 +174,7 @@ async fn read_account() -> Result<TrackerAccount, IssueUnavailable> {
 /// they have never opened, where a project attached in Dray is one they are
 /// working in.
 pub async fn repos_of_projects() -> Vec<String> {
-    let Ok(projects) = projects::list_projects().await else {
+    let Ok(projects) = projects::read_projects().await else {
         return Vec::new();
     };
 

@@ -51,6 +51,13 @@ pub async fn origin(cwd: &str) -> Option<String> {
     git_line(cwd, &["remote", "get-url", "origin"]).await.map(|url| repo_key(&url))
 }
 
+/// [`origin`], where it names a repository another machine could also have. A
+/// remote that is a path here says nothing about a path there, and two machines
+/// merged on `/srv/x.git` would hide a checkout.
+pub async fn shared_remote(cwd: &str) -> Option<String> {
+    origin(cwd).await.filter(|key| !key.starts_with(['/', '.']))
+}
+
 fn repo_key(url: &str) -> String {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let rest = rest.split_once('@').map_or(rest, |(_, rest)| rest);
@@ -1676,6 +1683,14 @@ mod tests {
             "ssh://git@github.com/monorepo-labs/dray.git",
         ] {
             assert_eq!(repo_key(url), "github.com/monorepo-labs/dray", "{url}");
+        }
+    }
+
+    #[test]
+    fn a_remote_that_is_a_path_keeps_its_leading_mark() {
+        // What `shared_remote` refuses on.
+        for url in ["/srv/x.git", "file:///srv/x.git", "../x.git", "./x"] {
+            assert!(repo_key(url).starts_with(['/', '.']), "{url}");
         }
     }
 

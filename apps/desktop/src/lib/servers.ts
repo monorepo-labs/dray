@@ -76,11 +76,10 @@ export function serverName(id: ServerId): string {
   return servers.find((s) => s.id === id)?.name ?? id;
 }
 
-/// A project's name where only text fits — a menu row, a filter — with a remote
-/// one's server after it, the way the sidebar heading draws it.
-export function projectLabel(project: { path: string; name: string }): string {
-  const server = serverOfPath(project.path);
-  return server === LOCAL ? project.name : `${project.name}-${serverName(server)}`;
+/// A project's name where only text fits, with its machine after it where that
+/// is one remote server. `null` is a project spanning several, which names none.
+export function projectLabel(name: string, server: ServerId | null): string {
+  return server === null || server === LOCAL ? name : `${name}-${serverName(server)}`;
 }
 
 /// Whether `id` can be asked anything right now. Local always can: a call to
