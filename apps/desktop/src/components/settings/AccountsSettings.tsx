@@ -33,6 +33,8 @@ import { useAgentAccounts, useAuthOptions } from "@/hooks/useAgentAccounts";
 import { useAgentAvailability } from "@/hooks/useAgentAvailability";
 import { useCopied } from "@/hooks/useCopied";
 import { setAgentEnabled, useEnabledAgents } from "@/hooks/useEnabledAgents";
+import { setAutoUpdateAgents, useAgentUpdates } from "@/hooks/useAgentUpdates";
+import SettingRow from "@/components/settings/SettingRow";
 import { Switch } from "@/components/ui/switch";
 import { onFocusChange } from "@/lib/focus";
 import { cn } from "@/lib/utils";
@@ -646,6 +648,7 @@ export default function AccountsSettings({
 
   const agent = agents?.find((a) => a.harness === signingIn?.harness) ?? null;
   const enabledAgents = useEnabledAgents();
+  const { auto: autoUpdate } = useAgentUpdates();
   const formOpen = signingIn !== null;
   useEffect(() => {
     onFormOpen?.(formOpen);
@@ -709,6 +712,20 @@ export default function AccountsSettings({
           </Tooltip>
         )}
       </SettingsHeaderAction>
+
+      {!signingIn && !only && (
+        <SettingRow
+          id="auto-update-agents"
+          label="Update agents automatically"
+          description="Keeps the agents you have turned on up to date on this Mac. Off, you update each one yourself."
+        >
+          <Switch
+            id="auto-update-agents"
+            checked={autoUpdate}
+            onCheckedChange={setAutoUpdateAgents}
+          />
+        </SettingRow>
+      )}
 
       {servers.length > 0 && !signingIn && !only && (
         <ServerPicker

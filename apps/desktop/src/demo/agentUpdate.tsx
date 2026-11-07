@@ -4,11 +4,12 @@ import ReactDOM from "react-dom/client";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
-import { startAgentUpdateChecks } from "@/hooks/useAgentUpdates";
+import { setAutoUpdateAgents, startAgentUpdateChecks } from "@/hooks/useAgentUpdates";
 import type { AgentCheck } from "@/types/events";
 import "../App.css";
 
-/// The update line under the new-task composer, with its ⌘U keycaps (#769).
+/// The update line under the new-task composer with automatic updates off, the
+/// one state with an Update button and its ⌘U keycaps (#769).
 ///
 /// An update can't be looked at on a machine whose agents are current, so the
 /// bridge answers one for Claude Code and pi. Update, or ⌘U, runs a fake
@@ -28,6 +29,8 @@ function answer(cmd: string): unknown {
   invoke: async (cmd: string, args: { cmd?: string }) =>
     answer(cmd === "server_invoke" ? args.cmd! : cmd),
 };
+
+setAutoUpdateAgents(false);
 
 // The real first check waits 30s after launch; this page has nothing to wait on.
 const realTimeout = window.setTimeout;
