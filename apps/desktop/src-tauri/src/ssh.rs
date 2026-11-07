@@ -182,6 +182,8 @@ pub struct Tunnel {
     /// Remote access is on there but its tunnel has not attached yet, so no
     /// `address` says nothing about the one last read.
     pub address_coming: bool,
+    /// The sandbox id this machine reports. Its own say-so: see `servers.rs`.
+    pub boat: Option<String>,
     stderr: Arc<Mutex<String>>,
 }
 
@@ -210,6 +212,9 @@ const SCRIPT: &str = concat!(
     "if [ -r \"$HOME/.dray/tunnel-url\" ]; then echo \"DRAY-SSH tunnel $(cat \"$HOME/.dray/tunnel-url\")\"; ",
     // The dot stands for a double quote.
     "elif grep -q \"remoteAccess.: *true\" \"$HOME/.dray/settings.json\" 2>/dev/null; then echo DRAY-SSH tunnel-coming; fi; ",
+    // A boat sandbox says which one it is. Read off the login, not the server, so
+    // a server too old to know about boat is recognised all the same.
+    "[ -z \"$BOAT_ID\" ] || echo \"DRAY-SSH boat $BOAT_ID\"; ",
     "echo \"DRAY-SSH token $(cat \"$HOME/.dray/serve-token\")\"; exec cat",
 );
 
@@ -237,6 +242,7 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
 
     let mut address = None;
     let mut address_coming = false;
+    let mut boat = None;
     let script = async {
         let mut line = String::new();
         let mut failed: Option<String> = None;
@@ -268,6 +274,9 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
                     if let Some(token) = rest.strip_prefix("token ") {
                         return Ok(Ok(token.trim().to_string()));
                     }
+                    if let Some(id) = rest.strip_prefix("boat ") {
+                        boat = Some(id.trim().to_string());
+                    }
                     if let Some(url) = rest.strip_prefix("tunnel ") {
                         let url = url.trim();
                         address = url.starts_with("https://").then(|| url.to_string());
@@ -282,7 +291,7 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
     let host = target.host();
     match outcome {
         Ok(Ok(Ok(token))) if !token.is_empty() => {
-            Ok(Tunnel { child, _stdin: stdin, _stdout: stdout, port, token, address, address_coming, stderr })
+            Ok(Tunnel { child, _stdin: stdin, _stdout: stdout, port, token, address, address_coming, boat, stderr })
         }
         Ok(Ok(Ok(_) | Err("notoken"))) => Err(Failure::new(
             format!("Dray is on {host} but its server has never run there."),
@@ -468,9 +477,12 @@ fn free_port() -> std::io::Result<u16> {
 }
 
 /// The bits of `ssh -G` that decide how `known_hosts` names a server.
-struct Resolved {
-    hostname: String,
-    port: u16,
+pub(crate) struct Resolved {
+    pub(crate) hostname: String,
+    pub(crate) port: u16,
+    /// `IdentityFile`, in ssh's order.
+    #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+    pub(crate) identity: Vec<PathBuf>,
     alias: Option<String>,
     /// `UserKnownHostsFile`, never empty. ssh reads them all and writes to the
     /// first.
@@ -481,16 +493,28 @@ struct Resolved {
 }
 
 impl Resolved {
-    /// The name ssh files a key under: the alias if one is set, `[host]:port`
-    /// off 22.
+    /// The name ssh files a key under: the alias if one is set, verbatim on any
+    /// port, else the host, as `[host]:port` off 22.
     fn known_as(&self) -> String {
-        let name = self.alias.clone().unwrap_or_else(|| self.hostname.clone());
-        if self.port == 22 { name } else { format!("[{name}]:{}", self.port) }
+        match &self.alias {
+            Some(alias) => alias.clone(),
+            None if self.port == 22 => self.hostname.clone(),
+            None => format!("[{}]:{}", self.hostname, self.port),
+        }
     }
 }
 
-async fn resolve(target: &Target) -> Result<Resolved, String> {
-    let out = Command::new(SSH)
+pub(crate) async fn resolve(target: &Target) -> Result<Resolved, String> {
+    resolve_with(target, None).await
+}
+
+/// [`resolve`] against a config file other than the reader's.
+pub(crate) async fn resolve_with(target: &Target, config: Option<&std::path::Path>) -> Result<Resolved, String> {
+    let mut ssh = Command::new(SSH);
+    if let Some(config) = config {
+        ssh.arg("-F").arg(config);
+    }
+    let out = ssh
         .arg("-G")
         .args(target.args())
         .stdin(Stdio::null())
@@ -506,20 +530,19 @@ async fn resolve(target: &Target) -> Result<Resolved, String> {
             .map(str::to_string)
     };
     let home = std::env::home_dir().ok_or("no home directory")?;
-    let mut known_hosts: Vec<PathBuf> = field("userknownhostsfile")
-        .unwrap_or_default()
-        .split_whitespace()
-        .map(|p| match p.strip_prefix("~/") {
-            Some(rest) => home.join(rest),
-            None => PathBuf::from(p),
-        })
-        .collect();
+    let expand = |p: &str| match p.strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None => PathBuf::from(p),
+    };
+    let mut known_hosts: Vec<PathBuf> =
+        field("userknownhostsfile").unwrap_or_default().split_whitespace().map(expand).collect();
     if known_hosts.is_empty() {
         known_hosts.push(home.join(".ssh/known_hosts"));
     }
     Ok(Resolved {
         hostname: field("hostname").ok_or("ssh could not resolve that name")?,
         port: field("port").and_then(|p| p.parse().ok()).unwrap_or(22),
+        identity: text.lines().filter_map(|l| l.strip_prefix("identityfile ")).map(|p| expand(p.trim())).collect(),
         alias: field("hostkeyalias"),
         known_hosts,
         algorithms: field("hostkeyalgorithms").map(|v| v.split(',').map(str::to_string).collect()).unwrap_or_default(),
@@ -581,7 +604,7 @@ fn pick_key<'a>(algorithms: &[String], keys: &[(&'a str, &'a str)]) -> Option<(&
 
 /// `ssh-keygen -lf -` reads one public key and answers
 /// `256 SHA256:… comment (ED25519)`.
-async fn fingerprint(key: &str) -> Result<(String, String), String> {
+pub(crate) async fn fingerprint(key: &str) -> Result<(String, String), String> {
     let printed = pipe(KEYGEN, &["-lf", "-"], &format!("{key}\n")).await?;
     let mut parts = printed.split_whitespace();
     let fingerprint = parts.nth(1).ok_or("ssh-keygen printed no fingerprint")?.to_string();
@@ -625,6 +648,30 @@ pub async fn trust(target: &Target, fingerprint: &str) -> Result<(), String> {
     let line = format!("{} {}\n", key.resolved.known_as(), key.key);
     let file = &key.resolved.known_hosts[0];
     append(file, &line).map_err(|e| format!("could not write {}: {e}", file.display()))
+}
+
+/// Replaces what `before` pinned with `key`, filed the way `after` will look it
+/// up. `key` comes from boat's API, never from the connection it will check. No
+/// file changes when it is already what ssh holds; answers whether one did.
+#[cfg(feature = "desktop")]
+pub(crate) async fn pin_key(before: &Resolved, after: &Resolved, key: &str) -> Result<bool, String> {
+    let name = after.known_as();
+    let file = &after.known_hosts[0];
+    let held = std::fs::read_to_string(file).unwrap_or_default();
+    if before.known_as() == name && held.lines().any(|l| l == format!("{name} {key}")) {
+        return Ok(false);
+    }
+    // ssh-keygen -R rewrites by rename and handles hashed entries, which reading
+    // the lines here would not. Its `.old` copy is the reader's way back.
+    for known in &before.known_hosts {
+        for stale in [before.known_as(), name.clone()] {
+            if lists_key(known, &stale).await {
+                let _ = Command::new(KEYGEN).args(["-R", &stale, "-f"]).arg(known).stdin(Stdio::null()).output().await;
+            }
+        }
+    }
+    append(file, &format!("{name} {key}\n")).map_err(|e| format!("could not write {}: {e}", file.display()))?;
+    Ok(true)
 }
 
 fn append(path: &std::path::Path, line: &str) -> std::io::Result<()> {
@@ -907,6 +954,7 @@ mod tests {
     fn files_keys_the_way_ssh_does() {
         let r = |port, alias: Option<&str>| Resolved {
             hostname: "1.2.3.4".into(),
+            identity: Vec::new(),
             port,
             alias: alias.map(str::to_string),
             known_hosts: vec![PathBuf::new()],
@@ -916,6 +964,7 @@ mod tests {
         assert_eq!(r(22, None).known_as(), "1.2.3.4");
         assert_eq!(r(2222, None).known_as(), "[1.2.3.4]:2222");
         assert_eq!(r(22, Some("vps")).known_as(), "vps");
+        assert_eq!(r(19042, Some("vps")).known_as(), "vps", "ssh looks an alias up with no port");
     }
 
     /// A key pinned in the second `UserKnownHostsFile` is removed from there,
@@ -930,6 +979,7 @@ mod tests {
         std::fs::write(&second, format!("[1.2.3.4]:2222 {key}\n")).unwrap();
         let resolved = Resolved {
             hostname: "1.2.3.4".into(),
+            identity: Vec::new(),
             port: 2222,
             alias: None,
             known_hosts: vec![first.clone(), second.clone()],

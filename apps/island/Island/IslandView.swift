@@ -267,6 +267,9 @@ struct IslandView: View {
             .gone(recording)
         }
         input
+        if let alert = composer.boatAlerts.first {
+            BoatLine(composer: composer, alert: alert).gone(recording)
+        }
         if let notice = composer.notice {
             HStack(spacing: 8) {
                 Text(notice).font(.caption).foregroundStyle(.secondary)
@@ -702,6 +705,23 @@ private struct MicButton: View {
     }
 }
 
+/// The pill's alert while the panel covers the pill.
+private struct BoatLine: View {
+    let composer: Composer
+    let alert: BoatAlert
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(alert.sentence).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            ForEach([2, 8, 24], id: \.self) { hours in
+                Button("\(hours)h") { Task { await composer.extendBoat(alert, hours: hours) } }
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.semibold))
+            }
+        }
+    }
+}
+
 /// The pills, drawn in a window of their own that never takes the keys: the
 /// panel hands the keys back by leaving the screen, and a pill drawn in it
 /// blinked out with it for a moment on every close.
@@ -716,6 +736,12 @@ struct PillsView: View {
                 AttentionPill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
                               count: composer.attention.count, glowing: composer.glowing) { composer.openCards() }
                     .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
+            } else if !composer.shown, let alert = composer.boatAlerts.first {
+                BoatPill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
+                         alert: alert, refused: composer.boatRefused,
+                         extend: { hours in Task { await composer.extendBoat(alert, hours: hours) } },
+                         dismiss: { composer.dismissBoat(alert) })
+                    .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
             } else if !composer.shown, !composer.done.isEmpty {
                 DonePill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
                          items: composer.done.reversed().map { ($0, store.items[$0]?.title ?? "") },
@@ -728,6 +754,7 @@ struct PillsView: View {
         }
         .animation(.spring(duration: 0.32, bounce: 0.2), value: composer.attention.count)
         .animation(.spring(duration: 0.32, bounce: 0.2), value: composer.done.count)
+        .animation(.spring(duration: 0.32, bounce: 0.2), value: composer.boatAlerts.count)
         .animation(.easeIn(duration: 0.15), value: composer.shown)
         .animation(.easeOut(duration: composer.glowing ? 0.2 : 0.6), value: composer.glowing)
         // Where the card hangs from: the panel's top edge, or just above the Dock.

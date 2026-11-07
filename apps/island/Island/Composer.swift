@@ -214,6 +214,7 @@ final class Composer {
         self.store = store
         self.server = server
         store.asksChanged = { [weak self] in self?.asksChanged() }
+        store.boatChanged = { [weak self] in self?.pillChanged() }
     }
 
     // MARK: Cards and alerts
@@ -353,7 +354,29 @@ final class Composer {
     static let doneFor: Duration = .seconds(6)
 
     /// Something to draw while the panel is shut: a card waiting outranks news.
-    var hasPill: Bool { !attention.isEmpty || !done.isEmpty }
+    var hasPill: Bool { !attention.isEmpty || !done.isEmpty || !boatAlerts.isEmpty }
+
+    /// By deadline, so an extend that later runs short warns again.
+    private var boatDismissed: Set<String> = []
+    var boatAlerts: [BoatAlert] { store.boatAlerts.filter { !boatDismissed.contains("\($0.server):\($0.stopsAt ?? "")") } }
+    /// Why the last Extend didn't take: a trial's cap, Dray being closed.
+    var boatRefused: String?
+
+    func dismissBoat(_ alert: BoatAlert) {
+        boatDismissed.insert("\(alert.server):\(alert.stopsAt ?? "")")
+        pillChanged()
+    }
+
+    /// Sets the time left. It does not add, and it is every later resume's length too.
+    func extendBoat(_ alert: BoatAlert, hours: Int) async {
+        let args: [String: JSON] = ["id": .string(alert.server), "minutes": .number(Double(hours * 60))]
+        do {
+            let _: JSON = try await store.call(server, "extend_boat", args, as: JSON.self)
+            boatRefused = nil
+        } catch {
+            boatRefused = error.localizedDescription
+        }
+    }
 
     /// Dray says a session finished where its banner would have.
     func finished(_ id: String) {

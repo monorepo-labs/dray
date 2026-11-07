@@ -25,6 +25,7 @@ final class Store {
     private(set) var transcripts: [SessionKey: Transcript] = [:]
     private(set) var asks: [SessionKey: [AgentEvent]] = [:] { didSet { asksChanged() } }
     private(set) var queued: [SessionKey: [Queued]] = [:]
+    private(set) var boatAlerts: [BoatAlert] = [] { didSet { boatChanged() } }
     private(set) var projects: [UUID: [Project]] = [:]
     /// Each repo's PR marks by branch, as `pr_marks` last answered.
     private(set) var marks: [ProjectKey: [String: PrMark]] = [:]
@@ -44,6 +45,7 @@ final class Store {
 
     /// For a client that reacts beside drawing: the Island opens itself on a card.
     @ObservationIgnored var asksChanged: () -> Void = {}
+    @ObservationIgnored var boatChanged: () -> Void = {}
     @ObservationIgnored private let path = NWPathMonitor()
     @ObservationIgnored private var reading: Set<UUID> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
@@ -463,10 +465,14 @@ final class Store {
             for t in live.tasks {
                 if case .backgroundTasks(let n) = t.payload { tasks[SessionKey(server: server, id: t.sessionId)] = n }
             }
+            if let boat = live.boat { boatAlerts = boat }
             if let held = live.queued {
                 for key in queued.keys where key.server == server { queued[key] = nil }
                 for q in held where !q.queued.isEmpty { queued[SessionKey(server: server, id: q.sessionId)] = q.queued }
             }
+        case "boat_alerts":
+            guard let frame = try? decoder.decode(EventFrame<BoatAlerts>.self, from: data).payload else { return }
+            boatAlerts = frame.alerts
         case "queue_changed":
             // Every client's sends, the desktop's and the CLI's included; `send_msg` answers only its caller.
             guard let q = try? decoder.decode(EventFrame<QueueChanged>.self, from: data).payload else { return }

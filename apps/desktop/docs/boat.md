@@ -1,0 +1,29 @@
+# Boat sandboxes
+
+A boat sandbox stops on a timer and resumes on a new machine: new address, new host key. To plain SSH that is a dead host and then something that looks like an attack. Dray asks boat instead (#790). [boat.rs](../src-tauri/src/boat.rs) talks to boat, `servers.rs` decides what to do with the answer, and both exist only in the app: the timers and the row state live beside its connections.
+
+**No CLI or no login means no boat UI, with nothing said.** `boat::info` answers `None` for all of it, offline included, and `ServerInfo.boat` is `None` then. Every path falls through to what any server does. `binpath::boat` is uncached and runs no login shell, so installing the CLI needs no restart.
+
+**A server names its own sandbox, and is believed once.** `BOAT_ID` comes off the login in ssh.rs's `SCRIPT`, so a server too old to know about boat still counts. Only a login has it: the sandbox's systemd user service, which runs `dray`, does not, so a machine added by address is never recognised as a sandbox. `remember_boat` saves it as `Saved.boat` only if boat agrees that sandbox sits at the address the login just reached. After that a different id changes nothing and only drops the row's boat state, so a server can never point Dray at another sandbox.
+
+**A new host key comes from boat's API, never from the connection being checked.** `POST /sandboxes/{id}/sshkey` answers over TLS, using the session `boat login` saved in `config.json`, read per call and never stored. That call also authorizes the login's public key, which needs a `.pub` beside its `IdentityFile`. `clean_key` drops anything with a newline, since the value lands in a known-hosts file.
+
+**`~/.ssh/config` is edited only where the alias is still this sandbox's.** `BoatLink.endpoint` remembers where the login last reached it; a block now pointing elsewhere was aimed there by the reader and is left alone, with the row saying so. Only a `Host` line naming that alias alone is touched: `Host a b` would move `b` too. Only the `HostName` and `Port` values change, every other byte stays, and the file lands by rename beside the real one (through a dotfile manager's symlink). Before the rename, `ssh -G -F <temp>` must reach the new address, or a `Host *` above the block would beat the edit silently. A block in an `Include`d file is not found and reads as not ours.
+
+**A key under `HostKeyAlias` is filed under the alias alone, on any port**, unlike a plain host's `[host]:port`. `known_as` had that wrong for an alias off port 22.
+
+**`run` asks boat before anything else on a failed connect**, before the saved tunnel address too, since a stale alias must get fixed even while the tunnel still answers. Stopped parks the row in `park_asleep`, which reads boat every 30s and tries no SSH, so a resume from a terminal is noticed. A row whose address moved repoints and retries at once.
+
+**The 1 to 3 minutes after `boat resume` returns are the hard part.** While `BoatPhase::Resuming` holds, `run` treats even a permanent SSH failure as retryable, since a sandbox coming back refuses in every way there is. `wake_boat` gives it 6 minutes.
+
+**A send waits on `resume_boat`, which resolves once connected**, inside the same gate uploads wait on, so a later send cannot overtake. Several callers share one `boat resume`. The composer is never blocked: stopped is a `pending` notice, not a `notice`. The text sits in `localStorage` while it waits, because the send is otherwise in memory for minutes; a quit puts it back in the composer rather than sending it, since nothing then says whether it arrived. Attachments do not survive that.
+
+**The timer is read, never counted down.** A running boat prompt and a `boat extend` from anywhere both move `archiveAfter`. `watch_boats` reads every 5 minutes, then every minute inside 20 minutes of the stop. Only a row whose connection reported this sandbox (`BoatRow.here`) warns.
+
+**`boat extend --ttl` sets the time left and every later resume's length.** It does not add, so the menu reads "Keep running for". A free trial refuses over 2 hours, and that refusal is what the card shows. Extend is the merge button's split shape: the button extends by the last value picked, and the arrow only changes that value, so the menu is never a second way to spend hours by accident.
+
+**Auto-extend is off until the reader says yes**, offered once by a card after their first Extend. On, a sandbox gets 30 minutes when its warning starts while one of its sessions has a turn or a background task running. At the warning rather than the last second, since the timer is read once a minute; and a sandbox handled that way draws no card. It lives in the frontend, which is what knows which sessions are busy, so it only runs with the app open.
+
+**The warning stands until extended, dismissed or stopped**, titled with a ticking `mm:ss`, unlike a notice card with its own clock: missing it costs running work. Dismissal is per deadline. It floats at the sidebar's foot from outside `<aside>`, so collapsing the sidebar hides nothing.
+
+**The island hears through This Mac's server**, since that is all it connects to. The app sends `boat_alerts` to its server, which broadcasts it and keeps the last in `Live`, so an island reconnecting still gets it. Extend goes back by `host_call`. With the app quit nothing reads the timers, so the island says nothing.

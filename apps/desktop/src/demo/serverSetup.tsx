@@ -149,7 +149,7 @@ const serverInfo = (over: Partial<ServerInfo> & Pick<ServerInfo, "id" | "name">)
   release: null,
   beta: false,
   latest: null,
-  restarting: false,
+  restarting: false, boat: null,
   ...over,
 });
 

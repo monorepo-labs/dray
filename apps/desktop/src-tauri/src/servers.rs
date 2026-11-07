@@ -8,8 +8,9 @@
 //! each token sits in `credentials.json` under `server:<id>`, never on a
 //! struct the frontend is handed.
 
-use crate::machines::{admit_with, credential_name, default_name, normalize, Saved, Socket, Welcome, ADMIT};
-use crate::{sink::Sink, ssh, store};
+use crate::machines::{admit_with, credential_name, default_name, normalize, BoatLink, Saved, Socket, Welcome, ADMIT};
+use crate::{boat, sink::Sink, ssh, store};
+use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -49,6 +50,32 @@ pub enum ServerStatus {
     Disconnected,
 }
 
+/// Where a boat sandbox is, as far as the reader is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "snake_case")]
+pub enum BoatPhase {
+    Running,
+    Stopped,
+    /// `boat resume` is running, or the server has yet to come up after it.
+    Resuming,
+}
+
+/// What boat says about a server. Absent from a machine that is no sandbox, and
+/// from one with no `boat` CLI or login here, which draws no boat UI at all.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct BoatStatus {
+    pub phase: BoatPhase,
+    /// When it auto-stops. `None` with auto-stop off.
+    pub stops_at: Option<String>,
+    /// It stops within [`WARN`]: raise the card, offer more time.
+    pub warning: bool,
+    /// Why the last resume didn't take, in boat's or Dray's words.
+    pub note: Option<String>,
+}
+
 /// A remote server as the frontend sees it. No token: that stays here.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
@@ -79,6 +106,7 @@ pub struct ServerInfo {
     pub latest: Option<String>,
     /// An update landed on the server and it restarts onto it once idle.
     pub restarting: bool,
+    pub boat: Option<BoatStatus>,
 }
 
 type Reply = Result<Value, Value>;
@@ -126,6 +154,28 @@ struct Conn {
     /// What the server said when last admitted, kept across a drop so the row
     /// still says what it last knew. `None` until it first connects.
     met: Option<Welcome>,
+    boat: Option<BoatRow>,
+}
+
+/// What this run of the app last heard from boat about a server.
+struct BoatRow {
+    phase: BoatPhase,
+    stops_at: Option<DateTime<Utc>>,
+    note: Option<String>,
+    /// The connection up now reported this sandbox, so its timer is this
+    /// machine's. A server reporting another id never gets this set.
+    here: bool,
+    /// When the timer was last read, which paces the reads.
+    read: Option<std::time::Instant>,
+}
+
+impl BoatRow {
+    fn warning(&self, connected: bool) -> bool {
+        connected
+            && self.here
+            && self.phase == BoatPhase::Running
+            && self.stops_at.is_some_and(|at| (at - Utc::now()).to_std().is_ok_and(|left| left <= WARN))
+    }
 }
 
 impl Conn {
@@ -144,6 +194,7 @@ impl Conn {
             task: None,
             forwards: HashMap::new(),
             met: None,
+            boat: None,
         };
         conn.restart();
         conn
@@ -196,6 +247,12 @@ fn info(conn: &Conn) -> ServerInfo {
         beta: conn.saved.beta,
         latest: latest(conn),
         restarting: conn.met.as_ref().is_some_and(|w| w.stale),
+        boat: conn.boat.as_ref().map(|row| BoatStatus {
+            phase: row.phase,
+            stops_at: row.stops_at.map(|at| at.to_rfc3339()),
+            warning: row.warning(conn.status == ServerStatus::Connected),
+            note: row.note.clone(),
+        }),
     }
 }
 
@@ -383,12 +440,14 @@ pub async fn start(sink: Sink) {
             off: false,
             beta: false,
             ignored: None,
+            boat: None,
             unknown: Default::default(),
         };
         list.push(Conn::new(this_mac));
         list.extend(saved.into_iter().map(Conn::new));
     }
     announce();
+    tokio::spawn(watch_boats());
     // Hourly, for an app left open for days on a connection that never drops.
     tokio::spawn(async {
         loop {
@@ -493,10 +552,25 @@ async fn run(id: String) {
         let (url, token, tunnel, admitted) = match &saved.ssh {
             Some(target) => match ssh::open(target, |stage| set(&id, ServerStatus::Connecting, Some(stage), None, None)).await {
                 Ok(tunnel) => {
+                    remember_boat(&id, tunnel.boat.as_deref(), target).await;
                     remember_address(&id, tunnel.address.as_deref(), tunnel.address_coming, &tunnel.token).await;
                     (format!("ws://127.0.0.1:{}", tunnel.port), tunnel.token.clone(), Some(tunnel), None)
                 }
-                Err(failure) => {
+                Err(mut failure) => {
+                    match boat_step(&id, saved.boat.as_ref(), saved.ssh.as_ref(), failure.permanent).await {
+                        BoatStep::Asleep => {
+                            park_asleep(&id, saved.boat.as_ref()).await;
+                            continue;
+                        }
+                        BoatStep::Moved => continue,
+                        BoatStep::Stuck(why) => failure.message = why,
+                        BoatStep::Unknown => {}
+                    }
+                    // A sandbox coming back refuses in every way there is, for
+                    // a few seconds each, and none of them is settled yet.
+                    if boat_waking(&id) {
+                        failure.permanent = false;
+                    }
                     // No login, but the server's tunnel address from the last
                     // one that worked, with the token it read.
                     let fallback =
@@ -575,6 +649,312 @@ async fn run(id: String) {
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
     }
+}
+
+/// What boat's word on a row that cannot connect leaves `run` to do.
+enum BoatStep {
+    /// Not a sandbox, or boat cannot say. Carry on as for any other server.
+    Unknown,
+    /// Stopped. There is nothing to connect to until it resumes.
+    Asleep,
+    /// The login was pointed at where the sandbox now is, so try again now.
+    Moved,
+    /// Running, and the login could not be pointed at it. Says why.
+    Stuck(String),
+}
+
+/// Asks boat about a saved sandbox that did not connect. `refused` is SSH saying
+/// no in a way a new key could cure, which reaches for boat's API even with the
+/// address unchanged. A key already what boat says answers `Unknown`, so a
+/// refusal boat cannot explain still reaches the reader as a warning.
+async fn boat_step(id: &str, link: Option<&BoatLink>, target: Option<&ssh::Target>, refused: bool) -> BoatStep {
+    let Some(link) = link else { return BoatStep::Unknown };
+    let Some(sandbox) = boat::info(&link.id).await else {
+        update_boat(id, |row| *row = None);
+        return BoatStep::Unknown;
+    };
+    update_boat(id, |row| {
+        let row = row.get_or_insert_with(|| BoatRow { phase: BoatPhase::Running, stops_at: None, note: None, here: false, read: None });
+        if row.phase != BoatPhase::Resuming {
+            row.phase = if sandbox.stopped { BoatPhase::Stopped } else { BoatPhase::Running };
+        }
+        row.stops_at = sandbox.stops_at;
+        row.here = false;
+    });
+    if sandbox.stopped {
+        return BoatStep::Asleep;
+    }
+    let Some(target) = target else { return BoatStep::Unknown };
+    if !refused && sandbox.endpoint == link.endpoint {
+        return BoatStep::Unknown;
+    }
+    match repoint_login(id, link, target).await {
+        Ok(true) => BoatStep::Moved,
+        Ok(false) => BoatStep::Unknown,
+        Err(why) => BoatStep::Stuck(why),
+    }
+}
+
+/// Points a sandbox's login at where boat says it is, and saves what moved.
+async fn repoint_login(id: &str, link: &BoatLink, target: &ssh::Target) -> Result<bool, String> {
+    let (link, next, moved) = boat::repoint(link, target).await.map_err(|why| why.sentence(target.host()))?;
+    {
+        let mut list = conns();
+        let Some(conn) = list.iter_mut().find(|c| c.saved.id == id) else { return Ok(false) };
+        conn.saved.boat = Some(link);
+        conn.saved.ssh = Some(next);
+    }
+    let _ = save().await;
+    Ok(moved)
+}
+
+/// A stopped sandbox's row, until it stops being stopped. boat is asked rather
+/// than `ssh` tried: there is no machine to answer, and it may yet be resumed
+/// from a terminal or the dashboard. Resume ends this by aborting the task.
+async fn park_asleep(id: &str, link: Option<&BoatLink>) {
+    let Some(link) = link else { return };
+    set(id, ServerStatus::Disconnected, None, Some("Stopped".into()), None);
+    loop {
+        tokio::time::sleep(BOAT_ASLEEP_READ).await;
+        if !boat::info(&link.id).await.is_some_and(|sandbox| sandbox.stopped) {
+            return;
+        }
+    }
+}
+
+/// Whether a resume is waiting on this row to come up.
+fn boat_waking(id: &str) -> bool {
+    conns().iter().any(|c| c.saved.id == id && c.boat.as_ref().is_some_and(|row| row.phase == BoatPhase::Resuming))
+}
+
+fn update_boat(id: &str, change: impl FnOnce(&mut Option<BoatRow>)) {
+    if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
+        change(&mut conn.boat);
+    }
+    announce();
+}
+
+/// Learns which sandbox a machine is from what it reported on connect. Its own
+/// say-so, so it only ever sets the link once, and only where boat agrees that
+/// sandbox is at the address the login just reached: a server cannot point Dray
+/// at another sandbox, whatever it reports later.
+async fn remember_boat(id: &str, reported: Option<&str>, target: &ssh::Target) {
+    let known = conns().iter().find(|c| c.saved.id == id).and_then(|c| c.saved.boat.clone());
+    let reported = reported.filter(|r| boat::valid_id(r));
+    if known.as_ref().is_some_and(|link| reported != Some(link.id.as_str())) {
+        if let (Some(link), Some(other)) = (&known, reported) {
+            eprintln!("[boat] {id} reports {other}, but it is {}. Ignoring it.", link.id);
+        }
+        update_boat(id, |row| *row = None);
+        return;
+    }
+    let Some(reported) = reported else { return };
+    let Some(sandbox) = boat::info(reported).await else {
+        update_boat(id, |row| *row = None);
+        return;
+    };
+    let reached = ssh::resolve(target).await.ok().map(|r| format!("{}:{}", r.hostname, r.port));
+    let here = reached.is_some() && reached == sandbox.endpoint;
+    if known.is_none() && !here {
+        return;
+    }
+    let link = BoatLink {
+        id: reported.to_string(),
+        endpoint: if here { reached } else { known.as_ref().and_then(|l| l.endpoint.clone()) },
+    };
+    let changed = known.as_ref() != Some(&link);
+    if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
+        conn.saved.boat = Some(link);
+        // Up, so stopped no longer holds. A resume is `wake_boat`'s to close.
+        let (phase, note) = match conn.boat.take() {
+            Some(row) if row.phase == BoatPhase::Resuming => (BoatPhase::Resuming, row.note),
+            _ => (BoatPhase::Running, None),
+        };
+        conn.boat = Some(BoatRow { phase, stops_at: sandbox.stops_at, note, here: true, read: Some(std::time::Instant::now()) });
+    }
+    if changed {
+        let _ = save().await;
+    }
+    announce();
+}
+
+/// How long before auto-stop the reader hears about it.
+const WARN: Duration = Duration::from_secs(10 * 60);
+/// How often a running sandbox's timer is read. `archiveAfter` moves under a
+/// running boat prompt and under a `boat extend` from anywhere, so it is read
+/// again rather than counted down. Faster once the warning is close.
+const BOAT_READ: Duration = Duration::from_secs(5 * 60);
+const BOAT_READ_NEAR: Duration = Duration::from_secs(60);
+const BOAT_ASLEEP_READ: Duration = Duration::from_secs(30);
+/// The server and its tunnel take 1 to 3 minutes after `boat resume` returns.
+const BOAT_WAKE: Duration = Duration::from_secs(6 * 60);
+
+/// Reads the timer of every sandbox connected now, redraws what moved, and tells
+/// the island. A stop seen here beats waiting for the socket to go silent.
+async fn watch_boats() {
+    let mut told = Value::Null;
+    loop {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        let due: Vec<(String, String)> = conns()
+            .iter()
+            .filter(|c| c.status == ServerStatus::Connected)
+            .filter_map(|c| {
+                let (row, link) = (c.boat.as_ref()?, c.saved.boat.as_ref()?);
+                let near = row.stops_at.is_some_and(|at| (at - Utc::now()).to_std().map_or(true, |left| left <= WARN * 2));
+                let pace = if near { BOAT_READ_NEAR } else { BOAT_READ };
+                (row.here && row.read.is_none_or(|at| at.elapsed() >= pace)).then(|| (c.saved.id.clone(), link.id.clone()))
+            })
+            .collect();
+        for (id, sandbox) in due {
+            let Some(read) = boat::info(&sandbox).await else {
+                update_boat(&id, |row| *row = None);
+                continue;
+            };
+            if read.stopped {
+                if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
+                    conn.restart();
+                }
+            }
+            update_boat(&id, |row| {
+                if let Some(row) = row {
+                    row.stops_at = read.stops_at;
+                    row.read = Some(std::time::Instant::now());
+                    if read.stopped {
+                        row.phase = BoatPhase::Stopped;
+                    }
+                }
+            });
+        }
+        // A warning also starts by the clock alone, with nothing read.
+        announce();
+        let alerts = boat_alerts();
+        if alerts != told || !alerts.as_array().is_none_or(Vec::is_empty) {
+            let sent = server_invoke(LOCAL.into(), "boat_alerts".into(), json!({ "alerts": alerts })).await;
+            if sent.is_ok() {
+                told = alerts;
+            }
+        }
+    }
+}
+
+/// The sandboxes about to stop, in the shape the island reads off the server.
+fn boat_alerts() -> Value {
+    let alerts: Vec<Value> = conns()
+        .iter()
+        .filter_map(|c| {
+            let row = c.boat.as_ref()?;
+            row.warning(c.status == ServerStatus::Connected).then(|| {
+                json!({ "server": c.saved.id, "name": c.saved.name, "stopsAt": row.stops_at.map(|at| at.to_rfc3339()) })
+            })
+        })
+        .collect();
+    json!(alerts)
+}
+
+/// Resumes a stopped sandbox and returns once the server on it is connected, so
+/// a send can simply wait on this. Already connected answers at once. Several
+/// callers share one resume: pressing Resume and sending, or sending twice,
+/// must not run `boat resume` twice.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn resume_boat(id: String) -> Result<(), String> {
+    let start = {
+        let mut list = conns();
+        let conn = list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?;
+        if conn.status == ServerStatus::Connected {
+            return Ok(());
+        }
+        let link = conn.saved.boat.clone().ok_or("This server is not a boat sandbox.")?;
+        let row = conn.boat.get_or_insert_with(|| BoatRow { phase: BoatPhase::Stopped, stops_at: None, note: None, here: false, read: None });
+        row.note = None;
+        match row.phase {
+            BoatPhase::Resuming => None,
+            _ => {
+                row.phase = BoatPhase::Resuming;
+                if let Some(task) = conn.task.take() {
+                    task.abort();
+                }
+                conn.status = ServerStatus::Connecting;
+                conn.error = None;
+                conn.fix = None;
+                Some(link)
+            }
+        }
+    };
+    announce();
+    if let Some(link) = start {
+        crate::analytics::track("feature_used", json!({ "feature": "boat_resumed" }));
+        tokio::spawn(wake_boat(id.clone(), link));
+    }
+    loop {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let list = conns();
+        let conn = list.iter().find(|c| c.saved.id == id).ok_or("The server was removed while it was resuming.")?;
+        if conn.status == ServerStatus::Connected {
+            return Ok(());
+        }
+        let Some(row) = conn.boat.as_ref().filter(|row| row.phase != BoatPhase::Resuming) else { continue };
+        return Err(row.note.clone().unwrap_or_else(|| format!("{} did not come back.", conn.saved.name)));
+    }
+}
+
+/// `boat resume`, then the login pointed at the new machine, then `run` again,
+/// which keeps retrying while [`boat_waking`] holds.
+async fn wake_boat(id: String, link: BoatLink) {
+    let settle = |phase: BoatPhase, note: Option<String>, restart: bool| {
+        if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
+            if let Some(row) = conn.boat.as_mut() {
+                row.phase = phase;
+                row.note = note;
+            }
+            if restart {
+                conn.restart();
+            }
+        }
+        announce();
+    };
+    if let Err(why) = boat::resume(&link.id).await {
+        settle(BoatPhase::Stopped, Some(why), true);
+        return;
+    }
+    let target = conns().iter().find(|c| c.saved.id == id).and_then(|c| c.saved.ssh.clone());
+    if let Some(target) = target {
+        if let Err(why) = repoint_login(&id, &link, &target).await {
+            settle(BoatPhase::Running, Some(why), true);
+            return;
+        }
+    }
+    settle(BoatPhase::Resuming, None, true);
+    let deadline = tokio::time::Instant::now() + BOAT_WAKE;
+    while tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let up = conns().iter().any(|c| c.saved.id == id && c.status == ServerStatus::Connected);
+        if up {
+            settle(BoatPhase::Running, None, false);
+            return;
+        }
+    }
+    let name = conns().iter().find(|c| c.saved.id == id).map(|c| c.saved.name.clone()).unwrap_or_default();
+    settle(BoatPhase::Running, Some(format!("{name} is running, but Dray hasn't answered on it yet.")), false);
+}
+
+/// More time on a sandbox's auto-stop: `minutes` from now, and on each later resume.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn extend_boat(id: String, minutes: u32) -> Result<(), String> {
+    let sandbox = {
+        let list = conns();
+        let conn = list.iter().find(|c| c.saved.id == id).ok_or("no such server")?;
+        conn.saved.boat.as_ref().ok_or("This server is not a boat sandbox.")?.id.clone()
+    };
+    boat::extend(&sandbox, minutes).await?;
+    crate::analytics::track("feature_used", json!({ "feature": "boat_extended", "minutes": minutes }));
+    let read = boat::info(&sandbox).await;
+    update_boat(&id, |row| {
+        if let (Some(row), Some(read)) = (row.as_mut(), read) {
+            row.stops_at = read.stops_at;
+            row.read = Some(std::time::Instant::now());
+        }
+    });
+    Ok(())
 }
 
 /// Retries a saved tunnel address until it answers, with `ssh` left alone: a
@@ -773,7 +1153,7 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
                 conn.saved.name = name;
                 conn.restart();
             } else {
-                list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, beta: false, ignored: None, unknown: Default::default() }));
+                list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, beta: false, ignored: None, boat: None, unknown: Default::default() }));
             }
         })
     };
@@ -885,7 +1265,7 @@ pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<Server
             conn.saved.id.clone()
         } else {
             let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
-            list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, beta: false, ignored: None, unknown: Default::default() }));
+            list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, beta: false, ignored: None, boat: None, unknown: Default::default() }));
             id
         }
     };
@@ -1527,7 +1907,7 @@ mod tests {
     /// or a re-add after rotating a token. This Mac's row is no name to route to.
     #[test]
     fn a_name_belongs_to_one_server() {
-        let saved = |id: &str, name: &str| Saved { id: id.into(), name: name.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, unknown: Default::default() };
+        let saved = |id: &str, name: &str| Saved { id: id.into(), name: name.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
         let list = vec![Conn::new(saved("a", "vps")), Conn::new(saved(LOCAL, "This Mac"))];
         assert!(refuse_taken(&list, "vps", None).is_err());
         assert!(refuse_taken(&list, "vps", Some("b")).is_err());
@@ -1539,7 +1919,7 @@ mod tests {
     /// loop is left to drain them, so they would wait for ever.
     #[test]
     fn turning_off_answers_calls_in_flight() {
-        let saved = Saved { id: "s".into(), name: "box".into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, unknown: Default::default() };
+        let saved = Saved { id: "s".into(), name: "box".into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
         let mut conn = Conn::new(saved);
         let (reply, mut answer) = oneshot::channel();
         conn.pending.insert(1, reply);
@@ -1640,7 +2020,7 @@ mod tests {
         let (url, remote) = forwarding_server().await;
         // A row with no login, the way a Mac added by address is one.
         let id = "forward-no-ssh";
-        let saved = Saved { id: id.into(), name: "box".into(), url: url.clone(), ssh: None, off: true, beta: false, ignored: None, unknown: Default::default() };
+        let saved = Saved { id: id.into(), name: "box".into(), url: url.clone(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
         let mut conn = Conn::new(saved);
         conn.status = ServerStatus::Connected;
         conn.live = Some((url, "t".into()));
@@ -1698,7 +2078,7 @@ mod tests {
     }
 
     async fn served_for(id: &str, answers: bool) -> Option<()> {
-        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, unknown: Default::default() };
+        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
         conns().push(Conn::new(saved));
         let (ws, _) = admit(&fake_server(answers).await, "t").await.unwrap();
         let served = tokio::time::timeout(SILENCE * 3, serve(id, ws)).await.ok();

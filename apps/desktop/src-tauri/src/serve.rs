@@ -692,6 +692,8 @@ struct Live {
     tasks: HashMap<String, Value>,
     running: std::collections::HashSet<String>,
     queued: HashMap<String, Value>,
+    /// The boat sandboxes about to stop, which only the app reads timers for.
+    boat: Value,
 }
 
 impl Live {
@@ -721,6 +723,7 @@ impl Live {
                     self.queued.insert(session, payload.clone());
                 }
             }
+            ("boat_alerts", _) => self.boat = payload["alerts"].clone(),
             ("session_status", _) => {
                 if payload["status"] == "in_progress" {
                     self.running.insert(session);
@@ -748,7 +751,7 @@ impl Live {
     fn payload(&self) -> Value {
         let tasks: Vec<&Value> = self.tasks.values().collect();
         let queued: Vec<&Value> = self.queued.values().collect();
-        json!({ "asks": self.asks, "tasks": tasks, "queued": queued })
+        json!({ "asks": self.asks, "tasks": tasks, "queued": queued, "boat": self.boat })
     }
 }
 
@@ -1349,8 +1352,14 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     // The Island's title opens its session in the app's window, which only the
     // app can raise, and the island opens on the session that window shows.
     #[cfg(feature = "desktop")]
-    if matches!(cmd, "show_session" | "selected_session") {
+    if matches!(cmd, "show_session" | "selected_session" | "extend_boat") {
         return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Dray's window is closed.")));
+    }
+    // The app's word to the island, which only this server reaches.
+    #[cfg(feature = "desktop")]
+    if cmd == "boat_alerts" {
+        let _ = sink.emit("boat_alerts", &args);
+        return Ok(Value::Null);
     }
     // A `dray-serve` updates itself; the Mac's server follows the app instead.
     #[cfg(not(feature = "desktop"))]
