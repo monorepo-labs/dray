@@ -1,10 +1,27 @@
-import type { AgentUpdate, Harness } from "@/types/events";
+import type { AgentUpdate, Harness, SessionIndexItem, SessionStatus } from "@/types/events";
 
 /// Whether this agent's updater overwrites files a live child reads. The other
 /// three install beside the running binary, so only these two wait on a turn
 /// and hold Send.
 export function overwritesInPlace(harness: Harness): boolean {
   return harness === "pi" || harness === "fx";
+}
+
+/// Whether a turn may be running on this agent.
+///
+/// Walks the statuses, not `rows`: the archived view swaps the running sessions
+/// out of the sidebar's list. A running session with no row could be on any
+/// agent, so it counts, which delays an update and never breaks a turn.
+export function turnRunningOn(
+  harness: Harness,
+  statuses: Record<string, SessionStatus>,
+  rows: Pick<SessionIndexItem, "sessionId" | "harness">[],
+): boolean {
+  const harnessOf = new Map(rows.map((row) => [row.sessionId, row.harness]));
+  return Object.entries(statuses).some(
+    ([sessionId, status]) =>
+      status === "in_progress" && (harnessOf.get(sessionId) ?? harness) === harness,
+  );
 }
 
 /// The update to run on its own now, or `null`.

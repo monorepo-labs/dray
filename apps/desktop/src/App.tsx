@@ -152,7 +152,7 @@ import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { useServers } from "@/lib/servers";
 import AgentUpdateLine from "@/components/composer/AgentUpdateLine";
 import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
-import { overwritesInPlace } from "@/lib/agentUpdates";
+import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
 import type { Attachment, Harness, IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/events";
@@ -2674,9 +2674,7 @@ function App() {
   // two — a toggle written when there were two silently never reached pi.
   const enabledAgents = useEnabledAgents();
   const agentTurnRunning = (agent: Harness) =>
-    sessionIndexItems.some(
-      (s) => s.harness === agent && statusBySession[s.sessionId] === "in_progress",
-    );
+    turnRunningOn(agent, statusBySession, sessionIndexItems);
   useAutoUpdateAgents(enabledAgents, agentTurnRunning);
   useHotkey("harness.next", () => setHarness(nextHarness(harness, enabledAgents)), {
     enabled: composingNewSession,

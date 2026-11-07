@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { nextAutoUpdate } from "@/lib/agentUpdates";
+import { nextAutoUpdate, turnRunningOn } from "@/lib/agentUpdates";
 import type { AgentUpdate, Harness } from "@/types/events";
 
 const update = (harness: Harness, latest = "2.0.0"): AgentUpdate => ({
@@ -13,6 +13,29 @@ const update = (harness: Harness, latest = "2.0.0"): AgentUpdate => ({
 const ALL: Harness[] = ["claude_code", "codex", "pi", "fx", "grok"];
 const idle = () => false;
 const none = new Map<Harness, string>();
+
+describe("turnRunningOn", () => {
+  const rows = [
+    { sessionId: "a", harness: "pi" as const },
+    { sessionId: "b", harness: "codex" as const },
+  ];
+
+  it("reads the running session's own agent", () => {
+    expect(turnRunningOn("pi", { a: "in_progress" }, rows)).toBe(true);
+    expect(turnRunningOn("fx", { a: "in_progress" }, rows)).toBe(false);
+  });
+
+  it("ignores sessions that are not running", () => {
+    expect(turnRunningOn("pi", { a: "idle", b: "completed" }, rows)).toBe(false);
+  });
+
+  // The archived view takes running sessions out of the list, and an update
+  // landing then overwrites files their child is reading.
+  it("counts a running session with no row, whichever agent is asked about", () => {
+    expect(turnRunningOn("pi", { gone: "in_progress" }, rows)).toBe(true);
+    expect(turnRunningOn("fx", { gone: "in_progress" }, [])).toBe(true);
+  });
+});
 
 describe("nextAutoUpdate", () => {
   it("takes the first update behind", () => {
