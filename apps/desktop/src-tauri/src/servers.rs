@@ -598,16 +598,13 @@ async fn wait_for_address(url: &str, token: &str, backoff: &mut Duration) -> (So
 /// still attaching forgets neither, or a login landing just after a restart
 /// leaves nothing to fall back on when the host key next changes (#781).
 async fn remember_address(id: &str, address: Option<&str>, coming: bool, token: &str) {
-    if address.is_none() && coming {
-        return;
-    }
-    let url = address.and_then(|a| normalize(a).ok()).unwrap_or_default();
-    let moved = {
+    let (url, moved) = {
         let mut list = conns();
         let Some(conn) = list.iter_mut().find(|c| c.saved.id == id) else { return };
+        let url = address_to_keep(&conn.saved.url, address, coming);
         let moved = conn.saved.url != url;
         conn.saved.url = url.clone();
-        moved
+        (url, moved)
     };
     let stored = (!url.is_empty()).then_some(token);
     if crate::issues::credential(&credential_name(id)).await.as_deref() != stored {
@@ -615,6 +612,15 @@ async fn remember_address(id: &str, address: Option<&str>, coming: bool, token: 
     }
     if moved {
         let _ = save().await;
+    }
+}
+
+/// The address to save after a login: what it read, or `saved` while the
+/// tunnel it found no address for is still attaching.
+fn address_to_keep(saved: &str, address: Option<&str>, coming: bool) -> String {
+    match address {
+        None if coming => saved.to_string(),
+        _ => address.and_then(|a| normalize(a).ok()).unwrap_or_default(),
     }
 }
 
@@ -1560,17 +1566,13 @@ mod tests {
         url
     }
 
-    /// The login found no address because the tunnel is still attaching.
-    #[tokio::test]
-    async fn a_tunnel_still_attaching_keeps_the_address() {
-        let id = "address-coming";
-        let url = "wss://kept.example";
-        let saved = Saved { id: id.into(), name: "box".into(), url: url.into(), ssh: None, off: true, beta: false, ignored: None, unknown: Default::default() };
-        conns().push(Conn::new(saved));
-        remember_address(id, None, true, "t").await;
-        let kept = conns().iter().find(|c| c.saved.id == id).unwrap().saved.url.clone();
-        assert_eq!(kept, url);
-        conns().retain(|c| c.saved.id != id);
+    #[test]
+    fn a_tunnel_still_attaching_keeps_the_address() {
+        let saved = "wss://kept.example";
+        assert_eq!(address_to_keep(saved, None, true), saved, "still attaching");
+        assert_eq!(address_to_keep(saved, None, false), "", "turned off");
+        assert_eq!(address_to_keep(saved, Some("https://new.example"), false), "wss://new.example", "moved");
+        assert_eq!(address_to_keep("", None, true), "", "none yet to keep");
     }
 
     #[tokio::test]
