@@ -226,6 +226,50 @@ struct AttentionPill: View {
     }
 }
 
+/// A boat sandbox about to auto-stop, with the way to give it more time. Stands
+/// until extended, dismissed or stopped, since missing it costs running work.
+struct BoatPill: View {
+    let notch: Bool
+    let notchHeight: CGFloat
+    let alert: BoatAlert
+    let refused: String?
+    let extend: (Int) -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        PillShell(notch: notch, notchHeight: notchHeight, glow: StatusDot.waiting) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Circle().fill(StatusDot.waiting).frame(width: 6, height: 6)
+                    // Redrawn each second, or the count would stand still.
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        // White outright: the pills' window takes the system's appearance, not the panel's dark.
+                        Text(alert.sentence).font(.system(size: 13, weight: .semibold).monospacedDigit()).lineLimit(1)
+                            .foregroundStyle(.white)
+                    }
+                }
+                HStack(spacing: 10) {
+                    Text("Extend").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
+                    ForEach([2, 8, 24], id: \.self) { hours in
+                        Button("\(hours)h") { extend(hours) }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white)
+                    }
+                    Button("Dismiss", action: dismiss)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                if let refused {
+                    Text(refused).font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+                        .frame(maxWidth: 300, alignment: .leading)
+                }
+            }
+        }
+    }
+}
+
 /// Sessions finished, in place of Dray's banner, newest first. One names
 /// itself and offers Open in app; several are a count that, under the pointer,
 /// grows a row each, five tall and then scrolling. A title opens the island on it.

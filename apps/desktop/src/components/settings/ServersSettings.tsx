@@ -5,6 +5,7 @@ import CommandChip from "@/components/settings/CommandChip";
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import SettingsHeaderAction from "@/components/settings/headerAction";
 import ServerSetupDialog from "@/components/settings/ServerSetupDialog";
+import { ExtendBoat } from "@/components/BoatWarnings";
 import { SpaceNameField } from "@/components/settings/SpacesSettings";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { useCopied } from "@/hooks/useCopied";
+import { AUTO_EXTEND_MINUTES, boatAsleep, resumeBoat, setBoatPrefs, useBoatPrefs } from "@/lib/boat";
 import { useLocalServer, useServers } from "@/lib/servers";
 import { invoke, listen, LOCAL } from "@/lib/transport";
 import { cn } from "@/lib/utils";
@@ -58,8 +60,11 @@ function StatusDot({ status }: { status: ServerStatus }) {
 function detailOf(server: ServerInfo): string {
   const address = server.beta ? `${server.ssh ?? server.url} · Beta` : (server.ssh ?? server.url);
   if (!server.on) return `Off · ${address}`;
+  if (server.boat?.phase === "resuming") return "Resuming… This can take a few minutes.";
+  if (server.boat?.phase === "stopped") return server.boat.note ? `Stopped · ${server.boat.note}` : "Stopped";
+  if (server.boat?.warning && server.boat.stopsAt) return `Stops in ${Math.max(1, Math.ceil((new Date(server.boat.stopsAt).getTime() - Date.now()) / 60_000))} min · ${address}`;
   if (server.status === "connecting" && server.stage) return STAGE_LABELS[server.stage];
-  if (server.status === "disconnected" && server.error) return server.error;
+  if (server.status === "disconnected" && (server.boat?.note || server.error)) return server.boat?.note ?? server.error!;
   return address;
 }
 
@@ -135,8 +140,17 @@ export default function ServersSettings() {
             onNewAddress={(url) => invoke("set_server_address", { id: server.id, url: splitConnectLine(url).url }, LOCAL)}
             on={server.on}
             onToggle={(on) => void invoke("set_server_on", { id: server.id, on }, LOCAL).catch(console.error)}
+            action={
+              server.boat?.phase === "stopped" ? (
+                <Button variant="secondary" size="sm" onClick={() => void resumeBoat(server.id).catch(console.error)}>
+                  Resume
+                </Button>
+              ) : server.boat?.warning ? (
+                <ExtendBoat id={server.id} size="sm" onFail={console.error} />
+              ) : undefined
+            }
             onRetry={
-              !server.on || server.status !== "disconnected"
+              !server.on || server.status !== "disconnected" || boatAsleep(server)
                 ? undefined
                 : server.fix?.kind === "install"
                   ? () =>
@@ -171,6 +185,7 @@ export default function ServersSettings() {
           </Row>
           </div>
         ))}
+        {servers.some((s) => s.boat) && <AutoExtendRow />}
       </div>
 
       <AddServerDialog
@@ -200,6 +215,23 @@ export default function ServersSettings() {
         />
       )}
     </>
+  );
+}
+
+/// Off by default, offered once after the first Extend; this is where it goes
+/// back off. Drawn only once a boat sandbox is on the list.
+function AutoExtendRow() {
+  const { auto } = useBoatPrefs();
+  return (
+    <div className="flex min-h-7 items-center gap-3 py-1.5 pl-4.5">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="text-ui font-medium">Keep busy sandboxes running</span>
+        <span className="text-ui text-muted-foreground">
+          Adds {AUTO_EXTEND_MINUTES} minutes when a boat sandbox is about to stop with a turn or background task running.
+        </span>
+      </div>
+      <Switch aria-label="Keep busy sandboxes running" checked={auto} onCheckedChange={(on) => setBoatPrefs({ auto: on, offered: true })} />
+    </div>
   );
 }
 

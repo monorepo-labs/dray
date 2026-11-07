@@ -639,6 +639,12 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
             crate::servers::reload().await;
             Ok(serde_json::Value::Null)
         }
+        // The island's Extend, on a timer only the app is reading.
+        "extend_boat" => {
+            let id = args["id"].as_str().ok_or("extend_boat wants an id")?.to_string();
+            let minutes = args["minutes"].as_u64().ok_or("extend_boat wants minutes")? as u32;
+            crate::servers::extend_boat(id, minutes).await.map(|()| serde_json::Value::Null)
+        }
         "show_session" => {
             let id = args["sessionId"].as_str().ok_or("show_session wants a sessionId")?;
             let app = crate::transcription::app().ok_or("Dray is not ready yet.")?;
