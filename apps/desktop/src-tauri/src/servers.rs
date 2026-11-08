@@ -936,16 +936,19 @@ fn boat_alerts() -> Value {
 /// must not run `boat resume` twice.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn resume_boat(id: String) -> Result<(), String> {
-    let start = {
+    let (start, turned_on) = {
         let mut list = conns();
         let conn = list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?;
         if conn.status == ServerStatus::Connected {
             return Ok(());
         }
         let link = conn.saved.boat.clone().ok_or("This server is not a boat sandbox.")?;
+        // Asking for the sandbox back is asking to reach it: a connection left
+        // off would never come up, and a send waiting on it would time out.
+        let turned_on = std::mem::take(&mut conn.saved.off);
         let row = conn.boat.get_or_insert_with(|| BoatRow::new(BoatPhase::Stopped));
         row.note = None;
-        match row.phase {
+        let start = match row.phase {
             BoatPhase::Resuming => None,
             _ => {
                 row.phase = BoatPhase::Resuming;
@@ -957,9 +960,13 @@ pub async fn resume_boat(id: String) -> Result<(), String> {
                 conn.fix = None;
                 Some(link)
             }
-        }
+        };
+        (start, turned_on)
     };
     announce();
+    if turned_on {
+        save().await?;
+    }
     if let Some(link) = start {
         crate::analytics::track("feature_used", json!({ "feature": "boat_resumed" }));
         tokio::spawn(wake_boat(id.clone(), link));

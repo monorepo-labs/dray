@@ -268,7 +268,7 @@ struct IslandView: View {
         }
         input
         if let alert = composer.boatAlerts.first {
-            BoatLine(alert: alert) { minutes in Task { await composer.extendBoat(alert, minutes: minutes) } }
+            BoatLine(alert: alert, refused: composer.boatRefused) { minutes in Task { await composer.extendBoat(alert, minutes: minutes) } }
                 .gone(recording)
         }
         if let notice = composer.notice {
@@ -709,15 +709,22 @@ private struct MicButton: View {
 /// The pill's alert while the panel covers the pill.
 struct BoatLine: View {
     let alert: BoatAlert
+    /// Why the last Extend didn't take, the pill's own line.
+    var refused: String? = nil
     /// Minutes.
     let extend: (Int) -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            TimelineView(.periodic(from: .now, by: 1)) { _ in
-                Text(alert.sentence).font(.caption.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    Text(alert.sentence).font(.caption.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+                }
+                BoatExtendChoices(size: 11, extend: extend)
             }
-            BoatExtendChoices(size: 11, extend: extend)
+            if let refused {
+                Text(refused).font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 }

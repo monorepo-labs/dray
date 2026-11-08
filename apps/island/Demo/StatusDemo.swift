@@ -369,7 +369,7 @@ private struct BoatMock: View {
                 BoatPill(notch: placement == .notch, notchHeight: placement == .notch ? 32 : 0,
                          alert: alert, refused: refused, extend: { _ in })
                 Text("In the open panel").foregroundStyle(.secondary).padding(.top, 8)
-                BoatLine(alert: alert, extend: { _ in })
+                BoatLine(alert: alert, refused: refused, extend: { _ in })
                     .padding(12)
                     .background(RoundedRectangle(cornerRadius: 12).fill(.black))
             }

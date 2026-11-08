@@ -458,13 +458,18 @@ function App() {
   const sleepingBoat = allServers.find((s) => s.id === activeServer && boatAsleep(s));
   useEffect(restoreHeld, []);
   // A turn or a background task on that server, which auto-extend keeps alive.
+  // Read off the live maps, which hold every session whatever the sidebar
+  // shows: the index list is one side of the archived split at a time. Its own
+  // status covers a launch before any live status has arrived.
   const boatBusy = useCallback(
-    (server: string) =>
-      sessionIndexItems.some(
-        (i) =>
-          serverOfPath(i.cwd) === server &&
-          ((statusBySession[i.sessionId] ?? i.status) === "in_progress" || !!tasksBySession[i.sessionId]?.length),
-      ),
+    (server: string) => {
+      const here = (id: string) => serverOfSession(id) === server;
+      return (
+        Object.entries(statusBySession).some(([id, s]) => s === "in_progress" && here(id)) ||
+        Object.entries(tasksBySession).some(([id, tasks]) => tasks.length > 0 && here(id)) ||
+        sessionIndexItems.some((i) => i.status === "in_progress" && serverOfPath(i.cwd) === server)
+      );
+    },
     [sessionIndexItems, statusBySession, tasksBySession],
   );
   // Only pi and fx, whose update overwrites files a child reads. The other three
