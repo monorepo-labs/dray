@@ -4,3 +4,8 @@
 TS_RS_LARGE_INT = "number"
 # Generated bindings belong with the frontend that imports them.
 TS_RS_EXPORT_DIR = { value = "../src/types", relative = true }
+# transcribe-cpp links whatever system BLAS it finds off a Mac, which makes
+# `libblas.so.3` a load-time need of the whole Linux app on every machine it
+# ships to. Off, as transcribe's own Linux wheels ship. A Mac links Accelerate
+# whatever this says.
+TRANSCRIBE_CMAKE_ARGS = "-DTRANSCRIBE_USE_SYSTEM_BLAS=OFF"

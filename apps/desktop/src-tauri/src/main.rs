@@ -23,5 +23,7 @@ async fn main() {
     if std::env::var_os("DISPLAY").is_some() && std::env::var_os("GDK_BACKEND").is_none() {
         std::env::set_var("GDK_BACKEND", "x11");
     }
+    #[cfg(target_os = "linux")]
+    ade_lib::transcription::audio::adopt_pulse_server();
     ade_lib::run()
 }

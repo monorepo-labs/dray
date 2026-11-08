@@ -311,7 +311,7 @@ export default function TranscriptionSettings({
           {/* The one thing worth saying here, and the reason the download is
               worth its size: nothing is sent anywhere. */}
           <p className="text-ui text-muted-foreground">
-            Transcription runs on this Mac. Audio never leaves it.
+            Transcription runs on this computer. Audio never leaves it.
           </p>
         </div>
 
