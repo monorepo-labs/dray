@@ -19,6 +19,37 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.29.18 · 2026-11-08
+
+### New
+
+- **Agent CLIs update themselves.** When Claude Code or another agent is
+  behind, Dray updates it in the background. Turn it off in Settings →
+  Accounts to get the Update button back.
+- **Projects grouped across machines.** A repo cloned on several machines
+  is one project, and new tasks get a dropdown to pick which machine runs
+  them.
+- **Videos play in the chat.** Any video an agent makes with
+  `dray video add` plays inline, on any machine.
+- **boat sandboxes.** A stopped sandbox shows Resume, sending to it wakes
+  it, and a warning with Extend shows before it auto-stops.
+
+### Improved
+
+- The Island shows sessions on every connected machine and can start
+  tasks on them.
+- `&` in the composer lists the project's tasks on other machines too.
+- Dev servers on a server added by address open without SSH.
+
+### Fixed
+
+- Opening a running session no longer replays its rows sliding by.
+- Settling, pinning or setting aside a task shows up on every Mac
+  connected to that server.
+- A remote chat that fell behind catches up when you open it.
+- A server with a saved tunnel keeps retrying after its host key changes,
+  instead of failing for good.
+
 ## 0.29.17 · 2026-11-03
 
 ### New
