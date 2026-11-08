@@ -401,6 +401,28 @@ pub async fn list() -> Vec<Row> {
     futures_util::future::join_all(load().await.into_iter().map(probe)).await
 }
 
+/// Sessions this server can message on other machines, for the `&` picker of a
+/// session running here. Ids rather than machines, since this server and the
+/// app each have their own name and id for one machine. One that fails to
+/// answer reaches nothing: a tag on it would fail too.
+pub async fn reachable_sessions() -> Vec<String> {
+    let list: Vec<_> = load().await.into_iter().filter(|m| !m.off).collect();
+    let asks = list
+        .iter()
+        .map(|m| tokio::time::timeout(SWEEP, call(m, "list_session_index_items", json!({ "archived": false }))));
+    futures_util::future::join_all(asks)
+        .await
+        .into_iter()
+        .filter_map(|answer| answer.ok()?.ok())
+        .flat_map(session_ids)
+        .collect()
+}
+
+fn session_ids(rows: Value) -> Vec<String> {
+    let Value::Array(rows) = rows else { return Vec::new() };
+    rows.iter().filter_map(|row| Some(row["sessionId"].as_str()?.to_string())).collect()
+}
+
 /// A name is how `--machine` picks one, so two may not share it. `except` is
 /// the machine being renamed or re-added, which may keep its own.
 fn refuse_taken(list: &[Saved], name: &str, except: Option<&str>) -> Result<(), String> {
@@ -575,6 +597,13 @@ mod tests {
         assert_eq!(find(&list, "a1").unwrap().name, "vps");
         assert!(find(&list, "box").unwrap_err().contains("b2, c3"));
         assert!(find(&list, "nope").is_err());
+    }
+
+    #[test]
+    fn reachable_ids_tolerate_a_shape_they_cannot_read() {
+        let rows = json!([{ "sessionId": "a" }, { "title": "no id" }, { "sessionId": "b" }]);
+        assert_eq!(session_ids(rows), ["a", "b"]);
+        assert!(session_ids(json!({ "err": "nope" })).is_empty());
     }
 
     #[test]

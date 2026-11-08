@@ -143,6 +143,8 @@ dray browser record stop "checkout flow"
 
 Recordings are saved under `~/.dray/browser/recordings/<session-id>/` and deleted with the session. When an agent puts a recording's path in its reply, the app plays it inline in the transcript.
 
+Any other video, like a screen recording, plays the same way once `dray video add <file>` has filed it. It converts anything that isn't an MP4, with `avconvert` on a Mac and `ffmpeg` where that cannot read it and on Linux, and prints the path. Run it on the machine serving the session. A machine with no way to convert the file says so.
+
 While a recording runs, the pane shows a notice in place of the page, and you cannot switch the session's tabs. Screenshots still work. One recording per session at a time.
 
 ## On a server

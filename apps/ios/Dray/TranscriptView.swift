@@ -572,6 +572,7 @@ struct MarkdownText: View {
                     ZoomableImage(ref: ref) { InlineImage(ref: ref) }
                 }
             }
+            ForEach(recordingPaths(in: text), id: \.self) { RecordingPlayer(path: $0) }
         }
         .tint(Theme.link)
         .textSelection(.enabled)

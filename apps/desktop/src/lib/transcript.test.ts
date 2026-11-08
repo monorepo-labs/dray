@@ -837,6 +837,22 @@ describe("segmentMedia", () => {
 
   /// A file that only mentions a recording path — this very test file, read
   /// back by an agent, or searched for the command — is not a recording.
+  it("reads a video add's output, in any home", () => {
+    const moved = "/srv/dray/browser/recordings/s1/screen.mp4";
+    const items = [
+      { seq: 1, payload: { type: "tool_call_started", callId: "add", input: { command: `dray video add /tmp/screen.mov` } } },
+    ] as never[];
+    const results = new Map([["add", { text: `${moved}\n` }]]) as never;
+    expect(segmentMedia(items, null, results)).toEqual([{ video: moved }]);
+  });
+
+  it("does not read a home-relative path as an absolute one", () => {
+    const items = [
+      { seq: 1, payload: { type: "assistant_text", text: "see ~/.dray/browser/recordings/s1/a.mp4 for it" } },
+    ] as never[];
+    expect(segmentMedia(items, null, new Map())).toEqual([]);
+  });
+
   it("reads recordings out of record stop's output alone", () => {
     const fixture = `const video = "${video}"`;
     expect(paths([callStarted(1, "a", { file_path: "/x/transcript.test.ts" }), result(2, "a", fixture, 0)])).toEqual([]);

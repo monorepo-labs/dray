@@ -79,6 +79,11 @@ static GENERATION: AtomicU64 = AtomicU64::new(1);
 /// the same pipe, so these start well clear of it and a reply is routed by
 /// which side of the line its id falls.
 const OWN: i32 = 1 << 30;
+/// Under a recording's 2x override this Chromium reads `Input.dispatchMouseEvent`
+/// in device pixels, so a click filmed unscaled lands at half its place and
+/// misses. CEF reads CSS pixels. Measured: a click at (720, 413) reached the
+/// page at (359, 206).
+const INPUT_IN_DEVICE_PIXELS: bool = true;
 static NEXT_CALL: AtomicI32 = AtomicI32::new(OWN);
 /// Each held with the generation it was written to, so a process exiting
 /// fails its own calls and never a successor's.

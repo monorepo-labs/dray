@@ -59,3 +59,9 @@ Create the sessions rather than proposing them.
 # Issues
 
 When this session creates a Linear issue, or works on one, link it: `dray issue link DRA-53 --title "<title>" --url "<url>"`. It links to this session; there is no need to name one. If `dray` answers that `<SESSION_ID>` is required, it is out of date: run `dray update` and retry.
+
+# Videos
+
+Every video you make must play in the chat. For a browser recording, put the path `dray browser record stop` prints in your reply. For any other video, such as a screen recording, run `dray video add <file>` and put the path it prints in your reply. It runs on the machine serving this session, so copy a video made on another machine here first.
+
+When a test confirms UI work or work on another machine, record it and show it this way, so the user can watch it pass.

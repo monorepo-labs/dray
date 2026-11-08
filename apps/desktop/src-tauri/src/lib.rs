@@ -771,6 +771,12 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // The configured scope names every home but one `DRAY_HOME` moved.
+            if let Some(home) = store::home_override() {
+                let recordings = home.join("browser/recordings");
+                let _ = std::fs::create_dir_all(&recordings);
+                let _ = app.asset_protocol_scope().allow_directory(&recordings, true);
+            }
             // Chromium first: it patches NSApp and starts its pump, and every
             // window already exists here for it to parent a view into.
             #[cfg(all(feature = "cef", target_os = "macos"))]
@@ -818,6 +824,11 @@ pub fn run() {
             // `drayserver://localhost/?server=<id>&path=<path>`: a remote
             // server's file, fetched with its token in a header.
             let query = request.uri().query().unwrap_or_default().to_string();
+            let range = request
+                .headers()
+                .get(tauri::http::header::RANGE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
             tauri::async_runtime::spawn(async move {
                 let (mut server, mut path) = (String::new(), String::new());
                 for (key, value) in form_urlencoded::parse(query.as_bytes()) {
@@ -827,10 +838,26 @@ pub fn run() {
                         _ => {}
                     }
                 }
-                let response = match servers::fetch_file(&server, &path).await {
-                    Ok((kind, body)) => tauri::http::Response::builder()
-                        .header("Content-Type", kind)
-                        .body(body),
+                let fetched = match range {
+                    Some(range) => servers::fetch_range(&server, &path, &range).await,
+                    None => servers::fetch_file(&server, &path).await.map(|(kind, body)| servers::FetchedFile {
+                        status: 200,
+                        kind,
+                        content_range: None,
+                        body,
+                    }),
+                };
+                let response = match fetched {
+                    Ok(file) => {
+                        let mut response = tauri::http::Response::builder()
+                            .status(file.status)
+                            .header("Content-Type", file.kind)
+                            .header("Accept-Ranges", "bytes");
+                        if let Some(content_range) = file.content_range {
+                            response = response.header("Content-Range", content_range);
+                        }
+                        response.body(file.body)
+                    }
                     Err(e) => {
                         eprintln!("[drayserver {server}] {path}: {e}");
                         tauri::http::Response::builder().status(404).body(Vec::new())

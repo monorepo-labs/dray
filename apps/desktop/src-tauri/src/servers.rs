@@ -377,6 +377,47 @@ fn announce() {
         let _ = sink.emit("servers_changed", snapshot());
         let _ = sink.emit("local_server_changed", local_server());
     }
+    tell_island();
+}
+
+/// A machine this app is connected to, and how Dray Island opens a socket of its
+/// own over the same link. The island is the app's companion, so it follows this
+/// list rather than holding one (#784).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IslandLink {
+    id: String,
+    name: String,
+    url: String,
+    token: String,
+}
+
+/// The server's `island_links`, asked by the island over its local listener.
+pub fn island_links() -> Vec<IslandLink> {
+    conns()
+        .iter()
+        .filter(|c| c.saved.id != LOCAL && c.status == ServerStatus::Connected)
+        .filter_map(|c| {
+            let (url, token) = c.live.clone()?;
+            Some(IslandLink { id: c.saved.id.clone(), name: c.saved.name.clone(), url, token })
+        })
+        .collect()
+}
+
+/// Pings the island when the list moved, which most status changes do not: one
+/// server connecting is several of them.
+fn tell_island() {
+    static TOLD: Mutex<Vec<IslandLink>> = Mutex::new(Vec::new());
+    let links = island_links();
+    {
+        let mut told = TOLD.lock().unwrap_or_else(|e| e.into_inner());
+        if *told == links {
+            return;
+        }
+        *told = links;
+    }
+    tokio::spawn(async {
+        let _ = tokio::process::Command::new("notifyutil").args(["-p", "com.yogesh.dray.island.links"]).output().await;
+    });
 }
 
 /// This Mac's server, as the remote ones are drawn.
@@ -1711,11 +1752,18 @@ pub async fn fetch_file(server: &str, path: &str) -> Result<(String, Vec<u8>), S
             return Ok(hit);
         }
     }
-    let (kind, body) = download_file(server, path).await?;
+    let fetched = download_file(server, path, None).await?;
+    let (kind, body) = (fetched.kind, fetched.body);
     if keep {
         FILES.lock().unwrap().put(key, kind.clone(), body.clone());
     }
     Ok((kind, body))
+}
+
+/// One span of a remote file, the `Range` the webview's `<video>` asked for
+/// passed through, so a video seeks and is not held whole in memory per read.
+pub async fn fetch_range(server: &str, path: &str, range: &str) -> Result<FetchedFile, String> {
+    download_file(server, path, Some(range)).await
 }
 
 /// Written once under a fresh uuid (`attachments/<session>/<uuid>.<ext>`)
@@ -1773,26 +1821,30 @@ impl FileCache {
     }
 }
 
-async fn download_file(server: &str, path: &str) -> Result<(String, Vec<u8>), String> {
+/// What a remote server's `/file` answered.
+pub struct FetchedFile {
+    pub status: u16,
+    pub kind: String,
+    pub content_range: Option<String>,
+    pub body: Vec<u8>,
+}
+
+async fn download_file(server: &str, path: &str, range: Option<&str>) -> Result<FetchedFile, String> {
     let (base, token) = http_base(server)?;
-    let response = crate::http()
-        .get(format!("{base}/file"))
-        .query(&[("path", path)])
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut request = crate::http().get(format!("{base}/file")).query(&[("path", path)]).bearer_auth(token);
+    if let Some(range) = range {
+        request = request.header(reqwest::header::RANGE, range);
+    }
+    let response = request.send().await.map_err(|e| e.to_string())?;
     if !response.status().is_success() {
         return Err(response.status().to_string());
     }
-    let kind = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/octet-stream")
-        .to_string();
+    let status = response.status().as_u16();
+    let header = |name| response.headers().get(name).and_then(|v: &reqwest::header::HeaderValue| v.to_str().ok()).map(str::to_string);
+    let kind = header(reqwest::header::CONTENT_TYPE).unwrap_or_else(|| "application/octet-stream".to_string());
+    let content_range = header(reqwest::header::CONTENT_RANGE);
     let body = response.bytes().await.map_err(|e| e.to_string())?;
-    Ok((kind, body.to_vec()))
+    Ok(FetchedFile { status, kind, content_range, body: body.to_vec() })
 }
 
 /// The `http(s)://` address and token of a connected server, for the routes
