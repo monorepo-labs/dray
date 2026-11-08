@@ -239,6 +239,7 @@ struct BoatPill: View {
         PillShell(notch: notch, notchHeight: notchHeight, glow: StatusDot.waiting) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(alert.name) stops in").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                    .frame(maxWidth: .infinity)
                 // Redrawn each second, or the count would stand still. White
                 // outright: the pills' window takes the system's appearance.
                 TimelineView(.periodic(from: .now, by: 1)) { _ in

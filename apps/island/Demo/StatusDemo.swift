@@ -352,15 +352,18 @@ private struct BoatMock: View {
         return BoatAlert(server: "demo", name: name, stopsAt: ISO8601DateFormatter().string(from: at))
     }
 
-    private static let cases: [(String, BoatAlert, String?)] = [
+    /// Made when the tab is built, so Replay — which rebuilds it — starts the clocks again.
+    @State private var cases = Self.makeCases()
+
+    private static func makeCases() -> [(String, BoatAlert, String?)] { [
         ("Nine minutes left", alert("boat-dray", in: 9 * 60 + 12), nil),
         ("Last two minutes, red", alert("boat-dray", in: 95), nil),
         ("Long server name", alert("a-sandbox-with-a-very-long-name", in: 7 * 60), nil),
         ("Extend refused", alert("boat-dray", in: 6 * 60), "Free trial sandboxes stop within 2 hours."),
-    ]
+    ] }
 
     var body: some View {
-        ForEach(Self.cases, id: \.0) { name, alert, refused in
+        ForEach(cases, id: \.0) { name, alert, refused in
             VStack(alignment: .leading, spacing: 8) {
                 Text(name).font(.headline)
                 BoatPill(notch: placement == .notch, notchHeight: placement == .notch ? 32 : 0,
