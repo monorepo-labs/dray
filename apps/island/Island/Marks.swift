@@ -227,35 +227,24 @@ struct AttentionPill: View {
 }
 
 /// A boat sandbox about to auto-stop, with the way to give it more time. Stands
-/// until extended, dismissed or stopped, since missing it costs running work.
+/// until extended or stopped, since missing it costs running work.
 struct BoatPill: View {
     let notch: Bool
     let notchHeight: CGFloat
     let alert: BoatAlert
     let refused: String?
     let extend: (Int) -> Void
-    let dismiss: () -> Void
 
     var body: some View {
         PillShell(notch: notch, notchHeight: notchHeight, glow: StatusDot.waiting) {
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Circle().fill(StatusDot.waiting).frame(width: 6, height: 6)
-                    Text(alert.name).font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
-                    Spacer(minLength: 16)
-                    Button(action: dismiss) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.white.opacity(0.5))
-                        .help("Dismiss")
-                }
+                Text("\(alert.name) stops in").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
                 // Redrawn each second, or the count would stand still. White
                 // outright: the pills' window takes the system's appearance.
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(alert.countdown).font(.system(size: 20, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(alert.urgent ? Color.red : .white)
-                        Text("left").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
-                    }
+                    Text(alert.countdown).font(.system(size: 20, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(alert.urgent ? Color.red : .white)
+                        .frame(maxWidth: .infinity)
                 }
                 BoatExtendChoices(size: 12, extend: extend)
                     .padding(.top, 2)

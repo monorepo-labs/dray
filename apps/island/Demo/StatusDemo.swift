@@ -19,12 +19,13 @@ private struct DemoPage: View {
     /// One group of cases at a time; the last tab is the list's marks.
     @State private var tab = sections[0].0
     private static let taskList = "Task list"
+    private static let boat = "Boat"
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 Picker("", selection: $tab) {
-                    ForEach(sections.map(\.0) + [Self.taskList], id: \.self) { Text($0).tag($0) }
+                    ForEach(sections.map(\.0) + [Self.taskList, Self.boat], id: \.self) { Text($0).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -50,7 +51,9 @@ private struct DemoPage: View {
                 // Wrapping, so a wide window shows several cases side by side.
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: Composer.width + 48), spacing: 28, alignment: .topLeading)],
                           alignment: .leading, spacing: 28) {
-                    if tab == Self.taskList {
+                    if tab == Self.boat {
+                        BoatMock(placement: placement)
+                    } else if tab == Self.taskList {
                         ListMock()
                     } else {
                         ForEach(sections.first { $0.0 == tab }?.1 ?? []) { c in
@@ -334,5 +337,39 @@ private struct ListMock: View {
         .padding(6)
         .frame(width: 520)
         .background(.black, in: RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+// MARK: Boat
+
+/// The boat sandbox warning in each state it can be in, on alerts made up here.
+/// The clock is real: each case counts down from when the tab was built.
+private struct BoatMock: View {
+    let placement: Placement
+
+    private static func alert(_ name: String, in seconds: Double) -> BoatAlert {
+        let at = Date().addingTimeInterval(seconds)
+        return BoatAlert(server: "demo", name: name, stopsAt: ISO8601DateFormatter().string(from: at))
+    }
+
+    private static let cases: [(String, BoatAlert, String?)] = [
+        ("Nine minutes left", alert("boat-dray", in: 9 * 60 + 12), nil),
+        ("Last two minutes, red", alert("boat-dray", in: 95), nil),
+        ("Long server name", alert("a-sandbox-with-a-very-long-name", in: 7 * 60), nil),
+        ("Extend refused", alert("boat-dray", in: 6 * 60), "Free trial sandboxes stop within 2 hours."),
+    ]
+
+    var body: some View {
+        ForEach(Self.cases, id: \.0) { name, alert, refused in
+            VStack(alignment: .leading, spacing: 8) {
+                Text(name).font(.headline)
+                BoatPill(notch: placement == .notch, notchHeight: placement == .notch ? 32 : 0,
+                         alert: alert, refused: refused, extend: { _ in })
+                Text("In the open panel").foregroundStyle(.secondary).padding(.top, 8)
+                BoatLine(alert: alert, extend: { _ in })
+                    .padding(12)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(.black))
+            }
+        }
     }
 }

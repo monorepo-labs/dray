@@ -74,7 +74,8 @@ export function ExtendBoat({
 
 const CARD = "pointer-events-auto flex flex-col gap-2 py-2.5 pr-2.5 pl-3 shadow-lg ring-1 ring-foreground/10 animate-in fade-in slide-in-from-bottom-2";
 
-function Warning({
+/// One sandbox's warning card. Exported for the demo page.
+export function Warning({
   server,
   stopsAt,
   now,
@@ -98,14 +99,14 @@ function Warning({
     <Alert className={cn(CARD, "relative overflow-hidden")}>
       <span className="flex min-w-0 items-start gap-2">
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-ui-sm text-muted-foreground" title={server.name}>
-            {server.name}
-          </span>
-          <span className="flex items-baseline gap-1.5">
-            <span className={cn("text-lg leading-tight font-semibold tabular-nums", urgent && "text-destructive")}>
-              {countdown(stopsAt, now)}
+          <span className="flex min-w-0 gap-1 text-ui-sm text-muted-foreground">
+            <span className="truncate" title={server.name}>
+              {server.name}
             </span>
-            <span className="text-ui-sm text-muted-foreground">left</span>
+            <span className="shrink-0">stops in</span>
+          </span>
+          <span className={cn("text-lg leading-tight font-semibold tabular-nums", urgent && "text-destructive")}>
+            {countdown(stopsAt, now)}
           </span>
         </span>
         <Button

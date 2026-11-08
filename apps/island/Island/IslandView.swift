@@ -268,7 +268,8 @@ struct IslandView: View {
         }
         input
         if let alert = composer.boatAlerts.first {
-            BoatLine(composer: composer, alert: alert).gone(recording)
+            BoatLine(alert: alert) { minutes in Task { await composer.extendBoat(alert, minutes: minutes) } }
+                .gone(recording)
         }
         if let notice = composer.notice {
             HStack(spacing: 8) {
@@ -706,14 +707,17 @@ private struct MicButton: View {
 }
 
 /// The pill's alert while the panel covers the pill.
-private struct BoatLine: View {
-    let composer: Composer
+struct BoatLine: View {
     let alert: BoatAlert
+    /// Minutes.
+    let extend: (Int) -> Void
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(alert.sentence).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            BoatExtendChoices(size: 11) { minutes in Task { await composer.extendBoat(alert, minutes: minutes) } }
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                Text(alert.sentence).font(.caption.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+            }
+            BoatExtendChoices(size: 11, extend: extend)
         }
     }
 }
@@ -735,8 +739,7 @@ struct PillsView: View {
             } else if !composer.shown, let alert = composer.boatAlerts.first {
                 BoatPill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
                          alert: alert, refused: composer.boatRefused,
-                         extend: { minutes in Task { await composer.extendBoat(alert, minutes: minutes) } },
-                         dismiss: { composer.dismissBoat(alert) })
+                         extend: { minutes in Task { await composer.extendBoat(alert, minutes: minutes) } })
                     .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
             } else if !composer.shown, !composer.done.isEmpty {
                 DonePill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,

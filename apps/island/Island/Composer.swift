@@ -356,16 +356,10 @@ final class Composer {
     /// Something to draw while the panel is shut: a card waiting outranks news.
     var hasPill: Bool { !attention.isEmpty || !done.isEmpty || !boatAlerts.isEmpty }
 
-    /// By deadline, so an extend that later runs short warns again.
-    private var boatDismissed: Set<String> = []
-    var boatAlerts: [BoatAlert] { store.boatAlerts.filter { !boatDismissed.contains("\($0.server):\($0.stopsAt ?? "")") } }
+    /// Standing until extended or stopped: the island offers no dismissal.
+    var boatAlerts: [BoatAlert] { store.boatAlerts }
     /// Why the last Extend didn't take: a trial's cap, Dray being closed.
     var boatRefused: String?
-
-    func dismissBoat(_ alert: BoatAlert) {
-        boatDismissed.insert("\(alert.server):\(alert.stopsAt ?? "")")
-        pillChanged()
-    }
 
     /// Sets the time left. It does not add, and it is every later resume's length too.
     func extendBoat(_ alert: BoatAlert, minutes: Int) async {
