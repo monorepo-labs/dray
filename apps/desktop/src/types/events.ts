@@ -1679,6 +1679,10 @@ beta: boolean,
  */
 latest: string | null, 
 /**
+ * Dray.app's own server on another Mac, updated by that app, not from here.
+ */
+app: boolean, 
+/**
  * An update landed on the server and it restarts onto it once idle.
  */
 restarting: boolean, boat: BoatStatus | null, };

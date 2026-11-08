@@ -104,6 +104,8 @@ pub struct ServerInfo {
     pub beta: bool,
     /// The newer release out on its channel, while the server is behind it.
     pub latest: Option<String>,
+    /// Dray.app's own server on another Mac, updated by that app, not from here.
+    pub app: bool,
     /// An update landed on the server and it restarts onto it once idle.
     pub restarting: bool,
     pub boat: Option<BoatStatus>,
@@ -255,6 +257,7 @@ fn info(conn: &Conn) -> ServerInfo {
         release: conn.met.as_ref().and_then(|w| w.release.clone()),
         beta: conn.saved.beta,
         latest: latest(conn),
+        app: conn.met.as_ref().is_some_and(Welcome::is_mac_app),
         restarting: conn.met.as_ref().is_some_and(|w| w.stale),
         boat: conn.boat.as_ref().filter(|row| !row.lost).map(|row| BoatStatus {
             phase: row.phase,
@@ -269,26 +272,43 @@ fn info(conn: &Conn) -> ServerInfo {
 /// reader ignored or the server is not behind it.
 fn latest(conn: &Conn) -> Option<String> {
     let releases = releases();
-    let newest = releases.newest(conn.saved.beta)?.to_string();
+    let app = conn.met.as_ref().is_some_and(Welcome::is_mac_app);
+    let newest = releases.newest(conn.saved.beta, app)?.to_string();
     let behind = conn.met.as_ref().is_some_and(|w| behind(w, conn.saved.beta, &releases));
     (behind && conn.saved.ignored.as_ref() != Some(&newest)).then_some(newest)
 }
 
-/// The newest CLI releases out, each channel's. A `dray-serve` ships in them.
+/// The newest releases out, each channel's: CLI ones, which a `dray-serve`
+/// ships in, and app ones, which another Mac's Dray.app serves from.
 #[derive(Debug, Clone, Default)]
 struct Releases {
     stable: Option<semver::Version>,
     beta: Option<semver::Version>,
+    app_stable: Option<semver::Version>,
+    app_beta: Option<semver::Version>,
 }
 
 impl Releases {
-    /// From GitHub's tags, the way install.sh reads them: `cli-v` and a
+    /// From GitHub's tags, the way install.sh reads them: `cli-v` or `v` and a
     /// version, a prerelease one being a beta. Newest by semver, so a beta
     /// sorts below its own release.
     fn from_tags<'a>(tags: impl Iterator<Item = &'a str>) -> Self {
         let mut out = Releases::default();
-        for v in tags.filter_map(|t| semver::Version::parse(t.strip_prefix("cli-v")?).ok()) {
-            let slot = if v.pre.is_empty() { &mut out.stable } else { &mut out.beta };
+        for tag in tags {
+            let (cli, rest) = match tag.strip_prefix("cli-v") {
+                Some(rest) => (true, rest),
+                None => match tag.strip_prefix('v') {
+                    Some(rest) => (false, rest),
+                    None => continue,
+                },
+            };
+            let Ok(v) = semver::Version::parse(rest) else { continue };
+            let slot = match (cli, v.pre.is_empty()) {
+                (true, true) => &mut out.stable,
+                (true, false) => &mut out.beta,
+                (false, true) => &mut out.app_stable,
+                (false, false) => &mut out.app_beta,
+            };
             if slot.as_ref().is_none_or(|have| v > *have) {
                 *slot = Some(v);
             }
@@ -298,8 +318,9 @@ impl Releases {
 
     /// The newest a server on this channel would install. Beta takes stable
     /// releases too, so whichever is newer.
-    fn newest(&self, beta: bool) -> Option<&semver::Version> {
-        if beta { self.stable.as_ref().max(self.beta.as_ref()) } else { self.stable.as_ref() }
+    fn newest(&self, beta: bool, app: bool) -> Option<&semver::Version> {
+        let (stable, pre) = if app { (&self.app_stable, &self.app_beta) } else { (&self.stable, &self.beta) };
+        if beta { stable.as_ref().max(pre.as_ref()) } else { stable.as_ref() }
     }
 }
 
@@ -307,13 +328,16 @@ impl Releases {
 /// One that says no version predates saying, so anything out is newer; one
 /// with a version and no release is a local build and is never offered one.
 /// A server ahead of its channel — beta left behind — is not behind, so
-/// leaving beta never downgrades.
+/// leaving beta never downgrades. Another Mac's app server has no release
+/// and is measured by its app version instead.
 fn behind(met: &Welcome, beta: bool, releases: &Releases) -> bool {
-    let Some(newest) = releases.newest(beta) else { return false };
+    let app = met.is_mac_app();
+    let Some(newest) = releases.newest(beta, app) else { return false };
     if met.version.is_none() {
         return true;
     }
-    met.release.as_deref().and_then(|r| semver::Version::parse(r).ok()).is_some_and(|r| r < *newest)
+    let running = if app { met.version.as_deref() } else { met.release.as_deref() };
+    running.and_then(|r| semver::Version::parse(r).ok()).is_some_and(|r| r < *newest)
 }
 
 /// How long one reading of GitHub's releases stands. Unauthenticated, the API
@@ -1614,7 +1638,7 @@ pub async fn servers_behind(beta: bool) -> Vec<String> {
     conns()
         .iter()
         .filter(|c| c.saved.id != LOCAL && c.status == ServerStatus::Connected && (c.saved.beta || !beta))
-        .filter(|c| c.met.as_ref().is_some_and(|w| w.version.is_some()) && latest(c).is_some())
+        .filter(|c| c.met.as_ref().is_some_and(|w| w.version.is_some() && !w.is_mac_app()) && latest(c).is_some())
         .map(|c| c.saved.id.clone())
         .collect()
 }
@@ -1987,6 +2011,11 @@ mod tests {
         assert!(behind(&old, false, &out), "a server that says nothing predates saying");
         let local = Welcome { version: Some("0.28.0".into()), release: None, stale: false, ..Default::default() };
         assert!(!behind(&local, true, &out), "a local build is never offered one");
+
+        let mac = |version: &str, dev: bool| Welcome { version: Some(version.into()), dictation: true, dev, ..Default::default() };
+        assert!(behind(&mac("0.28.9", false), false, &out), "another Mac's app is measured on app releases");
+        assert!(!behind(&mac("0.29.0", false), false, &out));
+        assert!(!behind(&mac("0.28.9", true), false, &out), "a dev build is never offered one");
     }
 
     /// Against GitHub itself, which refuses a request with no User-Agent.
