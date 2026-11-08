@@ -13,7 +13,7 @@ struct NewSessionBar: View {
             row(hints: false)
         }
         .font(.system(size: 13, weight: .medium))
-        .task(id: composer.harness) { await composer.loadModels() }
+        .task(id: "\(composer.harness) \(composer.pickedServer)") { await composer.loadModels() }
     }
 
     private func row(hints: Bool) -> some View {
@@ -27,7 +27,20 @@ struct NewSessionBar: View {
             }
             BarButton(id: .project, composer: composer) {
                 Image(systemName: "folder.fill").foregroundStyle(.secondary)
-                Text(composer.projects.first { $0.path == composer.projectPath }?.name ?? "Project")
+                // The group's own name, so a machine's other spelling never renames the row.
+                Text(composer.siblings.first?.project.name ?? "Project")
+            }
+            if composer.showsMachine, let picked = composer.checkout {
+                let label = HStack(spacing: 5) {
+                    ServerFilledIcon().frame(width: 13, height: 13).foregroundStyle(.secondary)
+                    Text(composer.checkoutLabel(picked, fullPath: false))
+                }.lineLimit(1).fixedSize()
+                // One checkout has nothing to choose, though where it runs is worth saying.
+                if composer.siblings.count > 1 {
+                    BarButton(id: .machine, composer: composer) { label }
+                } else {
+                    label.foregroundStyle(.secondary)
+                }
             }
             Button { composer.worktree.toggle() } label: {
                 HStack(spacing: 6) {
@@ -49,6 +62,26 @@ struct NewSessionBar: View {
     }
 }
 
+/// The desktop's `ServerFilledIcon`: two filled racks with their lights cut out.
+struct ServerFilledIcon: View {
+    var body: some View {
+        Racks().fill(style: FillStyle(eoFill: true))
+    }
+
+    private struct Racks: Shape {
+        func path(in rect: CGRect) -> Path {
+            let unit = min(rect.width, rect.height) / 24
+            var path = Path()
+            for y in [1, 13] as [CGFloat] {
+                path.addRoundedRect(in: CGRect(x: unit, y: y * unit, width: 22 * unit, height: 10 * unit),
+                                    cornerSize: CGSize(width: 3 * unit, height: 3 * unit))
+                path.addEllipse(in: CGRect(x: 4.5 * unit, y: (y + 3.5) * unit, width: 3 * unit, height: 3 * unit))
+            }
+            return path
+        }
+    }
+}
+
 /// Where each bar control sits, so its dropdown can open beneath it.
 struct MenuAnchors: PreferenceKey {
     static let defaultValue: [MenuID: Anchor<CGRect>] = [:]
@@ -66,7 +99,8 @@ private struct BarButton<Label: View>: View {
         Button {
             composer.openMenu = composer.openMenu == id ? nil : id
         } label: {
-            HStack(spacing: 5) { label() }.lineLimit(1).fixedSize()
+            // The whole box, or a click between two letters falls through.
+            HStack(spacing: 5) { label() }.lineLimit(1).fixedSize().contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .anchorPreference(key: MenuAnchors.self, value: .bounds) { [id: $0] }
@@ -110,9 +144,16 @@ struct DropMenus: View {
         case .model:
             EmptyView()
         case .project:
-            ForEach(composer.projects, id: \.path) { p in
-                MenuRow(title: p.name, on: p.path == composer.projectPath) {
-                    composer.projectPath = p.path
+            ForEach(composer.projectGroups, id: \.first?.id) { group in
+                MenuRow(title: group[0].project.name, on: group[0].group == composer.checkout?.group) {
+                    composer.pickProject(group)
+                    composer.openMenu = nil
+                }
+            }
+        case .machine:
+            ForEach(composer.siblings) { c in
+                MenuRow(title: composer.checkoutLabel(c, fullPath: true), on: c.id == composer.checkout?.id) {
+                    composer.pickCheckout(c)
                     composer.openMenu = nil
                 }
             }

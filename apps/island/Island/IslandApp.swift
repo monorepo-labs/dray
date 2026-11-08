@@ -385,6 +385,15 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 MainActor.assumeIsolated { Delegate.shared?.updateIfReplaced() }
             }
         }, "com.yogesh.dray.island.update" as CFString, nil, .deliverImmediately)
+        // Dray's window connected to a machine or lost one.
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), nil, { _, _, _, _, _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let composer = Delegate.shared?.composer else { return }
+                    Task { await composer.followApp() }
+                }
+            }
+        }, "com.yogesh.dray.island.links" as CFString, nil, .deliverImmediately)
         // The tap's twin for other processes: Dray.app, or a script driving the panel.
         DistributedNotificationCenter.default().addObserver(forName: .init("com.yogesh.dray.island.tap"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.pressed() }

@@ -131,9 +131,10 @@ function unwrapArgs(args: Rec): { args: Rec; server: ServerId | null } {
 }
 
 /// Commands that name a session but act on this Mac — its browser tabs, its
-/// banners, the island's pick — and so never follow the session to its server.
+/// banners, the island's pick and its done pill — and so never follow the
+/// session to its server.
 const onThisMac = (cmd: string): boolean =>
-  cmd.startsWith("browser_") || cmd === "notify_session" || cmd === "set_app_selection";
+  cmd.startsWith("browser_") || ["notify_session", "set_app_selection", "island_done"].includes(cmd);
 
 /// What the app answers itself: the browser, dictation, banners, the updater,
 /// the server list, opening apps and terminals. Every other local command goes
