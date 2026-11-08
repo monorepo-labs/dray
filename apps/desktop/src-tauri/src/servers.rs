@@ -964,12 +964,17 @@ pub async fn resume_boat(id: String) -> Result<(), String> {
         (start, turned_on)
     };
     announce();
-    if turned_on {
-        save().await?;
-    }
     if let Some(link) = start {
         crate::analytics::track("feature_used", json!({ "feature": "boat_resumed" }));
         tokio::spawn(wake_boat(id.clone(), link));
+    }
+    // After the wake is under way: a file that won't write must not strand a
+    // row marked resuming with nothing behind it. The connection is on in
+    // memory either way; only the next launch would see it off.
+    if turned_on {
+        if let Err(e) = save().await {
+            eprintln!("[boat] could not save {id} turned back on: {e}");
+        }
     }
     // `boat resume`'s own cap and then the wake, so a waiter never outlives both.
     let deadline = tokio::time::Instant::now() + boat::RESUMING + BOAT_WAKE;

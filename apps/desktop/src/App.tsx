@@ -460,14 +460,17 @@ function App() {
   // A turn or a background task on that server, which auto-extend keeps alive.
   // Read off the live maps, which hold every session whatever the sidebar
   // shows: the index list is one side of the archived split at a time. Its own
-  // status covers a launch before any live status has arrived.
+  // status counts only where no live one has arrived yet, since a turn ending
+  // moves the live map and leaves the list's copy saying in progress.
   const boatBusy = useCallback(
     (server: string) => {
       const here = (id: string) => serverOfSession(id) === server;
       return (
         Object.entries(statusBySession).some(([id, s]) => s === "in_progress" && here(id)) ||
         Object.entries(tasksBySession).some(([id, tasks]) => tasks.length > 0 && here(id)) ||
-        sessionIndexItems.some((i) => i.status === "in_progress" && serverOfPath(i.cwd) === server)
+        sessionIndexItems.some(
+          (i) => !(i.sessionId in statusBySession) && i.status === "in_progress" && serverOfPath(i.cwd) === server,
+        )
       );
     },
     [sessionIndexItems, statusBySession, tasksBySession],
