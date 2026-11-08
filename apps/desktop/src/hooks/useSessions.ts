@@ -1,6 +1,7 @@
 import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
+import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
 import { restoreAttachments } from "@/hooks/useAttachments";
@@ -878,6 +879,9 @@ const handleSendMsg = async (
   // The three the backend alone resolves — the worktree name, the truncated
   // title, the recorded branch — arrive with the snapshot and replace these.
   const provisional = provisionalId();
+  // A stopped sandbox is woken by this send, and it goes once that's done.
+  const asleep = boatAsleepById(serverOfPath(cwd));
+  const letGo = asleep ? holdThroughResume(isNewSession ? null : sessionId, message) : null;
 
   if (isNewSession) {
     const shell: SessionSnapshot = {
@@ -946,10 +950,11 @@ const handleSendMsg = async (
     const remote = attachments.length > 0 && server !== LOCAL;
     const ahead = uploadsAhead.get(sessionId);
     let sentPaths = attachmentPaths;
-    if (remote || ahead) {
+    if (remote || ahead || asleep) {
       if (remote) waitFor(provisional, server, attachmentPaths);
       const gate = (async () => {
         await ahead;
+        if (asleep) await resumeBoat(server);
         return remote ? Promise.all(attachments.map((a) => upload(server, a.path, a.size))) : attachmentPaths;
       })();
       const settled = gate.then(
@@ -1099,6 +1104,8 @@ const handleSendMsg = async (
     }
     fail(e);
     return false;
+  } finally {
+    letGo?.();
   }
 };
 

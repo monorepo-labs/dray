@@ -508,6 +508,29 @@ export type BlockRef = { messageId: string, index: number, };
 export type BlockType = { "type": "text" } | { "type": "thinking" } | { "type": "tool_use", id: string, name: string, };
 
 /**
+ * Where a boat sandbox is, as far as the reader is concerned.
+ */
+export type BoatPhase = "running" | "stopped" | "resuming";
+
+/**
+ * What boat says about a server. Absent from a machine that is no sandbox, and
+ * from one with no `boat` CLI or login here, which draws no boat UI at all.
+ */
+export type BoatStatus = { phase: BoatPhase, 
+/**
+ * When it auto-stops. `None` with auto-stop off.
+ */
+stopsAt: string | null, 
+/**
+ * It stops within [`WARN`]: raise the card, offer more time.
+ */
+warning: boolean, 
+/**
+ * Why the last resume didn't take, in boat's or Dray's words.
+ */
+note: string | null, };
+
+/**
  * What the composer's branch picker needs to render and guard itself.
  */
 export type BranchList = { 
@@ -1658,7 +1681,7 @@ latest: string | null,
 /**
  * An update landed on the server and it restarts onto it once idle.
  */
-restarting: boolean, };
+restarting: boolean, boat: BoatStatus | null, };
 
 export type ServerStatus = "connecting" | "connected" | "disconnected";
 

@@ -243,6 +243,7 @@ final class Composer {
         self.server = server
         store.asksChanged = { [weak self] in self?.asksChanged() }
         store.linksMayHaveMoved = { [weak self] in Task { await self?.followApp() } }
+        store.boatChanged = { [weak self] in self?.pillChanged() }
     }
 
     // MARK: Cards and alerts
@@ -382,7 +383,23 @@ final class Composer {
     static let doneFor: Duration = .seconds(6)
 
     /// Something to draw while the panel is shut: a card waiting outranks news.
-    var hasPill: Bool { !attention.isEmpty || !done.isEmpty }
+    var hasPill: Bool { !attention.isEmpty || !done.isEmpty || !boatAlerts.isEmpty }
+
+    /// Standing until extended or stopped: the island offers no dismissal.
+    var boatAlerts: [BoatAlert] { store.boatAlerts }
+    /// Why the last Extend didn't take: a trial's cap, Dray being closed.
+    var boatRefused: String?
+
+    /// Sets the time left. It does not add, and it is every later resume's length too.
+    func extendBoat(_ alert: BoatAlert, minutes: Int) async {
+        let args: [String: JSON] = ["id": .string(alert.server), "minutes": .number(Double(minutes))]
+        do {
+            let _: JSON = try await store.call(server, "extend_boat", args, as: JSON.self)
+            boatRefused = nil
+        } catch {
+            boatRefused = error.localizedDescription
+        }
+    }
 
     /// Dray says a session finished where its banner would have.
     func finished(_ id: String) {

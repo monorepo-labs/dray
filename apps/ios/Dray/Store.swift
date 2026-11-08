@@ -25,6 +25,7 @@ final class Store {
     private(set) var transcripts: [SessionKey: Transcript] = [:]
     private(set) var asks: [SessionKey: [AgentEvent]] = [:] { didSet { asksChanged() } }
     private(set) var queued: [SessionKey: [Queued]] = [:]
+    private(set) var boatAlerts: [BoatAlert] = [] { didSet { boatChanged() } }
     private(set) var projects: [UUID: [Project]] = [:]
     /// Each repo's PR marks by branch, as `pr_marks` last answered.
     private(set) var marks: [ProjectKey: [String: PrMark]] = [:]
@@ -49,6 +50,7 @@ final class Store {
     @ObservationIgnored var linksMayHaveMoved: () -> Void = {}
     /// The Island's This Mac; the phone has none.
     @ObservationIgnored private var home: UUID?
+    @ObservationIgnored var boatChanged: () -> Void = {}
     @ObservationIgnored private let path = NWPathMonitor()
     @ObservationIgnored private var reading: Set<UUID> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
@@ -495,10 +497,17 @@ final class Store {
             for t in live.tasks {
                 if case .backgroundTasks(let n) = t.payload { tasks[SessionKey(server: server, id: t.sessionId)] = n }
             }
+            // This Mac's alone: its app reads the timers and answers Extend. Another
+            // Mac's would name servers this one has never heard of.
+            if server == home, let boat = live.boat { boatAlerts = boat }
             if let held = live.queued {
                 for key in queued.keys where key.server == server { queued[key] = nil }
                 for q in held where !q.queued.isEmpty { queued[SessionKey(server: server, id: q.sessionId)] = q.queued }
             }
+        case "boat_alerts":
+            guard server == home,
+                  let frame = try? decoder.decode(EventFrame<BoatAlerts>.self, from: data).payload else { return }
+            boatAlerts = frame.alerts
         case "queue_changed":
             // Every client's sends, the desktop's and the CLI's included; `send_msg` answers only its caller.
             guard let q = try? decoder.decode(EventFrame<QueueChanged>.self, from: data).payload else { return }

@@ -148,6 +148,9 @@ import { useSessions } from "@/hooks/useSessions";
 import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailability";
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import ServerOfflineNotice from "@/components/composer/ServerOfflineNotice";
+import BoatNotice from "@/components/composer/BoatNotice";
+import BoatWarnings from "@/components/BoatWarnings";
+import { boatAsleep, restoreHeld } from "@/lib/boat";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout } from "@/lib/projectGroups";
 import { serverConnected, serverName, useServers } from "@/lib/servers";
@@ -278,6 +281,7 @@ function App() {
     paneState,
     indexSide,
     activeServer,
+    tasksBySession,
   } = useSessions();
 
   // Tasks saved to start later. One is open while the new-task composer shows
@@ -446,8 +450,30 @@ function App() {
   const missingAgent = useMissingAgent(harness, activeServer);
   // The open session's server, while it cannot be reached. Shown in place of
   // the error a read or send would raise, and cleared by the reconnect itself.
-  const offlineServer = useServers().find(
+  const allServers = useServers();
+  const offlineServer = allServers.find(
     (s) => !!selectedSessionId && s.id === activeServer && s.status !== "connected",
+  );
+  // Stopped or waking, which a send can do something about, unlike offline.
+  const sleepingBoat = allServers.find((s) => s.id === activeServer && boatAsleep(s));
+  useEffect(restoreHeld, []);
+  // A turn or a background task on that server, which auto-extend keeps alive.
+  // Read off the live maps, which hold every session whatever the sidebar
+  // shows: the index list is one side of the archived split at a time. Its own
+  // status counts only where no live one has arrived yet, since a turn ending
+  // moves the live map and leaves the list's copy saying in progress.
+  const boatBusy = useCallback(
+    (server: string) => {
+      const here = (id: string) => serverOfSession(id) === server;
+      return (
+        Object.entries(statusBySession).some(([id, s]) => s === "in_progress" && here(id)) ||
+        Object.entries(tasksBySession).some(([id, tasks]) => tasks.length > 0 && here(id)) ||
+        sessionIndexItems.some(
+          (i) => !(i.sessionId in statusBySession) && i.status === "in_progress" && serverOfPath(i.cwd) === server,
+        )
+      );
+    },
+    [sessionIndexItems, statusBySession, tasksBySession],
   );
   // Only pi and fx, whose update overwrites files a child reads. The other three
   // install beside the running binary, and an update can land at any moment, so
@@ -3276,7 +3302,7 @@ function App() {
           // session cannot be pointed at one that is missing — and a session
           // that already exists has a CLI that already ran.
           notice={
-            offlineServer ? (
+            sleepingBoat ? null : offlineServer ? (
               <ServerOfflineNotice server={offlineServer} />
             ) : !selectedSessionId && missingAgent ? (
               <AgentMissingNotice agent={missingAgent} />
@@ -3290,7 +3316,9 @@ function App() {
             ) : null
           }
           pending={
-            selectedItem?.continueAt && (
+            sleepingBoat ? (
+              <BoatNotice server={sleepingBoat} />
+            ) : selectedItem?.continueAt && (
               <AutoContinueNotice
                 at={selectedItem.continueAt}
                 off={selectedItem.continueOff}
@@ -3501,6 +3529,7 @@ function App() {
     </div>
     {/* Outside `AppShell` on purpose: it is fixed to the window rather than
         placed in the layout, and the shell has no slot that isn't a pane. */}
+    <BoatWarnings busy={boatBusy} />
     <NoticeStack
       onSelect={(id) => goToSession(() => void openNotice(id))}
       onOpenDrafts={() => {

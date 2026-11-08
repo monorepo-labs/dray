@@ -55,10 +55,23 @@ pub struct Saved {
     /// is offered again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ignored: Option<String>,
+    /// The boat sandbox this machine is, once it has said and boat agreed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boat: Option<BoatLink>,
     /// Fields a newer build wrote, carried back untouched — the index's own
     /// `unknown` bargain, since this file is rewritten whole too.
     #[serde(flatten)]
     pub unknown: serde_json::Map<String, Value>,
+}
+
+/// Which boat sandbox a saved machine is, and where its login last reached it.
+/// The address is how an alias is known to still be this sandbox's: one that no
+/// longer points there has been aimed elsewhere and is left alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BoatLink {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
 }
 
 impl Saved {
@@ -441,6 +454,7 @@ pub async fn add(name: String, address: String, token: Option<String>) -> Result
                 off: false,
                 beta: false,
                 ignored: None,
+                boat: None,
                 unknown: Default::default(),
             };
             (saved, Some(token))
@@ -465,6 +479,7 @@ pub async fn add(name: String, address: String, token: Option<String>) -> Result
                 off: false,
                 beta: false,
                 ignored: None,
+                boat: None,
                 unknown: Default::default(),
             };
             (saved, token)
@@ -574,6 +589,7 @@ mod tests {
             off: false,
             beta: false,
             ignored: None,
+            boat: None,
             unknown: Default::default(),
         };
         let list = [saved("a1", "vps"), saved("b2", "box"), saved("c3", "box"), saved("d4", "a1")];

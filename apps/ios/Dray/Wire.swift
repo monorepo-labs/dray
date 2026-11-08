@@ -164,6 +164,46 @@ struct LiveState: Decodable {
     let tasks: [AgentEvent]
     /// Every non-empty queue; absent from a server that predates `queue_changed`.
     let queued: [QueueChanged]?
+    /// Null until the app first reads a sandbox's timer.
+    let boat: [BoatAlert]?
+}
+
+/// A boat sandbox about to auto-stop. The Mac app reads the timers and tells
+/// its own server, so only the island ever hears one.
+struct BoatAlert: Decodable, Hashable {
+    /// The app's id for the machine, which `extend_boat` takes.
+    let server: String
+    let name: String
+    let stopsAt: String?
+
+    /// "boat-dray stops in 03:12", for the panel's one line.
+    var sentence: String { "\(name) stops in \(countdown)" }
+
+    /// "03:12" left.
+    var countdown: String {
+        let seconds = max(0, Int(secondsLeft ?? 0))
+        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
+    /// The last two minutes, which the pill draws red as the app's card does.
+    var urgent: Bool { (secondsLeft ?? .infinity) <= 120 }
+
+    private var secondsLeft: Double? {
+        guard let stopsAt, let at = Self.parse(stopsAt) else { return nil }
+        return at.timeIntervalSinceNow
+    }
+
+    private static func parse(_ text: String) -> Date? {
+        let plain = ISO8601DateFormatter()
+        if let at = plain.date(from: text) { return at }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: text)
+    }
+}
+
+struct BoatAlerts: Decodable {
+    let alerts: [BoatAlert]
 }
 
 /// A session's whole queue, sent each time it moves.

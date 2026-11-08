@@ -77,6 +77,8 @@ pub mod remote_access;
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod machines;
 #[cfg(feature = "desktop")]
+pub mod boat;
+#[cfg(feature = "desktop")]
 pub mod servers;
 pub mod session;
 pub mod share;
@@ -893,6 +895,8 @@ pub fn run() {
             servers::run_server_login,
             servers::run_gh_login,
             servers::upload_attachment,
+            servers::resume_boat,
+            servers::extend_boat,
             attachments::paste_attachments,
             // Here and not on the server: a video plays through this
             // webview's asset protocol, which only this process can widen.

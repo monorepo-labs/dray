@@ -117,6 +117,18 @@ pub fn forget_gh() {
     LOGIN_PATH_STALE.store(true, Ordering::Release);
 }
 
+/// The absolute path to `boat`, or `None` where it isn't here. Asked again each
+/// time rather than cached, and with no login shell: only a boat machine asks,
+/// and a reader installing it mid-session should not need a restart.
+#[cfg(feature = "desktop")]
+pub fn boat() -> Option<PathBuf> {
+    let installed = std::env::home_dir()?.join(".ascii/bin/boat");
+    if is_executable(&installed) {
+        return Some(installed);
+    }
+    search_path("boat").or_else(|| search_known_dirs("boat"))
+}
+
 /// The absolute path to a `codex` that can actually speak app-server.
 ///
 /// Unlike [`claude`], finding *a* binary is not enough. Verified against a real
