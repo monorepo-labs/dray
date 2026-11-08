@@ -249,13 +249,7 @@ struct BoatPill: View {
                     }
                 }
                 HStack(spacing: 10) {
-                    Text("Extend").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
-                    ForEach([2, 8, 24], id: \.self) { hours in
-                        Button("\(hours)h") { extend(hours) }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
+                    BoatExtendChoices(size: 12, extend: extend)
                     Button("Dismiss", action: dismiss)
                         .buttonStyle(.plain)
                         .font(.system(size: 12))
@@ -267,6 +261,40 @@ struct BoatPill: View {
                 }
             }
         }
+    }
+}
+
+/// Extend by a length stepped in 30-minute steps from 2 hours, the app card's
+/// own control: a stepper because the pills' window never takes the keys.
+struct BoatExtendChoices: View {
+    let size: CGFloat
+    /// Minutes.
+    let extend: (Int) -> Void
+    @State private var minutes = 120
+
+    var body: some View {
+        HStack(spacing: 8) {
+            step("minus", by: -30).disabled(minutes <= 30)
+            Text(Self.label(minutes)).font(.system(size: size, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.white).frame(minWidth: size * 4)
+            step("plus", by: 30).disabled(minutes >= 30 * 24 * 60)
+            Button("Extend") { extend(minutes) }
+                .buttonStyle(.plain)
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(.white)
+        }
+    }
+
+    /// "2h", "2h 30m", "30m".
+    static func label(_ minutes: Int) -> String {
+        let (h, m) = (minutes / 60, minutes % 60)
+        return [h > 0 ? "\(h)h" : nil, m > 0 ? "\(m)m" : nil].compactMap { $0 }.joined(separator: " ")
+    }
+
+    private func step(_ symbol: String, by delta: Int) -> some View {
+        Button { minutes += delta } label: { Image(systemName: symbol).font(.system(size: size - 2, weight: .semibold)) }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.7))
     }
 }
 

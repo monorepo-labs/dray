@@ -23,15 +23,23 @@ export const resumeBoat = (id: ServerId): Promise<void> => invoke("resume_boat",
 export const extendBoat = (id: ServerId, minutes: number): Promise<void> =>
   invoke("extend_boat", { id, minutes }, LOCAL);
 
-/// What the split Extend button offers. The last one picked is the button.
-export const EXTEND_HOURS = [2, 8, 24];
+/// Extend's stepper: 30-minute steps, up to boat's 30-day cap.
+export const EXTEND_STEP = 30;
+export const MAX_EXTEND_MINUTES = 30 * 24 * 60;
+
+/// "2h", "2h 30m", "30m".
+export function durationLabel(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return [h && `${h}h`, m && `${m}m`].filter(Boolean).join(" ") || "0m";
+}
 
 /// What auto-extend gives a sandbox about to stop mid-turn.
 export const AUTO_EXTEND_MINUTES = 30;
 
 type Prefs = {
-  /// The Extend button's own value, the last one picked from its menu.
-  hours: number;
+  /// Where Extend's stepper starts: the last length extended by.
+  minutes: number;
   /// Extend a busy sandbox on its own as it is about to stop. Off until asked.
   auto: boolean;
   /// The one-time card offering `auto` has been answered or shown.
@@ -39,7 +47,7 @@ type Prefs = {
 };
 
 const PREFS = "ade.boat";
-const DEFAULTS: Prefs = { hours: 2, auto: false, offered: false };
+const DEFAULTS: Prefs = { minutes: 120, auto: false, offered: false };
 let prefs: Prefs = { ...DEFAULTS, ...readLocalStorage<Partial<Prefs>>(PREFS, {}) };
 const prefsChanged = channel<void>();
 

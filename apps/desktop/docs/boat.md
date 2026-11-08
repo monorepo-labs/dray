@@ -22,7 +22,7 @@ A boat sandbox stops on a timer and resumes on a new machine: new address, new h
 
 **The timer is read, never counted down.** A running boat prompt and a `boat extend` from anywhere both move `archiveAfter`. `watch_boats` reads every 5 minutes, then every minute inside 20 minutes of the stop. Only a row whose connection reported this sandbox (`BoatRow.here`) warns.
 
-**`boat extend --ttl` sets the time left and every later resume's length.** It does not add, so the menu reads "Keep running for". A free trial refuses over 2 hours, and that refusal is what the card shows. Extend is the merge button's split shape: the button extends by the last value picked, and the arrow only changes that value, so the menu is never a second way to spend hours by accident.
+**`boat extend --ttl` sets the time left and every later resume's length.** It does not add, so the menu reads "Keep running for". A free trial refuses over 2 hours, and that refusal is what the card shows. Extend is one stepper in the card and the island alike: − and + in 30-minute steps from 2 hours, then Extend. The island's is a stepper because its pill window never takes the keys; the card's starts at the last length used.
 
 **Auto-extend is off until the reader says yes**, offered once by a card after their first Extend. On, a sandbox gets 30 minutes when its warning starts while one of its sessions has a turn or a background task running. At the warning rather than the last second, since the timer is read once a minute; and a sandbox handled that way draws no card. It lives in the frontend, which is what knows which sessions are busy, so it only runs with the app open.
 

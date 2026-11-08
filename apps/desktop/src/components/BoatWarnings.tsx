@@ -1,20 +1,15 @@
-import { Check, ChevronDown } from "lucide-react";
+import { Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { Alert, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   AUTO_EXTEND_MINUTES,
   countdown,
-  EXTEND_HOURS,
+  durationLabel,
+  EXTEND_STEP,
   extendBoat,
+  MAX_EXTEND_MINUTES,
   setBoatPrefs,
   useBoatPrefs,
 } from "@/lib/boat";
@@ -32,10 +27,9 @@ function useNow(): number {
   return now;
 }
 
-/// Extend by the last value picked, with the others behind the arrow: the merge
-/// button's shape. Picking from the menu changes the button, never extends, so
-/// the arrow is never a second way to spend hours by accident. Boat's refusal —
-/// a trial's 2-hour cap, say — goes to `onFail`.
+/// Extend by a length stepped in 30-minute steps, then pressed: one control,
+/// the island's own. Starts at the last length used. Boat's refusal — a
+/// trial's 2-hour cap, say — goes to `onFail`.
 export function ExtendBoat({
   id,
   onFail,
@@ -47,37 +41,32 @@ export function ExtendBoat({
   onDone?: () => void;
   size?: "xs" | "sm";
 }) {
-  const { hours } = useBoatPrefs();
+  const { minutes: last } = useBoatPrefs();
+  const [minutes, setMinutes] = useState(last);
   const [busy, setBusy] = useState(false);
+  const step = (by: number) => setMinutes((m) => Math.min(MAX_EXTEND_MINUTES, Math.max(EXTEND_STEP, m + by)));
   const extend = () => {
     setBusy(true);
-    extendBoat(id, hours * 60)
+    setBoatPrefs({ minutes });
+    extendBoat(id, minutes)
       .then(onDone)
       .catch((e) => onFail(String(e)))
       .finally(() => setBusy(false));
   };
+  const icon = size === "xs" ? "icon-xs" : "icon-sm";
   return (
-    <div className="flex shrink-0 items-center rounded-[min(var(--radius-md),12px)] shadow-(--shadow-button)">
-      <Button size={size} className="rounded-r-none" disabled={busy} onClick={extend}>
-        {busy ? "Extending…" : `Extend ${hours} hrs`}
+    <span className="flex shrink-0 items-center gap-0.5">
+      <Button variant="ghost" size={icon} aria-label="Less time" disabled={busy || minutes <= EXTEND_STEP} onClick={() => step(-EXTEND_STEP)}>
+        <Minus />
       </Button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button size={size} className="rounded-l-none border-l border-background/20 px-1.5" disabled={busy} aria-label="Extend by">
-            <ChevronDown />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-36">
-          <DropdownMenuLabel className="text-ui-sm font-normal text-muted-foreground">Keep running for</DropdownMenuLabel>
-          {EXTEND_HOURS.map((value) => (
-            <DropdownMenuItem key={value} onSelect={() => setBoatPrefs({ hours: value })}>
-              {value} hours
-              {value === hours && <Check className="ml-auto size-3.5" />}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+      <span className="min-w-9 text-center text-ui-sm font-medium tabular-nums">{durationLabel(minutes)}</span>
+      <Button variant="ghost" size={icon} aria-label="More time" disabled={busy || minutes >= MAX_EXTEND_MINUTES} onClick={() => step(EXTEND_STEP)}>
+        <Plus />
+      </Button>
+      <Button size={size} className="px-2" disabled={busy} onClick={extend}>
+        {busy ? "Extending…" : "Extend"}
+      </Button>
+    </span>
   );
 }
 
@@ -106,8 +95,8 @@ function Warning({
         <span className="shrink-0 tabular-nums">{countdown(stopsAt, now)}</span>
       </AlertTitle>
       {failed && <p className="text-ui-sm text-destructive">{failed}</p>}
-      <span className="flex items-center gap-1">
-        <Button variant="ghost" size="xs" className="text-muted-foreground" onClick={onDismiss}>
+      <span className="flex items-center gap-0.5">
+        <Button variant="ghost" size="xs" className="px-1 text-muted-foreground" onClick={onDismiss}>
           Dismiss
         </Button>
         <ExtendBoat id={server.id} onFail={setFailed} onDone={() => !offered && setOffer(true)} />

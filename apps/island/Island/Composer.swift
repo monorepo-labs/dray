@@ -368,8 +368,8 @@ final class Composer {
     }
 
     /// Sets the time left. It does not add, and it is every later resume's length too.
-    func extendBoat(_ alert: BoatAlert, hours: Int) async {
-        let args: [String: JSON] = ["id": .string(alert.server), "minutes": .number(Double(hours * 60))]
+    func extendBoat(_ alert: BoatAlert, minutes: Int) async {
+        let args: [String: JSON] = ["id": .string(alert.server), "minutes": .number(Double(minutes))]
         do {
             let _: JSON = try await store.call(server, "extend_boat", args, as: JSON.self)
             boatRefused = nil

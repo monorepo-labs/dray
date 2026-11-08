@@ -713,11 +713,7 @@ private struct BoatLine: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(alert.sentence).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            ForEach([2, 8, 24], id: \.self) { hours in
-                Button("\(hours)h") { Task { await composer.extendBoat(alert, hours: hours) } }
-                    .buttonStyle(.plain)
-                    .font(.caption.weight(.semibold))
-            }
+            BoatExtendChoices(size: 11) { minutes in Task { await composer.extendBoat(alert, minutes: minutes) } }
         }
     }
 }
@@ -739,7 +735,7 @@ struct PillsView: View {
             } else if !composer.shown, let alert = composer.boatAlerts.first {
                 BoatPill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
                          alert: alert, refused: composer.boatRefused,
-                         extend: { hours in Task { await composer.extendBoat(alert, hours: hours) } },
+                         extend: { minutes in Task { await composer.extendBoat(alert, minutes: minutes) } },
                          dismiss: { composer.dismissBoat(alert) })
                     .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
             } else if !composer.shown, !composer.done.isEmpty {
