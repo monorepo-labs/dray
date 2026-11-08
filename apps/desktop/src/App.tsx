@@ -710,8 +710,9 @@ function App() {
   // assigns to delete-forward in every text field — including the composer this
   // shortcut is for. Enabled always: pressed with nothing downloaded it opens
   // settings, which is the answer the reader needs rather than a dead key.
-  // Off for a remote session, like every Mac-only feature.
-  useHotkey("dictate", () => void recorder.toggle(), { platformOnly: true, enabled: activeServer === LOCAL });
+  // On for a remote session too: mic, model and transcription all run on this
+  // Mac, and the words land in a local draft.
+  useHotkey("dictate", () => void recorder.toggle(), { platformOnly: true });
 
   const [worktreePrompt, setWorktreePrompt] = useState<WorktreePrompt | null>(null);
 
@@ -3245,7 +3246,7 @@ function App() {
           }}
           dictating={recorder.state !== "idle"}
           dictation={
-            activeServer === LOCAL && <DictateControl
+            <DictateControl
               state={recorder.state}
               level={recorder.level}
               savedAudio={recorder.savedAudio}

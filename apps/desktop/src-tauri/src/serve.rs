@@ -1179,6 +1179,8 @@ async fn connection(
         "release": option_env!("DRAY_CLI_VERSION"),
         "stale": stale(),
         "dictation": cfg!(feature = "desktop"),
+        // A dev build's version is whatever its checkout says, never a release.
+        "dev": cfg!(debug_assertions),
         // Read by the app to tag a session it starts here, as a closed value.
         "os": std::env::consts::OS,
     });

@@ -173,6 +173,20 @@ pub struct Welcome {
     /// an ordinary client's and says nothing of it.
     #[serde(default)]
     pub forwarding: bool,
+    /// Only a desktop build serves dictation, so this marks Dray.app's own
+    /// server — the one signal a 0.29 app already sends.
+    #[serde(default)]
+    pub dictation: bool,
+    #[serde(default)]
+    pub dev: bool,
+}
+
+impl Welcome {
+    /// Dray.app's server on another Mac: it follows that app's updater, so it
+    /// is measured against app releases and has no `update_server`.
+    pub fn is_mac_app(&self) -> bool {
+        self.dictation && self.release.is_none() && !self.dev
+    }
 }
 
 /// Connects and says `hello`. Answers the admitted socket, or why not.

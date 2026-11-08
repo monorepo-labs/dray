@@ -27,6 +27,7 @@ const server = (name: string): ServerInfo => ({
   release: null,
   beta: false,
   latest: null,
+  app: false,
   restarting: false,
   boat: { phase: "running", stopsAt: null, warning: true, note: null },
 });

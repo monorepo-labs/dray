@@ -302,6 +302,22 @@ function UpdateLine({
         )}
       </>
     );
+  } else if (connected && server.latest && server.app) {
+    // Another Mac's Dray.app serves this, so only that app's updater moves it.
+    line = (
+      <>
+        {label(`v${server.latest} is out · update Dray on that Mac`)}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() =>
+            void invoke("ignore_server_update", { id: server.id, version: server.latest }, LOCAL).catch(console.error)
+          }
+        >
+          Ignore
+        </Button>
+      </>
+    );
   } else if (connected && server.latest) {
     line = (
       <>
