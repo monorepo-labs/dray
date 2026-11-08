@@ -176,11 +176,21 @@ struct BoatAlert: Decodable, Hashable {
     let name: String
     let stopsAt: String?
 
-    /// "boat-dray stops in 03:12", the app's card's own words.
-    var sentence: String {
-        guard let stopsAt, let at = Self.parse(stopsAt) else { return "\(name) stops soon" }
-        let seconds = max(0, Int(at.timeIntervalSinceNow))
-        return "\(name) stops in " + String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    /// "boat-dray stops in 03:12", for the panel's one line.
+    var sentence: String { "\(name) stops in \(countdown)" }
+
+    /// "03:12" left.
+    var countdown: String {
+        let seconds = max(0, Int(secondsLeft ?? 0))
+        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
+    /// The last two minutes, which the pill draws red as the app's card does.
+    var urgent: Bool { (secondsLeft ?? .infinity) <= 120 }
+
+    private var secondsLeft: Double? {
+        guard let stopsAt, let at = Self.parse(stopsAt) else { return nil }
+        return at.timeIntervalSinceNow
     }
 
     private static func parse(_ text: String) -> Date? {

@@ -1,12 +1,13 @@
-import { Minus, Plus } from "lucide-react";
+import { Minus, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-import { Alert, AlertTitle } from "@/components/ui/alert";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   AUTO_EXTEND_MINUTES,
   countdown,
   durationLabel,
+  WARN_MINUTES,
   EXTEND_STEP,
   extendBoat,
   MAX_EXTEND_MINUTES,
@@ -15,6 +16,7 @@ import {
 } from "@/lib/boat";
 import { channel } from "@/lib/channel";
 import { useServers } from "@/lib/servers";
+import { cn } from "@/lib/utils";
 import type { ServerInfo } from "@/types/events";
 
 /// Ticks once a second, for a countdown a reader watches.
@@ -55,7 +57,7 @@ export function ExtendBoat({
   };
   const icon = size === "xs" ? "icon-xs" : "icon-sm";
   return (
-    <span className="flex shrink-0 items-center gap-0.5">
+    <span className="flex items-center gap-0.5">
       <Button variant="ghost" size={icon} aria-label="Less time" disabled={busy || minutes <= EXTEND_STEP} onClick={() => step(-EXTEND_STEP)}>
         <Minus />
       </Button>
@@ -63,7 +65,7 @@ export function ExtendBoat({
       <Button variant="ghost" size={icon} aria-label="More time" disabled={busy || minutes >= MAX_EXTEND_MINUTES} onClick={() => step(EXTEND_STEP)}>
         <Plus />
       </Button>
-      <Button size={size} className="px-2" disabled={busy} onClick={extend}>
+      <Button size={size} className="ml-auto px-2" disabled={busy} onClick={extend}>
         {busy ? "Extending…" : "Extend"}
       </Button>
     </span>
@@ -87,20 +89,45 @@ function Warning({
 }) {
   const [failed, setFailed] = useState<string | null>(autoFailed ?? null);
   const { offered } = useBoatPrefs();
+  const left = new Date(stopsAt).getTime() - now;
+  // The last two minutes turn red, the notice cards' colour for a loss.
+  const urgent = left <= 2 * 60_000;
+  // Drains over the warning, the way a notice card's bar drains its own clock.
+  const fraction = Math.min(1, Math.max(0, left / (WARN_MINUTES * 60_000)));
   return (
-    <Alert className={CARD}>
-      <AlertTitle className="flex min-w-0 items-baseline gap-1 text-ui">
-        <span className="truncate" title={server.name}>{server.name}</span>
-        <span className="shrink-0 font-normal text-muted-foreground">stops in</span>
-        <span className="shrink-0 tabular-nums">{countdown(stopsAt, now)}</span>
-      </AlertTitle>
-      {failed && <p className="text-ui-sm text-destructive">{failed}</p>}
-      <span className="flex items-center gap-0.5">
-        <Button variant="ghost" size="xs" className="px-1 text-muted-foreground" onClick={onDismiss}>
-          Dismiss
+    <Alert className={cn(CARD, "relative overflow-hidden")}>
+      <span className="flex min-w-0 items-start gap-2">
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-ui-sm text-muted-foreground" title={server.name}>
+            {server.name}
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className={cn("text-lg leading-tight font-semibold tabular-nums", urgent && "text-destructive")}>
+              {countdown(stopsAt, now)}
+            </span>
+            <span className="text-ui-sm text-muted-foreground">left</span>
+          </span>
+        </span>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Dismiss ${server.name}'s warning`}
+          className="-mt-0.5 -mr-0.5 text-muted-foreground"
+          onClick={onDismiss}
+        >
+          <X />
         </Button>
-        <ExtendBoat id={server.id} onFail={setFailed} onDone={() => !offered && setOffer(true)} />
       </span>
+      {failed && <p className="text-ui-sm text-destructive">{failed}</p>}
+      <ExtendBoat id={server.id} onFail={setFailed} onDone={() => !offered && setOffer(true)} />
+      <span
+        aria-hidden
+        className={cn(
+          "absolute inset-x-0 bottom-0 h-0.5 origin-left transition-transform duration-1000 ease-linear",
+          urgent ? "bg-destructive/70" : "bg-accent-command/70",
+        )}
+        style={{ transform: `scaleX(${fraction})` }}
+      />
     </Alert>
   );
 }

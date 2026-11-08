@@ -23,6 +23,9 @@ export const resumeBoat = (id: ServerId): Promise<void> => invoke("resume_boat",
 export const extendBoat = (id: ServerId, minutes: number): Promise<void> =>
   invoke("extend_boat", { id, minutes }, LOCAL);
 
+/// How long before auto-stop the warning comes, `servers.rs`'s `WARN`.
+export const WARN_MINUTES = 10;
+
 /// Extend's stepper: 30-minute steps, up to boat's 30-day cap.
 export const EXTEND_STEP = 30;
 export const MAX_EXTEND_MINUTES = 30 * 24 * 60;

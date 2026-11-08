@@ -238,23 +238,27 @@ struct BoatPill: View {
 
     var body: some View {
         PillShell(notch: notch, notchHeight: notchHeight, glow: StatusDot.waiting) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Circle().fill(StatusDot.waiting).frame(width: 6, height: 6)
-                    // Redrawn each second, or the count would stand still.
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        // White outright: the pills' window takes the system's appearance, not the panel's dark.
-                        Text(alert.sentence).font(.system(size: 13, weight: .semibold).monospacedDigit()).lineLimit(1)
-                            .foregroundStyle(.white)
+                    Text(alert.name).font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                    Spacer(minLength: 16)
+                    Button(action: dismiss) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white.opacity(0.5))
+                        .help("Dismiss")
+                }
+                // Redrawn each second, or the count would stand still. White
+                // outright: the pills' window takes the system's appearance.
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(alert.countdown).font(.system(size: 20, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(alert.urgent ? Color.red : .white)
+                        Text("left").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
                     }
                 }
-                HStack(spacing: 10) {
-                    BoatExtendChoices(size: 12, extend: extend)
-                    Button("Dismiss", action: dismiss)
-                        .buttonStyle(.plain)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.5))
-                }
+                BoatExtendChoices(size: 12, extend: extend)
+                    .padding(.top, 2)
                 if let refused {
                     Text(refused).font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
                         .frame(maxWidth: 300, alignment: .leading)
@@ -278,6 +282,7 @@ struct BoatExtendChoices: View {
             Text(Self.label(minutes)).font(.system(size: size, weight: .semibold).monospacedDigit())
                 .foregroundStyle(.white).frame(minWidth: size * 4)
             step("plus", by: 30).disabled(minutes >= 30 * 24 * 60)
+            Spacer(minLength: 16)
             Button("Extend") { extend(minutes) }
                 .buttonStyle(.plain)
                 .font(.system(size: size, weight: .semibold))
