@@ -1,23 +1,23 @@
 {
-  "version": "0.29.17",
-  "notes": "### New\n\n- **The `dray` CLI comes with the app.** Dray keeps `~/.local/bin/dray` up\n  to date on every launch, so there's nothing to install or update by hand.\n- fx sessions can be forked.\n\n### Improved\n\n- ⌘U updates the agent's CLI from the new-task composer when an update is\n  available.\n- fx shell commands show their whole output.\n\n### Fixed\n\n- Fast mode is off for Opus 4.8, where Claude Code has retired it.\n- Session titles no longer run to the sidebar's edge with overlay\n  scrollbars.",
-  "pub_date": "2026-11-03T16:59:19.848Z",
+  "version": "0.29.18",
+  "notes": "### New\n\n- **Agent CLIs update themselves.** When Claude Code or another agent is\n  behind, Dray updates it in the background. Turn it off in Settings →\n  Accounts to get the Update button back.\n- **Projects grouped across machines.** A repo cloned on several machines\n  is one project, and new tasks get a dropdown to pick which machine runs\n  them.\n- **Videos play in the chat.** Any video an agent makes with\n  `dray video add` plays inline, on any machine.\n- **boat sandboxes.** A stopped sandbox shows Resume, sending to it wakes\n  it, and a warning with Extend shows before it auto-stops.\n\n### Improved\n\n- The Island shows sessions on every connected machine and can start\n  tasks on them.\n- `&` in the composer lists the project's tasks on other machines too.\n- Dev servers on a server added by address open without SSH.\n\n### Fixed\n\n- Opening a running session no longer replays its rows sliding by.\n- Settling, pinning or setting aside a task shows up on every Mac\n  connected to that server.\n- A remote chat that fell behind catches up when you open it.\n- A server with a saved tunnel keeps retrying after its host key changes,\n  instead of failing for good.",
+  "pub_date": "2026-11-08T07:46:16.389Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWlOdmd6YWtQcEoyWUpNOWZoU0tPNEVhUkdIUjdRS241bnd3R1RYZEJDWTZHeERFL1FGdmRENzFNVVR2NDNEOXpYRXhveXZmZjNvSjZSYTVzODZtQWc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzI1MTQ5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xNwpWbkNKNVFvamhvemQ3Q0t4SmNKSDVTdTc1ZWlQWEVnNDhSTGVjRkRSMEYrNlFIYmJOaTA1K09WdDNFL1czYW1MS2toalFReXFXczQzSVJBaWp2VklEZz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.29.17/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXRzQjY1TjBpM3VYMGNjTjJqUk9kM1ozdzVmL1o3RHhSSGhBOXZKcklmVE01QmVxNU5VNjU5VWRMYmVoODZHQjZYV01kdk5GVUR3U2xSSnAvMkp1NkF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MTIzOTY2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xOApBQm9yanp4OGpNUHhRQVlwK0ZjY0lOL3R0TStOTWdHYXN1OHdIV0tMMXFtMExHOHVhc2xXTVZmV1k5clpaZDdRbnVOSTJ4YnVYWVJreU9tM2drK09CZz09Cg==",
+      "url": "https://downloads.drayhq.com/v0.29.18/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWlOdmd6YWtQcEoyWUpNOWZoU0tPNEVhUkdIUjdRS241bnd3R1RYZEJDWTZHeERFL1FGdmRENzFNVVR2NDNEOXpYRXhveXZmZjNvSjZSYTVzODZtQWc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzI1MTQ5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xNwpWbkNKNVFvamhvemQ3Q0t4SmNKSDVTdTc1ZWlQWEVnNDhSTGVjRkRSMEYrNlFIYmJOaTA1K09WdDNFL1czYW1MS2toalFReXFXczQzSVJBaWp2VklEZz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.29.17/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXRzQjY1TjBpM3VYMGNjTjJqUk9kM1ozdzVmL1o3RHhSSGhBOXZKcklmVE01QmVxNU5VNjU5VWRMYmVoODZHQjZYV01kdk5GVUR3U2xSSnAvMkp1NkF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MTIzOTY2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xOApBQm9yanp4OGpNUHhRQVlwK0ZjY0lOL3R0TStOTWdHYXN1OHdIV0tMMXFtMExHOHVhc2xXTVZmV1k5clpaZDdRbnVOSTJ4YnVYWVJreU9tM2drK09CZz09Cg==",
+      "url": "https://downloads.drayhq.com/v0.29.18/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWlOdmd6YWtQcEoyWUpNOWZoU0tPNEVhUkdIUjdRS241bnd3R1RYZEJDWTZHeERFL1FGdmRENzFNVVR2NDNEOXpYRXhveXZmZjNvSjZSYTVzODZtQWc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzI1MTQ5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xNwpWbkNKNVFvamhvemQ3Q0t4SmNKSDVTdTc1ZWlQWEVnNDhSTGVjRkRSMEYrNlFIYmJOaTA1K09WdDNFL1czYW1MS2toalFReXFXczQzSVJBaWp2VklEZz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.29.17/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXRzQjY1TjBpM3VYMGNjTjJqUk9kM1ozdzVmL1o3RHhSSGhBOXZKcklmVE01QmVxNU5VNjU5VWRMYmVoODZHQjZYV01kdk5GVUR3U2xSSnAvMkp1NkF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MTIzOTY2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xOApBQm9yanp4OGpNUHhRQVlwK0ZjY0lOL3R0TStOTWdHYXN1OHdIV0tMMXFtMExHOHVhc2xXTVZmV1k5clpaZDdRbnVOSTJ4YnVYWVJreU9tM2drK09CZz09Cg==",
+      "url": "https://downloads.drayhq.com/v0.29.18/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWlOdmd6YWtQcEoyWUpNOWZoU0tPNEVhUkdIUjdRS241bnd3R1RYZEJDWTZHeERFL1FGdmRENzFNVVR2NDNEOXpYRXhveXZmZjNvSjZSYTVzODZtQWc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzI1MTQ5CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xNwpWbkNKNVFvamhvemQ3Q0t4SmNKSDVTdTc1ZWlQWEVnNDhSTGVjRkRSMEYrNlFIYmJOaTA1K09WdDNFL1czYW1MS2toalFReXFXczQzSVJBaWp2VklEZz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.29.17/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXRzQjY1TjBpM3VYMGNjTjJqUk9kM1ozdzVmL1o3RHhSSGhBOXZKcklmVE01QmVxNU5VNjU5VWRMYmVoODZHQjZYV01kdk5GVUR3U2xSSnAvMkp1NkF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MTIzOTY2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xOApBQm9yanp4OGpNUHhRQVlwK0ZjY0lOL3R0TStOTWdHYXN1OHdIV0tMMXFtMExHOHVhc2xXTVZmV1k5clpaZDdRbnVOSTJ4YnVYWVJreU9tM2drK09CZz09Cg==",
+      "url": "https://downloads.drayhq.com/v0.29.18/Dray_universal.app.tar.gz"
     }
   }
 }
