@@ -226,6 +226,8 @@ final class Composer {
     var askTab: SessionKey?
     /// The waiting sessions drawn as a list in place of the card, opened from its title.
     var asksListed = false
+    /// The list is on screen, covering the card: a list of one is never drawn.
+    var listing: Bool { asksListed && attention.count > 1 }
     /// Every ask's id in the order it arrived, which is the order the tabs are in.
     private var askOrder: [String] = []
     /// Asks the reader put away: still waiting in Dray, out of the pill and the cards until a new ask comes.
@@ -314,6 +316,8 @@ final class Composer {
             let fresh = ids.filter { !askOrder.contains($0) }
             let hadCards = askOrder.contains { !dismissed.contains($0) }
             askOrder = askOrder.filter(ids.contains) + fresh
+            // Answered elsewhere down to one: the list is gone, so it must not reopen when another lands.
+            if attention.count < 2 { asksListed = false }
             // A new ask brings back every one put away: dismissing quiets the pill, it answers nothing.
             if fresh.isEmpty { dismissed.formIntersection(ids) } else { dismissed = [] }
             // A dismissed ask answered in Dray is no card leaving, so it closes nothing here.
@@ -509,7 +513,7 @@ final class Composer {
     /// A number key on a card: a permission's option outright, a question's toggled.
     func pickOption(_ i: Int) {
         // The flash or the list covers the card, so a key now would answer one the reader cannot see.
-        guard !sent, !asksListed else { return }
+        guard !sent, !listing else { return }
         switch ask?.event.payload {
         case .permissionRequested(let r)? where r.options.indices.contains(i):
             Task { await respond(r.options[i].id) }

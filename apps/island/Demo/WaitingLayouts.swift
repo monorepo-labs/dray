@@ -194,6 +194,7 @@ private struct LayoutCard: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 Spacer(minLength: 0)
+                dismissAll
             }
             askBody(event)
         }
@@ -216,11 +217,13 @@ private struct LayoutCard: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Spacer(minLength: 8)
-                plain("Dismiss all") { composer.dismissAsks() }.padding(.leading, 8)
             }
             .frame(width: 150)
             VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    dismissAll
+                }
                 askBody(event)
             }
         }
@@ -243,6 +246,7 @@ private struct LayoutCard: View {
 
     /// Up top beside the switcher, as on the real card.
     @ViewBuilder private var dismissAll: some View {
+        DismissButton { composer.dismissAsks(key) }
         if keys.count > 1 {
             DismissButton(label: "Dismiss all", help: "Hide all until a new task needs you. They still wait in Dray.") { composer.dismissAsks() }
         }

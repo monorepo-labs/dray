@@ -296,7 +296,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             case (53, _) where composer.listening: break
             case (53, _): composer.escape()
             // A card takes Return to submit its answers, and digits to pick a permission option.
-            case (36, []) where composer.isQuestions: composer.submits += 1
+            case (36, []) where composer.isQuestions && !composer.listing: composer.submits += 1
             case (36, []) where composer.ask == nil:
                 if composer.listShown { composer.choose() } else { Task { await composer.send() } }
             // Unless the caret is in a card's text box, where a digit is typed.

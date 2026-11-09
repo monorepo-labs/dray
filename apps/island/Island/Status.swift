@@ -31,49 +31,71 @@ struct AskCard: View {
 
     var body: some View {
         let keys = composer.attention
+        let listed = composer.listing
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                if keys.count > 1 {
-                    WaitingSwitch(title: title(key), more: keys.count - 1, open: composer.asksListed) {
-                        composer.asksListed.toggle()
-                    }
-                } else {
-                    Text(title(key)).lineLimit(1)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.45))
-                        // The title row's ⌘-click, so every title in the panel answers it alike.
-                        .onTapGesture {
-                            if NSEvent.modifierFlags.contains(.command) { Task { await composer.showInApp(key) } }
+            // The list names every session itself, the picked one marked, so the header steps aside.
+            if !listed { header(keys) }
+            if listed {
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(keys, id: \.self) { k in
+                            WaitingRow(title: title(k), summary: store.askSummary(k), current: k == key,
+                                       pick: { list(open: false) { composer.askTab = k } },
+                                       openInApp: { Task { await composer.showInApp(k) } },
+                                       dismiss: { composer.dismissAsks(k) })
                         }
-                        .help("⌘-click to open in Dray")
-                }
-                Spacer(minLength: 0)
-                DismissButton { composer.dismissAsks(key) }
-                if keys.count > 1 {
-                    DismissButton(label: "Dismiss all", help: "Hide all until a new task needs you. They still wait in Dray.") {
-                        composer.dismissAsks()
                     }
                 }
-                Text(composer.closeHint).font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))
+                .scrollBounceBehavior(.basedOnSize)
+                // A row and its gap are 32pt; past the card body's own cap the list scrolls.
+                .frame(height: min(CGFloat(keys.count) * 32, 420))
+                .transition(.opacity)
             }
-            if composer.asksListed, keys.count > 1 {
-                VStack(spacing: 2) {
-                    ForEach(keys, id: \.self) { k in
-                        WaitingRow(title: title(k), summary: store.askSummary(k), current: k == key,
-                                   pick: {
-                                       composer.askTab = k
-                                       composer.asksListed = false
-                                   },
-                                   openInApp: { Task { await composer.showInApp(k) } },
-                                   dismiss: { composer.dismissAsks(k) })
-                    }
+            // Kept mounted under the list, only folded away, or opening it would throw out a
+            // half-answered question. Keyed on the ask: answers must not carry over to the next card.
+            AskBody(composer: composer, event: event)
+                .id(event.id)
+                .frame(height: listed ? 0 : nil, alignment: .top)
+                .clipped()
+                .opacity(listed ? 0 : 1)
+                .allowsHitTesting(!listed)
+                .transition(.opacity)
+        }
+    }
+
+    /// Opens or closes the list in one animation, whichever row was picked.
+    private func list(open: Bool, _ change: () -> Void = {}) {
+        withAnimation(.snappy(duration: 0.25)) {
+            change()
+            composer.asksListed = open
+        }
+    }
+
+    private func header(_ keys: [SessionKey]) -> some View {
+        HStack(spacing: 8) {
+            if keys.count > 1 {
+                WaitingSwitch(title: title(key), more: keys.count - 1, open: composer.asksListed) {
+                    list(open: !composer.asksListed)
                 }
             } else {
-                AskBody(composer: composer, event: event)
+                Text(title(key)).lineLimit(1)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.45))
+                    // The title row's ⌘-click, so every title in the panel answers it alike.
+                    .onTapGesture {
+                        if NSEvent.modifierFlags.contains(.command) { Task { await composer.showInApp(key) } }
+                    }
+                    .help("⌘-click to open in Dray")
             }
+            Spacer(minLength: 0)
+            DismissButton { composer.dismissAsks(key) }
+            if keys.count > 1 {
+                DismissButton(label: "Dismiss all", help: "Hide all until a new task needs you. They still wait in Dray.") {
+                    composer.dismissAsks()
+                }
+            }
+            Text(composer.closeHint).font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))
         }
-        // Answers typed into one card must not carry over to the next.
-        .id(event.id)
     }
 
     private func title(_ k: SessionKey) -> String { store.items[k]?.title ?? "Session" }
@@ -118,7 +140,6 @@ struct WaitingRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Circle().fill(StatusDot.waiting).frame(width: 6, height: 6)
             Text(title).font(.system(size: 13, weight: current ? .semibold : .regular)).lineLimit(1)
                 .foregroundStyle(.white.opacity(current ? 0.95 : 0.75)).layoutPriority(1)
             Text(summary).font(.system(size: 13)).lineLimit(1).foregroundStyle(.white.opacity(0.35))
