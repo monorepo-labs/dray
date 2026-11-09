@@ -2,7 +2,7 @@ import {
   ChatBubbleOvalLeftIcon,
   DocumentPlusIcon,
 } from "@heroicons/react/16/solid";
-import { Folder, Plus, X } from "lucide-react";
+import { Folder, Plus, Server, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 
 import AgentBeam from "@/components/browser/AgentBeam";
@@ -96,7 +96,6 @@ const MARK = "size-4 shrink-0 text-muted-foreground";
 const FOLDER = <Folder className="size-3.5 shrink-0 fill-current text-muted-foreground" />;
 
 type Item = {
-  machine?: string;
   key: TabKey;
   icon: React.ReactNode;
   label: string;
@@ -156,6 +155,7 @@ export default function ViewTabs({
 }) {
   // Read for the re-render alone: a server renamed moves the name in the tab.
   useServers();
+  const server = machine && machine !== LOCAL ? serverName(machine) : null;
   const loadedPages = useBrowserTabs(sessionId);
   const pages = loadedPages ?? [];
   const pending = usePendingTab(sessionId);
@@ -199,7 +199,6 @@ export default function ViewTabs({
           <ChatBubbleOvalLeftIcon className={MARK} />
         ),
       label: title,
-      machine: machine && machine !== LOCAL ? serverName(machine) : undefined,
       active: tab === "chat",
       pick: () => onChange("chat"),
       rename,
@@ -440,7 +439,6 @@ export default function ViewTabs({
           icon={item.icon}
           overlay={item.overlay}
           label={item.label}
-          machine={item.machine}
           active={item.active}
           locked={item.locked}
           fixed={item.fixed}
@@ -512,8 +510,14 @@ export default function ViewTabs({
         </span>
       )}
       {/* At the row's far end, where it gives way before any tab does. */}
+      {server && (
+        <span className="ml-auto flex min-w-6.5 shrink-[999] items-center gap-1 overflow-hidden pl-2 text-ui text-muted-foreground animate-in fade-in duration-200">
+          <Server className="size-3.5 shrink-0" />
+          <span className="truncate">{server}</span>
+        </span>
+      )}
       {branch && cwd && (
-        <span className="ml-auto flex min-w-6.5 shrink-[999] pl-2 text-ui animate-in fade-in duration-200">
+        <span className={cn("flex min-w-6.5 shrink-[999] pl-2 text-ui animate-in fade-in duration-200", !server && "ml-auto")}>
           <BranchButton branch={branch} cwd={cwd} />
         </span>
       )}
@@ -528,7 +532,6 @@ export default function ViewTabs({
 export function ItemTab({
   icon,
   label,
-  machine,
   active,
   locked = false,
   onPick,
@@ -548,7 +551,6 @@ export function ItemTab({
   /// Drawn over the whole tab, out of the row's flow: the agent's beam.
   overlay?: React.ReactNode;
   label: string;
-  machine?: string;
   active: boolean;
   /// Neither picked nor closed, while a recording holds the strip.
   locked?: boolean;
@@ -655,12 +657,6 @@ export function ItemTab({
       >
         {label}
       </span>
-      )}
-      {/* Beside the label rather than in it, so a cut title never cuts this. */}
-      {machine && (
-        <span className="min-w-0 shrink-[0.001] overflow-hidden whitespace-nowrap text-muted-foreground/60">
-          · {machine}
-        </span>
       )}
       {/* No tooltip: a cross on a tab says what it does, the way it does in
           every browser. */}
