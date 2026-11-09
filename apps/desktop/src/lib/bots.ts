@@ -43,6 +43,24 @@ export function isBotPath(cwd: string | null | undefined): boolean {
   return !!cwd && !!botAt(bots, cwd);
 }
 
+/// Whether `sessionId` is a bot's chat or anything it started, at any depth.
+/// Bounded, so an index pointing a session at its own ancestor costs a wrong
+/// answer rather than a hung render.
+export function inBotTree(
+  list: readonly Bot[],
+  items: readonly SessionIndexItem[],
+  sessionId: string,
+): boolean {
+  if (list.length === 0) return false;
+  const byId = new Map(items.map((i) => [i.sessionId, i]));
+  let at = byId.get(sessionId);
+  for (let hops = 0; at && hops < 8; hops++) {
+    if (botAt(list, at.cwd)) return true;
+    at = at.parentSessionId ? byId.get(at.parentSessionId) : undefined;
+  }
+  return false;
+}
+
 /// A bot and its ongoing chat, for the sidebar's Bots section.
 export type BotEntry = { bot: Bot; session: SessionIndexItem | undefined };
 

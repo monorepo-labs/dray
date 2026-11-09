@@ -1697,6 +1697,12 @@ pub fn report_to_parent(
         let Some(parent_id) = child.parent_session_id.clone() else {
             return Ok(());
         };
+        // A settled chat — Start fresh, or the child put away — takes no more
+        // reports: sending would resume a conversation the reader closed.
+        let parent = store::get_session_index_item(&parent_id).await?;
+        if child.archived || parent.is_none_or(|p| p.archived) {
+            return Ok(());
+        }
         if !crate::bots::in_bot_tree(&child).await {
             return Ok(());
         }

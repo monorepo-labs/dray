@@ -178,7 +178,7 @@ import { changeRange, lastToolResult } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { botAt, botEntries, refreshBots, useBots } from "@/lib/bots";
+import { botAt, botEntries, inBotTree, refreshBots, useBots } from "@/lib/bots";
 import { crewRows, crewSeen, inSidebar, withHiddenAsks } from "@/lib/crew";
 import { panelMove } from "@/lib/sidebarAuto";
 import { playCelebration, playNotification } from "@/lib/sound";
@@ -1108,7 +1108,12 @@ function App() {
   );
   // Off every session held, not the space-filtered list: a bot is no project and
   // belongs to no space, so filtering would hide its chat and open a new one.
-  const botList = useMemo(() => botEntries(bots, sessionIndexItems), [bots, sessionIndexItems]);
+  // Empty while the settled side is loaded: the active chat is not in it, so an
+  // entry built there would read as a bot with no chat and open a second one.
+  const botList = useMemo(
+    () => (archivedShown ? [] : botEntries(bots, sessionIndexItems)),
+    [archivedShown, bots, sessionIndexItems],
+  );
   // Narrowed the way the sessions above are, so a draft never sits under a
   // project the list is not drawing.
   const sidebarDrafts = useMemo(() => {
@@ -2201,7 +2206,13 @@ function App() {
     const openPath =
       selectedSession?.projectPath ??
       sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.projectPath;
-    if (openPath && !botAt(bots, openPath) && !sessionInSpace(projects, space, openPath)) {
+    // A bot's chat and its tasks belong to every space: a bot hands work to any
+    // project, and a task opened from its Tasks tab must not be closed again.
+    if (
+      openPath &&
+      !inBotTree(bots, sessionIndexItems, selectedSessionId) &&
+      !sessionInSpace(projects, space, openPath)
+    ) {
       goToSession(handleNewSession);
     }
     // The membership question and its two answers. `handleSelectProject` and

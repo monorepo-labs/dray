@@ -103,14 +103,17 @@ export function crewSeen(rows: CrewRow[], drawn: boolean): string[] {
 }
 
 /// The sidebar's list: everything but a hidden session whose parent is here,
-/// and a bot's own chat, which the Bots section draws. A hidden session
-/// surfaces through its cards beside that parent and the bot's Tasks tab. One
-/// whose parent is missing stays listed, since it would surface nowhere.
-/// Settled ones too: unsettling the parent lists them again.
+/// and a bot's ongoing chat, which the Bots section draws. A bot's *settled*
+/// chats stay, since the settled list is the only way back to one. A hidden
+/// session surfaces through its cards beside that parent and the bot's Tasks
+/// tab. One whose parent is missing stays listed, since it would surface
+/// nowhere. Settled ones too: unsettling the parent lists them again.
 export function inSidebar(items: SessionIndexItem[], bots: readonly Bot[] = []): SessionIndexItem[] {
   const ids = new Set(items.map((i) => i.sessionId));
   return items.filter(
-    (i) => !(i.hidden && i.parentSessionId && ids.has(i.parentSessionId)) && !botAt(bots, i.cwd),
+    (i) =>
+      !(i.hidden && i.parentSessionId && ids.has(i.parentSessionId)) &&
+      !(!i.archived && botAt(bots, i.cwd)),
   );
 }
 

@@ -153,6 +153,12 @@ describe("hidden sessions", () => {
     expect(inSidebar(withBot, [bot]).map((i) => i.sessionId)).toEqual(["a", "shown", "orphan"]);
   });
 
+  it("keeps a bot's settled chat in the history", () => {
+    const bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
+    const settled = [item("old", null, { cwd: "/h/bots/b", archived: true })];
+    expect(inSidebar(settled, [bot]).map((i) => i.sessionId)).toEqual(["old"]);
+  });
+
   it("leaves a settled hidden child out of the settled list too", () => {
     const settled = [item("a", null, { archived: true }), item("review", "a", { hidden: true, archived: true })];
     expect(inSidebar(settled).map((i) => i.sessionId)).toEqual(["a"]);

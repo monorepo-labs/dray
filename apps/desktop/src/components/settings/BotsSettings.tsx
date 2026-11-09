@@ -133,7 +133,9 @@ function BotEditor({ bot, onClose }: { bot: Bot; onClose: () => void }) {
         />
       </div>
       <p className="text-ui text-muted-foreground">
-        Changes reach the bot the next time its chat starts. Its folder: {bot.path}
+        Changes reach the bot the next time its chat starts. grok and fx keep the
+        first version for the whole chat, so on those use Start fresh. Its folder:{" "}
+        {bot.path}
       </p>
       {error && <p className="text-ui text-destructive">{error}</p>}
       <div className="flex gap-2">

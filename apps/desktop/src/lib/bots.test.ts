@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botAt, botSession } from "@/lib/bots";
+import { botAt, botSession, inBotTree } from "@/lib/bots";
 import type { Bot, SessionIndexItem } from "@/types/events";
 
 const bot: Bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
@@ -18,6 +18,19 @@ describe("botAt", () => {
   it("matches the bot's folder with or without a trailing slash", () => {
     expect(botAt([bot], "/h/bots/b/")).toBe(bot);
     expect(botAt([bot], "/h/bots/bb")).toBeUndefined();
+  });
+});
+
+describe("inBotTree", () => {
+  it("holds the bot's chat and everything under it, nothing else", () => {
+    const items = [
+      item("chat"),
+      item("child", { cwd: "/repo/wt", parentSessionId: "chat" }),
+      item("grand", { cwd: "/repo/wt2", parentSessionId: "child" }),
+      item("other", { cwd: "/repo" }),
+    ];
+    expect(inBotTree([bot], items, "grand")).toBe(true);
+    expect(inBotTree([bot], items, "other")).toBe(false);
   });
 });
 
