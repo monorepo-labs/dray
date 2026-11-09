@@ -318,7 +318,7 @@ async fn make_home_app_dir() -> Result<PathBuf> {
 ///
 /// Best-effort: a directory that cannot be narrowed is worth carrying on with,
 /// since the alternative is an app that refuses to start.
-async fn restrict_to_owner(path: &PathBuf) {
+pub(crate) async fn restrict_to_owner(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
 
     if let Err(e) = fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await {

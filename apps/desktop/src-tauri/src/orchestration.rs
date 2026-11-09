@@ -289,20 +289,19 @@ impl Socket {
     }
 }
 
-/// Recreates the socket's directory if it went, holds it to the same `0700`
-/// rule as the first bind, then binds.
+/// Recreates the socket's directory if it went, narrows it to `0700` the way
+/// startup does, checks it, then binds.
 ///
 /// Not through `store::get_home_app_dir`, which answers from a cache and would
-/// never notice the directory was deleted.
+/// never notice the directory was deleted. The narrowing is not redundant with
+/// creating at `0700`: a session's log write can recreate the directory first,
+/// under the umask, and a check alone would then refuse it forever.
 async fn rebind(path: &Path) -> Result<Socket> {
-    use std::os::unix::fs::DirBuilderExt;
-
     let dir = path.parent().context("the socket path has no directory")?;
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
+    tokio::fs::create_dir_all(dir)
+        .await
         .with_context(|| format!("could not create {}", dir.display()))?;
+    store::restrict_to_owner(dir).await;
 
     check_private(dir).await?;
     Socket::bind(path)
@@ -2058,6 +2057,26 @@ mod tests {
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&dir), 0o700);
         assert_eq!(mode(&path), 0o600);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A session's log write can recreate the directory before the check runs,
+    /// under a `022` umask. The rebind narrows it rather than refusing it.
+    #[tokio::test]
+    async fn a_directory_recreated_open_is_narrowed_and_bound() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = socket_dir("dir-open");
+        let path = dir.join("dray.sock");
+        let mut socket = Socket::bind(&path).unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("sessions")).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(socket.heal(&path).await);
+        reaches(&socket, &path).await;
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
         std::fs::remove_dir_all(&dir).ok();
     }
 
