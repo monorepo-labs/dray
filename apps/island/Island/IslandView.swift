@@ -119,7 +119,8 @@ struct IslandView: View {
                     .transition(.opacity)
             }
         }
-        .animation(.snappy(duration: 0.2), value: composer.attention.count)
+        // No animation keyed on the count here: it wrapped the card too, so an answer or a dismiss
+        // faded the old card out at full height beside the new one and the panel overshot.
     }
 
     private var composerCard: some View {

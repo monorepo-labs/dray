@@ -45,7 +45,8 @@ struct AskCard: View {
                 .clipped()
                 .opacity(listed ? 0 : 1)
                 .allowsHitTesting(!listed)
-                .transition(.opacity)
+                // The old body leaves at once: one fading out still holds its height, and the card overshoots.
+                .transition(.asymmetric(insertion: .opacity, removal: .identity))
         }
     }
 
