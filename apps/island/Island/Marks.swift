@@ -238,7 +238,7 @@ struct BoatPill: View {
     let notchHeight: CGFloat
     let alert: BoatAlert
     let refused: String?
-    let extend: (Int) -> Void
+    let extend: (Int) async -> Void
 
     var body: some View {
         PillShell(notch: notch, notchHeight: notchHeight, glow: StatusDot.waiting) {
@@ -267,21 +267,29 @@ struct BoatPill: View {
 /// own control: a stepper because the pills' window never takes the keys.
 struct BoatExtendChoices: View {
     let size: CGFloat
-    /// Minutes.
-    let extend: (Int) -> Void
+    /// Minutes. Returns once the app has answered.
+    let extend: (Int) async -> Void
     @State private var minutes = 120
+    @State private var extending = false
 
     var body: some View {
         HStack(spacing: 8) {
-            step("minus", by: -30).disabled(minutes <= 30)
+            step("minus", by: -30).disabled(extending || minutes <= 30)
             Text(Self.label(minutes)).font(.system(size: size, weight: .semibold).monospacedDigit())
                 .foregroundStyle(.white).frame(minWidth: size * 4)
-            step("plus", by: 30).disabled(minutes >= 30 * 24 * 60)
+            step("plus", by: 30).disabled(extending || minutes >= 30 * 24 * 60)
             Spacer(minLength: 16)
-            Button("Extend") { extend(minutes) }
-                .buttonStyle(.plain)
-                .font(.system(size: size, weight: .semibold))
-                .foregroundStyle(.white)
+            Button(extending ? "Extending…" : "Extend") {
+                extending = true
+                Task {
+                    await extend(minutes)
+                    extending = false
+                }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: size, weight: .semibold))
+            .foregroundStyle(.white.opacity(extending ? 0.55 : 1))
+            .disabled(extending)
         }
     }
 

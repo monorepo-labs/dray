@@ -1074,6 +1074,9 @@ pub async fn extend_boat(id: String, minutes: u32) -> Result<(), String> {
             row.lost = false;
         }
     });
+    // Before answering, so the island's pill is gone by the time its Extend
+    // returns rather than on `watch_boats`' next tick, up to 30s later.
+    let _ = server_invoke(LOCAL.into(), "boat_alerts".into(), json!({ "alerts": boat_alerts() })).await;
     Ok(())
 }
 
