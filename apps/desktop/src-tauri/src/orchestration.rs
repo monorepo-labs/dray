@@ -122,17 +122,205 @@ pub async fn serve(app: Sink) -> Result<()> {
     // socket exists at all. The chmod below stays as a second line rather than
     // the only one.
     let dir = store::get_home_app_dir().await?;
+    check_private(&dir).await?;
 
-    // That narrowing is best-effort — the app has to start whether or not it
-    // lands — so this checks rather than assumes. A directory that stayed
-    // group- or world-reachable leaves the racy chmod as the socket's only
-    // guard, and binding anyway would be serving session creation to every
-    // account on the machine.
-    //
-    // Refusing costs orchestration and nothing else, which is the bargain this
-    // whole module already makes: the caller logs and drops the error, and the
-    // app carries on without a side channel.
-    let mode = owner_bits(&dir).await?;
+    let mut socket = Socket::bind(&path)?;
+
+    let mut check = tokio::time::interval(SOCKET_CHECK);
+    check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            accepted = socket.listener.accept() => {
+                let stream = match accepted {
+                    Ok((stream, _)) => stream,
+                    Err(e) => {
+                        eprintln!("[orchestration accept err] {e}");
+                        continue;
+                    }
+                };
+
+                let app = app.clone();
+                // Per connection, so one slow create cannot hold the next caller off.
+                tokio::spawn(async move {
+                    if let Err(e) = handle(stream, &app).await {
+                        eprintln!("[orchestration conn err] {e:#}");
+                    }
+                });
+            }
+            _ = check.tick() => {
+                socket.heal(&path).await;
+            }
+        }
+    }
+}
+
+/// How often the socket path is checked against the file this process bound.
+/// One `stat` a tick; a longer gap is that much longer of every `dray` call
+/// failing.
+const SOCKET_CHECK: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// `(dev, ino)`: what tells the socket this process bound apart from another
+/// file later put at the same path.
+type FileId = (u64, u64);
+
+fn file_id(path: &Path) -> std::io::Result<FileId> {
+    use std::os::unix::fs::MetadataExt;
+
+    let meta = std::fs::symlink_metadata(path)?;
+    Ok((meta.dev(), meta.ino()))
+}
+
+/// What the socket path names on one check.
+#[derive(Debug, PartialEq, Eq)]
+enum PathState {
+    Ours,
+    Gone,
+    Other(FileId),
+}
+
+fn path_state(bound: FileId, seen: std::io::Result<FileId>) -> PathState {
+    match seen {
+        Ok(id) if id == bound => PathState::Ours,
+        Ok(id) => PathState::Other(id),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PathState::Gone,
+        // Unreadable says nothing about whose socket it is, so it is left be.
+        Err(_) => PathState::Ours,
+    }
+}
+
+/// The listener, and what is known about the path it was bound at.
+///
+/// A listening socket is tied to its inode, not its name. Unlink the file or
+/// put another in its place and this listener keeps accepting on an inode no
+/// path reaches, while every `dray` call meets nothing or a dead file and reads
+/// it as Dray not running. Deleting `~/.dray` does it; so did a sandbox
+/// restored from a snapshot, whose disk was swapped under a running server and
+/// left a copied socket file behind (#801). [`Socket::heal`] binds again.
+struct Socket {
+    listener: UnixListener,
+    id: FileId,
+    /// A live socket found holding the path, left to its owner. Probing it
+    /// every tick would hand that process an empty connection each time.
+    yielded: Option<FileId>,
+    /// Whether the last rebind failed, so a lasting failure logs once.
+    failing: bool,
+}
+
+impl Socket {
+    /// Binds the path, unlinking whatever stale file holds it, and narrows the
+    /// socket to `0600`.
+    ///
+    /// A socket file outlives the process that made it — a crash or a SIGKILL
+    /// leaves one behind, and binding onto it fails with "address in use". The
+    /// file is not a lock and holds nothing, so removing it is safe *because
+    /// this path names one build*: unlinking can only ever take the channel
+    /// from another copy of the same build, never from the release app a dev
+    /// one is running beside.
+    fn bind(path: &Path) -> Result<Self> {
+        std::fs::remove_file(path).ok();
+
+        let listener = UnixListener::bind(path)
+            .with_context(|| format!("could not bind {}", path.display()))?;
+
+        restrict(path)?;
+
+        Ok(Self {
+            listener,
+            id: file_id(path).context("could not read the socket just bound")?,
+            yielded: None,
+            failing: false,
+        })
+    }
+
+    /// Binds again when the path no longer names this socket and nothing live
+    /// answers there. Returns whether it did.
+    ///
+    /// The connect is what keeps two processes from taking the path back and
+    /// forth: one that answers owns it, so this one leaves it be. Only a path
+    /// that is gone or refuses is ours to take.
+    async fn heal(&mut self, path: &Path) -> bool {
+        let seen = match path_state(self.id, file_id(path)) {
+            PathState::Ours => return false,
+            PathState::Gone => None,
+            PathState::Other(id) => Some(id),
+        };
+
+        if seen.is_some() && seen == self.yielded {
+            return false;
+        }
+
+        match UnixStream::connect(path).await {
+            Ok(_) => {
+                if let Some(id) = seen {
+                    self.yielded = Some(id);
+                    eprintln!(
+                        "[orchestration] socket at {} belongs to another live process; leaving it",
+                        path.display()
+                    );
+                }
+                return false;
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) => {}
+            Err(_) => return false,
+        }
+
+        match rebind(path).await {
+            Ok(socket) => {
+                *self = socket;
+                eprintln!("[orchestration] socket at {} was replaced; rebound", path.display());
+                true
+            }
+            Err(e) => {
+                if !self.failing {
+                    eprintln!(
+                        "[orchestration] socket at {} was replaced; could not rebind: {e:#}",
+                        path.display()
+                    );
+                }
+                self.failing = true;
+                false
+            }
+        }
+    }
+}
+
+/// Recreates the socket's directory if it went, holds it to the same `0700`
+/// rule as the first bind, then binds.
+///
+/// Not through `store::get_home_app_dir`, which answers from a cache and would
+/// never notice the directory was deleted.
+async fn rebind(path: &Path) -> Result<Socket> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let dir = path.parent().context("the socket path has no directory")?;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .with_context(|| format!("could not create {}", dir.display()))?;
+
+    check_private(dir).await?;
+    Socket::bind(path)
+}
+
+/// Refuses a directory any other account can reach.
+///
+/// `get_home_app_dir`'s narrowing is best-effort — the app has to start
+/// whether or not it lands — so this checks rather than assumes. A directory
+/// that stayed group- or world-reachable leaves the racy chmod as the socket's
+/// only guard, and binding anyway would be serving session creation to every
+/// account on the machine.
+///
+/// Refusing costs orchestration and nothing else, which is the bargain this
+/// whole module already makes: the caller logs and drops the error, and the
+/// app carries on without a side channel.
+async fn check_private(dir: &Path) -> Result<()> {
+    let mode = owner_bits(dir).await?;
     if mode & 0o077 != 0 {
         bail!(
             "{} is mode {mode:04o}; refusing to serve a socket that other accounts can reach. \
@@ -141,37 +329,7 @@ pub async fn serve(app: Sink) -> Result<()> {
             dir.display()
         );
     }
-
-    // A socket file outlives the process that made it — a crash or a SIGKILL
-    // leaves one behind, and binding onto it fails with "address in use". The
-    // file is not a lock and holds nothing, so removing it is safe *because
-    // this path names one build*: unlinking can only ever take the channel from
-    // another copy of the same build, never from the release app a dev one is
-    // running beside.
-    tokio::fs::remove_file(&path).await.ok();
-
-    let listener = UnixListener::bind(&path)
-        .with_context(|| format!("could not bind {}", path.display()))?;
-
-    restrict(&path)?;
-
-    loop {
-        let (stream, _) = match listener.accept().await {
-            Ok(accepted) => accepted,
-            Err(e) => {
-                eprintln!("[orchestration accept err] {e}");
-                continue;
-            }
-        };
-
-        let app = app.clone();
-        // Per connection, so one slow create cannot hold the next caller off.
-        tokio::spawn(async move {
-            if let Err(e) = handle(stream, &app).await {
-                eprintln!("[orchestration conn err] {e:#}");
-            }
-        });
-    }
+    Ok(())
 }
 
 /// The permission bits on a directory, for the check above.
@@ -1825,5 +1983,118 @@ mod tests {
         for harness in Harness::ALL {
             assert!(err.contains(&harness.wire_name()), "{err} omits a harness");
         }
+    }
+
+    /// A private dir of its own per test, short enough for a socket path's
+    /// 108-byte limit.
+    fn socket_dir(name: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::DirBuilderExt;
+
+        let dir = std::env::temp_dir().join(format!("dray-sock-{}-{name}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir).unwrap();
+        dir
+    }
+
+    /// A connection reaching the listener, proven by the accept landing.
+    async fn reaches(socket: &Socket, path: &Path) {
+        let client = UnixStream::connect(path).await.expect("connect");
+        socket.listener.accept().await.expect("accept");
+        drop(client);
+    }
+
+    #[test]
+    fn the_path_state_follows_the_inode() {
+        let missing = || Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+        let denied = || Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+
+        assert_eq!(path_state((1, 2), Ok((1, 2))), PathState::Ours);
+        assert_eq!(path_state((1, 2), Ok((1, 3))), PathState::Other((1, 3)));
+        assert_eq!(path_state((1, 2), Ok((9, 2))), PathState::Other((9, 2)));
+        assert_eq!(path_state((1, 2), missing()), PathState::Gone);
+        assert_eq!(path_state((1, 2), denied()), PathState::Ours);
+    }
+
+    #[tokio::test]
+    async fn a_socket_still_in_place_is_left_alone() {
+        let dir = socket_dir("kept");
+        let path = dir.join("dray.sock");
+        let mut socket = Socket::bind(&path).unwrap();
+
+        assert!(!socket.heal(&path).await);
+        reaches(&socket, &path).await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_deleted_socket_is_bound_again() {
+        let dir = socket_dir("deleted");
+        let path = dir.join("dray.sock");
+        let mut socket = Socket::bind(&path).unwrap();
+
+        std::fs::remove_file(&path).unwrap();
+        assert!(UnixStream::connect(&path).await.is_err());
+
+        assert!(socket.heal(&path).await);
+        reaches(&socket, &path).await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `rm -rf ~/.dray` takes the directory too, and the rebind brings it back
+    /// private.
+    #[tokio::test]
+    async fn a_deleted_directory_is_made_again_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = socket_dir("dir-gone");
+        let path = dir.join("dray.sock");
+        let mut socket = Socket::bind(&path).unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(socket.heal(&path).await);
+        reaches(&socket, &path).await;
+
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&path), 0o600);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The case seen live (#801): a copied socket file with nothing behind it.
+    #[tokio::test]
+    async fn a_dead_socket_file_in_its_place_is_replaced() {
+        let dir = socket_dir("dead");
+        let path = dir.join("dray.sock");
+        let mut socket = Socket::bind(&path).unwrap();
+
+        let stale = dir.join("stale.sock");
+        drop(UnixListener::bind(&stale).unwrap());
+        std::fs::rename(&stale, &path).unwrap();
+        assert!(UnixStream::connect(&path).await.is_err());
+
+        assert!(socket.heal(&path).await);
+        reaches(&socket, &path).await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Two processes on one path must not take it from each other in turn.
+    #[tokio::test]
+    async fn a_live_socket_in_its_place_is_left_to_its_owner() {
+        let dir = socket_dir("live");
+        let path = dir.join("dray.sock");
+        let mut socket = Socket::bind(&path).unwrap();
+
+        let other = Socket::bind(&path).unwrap();
+
+        assert!(!socket.heal(&path).await);
+        assert_eq!(socket.yielded, Some(other.id));
+
+        // The probe above reached the owner; drain it so the next proof is clean.
+        other.listener.accept().await.unwrap();
+
+        assert!(!socket.heal(&path).await);
+        reaches(&other, &path).await;
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
