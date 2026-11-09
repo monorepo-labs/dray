@@ -12,6 +12,7 @@ import {
 } from "@/lib/breaks";
 import { BREAK_LINES } from "@/components/breakScenes";
 import { isWindowFocused } from "@/lib/focus";
+import { invoke } from "@/lib/transport";
 
 // Module-level so Preview and dismissal both reach the one clock.
 let clock: BreakClock = { used: 0, away: 0 };
@@ -34,9 +35,13 @@ function useBreakClock() {
     };
     const events = ["keydown", "pointerdown", "pointermove", "wheel"] as const;
     for (const e of events) document.addEventListener(e, touch, { passive: true, capture: true });
-    const id = setInterval(() => {
+    const id = setInterval(async () => {
+      // The browser pane's input never reaches the document, so the OS's idle
+      // time decides where it answers; the listeners cover where it can't.
+      const idle = await invoke<number | null>("idle_seconds").catch(() => null);
       const now = Date.now();
-      clock = advance(clock, now - last, isWindowFocused() && now - lastInput < IDLE_MS);
+      const recent = idle === null ? now - lastInput < IDLE_MS : idle * 1000 < IDLE_MS;
+      clock = advance(clock, now - last, isWindowFocused() && recent);
       last = now;
       if (clock.used >= minutes * 60_000) setBreakDue(true);
     }, TICK_MS);

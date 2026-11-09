@@ -377,6 +377,24 @@ pub fn app_selection() -> Option<String> {
     APP_SELECTION.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+/// Seconds since the last key or pointer input anywhere on this Mac. The break
+/// clock reads it because the browser pane is a native view whose input never
+/// reaches the webview's document. `None` off macOS.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn idle_seconds() -> Option<f64> {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGEventSourceSecondsSinceLastEventType(state: i32, event_type: u32) -> f64;
+        }
+        // Combined session state, any input event type; needs no permission.
+        return Some(unsafe { CGEventSourceSecondsSinceLastEventType(0, u32::MAX) });
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
 /// Whether Dray Island is running, asked at each permission or question so a
 /// island the reader quit never swallows the banner that would have replaced it.
 #[cfg_attr(feature = "desktop", tauri::command)]

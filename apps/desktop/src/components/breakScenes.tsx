@@ -86,22 +86,30 @@ function Figure({ pose }: { pose: Pose }) {
   );
 }
 
-const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+const REDUCED = "(prefers-reduced-motion: reduce)";
 
 /// Seconds since the scene mounted, one render a frame; null under reduced
-/// motion, where each scene holds its best pose instead.
+/// motion, where each scene holds its best pose instead. Follows the setting
+/// live, so turning it on mid-break stops the figure.
 function useClock(): number | null {
-  const [t, setT] = useState<number | null>(() => (reduced() ? null : 0));
+  const [still, setStill] = useState(() => matchMedia(REDUCED).matches);
+  const [t, setT] = useState(0);
   useEffect(() => {
-    if (reduced()) return;
+    const mq = matchMedia(REDUCED);
+    const change = () => setStill(mq.matches);
+    mq.addEventListener("change", change);
+    return () => mq.removeEventListener("change", change);
+  }, []);
+  useEffect(() => {
+    if (still) return;
     const start = performance.now();
     let raf = requestAnimationFrame(function tick(now) {
       setT((now - start) / 1000);
       raf = requestAnimationFrame(tick);
     });
     return () => cancelAnimationFrame(raf);
-  }, []);
-  return t;
+  }, [still]);
+  return still ? null : t;
 }
 
 /// One drawing for the break card's tile: a 160×110 box, ground at y≈102,
