@@ -43,7 +43,7 @@ const INSTALLING: Duration = Duration::from_secs(30 * 60);
 
 /// Where `dray setup` puts agents (the CLI's `HOME_BIN_DIRS`). A non-login
 /// `ssh host cmd` reads no `.profile`, so none of these are on its `PATH`.
-const AGENT_DIRS: &str =
+pub(crate) const AGENT_DIRS: &str =
     "$HOME/.local/bin:$HOME/.grok/bin:$HOME/.pi/agent/bin:$HOME/.bun/bin:$HOME/.npm-global/bin";
 
 /// What the reader typed, kept as typed: a `~/.ssh/config` alias stays an

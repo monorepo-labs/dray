@@ -29,7 +29,7 @@ const server = (name: string): ServerInfo => ({
   latest: null,
   app: false,
   restarting: false,
-  boat: { phase: "running", stopsAt: null, warning: true, note: null },
+  sandbox: { provider: "boat", phase: "running", stopsAt: null, warning: true, note: null },
 });
 
 const CASES: { title: string; name: string; seconds: number; refused?: string }[] = [

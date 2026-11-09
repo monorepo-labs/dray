@@ -129,6 +129,26 @@ pub fn boat() -> Option<PathBuf> {
     search_path("boat").or_else(|| search_known_dirs("boat"))
 }
 
+/// The absolute path to Vercel's `sandbox` CLI, on the same terms as [`boat`].
+/// It is a Node script run through `env node`, so whoever runs it needs node's
+/// directory on `PATH`: see `vercel.rs`.
+#[cfg(feature = "desktop")]
+pub fn vercel_sandbox() -> Option<PathBuf> {
+    search_path("sandbox").or_else(|| search_known_dirs("sandbox"))
+}
+
+/// `PATH` for a Node script at `script`: its own directory, where Homebrew and
+/// nvm keep `node` beside it, then wherever `node` is found, then what this
+/// process has. Finder hands an app launchd's `PATH`, which holds no `node`.
+#[cfg(feature = "desktop")]
+pub fn node_path(script: &std::path::Path) -> std::ffi::OsString {
+    let node = search_path("node").or_else(|| search_known_dirs("node"));
+    let dirs = [script.parent(), node.as_deref().and_then(std::path::Path::parent)];
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let all = dirs.into_iter().flatten().map(PathBuf::from).chain(std::env::split_paths(&inherited));
+    std::env::join_paths(all).unwrap_or(inherited)
+}
+
 /// The absolute path to a `codex` that can actually speak app-server.
 ///
 /// Unlike [`claude`], finding *a* binary is not enough. Verified against a real

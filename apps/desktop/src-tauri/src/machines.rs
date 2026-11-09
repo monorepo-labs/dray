@@ -58,6 +58,11 @@ pub struct Saved {
     /// The boat sandbox this machine is, once it has said and boat agreed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boat: Option<BoatLink>,
+    /// The Vercel sandbox this machine is, picked from Vercel's list when added.
+    /// A key of its own rather than a kind on `boat`, so an older build carries
+    /// it untouched instead of asking boat about a Vercel name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vercel: Option<VercelLink>,
     /// Fields a newer build wrote, carried back untouched — the index's own
     /// `unknown` bargain, since this file is rewritten whole too.
     #[serde(flatten)]
@@ -74,7 +79,23 @@ pub struct BoatLink {
     pub endpoint: Option<String>,
 }
 
+/// A Vercel sandbox: its name, and the team and project it lives in, which
+/// every call to Vercel's API names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VercelLink {
+    pub name: String,
+    pub team: String,
+    pub project: String,
+}
+
 impl Saved {
+    /// The sandbox this machine is, whichever provider runs it.
+    #[cfg(feature = "desktop")]
+    pub fn sandbox(&self) -> Option<crate::sandbox::Link> {
+        use crate::sandbox::Link;
+        self.boat.clone().map(Link::Boat).or_else(|| self.vercel.clone().map(Link::Vercel))
+    }
+
     /// What a reader typed to add it: the SSH line, else the address.
     pub fn address(&self) -> String {
         self.ssh.as_ref().map(ssh::Target::line).unwrap_or_else(|| self.url.clone())
@@ -469,6 +490,7 @@ pub async fn add(name: String, address: String, token: Option<String>) -> Result
                 beta: false,
                 ignored: None,
                 boat: None,
+                vercel: None,
                 unknown: Default::default(),
             };
             (saved, Some(token))
@@ -494,6 +516,7 @@ pub async fn add(name: String, address: String, token: Option<String>) -> Result
                 beta: false,
                 ignored: None,
                 boat: None,
+                vercel: None,
                 unknown: Default::default(),
             };
             (saved, token)
@@ -604,6 +627,7 @@ mod tests {
             beta: false,
             ignored: None,
             boat: None,
+            vercel: None,
             unknown: Default::default(),
         };
         let list = [saved("a1", "vps"), saved("b2", "box"), saved("c3", "box"), saved("d4", "a1")];

@@ -508,29 +508,6 @@ export type BlockRef = { messageId: string, index: number, };
 export type BlockType = { "type": "text" } | { "type": "thinking" } | { "type": "tool_use", id: string, name: string, };
 
 /**
- * Where a boat sandbox is, as far as the reader is concerned.
- */
-export type BoatPhase = "running" | "stopped" | "resuming";
-
-/**
- * What boat says about a server. Absent from a machine that is no sandbox, and
- * from one with no `boat` CLI or login here, which draws no boat UI at all.
- */
-export type BoatStatus = { phase: BoatPhase, 
-/**
- * When it auto-stops. `None` with auto-stop off.
- */
-stopsAt: string | null, 
-/**
- * It stops within [`WARN`]: raise the card, offer more time.
- */
-warning: boolean, 
-/**
- * Why the last resume didn't take, in boat's or Dray's words.
- */
-note: string | null, };
-
-/**
  * What the composer's branch picker needs to render and guard itself.
  */
 export type BranchList = { 
@@ -1604,6 +1581,35 @@ address: string | null,
 error: string | null, };
 
 /**
+ * Where a sandbox is, as far as the reader is concerned.
+ */
+export type SandboxPhase = "running" | "stopped" | "resuming";
+
+/**
+ * Who runs a sandbox, for the words the UI says about it.
+ */
+export type SandboxProvider = "boat" | "vercel";
+
+/**
+ * What a sandbox's provider says about a server. Absent from a machine that is
+ * no sandbox, and from one whose provider has no CLI or login here, which
+ * draws no sandbox UI at all.
+ */
+export type SandboxStatus = { provider: SandboxProvider, phase: SandboxPhase, 
+/**
+ * When it auto-stops. `None` with auto-stop off.
+ */
+stopsAt: string | null, 
+/**
+ * It stops within [`WARN`]: raise the card, offer more time.
+ */
+warning: boolean, 
+/**
+ * Why the last resume didn't take, in the provider's or Dray's words.
+ */
+note: string | null, };
+
+/**
  * What a save did. `Stale` is not an error: the file moved under the reader,
  * so their text is still in the editor and theirs to force through.
  */
@@ -1685,7 +1691,7 @@ app: boolean,
 /**
  * An update landed on the server and it restarts onto it once idle.
  */
-restarting: boolean, boat: BoatStatus | null, };
+restarting: boolean, sandbox: SandboxStatus | null, };
 
 export type ServerStatus = "connecting" | "connected" | "disconnected";
 
@@ -2285,6 +2291,11 @@ reasoningTokens: number | null, totalTokens: number | null, costUsd: number | nu
  * and every event that doesn't report one. See [`ModelUsage`].
  */
 perModel: Array<ModelUsage>, };
+
+/**
+ * A sandbox the reader can add, as the Add dialog lists it.
+ */
+export type VercelSandbox = { name: string, team: string, teamName: string, project: string, projectName: string, stopped: boolean, };
 
 /**
  * What the composer's action row needs to decide which buttons it has, in one

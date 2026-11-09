@@ -29,7 +29,7 @@ import { AUTO_EXTEND_MINUTES, boatAsleep, resumeBoat, setBoatPrefs, useBoatPrefs
 import { useLocalServer, useServers } from "@/lib/servers";
 import { invoke, listen, LOCAL } from "@/lib/transport";
 import { cn } from "@/lib/utils";
-import type { Failure, Fix, RemoteAccess, ServerInfo, ServerStatus, Stage } from "@/types/events";
+import type { Failure, Fix, RemoteAccess, ServerInfo, ServerStatus, Stage, VercelSandbox } from "@/types/events";
 
 type TrustHost = Extract<Fix, { kind: "trust_host" }>;
 
@@ -60,11 +60,11 @@ function StatusDot({ status }: { status: ServerStatus }) {
 function detailOf(server: ServerInfo): string {
   const address = server.beta ? `${server.ssh ?? server.url} · Beta` : (server.ssh ?? server.url);
   if (!server.on) return `Off · ${address}`;
-  if (server.boat?.phase === "resuming") return "Resuming… This can take a few minutes.";
-  if (server.boat?.phase === "stopped") return server.boat.note ? `Stopped · ${server.boat.note}` : "Stopped";
-  if (server.boat?.warning && server.boat.stopsAt) return `Stops in ${Math.max(1, Math.ceil((new Date(server.boat.stopsAt).getTime() - Date.now()) / 60_000))} min · ${address}`;
+  if (server.sandbox?.phase === "resuming") return "Resuming… This can take a few minutes.";
+  if (server.sandbox?.phase === "stopped") return server.sandbox.note ? `Stopped · ${server.sandbox.note}` : "Stopped";
+  if (server.sandbox?.warning && server.sandbox.stopsAt) return `Stops in ${Math.max(1, Math.ceil((new Date(server.sandbox.stopsAt).getTime() - Date.now()) / 60_000))} min · ${address}`;
   if (server.status === "connecting" && server.stage) return STAGE_LABELS[server.stage];
-  if (server.status === "disconnected" && (server.boat?.note || server.error)) return server.boat?.note ?? server.error!;
+  if (server.status === "disconnected" && (server.sandbox?.note || server.error)) return server.sandbox?.note ?? server.error!;
   return address;
 }
 
@@ -141,12 +141,12 @@ export default function ServersSettings() {
             on={server.on}
             onToggle={(on) => void invoke("set_server_on", { id: server.id, on }, LOCAL).catch(console.error)}
             action={
-              server.boat?.phase === "stopped" ? (
+              server.sandbox?.phase === "stopped" ? (
                 <Button variant="secondary" size="sm" onClick={() => void resumeBoat(server.id).catch(console.error)}>
                   Resume
                 </Button>
-              ) : server.boat?.warning ? (
-                <ExtendBoat id={server.id} size="sm" onFail={console.error} />
+              ) : server.sandbox?.warning ? (
+                <ExtendBoat id={server.id} provider={server.sandbox.provider} size="sm" onFail={console.error} />
               ) : undefined
             }
             onRetry={
@@ -185,7 +185,7 @@ export default function ServersSettings() {
           </Row>
           </div>
         ))}
-        {servers.some((s) => s.boat) && <AutoExtendRow />}
+        {servers.some((s) => s.sandbox) && <AutoExtendRow />}
       </div>
 
       <AddServerDialog
@@ -219,7 +219,7 @@ export default function ServersSettings() {
 }
 
 /// Off by default, offered once after the first Extend; this is where it goes
-/// back off. Drawn only once a boat sandbox is on the list.
+/// back off. Drawn only once a sandbox is on the list.
 function AutoExtendRow() {
   const { auto } = useBoatPrefs();
   return (
@@ -227,7 +227,7 @@ function AutoExtendRow() {
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="text-ui font-medium">Keep busy sandboxes running</span>
         <span className="text-ui text-muted-foreground">
-          Adds {AUTO_EXTEND_MINUTES} minutes when a boat sandbox is about to stop with a turn or background task running.
+          Adds {AUTO_EXTEND_MINUTES} minutes when a sandbox is about to stop with a turn or background task running.
         </span>
       </div>
       <Switch aria-label="Keep busy sandboxes running" checked={auto} onCheckedChange={(on) => setBoatPrefs({ auto: on, offered: true })} />
@@ -688,9 +688,19 @@ function asFailure(err: unknown): Failure {
   return { message: String(err), fix: null };
 }
 
-/// Two ways in. The SSH line is the one a reader already has: the app logs in
+type AddMode = "ssh" | "address" | "vercel";
+
+const OTHER_MODE: Record<AddMode, string> = {
+  ssh: "Use an SSH login instead",
+  address: "Use an address and token instead",
+  vercel: "Pick a Vercel sandbox instead",
+};
+
+/// Three ways in. The SSH line is the one a reader already has: the app logs in
 /// with it, forwards the server's port, reads its token and starts it if it is
-/// stopped. Address and token is for a server reached some other way.
+/// stopped. Address and token is for a server reached some other way. A Vercel
+/// sandbox is picked from the reader's own list, offered only where Vercel's
+/// CLI is logged in here, and set up by the app.
 function AddServerDialog({
   open,
   onClose,
@@ -701,7 +711,10 @@ function AddServerDialog({
   /// Reached Dray's absence over a working login: set it up there.
   onInstall: (line: string, name: string) => void;
 }) {
-  const [viaSsh, setViaSsh] = useState(true);
+  const [mode, setMode] = useState<AddMode>("ssh");
+  const viaSsh = mode === "ssh";
+  const [vercelOn, setVercelOn] = useState(false);
+  const [picked, setPicked] = useState<VercelSandbox | null>(null);
   const [line, setLine] = useState("");
   const [url, setUrl] = useState("");
   const [token, setToken] = useState("");
@@ -712,6 +725,17 @@ function AddServerDialog({
   const [trusting, setTrusting] = useState<TrustHost | null>(null);
   // Pressing Add starts the setup, and from then on only the buttons leave.
   const [started, setStarted] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    void invoke<boolean>("vercel_available", {}, LOCAL)
+      .then((on) => live && setVercelOn(on))
+      .catch(() => live && setVercelOn(false));
+    return () => {
+      live = false;
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!busy || !viaSsh) return;
@@ -732,7 +756,8 @@ function AddServerDialog({
     setToken("");
     setName("");
     setFailure(null);
-    setViaSsh(true);
+    setMode("ssh");
+    setPicked(null);
     setStarted(false);
     onClose();
   };
@@ -743,10 +768,13 @@ function AddServerDialog({
     setStage(null);
     setFailure(null);
     try {
-      if (viaSsh) {
+      if (mode === "ssh") {
         await invoke<ServerInfo>("add_ssh_server", { line, name: name.trim() || null }, LOCAL);
-      } else {
+      } else if (mode === "address") {
         await invoke<ServerInfo>("add_server", { url, token, name: name.trim() || null }, LOCAL);
+      } else if (picked) {
+        const { name: sandbox, team, project } = picked;
+        await invoke<ServerInfo>("add_vercel_server", { sandbox, team, project, name: name.trim() || null }, LOCAL);
       }
       close();
     } catch (err) {
@@ -770,7 +798,8 @@ function AddServerDialog({
     void add();
   };
 
-  const ready = viaSsh ? line.trim() : url.trim() && token.trim();
+  const ready = mode === "ssh" ? line.trim() : mode === "address" ? url.trim() && token.trim() : picked;
+  const others = (["ssh", "address", "vercel"] as const).filter((m) => m !== mode && (m !== "vercel" || vercelOn));
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && close()}>
@@ -778,13 +807,17 @@ function AddServerDialog({
         <DialogHeader>
           <DialogTitle>Add server</DialogTitle>
           <DialogDescription>
-            {viaSsh
+            {mode === "ssh"
               ? "Run sessions on a machine you can SSH into. Dray uses your existing key."
-              : "Connect by the address dray tunnel prints, or any running dray serve."}
+              : mode === "address"
+                ? "Connect by the address dray tunnel prints, or any running dray serve."
+                : "Run sessions in one of your Vercel sandboxes. Dray installs itself there and connects by the sandbox's own address."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="flex flex-col gap-3">
-          {viaSsh ? (
+          {mode === "vercel" ? (
+            <VercelPicker picked={picked} onPick={setPicked} disabled={busy} />
+          ) : viaSsh ? (
             <Field label="SSH" hint="The line you log in with. -p and ~/.ssh/config names work.">
               <Input
                 value={line}
@@ -821,7 +854,7 @@ function AddServerDialog({
             </>
           )}
           <Field label="Name" hint="Optional. Names this server in a session's tab and after its projects.">
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="vps" />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={picked && mode === "vercel" ? picked.name : "vps"} />
           </Field>
           {failure && (
             <div className="flex flex-col items-start gap-1.5">
@@ -834,25 +867,38 @@ function AddServerDialog({
               )}
             </div>
           )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="-ml-2 self-start text-muted-foreground"
-            disabled={busy}
-            onClick={() => {
-              setViaSsh(!viaSsh);
-              setFailure(null);
-            }}
-          >
-            {viaSsh ? "Use an address and token instead" : "Use an SSH login instead"}
-          </Button>
+          <div className="-ml-2 flex flex-col items-start">
+            {others.map((other) => (
+              <Button
+                key={other}
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                disabled={busy}
+                onClick={() => {
+                  setMode(other);
+                  setFailure(null);
+                }}
+              >
+                {OTHER_MODE[other]}
+              </Button>
+            ))}
+          </div>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={close}>
               Cancel
             </Button>
             <Button type="submit" disabled={busy || !ready}>
-              {busy ? (stage ? STAGE_LABELS[stage] : "Connecting…") : failure ? "Try again" : "Add"}
+              {busy
+                ? mode === "vercel"
+                  ? "Setting up…"
+                  : stage
+                    ? STAGE_LABELS[stage]
+                    : "Connecting…"
+                : failure
+                  ? "Try again"
+                  : "Add"}
             </Button>
           </div>
         </form>
@@ -869,6 +915,77 @@ function AddServerDialog({
         />
       )}
     </Dialog>
+  );
+}
+
+/// The reader's Vercel sandboxes, across every team and project their login
+/// sees, one to pick. A stopped one is listed too: adding it resumes it.
+function VercelPicker({
+  picked,
+  onPick,
+  disabled,
+}: {
+  picked: VercelSandbox | null;
+  onPick: (sandbox: VercelSandbox) => void;
+  disabled: boolean;
+}) {
+  const [sandboxes, setSandboxes] = useState<VercelSandbox[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void invoke<VercelSandbox[]>("vercel_sandboxes", {}, LOCAL)
+      .then((found) => live && setSandboxes(found))
+      .catch((e) => live && setError(String(e)));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const same = (a: VercelSandbox | null, b: VercelSandbox) =>
+    !!a && a.name === b.name && a.team === b.team && a.project === b.project;
+
+  return (
+    // Not `Field`: a label forwards a click on its hint to the first button inside.
+    <div className="flex flex-col gap-1.5">
+      <span className="text-ui font-medium">Sandbox</span>
+      {error ? (
+        <p className="text-ui text-destructive">{error}</p>
+      ) : !sandboxes ? (
+        <p className="flex items-center gap-2 text-ui text-muted-foreground">
+          <Spinner className="size-3.5" /> Reading your sandboxes…
+        </p>
+      ) : !sandboxes.length ? (
+        <div className="flex flex-col items-start gap-1.5">
+          <p className="text-ui text-muted-foreground">No sandboxes yet. Make one, then come back:</p>
+          <CommandChip command="sandbox create --timeout 2h" />
+        </div>
+      ) : (
+        <div role="radiogroup" aria-label="Sandbox" className="flex max-h-56 flex-col overflow-y-auto rounded-lg border">
+          {sandboxes.map((s) => (
+            <button
+              key={`${s.team}/${s.project}/${s.name}`}
+              type="button"
+              role="radio"
+              aria-checked={same(picked, s)}
+              disabled={disabled}
+              onClick={() => onPick(s)}
+              className={cn(
+                "flex min-w-0 flex-col px-3 py-1.5 text-left text-ui outline-none not-last:border-b hover:bg-accent focus-visible:bg-accent",
+                same(picked, s) && "bg-accent",
+              )}
+            >
+              <span className="truncate">{s.name}</span>
+              <span className="truncate text-muted-foreground">
+                {s.teamName} / {s.projectName}
+                {s.stopped && " · Stopped"}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      <span className="text-ui text-muted-foreground">Every sandbox your Vercel login can see.</span>
+    </div>
   );
 }
 
