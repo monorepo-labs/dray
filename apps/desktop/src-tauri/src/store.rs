@@ -155,10 +155,10 @@ pub struct SessionIndexItem {
     pub modified: String,
     pub archived: bool,
     pub pinned: bool,
-    /// Left out of the sidebar and drawn only in its parent's crew — a review
-    /// session nobody means to read on its own. `dray new --hidden` sets it,
-    /// the crew row's menu clears it, and detaching clears it too, since a
-    /// session with no parent has no crew to be drawn in.
+    /// Left out of the sidebar, surfacing only as cards beside its parent — a
+    /// review session nobody means to read on its own. `dray new --hidden` sets
+    /// it, and detaching clears it, since a session with no parent would
+    /// surface nowhere.
     ///
     /// `#[serde(default)]`: an entry written before the field reads as shown.
     #[serde(default)]
@@ -1117,7 +1117,7 @@ pub async fn take_continue_at(session_id: &str, at: &str) -> Result<Option<(Sess
 pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>, Fail> {
     Ok(update_item(session_id, |item| {
         item.parent_session_id = None;
-        // No parent means no crew, so a hidden session would be listed nowhere.
+        // No parent to surface beside, so a hidden session would show nowhere.
         item.hidden = false;
         item.clone()
     })
@@ -1125,7 +1125,7 @@ pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>
 }
 
 /// The hidden sessions `parent_id` started directly — the ones that follow it
-/// through settle, delete and worktree removal, since only its crew draws them.
+/// through settle, delete and worktree removal, since nothing on screen lists them.
 pub async fn hidden_children(parent_id: &str) -> Result<Vec<SessionIndexItem>> {
     Ok(read_index()
         .await?

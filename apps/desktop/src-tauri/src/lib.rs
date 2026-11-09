@@ -584,8 +584,8 @@ async fn set_session_flags(
     if updated.is_none() {
         return Ok(None);
     }
-    // A hidden child settles and unsettles with its parent, since only the
-    // parent's crew draws it. Here off the whole index, where the frontend
+    // A hidden child settles and unsettles with its parent, since nothing on
+    // screen lists it. Here off the whole index, where the frontend
     // holds one side of the split and can miss a child on the other.
     let mut settling = vec![session_id.to_string()];
     if let Some(archived) = archived {

@@ -50,7 +50,7 @@ Reach for `dray session new` on:
 
 Naming an agent names the harness a Dray session runs, never the vendor's own CLI or app. Never shell out to one.
 
-A review session — one that checks finished work and sends its findings back — takes `--hidden`, unless the user, `CLAUDE.md`, `AGENTS.md` or memory says otherwise. Tell the user in one line that the reviewer sits in the crew beside this session.
+A review session — one that checks finished work and sends its findings back — takes `--hidden`, unless the user, `CLAUDE.md`, `AGENTS.md` or memory says otherwise. Tell the user in one line that the reviewer runs out of the sidebar and any question it asks shows in this chat.
 
 A count means that many sessions, one each. Own branch and PR = own session; steps of one job stay in one.
 

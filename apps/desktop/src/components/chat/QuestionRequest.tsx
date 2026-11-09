@@ -15,7 +15,9 @@ import {
   QuestionnaireSubmit,
   QuestionnaireTitle,
 } from "@/components/ui/questionnaire";
+import { useCardKeys } from "@/lib/cardKeys";
 import { questionDrafts, type QuestionDraft } from "@/lib/questionDrafts";
+import { cn } from "@/lib/utils";
 import type { Question } from "@/types/events";
 
 /// The agent asking the reader something, rather than asking to run something.
@@ -29,6 +31,7 @@ export default function QuestionRequest({
   questions,
   onAnswer,
   autoFocus = true,
+  keyRank,
 }: {
   /// What the half-filled form is saved under, so a session switch that
   /// unmounts the card does not take the reader's picks with it.
@@ -41,11 +44,28 @@ export default function QuestionRequest({
   /// Whether the card takes focus on mount. False for a split pane that is
   /// not the focused one — see the effect below.
   autoFocus?: boolean;
+  /// Answers number keys and Return pressed outside a text field — see
+  /// [useCardKeys]. Undefined takes no keys.
+  keyRank?: number;
 }) {
   // One-shot, like the permission card: the reply can only be consumed once, so
   // a second submit during the round trip has nothing to answer.
   const [sent, setSent] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
+
+  // The form answers its own keys once focus is inside it, so a key pressed
+  // elsewhere is handed in on the active item's choice: the primitive then
+  // picks, steps or submits exactly as it would for a key pressed there.
+  const { owns, contested } = useCardKeys(formRef, sent ? undefined : keyRank, (e) => {
+    const item = formRef.current?.querySelector("[data-slot=questionnaire-item][data-active]");
+    const choice =
+      item?.querySelector<HTMLInputElement>("[data-slot=questionnaire-choice] input:checked") ??
+      item?.querySelector<HTMLInputElement>("[data-slot=questionnaire-choice] input");
+    if (!choice) return false;
+    choice.focus();
+    choice.dispatchEvent(new KeyboardEvent("keydown", { key: e.key, bubbles: true, cancelable: true }));
+    return true;
+  });
 
   // Read once: after mount the form owns its state and the store only follows.
   const [saved] = useState(() => questionDrafts.get(requestId));
@@ -121,7 +141,8 @@ export default function QuestionRequest({
     // a full-width row leaves most of itself empty and puts the click target a
     // long way from the text naming it. No card chrome: the choices carry their
     // own borders, and a box around boxes reads as a third surface.
-    <div className="max-w-md">
+    // Ringed only while another card is up too, to say which one the keys reach.
+    <div className={cn("max-w-md rounded-xl", owns && contested && "outline-2 outline-offset-8 outline-ring/50")}>
       <Questionnaire
         ref={formRef}
         className="gap-3"
@@ -248,12 +269,13 @@ export default function QuestionRequest({
             `min-h-0` throughout drops the component's 44px touch targets: those
             are a mobile floor, and on a one-word option or a "Skip" they are
             most of the height doing nothing. */}
-        <QuestionnaireActions className="flex min-h-0 items-center justify-end gap-2 sm:min-h-0">
-          {/* Pushes the rest right; with it hidden `justify-end` already has. */}
-          <QuestionnairePrevious size="sm" disabled={sent} className="mr-auto min-h-0" />
-          <QuestionnaireSkip size="sm" disabled={sent} onClick={persist} className="min-h-0" />
-          <QuestionnaireNext size="sm" disabled={sent} className="min-h-0" />
-          <QuestionnaireSubmit size="sm" disabled={sent} className="min-h-0">
+        <QuestionnaireActions className="flex min-h-0 items-center gap-2 sm:min-h-0">
+          {/* Skip and the forward button split the row 20/80, so the answer is
+              the bigger target. Previous keeps its own width. */}
+          <QuestionnairePrevious size="sm" disabled={sent} className="h-8 min-h-0" />
+          <QuestionnaireSkip size="sm" disabled={sent} onClick={persist} className="h-8 min-h-0 flex-1" />
+          <QuestionnaireNext size="sm" disabled={sent} className="h-8 min-h-0 flex-4" />
+          <QuestionnaireSubmit size="sm" disabled={sent} className="h-8 min-h-0 flex-4">
             Send
           </QuestionnaireSubmit>
         </QuestionnaireActions>

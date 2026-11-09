@@ -1,38 +1,28 @@
 import type { SessionIndexItem, SessionStatus } from "@/types/events";
 
-/// One strip in the crew — the sessions a conversation has running — holding the
-/// session and the three things a row says about it without being opened.
+/// One session the selected one started, and what it is doing.
 export type CrewRow = {
   item: SessionIndexItem;
-  /// A turn is in flight. Draws the orb, and nothing else in the crew moves.
+  /// A turn is in flight.
   busy: boolean;
-  /// Standing still behind a card somebody has to answer. The sidebar's yellow,
-  /// and the one state that opens a row on its own.
+  /// Standing still behind a card somebody has to answer. The one state that
+  /// puts a row in the crew column.
   asking: boolean;
   /// A turn finished and nobody has read it. The sidebar's green.
   unread: boolean;
 };
 
-/// What the selected session started, newest first. **Its own children and
-/// nothing below them.**
+/// Everything the selected session started, at any depth: depth-first, each
+/// level newest first. The crew column draws the rows asking.
 ///
-/// The depth cap allows a spawned session to spawn, so a grandchild exists and
-/// a walk would reach it. It is deliberately not drawn: a flat list cannot say
-/// that one of its rows belongs to another, so a grandchild sat in the column
-/// as a peer of the session that started it, and the reader had no way to tell
-/// which. Drawing the tree instead is the other half of the same answer and is
-/// refused for its own reasons — the sidebar already draws it, and a connector
-/// between two headers is broken by whatever transcript is expanded between
-/// them.
+/// Every depth, since a grandchild's card would otherwise surface only while
+/// its own parent is selected — and a hidden parent is never the selection.
 ///
-/// A grandchild is not unreachable, it is one hop away: ⌘-click the row that
-/// started it and that session anchors a crew of its own. Which is the honest
-/// reading of what this column is — *what this conversation is running*, not
-/// everything downstream of it.
+/// Newest first by when it was *started* rather than last touched: the
+/// sidebar's own ordering moves a row every time its turn ends.
 ///
-/// Archived sessions are dropped. A settled session is one the reader has
-/// finished with, and the crew is a worklist — the sidebar's archived side is
-/// where it goes on being listed.
+/// Archived sessions are dropped, with everything under them: a settled
+/// session is one the reader has finished with.
 export function crewRows(
   items: SessionIndexItem[],
   parentId: string | null,
@@ -42,13 +32,29 @@ export function crewRows(
   },
 ): CrewRow[] {
   if (!parentId) return [];
-  return items
-    .filter((i) => i.parentSessionId === parentId && !i.archived && i.sessionId !== parentId)
-    // Newest first, by when it was *started* rather than last touched: the
-    // sidebar's own ordering moves a row every time its turn ends, which here
-    // would slide an open transcript out from under somebody reading it.
-    .sort((a, b) => Date.parse(b.created) - Date.parse(a.created))
-    .map((item) => rowState(item, live));
+  const byParent = new Map<string, SessionIndexItem[]>();
+  for (const i of items) {
+    if (i.archived || !i.parentSessionId || i.parentSessionId === i.sessionId) continue;
+    const siblings = byParent.get(i.parentSessionId) ?? [];
+    siblings.push(i);
+    byParent.set(i.parentSessionId, siblings);
+  }
+  const out: CrewRow[] = [];
+  // A cycle in the index costs a short list rather than a hung render.
+  const seen = new Set([parentId]);
+  const walk = (id: string) => {
+    const kids = [...(byParent.get(id) ?? [])].sort(
+      (a, b) => Date.parse(b.created) - Date.parse(a.created),
+    );
+    for (const kid of kids) {
+      if (seen.has(kid.sessionId)) continue;
+      seen.add(kid.sessionId);
+      out.push(rowState(kid, live));
+      walk(kid.sessionId);
+    }
+  };
+  walk(parentId);
+  return out;
 }
 
 /// What a row says about one session.
@@ -75,76 +81,30 @@ function rowState(
   };
 }
 
-/// The session whose crew is on screen, which is *not* simply the selected one.
-///
-/// Opening a crew row selects that session — the composer has to follow where
-/// the reader is reading — and a child has no children of its own, so read
-/// straight off the selection the crew would delete itself on the first click
-/// it received. Hence an anchor that survives its own rows being selected.
-///
-/// The rule is three lines and **the order of the first two is load-bearing**:
-///
-///  1. the previous anchor stands while the selection is one of its rows — so
-///     the crew lives exactly as long as the reader is inside something it is
-///     showing;
-///  2. otherwise a session with descendants anchors its own crew;
-///  3. otherwise there is no crew.
-///
-/// Asking 2 first looks equivalent and is not, because a spawned session may
-/// spawn: clicking a row that has children of its own then made *that* session
-/// the anchor, which swapped the whole list and moved the main column onto it —
-/// reading as the crew row having replaced the conversation rather than opened
-/// beside it. A session in the list is in the list, and what it started of its
-/// own is deliberately not drawn here at all; ⌘-click is how you go and look.
-///
-/// Clause 1 is also narrower than "a child keeps its parent's crew", and the
-/// caller narrows it further: `previous` is passed only for a selection made
-/// from *inside* the crew. A child reached from the sidebar or with ⌘⇧↑/↓ shows
-/// no crew and opens full width, which is the settled behaviour — those are the
-/// reader leaving the arrangement, and an anchor that survived them left the
-/// main column on the parent while the composer moved, so the sidebar click
-/// read as having done nothing.
-export function crewAnchor(
-  items: SessionIndexItem[],
-  selectedId: string | null,
-  previous: string | null,
-): string | null {
-  if (!selectedId) return null;
-
-  if (previous) {
-    const quiet = { statusBySession: {}, askingSessions: new Set<string>() };
-    const held = crewRows(items, previous, quiet).some((r) => r.item.sessionId === selectedId);
-    if (held) return previous;
-  }
-  return items.some((i) => i.parentSessionId === selectedId && !i.archived) ? selectedId : null;
-}
-
-/// The sessions a crew column is *showing*, which is every row of it.
+/// The sessions whose cards the crew column would draw: every row, asking or
+/// not, wherever the column can appear.
 ///
 /// Not the question `crewShown` in `App` asks, which is narrower on purpose:
-/// that set is what gets loaded and read-marked, and a strip is on screen
-/// without its transcript being read. This one answers whether a card raised
-/// for a session would land in front of the reader — and a crew row opens
-/// itself for one, so membership alone is the whole answer.
+/// that set is what gets loaded and read-marked. This one answers whether a
+/// card raised for a session would land in front of the reader — and the
+/// column draws one for any row, so membership alone is the whole answer.
 ///
 /// **Never filtered by `asking`.** That flag is set by the very event being
 /// announced, so a set filtered by it is always one render behind the question:
-/// `announce`, asked at the instant the request landed, found the child not yet
-/// on screen and raised a notice — and the row drew its card a render later
-/// anyway, leaving a card and a notice for one event, with the notice's click
-/// dragging the main column onto a child the reader was already looking at.
+/// `announce` found the child not yet on screen and raised a notice, and the
+/// column drew its card a render later anyway — a card and a notice for one
+/// event (DRA-277).
 ///
-/// Empty where the column is not drawn — put away with the chord, behind
-/// another view tab, or anchored outside the active space — since a child that
-/// genuinely cannot be seen must still announce.
+/// Empty where the column cannot appear — behind another view tab, on the
+/// issues page, or beside a split — since a card nobody can see must announce.
 export function crewSeen(rows: CrewRow[], drawn: boolean): string[] {
   return drawn ? rows.map((r) => r.item.sessionId) : [];
 }
 
-/// The sidebar's list: everything but a hidden session whose parent is here to
-/// draw it in a crew. A hidden one whose parent is missing stays listed, since
-/// out of the sidebar it would be reachable from nowhere. Settled ones too:
-/// unsettling the parent brings them back to its crew.
+/// The sidebar's list: everything but a hidden session whose parent is here.
+/// A hidden session surfaces only through its cards beside that parent. One
+/// whose parent is missing stays listed, since it would surface nowhere. Settled ones too:
+/// unsettling the parent lists them again.
 export function inSidebar(items: SessionIndexItem[]): SessionIndexItem[] {
   const ids = new Set(items.map((i) => i.sessionId));
   return items.filter((i) => !(i.hidden && i.parentSessionId && ids.has(i.parentSessionId)));

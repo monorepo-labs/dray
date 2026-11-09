@@ -23,6 +23,7 @@ import { ChatSessionContext } from "@/hooks/useChatSession";
 import { useHotkey } from "@/hooks/useHotkey";
 import type { ApiRetryState, QueuedPrompt, Working } from "@/hooks/useSessions";
 import { useStreamingBlock, useStreamingKind } from "@/hooks/useStreamingBlock";
+import { RANK_OWN } from "@/lib/cardKeys";
 import { planAsked, setPlan } from "@/lib/plan";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
@@ -88,10 +89,6 @@ type ChatProps = {
   /// than unmounted when another view tab is picked, so ⌘↓ has to be told to
   /// stop listening — otherwise it scrolls a pane nobody can see.
   active?: boolean;
-  /// Draw only the newest N turns and mount nothing above them. The crew's
-  /// strips take it; the main column does not — see [`CREW_TAIL`]. Unset is the
-  /// whole conversation, backfilled.
-  tail?: number;
 };
 
 /// How long an answered permission card holds its place before going.
@@ -185,7 +182,6 @@ export default function Chat({
   crowded = false,
   rail = true,
   active = true,
-  tail,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -382,19 +378,12 @@ export default function Chat({
     sessionId: null,
     key: null,
   });
-  //
-  // `tail` replaces the whole arrangement rather than seeding it: a capped
-  // transcript draws its newest `tail` turns and mounts nothing above them, so
-  // the window is a plain count from the end with no state to key and no step
-  // to schedule.
   const mounted =
-    tail != null
-      ? Math.max(0, turns.length - tail)
-      : mount.sessionId === session?.sessionId
-        ? Math.max(0, turns.findIndex((turn) => turn.key === mount.key))
-        : firstMount(turns.length);
+    mount.sessionId === session?.sessionId
+      ? Math.max(0, turns.findIndex((turn) => turn.key === mount.key))
+      : firstMount(turns.length);
   const shownTurns = mountedTurns(turns, mounted);
-  const backfilling = tail == null && mounted > 0;
+  const backfilling = mounted > 0;
 
   // Where the oldest mounted turn sat before a step lands, for the
   // compensation below. A node, not the scroller's height: anything else
@@ -415,7 +404,7 @@ export default function Chat({
   useEffect(() => {
     if (!session) return;
     if (!backfilling) {
-      if (tail == null && olderBefore != null) loadOlder(session.sessionId);
+      if (olderBefore != null) loadOlder(session.sessionId);
       return;
     }
     const sessionId = session.sessionId;
@@ -724,6 +713,7 @@ export default function Chat({
                   // The pane the composer serves is the one whose card may
                   // take the caret.
                   autoFocus={active}
+                  keyRank={active ? RANK_OWN : undefined}
                 />
               ) : (
                 <PermissionRequest
@@ -746,6 +736,7 @@ export default function Chat({
                   onViewPlan={
                     planAsked(ask.toolName, ask.input) ? onOpenPlan : undefined
                   }
+                  keyRank={active ? RANK_OWN : undefined}
                 />
               ),
             )}
