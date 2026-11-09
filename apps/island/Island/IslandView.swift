@@ -111,8 +111,12 @@ struct IslandView: View {
     private var stackedCard: some View {
         VStack(spacing: 0) {
             composerCard
-            if !recording, !composer.sent, !composer.asksListed, composer.ask != nil, composer.attention.count > 1 {
-                AskPeeks(count: composer.attention.count - 1).transition(.opacity)
+            if !recording, !composer.sent, composer.ask != nil, composer.attention.count > 1 {
+                // Faded under the list, not removed: re-inserted, the edges landed at the card's new
+                // bottom at once and the card grew down to them.
+                AskPeeks(count: composer.attention.count - 1)
+                    .opacity(composer.listing ? 0 : 1)
+                    .transition(.opacity)
             }
         }
         .animation(.snappy(duration: 0.2), value: composer.attention.count)

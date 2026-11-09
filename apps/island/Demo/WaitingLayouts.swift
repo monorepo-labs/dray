@@ -38,7 +38,7 @@ enum WaitingLayout: String, CaseIterable, Identifiable {
         case .shipped: "The card with the rest stacked under it; the title and +N open every waiting session as a list."
         case .pager: "One title, a count and arrows. Narrowest header; the others are a click away, unnamed."
         case .deck: "Cards stacked, the ones behind peeking out under it. Answer or dismiss and the next slides up."
-        case .list: "Every session a row saying what it asks; the picked one opens in place. × on a row's hover."
+        case .list: "Every session a row saying what it asks; the picked one opens in place."
         case .menu: "The title is a menu holding the others, a count beside it."
         case .side: "Sessions down the left, the card on the right. Every title in full, less room for the card."
         }
@@ -158,8 +158,7 @@ private struct LayoutCard: View {
                     .padding(10)
                     .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
                 } else {
-                    WaitingRow(title: name(k), summary: store.askSummary(k), pick: { composer.askTab = k },
-                            dismiss: { composer.dismissAsks(k) })
+                    WaitingRow(title: name(k), summary: store.askSummary(k), pick: { composer.askTab = k })
                 }
             }
         }

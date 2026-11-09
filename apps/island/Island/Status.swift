@@ -41,8 +41,7 @@ struct AskCard: View {
                         ForEach(keys, id: \.self) { k in
                             WaitingRow(title: title(k), summary: store.askSummary(k), current: k == key,
                                        pick: { list(open: false) { composer.askTab = k } },
-                                       openInApp: { Task { await composer.showInApp(k) } },
-                                       dismiss: { composer.dismissAsks(k) })
+                                       openInApp: { Task { await composer.showInApp(k) } })
                         }
                     }
                 }
@@ -65,9 +64,14 @@ struct AskCard: View {
 
     /// Opens or closes the list in one animation, whichever row was picked.
     private func list(open: Bool, _ change: () -> Void = {}) {
-        withAnimation(.snappy(duration: 0.25)) {
-            change()
-            composer.asksListed = open
+        // The pick swaps the folded body unanimated: faded out instead, the old one kept its full
+        // height while it went, and the card grew past both and sprang back.
+        // The close waits a turn, or both land in one update and the instant transaction takes the animation with it.
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant, change)
+        DispatchQueue.main.async {
+            withAnimation(.snappy(duration: 0.25)) { composer.asksListed = open }
         }
     }
 
@@ -128,14 +132,13 @@ private struct WaitingSwitch: View {
 }
 
 /// One waiting session in the opened list: its title and what it asks. A click
-/// opens its card, ⌘-click opens it in Dray, and × on hover dismisses it.
+/// opens its card, ⌘-click opens it in Dray.
 struct WaitingRow: View {
     let title: String
     let summary: String
     var current = false
     let pick: () -> Void
     var openInApp: () -> Void = {}
-    let dismiss: () -> Void
     @State private var hover = false
 
     var body: some View {
@@ -144,11 +147,6 @@ struct WaitingRow: View {
                 .foregroundStyle(.white.opacity(current ? 0.95 : 0.75)).layoutPriority(1)
             Text(summary).font(.system(size: 13)).lineLimit(1).foregroundStyle(.white.opacity(0.35))
             Spacer(minLength: 0)
-            Button(action: dismiss) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white.opacity(0.5))
-                .opacity(hover ? 1 : 0)
-                .help("Dismiss")
         }
         .padding(.horizontal, 10)
         .frame(height: 30)
