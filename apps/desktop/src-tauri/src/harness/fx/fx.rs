@@ -623,7 +623,16 @@ async fn open_session(
 
     if is_new_session {
         let answer =
-            open_with_servers(client, "session/new", new_session_params(&hello, session_cwd), mcp_servers)
+            open_with_servers(
+                client,
+                "session/new",
+                new_session_params(
+                    &hello,
+                    session_cwd,
+                    &crate::bots::system_prompt(SYSTEM_PROMPT, session_cwd).await,
+                ),
+                mcp_servers,
+            )
                 .await?;
         let id = answer
             .get("sessionId")
@@ -656,10 +665,10 @@ async fn open_session(
 /// Gated on the capability rather than sent blind: an fx that predates it is
 /// one nobody has watched answer an unknown field, and a refused open kills the
 /// session before it starts.
-fn new_session_params(hello: &Value, session_cwd: &str) -> Value {
+fn new_session_params(hello: &Value, session_cwd: &str, system_prompt: &str) -> Value {
     let mut params = json!({"cwd": session_cwd});
     if hello["agentCapabilities"]["sessionCapabilities"]["systemPrompt"].is_object() {
-        params["systemPrompt"] = json!([{"type": "text", "text": SYSTEM_PROMPT}]);
+        params["systemPrompt"] = json!([{"type": "text", "text": system_prompt}]);
         params["systemPromptMode"] = json!("append");
     }
     params
@@ -1586,7 +1595,7 @@ mod tests {
     #[test]
     fn the_rules_ride_session_new_where_fx_advertises_a_system_prompt() {
         let hello = &answers()[0]["result"];
-        let params = new_session_params(hello, "/tmp/x");
+        let params = new_session_params(hello, "/tmp/x", SYSTEM_PROMPT);
         assert_eq!(params["systemPromptMode"], "append");
         let text = params["systemPrompt"][0]["text"].as_str().unwrap();
         assert!(text.contains("You run inside Dray"));
@@ -1597,7 +1606,7 @@ mod tests {
             .and_then(|line| line.strip_prefix("<< "))
             .expect("cancel.jsonl carries an initialize reply");
         let old: Value = serde_json::from_str(old).unwrap();
-        assert_eq!(new_session_params(&old["result"], "/tmp/x"), json!({"cwd": "/tmp/x"}));
+        assert_eq!(new_session_params(&old["result"], "/tmp/x", SYSTEM_PROMPT), json!({"cwd": "/tmp/x"}));
     }
 
     /// `fast` is a config option on 0.0.14: off at `session/new`, on after the

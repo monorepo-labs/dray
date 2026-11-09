@@ -81,6 +81,9 @@ type ComposerToolbarProps = {
   /// Where the session runs is fixed at creation, so the last three controls
   /// only exist before one starts.
   isNewSession: boolean;
+  /// A bot's first chat: its name stands in for the project pickers, since it
+  /// runs in its own folder rather than in a repo.
+  botName?: string;
 
   /// Whether this session's turn is in flight. Only the fx provider switch
   /// reads it — it is the one control here that moves the child on the click
@@ -125,6 +128,7 @@ export default function ComposerToolbar({
   onAttach,
   contextUsage,
   isNewSession,
+  botName,
   busy,
 }: ComposerToolbarProps) {
   return (
@@ -169,7 +173,11 @@ export default function ComposerToolbar({
         loadingModels={loadingModels}
       />
 
-      {isNewSession && (
+      {isNewSession && botName && (
+        <span className="truncate px-1.5 text-ui text-muted-foreground">{botName}</span>
+      )}
+
+      {isNewSession && !botName && (
         <>
           <ProjectSelector
             projects={projects}

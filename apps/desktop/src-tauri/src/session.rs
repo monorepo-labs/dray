@@ -3192,6 +3192,18 @@ pub async fn ingest(ctx: &Ingest<'_>, agent_event: AgentEvent, app: &Sink) {
 /// [`ingest`], with `tracked` false for an event whose status change the
 /// caller already made under its own lock — Stop's close, which has to check
 /// and close the turn in one step.
+/// What a child's closing turn says to the bot: its last words, or what became
+/// of a turn that ended without any, so the bot is never left waiting on one.
+fn report_text(status: TurnStatus, stop_reason: Option<&str>, final_text: Option<&str>) -> String {
+    match final_text.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(text) => text.to_string(),
+        None if status == TurnStatus::Error => {
+            format!("(the turn failed: {})", stop_reason.unwrap_or("no reason given"))
+        }
+        None => "(the turn ended without a message)".to_string(),
+    }
+}
+
 async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink, tracked: bool) {
     // Filled here rather than in the mapper because only the session layer
     // knows the cwd. Freezing the tree id onto the closing event is what
@@ -3236,6 +3248,20 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
 
     if let Err(err) = app.emit("agent_event", &agent_event) {
         eprintln!("[emit err] {err}");
+    }
+
+    // A bot's child reports every turn it closes. Spawned: the send lands in
+    // the parent's session, which must not hold this one's read loop up.
+    if agent_event.subagent.is_none() {
+        if let AgentEventPayload::TurnCompleted { status, stop_reason, final_text, .. } = &agent_event.payload {
+            let text = report_text(*status, stop_reason.as_deref(), final_text.as_deref());
+            let report = crate::orchestration::report_to_parent(ctx.session_id.to_string(), text, app.clone());
+            tokio::spawn(async move {
+                if let Err(e) = report.await {
+                    eprintln!("[bot report err] {e:#}");
+                }
+            });
+        }
     }
 
     // The CLI moved the session to another model for good. Recorded, or the

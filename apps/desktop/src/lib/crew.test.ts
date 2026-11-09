@@ -147,6 +147,12 @@ describe("hidden sessions", () => {
     expect(inSidebar(items).map((i) => i.sessionId)).toEqual(["a", "shown", "orphan"]);
   });
 
+  it("leaves a bot's own chat to the Bots section", () => {
+    const bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
+    const withBot = [...items, item("chat", null, { cwd: "/h/bots/b" })];
+    expect(inSidebar(withBot, [bot]).map((i) => i.sessionId)).toEqual(["a", "shown", "orphan"]);
+  });
+
   it("leaves a settled hidden child out of the settled list too", () => {
     const settled = [item("a", null, { archived: true }), item("review", "a", { hidden: true, archived: true })];
     expect(inSidebar(settled).map((i) => i.sessionId)).toEqual(["a"]);

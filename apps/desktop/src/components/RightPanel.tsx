@@ -48,6 +48,7 @@ export function PanelToggle({ onToggle }: { onToggle: () => void }) {
 export const PANEL_TABS = [
   "changes",
   "browser",
+  "tasks",
   "more",
   "pr",
   "issue",
@@ -63,6 +64,8 @@ export const PANEL_LABELS: Record<PanelTab, string> = {
   // empty state is a URL bar, which is a place to start rather than a
   // sentence saying there is nothing.
   browser: "Browser",
+  // A bot's children: the work it handed off, waiting, running or done.
+  tasks: "Tasks",
   // A catch-all, and named as one on purpose. What is in it — the task list,
   // the runs this session spawned — is what the reader checks rather than
   // works in, and the row cannot grow a tab per answer of that kind. A name
@@ -105,6 +108,7 @@ export function tabOrder({
   issue,
   more,
   plan,
+  tasks,
 }: {
   pr: boolean;
   /// At least one markdown file is open in the pane — see
@@ -118,10 +122,14 @@ export function tabOrder({
   /// The agent has put a plan up in this session — see [plan](../lib/plan.ts).
   /// Absent otherwise, for the PR tab's reason: most sessions never plan.
   plan?: boolean;
+  /// The session is a bot's chat. Drawn even with nothing handed off yet.
+  tasks?: boolean;
 }): readonly PanelTab[] {
   // Browser always: with no page open its empty state is a URL bar, the
   // session's recent pages and its local servers — a place to start.
-  const tabs: PanelTab[] = pr ? ["pr", "changes", "browser"] : ["changes", "browser"];
+  const tabs: PanelTab[] = pr ? ["pr", "changes"] : ["changes"];
+  if (tasks) tabs.push("tasks");
+  tabs.push("browser");
   // After Changes, which is what keeps Issue immediately before More.
   if (docs) tabs.push("docs");
   // Immediately before More wherever it is drawn, so the row's order is the

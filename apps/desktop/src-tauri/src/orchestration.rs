@@ -1180,7 +1180,22 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
         bail!("--hidden needs a calling session: a hidden session shows only beside its parent");
     }
 
+    // Everything under a bot runs hidden: the bot is the one place its work is
+    // run from, and each child reports back to it on its own.
+    let in_bot_tree = match parent.as_ref() {
+        Some(p) => crate::bots::in_bot_tree(p).await,
+        None => false,
+    };
+    let hidden = create.hidden || in_bot_tree;
+
     let project_path = resolve_project(&create, parent.as_ref())?;
+    // A bot's folder is not a repository, so inheriting it as the project
+    // would fail at the worktree with git's own words instead of these.
+    if parent.as_ref().is_some_and(|p| p.cwd == project_path)
+        && crate::bots::bot_at(&project_path).await.is_some()
+    {
+        bail!("a bot's folder is not a repository — pass --project <repo path>");
+    }
 
     // The project is deliberately *not* attached here. The sidebar's filter
     // defaults to null and lists every session whatever its project, so a
@@ -1232,7 +1247,7 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
             base_ref.as_deref(),
             true,
             create.parent_session_id.as_deref(),
-            create.hidden,
+            hidden,
             create.title.as_deref(),
             // The creating session is this one's *parent*, which the sidebar
             // already draws by nesting the row. Its opening prompt is the brief,
@@ -1657,6 +1672,41 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
 
     Ok(Response::Sent {
         queued: outcome.queued.is_some(),
+    })
+}
+
+/// Sends what a bot's child closed its turn with to the session that started it.
+///
+/// Every turn, not only the last one, and mechanical rather than left to the
+/// child: a report the agent is asked to send is one it can forget, and the bot
+/// is where the user is. The same path as `dray session send`, so the bot sees
+/// it exactly as it would a message the child sent itself.
+///
+/// Boxed because the read loop calling it lives inside a harness's `init`, and
+/// this send can reach `init` again: left unboxed, the compiler cannot name
+/// either future without first naming the other.
+pub fn report_to_parent(
+    child_id: String,
+    text: String,
+    app: Sink,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+    Box::pin(async move {
+        let Some(child) = store::get_session_index_item(&child_id).await? else {
+            return Ok(());
+        };
+        let Some(parent_id) = child.parent_session_id.clone() else {
+            return Ok(());
+        };
+        if !crate::bots::in_bot_tree(&child).await {
+            return Ok(());
+        }
+        send_message(
+            SendMessage { session_id: parent_id, prompt: text, from_session_id: Some(child_id) },
+            None,
+            &app,
+        )
+        .await?;
+        Ok(())
     })
 }
 

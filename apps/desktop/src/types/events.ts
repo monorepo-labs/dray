@@ -531,6 +531,30 @@ warning: boolean,
 note: string | null, };
 
 /**
+ * A bot: one long-lived chat with instructions and memory of its own, which
+ * everything it spawns reports back to after every turn.
+ *
+ * It is a folder, `bots/<id>/` under the home, holding [`INSTRUCTIONS`] and
+ * [`MEMORY`]; the bot's session runs *in* that folder, which is how a session
+ * is known to be a bot's — no field on the index says so, so an older build
+ * reading the index loses nothing. `bots.json` holds only the list.
+ */
+export type Bot = { id: string, name: string, 
+/**
+ * The bot's folder: its session's cwd. Absolute, on the server holding it.
+ */
+path: string, created: string, };
+
+/**
+ * A bot with what its two files say, for Settings.
+ */
+export type BotDetail = { instructions: string, memory: string, id: string, name: string, 
+/**
+ * The bot's folder: its session's cwd. Absolute, on the server holding it.
+ */
+path: string, created: string, };
+
+/**
  * What the composer's branch picker needs to render and guard itself.
  */
 export type BranchList = { 
@@ -1799,10 +1823,10 @@ issues: Array<IssueRef>,
  */
 parentSessionId: string | null, created: string, modified: string, archived: boolean, pinned: boolean, 
 /**
- * Left out of the sidebar and drawn only in its parent's crew — a review
- * session nobody means to read on its own. `dray new --hidden` sets it,
- * the crew row's menu clears it, and detaching clears it too, since a
- * session with no parent has no crew to be drawn in.
+ * Left out of the sidebar, surfacing only as cards beside its parent — a
+ * review session nobody means to read on its own. `dray new --hidden` sets
+ * it, and detaching clears it, since a session with no parent would
+ * surface nowhere.
  *
  * `#[serde(default)]`: an entry written before the field reads as shown.
  */
@@ -1956,10 +1980,10 @@ issues: Array<IssueRef>,
  */
 parentSessionId: string | null, created: string, modified: string, archived: boolean, pinned: boolean, 
 /**
- * Left out of the sidebar and drawn only in its parent's crew — a review
- * session nobody means to read on its own. `dray new --hidden` sets it,
- * the crew row's menu clears it, and detaching clears it too, since a
- * session with no parent has no crew to be drawn in.
+ * Left out of the sidebar, surfacing only as cards beside its parent — a
+ * review session nobody means to read on its own. `dray new --hidden` sets
+ * it, and detaching clears it, since a session with no parent would
+ * surface nowhere.
  *
  * `#[serde(default)]`: an entry written before the field reads as shown.
  */

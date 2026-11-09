@@ -18,6 +18,7 @@ import {
   Undo2,
 } from "lucide-react";
 import Orb from "@/components/Orb";
+import type { BotEntry } from "@/lib/bots";
 
 import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
@@ -63,6 +64,7 @@ import { useResizable } from "@/components/ResizeHandle";
 import { useJumpDigit } from "@/lib/digitChords";
 import { cn } from "@/lib/utils";
 import type {
+  Bot,
   PrMark,
   Project,
   SessionIndexItem,
@@ -79,6 +81,12 @@ type SidebarProps = {
   // Already scoped to `projectFilter` and to `search` by the caller, so the list
   // and the ⌘⇧↑/↓ walk step through exactly the same rows.
   items: SessionIndexItem[];
+  /// The Bots section: every bot with its ongoing chat, if it has one.
+  bots?: BotEntry[];
+  onOpenBot?: (bot: Bot) => void;
+  /// Settles the bot's chat, so its next message starts a new one.
+  onStartBotFresh?: (bot: Bot) => void;
+  onEditBot?: (bot: Bot) => void;
   // The live search query. Owned by the caller, because the list it narrows is
   // the caller's — the ⌘⇧↑/↓ walk reads the same array, and a query kept in here
   // would leave the shortcut stepping rows the sidebar no longer draws.
@@ -958,6 +966,10 @@ export const SIDEBAR_MIN = 240;
 
 export default function Sidebar({
   items,
+  bots = [],
+  onOpenBot,
+  onStartBotFresh,
+  onEditBot,
   search,
   onSearchChange,
   searchOpen,
@@ -1372,6 +1384,28 @@ export default function Sidebar({
         // observer, which is one more thing to mount per step.
         onScroll={more ? openMore : undefined}
       >
+        {/* Bots lead the live list: each is one ongoing chat the reader runs
+            everything else from, so it is where the eye goes first. Not in the
+            settled list or the drafts view, which are about sessions. */}
+        {!archivedShown && !draftsShown && bots.length > 0 && (
+          <>
+            <HeadingRow label="Bots" />
+            {bots.map(({ bot, session }) => (
+              <BotRow
+                key={bot.id}
+                bot={bot}
+                status={session ? (statusBySession[session.sessionId] ?? session.status) : "idle"}
+                asking={!!session && askingSessions.has(session.sessionId)}
+                active={!!session && session.sessionId === selectedSessionId}
+                onOpen={() => onOpenBot?.(bot)}
+                onStartFresh={session ? () => onStartBotFresh?.(bot) : undefined}
+                onEdit={() => onEditBot?.(bot)}
+              />
+            ))}
+            <div aria-hidden className="h-4 shrink-0" />
+          </>
+        )}
+
         {runs.length === 0 ? (
           <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
@@ -1683,6 +1717,65 @@ function DotTrack({
 /// task in it. The plus only appears under the cursor: the row is a label first
 /// and every heading carrying one at rest would draw more chrome than the
 /// sessions beneath it.
+/// A bot and the one chat it is. The session row's own rail and orb, with no
+/// lineage, PR mark or hover controls: a bot is managed in Settings.
+function BotRow({
+  bot,
+  status,
+  asking,
+  active,
+  onOpen,
+  onStartFresh,
+  onEdit,
+}: {
+  bot: Bot;
+  status: SessionStatus;
+  asking: boolean;
+  active: boolean;
+  onOpen: () => void;
+  /// Absent while the bot has no chat to settle.
+  onStartFresh?: () => void;
+  onEdit: () => void;
+}) {
+  return (
+    <ContextMenu>
+    <ContextMenuTrigger asChild>
+    <button
+      type="button"
+      onClick={onOpen}
+      className={cn(
+        "group relative flex min-h-7 w-full cursor-pointer items-center rounded-md pl-0 pr-0.5 text-left",
+        "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
+        active
+          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
+      )}
+    >
+      <span className="flex w-2 shrink-0 items-center self-stretch">
+        {(asking || status === "completed") && (
+          <span
+            role="img"
+            aria-label={asking ? "Waiting for you" : "Unread"}
+            className={cn("h-1.5 w-0.5 rounded-[1px]", asking ? "bg-accent-command" : "bg-accent-add")}
+          />
+        )}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-ui">{bot.name}</span>
+      {status === "in_progress" && !asking && <Orb state="working" label="Working" />}
+    </button>
+    </ContextMenuTrigger>
+    <ContextMenuContent className="w-44">
+      <ContextMenuItem className="text-ui" disabled={!onStartFresh} onSelect={onStartFresh}>
+        Start fresh
+      </ContextMenuItem>
+      <ContextMenuItem className="text-ui" onSelect={onEdit}>
+        Edit in Settings
+      </ContextMenuItem>
+    </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 function HeadingRow({
   onClick,
   label,

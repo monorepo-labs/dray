@@ -330,6 +330,7 @@ Detail per subsystem lives in [apps/desktop/docs/](apps/desktop/docs/). **Read t
 - [worktrees.md](apps/desktop/docs/worktrees.md) — Removing worktrees, unlocking, relocating sessions, settle kills the tree.
 - [orchestration.md](apps/desktop/docs/orchestration.md) — `dray` CLI: socket, protocol versions, install/update, creating and relaying sessions, skills.
 - [sidebar-and-crew.md](apps/desktop/docs/sidebar-and-crew.md) — Sidebar stages and nesting; the crew's cards.
+- [bots.md](apps/desktop/docs/bots.md) — Bots: the folder, prompt injection per harness, hidden children, automatic report-back, Tasks tab.
 - [browser.md](apps/desktop/docs/browser.md) — CEF browser: download, profiles, tabs, discard, `dray browser`, recording.
 - [forking.md](apps/desktop/docs/forking.md) — Lazy forks per harness, worktree forks, name resolution, log repointing.
 - [releases.md](apps/desktop/docs/releases.md) — App updater, channels, manifests, R2, relaunch; changelog feed.

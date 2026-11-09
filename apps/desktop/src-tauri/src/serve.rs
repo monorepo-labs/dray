@@ -1579,6 +1579,12 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             saved
         };
         delete_draft(id: String) => crate::drafts::delete_draft(id).await;
+        list_bots() => crate::bots::list_bots().await;
+        read_bot(id: String) => crate::bots::read_bot(id).await;
+        create_bot(name: String, instructions: String) => crate::bots::create_bot(name, instructions).await;
+        update_bot(id: String, name: Option<String>, instructions: Option<String>, memory: Option<String>) =>
+            crate::bots::update_bot(id, name, instructions, memory).await;
+        delete_bot(id: String) => crate::bots::delete_bot(id).await;
         read_doc(path: String) => crate::docs::read_doc(path).await;
         save_doc(path: String, text: String, expect: Option<String>) => crate::docs::save_doc(path, text, expect).await;
         watch_docs(scope: String, paths: Vec<String>) => {
