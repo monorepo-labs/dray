@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useId, useState, type ReactNode } fro
 import {
   BoltIcon,
   ChatBubbleBottomCenterTextIcon,
+  ClockIcon,
   ComputerDesktopIcon,
   InformationCircleIcon,
   MicrophoneIcon,
@@ -45,6 +46,7 @@ import { chordFor, useShortcutOverrides } from "@/hooks/useShortcuts";
 import { useTheme } from "@/hooks/useTheme";
 import { type ManualCheck, updateFailure } from "@/hooks/useUpdater";
 import { downloadChromium, removeChromium, useChromium } from "@/lib/browser";
+import { BREAK_INTERVALS, setBreakDue, setBreakSettings, useBreakSettings } from "@/lib/breaks";
 import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
 import {
   cachedApps,
@@ -203,6 +205,11 @@ export default function SettingsPage({
           </>
         ),
         composer: <HandoffSettings />,
+        breaks: (
+          <Section>
+            <BreakRows />
+          </Section>
+        ),
         shortcuts: <ShortcutsSettings onOpenIsland={() => goTo("island")} />,
         island: <IslandSettings />,
         spaces: (
@@ -744,6 +751,45 @@ function AutoHideRow({
     >
       <Switch id={id} checked={checked} onCheckedChange={onChange} />
     </SettingRow>
+  );
+}
+
+const BREAK_OPTIONS = BREAK_INTERVALS.map((m) => ({ id: String(m), label: `${m} min` }));
+
+/// The hourly break reminder: whether it runs, how often, and a way to see it
+/// without waiting the interval out.
+function BreakRows() {
+  const switchId = useId();
+  const everyId = useId();
+  const settings = useBreakSettings();
+
+  return (
+    <>
+      <SettingRow
+        id={switchId}
+        label="Break reminders"
+        description="Asks you to get up, walk and stretch."
+        trailing={
+          <Button variant="ghost" size="sm" onClick={() => setBreakDue(true)}>
+            Preview
+          </Button>
+        }
+      >
+        <Switch
+          id={switchId}
+          checked={settings.on}
+          onCheckedChange={(on) => setBreakSettings({ ...settings, on })}
+        />
+      </SettingRow>
+      <SettingRow id={everyId} asGroup label="Remind every">
+        <SegmentedRadio
+          options={BREAK_OPTIONS}
+          value={String(settings.minutes)}
+          onPick={(m) => setBreakSettings({ ...settings, minutes: Number(m) })}
+          labelledBy={everyId}
+        />
+      </SettingRow>
+    </>
   );
 }
 
@@ -1354,6 +1400,7 @@ const ALL_TABS = [
   { id: "shortcuts", label: "Shortcuts", Icon: BoltIcon },
   { id: "island", label: "Island", Icon: ComputerDesktopIcon },
   { id: "composer", label: "Composer", Icon: ChatBubbleBottomCenterTextIcon },
+  { id: "breaks", label: "Breaks", Icon: ClockIcon },
   { id: "changelog", label: "Changelog", Icon: NewspaperIcon },
   { id: "about", label: "About", Icon: InformationCircleIcon },
 ] as const;

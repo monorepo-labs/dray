@@ -194,6 +194,7 @@ export const APP_COMMANDS = new Set([
   "configure_island",
   "island_running",
   "set_app_selection",
+  "idle_seconds",
   "island_done",
   "island_prefs",
   "set_island_pref",

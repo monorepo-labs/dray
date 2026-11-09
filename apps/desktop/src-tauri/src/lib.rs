@@ -941,6 +941,7 @@ pub fn run() {
             apps::configure_island,
             apps::island_running,
             apps::set_app_selection,
+            apps::idle_seconds,
             apps::island_done,
             apps::island_prefs,
             apps::set_island_pref,
