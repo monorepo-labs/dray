@@ -1740,6 +1740,24 @@ wrap_keyboard_handler! {
             }
             1
         }
+
+        /// Keeps a characterless keydown the page left unhandled away from
+        /// the menu bar. CEF hands every such key to `performKeyEquivalent:`,
+        /// and an `NSEvent` with no characters matches the first item with no
+        /// shortcut — About. `dray browser press Escape`, Tab, arrows and any
+        /// textless chord all synthesize one; a real key always carries
+        /// characters, and no menu item answers to a function key.
+        fn on_key_event(
+            &self,
+            _browser: Option<&mut Browser>,
+            event: Option<&KeyEvent>,
+            _os_event: *mut u8,
+        ) -> ::std::os::raw::c_int {
+            let Some(event) = event else { return 0 };
+            let up = sys::cef_key_event_type_t::from(event.type_)
+                == sys::cef_key_event_type_t::KEYEVENT_KEYUP;
+            (!up && event.character == 0 && event.unmodified_character == 0) as _
+        }
     }
 }
 
