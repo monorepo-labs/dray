@@ -48,11 +48,14 @@ type CrewProps = {
 /// The title is a label, not a link. Answering a card is a reply sent by id,
 /// not a move into that session, so nothing here moves the selection.
 export default function Crew({ rows, paneState, onOpen, chat, stacked = false }: CrewProps) {
-  // Held by id, so an answered card leaving does not shift the reader onto
-  // whichever card took its index; they land on the first one instead.
+  // Held by id — whatever is shown, picked or not — so a newer ask landing
+  // ahead of it only moves the count, and an answered card leaving drops the
+  // reader on the first one rather than on whichever took its index.
   const [pickedId, setPickedId] = useState<string | null>(null);
   const at = Math.max(0, rows.findIndex((r) => r.item.sessionId === pickedId));
   const row = rows[at];
+  // During render rather than in an effect, so no commit shows a newer card first.
+  if (row && row.item.sessionId !== pickedId) setPickedId(row.item.sessionId);
   const step = (delta: number) =>
     setPickedId(rows[(at + delta + rows.length) % rows.length].item.sessionId);
   if (!row) return null;

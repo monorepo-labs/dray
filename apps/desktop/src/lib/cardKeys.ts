@@ -68,8 +68,9 @@ function onKeyDown(e: KeyboardEvent) {
   settle();
   const card = owner;
   if (!card) return;
-  const inCard = !!target && !!card.el()?.contains(target);
-  if (e.key === "Enter" && !inCard && target?.closest(ACTS_ON_ENTER)) return;
+  // A focused button presses itself — Deny included, which a forwarded Enter
+  // would have turned into the card's pick.
+  if (e.key === "Enter" && target?.closest(ACTS_ON_ENTER)) return;
 
   if (card.key(e)) {
     e.preventDefault();
