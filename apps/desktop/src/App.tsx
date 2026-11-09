@@ -12,6 +12,8 @@ import Chat from "@/components/Chat";
 import ChatInput from "@/components/ChatInput";
 import DiffWorkerPool from "@/components/DiffWorkerPool";
 import NoticeStack from "@/components/NoticeStack";
+import BreakOverlay from "@/components/BreakOverlay";
+import { useBreakDue } from "@/lib/breaks";
 import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
 import type { SettingsTab } from "@/components/SettingsPage";
@@ -675,7 +677,8 @@ function App() {
   };
   // Layout, not ordinary: the switch must be down before the page paints, or a
   // keystroke in that frame reaches a shell nobody can see.
-  useLayoutEffect(() => setHotkeysSuspended(settingsOpen), [settingsOpen]);
+  const breakDue = useBreakDue();
+  useLayoutEffect(() => setHotkeysSuspended(settingsOpen || breakDue), [settingsOpen, breakDue]);
 
   // Dictation writes into the composer's draft through the module-level store,
   // not through a prop: the controls reach `ChatInput` as an opaque node, so
@@ -3539,6 +3542,7 @@ function App() {
       )}
     </AppShell>
     </div>
+    <BreakOverlay />
     {/* Outside `AppShell` on purpose: it is fixed to the window rather than
         placed in the layout, and the shell has no slot that isn't a pane. */}
     <BoatWarnings busy={boatBusy} />
