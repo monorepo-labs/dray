@@ -1799,10 +1799,10 @@ issues: Array<IssueRef>,
  */
 parentSessionId: string | null, created: string, modified: string, archived: boolean, pinned: boolean, 
 /**
- * Left out of the sidebar and drawn only in its parent's crew — a review
- * session nobody means to read on its own. `dray new --hidden` sets it,
- * the crew row's menu clears it, and detaching clears it too, since a
- * session with no parent has no crew to be drawn in.
+ * Left out of the sidebar, surfacing only as cards beside its parent — a
+ * review session nobody means to read on its own. `dray new --hidden` sets
+ * it, and detaching clears it, since a session with no parent would
+ * surface nowhere.
  *
  * `#[serde(default)]`: an entry written before the field reads as shown.
  */
@@ -1956,10 +1956,10 @@ issues: Array<IssueRef>,
  */
 parentSessionId: string | null, created: string, modified: string, archived: boolean, pinned: boolean, 
 /**
- * Left out of the sidebar and drawn only in its parent's crew — a review
- * session nobody means to read on its own. `dray new --hidden` sets it,
- * the crew row's menu clears it, and detaching clears it too, since a
- * session with no parent has no crew to be drawn in.
+ * Left out of the sidebar, surfacing only as cards beside its parent — a
+ * review session nobody means to read on its own. `dray new --hidden` sets
+ * it, and detaching clears it, since a session with no parent would
+ * surface nowhere.
  *
  * `#[serde(default)]`: an entry written before the field reads as shown.
  */
