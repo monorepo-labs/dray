@@ -108,11 +108,6 @@ export function Island() {
             aria-hidden="true"
             className={`absolute bottom-[132px] left-1/2 flex w-[400px] max-w-[calc(100%-32px)] -translate-x-1/2 origin-bottom flex-col gap-2.5 rounded-[20px] bg-black px-4 py-3.5 text-[13px] leading-[18px] shadow-[0_4px_12px_#00000059] ${s.ask}`}
           >
-            <div className="flex items-center gap-1">
-              <div className="flex h-[18px] items-center leading-4 font-semibold text-[#FFFFFF73]">Retry uploads</div>
-              <div className="grow" />
-              <div className="text-[12px] leading-4 text-[#FFFFFF4D]">Esc</div>
-            </div>
             <div className="font-medium text-white">How should uploads retry?</div>
             <div className="flex flex-col gap-1.5">
               <Option n={1} className={`bg-[#FFFFFF33] ${s.pick1}`} hint="3 tries, waiting 1s, 2s, then 4s">
@@ -140,17 +135,11 @@ export function Island() {
             aria-hidden="true"
             className={`absolute bottom-[132px] left-1/2 flex w-[400px] max-w-[calc(100%-32px)] -translate-x-1/2 origin-bottom flex-col gap-2.5 rounded-[20px] bg-black px-4 py-3.5 text-[13px] leading-[18px] shadow-[0_4px_12px_#00000059] ${s.perm}`}
           >
-            <div className="flex items-center gap-1">
-              <div className="flex h-[18px] items-center leading-4 font-semibold text-[#FFFFFF73]">Retry uploads</div>
-              <div className="grow" />
-              <div className="text-[12px] leading-4 text-[#FFFFFF4D]">Esc</div>
-            </div>
             <div className="flex flex-col gap-1.5">
               <div className="truncate">
                 <span className="font-medium text-white">Bash</span>
                 <span className="ml-1.5 text-[12px] text-[#FFFFFF80]">Run the upload client tests</span>
               </div>
-              <div className="truncate font-mono text-[11px] leading-[14px] text-[#FFFFFF80]">pnpm test upload</div>
               {["Allow once", "Always allow Bash(pnpm test:*)", "Deny"].map((label, i) => (
                 <div
                   key={label}

@@ -64,10 +64,7 @@ export function MessagesPanel() {
       <div
         className={`absolute bottom-[132px] left-1/2 flex w-[400px] max-w-[calc(100%-32px)] -translate-x-1/2 origin-bottom flex-col gap-3 rounded-[20px] bg-black px-4 py-3.5 shadow-[0_4px_12px_#00000059] transition-[opacity,scale] duration-250 ${sent ? "scale-95 opacity-0" : ""}`}
       >
-        <div className="flex items-center gap-3">
-          <div className="grow text-[13px] leading-4 font-semibold text-[#FFFFFFB3]">Retry uploads</div>
-          <div className="text-[12px] leading-4 text-[#FFFFFF4D]">Esc</div>
-        </div>
+        <div className="text-[13px] leading-4 font-semibold text-[#FFFFFFB3]">Retry uploads</div>
         <div className="flex flex-col gap-2">
           <div className="flex justify-end pl-16">
             <div className="rounded-xl bg-[#FFFFFF1A] px-2.5 py-1.5 text-[13px] leading-[18px] text-[#FFFFFFD9]">
@@ -92,19 +89,9 @@ export function MessagesPanel() {
                   <span className="ml-px inline-block h-[15px] w-px translate-y-[3px] bg-white" />
                 </span>
               ) : (
-                <span className="text-[#FFFFFF4D]">⌃ to speak, ⏎ Send</span>
+                <span className="text-[#FFFFFF4D]">⌃ to speak</span>
               )}
             </div>
-            <svg width="18" height="18" viewBox="0 0 18 18" className="shrink-0">
-              <path
-                d="M2 6V4a2 2 0 0 1 2-2h2M12 2h2a2 2 0 0 1 2 2v2M16 12v2a2 2 0 0 1-2 2h-2M6 16H4a2 2 0 0 1-2-2v-2"
-                fill="none"
-                stroke="#FFFFFF99"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-              />
-              <circle cx="9" cy="9" r="2.6" fill="none" stroke="#FFFFFF99" strokeWidth="1.5" />
-            </svg>
             <svg
               width="22"
               height="22"

@@ -21,7 +21,7 @@ const LINKS = [
 /// The last blue band: the closing line, both ways in, and the footer.
 export function Closing() {
   return (
-    <section data-scheme="dark" className="relative flex flex-col overflow-clip bg-[#1612F8] px-5 pt-[120px] sm:px-8 lg:min-h-[960px]">
+    <section data-scheme="dark" className="relative flex flex-col overflow-clip bg-[#1612F8] px-5 pt-[120px] sm:px-8">
       <Stripes />
       <Tiles />
 
@@ -40,7 +40,7 @@ export function Closing() {
         </div>
       </div>
 
-      <footer className="relative mx-auto mt-[120px] flex w-full max-w-[960px] flex-col gap-4 pb-[220px] sm:flex-row sm:items-center sm:justify-between lg:mt-auto lg:pb-[276px]">
+      <footer className="relative mx-auto mt-[120px] flex w-full max-w-[960px] flex-col gap-4 pb-[220px] sm:flex-row sm:items-center sm:justify-between lg:mt-[140px]">
         <p className={LABEL}>© {new Date().getFullYear()} Dray</p>
         <nav aria-label="Footer" className="flex flex-wrap gap-x-6 gap-y-2">
           {LINKS.map((l) => (
