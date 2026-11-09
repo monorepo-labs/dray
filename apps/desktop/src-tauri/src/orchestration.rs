@@ -1707,11 +1707,18 @@ pub fn report_to_parent(
             return Ok(());
         }
         send_message(
-            SendMessage { session_id: parent_id, prompt: text, from_session_id: Some(child_id) },
+            SendMessage { session_id: parent_id.clone(), prompt: text, from_session_id: Some(child_id) },
             None,
             &app,
         )
         .await?;
+        // Settling writes the flag and then stops the child, so a Start fresh
+        // landing between the check above and this send resumed the chat it
+        // had just closed. Read again and stop it: one landing after this read
+        // waits on the slot lock the send held, and stops the child itself.
+        if store::get_session_index_item(&parent_id).await?.is_some_and(|p| p.archived) {
+            manager().settle(&parent_id).await?;
+        }
         Ok(())
     })
 }
