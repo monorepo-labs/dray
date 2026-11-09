@@ -285,7 +285,7 @@ struct IslandView: View {
         input
         if let alert = composer.boatAlerts.first {
             BoatLine(alert: alert, refused: composer.boatRefused,
-                     extend: { minutes in Task { await composer.extendBoat(alert, minutes: minutes) } },
+                     extend: { minutes in await composer.extendBoat(alert, minutes: minutes) },
                      dismiss: { composer.dismissBoat(alert) })
                 .gone(recording)
         }
@@ -730,7 +730,7 @@ struct BoatLine: View {
     /// Why the last Extend didn't take, the pill's own line.
     var refused: String? = nil
     /// Minutes.
-    let extend: (Int) -> Void
+    let extend: (Int) async -> Void
     let dismiss: () -> Void
 
     var body: some View {
@@ -765,7 +765,7 @@ struct PillsView: View {
             } else if !composer.shown, let alert = composer.boatAlerts.first {
                 BoatPill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
                          alert: alert, refused: composer.boatRefused,
-                         extend: { minutes in Task { await composer.extendBoat(alert, minutes: minutes) } },
+                         extend: { minutes in await composer.extendBoat(alert, minutes: minutes) },
                          dismiss: { composer.dismissBoat(alert) }, glowing: composer.glowing)
                     .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
             } else if !composer.shown, !composer.done.isEmpty {

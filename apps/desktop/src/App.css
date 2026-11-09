@@ -893,6 +893,42 @@
   --vibrancy-alpha: 80%;
 }
 
+/* The break card's colour: each palette's loudest colour, so the card draws
+   the eye in every theme, with the ink that reads on it. Dray's is the site's
+   blue. Set on the palette selectors because an alias resolves where it is
+   declared. Stripes are faint by default, since dark ink on a pale card cuts
+   into the line; the two deep cards take them stronger. */
+[data-theme="default"] {
+  --break-card: #1612f8;
+  --break-ink: #fff;
+  --break-stripe: #0000002e;
+}
+[data-theme="catppuccin"][data-mode="dark"] {
+  --break-card: #cba6f7; /* mauve */
+  --break-ink: #1e1e2e;
+}
+[data-theme="catppuccin"][data-mode="light"] {
+  --break-card: #8839ef; /* mauve */
+  --break-ink: #fff;
+  --break-stripe: #0000002e;
+}
+[data-theme="cobalt2"] {
+  --break-card: #ffc600;
+  --break-ink: #193549;
+}
+[data-theme="one-dark-pro"] {
+  --break-card: #61afef; /* blue */
+  --break-ink: #282c34;
+}
+[data-theme="gruvbox"][data-mode="dark"] {
+  --break-card: #fe8019; /* orange */
+  --break-ink: #282828;
+}
+[data-theme="gruvbox"][data-mode="light"] {
+  --break-card: #d65d0e; /* orange */
+  --break-ink: #fbf1c7;
+}
+
 @theme inline {
   --font-sans: 'Geist Variable', sans-serif;
   --font-heading: var(--font-sans);

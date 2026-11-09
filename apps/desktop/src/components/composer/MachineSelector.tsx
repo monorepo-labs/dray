@@ -1,4 +1,5 @@
 import ServerFilledIcon from "@/components/icons/ServerFilledIcon";
+import ShortcutKeys from "@/components/ShortcutKeys";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -7,8 +8,9 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { basename } from "@/lib/format";
-import { checkoutsOf, soleServer } from "@/lib/projectGroups";
+import { checkoutsOf, nextCheckout, soleServer } from "@/lib/projectGroups";
 import { serverConnected, serverName, useServers } from "@/lib/servers";
 import { displayPath, LOCAL, serverOfPath } from "@/lib/transport";
 import type { Project } from "@/types/events";
@@ -34,18 +36,30 @@ export default function MachineSelector({
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={only}
-          className="max-w-40 gap-1.5 px-1.5 text-ui text-muted-foreground disabled:opacity-100"
-        >
-          <ServerFilledIcon className="size-3.5 shrink-0" />
-          <span className="truncate">{checkoutLabel(current, checkouts, basename)}</span>
-        </Button>
-      </DropdownMenuTrigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={only}
+              className="max-w-40 gap-1.5 px-1.5 text-ui text-muted-foreground disabled:opacity-100"
+            >
+              <ServerFilledIcon className="size-3.5 shrink-0" />
+              <span className="truncate">{checkoutLabel(current, checkouts, basename)}</span>
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        {/* Same test as the chord's own gate in `App`, so the hint never names
+            a key that is unbound — every other machine offline included. */}
+        {nextCheckout(checkouts, current.path) && (
+          <TooltipContent side="top" className="max-w-none whitespace-nowrap">
+            Next server
+            <ShortcutKeys ids={["server.next"]} />
+          </TooltipContent>
+        )}
+      </Tooltip>
 
       <DropdownMenuContent align="start" className="w-auto max-w-96 min-w-40">
         <DropdownMenuRadioGroup value={current.path} onValueChange={onSelect}>

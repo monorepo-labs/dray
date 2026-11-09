@@ -12,6 +12,8 @@ import Chat from "@/components/Chat";
 import ChatInput from "@/components/ChatInput";
 import DiffWorkerPool from "@/components/DiffWorkerPool";
 import NoticeStack from "@/components/NoticeStack";
+import BreakOverlay from "@/components/BreakOverlay";
+import { useBreakDue } from "@/lib/breaks";
 import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
 import type { SettingsTab } from "@/components/SettingsPage";
@@ -152,7 +154,7 @@ import BoatNotice from "@/components/composer/BoatNotice";
 import BoatWarnings from "@/components/BoatWarnings";
 import { boatAsleep, restoreHeld } from "@/lib/boat";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
-import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout } from "@/lib/projectGroups";
+import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
 import { serverConnected, serverName, useServers } from "@/lib/servers";
 import { canTagFrom } from "@/lib/sessionTag";
 import { useReachableSessions } from "@/hooks/useReachableSessions";
@@ -675,7 +677,8 @@ function App() {
   };
   // Layout, not ordinary: the switch must be down before the page paints, or a
   // keystroke in that frame reaches a shell nobody can see.
-  useLayoutEffect(() => setHotkeysSuspended(settingsOpen), [settingsOpen]);
+  const breakDue = useBreakDue();
+  useLayoutEffect(() => setHotkeysSuspended(settingsOpen || breakDue), [settingsOpen, breakDue]);
 
   // Dictation writes into the composer's draft through the module-level store,
   // not through a prop: the controls reach `ChatInput` as an opaque node, so
@@ -2531,6 +2534,17 @@ function App() {
       enabled: !selectedSessionId && !issuesOpen && groupProjects(spaceProjects).length > 1,
     },
   );
+  // The machine picker's twin of the above: same gate, same wrap, stepping the
+  // picked project's checkouts. Bound only with somewhere else to go, so ⌘⇧S
+  // is not claimed on a project that lives on one machine.
+  const nextServerCheckout = projectPath ? nextCheckout(checkoutsOf(spaceProjects, projectPath), projectPath) : null;
+  useHotkey(
+    "server.next",
+    () => {
+      if (nextServerCheckout) handleSelectProject(nextServerCheckout.path);
+    },
+    { enabled: !selectedSessionId && !issuesOpen && nextServerCheckout !== null },
+  );
   // Steps the sidebar's project filter, All Projects included, in the order the
   // filter itself draws. Wraps, for the same reason the picker's own tap does:
   // one key with a clamp dead-ends with no way back. Bound only where there is
@@ -3528,6 +3542,7 @@ function App() {
       )}
     </AppShell>
     </div>
+    <BreakOverlay />
     {/* Outside `AppShell` on purpose: it is fixed to the window rather than
         placed in the layout, and the shell has no slot that isn't a pane. */}
     <BoatWarnings busy={boatBusy} />
