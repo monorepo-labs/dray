@@ -2,7 +2,7 @@ import {
   ChatBubbleOvalLeftIcon,
   DocumentPlusIcon,
 } from "@heroicons/react/16/solid";
-import { Folder, Plus, X } from "lucide-react";
+import { Folder, Plus, Server, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 
 import AgentBeam from "@/components/browser/AgentBeam";
@@ -53,7 +53,6 @@ import {
   type TabKey,
 } from "@/lib/tabOrder";
 import BranchButton from "@/components/layout/BranchButton";
-import ServerFilledIcon from "@/components/icons/ServerFilledIcon";
 import { cn } from "@/lib/utils";
 
 /// Which view fills the main column.
@@ -513,7 +512,7 @@ export default function ViewTabs({
       {/* At the row's far end, where it gives way before any tab does. */}
       {server && (
         <span className="ml-auto flex min-w-6.5 shrink-[999] items-center gap-1 overflow-hidden pl-2 text-ui text-muted-foreground animate-in fade-in duration-200">
-          <ServerFilledIcon className="size-3.5 shrink-0" />
+          <Server className="size-3.5 shrink-0" />
           <span className="truncate">{server}</span>
         </span>
       )}
