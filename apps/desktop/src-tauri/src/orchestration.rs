@@ -1017,10 +1017,10 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
     check_depth(calling.as_ref().map(|c| c.1))?;
     let parent = calling.map(|c| c.0);
 
-    // A hidden session is drawn in its parent's crew and nowhere else, so one
+    // A hidden session surfaces only as cards beside its parent, so one
     // made from a terminal would be listed nowhere at all.
     if create.hidden && parent.is_none() {
-        bail!("--hidden needs a calling session: a hidden session shows only in its parent's crew");
+        bail!("--hidden needs a calling session: a hidden session shows only beside its parent");
     }
 
     let project_path = resolve_project(&create, parent.as_ref())?;

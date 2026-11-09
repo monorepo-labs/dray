@@ -87,7 +87,7 @@ import Sidebar, {
 } from "@/components/Sidebar";
 import { useChord } from "@/hooks/useShortcuts";
 import { type Chord, formatChords } from "@/lib/shortcuts";
-import Crew, { CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
+import Crew, { CREW_BESIDE, CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
@@ -165,10 +165,9 @@ import type { Attachment, Harness, IssueRef, SessionIndexItem, WorktreeDispositi
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
-import { appendToDraft, onDraftWrite, readDraft, useHasDraft, writeDraft } from "@/hooks/useDraft";
+import { appendToDraft, onDraftWrite, readDraft, writeDraft } from "@/hooks/useDraft";
 import { draftKey, useDrafts } from "@/hooks/useDrafts";
 import { issueTag, rememberIssueTitle, setIssueOpener } from "@/lib/issue";
-import { loadOlder } from "@/lib/olderPages";
 import { authFailedTurn } from "@/lib/auth";
 import { basename } from "@/lib/format";
 import { focusComposer, focusComposerEnd } from "@/lib/composerFocus";
@@ -176,7 +175,7 @@ import { changeRange, lastToolResult } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { crewAnchor, crewRows, crewSeen, inSidebar, withHiddenAsks } from "@/lib/crew";
+import { crewRows, crewSeen, inSidebar, withHiddenAsks } from "@/lib/crew";
 import { panelMove } from "@/lib/sidebarAuto";
 import { playCelebration, playNotification } from "@/lib/sound";
 import {
@@ -203,8 +202,6 @@ function SettingsReady({ onReady }: { onReady: (ready: boolean) => void }) {
   return null;
 }
 
-/// One empty set, so clearing the rail's open rows twice is one state change.
-const NO_ROWS: ReadonlySet<string> = new Set();
 
 function App() {
   const {
@@ -937,121 +934,13 @@ function App() {
     return server === LOCAL ? named : `${named} · ${serverName(server)}`;
   })();
 
-  // The crew's anchor — the conversation whose sessions are listed — settled
-  // during render off a ref rather than in an effect. An effect is a frame
-  // behind, and this is a frame in which the crew is drawn against the session
-  // the reader has just left: it appears, vanishes or lists somebody else's
-  // children for one paint.
-  //
-  // **Only a move made from inside the crew keeps it up.** Clicking a row or
-  // reaching into its transcript is navigation within an arrangement the
-  // reader is standing in; the sidebar and ⌘⇧↑/↓ are them leaving it, and the
-  // anchor surviving those made the sidebar look broken — selecting a crew
-  // member from over there moved the composer while the main column went on
-  // showing the parent, so the click read as having done nothing. So the ref
-  // is cleared on any selection this app did not route through `focusSession`,
-  // and `crewAnchor` then answers for the selected session alone.
-  //
-  // The flag is consumed by a selection *changing*, so it is only ever set for
-  // a move that changes one — focusing the session already selected consumes
-  // nothing and would leave it armed for whatever the reader did next, which
-  // is a bare sidebar click reading as a move from inside the crew.
-  const crewRef = useRef<string | null>(null);
-  const keepCrewRef = useRef(false);
-  const lastSelectedRef = useRef(selectedSessionId);
-  // Leaving deliberately — ⌘-click — cannot be a ref write on its own: the row
-  // it acts on is usually the selected one, so there is no selection change to
-  // read the write on and nothing else in that render would move. This is what
-  // makes the leaving cause the render that reads it.
-  const [, crewMoved] = useState(0);
-  if (lastSelectedRef.current !== selectedSessionId) {
-    if (!keepCrewRef.current) crewRef.current = null;
-    keepCrewRef.current = false;
-    lastSelectedRef.current = selectedSessionId;
-  }
-  crewRef.current = crewAnchor(visibleSessions, selectedSessionId, crewRef.current);
-  const crewAnchorId = crewRef.current;
-  const crew = useMemo(
-    () => crewRows(visibleSessions, crewAnchorId, { statusBySession, askingSessions }),
-    [visibleSessions, crewAnchorId, statusBySession, askingSessions],
-  );
-  // Whether this conversation has a crew to draw at all, and whether the reader
-  // wants it drawn. The second is ⌘⇧C and nothing else: no button, since a
-  // permanent control in the titlebar would be chrome for a thing most
-  // conversations never have. Stated cost — hidden, the column is reachable
-  // only by somebody who remembers the chord.
-  //
-  // Kept per conversation and in memory, the shape `panelOpens` above takes
-  // and for its reason: what the column *holds* differs from one conversation
-  // to the next, so a reader who put away a fan-out of six has said nothing
-  // about the next one. Keyed on the anchor, since that is whose crew it is.
-  // Not persisted, so a conversation never opened holds no entry and the map
-  // cannot outgrow the session list.
-  //
-  // Three readings of one thing, and the split matters. `crewUp` is the
-  // *arrangement* — what the main column is drawing and what the composer is
-  // pointed at — and it deliberately does not ask which view tab is on screen:
-  // tab bodies hide rather than unmount, so a flip to Files with a row focused
-  // would otherwise swap the hidden transcript for that row's and swap it back
-  // on return, taking the scroll pin and the mounted turns with it both ways.
-  // `crewDrawn` is the column itself, which is the reading every gate on being
-  // *seen* takes.
-  // A grouped *anchor* has no crew: its column is already several
-  // conversations side by side, so there is nowhere for the list to go. The
-  // question is asked of the anchor and never of the selection — a child that
-  // happens to sit in a split group would otherwise swap the whole column for
-  // that group the moment its row was clicked, which is the arrangement
-  // leaving on the one gesture that is supposed to stay inside it.
-  const crewExists = crew.length > 0 && !groupOf(spaceGroups, crewAnchorId);
-  const crewAvailable = crewExists && !issuesOpen && viewTab === "chat";
-  // **Beside the chat only where it fits, judged on minimums alone.** The
-  // crew never gives width back, so on a narrow window it crushed the sidebar
-  // to a sliver. Measured off the sidebar's *drawn* width this would chase
-  // itself — the crew's floor is what clamps that width — so it reads the
-  // floor. Where it does not fit it starts hidden and ⌘⇧C stacks it under the
-  // transcript instead; an explicit toggle outranks the default either way.
-  // The panel counts as the crew would leave it — under the anchor's key, see
-  // `panelKey` below — since reading `panelOpen` itself would loop back here.
-  // The sidebar counts at its drawn width, since the panel yields to it and a
-  // widened sidebar would otherwise leave the panel a sliver; floored at its
-  // minimum, because narrowing the window clamps that width under it.
-  // Up to a 14" MacBook's width, an open panel stacks the crew even where the
-  // minimums fit: all four at their floors reads as cramped, not as fitting.
-  // That case still starts shown — it fits, it is only drawn somewhere else.
-  const crewPanelOpen = !!(crewAnchorId && panelOpens[crewAnchorId]) && !issuesOpen;
-  const sidebarW = Math.max(SIDEBAR_MIN, usePaneWidth("sidebar"));
-  // What the sidebar is drawn at, 0 while shut: where the sheet starts.
-  const sidebarDrawn = usePaneWidth("sidebar");
-  const viewportW = useViewportWidth();
-  const crewFits =
-    viewportW >=
-    CHAT_MIN + CREW_W + (collapsed ? 0 : sidebarW) + (crewPanelOpen ? PANEL_MIN : 0);
-  const crewBeside = crewFits && !(crewPanelOpen && viewportW <= CREW_STACK_WITH_PANEL_W);
-  const [crewHiddenBy, setCrewHiddenBy] = useState<Record<string, boolean>>({});
-  const crewHidden = !!crewAnchorId && (crewHiddenBy[crewAnchorId] ?? !crewFits);
-  const crewUp = crewExists && !crewHidden;
-  const crewDrawn = crewAvailable && !crewHidden;
-
   // **Whose preference the right pane follows.** A split group is one
-  // arrangement and answers under the group's id; the crew is the same shape —
-  // selecting a row moves the composer and not the arrangement — so it answers
-  // under the anchor. Keyed on the row instead, clicking down a crew of six
-  // opened and shut the pane row by row out of whatever each session last
-  // remembered from being read on its own, which reads as the panel flickering
-  // rather than as a preference being honoured. Reached from the sidebar or a
-  // chord the crew is down and the session answers for itself again, which is
-  // the same rule seen from the other side.
-  const panelKey =
-    crewUp && crewAnchorId ? crewAnchorId : selectedSessionId && openKey(selectedSessionId);
+  // arrangement and answers under the group's id; a lone session under its own.
+  const panelKey = selectedSessionId && openKey(selectedSessionId);
   // The bare session id stands in for a group key the seeding effect below has
   // not filled yet, or a session reads shut for the commit before it lands.
-  // Not offered to the crew: its key is a plain session id already, so falling
-  // through there would read the *row's* own flag — the very thing this is
-  // keyed away from.
   const panelOpen = panelKey
-    ? (panelOpens[panelKey] ??
-      (!crewUp && selectedSessionId ? panelOpens[selectedSessionId] : undefined) ??
-      false)
+    ? (panelOpens[panelKey] ?? (selectedSessionId ? panelOpens[selectedSessionId] : undefined) ?? false)
     : false;
   const setPanelOpen = useCallback(
     (open: boolean | ((prev: boolean) => boolean), id?: string | null) => {
@@ -1089,69 +978,54 @@ function App() {
   /// preference is kept, so coming back restores the pane exactly as it was;
   /// everything that draws or reads reads this instead.
   const panelShown = panelOpen && !issuesOpen;
+  // Every session the selected one started, at any depth. The crew column
+  // draws only the ones holding a card, and only while one is.
+  const crew = useMemo(
+    () => crewRows(visibleSessions, selectedSessionId, { statusBySession, askingSessions }),
+    [visibleSessions, selectedSessionId, statusBySession, askingSessions],
+  );
+  const crewAsks = useMemo(() => crew.filter((r) => r.asking), [crew]);
+  // A split has no crew column: it is already several conversations side by
+  // side, with nowhere for one to go. Its children's cards raise notices.
+  const crewAvailable = crew.length > 0 && !activeGroup && !issuesOpen && viewTab === "chat";
+  const crewDrawn = crewAvailable && crewAsks.length > 0;
+  // **Beside the chat only where it fits, judged on minimums alone.** The
+  // column never gives width back, so on a narrow window it crushed the
+  // sidebar to a sliver. Measured off the sidebar's *drawn* width this would
+  // chase itself — the column's floor is what clamps that width — so it reads
+  // the floor, and where it does not fit the cards stack above the composer.
+  // Up to a 14" MacBook's width, an open panel stacks it even where the
+  // minimums fit: all four at their floors reads as cramped, not as fitting.
+  const sidebarW = Math.max(SIDEBAR_MIN, usePaneWidth("sidebar"));
+  // What the sidebar is drawn at, 0 while shut: where the sheet starts.
+  const sidebarDrawn = usePaneWidth("sidebar");
+  const viewportW = useViewportWidth();
+  const crewFits =
+    viewportW >= CHAT_MIN + CREW_W + (collapsed ? 0 : sidebarW) + (panelShown ? PANEL_MIN : 0);
+  const crewBeside =
+    CREW_BESIDE && crewFits && !(panelShown && viewportW <= CREW_STACK_WITH_PANEL_W);
   // One conversation keeps a readable floor whatever the panes beside it are
   // dragged to; a split holds several deliberately small ones, so the same
-  // floor there would refuse the layout the reader asked for. The crew rides
-  // on top of it because it is fixed-width and never gives any of it back.
-  // What the main column is actually showing. With a crew up that is the
-  // anchor, which `crewExists` has already established is in no group.
-  const mainGroup = crewUp ? null : activeGroup;
+  // floor there would refuse the layout the reader asked for. The crew column
+  // rides on top of it because it is fixed-width and never gives any back.
+  const mainGroup = activeGroup;
   useChatColumnFloor(!mainGroup, crewDrawn && crewBeside ? CREW_W : 0);
 
-  const toggleCrew = () => {
-    if (crewAnchorId) setCrewHiddenBy((prev) => ({ ...prev, [crewAnchorId]: !crewHidden }));
-  };
-
-  // **The main column keeps drawing the anchor, whatever is selected.** That is
-  // the whole difference between this and the split grid: selecting a crew row
-  // moves the composer, the right panel and the header to that session while
-  // the conversation the reader is orchestrating from stays where it was.
-  // Drawing it in both places instead was the first shape and it made the crew
-  // a slower way to switch sessions — the same transcript twice on one screen,
-  // with the second copy taking the place of the thing it was spawned out of.
-  const mainSessionId = (crewUp && crewAnchorId) || selectedSessionId;
-
   // The composer says where it sends whenever that is not the transcript
-  // under it — a grid's focused pane, or a crew row. One box under several
-  // conversations is one box that can send into the wrong one, so it says
-  // which before anything is typed.
-  const composerTarget =
-    (mainGroup && splitTarget) ??
-    (mainSessionId !== selectedSessionId ? selectedSession?.title ?? null : null);
-  // Composing into the focused session, so every other transcript gives way.
-  // The emptiness alone, never the text: every mounted transcript is below
-  // this, and subscribing to the string would rerender them all per keystroke.
-  const composing = useHasDraft(selectedSessionId);
+  // under it — a grid's focused pane. One box under several conversations is
+  // one box that can send into the wrong one, so it says which first.
+  const composerTarget = (mainGroup && splitTarget) ?? null;
 
-  // What the reader opened, emptied when the crew moves to another
-  // conversation: the set names sessions, so carrying it across would reopen a
-  // row only if the same session appeared under both anchors — rare, and rarer
-  // still to be what was wanted.
-  const [crewOpen, setCrewOpen] = useState<ReadonlySet<string>>(NO_ROWS);
-  useEffect(() => setCrewOpen(NO_ROWS), [crewAnchorId]);
-
-  // Both halves of an open row need the log: a transcript obviously, and a card
-  // because `buildTranscript` reads the request out of the session's own
-  // events. Gated on the crew being *drawn* rather than on it having rows,
-  // since being on screen is what read-marking promises and a crew behind the
-  // Files view is not.
-  const crewShown = (crewDrawn ? crew : [])
-    .filter((row) => crewOpen.has(row.item.sessionId) || row.asking)
-    .map((row) => row.item.sessionId)
-    .join("\n");
+  // A card is read out of its session's own events, so an asking row has to be
+  // loaded. Gated on the column being *drawn*, since being on screen is what
+  // read-marking promises.
+  const crewShown = (crewDrawn ? crewAsks : []).map((row) => row.item.sessionId).join("\n");
 
   // Every pane loaded and held: eviction and read-marking treat the whole grid
   // as on screen. One effect for the grid and the crew together, since
   // `setOnScreen` takes the whole set rather than adding to it — two callers
-  // would each wipe the other's. The anchor rides along because the main
-  // column is drawing it while something else is selected, which is exactly
-  // the state the eviction sweep would otherwise read as nobody looking.
-  // The grid's members only where the grid is what the column draws — a crew
-  // child that happens to sit in a split group is on screen as a strip, not as
-  // that group.
-  const onScreenKey = [mainGroup ? memberKey : "", crewShown, crewUp ? crewAnchorId : null]
-    .filter(Boolean)
-    .join("\n");
+  // would each wipe the other's.
+  const onScreenKey = [mainGroup ? memberKey : "", crewShown].filter(Boolean).join("\n");
   useEffect(() => {
     const ids = [...new Set(onScreenKey.split("\n").filter(Boolean))];
     setOnScreen(ids);
@@ -1160,102 +1034,21 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onScreenKey]);
 
-  // Every row of a drawn crew, for `announce` alone — see `crewSeen`. Wider
-  // than `crewShown` above on purpose: that one loads and read-marks, where
-  // this one only answers whether a card would land in front of the reader,
-  // which every strip does without being opened first.
+  // Every row the column would draw a card for, for `announce` alone — see
+  // `crewSeen`. Wider than `crewShown` on purpose: that one loads and
+  // read-marks, where this one answers whether a card would land in front of
+  // the reader.
   //
-  // **A layout effect, which is the one place this differs from `setOnScreen`
-  // above — and the difference is which way being wrong costs.** That set only
-  // widens what is kept in memory; a stale reading here *suppresses* a notice,
-  // so it has to be exact in both directions and neither of the ordinary two
-  // is. An ordinary effect lands after paint, so a crew put away with the chord
-  // or flipped behind another view tab would go on naming its rows for a frame,
-  // and an ask arriving there would be silenced with nothing on screen to
-  // silence it for. A render-time write is the opposite hole: React may
-  // interrupt or throw a render away, leaving this describing a column that was
-  // never committed. A layout effect runs inside the commit and before the
-  // browser paints, so what it publishes is always what was committed and there
-  // is no frame in which the reader and this ref disagree — an event listener
-  // is a task and cannot land in the middle of one.
-  const crewSeenKey = crewSeen(crew, crewDrawn).join("\n");
+  // **A layout effect, not an ordinary one, because a stale reading here
+  // suppresses a notice.** After paint, a column flipped behind another view
+  // tab would go on naming its rows for a frame and silence an ask with
+  // nothing on screen; a render-time write could describe a render React threw
+  // away. A layout effect publishes exactly what was committed, before paint.
+  const crewSeenKey = crewSeen(crew, crewAvailable).join("\n");
   useLayoutEffect(() => {
     setCrewSeen(crewSeenKey.split("\n").filter(Boolean));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [crewSeenKey]);
-
-  // Focusing a transcript is what points the composer at it, and it is separate
-  // from opening one: reaching into a transcript to scroll or copy is not
-  // asking it to shut, and a row can be answered from its card without being
-  // read. The main column takes it too — with a crew up it is one transcript
-  // among several and clicking into it has to mean what clicking into a row
-  // means, or the way *back* to the conversation is the only move on screen
-  // with no click behind it.
-  // This is also the one route that keeps the anchor, which is what makes it
-  // the crew's own way of moving the composer: everything else lands on
-  // `handleSelectSessionIndexItem` bare and takes the crew down with it.
-  const focusSession = (id: string) => {
-    if (id !== selectedSessionId) keepCrewRef.current = true;
-    void handleSelectSessionIndexItem(id);
-  };
-
-  // Expanding a row focuses it too — asking to read something is asking to
-  // talk to it. Collapsing the focused one hands the composer back to the
-  // conversation the crew belongs to; collapsing any other row moves nothing,
-  // since that is tidying rather than navigation.
-  const toggleCrewRow = (id: string) => {
-    const opening = !crewOpen.has(id);
-    setCrewOpen((prev) => {
-      const next = new Set(prev);
-      if (opening) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-    if (opening) focusSession(id);
-    else if (id === selectedSessionId && crewAnchorId) focusSession(crewAnchorId);
-  };
-
-  // Leaving the arrangement outright, rather than leaving it to the selection
-  // change to clear the anchor. Both callers act on a row that is usually the
-  // focused one — already selected — so there is no change coming to read the
-  // write on, and the arrangement would simply stand. The bump is what causes
-  // the render that reads it; it is skipped where no anchor is held, which is
-  // every ordinary sidebar click.
-  //
-  // **Run on the move landing, never before it.** A sidebar row can be stale,
-  // and a selection that resolves to nothing puts the reader back where they
-  // were — so tearing down first left them on the session they had been
-  // reading with the crew column gone from under it. It self-heals where that
-  // session *is* the anchor, since `crewAnchor` with no hold asks whether the
-  // selection spawned anything; it does not where they were reading a child,
-  // which is the ordinary place to be standing when this happens.
-  const leaveCrew = () => {
-    keepCrewRef.current = false;
-    if (!crewRef.current) return;
-    crewRef.current = null;
-    crewMoved((n) => n + 1);
-  };
-
-  // Selecting from outside the crew: the move first, the teardown only if it
-  // landed. Resolving takes a microtask at most for a session already held —
-  // which is every crew row and most sidebar rows — so the anchor still drops
-  // in the same frame the reader clicked in.
-  const selectAndLeaveCrew = async (id: string) => {
-    if (await handleSelectSessionIndexItem(id)) leaveCrew();
-  };
-
-  // ⌘-click: the one way out of the arrangement from inside it. Collapsed on
-  // the way out, or coming back would find a row already open for a session
-  // just read whole.
-  const openCrewRowInMain = (id: string) => {
-    setCrewOpen((prev) => {
-      if (!prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-    void selectAndLeaveCrew(id);
-  };
 
   // The dropped session is the one just opened, so it takes the focus. Only
   // on a drop that opens something: selecting after a refused one would swap
@@ -1562,14 +1355,6 @@ function App() {
   // the reader's pick for when they switch to one that has it.
   const activeTab: PanelTab = panelTab && tabs.includes(panelTab) ? panelTab : defaultTab;
 
-  // The attachment grid reads the session's whole log, but a transcript drawn
-  // as a crew strip never pages past its tail — so the More tab pages in the
-  // rest itself while it is on screen. The main column's transcript already
-  // does, and `loadOlder` runs one read per session for the two of them.
-  const pagedForMore = panelShown && activeTab === "more" ? selectedSession : null;
-  useEffect(() => {
-    if (pagedForMore?.olderBefore != null) loadOlder(pagedForMore.sessionId);
-  }, [pagedForMore?.sessionId, pagedForMore?.olderBefore]);
 
   // Drops the Browser view's claim, `toggleSidebar`'s reason: a pane moved by
   // hand is the reader's.
@@ -2283,7 +2068,7 @@ function App() {
       () => null,
     ));
 
-  /// A notice or banner click. A hidden session is drawn in its parent's crew,
+  /// A notice or banner click. A hidden session draws its cards beside its parent,
   /// so it opens the parent — where the parent still exists.
   const openNotice = async (id: string) => {
     // Claimed by bumping before the lookups, so any move landing during them —
@@ -2629,11 +2414,6 @@ function App() {
   // ⌘⌥E, the side beside ⌘E's visibility. Moves a hidden pane too: the pick
   // is a preference, and it lands wherever the pane next opens.
   useHotkey("panel.side", () => setPanelSide((s) => (s === "left" ? "right" : "left")));
-  // Bound only where a crew could be drawn, since `useHotkey` claims a chord it
-  // is listening for — unbound elsewhere, ⌘⇧C stays free for whatever the
-  // reader rebinds onto it rather than being swallowed by a column that has
-  // nowhere to appear.
-  useHotkey("crew.toggle", toggleCrew, { enabled: crewAvailable });
   // ⌘⇧[ / ⌘⇧] — the browser and editor chord for stepping through tabs, so it
   // arrives already known. The shift layout reaches `key`, so the character is
   // `{` rather than `[`; the physical key rides along for the engines that
@@ -2794,7 +2574,7 @@ function App() {
   // `selectedSession` is null for exactly that window — so every arrangement
   // gated on it, the centred composer, the view tabs and the right pane, was
   // torn down at the click and rebuilt when the read answered. In the main
-  // column that read as the switch; beside a crew it was the anchor, the pane
+  // column that read as the switch, and the pane
   // and the column remounting under rows that had not moved, and only ever on
   // a row's first open (DRA-274). The index carries what the layout needs of
   // it meanwhile. The transcript still waits on the snapshot, and draws an
@@ -2805,7 +2585,7 @@ function App() {
   const selectedItem = sessionIndexItems.find((i) => i.sessionId === selectedSessionId);
 
   // What every transcript on screen reports back through: the main column, a
-  // split pane and a crew strip alike.
+  // split pane and a crew card alike.
   const paneChat: PaneChat = {
     onOpenSubagent: openSubagent,
     onOpenSession: (id) => void handleSelectSessionIndexItem(id),
@@ -2844,17 +2624,9 @@ function App() {
         crewDrawn ? (
           <Crew
             stacked={!crewBeside}
-            rows={crew}
-            open={crewOpen}
-            selectedId={selectedSessionId}
+            rows={crewAsks}
             paneState={paneState}
-            prFor={prMarks.prFor}
-            onToggle={toggleCrewRow}
-            onFocus={focusSession}
-            onOpenInMain={openCrewRowInMain}
-            onShowInSidebar={(id) => void setSessionFlags(id, { hidden: false })}
-            composing={composing}
-            active={!issuesOpen && viewTab === "chat"}
+            onOpen={(id) => void handleSelectSessionIndexItem(id)}
             chat={paneChat}
           />
         ) : undefined
@@ -2879,14 +2651,7 @@ function App() {
           // selection itself is kept, which is what makes coming back free.
           selectedSessionId={issuesOpen ? null : selectedSessionId}
           collapsed={collapsed}
-          // The sidebar is the reader leaving the crew, and it has to say so
-          // outright rather than lean on the selection moving. A row already
-          // selected — the crew member they are reading — moves nothing, so
-          // the anchor stood and the main column went on drawing the parent:
-          // the click read as broken, and the only way into that session's
-          // full view was ⌘-clicking it over in the crew, or clicking away to
-          // another row and back.
-          onSelect={(sessionId) => goToSession(() => void selectAndLeaveCrew(sessionId))}
+          onSelect={(sessionId) => goToSession(() => void handleSelectSessionIndexItem(sessionId))}
           onPrefetch={(sessionId) => void ensureLoaded(sessionId)}
           groups={spaceGroups}
           onDropSession={dropSession}
@@ -2992,7 +2757,7 @@ function App() {
               header has nothing left to say; it stays for the pages that are
               not a session — the issues page, a new task. */}
           {/* A hidden session has no sidebar row, so this is the way back to
-              the crew it sits in. */}
+              the session that started it. */}
           {!issuesOpen && shownSession && hiddenParent && (
             <button
               type="button"
@@ -3434,43 +3199,18 @@ function App() {
         className="relative flex min-h-0 flex-1 flex-col"
         {...{ [DROP_ATTR]: selectedSessionId ?? undefined }}
       >
-      {/* `paneState` rather than the selected session's own fields, which are
-          the same values read off the same maps — it is what lets this draw
-          the crew's anchor while something else is selected, and it is the
-          function every other transcript in the app already goes through.
-
-          Dimmed on the same rule as a crew row, since while the composer is
-          pointed at a crew session this column is one of the transcripts
-          giving way. */}
-      <div
-        // Pointerdown bubbles here before the click it precedes, so a control
-        // inside the transcript acts on an already-focused session; keyboard
-        // focus entering it is the same claim. Only where it is not already
-        // the one selected, which with no crew up is always.
-        onPointerDown={() =>
-          mainSessionId && mainSessionId !== selectedSessionId && focusSession(mainSessionId)
-        }
-        onFocus={() =>
-          mainSessionId && mainSessionId !== selectedSessionId && focusSession(mainSessionId)
-        }
-        className={cn(
-          "min-h-0 flex-1 transition-opacity duration-150 ease-out",
-          composing && mainSessionId !== selectedSessionId && "opacity-35",
-        )}
-      >
+      <div className="min-h-0 flex-1">
         {/* A transcript its server has not answered for yet; the reconnect
             loads it. One already loaded keeps drawing what it has. */}
-        {offlineServer && !selectedSession && mainSessionId === selectedSessionId ? (
+        {offlineServer && !selectedSession ? (
           <TranscriptSkeleton />
         ) : (
           <Chat
-            {...paneState(mainSessionId ?? "")}
+            {...paneState(selectedSessionId ?? "")}
             {...paneChat}
-            crowded={!collapsed && (panelShown || crewUp || (issuesOpen && !!pickedIssue))}
-            // Its own chords only while the composer is pointed here — the same
-            // gate a split pane takes, since Stop and scroll-to-bottom act on
-            // the session being written to.
-            active={!issuesOpen && viewTab === "chat" && mainSessionId === selectedSessionId}
+            crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
+            // Its own chords only while the chat tab is on screen.
+            active={!issuesOpen && viewTab === "chat"}
           />
         )}
       </div>

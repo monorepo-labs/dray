@@ -748,7 +748,7 @@ impl SessionManager {
         // composer never has one, and it is recorded rather than acted on —
         // the depth cap reads it back off the index on the *next* create.
         parent_session_id: Option<&str>,
-        // Kept out of the sidebar, drawn in the parent's crew alone. Only the
+        // Kept out of the sidebar, surfacing only as cards beside the parent. Only the
         // orchestration socket sets it, and only with a parent.
         hidden: bool,
         // A title the caller already knows, set and locked now so none is
@@ -1760,7 +1760,7 @@ impl SessionManager {
             bail!("that session is not running in a worktree");
         }
 
-        // A hidden child is drawn in this session's crew alone, so nothing on
+        // A hidden child is listed nowhere on screen, so nothing there
         // screen offers to remove its tree: it goes with this one. First, and a
         // refusal stops here — this session's own button is then still there to
         // retry with, where a child failing after it had nowhere to be retried.
@@ -1846,7 +1846,7 @@ impl SessionManager {
     /// The child goes first and its lock is released before the disk work, so a
     /// dying process can't append one last event to a file we just removed.
     pub async fn delete(&self, session_id: &str) -> Result<bool> {
-        // A hidden child is drawn in this session's crew alone, so it goes with
+        // A hidden child is listed nowhere on screen, so it goes with
         // it. Here rather than in the frontend, which holds one side of the
         // settled split and can miss a child sitting on the other.
         for child in crate::store::hidden_children(session_id).await? {
