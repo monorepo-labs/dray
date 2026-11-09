@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { basename } from "@/lib/format";
-import { checkoutsOf, soleServer } from "@/lib/projectGroups";
+import { checkoutsOf, nextCheckout, soleServer } from "@/lib/projectGroups";
 import { serverConnected, serverName, useServers } from "@/lib/servers";
 import { displayPath, LOCAL, serverOfPath } from "@/lib/transport";
 import type { Project } from "@/types/events";
@@ -51,9 +51,9 @@ export default function MachineSelector({
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        {/* A disabled trigger opens no tooltip anyway; with one checkout there is
-            no next machine to name the chord for. */}
-        {!only && (
+        {/* Same test as the chord's own gate in `App`, so the hint never names
+            a key that is unbound — every other machine offline included. */}
+        {nextCheckout(checkouts, current.path) && (
           <TooltipContent side="top" className="max-w-none whitespace-nowrap">
             Next server
             <ShortcutKeys ids={["server.next"]} />
