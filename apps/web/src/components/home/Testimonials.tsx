@@ -5,9 +5,7 @@ import { TESTIMONIALS } from "@/lib/testimonials";
 export function Testimonials() {
   return (
     <Section id="testimonials" className="py-20">
-      <Title lead="What devs">
-        running agents days, nights and weekends <span className="text-white light:text-[#0A0A0A]">are saying.</span>
-      </Title>
+      <Title lead="What devs are saying.">The ones running agents days, nights and weekends.</Title>
       <div className="mt-12 grid gap-px sm:grid-cols-2 lg:mt-20 lg:grid-cols-4">
         {TESTIMONIALS.map((t) => (
           <a
