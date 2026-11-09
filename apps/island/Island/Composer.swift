@@ -247,9 +247,10 @@ final class Composer {
         store.linksMayHaveMoved = { [weak self] in Task { await self?.followApp() } }
         store.boatChanged = { [weak self] in
             guard let self else { return }
-            dismissedBoats.formIntersection(store.boatAlerts)
+            // `self.store`, not the init's argument: the store owns this closure, so capturing it is a cycle.
+            dismissedBoats.formIntersection(self.store.boatAlerts)
             // A sandbox newly warning is news: the pill lights up once, as an ask's does, then rests.
-            let warning = Set(store.boatAlerts.map(\.server))
+            let warning = Set(self.store.boatAlerts.map(\.server))
             if !warning.subtracting(boatsWarned).isEmpty, !shown { announce() }
             boatsWarned = warning
             pillChanged()
