@@ -5,19 +5,6 @@ extension Store {
         guard let item = items[key] else { return Marks() }
         return Marks(asking: isAsking(key), unread: item.status == "completed", busy: item.busy, pr: prMark(key, item))
     }
-
-    /// What a session waits on, in a line: the tool and what it is for, or the first question.
-    func askSummary(_ key: SessionKey) -> String {
-        switch asks[key]?.first?.payload {
-        case .permissionRequested(let r)?:
-            let line = ToolLine(r)
-            return [line.tool, line.beside].compactMap { $0 }.joined(separator: "  ")
-        case .questionsAsked(let r)?:
-            return r.questions.first?.question ?? "A question"
-        default:
-            return ""
-        }
-    }
 }
 
 /// A card a session is blocked on, in place of the draft. Several waiting
@@ -39,7 +26,7 @@ struct AskCard: View {
                 ScrollView {
                     VStack(spacing: 2) {
                         ForEach(keys, id: \.self) { k in
-                            WaitingRow(title: title(k), summary: store.askSummary(k), current: k == key,
+                            WaitingRow(title: title(k), current: k == key,
                                        pick: { list(open: false) { composer.askTab = k } },
                                        openInApp: { Task { await composer.showInApp(k) } })
                         }
@@ -131,11 +118,12 @@ private struct WaitingSwitch: View {
     }
 }
 
-/// One waiting session in the opened list: its title and what it asks. A click
-/// opens its card, ⌘-click opens it in Dray.
+/// One waiting session in the opened list, by title. A click opens its card,
+/// ⌘-click opens it in Dray.
 struct WaitingRow: View {
     let title: String
-    let summary: String
+    /// What it asks, drawn dim after the title; the panel's list leaves it out, a demo layout shows it.
+    var summary: String? = nil
     var current = false
     let pick: () -> Void
     var openInApp: () -> Void = {}
@@ -145,7 +133,7 @@ struct WaitingRow: View {
         HStack(spacing: 8) {
             Text(title).font(.system(size: 13, weight: current ? .semibold : .regular)).lineLimit(1)
                 .foregroundStyle(.white.opacity(current ? 0.95 : 0.75)).layoutPriority(1)
-            Text(summary).font(.system(size: 13)).lineLimit(1).foregroundStyle(.white.opacity(0.35))
+            if let summary { Text(summary).font(.system(size: 13)).lineLimit(1).foregroundStyle(.white.opacity(0.35)) }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)

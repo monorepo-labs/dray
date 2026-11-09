@@ -1,7 +1,22 @@
 import SwiftUI
 
-/// Ways to show several sessions waiting other than today's tabs, side by side
-/// so one can be picked by looking. Each runs the real composer and the real
+extension Store {
+    /// What a session waits on, in a line: the tool and what it is for, or the first question.
+    func askSummary(_ key: SessionKey) -> String {
+        switch asks[key]?.first?.payload {
+        case .permissionRequested(let r)?:
+            let line = ToolLine(r)
+            return [line.tool, line.beside].compactMap { $0 }.joined(separator: "  ")
+        case .questionsAsked(let r)?:
+            return r.questions.first?.question ?? "A question"
+        default:
+            return ""
+        }
+    }
+}
+
+/// Ways to show several sessions waiting, the shipped one beside the others weighed,
+/// so they can be compared by looking. Each runs the real composer and the real
 /// card body; only the part naming and switching sessions differs.
 struct WaitingLayouts: View {
     let items: [SessionItem]
