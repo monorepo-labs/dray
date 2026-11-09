@@ -58,10 +58,13 @@ Everything else below waits.
 v2 (#565): status, across every live session.
 - A permission or question card never opens the panel: a pill hangs from the
   notch saying how many tasks need attention, until they are answered. Opening
-  draws the cards as tabs, oldest first; the last answer closes the panel.
-  Dismiss, at the left of a card's last row, puts that session's card away
-  unanswered; Dismiss all, up top, puts every one away. They still wait in
-  Dray, and the next new ask brings the pill back with every one of them.
+  draws the oldest card with the rest stacked under it; its title, with +N,
+  opens every waiting session as a list to pick from. The last answer closes
+  the panel. Dismiss and Dismiss all sit in the card's header and put one
+  session's card or every one away unanswered. They still wait in Dray, and
+  the next new ask brings the pill back with every one of them.
+- A permission reads as one line, the tool's short name and its file or
+  purpose; a command waits behind a click on that line.
 - A finished session is Dray's own banner and not the island's: where the reader
   works decides which one they see, and only the banner opens the session.
 - The task list carries the sidebar's marks; the title opens the task list, since a

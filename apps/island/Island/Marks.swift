@@ -148,56 +148,6 @@ struct SessionRow: View {
     }
 }
 
-/// The sessions waiting on the reader, oldest first, scrolling sideways past
-/// the card's width.
-struct AskTabs: View {
-    let titles: [String]
-    let active: Int
-    let pick: (Int) -> Void
-    let openInApp: (Int) -> Void
-
-    var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 4) {
-                ForEach(Array(titles.enumerated()), id: \.offset) { i, title in
-                    AskTab(title: title, active: i == active) {
-                        if NSEvent.modifierFlags.contains(.command) { openInApp(i) } else { pick(i) }
-                    }
-                }
-            }
-        }
-        .scrollIndicators(.never)
-    }
-}
-
-/// One waiting session over the card, as a browser tab: the active one names
-/// itself, the others are clipped short. ⌘-click opens it in Dray.
-struct AskTab: View {
-    let title: String
-    let active: Bool
-    let pick: () -> Void
-    @State private var hovered = false
-
-    var body: some View {
-        Button(action: pick) {
-            Text(title).lineLimit(1)
-                .font(.system(size: 12, weight: active ? .semibold : .regular))
-                .foregroundStyle(.white.opacity(active || hovered ? 0.9 : 0.5))
-                .padding(.horizontal, 8)
-            .frame(maxWidth: active ? 200 : 72, alignment: .leading)
-            .frame(height: 24)
-            .background(.white.opacity(active ? 0.12 : hovered ? 0.08 : 0.04), in: RoundedRectangle(cornerRadius: 7))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .fixedSize(horizontal: active, vertical: false)
-        // A clipped title reads in full on hover, without the strip moving under the cursor.
-        .help(active ? "" : title)
-        .onHover { hovered = $0 }
-        .animation(.snappy(duration: 0.2), value: hovered)
-    }
-}
-
 /// Hangs from the notch while the panel is shut and sessions wait on the
 /// reader, until every one is answered. Resting the pointer on it opens the
 /// panel on the cards; a short dwell keeps a pointer passing by from doing so.

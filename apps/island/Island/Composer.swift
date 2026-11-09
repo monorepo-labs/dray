@@ -222,8 +222,10 @@ final class Composer {
     var submits = 0
     var digits = 0
     private(set) var digit = 0
-    /// The session whose card is up, picked from the tabs; the oldest when unpicked.
+    /// The session whose card is up, picked from the list; the oldest when unpicked.
     var askTab: SessionKey?
+    /// The waiting sessions drawn as a list in place of the card, opened from its title.
+    var asksListed = false
     /// Every ask's id in the order it arrived, which is the order the tabs are in.
     private var askOrder: [String] = []
     /// Asks the reader put away: still waiting in Dray, out of the pill and the cards until a new ask comes.
@@ -364,6 +366,7 @@ final class Composer {
     private func released() {
         viewing = nil
         cardsFirst = false
+        asksListed = false
         let ask = heldAsk && !attention.isEmpty, finished = heldDone && !done.isEmpty
         heldAsk = false
         heldDone = false
@@ -387,6 +390,7 @@ final class Composer {
         let asks = key.map { [store.asks[$0] ?? []] } ?? Array(store.asks.values)
         dismissed.formUnion(asks.flatMap { $0.compactMap(\.payload.askId) })
         if askTab == key || key == nil { askTab = nil }
+        asksListed = false
         if attention.isEmpty, !busy { hide() }
         pillChanged()
     }
@@ -504,8 +508,8 @@ final class Composer {
 
     /// A number key on a card: a permission's option outright, a question's toggled.
     func pickOption(_ i: Int) {
-        // The flash covers the card, so a key now would answer one the reader cannot see.
-        guard !sent else { return }
+        // The flash or the list covers the card, so a key now would answer one the reader cannot see.
+        guard !sent, !asksListed else { return }
         switch ask?.event.payload {
         case .permissionRequested(let r)? where r.options.indices.contains(i):
             Task { await respond(r.options[i].id) }

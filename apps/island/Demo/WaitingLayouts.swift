@@ -19,12 +19,12 @@ struct WaitingLayouts: View {
 }
 
 enum WaitingLayout: String, CaseIterable, Identifiable {
-    case tabs, pager, deck, list, menu, side
+    case shipped, pager, deck, list, menu, side
     var id: Self { self }
 
     var name: String {
         switch self {
-        case .tabs: "Tabs (today)"
+        case .shipped: "Shipped: deck, count, list"
         case .pager: "Pager"
         case .deck: "Deck"
         case .list: "List"
@@ -35,7 +35,7 @@ enum WaitingLayout: String, CaseIterable, Identifiable {
 
     var note: String {
         switch self {
-        case .tabs: "What ships: a tab per session, the picked one named in full."
+        case .shipped: "The card with the rest stacked under it; the title and +N open every waiting session as a list."
         case .pager: "One title, a count and arrows. Narrowest header; the others are a click away, unnamed."
         case .deck: "Cards stacked, the ones behind peeking out under it. Answer or dismiss and the next slides up."
         case .list: "Every session a row saying what it asks; the picked one opens in place. × on a row's hover."
@@ -92,7 +92,7 @@ private struct LayoutCard: View {
         VStack(spacing: 0) {
             Group {
                 switch layout {
-                case .tabs: AskCard(composer: composer, key: key, event: event)
+                case .shipped: AskCard(composer: composer, key: key, event: event)
                 case .pager: pager
                 case .deck: deck
                 case .list: list
@@ -104,7 +104,7 @@ private struct LayoutCard: View {
             .frame(width: Composer.width, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 16).fill(.black))
             .overlay { RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.12), lineWidth: 0.5) }
-            if layout == .deck { peeks }
+            if layout == .deck || layout == .shipped, !composer.asksListed, keys.count > 1 { AskPeeks(count: keys.count - 1) }
         }
         .animation(.spring(duration: 0.3, bounce: 0.15), value: key)
     }
@@ -142,18 +142,6 @@ private struct LayoutCard: View {
         }
     }
 
-    /// The cards under the top one, two at most, each a little narrower.
-    private var peeks: some View {
-        VStack(spacing: 0) {
-            ForEach(0..<min(keys.count - 1, 2), id: \.self) { i in
-                UnevenRoundedRectangle(bottomLeadingRadius: 10, bottomTrailingRadius: 10)
-                    .fill(Color(white: i == 0 ? 0.1 : 0.06))
-                    .frame(width: Composer.width - CGFloat(i + 1) * 28, height: 7)
-                    .onTapGesture { next() }
-            }
-        }
-    }
-
     private var list: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(keys, id: \.self) { k in
@@ -170,7 +158,7 @@ private struct LayoutCard: View {
                     .padding(10)
                     .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
                 } else {
-                    WaitingRow(title: name(k), summary: summary(k), pick: { composer.askTab = k },
+                    WaitingRow(title: name(k), summary: store.askSummary(k), pick: { composer.askTab = k },
                             dismiss: { composer.dismissAsks(k) })
                 }
             }
@@ -184,7 +172,7 @@ private struct LayoutCard: View {
                     ForEach(keys, id: \.self) { k in
                         Button { composer.askTab = k } label: {
                             Text(name(k))
-                            Text(summary(k))
+                            Text(store.askSummary(k))
                         }
                     }
                     Divider()
@@ -219,7 +207,7 @@ private struct LayoutCard: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(name(k)).font(.system(size: 12, weight: k == key ? .semibold : .regular)).lineLimit(2)
                                 .foregroundStyle(.white.opacity(k == key ? 0.9 : 0.55))
-                            Text(summary(k)).font(.system(size: 11)).lineLimit(1).foregroundStyle(.white.opacity(0.35))
+                            Text(store.askSummary(k)).font(.system(size: 11)).lineLimit(1).foregroundStyle(.white.opacity(0.35))
                         }
                         .padding(8)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -247,19 +235,6 @@ private struct LayoutCard: View {
 
     private func name(_ k: SessionKey) -> String { store.items[k]?.title ?? "Session" }
 
-    /// What a session asks, in a line: the tool and its purpose, or the first question.
-    private func summary(_ k: SessionKey) -> String {
-        switch store.asks[k]?.first?.payload {
-        case .permissionRequested(let r)?:
-            let tool = r.displayName ?? r.toolName
-            return [tool, r.description ?? r.input.flatMap(toolArgument)].compactMap { $0 }.joined(separator: "  ")
-        case .questionsAsked(let r)?:
-            return r.questions.first?.question ?? "A question"
-        default:
-            return ""
-        }
-    }
-
     private func title(_ k: SessionKey) -> some View {
         Text(name(k)).lineLimit(1)
             .font(.system(size: 13, weight: .semibold))
@@ -274,7 +249,7 @@ private struct LayoutCard: View {
     }
 
     private func askBody(_ e: AgentEvent) -> some View {
-        AskBody(composer: composer, event: e) { composer.dismissAsks(key) }.id(e.id)
+        AskBody(composer: composer, event: e).id(e.id)
     }
 
     private func arrow(_ symbol: String, disabled: Bool, _ action: @escaping () -> Void) -> some View {
@@ -293,34 +268,5 @@ private struct LayoutCard: View {
             Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.5))
         }
         .buttonStyle(.plain)
-    }
-}
-
-/// A waiting session folded to one line in the list layout; × shows on hover.
-private struct WaitingRow: View {
-    let title: String
-    let summary: String
-    let pick: () -> Void
-    let dismiss: () -> Void
-    @State private var hover = false
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Circle().fill(StatusDot.waiting).frame(width: 6, height: 6)
-            Text(title).font(.system(size: 13)).lineLimit(1).foregroundStyle(.white.opacity(0.75)).layoutPriority(1)
-            Text(summary).font(.system(size: 12)).lineLimit(1).foregroundStyle(.white.opacity(0.35))
-            Spacer(minLength: 0)
-            Button(action: dismiss) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
-                .buttonStyle(.plain)
-                .foregroundStyle(.white.opacity(0.5))
-                .opacity(hover ? 1 : 0)
-                .help("Dismiss")
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 30)
-        .background(.white.opacity(hover ? 0.06 : 0), in: RoundedRectangle(cornerRadius: 8))
-        .contentShape(Rectangle())
-        .onTapGesture(perform: pick)
-        .onHover { hover = $0 }
     }
 }

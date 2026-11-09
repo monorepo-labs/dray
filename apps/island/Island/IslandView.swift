@@ -45,11 +45,11 @@ struct IslandView: View {
     var body: some View {
         VStack(spacing: 8) {
             if composer.placement == .notch {
-                composerCard
+                stackedCard
                 if composer.ask == nil { farSide }
             } else {
                 if composer.ask == nil { farSide }
-                composerCard
+                stackedCard
             }
         }
         // Recording draws only the orb and the clock, so the card shrinks to them.
@@ -105,6 +105,17 @@ struct IslandView: View {
 
     @ViewBuilder private var farSide: some View {
         if composer.listShown { SessionList(composer: composer, focus: $focus) }
+    }
+
+    /// The card, with the edges of the other waiting cards under it while one is up.
+    private var stackedCard: some View {
+        VStack(spacing: 0) {
+            composerCard
+            if !recording, !composer.sent, !composer.asksListed, composer.ask != nil, composer.attention.count > 1 {
+                AskPeeks(count: composer.attention.count - 1).transition(.opacity)
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: composer.attention.count)
     }
 
     private var composerCard: some View {

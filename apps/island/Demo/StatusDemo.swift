@@ -119,8 +119,8 @@ private let sections: [(String, [Case])] = [
         Case(name: "No free text", note: "pi's select: an offered option or nothing.", open: true, items: [s2], asks: [noFreeText(s2)]),
     ]),
     ("Several waiting", [
-        Case(name: "Two sessions, as tabs", open: true, items: [s1, s2], asks: [bash(s1), question(s2)]),
-        Case(name: "Five sessions, as tabs", open: true, items: [s1, s2, s3, s4, long],
+        Case(name: "Two sessions waiting", open: true, items: [s1, s2], asks: [bash(s1), question(s2)]),
+        Case(name: "Five sessions waiting", open: true, items: [s1, s2, s3, s4, long],
              asks: [bash(s1), question(s2), edit(s3), bash(s4), multiSelect(long)]),
     ]),
     ("Session view", [
