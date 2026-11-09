@@ -13,8 +13,6 @@ struct AskCard: View {
     let composer: Composer
     let key: SessionKey
     let event: AgentEvent
-    @State private var bodyHeight: CGFloat = 0
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
@@ -38,36 +36,79 @@ struct AskCard: View {
                     Text(machine).font(.system(size: 13)).foregroundStyle(.white.opacity(0.3)).lineLimit(1).fixedSize()
                 }
                 Spacer(minLength: 0)
-                Text(composer.closeHint).font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))
-            }
-            // A long option list scrolls rather than pushing the buttons out of the window.
-            ScrollView {
-                Group {
-                    switch event.payload {
-                    case .permissionRequested(let r): PermissionBody(composer: composer, request: r)
-                    case .questionsAsked(let r): QuestionsBody(composer: composer, request: r)
-                    default: EmptyView()
+                if keys.count > 1 {
+                    DismissButton(label: "Dismiss all", help: "Hide all until a new task needs you. They still wait in Dray.") {
+                        composer.dismissAsks()
                     }
                 }
-                .onGeometryChange(for: CGFloat.self, of: \.size.height) { bodyHeight = $0 }
+                Text(composer.closeHint).font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(height: min(bodyHeight, 420))
+            AskBody(composer: composer, event: event) { composer.dismissAsks(key) }
         }
         // Answers typed into one card must not carry over to the next.
         .id(event.id)
     }
 }
 
+/// A card's question and its answers, under whatever header names the session.
+struct AskBody: View {
+    let composer: Composer
+    let event: AgentEvent
+    /// This card's asks put away, from the left end of its last row.
+    let dismiss: () -> Void
+    @State private var bodyHeight: CGFloat = 0
+
+    var body: some View {
+        // A long option list scrolls rather than pushing the buttons out of the window.
+        ScrollView {
+            Group {
+                switch event.payload {
+                case .permissionRequested(let r): PermissionBody(composer: composer, request: r, dismiss: dismiss)
+                case .questionsAsked(let r): QuestionsBody(composer: composer, request: r, dismiss: dismiss)
+                default: EmptyView()
+                }
+            }
+            .onGeometryChange(for: CGFloat.self, of: \.size.height) { bodyHeight = $0 }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: min(bodyHeight, 420))
+    }
+}
+
+/// Puts waiting cards away until a new ask comes, unanswered. Bare text, as the close hint
+/// beside it, so it reads as a way out and not as an answer.
+struct DismissButton: View {
+    var label = "Dismiss"
+    var help = "Hide until a new task needs you. It still waits in Dray."
+    var size: CGFloat = 12
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: size, weight: .medium))
+                .foregroundStyle(.white.opacity(hover ? 0.9 : 0.5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: hover)
+    }
+}
+
 private struct PermissionBody: View {
     let composer: Composer
     let request: PermissionRequest
+    let dismiss: () -> Void
     @State private var busy = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // The tool and what it is for, read as one line.
-            (Text(request.title ?? request.displayName ?? request.toolName).font(.system(size: 13, weight: .medium))
+            // The tool and what it is for, read as one line. The tool goes by its short
+            // name, never the title ("Run a command"): the description or the argument under it says the rest.
+            (Text(request.displayName ?? request.toolName).font(.system(size: 13, weight: .medium))
                 + Text(request.description.map { "  \($0)" } ?? "").font(.system(size: 12)).foregroundColor(.white.opacity(0.5)))
                 .lineLimit(2)
             if let line = request.input.flatMap(toolArgument) {
@@ -97,6 +138,9 @@ private struct PermissionBody: View {
                 }
                 .buttonStyle(.plain)
             }
+            // The questions card keeps Dismiss at the left of its send row; this card has no row, so it gets one.
+            DismissButton(size: 13, action: dismiss)
+                .padding(.top, 4)
         }
         .disabled(busy)
     }
@@ -109,6 +153,7 @@ private struct PermissionBody: View {
 private struct QuestionsBody: View {
     let composer: Composer
     let request: QuestionsRequest
+    let dismiss: () -> Void
     @State private var index = 0
     @State private var picks: [String: Set<String>] = [:]
     @State private var typed: [String: String] = [:]
@@ -181,6 +226,7 @@ private struct QuestionsBody: View {
                 }
             }
             HStack(spacing: 14) {
+                DismissButton(size: 13, action: dismiss)
                 if index > 0 {
                     Button("Back") { move(-1) }.buttonStyle(.plain).foregroundStyle(.white.opacity(0.5))
                 }

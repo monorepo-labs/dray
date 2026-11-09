@@ -20,12 +20,13 @@ private struct DemoPage: View {
     @State private var tab = sections[0].0
     private static let taskList = "Task list"
     private static let boat = "Boat"
+    private static let layouts = "Waiting layouts"
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 Picker("", selection: $tab) {
-                    ForEach(sections.map(\.0) + [Self.taskList, Self.boat], id: \.self) { Text($0).tag($0) }
+                    ForEach(sections.map(\.0) + [Self.layouts, Self.taskList, Self.boat], id: \.self) { Text($0).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -53,6 +54,8 @@ private struct DemoPage: View {
                           alignment: .leading, spacing: 28) {
                     if tab == Self.boat {
                         BoatMock(placement: placement)
+                    } else if tab == Self.layouts {
+                        WaitingLayouts(items: [s1, s2, s3, long], asks: [bash(s1), question(s2), edit(s3), multiSelect(long)])
                     } else if tab == Self.taskList {
                         ListMock()
                     } else {
@@ -256,6 +259,8 @@ private struct CaseStage: View {
         if let id = c.pinned { composer.target = .session(SessionKey(server: server, id: id)) }
         composer.listShown = c.listShown
         composer.done = c.done.map { SessionKey(server: server, id: $0) }
+        // The app's hide also takes the window away; here the panel just shuts, so Dismiss can be seen to land.
+        composer.hide = { [weak composer] in composer?.shown = false }
         _composer = State(initialValue: composer)
     }
 
@@ -367,9 +372,9 @@ private struct BoatMock: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(name).font(.headline)
                 BoatPill(notch: placement == .notch, notchHeight: placement == .notch ? 32 : 0,
-                         alert: alert, refused: refused, extend: { _ in })
+                         alert: alert, refused: refused, extend: { _ in }, dismiss: {})
                 Text("In the open panel").foregroundStyle(.secondary).padding(.top, 8)
-                BoatLine(alert: alert, refused: refused, extend: { _ in })
+                BoatLine(alert: alert, refused: refused, extend: { _ in }, dismiss: {})
                     .padding(12)
                     .background(RoundedRectangle(cornerRadius: 12).fill(.black))
             }

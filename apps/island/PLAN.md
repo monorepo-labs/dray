@@ -59,6 +59,9 @@ v2 (#565): status, across every live session.
 - A permission or question card never opens the panel: a pill hangs from the
   notch saying how many tasks need attention, until they are answered. Opening
   draws the cards as tabs, oldest first; the last answer closes the panel.
+  Dismiss, at the left of a card's last row, puts that session's card away
+  unanswered; Dismiss all, up top, puts every one away. They still wait in
+  Dray, and the next new ask brings the pill back with every one of them.
 - A finished session is Dray's own banner and not the island's: where the reader
   works decides which one they see, and only the banner opens the session.
 - The task list carries the sidebar's marks; the title opens the task list, since a

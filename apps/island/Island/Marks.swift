@@ -232,16 +232,18 @@ struct AttentionPill: View {
 }
 
 /// A boat sandbox about to auto-stop, with the way to give it more time. Stands
-/// until extended or stopped, since missing it costs running work.
+/// until extended, stopped or dismissed, since missing it costs running work.
 struct BoatPill: View {
     let notch: Bool
     let notchHeight: CGFloat
     let alert: BoatAlert
     let refused: String?
     let extend: (Int) -> Void
+    let dismiss: () -> Void
+    var glowing = false
 
     var body: some View {
-        PillShell(notch: notch, notchHeight: notchHeight, glow: StatusDot.waiting) {
+        PillShell(notch: notch, notchHeight: notchHeight, glow: glowing ? StatusDot.waiting : nil) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(alert.name) stops in").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
                     .frame(maxWidth: .infinity)
@@ -252,7 +254,7 @@ struct BoatPill: View {
                         .foregroundStyle(alert.urgent ? Color.red : .white)
                         .frame(maxWidth: .infinity)
                 }
-                BoatExtendChoices(size: 12, extend: extend)
+                BoatExtendChoices(size: 12, extend: extend, dismiss: dismiss)
                     .padding(.top, 2)
                 if let refused {
                     Text(refused).font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
@@ -269,6 +271,7 @@ struct BoatExtendChoices: View {
     let size: CGFloat
     /// Minutes.
     let extend: (Int) -> Void
+    var dismiss: (() -> Void)? = nil
     @State private var minutes = 120
 
     var body: some View {
@@ -278,6 +281,13 @@ struct BoatExtendChoices: View {
                 .foregroundStyle(.white).frame(minWidth: size * 4)
             step("plus", by: 30).disabled(minutes >= 30 * 24 * 60)
             Spacer(minLength: 16)
+            if let dismiss {
+                Button("Dismiss", action: dismiss)
+                    .buttonStyle(.plain)
+                    .font(.system(size: size, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .help("Hide this warning. It comes back if the stop time changes.")
+            }
             Button("Extend") { extend(minutes) }
                 .buttonStyle(.plain)
                 .font(.system(size: size, weight: .semibold))
