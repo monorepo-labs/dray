@@ -7,55 +7,230 @@ extension Store {
     }
 }
 
-/// A card a session is blocked on, in place of the draft.
+/// A card a session is blocked on, in place of the draft. Several waiting
+/// are one card with the rest stacked under it; its title, with the count,
+/// opens them as a list to pick from.
 struct AskCard: View {
     @Environment(Store.self) private var store
     let composer: Composer
     let key: SessionKey
     let event: AgentEvent
+
+    var body: some View {
+        let keys = composer.attention
+        let listed = composer.listing
+        VStack(alignment: .leading, spacing: 10) {
+            // The list names every session itself, the picked one marked, so the header steps aside.
+            if !listed { header(keys) }
+            if listed {
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(keys, id: \.self) { k in
+                            WaitingRow(title: title(k), current: k == key,
+                                       pick: { list(open: false) { composer.askTab = k } },
+                                       openInApp: { Task { await composer.showInApp(k) } })
+                        }
+                    }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                // A row and its gap are 32pt; past the card body's own cap the list scrolls.
+                .frame(height: min(CGFloat(keys.count) * 32, 420))
+                .transition(.opacity)
+            }
+            // Kept mounted under the list, only folded away, or opening it would throw out a
+            // half-answered question. Keyed on the ask: answers must not carry over to the next card.
+            AskBody(composer: composer, event: event)
+                .id(event.id)
+                .frame(height: listed ? 0 : nil, alignment: .top)
+                .clipped()
+                .opacity(listed ? 0 : 1)
+                .allowsHitTesting(!listed)
+                // The old body leaves at once: one fading out still holds its height, and the card overshoots.
+                .transition(.asymmetric(insertion: .opacity, removal: .identity))
+        }
+    }
+
+    /// Opens or closes the list in one animation, whichever row was picked.
+    private func list(open: Bool, _ change: () -> Void = {}) {
+        // The pick swaps the folded body unanimated: faded out instead, the old one kept its full
+        // height while it went, and the card grew past both and sprang back.
+        // The close waits a turn, or both land in one update and the instant transaction takes the animation with it.
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant, change)
+        DispatchQueue.main.async {
+            withAnimation(.snappy(duration: 0.25)) { composer.asksListed = open }
+        }
+    }
+
+    private func header(_ keys: [SessionKey]) -> some View {
+        HStack(spacing: 8) {
+            if keys.count > 1 {
+                WaitingSwitch(title: title(key), more: keys.count - 1, open: composer.asksListed) {
+                    list(open: !composer.asksListed)
+                }
+            } else {
+                Text(title(key)).lineLimit(1)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.45))
+                    // The title row's ⌘-click, so every title in the panel answers it alike.
+                    .onTapGesture {
+                        if NSEvent.modifierFlags.contains(.command) { Task { await composer.showInApp(key) } }
+                    }
+                    .help("⌘-click to open in Dray")
+            }
+            Spacer(minLength: 0)
+            DismissButton { composer.dismissAsks(key) }
+            if keys.count > 1 {
+                DismissButton(label: "Dismiss all", help: "Hide all until a new task needs you. They still wait in Dray.") {
+                    composer.dismissAsks()
+                }
+            }
+            Text(composer.closeHint).font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))
+        }
+    }
+
+    private func title(_ k: SessionKey) -> String { store.items[k]?.title ?? "Session" }
+}
+
+/// The picked session's title with how many more wait, which opens the list of them.
+private struct WaitingSwitch: View {
+    let title: String
+    let more: Int
+    let open: Bool
+    let toggle: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 6) {
+                Text(title).lineLimit(1).font(.system(size: 13, weight: .semibold))
+                Text("+\(more)").font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .padding(.horizontal, 6)
+                    .frame(height: 18)
+                    .background(.white.opacity(open ? 0.3 : 0.18), in: Capsule())
+            }
+            .foregroundStyle(.white.opacity(hover || open ? 0.9 : 0.6))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .animation(.snappy(duration: 0.2), value: open)
+    }
+}
+
+/// One waiting session in the opened list, by title. A click opens its card,
+/// ⌘-click opens it in Dray.
+struct WaitingRow: View {
+    let title: String
+    /// What it asks, drawn dim after the title; the panel's list leaves it out, a demo layout shows it.
+    var summary: String? = nil
+    var current = false
+    let pick: () -> Void
+    var openInApp: () -> Void = {}
+    @State private var hover = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title).font(.system(size: 13, weight: current ? .semibold : .regular)).lineLimit(1)
+                .foregroundStyle(.white.opacity(current ? 0.95 : 0.75)).layoutPriority(1)
+            if let summary { Text(summary).font(.system(size: 13)).lineLimit(1).foregroundStyle(.white.opacity(0.35)) }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(.white.opacity(hover || current ? 0.08 : 0), in: RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if NSEvent.modifierFlags.contains(.command) { openInApp() } else { pick() }
+        }
+        .onHover { hover = $0 }
+    }
+}
+
+/// The edges of the cards waiting under the one shown, two at most, so the
+/// stack reads at a glance. Drawn under the panel's card, outside its fill.
+struct AskPeeks: View {
+    let count: Int
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(0..<min(count, 2), id: \.self) { i in
+                UnevenRoundedRectangle(bottomLeadingRadius: 10, bottomTrailingRadius: 10)
+                    .fill(Color(white: i == 0 ? 0.1 : 0.06))
+                    .overlay {
+                        UnevenRoundedRectangle(bottomLeadingRadius: 10, bottomTrailingRadius: 10)
+                            .stroke(.white.opacity(0.1), lineWidth: 0.5)
+                    }
+                    .frame(width: Composer.width - CGFloat(i + 1) * 28, height: 7)
+            }
+        }
+    }
+}
+
+/// A card's question and its answers, under whatever header names the session.
+struct AskBody: View {
+    let composer: Composer
+    let event: AgentEvent
     @State private var bodyHeight: CGFloat = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                let keys = composer.attention
-                if keys.count > 1 {
-                    AskTabs(titles: keys.map { store.items[$0]?.title ?? "Session" }, active: keys.firstIndex(of: key) ?? 0,
-                            pick: { composer.askTab = keys[$0] },
-                            openInApp: { i in Task { await composer.showInApp(keys[i]) } })
-                } else {
-                    Text(store.items[key]?.title ?? "Session").lineLimit(1)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.45))
-                        // The title row's ⌘-click, so every title in the panel answers it alike.
-                        .onTapGesture {
-                            if NSEvent.modifierFlags.contains(.command) { Task { await composer.showInApp(key) } }
-                        }
-                        .help("⌘-click to open in Dray")
+        // A long option list scrolls rather than pushing the buttons out of the window.
+        ScrollView {
+            Group {
+                switch event.payload {
+                case .permissionRequested(let r): PermissionBody(composer: composer, request: r)
+                case .questionsAsked(let r): QuestionsBody(composer: composer, request: r)
+                default: EmptyView()
                 }
-                // Which machine a permission would run on is half the question.
-                if let machine = store.machine(key.server) {
-                    Text(machine).font(.system(size: 13)).foregroundStyle(.white.opacity(0.3)).lineLimit(1).fixedSize()
-                }
-                Spacer(minLength: 0)
-                Text(composer.closeHint).font(.system(size: 12)).foregroundStyle(.white.opacity(0.3))
             }
-            // A long option list scrolls rather than pushing the buttons out of the window.
-            ScrollView {
-                Group {
-                    switch event.payload {
-                    case .permissionRequested(let r): PermissionBody(composer: composer, request: r)
-                    case .questionsAsked(let r): QuestionsBody(composer: composer, request: r)
-                    default: EmptyView()
-                    }
-                }
-                .onGeometryChange(for: CGFloat.self, of: \.size.height) { bodyHeight = $0 }
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(height: min(bodyHeight, 420))
+            .onGeometryChange(for: CGFloat.self, of: \.size.height) { bodyHeight = $0 }
         }
-        // Answers typed into one card must not carry over to the next.
-        .id(event.id)
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: min(bodyHeight, 420))
+    }
+}
+
+/// Puts waiting cards away until a new ask comes, unanswered. Bare text, as the close hint
+/// beside it, so it reads as a way out and not as an answer.
+struct DismissButton: View {
+    var label = "Dismiss"
+    var help = "Hide until a new task needs you. It still waits in Dray."
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(hover ? 0.9 : 0.5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: hover)
+    }
+}
+
+/// A permission's tool and what it touches, as the card's one line. A command is
+/// long and rarely the question, so it waits behind a click; a path is short and
+/// is the question, so it sits beside the tool.
+struct ToolLine {
+    let tool: String
+    /// Beside the tool name: the file, else what the agent says it is for, else the argument.
+    let beside: String?
+    /// Shown under the line once it is clicked: a command the line does not already say.
+    let hidden: String?
+
+    init(_ r: PermissionRequest) {
+        tool = r.displayName ?? r.toolName
+        let command = r.input?["command"]?.string.flatMap { $0.isEmpty ? nil : $0 }
+        let argument = r.input.flatMap(toolArgument)
+        // `toolArgument` answers a path first, so an argument that is not the command is the path or its kin.
+        let path = argument == command ? nil : argument
+        beside = path ?? r.description ?? argument
+        hidden = command == beside ? nil : command
     }
 }
 
@@ -63,16 +238,23 @@ private struct PermissionBody: View {
     let composer: Composer
     let request: PermissionRequest
     @State private var busy = false
+    @State private var showCommand = false
 
     var body: some View {
+        let line = ToolLine(request)
         VStack(alignment: .leading, spacing: 6) {
-            // The tool and what it is for, read as one line.
-            (Text(request.title ?? request.displayName ?? request.toolName).font(.system(size: 13, weight: .medium))
-                + Text(request.description.map { "  \($0)" } ?? "").font(.system(size: 12)).foregroundColor(.white.opacity(0.5)))
+            (Text(line.tool).fontWeight(.medium)
+                + Text(line.beside.map { "  \($0)" } ?? "").foregroundColor(.white.opacity(0.5)))
+                .font(.system(size: 13))
                 .lineLimit(2)
-            if let line = request.input.flatMap(toolArgument) {
-                Text(line).font(.system(size: 11, weight: .regular).monospaced()).lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                // No chevron: the line itself is what opens, and only where there is a command to show.
+                .onTapGesture { if line.hidden != nil { showCommand.toggle() } }
+            if showCommand, let command = line.hidden {
+                Text(command).font(.system(size: 11, weight: .regular).monospaced())
                     .foregroundStyle(.white.opacity(0.5))
+                    .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             ForEach(Array(request.options.enumerated()), id: \.element.id) { i, option in
@@ -99,6 +281,7 @@ private struct PermissionBody: View {
             }
         }
         .disabled(busy)
+        .animation(.snappy(duration: 0.2), value: showCommand)
     }
 }
 

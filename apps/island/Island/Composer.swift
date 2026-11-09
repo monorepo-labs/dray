@@ -222,10 +222,16 @@ final class Composer {
     var submits = 0
     var digits = 0
     private(set) var digit = 0
-    /// The session whose card is up, picked from the tabs; the oldest when unpicked.
+    /// The session whose card is up, picked from the list; the oldest when unpicked.
     var askTab: SessionKey?
+    /// The waiting sessions drawn as a list in place of the card, opened from its title.
+    var asksListed = false
+    /// The list is on screen, covering the card: a list of one is never drawn.
+    var listing: Bool { asksListed && attention.count > 1 }
     /// Every ask's id in the order it arrived, which is the order the tabs are in.
     private var askOrder: [String] = []
+    /// Asks the reader put away: still waiting in Dray, out of the pill and the cards until a new ask comes.
+    private var dismissed: Set<String> = []
 
     @ObservationIgnored var hide: () -> Void = {}
     @ObservationIgnored var present: () -> Void = {}
@@ -243,10 +249,24 @@ final class Composer {
         self.server = server
         store.asksChanged = { [weak self] in self?.asksChanged() }
         store.linksMayHaveMoved = { [weak self] in Task { await self?.followApp() } }
-        store.boatChanged = { [weak self] in self?.pillChanged() }
+        store.boatChanged = { [weak self] in
+            guard let self else { return }
+            // `self.store`, not the init's argument: the store owns this closure, so capturing it is a cycle.
+            dismissedBoats.formIntersection(self.store.boatAlerts)
+            // A sandbox newly warning is news: the pill lights up once, as an ask's does, then rests.
+            let warning = Set(self.store.boatAlerts.map(\.server))
+            if !warning.subtracting(boatsWarned).isEmpty, !shown { announce() }
+            boatsWarned = warning
+            pillChanged()
+        }
     }
 
     // MARK: Cards and alerts
+
+    /// A session's asks the island still offers, oldest first.
+    private func waiting(_ key: SessionKey) -> [AgentEvent] {
+        (store.asks[key] ?? []).filter { $0.payload.askId.map { !dismissed.contains($0) } ?? true }
+    }
 
     /// The sessions waiting on the reader, oldest ask first: the tabs over the card.
     var attention: [SessionKey] {
@@ -254,7 +274,7 @@ final class Composer {
             asks.compactMap { $0.payload.askId.flatMap(askOrder.firstIndex) }.min() ?? .max
         }
         // The answered card is gone to the reader already, so no pill waits on it.
-        return store.asks.filter { $0.value.contains { $0.id != leaving?.event.id } }
+        return store.asks.filter { waiting($0.key).contains { $0.id != leaving?.event.id } }
             .sorted { (first($0.value), $0.key.id) < (first($1.value), $1.key.id) }
             .map(\.key)
     }
@@ -267,7 +287,7 @@ final class Composer {
         guard cardsFirst || !busy else { return nil }
         let keys = attention
         guard let key = askTab.flatMap({ keys.contains($0) ? $0 : nil }) ?? keys.first,
-              let event = store.asks[key]?.first else { return nil }
+              let event = waiting(key).first else { return nil }
         return (key, event)
     }
 
@@ -294,8 +314,14 @@ final class Composer {
             asksPending = false
             let ids = store.asks.values.flatMap { $0.compactMap(\.payload.askId) }
             let fresh = ids.filter { !askOrder.contains($0) }
-            let hadCards = !askOrder.isEmpty
+            let hadCards = askOrder.contains { !dismissed.contains($0) }
             askOrder = askOrder.filter(ids.contains) + fresh
+            // Answered elsewhere down to one: the list is gone, so it must not reopen when another lands.
+            if attention.count < 2 { asksListed = false }
+            // A new ask brings back every one put away: dismissing quiets the pill, it answers nothing.
+            if fresh.isEmpty { dismissed.formIntersection(ids) } else { dismissed = [] }
+            // A dismissed ask answered in Dray is no card leaving, so it closes nothing here.
+            let live = ids.filter { !dismissed.contains($0) }
             if !fresh.isEmpty {
                 // An idle open panel draws the card at once, which says enough.
                 if !shown { announce() } else if busy || sent { heldAsk = true }
@@ -307,9 +333,9 @@ final class Composer {
             // Not while the reader is busy: a card answered elsewhere leaves them their draft.
             // Nor under a card's flash, which closes the panel itself once read,
             // nor on a new session, which the reader asked for with ⌘N.
-            if ids.isEmpty, hadCards, shown, !busy, !sent, target != .new { hide() }
+            if live.isEmpty, hadCards, shown, !busy, !sent, target != .new { hide() }
             // Answered elsewhere with the panel shut: the done pill is back in view, its clock with it.
-            if ids.isEmpty, hadCards, !shown {
+            if live.isEmpty, hadCards, !shown {
                 unseenDone = []
                 if !done.isEmpty { startDoneClock() }
             }
@@ -344,6 +370,7 @@ final class Composer {
     private func released() {
         viewing = nil
         cardsFirst = false
+        asksListed = false
         let ask = heldAsk && !attention.isEmpty, finished = heldDone && !done.isEmpty
         heldAsk = false
         heldDone = false
@@ -358,6 +385,18 @@ final class Composer {
         guard heldAsk, shown else { return }
         heldAsk = false
         chime()
+    }
+
+    /// One session's asks put away, or every session's with none named; the
+    /// pill goes once nothing is left. Nothing is answered, and the next new
+    /// ask brings every one back with it.
+    func dismissAsks(_ key: SessionKey? = nil) {
+        let asks = key.map { [store.asks[$0] ?? []] } ?? Array(store.asks.values)
+        dismissed.formUnion(asks.flatMap { $0.compactMap(\.payload.askId) })
+        if askTab == key || key == nil { askTab = nil }
+        asksListed = false
+        if attention.isEmpty, !busy { hide() }
+        pillChanged()
     }
 
     /// The attention pill: the panel, on the cards, whatever the draft holds.
@@ -385,8 +424,18 @@ final class Composer {
     /// Something to draw while the panel is shut: a card waiting outranks news.
     var hasPill: Bool { !attention.isEmpty || !done.isEmpty || !boatAlerts.isEmpty }
 
-    /// Standing until extended or stopped: the island offers no dismissal.
-    var boatAlerts: [BoatAlert] { store.boatAlerts }
+    /// Standing until extended, stopped or dismissed.
+    var boatAlerts: [BoatAlert] { store.boatAlerts.filter { !dismissedBoats.contains($0) } }
+    /// Keyed on the whole alert, `stopsAt` included, so a later warning about
+    /// the same sandbox is news again.
+    private var dismissedBoats: Set<BoatAlert> = []
+    /// Sandboxes already warning, so an alert redrawn with a new stop time is not announced again.
+    @ObservationIgnored private var boatsWarned: Set<String> = []
+
+    func dismissBoat(_ alert: BoatAlert) {
+        dismissedBoats.insert(alert)
+        pillChanged()
+    }
     /// Why the last Extend didn't take: a trial's cap, Dray being closed.
     var boatRefused: String?
 
@@ -463,8 +512,8 @@ final class Composer {
 
     /// A number key on a card: a permission's option outright, a question's toggled.
     func pickOption(_ i: Int) {
-        // The flash covers the card, so a key now would answer one the reader cannot see.
-        guard !sent else { return }
+        // The flash or the list covers the card, so a key now would answer one the reader cannot see.
+        guard !sent, !listing else { return }
         switch ask?.event.payload {
         case .permissionRequested(let r)? where r.options.indices.contains(i):
             Task { await respond(r.options[i].id) }
@@ -524,7 +573,7 @@ final class Composer {
     /// Several answered in one visit are told as a group.
     private func closeOnLastCard(_ key: SessionKey, _ e: AgentEvent, _ label: String) {
         answered += 1
-        guard !busy, attention == [key], store.asks[key]?.count == 1 else { return }
+        guard !busy, attention == [key], waiting(key).count == 1 else { return }
         leaving = (key, e)
         Sound.send?.play()
         flash(answered > 1 ? "\(answered) answered" : label)

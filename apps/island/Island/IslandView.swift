@@ -45,11 +45,11 @@ struct IslandView: View {
     var body: some View {
         VStack(spacing: 8) {
             if composer.placement == .notch {
-                composerCard
+                stackedCard
                 if composer.ask == nil { farSide }
             } else {
                 if composer.ask == nil { farSide }
-                composerCard
+                stackedCard
             }
         }
         // Recording draws only the orb and the clock, so the card shrinks to them.
@@ -105,6 +105,22 @@ struct IslandView: View {
 
     @ViewBuilder private var farSide: some View {
         if composer.listShown { SessionList(composer: composer, focus: $focus) }
+    }
+
+    /// The card, with the edges of the other waiting cards under it while one is up.
+    private var stackedCard: some View {
+        VStack(spacing: 0) {
+            composerCard
+            if !recording, !composer.sent, composer.ask != nil, composer.attention.count > 1 {
+                // Faded under the list, not removed: re-inserted, the edges landed at the card's new
+                // bottom at once and the card grew down to them.
+                AskPeeks(count: composer.attention.count - 1)
+                    .opacity(composer.listing ? 0 : 1)
+                    .transition(.opacity)
+            }
+        }
+        // No animation keyed on the count here: it wrapped the card too, so an answer or a dismiss
+        // faded the old card out at full height beside the new one and the panel overshot.
     }
 
     private var composerCard: some View {
@@ -268,7 +284,9 @@ struct IslandView: View {
         }
         input
         if let alert = composer.boatAlerts.first {
-            BoatLine(alert: alert, refused: composer.boatRefused) { minutes in await composer.extendBoat(alert, minutes: minutes) }
+            BoatLine(alert: alert, refused: composer.boatRefused,
+                     extend: { minutes in await composer.extendBoat(alert, minutes: minutes) },
+                     dismiss: { composer.dismissBoat(alert) })
                 .gone(recording)
         }
         if let notice = composer.notice {
@@ -713,6 +731,7 @@ struct BoatLine: View {
     var refused: String? = nil
     /// Minutes.
     let extend: (Int) async -> Void
+    let dismiss: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -720,7 +739,7 @@ struct BoatLine: View {
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
                     Text(alert.sentence).font(.caption.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
                 }
-                BoatExtendChoices(size: 11, extend: extend)
+                BoatExtendChoices(size: 11, extend: extend, dismiss: dismiss)
             }
             if let refused {
                 Text(refused).font(.caption).foregroundStyle(.secondary)
@@ -746,7 +765,8 @@ struct PillsView: View {
             } else if !composer.shown, let alert = composer.boatAlerts.first {
                 BoatPill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
                          alert: alert, refused: composer.boatRefused,
-                         extend: { minutes in await composer.extendBoat(alert, minutes: minutes) })
+                         extend: { minutes in await composer.extendBoat(alert, minutes: minutes) },
+                         dismiss: { composer.dismissBoat(alert) }, glowing: composer.glowing)
                     .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
             } else if !composer.shown, !composer.done.isEmpty {
                 DonePill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
