@@ -348,30 +348,29 @@ pub struct VercelSandbox {
 /// Vercel lists sandboxes per project only, and the CLI puts its own in a
 /// project of its own, `vercel-sandbox-default-project`.
 pub async fn list() -> Result<Vec<VercelSandbox>, String> {
-    let teams = call(Method::GET, "/v2/teams", &[("limit", "100")], None, QUICK).await?;
+    let teams = every("/v2/teams", &[], "teams", Page::Until).await?;
     let mut projects = tokio::task::JoinSet::new();
-    for team in teams.get("teams").and_then(Value::as_array).into_iter().flatten() {
+    for team in &teams {
         let (Some(id), Some(slug)) = (team.get("id").and_then(Value::as_str), team.get("slug").and_then(Value::as_str)) else {
             continue;
         };
         let (id, slug) = (id.to_string(), slug.to_string());
         projects.spawn(async move {
-            let found = call(Method::GET, "/v10/projects", &[("teamId", id.as_str()), ("limit", "100")], None, QUICK).await;
+            let found = every("/v10/projects", &[("teamId", id.as_str())], "projects", Page::Until).await;
             (id, slug, found)
         });
     }
     let mut sandboxes = tokio::task::JoinSet::new();
     while let Some(Ok((team, team_name, found))) = projects.join_next().await {
-        for project in found?.get("projects").and_then(Value::as_array).into_iter().flatten() {
+        for project in found? {
             let (Some(id), Some(name)) = (project.get("id").and_then(Value::as_str), project.get("name").and_then(Value::as_str)) else {
                 continue;
             };
             let (team, team_name, project, project_name) = (team.clone(), team_name.clone(), id.to_string(), name.to_string());
             sandboxes.spawn(async move {
-                // 50 is this list's cap, where teams and projects take 100.
-                let query = [("teamId", team.as_str()), ("project", project.as_str()), ("limit", "50")];
-                let found = call(Method::GET, "/v2/sandboxes", &query, None, QUICK).await;
-                found.map(|value| parse_list(&value, &team, &team_name, &project, &project_name))
+                let query = [("teamId", team.as_str()), ("project", project.as_str())];
+                let found = every("/v2/sandboxes", &query, "sandboxes", Page::Cursor).await;
+                found.map(|items| parse_list(&items, &team, &team_name, &project, &project_name))
             });
         }
     }
@@ -383,9 +382,47 @@ pub async fn list() -> Result<Vec<VercelSandbox>, String> {
     Ok(all)
 }
 
-fn parse_list(value: &Value, team: &str, team_name: &str, project: &str, project_name: &str) -> Vec<VercelSandbox> {
-    let found = value.get("sandboxes").and_then(Value::as_array).into_iter().flatten();
+/// How a list asks for its next page: teams and projects by the timestamp in
+/// `pagination.next`, sandboxes by an opaque cursor in the same field.
+#[derive(Clone, Copy)]
+enum Page {
+    Until,
+    Cursor,
+}
+
+/// Every item of a paged list, `key` naming the array. Capped, so an API that
+/// never stops answering a `next` cannot hold the dialog for good.
+async fn every(path: &str, query: &[(&str, &str)], key: &str, page: Page) -> Result<Vec<Value>, String> {
+    // 50 is the sandbox list's cap, where teams and projects take 100.
+    let limit = match page {
+        Page::Until => "100",
+        Page::Cursor => "50",
+    };
+    let mut items = Vec::new();
+    let mut next: Option<String> = None;
+    for _ in 0..20 {
+        let mut asked = query.to_vec();
+        asked.push(("limit", limit));
+        if let Some(next) = &next {
+            asked.push((if matches!(page, Page::Until) { "until" } else { "cursor" }, next));
+        }
+        let value = call(Method::GET, path, &asked, None, QUICK).await?;
+        items.extend(value.get(key).and_then(Value::as_array).into_iter().flatten().cloned());
+        next = match value.pointer("/pagination/next") {
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(Value::Number(n)) => Some(n.to_string()),
+            _ => None,
+        };
+        if next.is_none() {
+            break;
+        }
+    }
+    Ok(items)
+}
+
+fn parse_list(found: &[Value], team: &str, team_name: &str, project: &str, project_name: &str) -> Vec<VercelSandbox> {
     found
+        .iter()
         .filter_map(|sandbox| {
             let name = sandbox.get("name")?.as_str().filter(|n| valid_part(n))?;
             let status = sandbox.get("status").and_then(Value::as_str).unwrap_or_default();
@@ -440,12 +477,12 @@ mod tests {
 
     #[test]
     fn lists_what_a_project_holds() {
-        let value = json!({ "sandboxes": [
-            { "name": "a", "status": "running" },
-            { "name": "b", "status": "stopped" },
-            { "name": "bad name", "status": "running" }
-        ] });
-        let listed = parse_list(&value, "team_1", "acme", "prj_1", "web");
+        let found = [
+            json!({ "name": "a", "status": "running" }),
+            json!({ "name": "b", "status": "stopped" }),
+            json!({ "name": "bad name", "status": "running" }),
+        ];
+        let listed = parse_list(&found, "team_1", "acme", "prj_1", "web");
         assert_eq!(listed.iter().map(|l| (l.name.as_str(), l.stopped)).collect::<Vec<_>>(), [("a", false), ("b", true)]);
     }
 
@@ -462,6 +499,15 @@ mod tests {
         assert!(reached.url.starts_with("wss://"), "{}", reached.url);
         assert_eq!(reached.token.len(), 64);
         assert!(!start_server(&link).await.unwrap(), "a second start finds it running");
+    }
+
+    /// Every sandbox this Mac's `sandbox login` sees, through every page.
+    #[tokio::test]
+    #[ignore]
+    async fn lists_a_live_login() {
+        for sandbox in list().await.unwrap() {
+            println!("{} {}/{} stopped={}", sandbox.name, sandbox.team_name, sandbox.project_name, sandbox.stopped);
+        }
     }
 
     #[test]

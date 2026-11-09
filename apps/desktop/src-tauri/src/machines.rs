@@ -536,6 +536,9 @@ pub async fn add(name: String, address: String, token: Option<String>) -> Result
             saved.id = list[at].id.clone();
             saved.beta = list[at].beta;
             saved.ignored = list[at].ignored.take();
+            // A boat link is learned again off the next login. A Vercel one
+            // is not: only the app's Add sets it, so a re-add must carry it.
+            saved.vercel = list[at].vercel.take();
             saved.unknown = std::mem::take(&mut list[at].unknown);
             list[at] = saved.clone();
         }
