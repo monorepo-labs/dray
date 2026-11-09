@@ -104,6 +104,7 @@ export const SHORTCUTS = [
   { id: "harness.next", label: "Next agent", group: "Composer", chord: k("a", { shift: true }) },
   { id: "worktree.toggle", label: "Toggle worktree", group: "Composer", chord: k("t", { shift: true }) },
   { id: "project.next", label: "Next project in picker", group: "Composer", chord: k("p", { shift: true }) },
+  { id: "server.next", label: "Next server in picker", group: "Composer", chord: k("s", { shift: true }) },
   { id: "queue.send", label: "Send queued prompts now", group: "Composer", chord: k("Enter") },
   { id: "composer.draft", label: "Save as draft", group: "Composer", chord: k("s") },
   { id: "agent.update", label: "Update the agent's CLI", group: "Composer", chord: k("u") },
@@ -143,6 +144,7 @@ export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord | null>> = {
   "tab.reopen": null,
   "mode.toggle": null,
   "agent.update": null,
+  "server.next": null,
 };
 
 export const SHORTCUT_GROUPS: ShortcutGroup[] = [

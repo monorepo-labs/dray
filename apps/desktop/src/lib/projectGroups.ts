@@ -54,6 +54,22 @@ export function lastUsedCheckout(
   return newest(reachable.length ? reachable : checkouts);
 }
 
+/// The checkout after `path` that could send, wrapping, so one key steps every
+/// machine and comes back round. `null` where no other one is up to step to,
+/// since a disconnected checkout is one the picker refuses too.
+export function nextCheckout(
+  checkouts: Project[],
+  path: string,
+  connected: (server: ServerId) => boolean = serverConnected,
+): Project | null {
+  const at = checkouts.findIndex((p) => p.path === path);
+  for (let step = 1; step <= checkouts.length; step++) {
+    const next = checkouts[(at + step) % checkouts.length];
+    if (next.path !== path && connected(serverOfPath(next.path))) return next;
+  }
+  return null;
+}
+
 /// The one machine every checkout sits on, or `null` where they span several.
 export function soleServer(checkouts: Project[]): ServerId | null {
   const servers = new Set(checkouts.map((p) => serverOfPath(p.path)));

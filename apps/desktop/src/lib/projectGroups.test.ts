@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { groupProjects, inheritSpaces, keyOfPath, lastUsedCheckout, soleServer } from "@/lib/projectGroups";
+import { groupProjects, inheritSpaces, keyOfPath, lastUsedCheckout, nextCheckout, soleServer } from "@/lib/projectGroups";
 import { qualify } from "@/lib/transport";
 import type { Project } from "@/types/events";
 
@@ -55,6 +55,24 @@ describe("lastUsedCheckout", () => {
 
   it("still answers with nothing reachable", () => {
     expect(lastUsedCheckout([here, newer], () => false)).toBe(newer);
+  });
+});
+
+describe("nextCheckout", () => {
+  const third = checkout(qualify("/srv/dray", "rack"), { remote: REMOTE });
+
+  it("steps to the next machine and wraps", () => {
+    expect(nextCheckout([here, there, third], here.path, () => true)).toBe(there);
+    expect(nextCheckout([here, there, third], third.path, () => true)).toBe(here);
+  });
+
+  it("skips a machine that dropped", () => {
+    expect(nextCheckout([here, there, third], here.path, (s) => s !== "box")).toBe(third);
+  });
+
+  it("answers null with nowhere else to go", () => {
+    expect(nextCheckout([here], here.path, () => true)).toBeNull();
+    expect(nextCheckout([here, there], here.path, (s) => s === "local")).toBeNull();
   });
 });
 
