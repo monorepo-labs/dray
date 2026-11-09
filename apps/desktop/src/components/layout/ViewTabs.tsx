@@ -512,12 +512,7 @@ export default function ViewTabs({
       )}
       {/* At the row's far end, where it gives way before any tab does. */}
       {server && (
-        <span
-          className={cn(
-            "flex min-w-6.5 shrink-[999] items-center gap-1 overflow-hidden pl-2 text-ui text-muted-foreground animate-in fade-in duration-200",
-            !(branch && cwd) && "ml-auto",
-          )}
-        >
+        <span className="ml-auto flex min-w-6.5 shrink-[999] items-center gap-1 overflow-hidden pl-2 text-ui text-muted-foreground animate-in fade-in duration-200">
           <ServerFilledIcon className="size-3.5 shrink-0" />
           <span className="truncate">{server}</span>
         </span>
