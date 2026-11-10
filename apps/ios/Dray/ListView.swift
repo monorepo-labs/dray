@@ -43,12 +43,12 @@ struct SessionList: View {
                 ProjectStrip(names: names, picked: filter) { project = $0 }
             }
             List(selection: $selection) {
-                if !store.online { OfflineBanner().plainRow() }
+                if !store.online { HealthBanner(health: .offline("Tasks keep running on their servers.")).bannerRow() }
                 ForEach(problems, id: \.server.id) { p in
-                    ServerBanner(name: p.server.name, health: p.health,
+                    HealthBanner(health: p.health,
                                  retry: { Task { await store.retry(p.server.id) } },
                                  fix: { sheet = .settings(server: p.server.id) })
-                        .plainRow()
+                        .bannerRow()
                 }
                 if mode == .drafts {
                     draftRows(filter)
@@ -59,11 +59,15 @@ struct SessionList: View {
                 ForEach(Array(runs.enumerated()), id: \.element.stage) { i, run in
                     if i > 0 { Color.clear.frame(height: Theme.Space.l).plainRow() }
                     ForEach(Array(run.rows.enumerated()), id: \.element.id) { j, row in
+                        // A server in trouble dims its tasks and their cards, so the banner above says whose they are.
+                        let away = problems.contains { $0.server.id == row.key.server }
                         SessionRow(key: row.key, item: row.item, lines: elbows(run.rows, j))
+                            .opacity(away ? 0.4 : 1)
                             .tag(row.key)
                             .sessionRow(selected: selection == row.key)
                         if mode == .live, let ask = store.asks[row.key]?.first {
                             AskCard(key: row.key, event: ask)
+                                .opacity(away ? 0.4 : 1)
                                 .padding(EdgeInsets(top: 2, leading: 14, bottom: Theme.Space.m, trailing: Theme.Space.m))
                                 .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 8))
                                 .listRowSeparator(.hidden)
@@ -208,6 +212,15 @@ extension View {
     /// A list row that is not a session: no inset, no separator, no fill.
     func plainRow() -> some View {
         listRowInsets(EdgeInsets(top: 0, leading: Theme.Space.l, bottom: 0, trailing: Theme.Space.l))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .selectionDisabled()
+    }
+
+    /// A list banner: the session rows' insets, set in from them as the frames have it.
+    func bannerRow() -> some View {
+        padding(EdgeInsets(top: 0, leading: 14, bottom: 14, trailing: Theme.Space.xs))
+            .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 8))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .selectionDisabled()

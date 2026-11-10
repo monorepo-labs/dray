@@ -66,7 +66,8 @@ struct TranscriptView: View {
         .environment(\.imageServer, store.connection(key.server))
         // A card arriving is the agent stopping to ask: felt, once per card.
         .onChange(of: asks.count) { old, new in if new > old { Haptic.warning() } }
-        .safeAreaInset(edge: .bottom, spacing: 0) { ReplyDock(key: key) { fixing = true } }
+        .safeAreaInset(edge: .bottom, spacing: 0) { ReplyDock(key: key) }
+        .overlay(alignment: .top) { SessionBanner(server: key.server) { fixing = true } }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) { title }

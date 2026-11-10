@@ -117,12 +117,12 @@ final class RedesignTests: XCTestCase {
 
     /// Typing a task from scratch, then saving it as a draft from Cancel.
     /// A session's foot: hold to reply, the reply as a bubble, the sheet, Send, and Stop while it runs.
-    func testReplyDock() throws {
-        let app = try pair()
+    /// Opens a session from the list, scrolled clear of the dock first.
+    func openRow(_ app: XCUIApplication, _ title: String) {
         // Below the two cards, so off screen at first: the list is lazy and only draws what scrolls in.
-        XCTAssertTrue(app.descendants(matching: .any)["orb"].waitForExistence(timeout: 20))
-        let row = labelled(app, "Tighten session row spacing")
         let orb = app.descendants(matching: .any)["orb"]
+        XCTAssertTrue(orb.waitForExistence(timeout: 20))
+        let row = labelled(app, title)
         // The dock floats over the list, so a row behind it still reads as hittable and the tap lands on the orb.
         let clear = { row.exists && row.isHittable && row.frame.maxY < orb.frame.minY - 40 }
         for _ in 0..<8 where !clear() { app.swipeUp() }
@@ -132,6 +132,76 @@ final class RedesignTests: XCTestCase {
         // The list's dock has a Project pick and the session's has none; both have the orb.
         XCTAssertTrue(app.buttons["Project"].waitForNonExistence(timeout: 20), "the session never opened")
         XCTAssertTrue(orb.waitForExistence(timeout: 20), "no dock in the session")
+    }
+
+    /// A server going bad under an open session, then the list: reconnecting, can't reach,
+    /// needs an update, token refused. Wants `/tmp/dray825-proxy.py` in front of the server:
+    ///   TEST_RUNNER_DRAY_PROXY_URL=ws://127.0.0.1:… TEST_RUNNER_DRAY_PROXY_MODE=/tmp/…
+    func testConnectionBanners() throws {
+        guard let proxy = env["DRAY_PROXY_URL"], let modeFile = env["DRAY_PROXY_MODE"] else {
+            throw XCTSkip("set TEST_RUNNER_DRAY_PROXY_URL and TEST_RUNNER_DRAY_PROXY_MODE")
+        }
+        let mode = { (m: String) in try? m.write(toFile: modeFile, atomically: true, encoding: .utf8) }
+        mode("forward")
+        defer { mode("forward") }
+        let app = try pair(url: proxy)
+        openRow(app, "Tighten session row spacing")
+        sleep(2)
+        snap(app, "conn-session-ok")
+
+        mode("hang")
+        XCTAssertTrue(app.staticTexts["Reconnecting to Studio Mac…"].waitForExistence(timeout: 30), "no reconnecting banner")
+        sleep(1)
+        snap(app, "conn-session-reconnecting")
+
+        mode("down")
+        let unreachable = app.staticTexts["Can't reach Studio Mac"]
+        XCTAssertTrue(unreachable.waitForExistence(timeout: 60), "no can't-reach banner")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Trying again'")).firstMatch.exists)
+        snap(app, "conn-session-unreachable")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        // The banner heads the list, and opening the row left it scrolled down.
+        for _ in 0..<5 where !unreachable.waitForExistence(timeout: 2) { app.swipeDown() }
+        XCTAssertTrue(unreachable.exists, "the list says nothing of the server")
+        sleep(1)
+        snap(app, "conn-list-unreachable")
+
+        mode("older")
+        app.buttons["Retry"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Studio Mac needs an update"].waitForExistence(timeout: 30), "no needs-update banner")
+        openRow(app, "Tighten session row spacing")
+        sleep(1)
+        snap(app, "conn-session-older")
+
+        mode("token")
+        app.buttons["Retry"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Studio Mac refused the token"].waitForExistence(timeout: 30), "no token banner")
+        sleep(1)
+        snap(app, "conn-session-token")
+        app.buttons["Fix"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Paste a new token"].waitForExistence(timeout: 10)
+            || app.textFields["Token"].waitForExistence(timeout: 1), "Fix opened no settings")
+    }
+
+    /// No network: the session says its task keeps running, the list says it once for all.
+    func testOfflineBanners() throws {
+        let app = try pair(offline: true)
+        openRow(app, "Tighten session row spacing")
+        XCTAssertTrue(app.staticTexts["The task keeps running on Studio Mac."].waitForExistence(timeout: 10))
+        sleep(1)
+        snap(app, "conn-session-offline")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let offline = app.staticTexts["Tasks keep running on their servers."]
+        for _ in 0..<5 where !offline.waitForExistence(timeout: 2) { app.swipeDown() }
+        XCTAssertTrue(offline.exists, "the list says nothing of being offline")
+        sleep(1)
+        snap(app, "conn-list-offline")
+    }
+
+    func testReplyDock() throws {
+        let app = try pair()
+        openRow(app, "Tighten session row spacing")
+        let orb = app.descendants(matching: .any)["orb"]
         sleep(3)
         snap(app, "reply-rest")
 
@@ -283,12 +353,12 @@ final class RedesignTests: XCTestCase {
     }
 
     /// A fresh launch with no saved server, paired through the link a QR carries.
-    func pair() throws -> XCUIApplication {
-        guard let url = env["DRAY_URL"], let token = env["DRAY_TOKEN"] else {
+    func pair(url: String? = nil, offline: Bool = false) throws -> XCUIApplication {
+        guard let url = url ?? env["DRAY_URL"], let token = env["DRAY_TOKEN"] else {
             throw XCTSkip("set TEST_RUNNER_DRAY_URL and TEST_RUNNER_DRAY_TOKEN")
         }
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", ""]
+        app.launchArguments = ["-servers", ""] + (offline ? ["-offline"] : [])
         app.launch()
         var link = URLComponents(string: "dray://connect")!
         link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "Studio Mac")]

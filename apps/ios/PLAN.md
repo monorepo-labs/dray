@@ -101,12 +101,13 @@ Rationale and the screens it was judged on are in #631.
 - **One type scale** in `Theme.Font`, five rungs, SF Pro only, regular and
   semibold only. Buttons are semibold: Headline full-width, `pill` compact;
   a text-only action stays regular.
-- **Each server reports its own trouble** in a banner at the top of the list
-  and a strip above the composer, written by `Store.health`
-  ([ConnectionStatus.swift](Dray/ConnectionStatus.swift)): reconnecting with a
-  visible countdown, can't reach, token refused, protocol behind in either
-  direction, a list that failed to load. Each carries Retry or Fix, and none
-  holds up another server. Offline is one banner, not one per server.
+- **Each server reports its own trouble**, written by `Store.health`
+  ([ConnectionStatus.swift](Dray/ConnectionStatus.swift)): reconnecting,
+  can't reach with a visible countdown, token refused, protocol behind in
+  either direction, a list that failed to load. Each carries Retry or Fix, and
+  none holds up another server. In the list it is a card at the top and that
+  server's tasks dim; in a session it floats under the title bar and the dock
+  dims, still usable. Offline is one banner, not one per server.
 - **A failure stays where it happened.** A failed send keeps the draft and
   offers Retry under it; a failed transcript read is the screen's own empty
   state with Try again; an action with nowhere of its own is a toast, never an

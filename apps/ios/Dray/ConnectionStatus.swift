@@ -13,9 +13,17 @@ struct Health {
     var action: Action?
     /// The reader has to do something, rather than wait: drawn in the yellow.
     var needsYou = false
+    /// An icon from the asset catalog, else an SF Symbol.
     var symbol = "exclamationmark.triangle"
     /// Already trying again, so an orb says so instead of a symbol.
     var working = false
+}
+
+extension Health {
+    /// No network at all, said once in place of each server's own trouble.
+    static func offline(_ detail: String) -> Health {
+        Health(title: "You're offline", detail: detail, symbol: "health-offline")
+    }
 }
 
 extension Store {
@@ -30,29 +38,29 @@ extension Store {
             }
         case .connecting(let attempt)?:
             return attempt == 0 || !online ? nil
-                : Health(title: "Reconnecting to \(name)", detail: nil, working: true)
+                : Health(title: "Reconnecting to \(name)…", detail: nil, working: true)
         case .waiting(let problem, let until)?:
             if !online || problem == .offline { return nil }
-            return Health(title: "Can't reach \(name)", detail: nil, until: until, action: .retry, symbol: "bolt.horizontal.circle")
+            return Health(title: "Can't reach \(name)", detail: nil, until: until, action: .retry, symbol: "health-unreachable")
         case .failed(let problem)?:
             switch problem {
             case .auth:
                 return Health(title: "\(name) refused the token",
                               detail: "Pair this phone again, or paste a new token.",
-                              action: .fix, needsYou: true, symbol: "key")
+                              action: .fix, needsYou: true, symbol: "health-key")
             case .serverOlder:
                 return Health(title: "\(name) needs an update",
-                              detail: "It runs an older dray-serve than this app speaks. Run dray update there, then retry.",
-                              action: .retry, needsYou: true, symbol: "arrow.down.circle")
+                              detail: "Run dray update there, then retry.",
+                              action: .retry, needsYou: true, symbol: "health-update")
             case .serverNewer:
                 return Health(title: "This app needs an update",
                               detail: "\(name) is newer than this app. Update Dray from TestFlight, then retry.",
-                              action: .retry, needsYou: true, symbol: "arrow.down.circle")
+                              action: .retry, needsYou: true, symbol: "health-update")
             case .badAddress:
                 return Health(title: "\(name) has no valid address",
-                              detail: "Remove it and add it again.", action: .fix, needsYou: true, symbol: "link")
+                              detail: "Remove it and add it again.", action: .fix, needsYou: true, symbol: "health-unreachable")
             case .offline, .unreachable, .other:
-                return Health(title: "Can't reach \(name)", detail: nil, action: .retry, symbol: "bolt.horizontal.circle")
+                return Health(title: "Can't reach \(name)", detail: nil, action: .retry, symbol: "health-unreachable")
             }
         case nil:
             return nil
@@ -96,30 +104,28 @@ struct Countdown: View {
     }
 }
 
-/// One server's trouble, at the top of the list. Each server gets its own, so
-/// one failing never hides another working.
-struct ServerBanner: View {
-    let name: String
+/// One server's trouble, or the network's: what it is, why, and its one action.
+/// `floating` is the session's, laid over the transcript under the title bar;
+/// otherwise a card at the top of the list, one per server.
+struct HealthBanner: View {
     let health: Health
-    let retry: () -> Void
-    let fix: () -> Void
+    var floating = false
+    var retry: () -> Void = {}
+    var fix: () -> Void = {}
 
     var body: some View {
-        HStack(alignment: .center, spacing: Theme.Space.m) {
+        HStack(spacing: 10) {
             Group {
                 if health.working {
-                    Orb(.reconnecting)
+                    Orb(.reconnecting, size: 20)
                 } else {
-                    Image(systemName: health.symbol)
-                        .font(Theme.Font.body.font)
+                    icon.resizable().scaledToFit()
                         .foregroundStyle(health.needsYou ? Theme.accent : Theme.secondary)
                 }
             }
-            .frame(width: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(health.title)
-                    .font(Theme.Font.pill)
-                    .foregroundStyle(Theme.text)
+            .frame(width: 20, height: 20)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(health.title).font(Theme.Font.subhead).foregroundStyle(Theme.text)
                 Group {
                     if let detail = health.detail { Text(detail) }
                     if let until = health.until { Countdown(until: until) }
@@ -128,7 +134,7 @@ struct ServerBanner: View {
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
             if let action = health.action {
                 Button(action == .fix ? "Fix" : "Retry") {
                     Haptic.tap()
@@ -139,75 +145,44 @@ struct ServerBanner: View {
                 .foregroundStyle(health.needsYou ? Theme.accent : Theme.text)
             }
         }
-        .card(padding: Theme.Space.m)
-        .padding(.vertical, Theme.Space.xs)
+        .padding(.vertical, Theme.Space.m)
+        .padding(.horizontal, 14)
+        .frame(minHeight: 64)
+        .background { if floating { glass } else { RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous).fill(Theme.card) } }
         .transition(.move(edge: .top).combined(with: .opacity))
     }
-}
 
-/// No network at all: said once, in place of every server's own banner.
-struct OfflineBanner: View {
-    var body: some View {
-        HStack(spacing: Theme.Space.m) {
-            Image(systemName: "wifi.slash")
-                .font(Theme.Font.body.font)
-                .foregroundStyle(Theme.secondary)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("You're offline").font(Theme.Font.pill).foregroundStyle(Theme.text)
-                Text("Sessions keep running on their servers. This reconnects when the network is back.")
-                    .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .card(padding: Theme.Space.m)
-        .padding(.vertical, Theme.Space.xs)
+    private var icon: Image {
+        UIImage(named: health.symbol) != nil ? Image(health.symbol) : Image(systemName: health.symbol)
+    }
+
+    private var glass: some View {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        return shape.fill(.ultraThinMaterial)
+            .overlay(shape.fill(Theme.raised.opacity(0.9)))
+            .overlay(shape.strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.6), radius: 12, y: 8)
     }
 }
 
-/// A session's server, when it is not connected: a slim line above the
-/// composer, so the reader knows why Send is off before pressing it.
-struct ConnectionStrip: View {
+/// A session's server when it is not connected, floating under the title bar so the
+/// reader knows why the dock is dim before holding the orb.
+struct SessionBanner: View {
     @Environment(Store.self) private var store
     let server: UUID
-    var openSettings: () -> Void = {}
+    let fix: () -> Void
 
     var body: some View {
-        let state = store.serverState[server]
-        if state != .connected {
-            let health = store.health(server)
-            HStack(spacing: Theme.Space.s) {
-                if !store.online {
-                    Image(systemName: "wifi.slash").foregroundStyle(Theme.secondary)
-                    Text("You're offline").foregroundStyle(Theme.secondary)
-                    Spacer(minLength: 0)
-                } else if let health, !health.working {
-                    Image(systemName: health.symbol).foregroundStyle(health.needsYou ? Theme.accent : Theme.secondary)
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(health.title).foregroundStyle(Theme.text).lineLimit(1)
-                        if let until = health.until { Countdown(until: until).foregroundStyle(Theme.secondary) }
-                    }
-                    Spacer(minLength: 0)
-                    if let action = health.action {
-                        Button(action == .fix ? "Fix" : "Retry") {
-                            if action == .fix { openSettings() } else { Task { await store.retry(server) } }
-                        }
-                        .foregroundStyle(health.needsYou ? Theme.accent : Theme.text)
-                    }
-                } else {
-                    Orb(.reconnecting, size: 16)
-                    Text("Connecting to \(store.name(of: server))…").foregroundStyle(Theme.secondary)
-                    Spacer(minLength: 0)
-                }
+        Group {
+            if !store.online {
+                HealthBanner(health: .offline("The task keeps running on \(store.name(of: server))."), floating: true)
+            } else if let health = store.health(server) {
+                HealthBanner(health: health, floating: true, retry: { Task { await store.retry(server) } }, fix: fix)
             }
-            .font(Theme.Font.footnote)
-            .padding(.horizontal, Theme.Space.m)
-            .padding(.vertical, Theme.Space.s)
-            .background(.ultraThinMaterial, in: .rect(cornerRadius: Theme.Radius.md, style: .continuous))
-            .padding(.horizontal, Theme.Space.m)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
+        .padding(.horizontal, Theme.Space.l)
+        .padding(.top, 10)
+        .animation(Theme.motion, value: store.online)
     }
 }
 
