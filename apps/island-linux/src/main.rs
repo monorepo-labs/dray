@@ -839,6 +839,7 @@ pub fn move_list(island: &Entity<Island>, delta: isize, cx: &mut App) {
             let opening = !i.draft().list_shown;
             let at = (!opening).then(|| i.draft().session().and_then(|id| list.iter().position(|s| s.session_id == id))).flatten();
             let next = at.map_or(0, |at| at.saturating_add_signed(delta).min(list.len() - 1));
+            i.draft().list_scroll.scroll_to_item(next);
             Some(list[next].session_id.clone())
         }
     };
@@ -1017,6 +1018,10 @@ pub fn send(island: &Entity<Island>, cx: &mut App) {
         cx.notify();
         start_flash(island, "Sent")
     });
+    // The panel closes on Sent's own clock while the request runs behind
+    // it; a failure brings the draft back up.
+    let flashing = island.clone();
+    cx.spawn(async move |cx| after_flash(&flashing, clock, cx).await).detach();
     let island = island.clone();
     let server = |cx: &mut App, cmd: &str, args: serde_json::Value| island.read(cx).server.as_ref().map(|s| s.call(cmd, args));
     let fresh = match &target {
@@ -1070,7 +1075,6 @@ pub fn send(island: &Entity<Island>, cx: &mut App) {
             }
             _ => Err("Dray's server isn't reachable.".into()),
         };
-        let landed = outcome.is_ok();
         cx.update(|cx| match outcome {
             Ok(id) => {
                 state.update(cx, |island, _| island.draft_mut().sending = false);
@@ -1083,30 +1087,44 @@ pub fn send(island: &Entity<Island>, cx: &mut App) {
             }
             Err(why) => restore(&state, rows, typing, target, why, cx),
         });
-        if landed {
-            after_flash(&state, clock, cx).await;
-        }
     })
     .detach();
 }
 
 /// A send that failed behind its Sent comes back as the draft, on the target
-/// it was for, ahead of anything typed since, the panel open on it.
+/// it was for, the panel open on it. Anything written since stays after it,
+/// in order: the failed box text becomes a row ahead of newer rows. A draft
+/// begun since for somewhere else is the reader's and is left alone, so the
+/// failed message goes to the clipboard instead, as on the Mac.
 fn restore(island: &Entity<Island>, rows: Vec<String>, typing: String, target: Target, why: String, cx: &mut App) {
     let typing_box = island.read(cx).draft().typing.clone();
     let now = typing_box.read(cx).text().to_string();
-    let joined = if now.is_empty() { typing } else { format!("{typing} {now}") };
-    typing_box.update(cx, |t, cx| t.set_text(&joined, cx));
+    let (same, empty) = {
+        let d = island.read(cx).draft();
+        (d.target.as_ref() == Some(&target), d.rows.is_empty() && now.trim().is_empty())
+    };
+    let mut why = why;
+    if empty {
+        typing_box.update(cx, |t, cx| t.set_text(&typing, cx));
+    } else if !same {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(draft::prompt(&rows, &typing)));
+        why.push_str(" The message is on the clipboard.");
+    }
     island.update(cx, |island, cx| {
         island.flash = None;
         let draft = island.draft_mut();
         draft.sending = false;
-        draft.target = Some(target);
-        let held = std::mem::take(&mut draft.rows);
-        for text in &rows {
-            draft.add_row(text, cx);
+        if same || empty {
+            draft.target = Some(target);
+            let held = std::mem::take(&mut draft.rows);
+            for text in &rows {
+                draft.add_row(text, cx);
+            }
+            if !empty && !typing.trim().is_empty() {
+                draft.add_row(&typing, cx);
+            }
+            draft.rows.extend(held);
         }
-        draft.rows.extend(held);
         cx.notify();
     });
     if island.read(cx).window.is_none() {

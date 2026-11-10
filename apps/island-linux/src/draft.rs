@@ -6,7 +6,7 @@
 use crate::input::TextInput;
 use crate::newtask::Picks;
 use crate::server::Session;
-use gpui::{App, AppContext, Entity};
+use gpui::{App, AppContext, Entity, ScrollHandle};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -45,6 +45,8 @@ pub struct Draft {
     /// The switcher, hidden until asked for — the title, Ctrl+F or ↑/↓ — and
     /// again once the reader picks.
     pub list_shown: bool,
+    /// The switcher's scroll, so ↑/↓ keep the highlighted row in view.
+    pub list_scroll: ScrollHandle,
     pub sending: bool,
     pub menu: Option<Menu>,
     /// The model row the pointer is on, whose effort levels fly out beside it.
@@ -62,6 +64,7 @@ impl Draft {
             typing: cx.new(|cx| TextInput::new("Ctrl+⏎ Queue, ⏎ Send", cx)),
             search: cx.new(|cx| TextInput::new("Search tasks  Ctrl+F", cx).max_lines(1)),
             list_shown: false,
+            list_scroll: ScrollHandle::new(),
             sending: false,
             menu: None,
             hovered_model: None,

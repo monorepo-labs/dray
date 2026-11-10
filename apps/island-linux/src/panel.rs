@@ -181,8 +181,6 @@ impl Render for Panel {
             flash(label).into_any_element()
         } else if let Some((key, _)) = &card_up {
             card(&state, island, key, &self.focus, cx).into_any_element()
-        } else if !matches!(island.link, Link::Up) {
-            pinned(island).into_any_element()
         } else {
             draft_view(&state, island, cx).into_any_element()
         };
@@ -327,40 +325,6 @@ fn cap(cx: &App) -> f32 {
 
 fn shell() -> gpui::Div {
     div().flex_none().w_full().flex().flex_col().gap(px(10.)).p(px(12.))
-}
-
-/// The panel while there is no server to reach: what is wrong, and the box,
-/// whose draft waits for it.
-fn pinned(island: &Island) -> impl IntoElement {
-    let key = crate::prefs::read().key.label();
-    let busy = false;
-    let (title, detail): (String, String) = match &island.link {
-        Link::Up | Link::Connecting => ("Connecting to Dray…".into(), String::new()),
-        Link::Unreachable => ("Dray isn't running".into(), "Open Dray to reach your tasks".into()),
-        Link::Refused(why) => ("Dray turned the island away".into(), why.clone()),
-    };
-    shell()
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(div().size(px(6.)).rounded_full().bg(if busy { rgb(YELLOW).into() } else { white(0.25) }))
-                .child(div().flex_1().truncate().font_weight(gpui::FontWeight::SEMIBOLD).text_color(white(0.45)).child(title))
-                .child(div().text_size(px(ASIDE)).text_color(white(0.3)).child(detail)),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .px(px(10.))
-                .h(px(32.))
-                .rounded(px(8.))
-                .bg(white(0.08))
-                .child(div().text_color(white(0.3)).child("Reply…"))
-                .child(div().text_size(px(ASIDE)).text_color(white(0.3)).child(format!("Tap {key} to close · Esc"))),
-        )
 }
 
 /// The last answer's word while the panel closes on it.
@@ -830,10 +794,31 @@ fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> impl IntoEle
     };
     shell()
         .gap(px(8.))
+        .children(link_status(island))
         .child(head)
         .children(rows)
         .child(div().flex().items_end().gap_2().child(div().flex_1().min_w_0().py(px(2.)).child(d.typing.clone())).child(send))
         .children(island.notice.clone().map(|n| div().text_size(px(ASIDE)).text_color(white(0.5)).child(n)))
+}
+
+/// What is wrong with the connection, over the draft, which stays: a draft
+/// written or restored while the server is away waits for it.
+fn link_status(island: &Island) -> Option<impl IntoElement> {
+    let (title, detail): (&str, String) = match &island.link {
+        Link::Up => return None,
+        Link::Connecting => ("Connecting to Dray…", String::new()),
+        Link::Unreachable => ("Dray isn't running", "Open Dray to reach your tasks".into()),
+        Link::Refused(why) => ("Dray turned the island away", why.clone()),
+    };
+    Some(
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(dot(white(0.25)))
+            .child(div().flex_none().font_weight(gpui::FontWeight::SEMIBOLD).text_color(white(0.45)).child(title))
+            .child(div().truncate().text_size(px(ASIDE)).text_color(white(0.3)).child(detail)),
+    )
 }
 
 /// The sidebar's mark for a session: asking, running, or nothing.
@@ -955,6 +940,7 @@ fn menu_card(width: f32) -> gpui::Div {
 fn menu_row(id: (&'static str, usize), title: String, on: bool) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
+        .flex_none()
         .flex()
         .items_center()
         .gap_2()
@@ -1006,6 +992,9 @@ fn new_task_bar(state: &Entity<Island>, island: &Island, top: bool) -> impl Into
             div().flex().gap(px(5.)).child(div().text_color(white(0.45)).child("▤")).child(p.project_name().unwrap_or("Project").to_string()),
             || {
                 menu_card(240.)
+                    .id("projects")
+                    .max_h(px(MENU_ROOM - 16.))
+                    .overflow_y_scroll()
                     .children(p.projects.iter().enumerate().map(|(n, project)| {
                         let (state, path) = (state.clone(), project.path.clone());
                         menu_row(("project", n), project.name.clone(), p.project.as_ref() == Some(&project.path))
@@ -1190,7 +1179,8 @@ fn switcher(state: &Entity<Island>, island: &Island, glass: bool, cx: &App) -> S
     let empty = rows.is_empty();
     let state = state.clone();
     let search = d.search.clone();
-    SwitcherCard { state, search, current, rows, empty, glass }
+    let scroll = d.list_scroll.clone();
+    SwitcherCard { state, search, current, rows, empty, glass, scroll }
 }
 
 /// Held as its parts so the frame can put it above or below the card.
@@ -1201,6 +1191,7 @@ struct SwitcherCard {
     rows: Vec<(String, String, String, Option<Hsla>)>,
     empty: bool,
     glass: bool,
+    scroll: gpui::ScrollHandle,
 }
 
 impl IntoElement for SwitcherCard {
@@ -1231,6 +1222,7 @@ impl IntoElement for SwitcherCard {
                     .id("switcher")
                     .max_h(px(5. * 32. + 14.))
                     .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
                     .flex()
                     .flex_col()
                     .gap(px(2.))
