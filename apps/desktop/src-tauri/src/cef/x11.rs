@@ -274,10 +274,12 @@ pub(super) enum Pressed {
 }
 
 /// Calls `on_press` on the main thread after every left, middle or right
-/// button press anywhere on the display, with the deepest window under the
-/// pointer *at the press*: read here rather than when the main thread gets to
-/// it, or a click on the composer followed by a quick move onto the page
-/// would hand the page the keyboard. Started once.
+/// button press anywhere on the display, with where on the screen the
+/// pointer was *at the press*: read here rather than when the main thread
+/// gets to it, or a click on the composer followed by a quick move onto the
+/// page would hand the page the keyboard. Only the root is asked, which no
+/// client can destroy; this connection has no error trap, and a `BadWindow`
+/// on it would end the process. Started once.
 ///
 /// **This is click-to-focus, and nobody else provides it.** A tab's window
 /// is a child of a foreign window, so a click on the page never moves X's
@@ -289,7 +291,7 @@ pub(super) enum Pressed {
 /// events because they reach every client whoever holds the button's
 /// selection — Chromium does, and only one client may — and grab nothing,
 /// so a stalled main loop can never freeze the pointer.
-pub(super) fn watch_presses(on_press: fn(u64)) {
+pub(super) fn watch_presses(on_press: fn(i32, i32)) {
     std::thread::Builder::new()
         .name("cef-x11-presses".into())
         .spawn(move || unsafe {
@@ -330,35 +332,52 @@ pub(super) fn watch_presses(on_press: fn(u64)) {
                     && (1..=3).contains(&(*(cookie.data as *const xi::XIRawEvent)).detail);
                 xlib::XFreeEventData(display, &mut cookie);
                 if pressed {
-                    let leaf = leaf_under_pointer(display) as u64;
-                    let _ = super::on_main(move || on_press(leaf));
+                    let (x, y) = pointer_on_root(display);
+                    let _ = super::on_main(move || on_press(x, y));
                 }
             }
         })
         .expect("cef click thread");
 }
 
-/// The deepest window under the pointer, walked down from the root.
-unsafe fn leaf_under_pointer(display: *mut xlib::Display) -> xlib::Window {
-    let mut window = xlib::XDefaultRootWindow(display);
+/// The pointer's position on the root window.
+unsafe fn pointer_on_root(display: *mut xlib::Display) -> (i32, i32) {
+    let (mut root, mut child) = (0, 0);
+    let (mut rx, mut ry, mut x, mut y, mut mask) = (0, 0, 0, 0, 0);
+    xlib::XQueryPointer(
+        display,
+        xlib::XDefaultRootWindow(display),
+        &mut root,
+        &mut child,
+        &mut rx,
+        &mut ry,
+        &mut x,
+        &mut y,
+        &mut mask,
+    );
+    (rx, ry)
+}
+
+/// The deepest window at a point on the root, walked down from it. Inside
+/// the caller's error trap: a window can be gone between two steps.
+unsafe fn window_at(display: *mut xlib::Display, x: i32, y: i32) -> xlib::Window {
+    let root = xlib::XDefaultRootWindow(display);
+    let mut window = root;
     loop {
-        let (mut root, mut child) = (0, 0);
-        let (mut rx, mut ry, mut x, mut y, mut mask) = (0, 0, 0, 0, 0);
-        if xlib::XQueryPointer(display, window, &mut root, &mut child, &mut rx, &mut ry, &mut x, &mut y, &mut mask) == 0
-            || child == 0
-        {
+        let (mut dx, mut dy, mut child) = (0, 0, 0);
+        if xlib::XTranslateCoordinates(display, root, window, x, y, &mut dx, &mut dy, &mut child) == 0 || child == 0 {
             return window;
         }
         window = child;
     }
 }
 
-/// Where a press landed, from the window it landed in: the page, elsewhere in
-/// the main window, or another app.
-pub(super) fn classify(leaf: u64) -> Pressed {
+/// Where a press at a point on the root landed: the page, elsewhere in the
+/// main window, or another app.
+pub(super) fn classify(x: i32, y: i32) -> Pressed {
     with_display(|h| unsafe {
         let frame = FRAME.load(Ordering::Relaxed);
-        let leaf = leaf as xlib::Window;
+        let leaf = window_at(h.display, x, y);
         if frame != 0 && is_within(h.display, leaf, frame) {
             Pressed::Page
         } else if is_within(h.display, leaf, h.window) {

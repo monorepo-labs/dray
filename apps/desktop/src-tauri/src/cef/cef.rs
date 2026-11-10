@@ -1188,8 +1188,8 @@ fn reveal(id: i32) {
 /// keyboard, and one anywhere else in the window takes it back from a tab
 /// holding it. Main thread.
 #[cfg(target_os = "linux")]
-fn pressed(leaf: u64) {
-    match x11::classify(leaf) {
+fn pressed(x: i32, y: i32) {
+    match x11::classify(x, y) {
         x11::Pressed::Page => {
             let Some(id) = shown_tab() else { return };
             let view = TABS.lock().unwrap().iter().find(|t| t.id == id).map_or(0, |t| t.view);
