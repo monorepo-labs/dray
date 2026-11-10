@@ -43,8 +43,8 @@ use std::path::PathBuf;
 /// cannot parse it, and one that could ignore the machine would run the
 /// request here, a create meant for a VPS starting on the Mac as if it had
 /// gone where it was sent. v13 added `add_video`, which an older app reads as a
-/// broken CLI rather than as an app to update.
-pub const PROTOCOL_VERSION: u32 = 13;
+/// broken CLI rather than as an app to update. v14 added `share_machines`.
+pub const PROTOCOL_VERSION: u32 = 14;
 
 /// The oldest envelope the app still answers. Rises only when a shape is
 /// *renamed*, never for an addition: v4 renamed `LinkIssues.identifiers` to
@@ -113,6 +113,7 @@ impl Request {
             Request::SetRemoteAccess(_) => 11,
             Request::OnMachine(_) => 12,
             Request::AddVideo(_) => 13,
+            Request::ShareMachines(_) => 14,
         }
     }
 }
@@ -143,6 +144,15 @@ pub enum Request {
     ListShares(ListSessions),
     SetRemoteAccess(SetRemoteAccess),
     OnMachine(OnMachine),
+    ShareMachines(ShareMachines),
+}
+
+/// Whether a client holding this machine's token reaches every machine on its
+/// list through it. Remembered; off until switched on.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareMachines {
+    pub on: bool,
 }
 
 /// Any other request, run on a machine the app connects to rather than here.
@@ -730,6 +740,9 @@ pub enum Response {
     /// [`TUNNEL_URL_FILE`] once the relay has it, which a first start can
     /// take a minute over.
     RemoteAccess { on: bool },
+    /// Sharing as it stands after the switch, and the machines it reaches by
+    /// name: none while off.
+    MachinesShared { on: bool, machines: Vec<String> },
     Error { message: String },
 }
 
@@ -1044,13 +1057,15 @@ mod tests {
         assert_eq!(Envelope::new(elsewhere.clone()).v, 12);
         let video = Request::AddVideo(AddVideo { session_id: "s".into(), path: "/v.mov".into(), name: None });
         assert_eq!(Envelope::new(video.clone()).v, 13);
+        let sharing = Request::ShareMachines(Default::default());
+        assert_eq!(Envelope::new(sharing.clone()).v, 14);
         let newest = old
             .iter()
             .chain(&drafts)
             .chain([&share])
             .chain(&servers)
             .chain(&sessions)
-            .chain([&remote, &elsewhere, &video])
+            .chain([&remote, &elsewhere, &video, &sharing])
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));

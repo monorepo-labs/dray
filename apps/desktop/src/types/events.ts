@@ -408,7 +408,13 @@ transcription: TranscriptionSettings,
  * Whether this Mac serves itself through a quick tunnel. Here because
  * Rust starts it at launch, before any webview exists to ask.
  */
-remoteAccess: boolean, };
+remoteAccess: boolean, 
+/**
+ * Whether a client holding this server's token reaches the machines it
+ * lists through it (#847). Off by default: it hands that token every
+ * machine's reach, SSH logins included.
+ */
+shareMachines: boolean, };
 
 /**
  * Permission stance a session *runs under*, in roughly increasing order of

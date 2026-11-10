@@ -54,7 +54,9 @@ enum ImageLoader {
                 .addingPercentEncoding(withAllowedCharacters: .alphanumerics) else { return nil }
         parts.scheme = parts.scheme == "wss" ? "https" : "http"
         parts.path = (parts.path.hasSuffix("/") ? String(parts.path.dropLast()) : parts.path) + "/file"
-        parts.percentEncodedQuery = "path=\(path)"
+        // Encoded by hand: `queryItems` leaves a `+` in a path, which the server reads as a space.
+        let via = server.via?.addingPercentEncoding(withAllowedCharacters: .alphanumerics).map { "&via=\($0)" } ?? ""
+        parts.percentEncodedQuery = "path=\(path)\(via)"
         guard let url = parts.url else { return nil }
         // The header, not the query: the token rides no URL.
         var request = URLRequest(url: url)

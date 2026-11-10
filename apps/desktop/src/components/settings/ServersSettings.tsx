@@ -186,6 +186,7 @@ export default function ServersSettings() {
           </Row>
           </div>
         ))}
+        {servers.length > 0 && <ShareMachinesRow />}
         {servers.some((s) => s.boat) && <AutoExtendRow />}
       </div>
 
@@ -216,6 +217,53 @@ export default function ServersSettings() {
         />
       )}
     </>
+  );
+}
+
+type Sharing = { on: boolean; machines: { id: string; name: string }[] };
+
+/// Whether a phone or Mac paired with this one reaches the machines above
+/// through it (#847). Off by default: it hands this Mac's token their reach.
+function ShareMachinesRow() {
+  const [on, setOn] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    let unlisten: (() => void) | undefined;
+    void listen<Sharing>("machines_shared", ({ payload, server }) => {
+      if (server === LOCAL) setOn(payload.on);
+    }).then((off) => {
+      if (!live) return off();
+      unlisten = off;
+      void invoke<Sharing>("share_machines", {}, LOCAL).then((now) => live && setOn(now.on));
+    });
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const toggle = (next: boolean) => {
+    setOn(next);
+    invoke<Sharing>("set_share_machines", { on: next }, LOCAL)
+      .then((now) => setOn(now.on))
+      .catch((e) => {
+        setOn(!next);
+        console.error(e);
+      });
+  };
+
+  return (
+    <div className="flex min-h-7 items-center gap-3 py-1.5 pl-4.5">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="text-ui font-medium">Share these servers</span>
+        <span className="text-ui text-muted-foreground">
+          Your phone, or a Mac paired with this one, reaches every server above through this Mac, with no pairing of
+          its own.
+        </span>
+      </div>
+      <Switch aria-label="Share these servers" checked={on} onCheckedChange={toggle} />
+    </div>
   );
 }
 
