@@ -1896,6 +1896,40 @@ struct ForwardedKey {
     ctrl: bool,
 }
 
+/// The character a Windows virtual-key code stands for, unshifted: the keys
+/// an app chord can name. Linux only; see `on_pre_key_event`.
+#[cfg(target_os = "linux")]
+fn key_char(code: ::std::os::raw::c_int) -> char {
+    match code {
+        0x30..=0x39 => char::from(code as u8),
+        0x41..=0x5A => char::from(code as u8).to_ascii_lowercase(),
+        0xBB => '=',
+        0xBC => ',',
+        0xBD => '-',
+        0xBE => '.',
+        0xBF => '/',
+        0xDB => '[',
+        0xDD => ']',
+        _ => '\0',
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod key_char_tests {
+    use super::key_char;
+
+    /// Ctrl+1 reaches CEF as key code 0x31 with a control character beside
+    /// it; the chord has to read as '1'.
+    #[test]
+    fn key_codes_read_as_the_unshifted_key() {
+        assert_eq!(key_char(0x31), '1');
+        assert_eq!(key_char(0x45), 'e');
+        assert_eq!(key_char(0xBB), '=');
+        assert_eq!(key_char(0xDB), '[');
+        assert_eq!(key_char(0x25), '\0');
+    }
+}
+
 /// The platform's own key event, which CEF hands over beside its own.
 #[cfg(target_os = "macos")]
 type OsEvent<'a> = *mut u8;
@@ -1932,9 +1966,15 @@ wrap_keyboard_handler! {
             if cfg!(target_os = "linux") && !shift && !alt && matches!(event.windows_key_code, 0x25 | 0x27) {
                 return 0;
             }
+            #[cfg(target_os = "macos")]
             let ch = char::from_u32(event.unmodified_character as u32)
                 .unwrap_or('\0')
                 .to_ascii_lowercase();
+            // With Ctrl held, Linux's `unmodified_character` is the control
+            // code (Ctrl+1 reads 17), so no chord matched and every one went
+            // to the page. The key code is the key.
+            #[cfg(target_os = "linux")]
+            let ch = key_char(event.windows_key_code);
             if let Some(browser) = browser {
                 let plain = !shift && !alt && !ctrl;
                 match ch {
