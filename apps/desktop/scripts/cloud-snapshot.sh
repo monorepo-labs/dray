@@ -88,6 +88,16 @@ sudo -n loginctl enable-linger "$(id -un)"
 step "Installing $TOOLS and starting the server"
 dray setup --tools "$TOOLS" </dev/null
 
+# setup warns on a tool that failed and starts the server anyway. Run again
+# with nothing named and no terminal, it lists what is still missing, judged
+# by its own test — the browser's is a set of libraries, not a binary.
+missing=$(dray setup </dev/null 2>&1 | sed -n 's/.*Not installed: //p' | tr -d ' ')
+failed=
+for tool in ${TOOLS//,/ }; do
+  case ",$missing," in *",$tool,"*) failed="$failed $tool" ;; esac
+done
+[ -z "$failed" ] || { echo "did not install:$failed" >&2; exit 1; }
+
 [ "$(systemctl --user show dray --property=OOMPolicy --value)" = continue ] \
   || { echo "the unit has no OOMPolicy=continue; this dray predates #708's fix" >&2; exit 1; }
 for _ in $(seq 30); do [ -s "$HOME/.dray/serve-token" ] && break; sleep 1; done

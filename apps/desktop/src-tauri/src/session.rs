@@ -715,7 +715,8 @@ impl SessionManager {
     /// How many sessions have a turn running, and whether anything at all is
     /// working, background tasks included: Dray Cloud's `machine_load` and its
     /// heartbeat. A slot locked by a send or a respawn counts as a turn, as in
-    /// [`Self::any_turn_in_flight`].
+    /// [`Self::any_turn_in_flight`]. A new session's first send joins the map
+    /// only once its prompt is out, so `SENDS` is what makes it busy before.
     pub async fn load(&self) -> (usize, bool) {
         let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
         let (mut turns, mut busy) = (0, false);
@@ -732,7 +733,7 @@ impl SessionManager {
             turns += usize::from(tracker.turn_in_flight());
             busy |= tracker.has_outstanding_work();
         }
-        (turns, busy || turns > 0)
+        (turns, busy || turns > 0 || SENDS.load(SeqCst) > 0)
     }
 
     /// Takes the live child out, leaving the slot empty for the next send.
