@@ -46,7 +46,10 @@ fn run_taps(on_tap: impl Fn()) -> anyhow::Result<()> {
         version.major_version,
         version.minor_version
     );
-    let mask = XIEventMask::RAW_KEY_PRESS | XIEventMask::RAW_KEY_RELEASE | XIEventMask::RAW_BUTTON_PRESS;
+    let mask = XIEventMask::RAW_KEY_PRESS
+        | XIEventMask::RAW_KEY_RELEASE
+        | XIEventMask::RAW_BUTTON_PRESS
+        | XIEventMask::RAW_BUTTON_RELEASE;
     xinput::xi_select_events(&conn, root, &[xinput::EventMask { deviceid: ALL_MASTER, mask: vec![mask] }])?;
     conn.flush()?;
     let mut keysyms = Keysyms::read(&conn)?;
@@ -64,7 +67,8 @@ fn run_taps(on_tap: impl Fn()) -> anyhow::Result<()> {
                     on_tap();
                 }
             }
-            Event::XinputRawButtonPress(_) => tap.click(),
+            Event::XinputRawButtonPress(e) => tap.button(e.detail, true, Instant::now()),
+            Event::XinputRawButtonRelease(e) => tap.button(e.detail, false, Instant::now()),
             Event::MappingNotify(_) => keysyms = Keysyms::read(&conn)?,
             _ => {}
         }
@@ -75,12 +79,14 @@ fn run_taps(on_tap: impl Fn()) -> anyhow::Result<()> {
 /// lost release can never stop every tap after it.
 const STALE: Duration = Duration::from_secs(30);
 
-/// One tap's progress: when the reader's key went down, and every key held,
-/// so the key pressed while Shift is already down is a chord and no tap.
+/// One tap's progress: when the reader's key went down, and every key and
+/// button held, so the key pressed while Shift or a drag is already down is a
+/// chord and no tap.
 #[derive(Default)]
 struct Tap {
     down: Option<Instant>,
     held: HashMap<u32, (bool, Instant)>,
+    buttons: HashMap<u32, Instant>,
 }
 
 impl Tap {
@@ -89,8 +95,9 @@ impl Tap {
             return;
         }
         self.held.retain(|_, (_, since)| at.duration_since(*since) < STALE);
+        self.buttons.retain(|_, since| at.duration_since(*since) < STALE);
         // Left then right of the same key keeps the first down's time.
-        let alone = self.held.values().all(|(ours, _)| *ours);
+        let alone = self.buttons.is_empty() && self.held.values().all(|(ours, _)| *ours);
         self.held.insert(code, (ours, at));
         self.down = if ours && alone { self.down.or(Some(at)) } else { None };
     }
@@ -105,8 +112,14 @@ impl Tap {
         self.down.take().is_some_and(|down| at.duration_since(down) < TAP)
     }
 
-    fn click(&mut self) {
-        self.down = None;
+    /// A press or release of a pointer button; a press rules the tap out.
+    fn button(&mut self, button: u32, pressed: bool, at: Instant) {
+        if pressed {
+            self.down = None;
+            self.buttons.insert(button, at);
+        } else {
+            self.buttons.remove(&button);
+        }
     }
 }
 
@@ -267,8 +280,20 @@ mod tests {
     fn a_click_between_is_no_tap() {
         let (mut tap, t) = (Tap::default(), Instant::now());
         tap.press(CTRL, true, false, t);
-        tap.click();
+        tap.button(1, true, after(t, 50));
+        tap.button(1, false, after(t, 80));
         assert!(!tap.release(CTRL, true, after(t, 100)));
+    }
+
+    #[test]
+    fn a_button_already_held_makes_a_chord() {
+        let (mut tap, t) = (Tap::default(), Instant::now());
+        tap.button(1, true, t);
+        tap.press(CTRL, true, false, after(t, 50));
+        assert!(!tap.release(CTRL, true, after(t, 100)));
+        tap.button(1, false, after(t, 150));
+        tap.press(CTRL, true, false, after(t, 200));
+        assert!(tap.release(CTRL, true, after(t, 250)));
     }
 
     #[test]
