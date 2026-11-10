@@ -17,7 +17,8 @@ enum Theme {
     static let raised = Color(hex: 0x262626)
     /// `--surface-selected`: the current row.
     static let selected = Color(hex: 0x2B2B2B)
-    /// An icon's tile on a raised card: a server, Add server, Scan QR code.
+    /// An icon's tile or a control on a raised card: a server, Add server,
+    /// Scan QR code, Local servers' round and pill buttons.
     static let tile = Color(hex: 0x333333)
     /// A switch's track when off.
     static let off = Color(hex: 0x3A3A3A)
@@ -280,6 +281,37 @@ struct SecondaryButtonStyle: ButtonStyle {
             .padding(.horizontal, Theme.Space.l)
             .frame(minHeight: 44)
             .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.md, style: .continuous))
+            .pressed(configuration.isPressed)
+    }
+}
+
+/// A compact capsule button: semibold `pill` text, dimmed rather than greyed when off.
+struct PillButtonStyle: ButtonStyle {
+    var fill = Theme.raised
+    var height: CGFloat = 44
+    @Environment(\.isEnabled) private var enabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(Theme.Font.pill)
+            .foregroundStyle(Theme.text)
+            .padding(.horizontal, 22)
+            .frame(minHeight: height)
+            .background(fill, in: Capsule())
+            .opacity(enabled ? 1 : 0.4)
+            .pressed(configuration.isPressed)
+    }
+}
+
+/// A 32pt round icon button on a raised surface: copy, share, stop.
+struct CircleButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(Theme.Font.pill.font)
+            .foregroundStyle(Theme.text)
+            .frame(width: 32, height: 32)
+            .background(Theme.tile, in: Circle())
+            .contentShape(Circle())
             .pressed(configuration.isPressed)
     }
 }
