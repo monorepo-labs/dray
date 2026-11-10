@@ -29,7 +29,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 `gh` missing or logged out → say so, then carry on with the work. Tell reader at the end which issue still want creating.
 
-**Commit, push and open the PR unasked once the work is done and tested** — the default road above. **Hold the PR where Yogesh has to test something himself first**: commit, say what to try, and wait. Still ask before anything rewriting history, and before a branch nobody asked for.
+**Commit, push and open the PR unasked once the work is done and tested** — the default road above — and loop Greptile to 5/5. Yogesh tests after that, so end by saying what to try. **Hold the PR only where he says he wants to test first**: it is his call per task, not a rule to infer. Still ask before anything rewriting history, and before a branch nobody asked for.
 
 **Always write commit message with `caveman-commit` skill.** Invoke it, don't imitate — skill carry format and it can change under you. Every commit here, amend included.
 
