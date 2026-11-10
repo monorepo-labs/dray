@@ -290,12 +290,29 @@ final class Store {
         guard let c = connections[server] else { return }
         do {
             let list: [SessionItem] = try await c.call("list_session_index_items", ["archived": false])
-            for key in items.keys where key.server == server { items[key] = nil }
+            // Settled rows are the settled view's to replace; this read never holds them.
+            for key in items.keys where key.server == server && items[key]?.archived != true { items[key] = nil }
             for item in list { store(SessionKey(server: server, id: item.sessionId), item) }
             loadErrors[server] = nil
         } catch {
             // The rows already listed stay; the list says this read failed beside them.
             loadErrors[server] = error.localizedDescription
+        }
+    }
+
+    /// Settled sessions, read only when the settled view asks: the live read
+    /// leaves them out, and its next pass clears them again.
+    func loadSettled() async {
+        for s in servers where serverState[s.id] == .connected {
+            // Rows held before the read; one the reply leaves out was deleted, unless an event
+            // moved it meanwhile. Unsettling leaves `modified` alone, so `archived` is read again too.
+            let held = items.filter { $0.key.server == s.id && $0.value.archived == true }.mapValues(\.modified)
+            guard let list: [SessionItem] = try? await call(s.id, "list_session_index_items", ["archived": true]) else { continue }
+            let listed = Set(list.map(\.sessionId))
+            for (key, modified) in held where !listed.contains(key.id) {
+                if let now = items[key], now.archived == true, now.modified == modified { items[key] = nil }
+            }
+            for item in list { store(SessionKey(server: s.id, id: item.sessionId), item) }
         }
     }
 
@@ -312,12 +329,13 @@ final class Store {
 
     // MARK: Sessions
 
-    /// What the list draws, in the desktop sidebar's runs, narrowed to one
-    /// project first when a chip is picked.
-    func runs(_ project: ProjectKey?) -> [(stage: Stage, rows: [ListRow])] {
-        let list = items.filter { key, item in
-            item.hidden != true && item.archived != true
-                && (project.map { $0 == ProjectKey(server: key.server, path: item.projectPath) } ?? true)
+    /// What the list draws, in the desktop sidebar's runs: the live sessions,
+    /// or the settled ones, narrowed to one project by name when one is picked —
+    /// by name, so a repo checked out on two machines is one project.
+    func runs(project: String?, settled: Bool = false) -> [(stage: Stage, rows: [ListRow])] {
+        let list = items.filter { _, item in
+            item.hidden != true && (item.archived == true) == settled
+                && (project.map { $0 == item.project } ?? true)
         }.map { (key: $0.key, item: $0.value) }
         return stageRuns(list) { stage($0.key, $0.item) }
     }

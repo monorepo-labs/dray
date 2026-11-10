@@ -63,7 +63,7 @@ struct LocalServersView: View {
                     GroupLabel("Running on \(store.name(of: key.server))")
                     ForEach(servers, id: \.port) { row($0).card() }
                     Text("A public link is one anyone can open, until you stop it.")
-                        .font(Theme.Font.meta).foregroundStyle(Theme.tertiary)
+                        .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                         .padding(.horizontal, Theme.Space.xs)
                 }
                 .padding(Theme.Space.l)
@@ -91,10 +91,10 @@ struct LocalServersView: View {
     private func row(_ s: LocalServer) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                Text(verbatim: "localhost:\(s.port)").font(Theme.Font.mono.weight(.medium)).foregroundStyle(Theme.text)
-                Text(s.process).font(Theme.Font.meta).foregroundStyle(Theme.secondary).lineLimit(1)
+                Text(verbatim: "localhost:\(s.port)").font(Theme.Font.body).foregroundStyle(Theme.text)
+                Text(s.process).font(Theme.Font.footnote).foregroundStyle(Theme.secondary).lineLimit(1)
                 Spacer()
-                if s.mine { Text("This session").font(Theme.Font.micro).foregroundStyle(Theme.tertiary) }
+                if s.mine { Text("This session").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary) }
             }
             if let link = s.share.flatMap(URL.init(string:)) {
                 shared(link, port: s.port)
@@ -108,7 +108,7 @@ struct LocalServersView: View {
                 .disabled(sharing != nil)
             }
             if let failure = failures[s.port] {
-                Text(failure).font(Theme.Font.callout).foregroundStyle(Theme.destructive).textSelection(.enabled)
+                Text(failure).font(Theme.Font.subhead).foregroundStyle(Theme.destructive).textSelection(.enabled)
             }
         }
     }
@@ -121,13 +121,13 @@ struct LocalServersView: View {
                 HStack(spacing: Theme.Space.s) {
                     Orb(.working)
                     Text(settingUp ? "Setting up tunnel…" : "Creating link…")
-                        .font(Theme.Font.callout).foregroundStyle(Theme.secondary).shimmer()
+                        .font(Theme.Font.subhead).foregroundStyle(Theme.secondary).shimmer()
                 }
                 if context.date.timeIntervalSince(since) >= 30 {
                     Text(settingUp
                         ? "A first link registers the tunnel, which can take a few minutes. It shows here once it's up, or why it failed."
                         : "Still waiting on the relay. The link shows here once it's up, or why it failed.")
-                        .font(Theme.Font.meta).foregroundStyle(Theme.secondary)
+                        .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
                 }
             }
         }
@@ -137,7 +137,7 @@ struct LocalServersView: View {
         HStack(spacing: Theme.Space.xs) {
             Link(destination: link) {
                 Label(link.host() ?? link.absoluteString, systemImage: "link")
-                    .font(Theme.Font.callout)
+                    .font(Theme.Font.subhead)
                     .foregroundStyle(Theme.link)
                     .lineLimit(1).truncationMode(.middle)
             }

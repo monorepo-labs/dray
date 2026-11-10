@@ -129,12 +129,12 @@ struct PrSheet: View {
                 VStack(alignment: .leading, spacing: Theme.Space.xl) {
                     if let u = model.unavailable {
                         Text(.init(u.sentence))
-                            .font(Theme.Font.callout)
+                            .font(Theme.Font.subhead)
                             .foregroundStyle(u.keepsButton ? Theme.secondary : Theme.destructive)
                     }
                     if let e = model.actionError {
                         Label(sentence(e), systemImage: "exclamationmark.circle.fill")
-                            .font(Theme.Font.callout)
+                            .font(Theme.Font.subhead)
                             .foregroundStyle(Theme.destructive)
                     }
                     ForEach(model.prs) { pr in
@@ -185,18 +185,18 @@ private struct PrSection: View {
                     ChangeCount(added: pr.additions, removed: pr.deletions)
                     Text("· \(pr.changedFiles) \(pr.changedFiles == 1 ? "file" : "files")")
                 }
-                .font(Theme.Font.meta)
+                .font(Theme.Font.footnote)
                 .foregroundStyle(Theme.secondary)
 
                 VStack(alignment: .leading, spacing: Theme.Space.m) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(ready.label).font(Theme.Font.callout.weight(.semibold)).foregroundStyle(tone)
+                        Text(ready.label).font(Theme.Font.pill).foregroundStyle(tone)
                         if pr.state == "OPEN" {
-                            Text("into \(pr.baseRefName)").font(Theme.Font.mono).foregroundStyle(Theme.tertiary).lineLimit(1)
+                            Text("into \(pr.baseRefName)").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary).lineLimit(1)
                         }
                     }
                     if let detail = ready.detail {
-                        Text(detail).font(Theme.Font.meta).foregroundStyle(Theme.secondary)
+                        Text(detail).font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
                     }
                     action
                 }
@@ -241,7 +241,7 @@ private struct PrSection: View {
         if model.acting {
             HStack(spacing: Theme.Space.s) {
                 Orb(.working)
-                Text("Working…").font(Theme.Font.callout).foregroundStyle(Theme.secondary).shimmer()
+                Text("Working…").font(Theme.Font.subhead).foregroundStyle(Theme.secondary).shimmer()
             }
             .frame(minHeight: 44)
         } else if pr.state == "CLOSED" {
@@ -290,10 +290,10 @@ private struct CheckRow: View {
                 }
             }
             .frame(width: 20)
-            Text(check.name).font(Theme.Font.callout).foregroundStyle(Theme.text).lineLimit(1)
+            Text(check.name).font(Theme.Font.subhead).foregroundStyle(Theme.text).lineLimit(1)
             Spacer(minLength: 0)
             if check.url != nil {
-                Image(systemName: "arrow.up.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+                Image(systemName: "arrow.up.right").font(Theme.Font.footnoteStrong.font).foregroundStyle(Theme.tertiary)
             }
         }
         .padding(.horizontal, Theme.Space.m)
@@ -318,18 +318,18 @@ private struct CommentRow: View {
                 }
                 .frame(width: 20, height: 20)
                 .clipShape(Circle())
-                Text(comment.author).font(Theme.Font.callout.weight(.semibold)).foregroundStyle(Theme.text)
-                if let verb { Text(verb).font(Theme.Font.meta).foregroundStyle(verbColor) }
+                Text(comment.author).font(Theme.Font.pill).foregroundStyle(Theme.text)
+                if let verb { Text(verb).font(Theme.Font.footnote).foregroundStyle(verbColor) }
                 Spacer(minLength: 0)
-                if comment.resolved { Text("Resolved").font(Theme.Font.micro).foregroundStyle(Theme.tertiary) }
+                if comment.resolved { Text("Resolved").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary) }
             }
             if let path = comment.path {
-                Text((path as NSString).lastPathComponent).font(Theme.Font.code).foregroundStyle(Theme.tertiary)
+                Text((path as NSString).lastPathComponent).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
             }
             let text = commentText(comment.body)
             if !text.isEmpty {
                 if open { MarkdownText(text: text) } else {
-                    Text(.init(text)).font(Theme.Font.callout).foregroundStyle(Theme.secondary).lineLimit(3)
+                    Text(.init(text)).font(Theme.Font.subhead).foregroundStyle(Theme.secondary).lineLimit(3)
                 }
             }
             if open {
@@ -339,7 +339,7 @@ private struct CommentRow: View {
                         .overlay(alignment: .leading) { Rectangle().fill(Theme.border).frame(width: 1) }
                 }
             } else if !comment.replies.isEmpty {
-                Text("\(comment.replies.count) more").font(Theme.Font.meta).foregroundStyle(Theme.tertiary)
+                Text("\(comment.replies.count) more").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
             }
         }
         .opacity(comment.resolved && !open ? 0.6 : 1)

@@ -111,20 +111,20 @@ struct ServerBanner: View {
                     Orb(.reconnecting)
                 } else {
                     Image(systemName: health.symbol)
-                        .font(.body.weight(.medium))
+                        .font(Theme.Font.body.font)
                         .foregroundStyle(health.needsYou ? Theme.accent : Theme.secondary)
                 }
             }
             .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
                 Text(health.title)
-                    .font(Theme.Font.callout.weight(.semibold))
+                    .font(Theme.Font.pill)
                     .foregroundStyle(Theme.text)
                 Group {
                     if let detail = health.detail { Text(detail) }
                     if let until = health.until { Countdown(until: until) }
                 }
-                .font(Theme.Font.meta)
+                .font(Theme.Font.footnote)
                 .foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -134,7 +134,7 @@ struct ServerBanner: View {
                     Haptic.tap()
                     action == .fix ? fix() : retry()
                 }
-                .font(Theme.Font.callout.weight(.semibold))
+                .font(Theme.Font.pill)
                 .buttonStyle(.borderless)
                 .foregroundStyle(health.needsYou ? Theme.accent : Theme.text)
             }
@@ -150,13 +150,13 @@ struct OfflineBanner: View {
     var body: some View {
         HStack(spacing: Theme.Space.m) {
             Image(systemName: "wifi.slash")
-                .font(.body.weight(.medium))
+                .font(Theme.Font.body.font)
                 .foregroundStyle(Theme.secondary)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
-                Text("You're offline").font(Theme.Font.callout.weight(.semibold)).foregroundStyle(Theme.text)
+                Text("You're offline").font(Theme.Font.pill).foregroundStyle(Theme.text)
                 Text("Sessions keep running on their servers. This reconnects when the network is back.")
-                    .font(Theme.Font.meta).foregroundStyle(Theme.secondary)
+                    .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
@@ -193,7 +193,6 @@ struct ConnectionStrip: View {
                         Button(action == .fix ? "Fix" : "Retry") {
                             if action == .fix { openSettings() } else { Task { await store.retry(server) } }
                         }
-                        .fontWeight(.semibold)
                         .foregroundStyle(health.needsYou ? Theme.accent : Theme.text)
                     }
                 } else {
@@ -202,7 +201,7 @@ struct ConnectionStrip: View {
                     Spacer(minLength: 0)
                 }
             }
-            .font(Theme.Font.meta)
+            .font(Theme.Font.footnote)
             .padding(.horizontal, Theme.Space.m)
             .padding(.vertical, Theme.Space.s)
             .background(.ultraThinMaterial, in: .rect(cornerRadius: Theme.Radius.md, style: .continuous))
@@ -225,7 +224,7 @@ struct ErrorToast: View {
                     Text(sentence(message)).foregroundStyle(Theme.text)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .font(Theme.Font.callout)
+                .font(Theme.Font.subhead)
                 .padding(.horizontal, Theme.Space.l)
                 .padding(.vertical, Theme.Space.m)
                 .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous))
