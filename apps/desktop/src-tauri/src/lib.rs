@@ -790,9 +790,14 @@ pub fn run() {
             trackpad::watch(app.handle());
             // GTK draws the menu as a bar inside the window, over the app's own
             // titlebar strip. The webview answers the edit chords without it.
+            // The window manager's bar sat above that strip too, so it goes and
+            // `WindowControls` draws its buttons. Here and not in the config:
+            // the dev config restates the window list whole, and the keys that
+            // shape the Mac's titlebar mean nothing to GTK.
             #[cfg(target_os = "linux")]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.remove_menu();
+                let _ = window.set_decorations(false);
             }
             #[cfg(target_os = "macos")]
             cli::install();

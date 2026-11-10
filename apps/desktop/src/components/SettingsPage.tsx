@@ -57,6 +57,7 @@ import {
 } from "@/lib/openWith";
 import AccountsSettings from "@/components/settings/AccountsSettings";
 import AppShell from "@/components/layout/AppShell";
+import WindowControls from "@/components/layout/WindowControls";
 import { SettingsHeaderSlot } from "@/components/settings/headerAction";
 import ServersSettings from "@/components/settings/ServersSettings";
 import HandoffSettings from "@/components/settings/HandoffSettings";
@@ -1482,7 +1483,7 @@ function SettingsTabs({
       // header to hold over the sheet.
       tall
       header={
-        <header className="relative h-(--titlebar-h)" data-tauri-drag-region="deep">
+        <header className="relative flex h-(--titlebar-h) items-center justify-end px-3" data-tauri-drag-region="deep">
           {/* Where the gear that opened this sits: the sidebar's right end. */}
           <div className="absolute top-1/2 right-[calc(100%-15rem+0.5rem)] -translate-y-1/2">
             <Tooltip>
@@ -1503,6 +1504,7 @@ function SettingsTabs({
               </TooltipContent>
             </Tooltip>
           </div>
+          <WindowControls />
         </header>
       }
       sidebar={

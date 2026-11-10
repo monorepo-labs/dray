@@ -35,6 +35,8 @@ Permission first: `core:default` grant `allow-internal-toggle-maximize` but **no
 
 Then value: bare `data-tauri-drag-region` = **self only**, drag start only where pointer hit that exact element ([drag.js](https://github.com/tauri-apps/tauri) walk composed path), so every label inside row = dead strip in titlebar that look uniform. Use `"deep"` on row and put attribute nowhere else — Tauri stop walk at any clickable element (`A`, `BUTTON`, `INPUT`, `role`, `tabindex`) carrying no attribute of own, so toggles and tabs block on their own and need no opt-out. `="false"` = hard block, for element that must not drag though nothing clickable in it.
 
+**Linux draw own window buttons, and window manager's bar go.** Keeping bar drew two titlebar — WM's, then app's strip under it — and strip cannot go, since it hold tabs. So `set_decorations(false)` at setup and [WindowControls](src/components/layout/WindowControls.tsx) draw minimize, maximize, close at strip's right end, ghost like every other chrome button. Runtime call, not config: dev config restate window list whole, so a Linux-only key there get dropped. Close raise same `CloseRequested` WM's button did, so quit dialog still guard it. No traffic lights there either, so `--traffic-lights-w` lead reserved on windowed Mac alone.
+
 ## Transparency, and what surfaces sit on
 
 **Vibrancy = macOS flavour of transparency, not second one.** Everything above describe one way of answering "what is behind these surfaces", and it only ever had one answer: the desktop. That answer die in fullscreen, and outside macOS never existed — so app went flat in both, which read as theme washing out rather than as effect.

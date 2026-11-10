@@ -110,7 +110,7 @@ fn said(out: &std::process::Output) -> String {
 /// Resumes a stopped sandbox and returns once it can run a command, which is
 /// before SSH and Dray are up on it.
 pub async fn resume(id: &str) -> Result<(), String> {
-    let out = run(&["resume", id], RESUMING).await.ok_or("boat isn't installed on this Mac.")?;
+    let out = run(&["resume", id], RESUMING).await.ok_or_else(|| format!("boat isn't installed on {}.", crate::ssh::HERE_MID))?;
     let out = out.map_err(|e| format!("Could not run boat: {e}"))?;
     if out.status.success() { Ok(()) } else { Err(said(&out)) }
 }
@@ -118,7 +118,7 @@ pub async fn resume(id: &str) -> Result<(), String> {
 /// Sets the time left, and the length of every later resume. It does not add.
 pub async fn extend(id: &str, minutes: u32) -> Result<(), String> {
     let seconds = (u64::from(minutes) * 60).to_string();
-    let out = run(&["extend", id, "--ttl", &seconds], QUICK).await.ok_or("boat isn't installed on this Mac.")?;
+    let out = run(&["extend", id, "--ttl", &seconds], QUICK).await.ok_or_else(|| format!("boat isn't installed on {}.", crate::ssh::HERE_MID))?;
     let out = out.map_err(|e| format!("Could not run boat: {e}"))?;
     if out.status.success() { Ok(()) } else { Err(said(&out)) }
 }
@@ -128,7 +128,7 @@ pub async fn extend(id: &str, minutes: u32) -> Result<(), String> {
 /// answer is over TLS from boat, so it can check what SSH then connects to,
 /// which a key read off that connection never could.
 async fn access(id: &str, key: &str) -> Result<(String, String), String> {
-    let token = api_token().await.ok_or("boat isn't logged in on this Mac.")?;
+    let token = api_token().await.ok_or_else(|| format!("boat isn't logged in on {}.", crate::ssh::HERE_MID))?;
     let answer = crate::http()
         .post(format!("{API}/sandboxes/{id}/sshkey"))
         .bearer_auth(token)

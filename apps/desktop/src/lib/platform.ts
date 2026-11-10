@@ -12,3 +12,7 @@ export const IS_LINUX =
 /// desktop have it and nothing else does: elsewhere its button, chord and tab
 /// are not drawn.
 export const HAS_DICTATION = IS_MAC || IS_LINUX;
+
+/// What copy calls the machine the app runs on: "this Mac" on a Mac, "this
+/// machine" anywhere else. One noun, so every sentence reads the same per platform.
+export const MACHINE = IS_MAC ? "Mac" : "machine";

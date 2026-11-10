@@ -456,9 +456,9 @@ async fn local_address() -> Result<(String, String, bool), String> {
     let home = store::get_home_app_dir().await.map_err(|e| e.to_string())?;
     let port_file = tokio::fs::read_to_string(home.join(crate::serve::PORT_FILE)).await.unwrap_or_default();
     let mut lines = port_file.lines();
-    let port: u16 = lines.next().and_then(|p| p.trim().parse().ok()).ok_or("The server on this Mac is starting.")?;
+    let port: u16 = lines.next().and_then(|p| p.trim().parse().ok()).ok_or_else(|| format!("The server on {} is starting.", crate::ssh::HERE_MID))?;
     let stale = crate::serve::exe_stamp().is_some_and(|now| lines.next().map(str::trim) != Some(now.as_str()));
-    let token = tokio::fs::read_to_string(home.join("serve-token")).await.map_err(|_| "The server on this Mac is starting.")?;
+    let token = tokio::fs::read_to_string(home.join("serve-token")).await.map_err(|_| format!("The server on {} is starting.", crate::ssh::HERE_MID))?;
     Ok((format!("ws://127.0.0.1:{port}"), token.trim().to_string(), stale))
 }
 
@@ -603,7 +603,7 @@ async fn run(id: String) {
                             conn.live = Some((url, token));
                         }
                         serve(&id, ws).await;
-                        set_status(&id, ServerStatus::Disconnected, Some("The server on this Mac restarted.".into()));
+                        set_status(&id, ServerStatus::Disconnected, Some(format!("The server on {} restarted.", crate::ssh::HERE_MID)));
                         if let Err(e) = crate::launchd::reload_if_pending().await {
                             eprintln!("[launchd] could not load the new agent: {e:#}");
                         }
