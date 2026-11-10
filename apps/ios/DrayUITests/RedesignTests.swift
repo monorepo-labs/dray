@@ -159,6 +159,9 @@ final class RedesignTests: XCTestCase {
         XCTAssertTrue(unreachable.waitForExistence(timeout: 60), "no can't-reach banner")
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Trying again'")).firstMatch.exists)
         snap(app, "conn-session-unreachable")
+        // At the top, the first row sits clear of the banner rather than under it.
+        for _ in 0..<6 { app.swipeDown(velocity: .fast) }
+        snap(app, "conn-session-top")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         // The banner heads the list, and opening the row left it scrolled down.
         for _ in 0..<5 where !unreachable.waitForExistence(timeout: 2) { app.swipeDown() }
