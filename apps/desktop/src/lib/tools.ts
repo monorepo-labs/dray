@@ -433,12 +433,14 @@ export function formatToolInput(input: JsonValue, omit: string[]): string | null
 /// permission card sees raw wire input and no `ToolType`. Same field precedence
 /// as `toolSummary`, minus the per-type branch it can't make.
 export function toolArgument(input: JsonValue): string | null {
+  const pattern = field(input, "pattern");
+  if (pattern) return pattern;
+
   const path = pathField(input);
   if (path) return shortenPath(path);
 
   return (
     field(input, "command") ??
-    field(input, "pattern") ??
     field(input, "query") ??
     field(input, "url") ??
     // Field-keyed where `toolSummary` keys on the tool: the card sees raw wire

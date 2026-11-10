@@ -928,15 +928,16 @@ function shutterReady(of: number) {
 }
 
 /// What the URL bar opens. A scheme is taken as written; `host:port` looks
-/// like a scheme, so a scheme wants its `//`. Loopback hosts read as `http`,
-/// since that is what a dev server speaks. Anything that is not a host —
-/// a space in it, or no dot — is a search.
+/// like a scheme, so a scheme wants its `//`. Loopback hosts and bare
+/// addresses read as `http`, since that is what a dev server speaks — on this
+/// Mac or on the LAN, where `https` to an address has no certificate to offer.
+/// Anything that is not a host — a space in it, or no dot — is a search.
 export function normalizeUrl(input: string): string {
   const s = input.trim();
   if (!s) return s;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s) || /^(about|data|mailto|blob|chrome):/i.test(s)) return s;
   const host = s.split(/[/?#]/)[0] ?? "";
-  const loopback = /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?$/i.test(host);
+  const loopback = /^(localhost|\d{1,3}(\.\d{1,3}){3}|\[::1\])(:\d+)?$/i.test(host);
   if (loopback) return `http://${s}`;
   if (/\s/.test(s) || !host.includes(".")) {
     return `https://www.google.com/search?q=${encodeURIComponent(s)}`;

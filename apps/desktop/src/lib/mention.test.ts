@@ -242,6 +242,15 @@ describe("highlightSegments", () => {
     ]);
   });
 
+  /// Rust trims brackets off the front of a whitespace token only, so a
+  /// bracket in the middle of one opens nothing there and must not here.
+  it("leaves a tag behind a bracket mid-word plain", () => {
+    expect(highlightSegments("call(#DRA-53) now")).toEqual([
+      { kind: "text", text: "call(#DRA-53) now" },
+    ]);
+    expect(highlightSegments('say ("#DRA-53") now').some((s) => s.kind === "issue")).toBe(true);
+  });
+
   it("marks the inline runs, delimiters kept on the segment", () => {
     expect(highlightSegments("make it **bold** now")).toEqual([
       { kind: "text", text: "make it " },

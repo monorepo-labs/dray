@@ -92,14 +92,14 @@ const URL_TAIL = /[.,;:!?'"»›]+$/;
 ///
 /// The TLD list is the guess, and it is short on purpose: a file name is the
 /// false positive, so every TLD that is also a common extension is left out
-/// (`md`, `rs`, `py`, `sh`, `so`, `app`, `ts`, `js`). A miss costs one plain
+/// (`md`, `rs`, `py`, `sh`, `so`, `app`, `ts`, `js`, `in`). A miss costs one plain
 /// word; a hit on `README.md` costs a link to a stranger's site. Localhost and
 /// a bare IP need a port, or the word "localhost" in a sentence would link.
 /// Not after `/`, `@`, `.` or a word character, so a path segment or an email
 /// is never cut in half — and not before `.` and a word character either, or
 /// `config.dev.ts` links its first half.
 const BARE_URL =
-  /(?<![\w@./:-])(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|org|net|io|dev|ai|co|me|gg|xyz|info|edu|gov|uk|de|fr|jp|ca|au|in)(?::\d{2,5})?|(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):\d{2,5})(?![\w-]|\.\w)(?:[/?#][^\s<>]*)?/gi;
+  /(?<![\w@./:-])(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|org|net|io|dev|ai|co|me|gg|xyz|info|edu|gov|uk|de|fr|jp|ca|au)(?::\d{2,5})?|(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):\d{2,5})(?![\w-]|\.\w)(?:[/?#][^\s<>]*)?/gi;
 
 /// The same rule anchored at one index, for the scanner below.
 const BARE_URL_AT = new RegExp(BARE_URL.source, "iy");
@@ -107,10 +107,12 @@ const BARE_URL_AT = new RegExp(BARE_URL.source, "iy");
 type Url = { text: string; href: string };
 
 /// A bare host with the scheme it opens under: `http` for a local address,
-/// which serves none of them over TLS, `https` for the rest.
+/// which serves none of them over TLS, `https` for the rest. An address, not
+/// any host with a leading digit: `1password.com` is a site.
 function bareUrl(match: string): Url {
   const text = trimUrlTail(match);
-  return { text, href: `${/^(localhost|\d)/i.test(text) ? "http" : "https"}://${text}` };
+  const local = /^(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):/i.test(text);
+  return { text, href: `${local ? "http" : "https"}://${text}` };
 }
 
 export type BareUrl = { start: number; end: number; href: string };
@@ -556,9 +558,14 @@ export function highlightSegments(text: string): Segment[] {
     // links by. A mention is left as strict as it was: the CLI parses `@path`
     // out of the prompt itself, so widening it here would paint mentions the
     // harness will not read.
+    //
+    // The brackets have to open the word themselves. Rust trims them off the
+    // front of a whitespace token and nowhere else, so `call(#DRA-53)` links
+    // nothing and must not be painted as if it did.
     const previous = i > 0 ? text[i - 1] : " ";
-    const opensWord =
-      SPACE.test(previous) || (opener === "#" && OPENERS.includes(previous));
+    let before = i - 1;
+    if (opener === "#") while (before >= 0 && OPENERS.includes(text[before])) before -= 1;
+    const opensWord = SPACE.test(previous) || before < 0 || SPACE.test(text[before]);
     if (!opensWord) continue;
 
     let end = i + 1;

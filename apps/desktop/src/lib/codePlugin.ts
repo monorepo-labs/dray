@@ -21,6 +21,10 @@ type HighlightResult = NonNullable<ReturnType<CodeHighlighterPlugin["highlight"]
 ///
 /// The plugin interface is structural, so this satisfies it without depending on
 /// the stock implementation.
+/// How many highlighted blocks are kept. A long transcript on screen draws a
+/// few hundred, and a block evicted while mounted only tokenizes again.
+const MAX_HIGHLIGHTS = 500;
+
 export function createSharedCodePlugin(pair: CodeThemePair): CodeHighlighterPlugin {
   const themes: [string, string] = [pair.light, pair.dark];
 
@@ -28,8 +32,15 @@ export function createSharedCodePlugin(pair: CodeThemePair): CodeHighlighterPlug
   // block and re-tokenizing is the expensive part. Pending callbacks are held
   // per key so N blocks of one language share a single load rather than each
   // starting their own.
+  //
+  // Capped, oldest out first. The key is the block's whole text, so unbounded
+  // this held every code block of every transcript opened since launch, twice.
   const done = new Map<string, HighlightResult>();
   const waiting = new Map<string, Set<(result: HighlightResult) => void>>();
+  const remember = (key: string, result: HighlightResult) => {
+    if (done.size >= MAX_HIGHLIGHTS) done.delete(done.keys().next().value as string);
+    done.set(key, result);
+  };
 
   // The whole text, not Streamdown's own length-and-first-100-characters: a
   // "before" and "after" fence of one snippet share both, and the second then
@@ -74,7 +85,7 @@ export function createSharedCodePlugin(pair: CodeThemePair): CodeHighlighterPlug
           lang,
           themes: { light: themes[0], dark: themes[1] },
         }) as HighlightResult;
-        done.set(key, result);
+        remember(key, result);
         return result;
       };
 
