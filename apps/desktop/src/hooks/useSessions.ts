@@ -1431,12 +1431,6 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   return false;
 }
 
-
-
-// One call for both flags, so a click writes only the one it owns. The row is
-// replaced from what the store returned rather than from the value we sent —
-// the index is authoritative, and a failed write must not leave the sidebar
-// showing a state the disk doesn't have.
 /// Cuts a spawned session loose from its parent, so the sidebar stops nesting
 /// it under a row it no longer belongs to.
 ///
@@ -1514,7 +1508,13 @@ const applyIndexItem = (updated: SessionIndexItem) => {
   if (updated.archived) evictSessions({ sessionId });
 };
 
-/// Writes a session's settled or pinned flag, and answers whether it landed.
+/// Writes a session's flags — settled, pinned, hidden, set aside — and answers
+/// whether it landed.
+///
+/// One call for all of them, so a click writes only the one it owns. The row is
+/// replaced from what the store returned rather than from the value sent — the
+/// index is authoritative, and a failed write must not leave the sidebar
+/// showing a state the disk doesn't have.
 ///
 /// The answer is what callers navigate on. A failed write leaves the row where
 /// it was, so acting anyway — following it to the other view, celebrating a
@@ -1778,6 +1778,14 @@ const deleteSession = async (sessionId: string) => {
     await invoke<boolean>("delete_session", { sessionId });
   } catch (e) {
     deletedRef.current.delete(sessionId);
+    // A delete can stop the child and then fail, and the status that said so
+    // was dropped above. The index has it: the live reading goes, so the row
+    // falls back on the entry read here.
+    setStatusBySession(({ [sessionId]: _, ...rest }) => rest);
+    setWorkingBySession(({ [sessionId]: _, ...rest }) => rest);
+    invoke<SessionIndexItem | null>("session_index_item", { sessionId })
+      .then((item) => item && applyIndexItem(item))
+      .catch((err) => console.error("could not reread", sessionId, err));
     fail(e);
     return;
   }
@@ -2832,19 +2840,6 @@ const markSessionUnread = (sessionId: string) => {
   void invoke("mark_session_read", { sessionId, read: false }).catch(() => {});
 };
 
-/// Tell the reader about something that happened in a session, on exactly one
-/// channel, chosen by where they are. Returns whether they were already looking
-/// at it — the one case nothing is raised, since the transcript itself is the
-/// notification.
-///
-/// Shared by every announcement rather than repeated per event: a desktop banner
-/// in front of someone looking at the window is an interruption, and an in-app
-/// card is invisible from another app, so the split has to be made the same way
-/// everywhere or one event ends up on two channels.
-/// The two channels are told apart on purpose. A desktop banner lands in a
-/// stack beside every other app's, so it has to name the session and the
-/// project or it says nothing; the in-app card is the only card on screen next
-/// to a sidebar already marking the row, so it needs the verb and nothing else.
 /// Whether a session may say anything at all right now — the space rule, asked
 /// once for every channel.
 ///
@@ -2872,6 +2867,22 @@ const canAnnounce = (sessionId: string): boolean => {
   return allowedInSpace(projectsRef.current, space, projectPath);
 };
 
+/// Tell the reader about something that happened in a session, on exactly one
+/// channel, chosen by where they are. Returns whether they were already looking
+/// at it — the one case nothing is raised, since the transcript itself is the
+/// notification.
+///
+/// Shared by every announcement rather than repeated per event: a desktop banner
+/// in front of someone looking at the window is an interruption, and an in-app
+/// card is invisible from another app, so the split has to be made the same way
+/// everywhere or one event ends up on two channels. Away from the window, Dray
+/// Island takes an ask or a finished turn while it runs and the banner stays
+/// down.
+///
+/// Banner and card are worded apart on purpose. A desktop banner lands in a
+/// stack beside every other app's, so it has to name the session or it says
+/// nothing; the in-app card is the only card on screen next to a sidebar
+/// already marking the row, so it needs the verb and nothing else.
 const announce = (sessionId: string, kind: NoticeKind, label: string): boolean => {
   const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
 
@@ -3050,10 +3061,6 @@ useEffect(() => {
   };
 }, []);
 
-// The backend generates a title a few seconds after a session starts and writes
-// it to the index itself, so this only mirrors what's already on disk. Its own
-// listener rather than a branch in `agent_event`: nothing here came from the
-// agent, and it must not land in the session's event list.
 // A session created by something other than the composer — an agent calling the
 // `dray` CLI, which reaches the backend over its own socket. The row has to
 // appear without a refetch, the way a composer-created one does.
@@ -3115,6 +3122,10 @@ useEffect(() => {
   };
 }, []);
 
+// The backend generates a title a few seconds after a session starts and writes
+// it to the index itself, so this only mirrors what's already on disk. Its own
+// listener rather than a branch in `agent_event`: nothing here came from the
+// agent, and it must not land in the session's event list.
 useEffect(() => {
   const listenerPromise = listen<SessionTitleEvent>("session_title", (event) => {
     const { sessionId, title, titleLocked } = event.payload;
