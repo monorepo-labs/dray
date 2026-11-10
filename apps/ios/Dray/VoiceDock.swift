@@ -16,7 +16,7 @@ struct VoiceDock: View {
     @State private var confirming = false
     @State private var editing = false
     @State private var sheetTitle = "New task"
-    @State private var attaching = false
+    @State private var picking = false
 
     private let draft = SessionKey.newSession
     private var dictation: Dictation { Dictations.shared.state(draft) }
@@ -71,16 +71,7 @@ struct VoiceDock: View {
         .sheet(isPresented: $editing) {
             TextSheet(title: sheetTitle, text: $task.text)
         }
-        .sheet(isPresented: $attaching) {
-            if let server = task.server {
-                NavigationStack {
-                    AttachProjectView(server: server, projects: store.projects[server] ?? []) { list in
-                        store.attached(server, list)
-                        task.projectName = list.max { $0.lastSelected < $1.lastSelected }?.name
-                    }
-                }
-            }
-        }
+        .sheet(isPresented: $picking) { RunWithSheet(task: task) }
         // A new phase asks its own question; one left up would answer the wrong one.
         .onChange(of: phase) { confirming = false }
     }
@@ -213,10 +204,10 @@ struct VoiceDock: View {
         }
     }
 
-    /// Model and effort, project, machine, the rest behind "···", and the keyboard.
+    /// Model and effort, project, machine and "···", each opening Run with, and the keyboard.
     private var picks: some View {
         HStack(spacing: Theme.Space.l) {
-            Menu { modelMenu } label: {
+            Button { picking = true } label: {
                 HStack(spacing: 5) {
                     AgentMark(harness: task.harness).frame(width: 13, height: 13)
                     Text(task.model?.label ?? "Default").font(Theme.Font.footnoteStrong).foregroundStyle(Theme.text)
@@ -228,21 +219,21 @@ struct VoiceDock: View {
                 .fixedSize()
             }
             .accessibilityLabel("Model")
-            Menu { projectMenu } label: {
+            Button { picking = true } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "folder.fill").font(.system(size: 11))
                     Text(task.project ?? "Project").font(Theme.Font.footnote)
                 }
             }
             .accessibilityLabel("Project")
-            Menu { machineMenu } label: {
+            Button { picking = true } label: {
                 HStack(spacing: 5) {
                     ServerIcon().frame(width: 13, height: 13)
                     Text(task.server.map(store.name(of:)) ?? "Machine").font(Theme.Font.footnote)
                 }
             }
             .accessibilityLabel("Machine")
-            Menu { moreMenu } label: {
+            Button { picking = true } label: {
                 Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).frame(width: 24, height: 20)
             }
             .accessibilityLabel("More picks")
@@ -256,54 +247,6 @@ struct VoiceDock: View {
         .foregroundStyle(Theme.secondary)
         .lineLimit(1)
         .frame(height: 20)
-    }
-
-    @ViewBuilder private var modelMenu: some View {
-        let agents = task.available.filter(\.available)
-        if agents.count > 1 {
-            Picker("Agent", selection: $task.harness) {
-                ForEach(agents, id: \.harness) { Text($0.label).tag($0.harness) }
-            }
-            .pickerStyle(.menu)
-        }
-        Picker("Model", selection: Binding(get: { task.modelId }, set: task.pickModel)) {
-            if Picks.defaultModel[task.harness]?.isEmpty ?? false { Text("Default").tag("") }
-            ForEach(task.list, id: \.id) { Text($0.label).tag($0.id) }
-        }
-        if let model = task.model, !model.efforts.isEmpty {
-            Picker("Effort", selection: Binding(get: { task.effort ?? "" }, set: task.pickEffort)) {
-                ForEach(model.efforts, id: \.self) { Text(Picks.effortLabels[$0] ?? $0).tag($0) }
-            }
-            .pickerStyle(.menu)
-        }
-        if Picks.offersFast(task.harness, task.model) {
-            Toggle("Fast mode", isOn: $task.fast)
-        }
-    }
-
-    @ViewBuilder private var projectMenu: some View {
-        Picker("Project", selection: Binding(get: { task.projectChoice }, set: task.pick)) {
-            ForEach(task.projectChoices, id: \.self) { Text($0.label).tag(Optional($0)) }
-        }
-        if task.server != nil {
-            Button("Attach project…", systemImage: "plus") { attaching = true }
-        }
-    }
-
-    @ViewBuilder private var machineMenu: some View {
-        Picker("Machine", selection: Binding(get: { task.server }, set: { task.pickedServer = $0 })) {
-            ForEach(task.machines) { Text($0.name).tag(Optional($0.id)) }
-        }
-    }
-
-    @ViewBuilder private var moreMenu: some View {
-        Toggle("Worktree", isOn: $task.worktree)
-        if Picks.offersStances(task.harness) {
-            Picker("Permissions", selection: Binding(get: { Picks.stanceFor(task.harness, task.stance) }, set: { task.stance = $0 })) {
-                ForEach(Picks.stances.filter { Picks.honours(task.harness, $0.0) }, id: \.0) { Text($0.1).tag($0.0) }
-            }
-            .pickerStyle(.menu)
-        }
     }
 }
 
@@ -487,24 +430,16 @@ struct StopTimer: View {
     }
 }
 
-/// The agent's mark in the picks: Claude's rust starburst, else a neutral sparkle.
+/// The agent's mark: the desktop's `AgentIcon`, Claude in its rust and the rest in the text's colour.
 struct AgentMark: View {
     let harness: String
 
     var body: some View {
-        if harness == "claude_code" {
-            Canvas { ctx, size in
-                ctx.scaleBy(x: size.width / 24, y: size.height / 24)
-                let points: [(Double, Double)] = [(12, 1.5), (13.6, 8.8), (19.8, 4.6), (15.6, 10.8), (22.9, 12.4), (15.6, 14),
-                                                  (19.8, 20.2), (13.6, 16), (12, 22.5), (10.4, 15.2), (4.2, 19.4), (8.4, 13.2),
-                                                  (1.1, 12), (8.4, 10.4), (4.2, 4.2), (10.4, 8.4)]
-                var p = Path()
-                p.addLines(points.map { CGPoint(x: $0.0, y: $0.1) })
-                p.closeSubpath()
-                ctx.fill(p, with: .color(Theme.claude))
-            }
+        if UIImage(named: "agent-" + harness) != nil {
+            Image("agent-" + harness).resizable().scaledToFit()
+                .foregroundStyle(harness == "claude_code" ? AnyShapeStyle(Theme.claude) : AnyShapeStyle(.foreground))
         } else {
-            Image(systemName: "sparkle").resizable().scaledToFit().foregroundStyle(Theme.secondary)
+            Image(systemName: "sparkle").resizable().scaledToFit()
         }
     }
 }

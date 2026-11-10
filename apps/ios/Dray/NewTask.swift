@@ -61,7 +61,7 @@ final class NewTask {
     }
     var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
-    private var connected: [Server] { store.servers.filter { store.serverState[$0.id] == .connected } }
+    var connected: [Server] { store.servers.filter { store.serverState[$0.id] == .connected } }
 
     /// Every project name a connected machine holds, newest pick first.
     var projectNames: [String] {
@@ -74,7 +74,11 @@ final class NewTask {
     var project: String? { projectName.flatMap { projectNames.contains($0) ? $0 : nil } ?? projectNames.first }
     /// The machines holding the picked project.
     var machines: [Server] { connected.filter { s in (store.projects[s.id] ?? []).contains { $0.name == project } } }
-    var server: UUID? { machines.first { $0.id == pickedServer }?.id ?? machines.first?.id ?? connected.first?.id }
+    /// With no project yet, the machine picked to attach one on.
+    var server: UUID? {
+        machines.first { $0.id == pickedServer }?.id ?? machines.first?.id
+            ?? connected.first { $0.id == pickedServer }?.id ?? connected.first?.id
+    }
     var cwd: String? {
         guard let server, let held = store.projects[server]?.filter({ $0.name == project }) else { return nil }
         return held.first { $0.path == projectPath }?.path ?? held.first?.path

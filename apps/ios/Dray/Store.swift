@@ -439,10 +439,10 @@ final class Store {
     /// `send_msg` finds nothing changed and respawns nothing. They are read
     /// fresh first: another client moving the model broadcasts nothing, and a
     /// held copy sent back would undo its change.
-    /// `model`, `effort` and `stance` are what the reader moved for this reply; each nil keeps
+    /// `model`, `effort`, `stance` and `fast` are what the reader moved for this reply; each nil keeps
     /// the session's as just re-read, so a change another client made is never undone.
     func send(_ key: SessionKey, _ text: String, attachments: [String] = [],
-              model: String? = nil, effort: String? = nil, stance: String? = nil) async -> Bool {
+              model: String? = nil, effort: String? = nil, stance: String? = nil, fast: Bool? = nil) async -> Bool {
         guard let c = connections[key.server] else { return false }
         do {
             let fresh: SessionItem? = try await c.call("get_session_by_id", ["sessionId": .string(key.id), "turns": 0])
@@ -456,7 +456,7 @@ final class Store {
                 "model": .string(model ?? item.model),
                 "effort": JSON(effort ?? item.effort),
                 "permissionMode": .string(stance ?? item.permissionMode),
-                "fast": .bool(item.fast ?? false),
+                "fast": .bool(fast ?? item.fast ?? false),
                 "cwd": .string(item.cwd),
                 "branch": nil,
                 "useWorktree": false,

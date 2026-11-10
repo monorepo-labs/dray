@@ -87,9 +87,6 @@ enum Picks {
         }
     }
 
-    /// `offersFast` and `fastFor` for a new session: the harness needs a route
-    /// to one (pi has none) and the model a faster tier. fx alone stands with no
-    /// model picked, since it decides per model itself.
     /// `liveControls.ts`'s table: what each harness carries onto a prompt sent while a turn runs.
     /// Stated a third time beside the desktop and `send_msg`'s gate; change all three together.
     private static let live: [String: Set<String>] = [
@@ -101,6 +98,9 @@ enum Picks {
         busy && !(live[harness]?.contains(control) ?? false)
     }
 
+    /// `offersFast` and `fastFor` for a new session: the harness needs a route
+    /// to one (pi has none) and the model a faster tier. fx alone stands with no
+    /// model picked, since it decides per model itself.
     static func offersFast(_ harness: String, _ model: Model?) -> Bool {
         guard ["claude_code", "codex", "fx", "grok"].contains(harness) else { return false }
         return model?.supportsFast ?? (harness == "fx")

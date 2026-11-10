@@ -175,12 +175,74 @@ final class RedesignTests: XCTestCase {
         sleep(2)
         snap(app, "reply-running")
         app.buttons["Model"].tap()
+        XCTAssertTrue(app.staticTexts["This task"].waitForExistence(timeout: 5), "the model pick opened no sheet")
         sleep(1)
-        snap(app, "reply-model-menu")
-        app.tap()
+        snap(app, "reply-this-task")
+        app.buttons["Done"].tap()
         XCTAssertTrue(stop.waitForNonExistence(timeout: 180), "the turn never ended")
         sleep(2)
         snap(app, "reply-answered")
+    }
+
+    /// Run with from the list's dock: a star, the project menu, and a branch switch over uncommitted
+    /// files. Wants `thinking-orbs` on the server holding a `fix-reconnect` branch and dirty files.
+    func testRunWithSheet() throws {
+        let app = try pair()
+        let model = app.buttons["Model"]
+        XCTAssertTrue(model.waitForExistence(timeout: 20))
+        sleep(2)
+        snap(app, "picks-dock")
+        model.tap()
+        XCTAssertTrue(app.staticTexts["Run with"].waitForExistence(timeout: 5), "the model pick opened no sheet")
+        let haiku = app.buttons["Haiku 5.5"]
+        XCTAssertTrue(haiku.waitForExistence(timeout: 15), "no model chips")
+        sleep(1)
+        snap(app, "picks-run-with")
+
+        haiku.doubleTap()
+        XCTAssertEqual(haiku.value as? String, "Starred", "a double-tap starred nothing")
+        sleep(1)
+        snap(app, "picks-starred")
+        haiku.doubleTap()
+        XCTAssertNotEqual(haiku.value as? String, "Starred", "a second double-tap left the star")
+
+        app.buttons["row.Project"].tap()
+        let orbs = menuItem(app, "thinking-orbs")
+        XCTAssertTrue(orbs.exists, "no thinking-orbs in the project menu")
+        XCTAssertTrue(app.buttons["Attach project…"].exists, "no Attach inside the project menu")
+        snap(app, "picks-project-menu")
+        orbs.tap()
+
+        let worktree = app.switches["Worktree"]
+        if worktree.value as? String == "On" { worktree.tap() }
+        let branch = app.buttons["row.Branch"]
+        XCTAssertTrue(branch.waitForExistence(timeout: 10), "worktree off shows no branch row")
+        snap(app, "picks-branch")
+        branch.tap()
+        menuItem(app, "fix-reconnect").tap()
+        let bring = app.buttons["Bring changes"]
+        XCTAssertTrue(bring.waitForExistence(timeout: 5), "uncommitted files asked nothing")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ENDSWITH 'uncommitted files'")).count > 0)
+        snap(app, "picks-dirty")
+        bring.tap()
+        XCTAssertTrue(app.staticTexts["fix-reconnect"].waitForExistence(timeout: 15), "the checkout never landed")
+        snap(app, "picks-switched")
+        // Back as it was, for the next run.
+        branch.tap()
+        menuItem(app, "main").tap()
+        app.buttons["Bring changes"].tap()
+        XCTAssertTrue(app.staticTexts["main"].waitForExistence(timeout: 15))
+        worktree.tap()
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.staticTexts["Run with"].waitForNonExistence(timeout: 5))
+    }
+
+    /// An open menu's item: the last of its name, since the list under the sheet can hold the same one.
+    private func menuItem(_ app: XCUIApplication, _ label: String) -> XCUIElement {
+        let all = app.buttons.matching(NSPredicate(format: "label == %@", label))
+        _ = all.firstMatch.waitForExistence(timeout: 5)
+        sleep(1)
+        return all.allElementsBoundByIndex.last { $0.isHittable } ?? all.firstMatch
     }
 
     func testTypeAndSaveDraft() throws {

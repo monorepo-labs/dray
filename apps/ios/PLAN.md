@@ -20,19 +20,25 @@ phone reads and drives it over the same WebSocket the desktop uses
   turn's: swipe or the strip to page, pinch to zoom, drag down to close.
 - **Reply** from a dock at the session's foot, the list's orb held to talk:
   the words show as the bubble they will send as, the keyboard edits them
-  in a sheet that can also send, and Cancel asks first. Its picks are the
-  session's model, effort and stance, each locked mid-turn where the harness
-  can't carry it onto a queued prompt (`liveControls.ts`, restated in
-  `Picks.lockedMidTurn`). **Stop** sits at the end of the picks while a turn
-  runs. The top bar names the project and machine, never the branch.
+  in a sheet that can also send, and Cancel asks first. The model chip and
+  "···" open **This task**: the session's model, effort, fast mode and
+  stance for the next reply, each locked mid-turn where the harness can't
+  carry it onto a queued prompt (`liveControls.ts`, restated in
+  `Picks.lockedMidTurn`). Nothing there reaches the session until a reply
+  goes out, since `send_msg` is what carries it. **Stop** sits at the end of
+  the picks while a turn runs. The top bar names the project and machine,
+  never the branch.
 - **Permission and question cards**, answered in place.
 - **New task by voice**, from a dock under the list: hold the orb to talk,
   and the recording runs hands-free until Done or Cancel. The words land as
   the task's text; holding again adds to them, the keyboard edits them in a
   sheet, and Cancel offers Save draft (`create_draft`), Keep or Discard.
-  Picks under the orb: harness, model, effort, project, machine, and behind
-  "···" stance and worktree. No branch pick: a task with no worktree runs
-  on whatever branch the project has checked out.
+  Every pick under the orb opens **Run with**: server (where two hold the
+  project), project with Attach inside its menu, worktree, the agent and its
+  model as chips, effort, fast mode and stance. Double-tapping a model stars
+  it, on this phone, per agent; starred ones lead. With the worktree off a
+  Branch row switches the checkout at once (`checkout_branch`), asking
+  Bring or Stash first where files are uncommitted, as the desktop does.
 - **Pairing** by paste or by QR, and every server's name, token and removal
   in one Settings screen.
 - **Pull request** sheet from the session view: readiness in the desktop's

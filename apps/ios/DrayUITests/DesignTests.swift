@@ -92,7 +92,8 @@ final class DesignTests: XCTestCase {
         sleep(1)
         snap(app, "17-new-task-ready")
         app.buttons["Model"].firstMatch.tap()
-        snap(app, "18-model-menu")
+        sleep(1)
+        snap(app, "18-run-with")
     }
 
     func testFailureStates() throws {
