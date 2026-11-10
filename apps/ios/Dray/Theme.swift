@@ -297,7 +297,7 @@ struct PillButtonStyle: ButtonStyle {
             .font(Theme.Font.pill)
             .foregroundStyle(Theme.text)
             .padding(.horizontal, 22)
-            .frame(height: height)
+            .frame(minHeight: height)
             .background(fill, in: Capsule())
             .opacity(enabled ? 1 : 0.4)
             .pressed(configuration.isPressed)

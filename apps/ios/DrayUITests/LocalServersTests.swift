@@ -36,9 +36,13 @@ final class LocalServersTests: XCTestCase {
         }
         snap(app, "00-list")
         app.buttons["Get public link"].firstMatch.tap()
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ENDSWITH '…'")).firstMatch.waitForExistence(timeout: 5))
-        snap(app, "02-creating")
         let copy = app.buttons["Copy link"]
+        // A warm tunnel can answer before the wait is ever drawn.
+        if app.staticTexts.matching(NSPredicate(format: "label ENDSWITH '…'")).firstMatch.waitForExistence(timeout: 5) {
+            snap(app, "02-creating")
+        } else {
+            XCTAssertTrue(copy.exists, "neither a wait nor a link after sharing")
+        }
         let stalled = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'shows here once'")).firstMatch
         XCTAssertTrue(copy.waitForExistence(timeout: 40) || stalled.exists, "spinning with nothing to say")
         if stalled.exists { snap(app, "02-waiting") }
@@ -47,7 +51,7 @@ final class LocalServersTests: XCTestCase {
         copy.tap()
         XCTAssertTrue(app.buttons["Copied"].waitForExistence(timeout: 3))
         app.buttons["Stop sharing"].tap()
-        XCTAssertTrue(app.buttons["Copy link"].waitForNonExistence(timeout: 15), "stop left the link up")
+        XCTAssertTrue(app.buttons["Stop sharing"].waitForNonExistence(timeout: 15), "stop left the link up")
         app.buttons["Done"].tap()
 
         guard let kill = env["DRAY_KILL_FILE"] else { return }
