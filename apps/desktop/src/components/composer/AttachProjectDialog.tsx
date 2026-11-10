@@ -58,7 +58,8 @@ export default function AttachProjectDialog({
   /// Every route ends in the list `add_project` answers for `server`.
   onAttached: (server: ServerId, list: Project[]) => void;
 }) {
-  const remotes = useServers().filter((s) => s.status === "connected");
+  // A cloud machine is reached through placement, never picked by hand.
+  const remotes = useServers().filter((s) => s.status === "connected" && !s.cloud);
   const [server, setServer] = useState<ServerId>(LOCAL);
   const [repos, setRepos] = useState<GithubRepo[] | null>(null);
   const [unavailable, setUnavailable] = useState<PrUnavailable | null>(null);

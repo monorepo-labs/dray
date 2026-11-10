@@ -2,6 +2,7 @@ import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSess
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
 import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
+import { cloudIo, onCloud, placeTask, setPlacing } from "@/lib/cloud";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
 import { restoreAttachments } from "@/hooks/useAttachments";
@@ -832,24 +833,48 @@ const handleSendMsg = async (
   const existing = sessionId ? sessions.find((s) => s.sessionId === sessionId) : undefined;
   // The backend reads the recorded cwd on resume, so this only has to be right
   // for a new session.
-  const cwd = isNewSession ? projectPath : existing?.cwd ?? projectPath;
+  let cwd = isNewSession ? projectPath : existing?.cwd ?? projectPath;
 
   if (!cwd) {
     setError("Attach a project first.");
     return false;
+  }
+  // A new task on Cloud has no machine until it is placed, which can start
+  // one and take minutes, so the prompt sits on disk meanwhile as it does
+  // through a resume.
+  let placed: string | null = null;
+  const before = navGen.current;
+  const remote = projects.find((p) => p.path === cwd)?.remote;
+  if (isNewSession && remote && onCloud(projects, cwd)) {
+    const letGo = holdThroughResume(null, message);
+    try {
+      const where = await placeTask(projects, remote, cloudIo, setPlacing);
+      if (where.cloned) setProjects((prev) => mergeFrom(prev, where.server, where.cloned!, pathOfProject));
+      placed = cwd = where.path;
+    } catch (e) {
+      if (before === navGen.current) setError(e instanceof Error ? e.message : String(e));
+      return false;
+    } finally {
+      letGo();
+      setPlacing(null);
+    }
   }
   if (!sessionId) {
     sessionId = crypto.randomUUID();
     // Before the selection moves, so the composer reads this server's models
     // on the very frame it lands on the new session.
     noteSession(sessionId, serverOfPath(cwd));
-    // Claimed alongside the selection everywhere it moves, or a read still out
-    // from an earlier click can land afterwards and roll this one away.
-    selectionRequestRef.current = sessionId;
-    setSelectedSessionId(sessionId);
-    // A move like any other: the composer now belongs to this session, so an
-    // action still out from the new-task view must not report into it.
-    navGen.current++;
+    // A reader who moved on while it was placed keeps their place, and the
+    // task starts in the sidebar.
+    if (before === navGen.current) {
+      // Claimed alongside the selection everywhere it moves, or a read still
+      // out from an earlier click can land afterwards and roll this one away.
+      selectionRequestRef.current = sessionId;
+      setSelectedSessionId(sessionId);
+      // A move like any other: the composer now belongs to this session, so
+      // an action still out from the new-task view must not report into it.
+      navGen.current++;
+    }
   }
   // Taken after the mint, so this send's own failure still reports.
   const fail = failUnlessLeft();
@@ -892,8 +917,8 @@ const handleSendMsg = async (
       sessionId,
       harness,
       cwd,
-      projectPath: projectPath ?? cwd,
-      branch: !useWorktree ? branch : null,
+      projectPath: placed ?? projectPath ?? cwd,
+      branch: !useWorktree && !placed ? branch : null,
       worktreeName: null,
       worktreeRemoved: false,
       // Provisional. The backend truncates its own way and `session_title`
@@ -994,8 +1019,9 @@ const handleSendMsg = async (
       fast,
       cwd,
       // Recorded, not acted on — the picker already checked it out. Null for a
-      // worktree session, whose branch the CLI names itself.
-      branch: isNewSession && !useWorktree ? branch : null,
+      // worktree session, whose branch the CLI names itself, and for a placed
+      // one, whose checkout the picker never read.
+      branch: isNewSession && !useWorktree && !placed ? branch : null,
       useWorktree: isNewSession && useWorktree,
       worktreeName: null,
       baseRef: isNewSession && useWorktree ? baseRef : null,

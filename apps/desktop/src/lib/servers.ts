@@ -74,10 +74,13 @@ export function useLocalServer(): ServerInfo | null {
   return useSyncExternalStore(subscribeServers, localServer, localServer);
 }
 
-/// What the reader calls a server: its name, or "This Mac" — the machine the app runs on.
+/// What the reader calls a server: its name, "This Mac" — the machine the app
+/// runs on — or "Cloud" for every Dray Cloud machine, which the reader never
+/// picks one by one.
 export function serverName(id: ServerId): string {
   if (id === LOCAL) return "This Mac";
-  return servers.find((s) => s.id === id)?.name ?? id;
+  const server = servers.find((s) => s.id === id);
+  return server?.cloud ? "Cloud" : (server?.name ?? id);
 }
 
 /// A project's name where only text fits, with its machine after it where that

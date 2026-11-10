@@ -61,6 +61,10 @@ pub struct AppSettings {
     /// Rust starts it at launch, before any webview exists to ask.
     #[serde(default)]
     pub remote_access: bool,
+    /// Dray Cloud's switch (#857). Here because Rust lists the machines at
+    /// launch; the key itself sits in `credentials.json`.
+    #[serde(default)]
+    pub dray_cloud: bool,
 }
 
 /// The transcription picks. Model and device mean "not chosen" when absent.
@@ -108,6 +112,7 @@ impl Default for AppSettings {
             linear_account: None,
             transcription: TranscriptionSettings::default(),
             remote_access: false,
+            dray_cloud: false,
         }
     }
 }
@@ -274,6 +279,7 @@ mod tests {
             linear_account: None,
             transcription: TranscriptionSettings::default(),
             remote_access: true,
+            dray_cloud: true,
         };
 
         write_to(&dir, &off).await.unwrap();

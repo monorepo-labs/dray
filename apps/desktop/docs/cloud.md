@@ -1,0 +1,17 @@
+# Dray Cloud
+
+Hosted machines Dray starts and stops itself (#857). The contract between the app, the control plane in `apps/web` and `dray-serve` is fixed in the issue; this is the app's half. [cloud.rs](../src-tauri/src/cloud.rs) talks to the control plane, `servers.rs` turns its answer into connections, and [cloud.ts](../src/lib/cloud.ts) places new tasks.
+
+**Every machine is a connection like any other**, a `Saved` marked `cloud` with its sandbox id, so everything a server already does — `server_invoke`, events, the sidebar, `dray --machine` — works on it unchanged. The control plane keeps no database, so the list is read again every 30s while Dray Cloud is on (`watch_cloud`), and a failed connect asks for a fresh read at most every 10s. A machine the list no longer names goes, token and all. One token serves every machine, kept under each one's `server:<id>` as any token is.
+
+**Stopped and resuming are the boat row's**, not a second copy. A cloud machine carries a `BoatRow` (`ServerInfo.boat`) with no boat link, so the stopped notice, Resume, and a send waiting on `resume_boat` all work as they do for a sandbox; `wake_boat` asks the control plane instead of `boat resume`. With no link the timer, the warning and Extend never apply: a busy server's heartbeat moves its own auto-stop. A listing never closes a resume, only `wake_boat` does — the waiter reads any other phase as the resume having failed, and the list can lag the resume it just answered.
+
+**One row in Settings, never one per machine.** They come and go on their own, so a row each is a list the reader cannot act on. The key is checked against the control plane before it is saved, sits in `credentials.json` under `dray-cloud`, and is never read back. The switch lives in `settings.json` (`drayCloud`), since Rust lists the machines at launch; off turns every cloud connection off the way a server's own switch does. `DRAY_CLOUD_URL` moves the control plane.
+
+**Every cloud checkout reads as "Cloud"** (`serverName`). The composer's `MachineSelector` folds them into one Cloud entry, offered on a project with a GitHub remote while Dray Cloud is on and keyed. The pick is per project key in local storage (`ade.cloudPicks`), apart from the checkout pick, since Cloud is no one checkout until a task is placed. A project whose last-used checkout is on a cloud machine reads as Cloud too.
+
+**A new task on Cloud is placed on send** (`placeTask`): each connected machine is asked `machine_load`, room is fewer than 3 turns and at least 1500 MB free, a machine already holding the checkout wins, then the least busy. No room anywhere calls `add_cloud_room` — the control plane resumes, forks or creates — which answers once that machine is connected. A machine without the checkout clones it with `clone_github_repo`. Placement runs before the session exists, since its server is what it decides, so the composer shows `CloudNotice` meanwhile and the prompt is held on disk as a resume holds it. A reader who moves away keeps their place; the task still starts. A machine that does not answer its load in 5s, or predates `machine_load`, has no room.
+
+**Placement lives in the app for now** and moves to the control plane once a second client needs it.
+
+Tested against [demo/cloud.html](../demo/cloud.html): three real `dray-serve`s, one for This Mac and two for machines, with the control plane and `machine_load` faked in the page and a panel to stop machines and set their load.

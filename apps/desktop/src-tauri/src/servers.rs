@@ -9,7 +9,7 @@
 //! struct the frontend is handed.
 
 use crate::machines::{admit_with, credential_name, default_name, normalize, BoatLink, Saved, Socket, Welcome, ADMIT};
-use crate::{boat, sink::Sink, ssh, store};
+use crate::{boat, cloud, sink::Sink, ssh, store};
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -107,7 +107,11 @@ pub struct ServerInfo {
     pub app: bool,
     /// An update landed on the server and it restarts onto it once idle.
     pub restarting: bool,
+    /// Stopped and resuming, for a boat sandbox and a Dray Cloud machine alike.
     pub boat: Option<BoatStatus>,
+    /// A Dray Cloud machine (#857): drawn as no row of its own, and read as
+    /// "Cloud" wherever a machine is named.
+    pub cloud: bool,
 }
 
 type Reply = Result<Value, Value>;
@@ -264,6 +268,7 @@ fn info(conn: &Conn) -> ServerInfo {
             warning: row.warning(conn.status == ServerStatus::Connected),
             note: row.note.clone(),
         }),
+        cloud: conn.saved.cloud.is_some(),
     }
 }
 
@@ -514,6 +519,7 @@ pub async fn start(sink: Sink) {
             beta: false,
             ignored: None,
             boat: None,
+            cloud: None,
             unknown: Default::default(),
         };
         list.push(Conn::new(this_mac));
@@ -521,6 +527,7 @@ pub async fn start(sink: Sink) {
     }
     announce();
     tokio::spawn(watch_boats());
+    tokio::spawn(watch_cloud());
     // Hourly, for an app left open for days on a connection that never drops.
     tokio::spawn(async {
         loop {
@@ -620,6 +627,13 @@ async fn run(id: String) {
             tokio::time::sleep(Duration::from_millis(500)).await;
             continue;
         }
+        // A stopped cloud machine has nothing to answer. The cloud sync restarts
+        // this loop once the control plane says it runs again.
+        let cloud = saved.cloud.is_some();
+        if cloud && cloud_parked(&id) {
+            set(&id, ServerStatus::Disconnected, None, Some("Stopped".into()), None);
+            return;
+        }
         let kept_token = crate::issues::credential(&credential_name(&id)).await.unwrap_or_default();
         // `admitted` is a socket the SSH fallback already opened, kept rather
         // than thrown away and opened a second time.
@@ -717,7 +731,13 @@ async fn run(id: String) {
                 );
                 return;
             }
-            Err(e) => set_status(&id, ServerStatus::Disconnected, Some(said(e))),
+            Err(e) => {
+                set_status(&id, ServerStatus::Disconnected, Some(said(e)));
+                // It may have stopped, or moved under a fork.
+                if cloud {
+                    tokio::spawn(sync_cloud_soon());
+                }
+            }
         }
         drop(tunnel);
         tokio::time::sleep(backoff).await;
@@ -954,19 +974,37 @@ fn boat_alerts() -> Value {
     json!(alerts)
 }
 
-/// Resumes a stopped sandbox and returns once the server on it is connected, so
-/// a send can simply wait on this. Already connected answers at once. Several
-/// callers share one resume: pressing Resume and sending, or sending twice,
-/// must not run `boat resume` twice.
+/// What brings a stopped machine back: `boat resume` for a sandbox added by
+/// hand, the control plane for a Dray Cloud one.
+#[derive(Clone)]
+enum Sleeper {
+    Boat(BoatLink),
+    /// `started` is a machine the control plane already set going, as adding
+    /// room does, so there is nothing to ask for, only a wait.
+    Cloud { sandbox: String, started: bool },
+}
+
+/// Resumes a stopped sandbox or cloud machine and returns once the server on
+/// it is connected, so a send can simply wait on this. Already connected
+/// answers at once. Several callers share one resume: pressing Resume and
+/// sending, or sending twice, must not resume twice.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn resume_boat(id: String) -> Result<(), String> {
+    wake(id, false).await
+}
+
+async fn wake(id: String, started: bool) -> Result<(), String> {
     let (start, turned_on) = {
         let mut list = conns();
         let conn = list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?;
         if conn.status == ServerStatus::Connected {
             return Ok(());
         }
-        let link = conn.saved.boat.clone().ok_or("This server is not a boat sandbox.")?;
+        let sleeper = match (&conn.saved.boat, &conn.saved.cloud) {
+            (_, Some(sandbox)) => Sleeper::Cloud { sandbox: sandbox.clone(), started },
+            (Some(link), None) => Sleeper::Boat(link.clone()),
+            (None, None) => return Err("This server is not a boat sandbox.".into()),
+        };
         // Asking for the sandbox back is asking to reach it: a connection left
         // off would never come up, and a send waiting on it would time out.
         let turned_on = std::mem::take(&mut conn.saved.off);
@@ -982,15 +1020,16 @@ pub async fn resume_boat(id: String) -> Result<(), String> {
                 conn.status = ServerStatus::Connecting;
                 conn.error = None;
                 conn.fix = None;
-                Some(link)
+                Some(sleeper)
             }
         };
         (start, turned_on)
     };
     announce();
-    if let Some(link) = start {
-        crate::analytics::track("feature_used", json!({ "feature": "boat_resumed" }));
-        tokio::spawn(wake_boat(id.clone(), link));
+    if let Some(sleeper) = start {
+        let feature = if matches!(sleeper, Sleeper::Boat(_)) { "boat_resumed" } else { "cloud_resumed" };
+        crate::analytics::track("feature_used", json!({ "feature": feature }));
+        tokio::spawn(wake_boat(id.clone(), sleeper));
     }
     // After the wake is under way: a file that won't write must not strand a
     // row marked resuming with nothing behind it. The connection is on in
@@ -1001,7 +1040,7 @@ pub async fn resume_boat(id: String) -> Result<(), String> {
         }
     }
     // `boat resume`'s own cap and then the wake, so a waiter never outlives both.
-    let deadline = tokio::time::Instant::now() + boat::RESUMING + BOAT_WAKE;
+    let deadline = tokio::time::Instant::now() + boat::RESUMING.max(cloud::START) + BOAT_WAKE;
     loop {
         tokio::time::sleep(Duration::from_millis(250)).await;
         if tokio::time::Instant::now() > deadline {
@@ -1017,9 +1056,10 @@ pub async fn resume_boat(id: String) -> Result<(), String> {
     }
 }
 
-/// `boat resume`, then the login pointed at the new machine, then `run` again,
-/// which keeps retrying while [`boat_waking`] holds.
-async fn wake_boat(id: String, link: BoatLink) {
+/// `boat resume` and the login pointed at the new machine, or the control
+/// plane's resume, then `run` again, which keeps retrying while
+/// [`boat_waking`] holds.
+async fn wake_boat(id: String, sleeper: Sleeper) {
     let settle = |phase: BoatPhase, note: Option<String>, restart: bool| {
         if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
             let row = conn.boat.get_or_insert_with(|| BoatRow::new(phase));
@@ -1031,15 +1071,33 @@ async fn wake_boat(id: String, link: BoatLink) {
         }
         announce();
     };
-    if let Err(why) = boat::resume(&link.id).await {
-        settle(BoatPhase::Stopped, Some(why), true);
-        return;
-    }
-    let target = conns().iter().find(|c| c.saved.id == id).and_then(|c| c.saved.ssh.clone());
-    if let Some(target) = target {
-        if let Err(why) = repoint_login(&id, &link, &target).await {
-            settle(BoatPhase::Running, Some(why), true);
-            return;
+    match &sleeper {
+        Sleeper::Boat(link) => {
+            if let Err(why) = boat::resume(&link.id).await {
+                settle(BoatPhase::Stopped, Some(why), true);
+                return;
+            }
+            let target = conns().iter().find(|c| c.saved.id == id).and_then(|c| c.saved.ssh.clone());
+            if let Some(target) = target {
+                if let Err(why) = repoint_login(&id, link, &target).await {
+                    settle(BoatPhase::Running, Some(why), true);
+                    return;
+                }
+            }
+        }
+        Sleeper::Cloud { started: true, .. } => {}
+        Sleeper::Cloud { sandbox, started: false } => {
+            let resumed = match cloud_key().await {
+                Some(key) => cloud::resume(&key, sandbox).await,
+                None => Err("Dray Cloud has no key. Add it in Settings, Servers.".into()),
+            };
+            match resumed {
+                Ok(machine) => cloud_moved(&id, &machine.url).await,
+                Err(why) => {
+                    settle(BoatPhase::Stopped, Some(why), true);
+                    return;
+                }
+            }
         }
     }
     settle(BoatPhase::Resuming, None, true);
@@ -1078,6 +1136,280 @@ pub async fn extend_boat(id: String, minutes: u32) -> Result<(), String> {
     // returns rather than on `watch_boats`' next tick, up to 30s later.
     let _ = server_invoke(LOCAL.into(), "boat_alerts".into(), json!({ "alerts": boat_alerts() })).await;
     Ok(())
+}
+
+/// The Dray Cloud row in Settings. The machines themselves ride
+/// `servers_changed`, each a server marked `cloud`.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct CloudInfo {
+    pub on: bool,
+    /// A key is saved. The key itself never leaves Rust.
+    pub keyed: bool,
+    /// Why the last listing failed.
+    pub error: Option<String>,
+}
+
+static CLOUD_ERROR: Mutex<Option<String>> = Mutex::new(None);
+/// When the control plane was last listed, which paces the listings a failed
+/// connect asks for.
+static CLOUD_LISTED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+/// One listing applied at a time, or two at once mint two rows for one machine.
+static CLOUD_SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// How often the machines are listed while Dray Cloud is on. A stopped one is
+/// noticed resuming from elsewhere within this, as a parked boat row is.
+const CLOUD_READ: Duration = Duration::from_secs(30);
+const CLOUD_RETRY_GAP: Duration = Duration::from_secs(10);
+
+async fn cloud_key() -> Option<String> {
+    crate::issues::credential(cloud::KEY).await
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn cloud_info() -> CloudInfo {
+    CloudInfo {
+        on: crate::settings::read().await.dray_cloud,
+        keyed: cloud_key().await.is_some(),
+        error: CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+    }
+}
+
+async fn announce_cloud() {
+    let info = cloud_info().await;
+    if let Some(sink) = SINK.get() {
+        let _ = sink.emit("cloud_changed", info);
+    }
+}
+
+/// A cloud machine the control plane last said is stopped: `run` parks it
+/// rather than knocking on an address nothing answers.
+fn cloud_parked(id: &str) -> bool {
+    conns().iter().any(|c| c.saved.id == id && c.boat.as_ref().is_some_and(|row| row.phase == BoatPhase::Stopped))
+}
+
+/// A resume may answer a new address. It survives a resume today, but the
+/// contract does not promise it, and a stale one would only ever fail.
+async fn cloud_moved(id: &str, url: &str) {
+    let Ok(url) = normalize(url) else { return };
+    let moved = match conns().iter_mut().find(|c| c.saved.id == id) {
+        Some(conn) if conn.saved.url != url => {
+            conn.saved.url = url;
+            true
+        }
+        _ => false,
+    };
+    if moved {
+        let _ = save().await;
+    }
+}
+
+/// Where a machine's row goes on a listing. A resume in flight is
+/// `wake_boat`'s to close: the list can lag it, and a row flipped early would
+/// fail the send waiting on it.
+fn cloud_phase(was: Option<BoatPhase>, state: cloud::State) -> BoatPhase {
+    use cloud::State::*;
+    match (was, state) {
+        (Some(BoatPhase::Resuming), _) => BoatPhase::Resuming,
+        (_, Running | Starting) => BoatPhase::Running,
+        (_, Stopping | Stopped | Error) => BoatPhase::Stopped,
+        (was, Unknown) => was.unwrap_or(BoatPhase::Running),
+    }
+}
+
+/// A sandbox id goes into a URL path, so only one that cannot step out of it.
+fn valid_sandbox(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Lists the machines and brings the cloud connections in line: a row per
+/// machine, parked while it is stopped, gone once the control plane drops it.
+async fn sync_cloud() -> Result<(), String> {
+    let _one = CLOUD_SYNC.lock().await;
+    *CLOUD_LISTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+    let (Some(key), true) = (cloud_key().await, crate::settings::read().await.dray_cloud) else {
+        return Ok(());
+    };
+    let listed = cloud::list(&key).await;
+    let error = listed.as_ref().err().cloned();
+    let changed = std::mem::replace(&mut *CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()), error.clone()) != error;
+    if changed {
+        announce_cloud().await;
+    }
+    apply_listing(listed?).await;
+    Ok(())
+}
+
+/// A listing a failed connect asked for, at most one per [`CLOUD_RETRY_GAP`],
+/// since `run` retries every few seconds.
+async fn sync_cloud_soon() {
+    let recent = CLOUD_LISTED.lock().unwrap_or_else(|e| e.into_inner()).is_some_and(|at| at.elapsed() < CLOUD_RETRY_GAP);
+    if !recent {
+        let _ = sync_cloud().await;
+    }
+}
+
+async fn apply_listing(listing: cloud::Listing) {
+    let known: HashMap<String, String> =
+        conns().iter().filter_map(|c| Some((c.saved.cloud.clone()?, c.saved.id.clone()))).collect();
+    let machines: Vec<(cloud::Machine, String, String)> = listing
+        .machines
+        .into_iter()
+        .filter(|m| valid_sandbox(&m.id))
+        .filter_map(|m| {
+            let url = normalize(&m.url).ok()?;
+            let id = known.get(&m.id).cloned().unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
+            Some((m, url, id))
+        })
+        .collect();
+    // Before any row exists: `run` reads the token the moment one does.
+    let mut rekeyed = Vec::new();
+    for (_, _, id) in &machines {
+        if crate::issues::credential(&credential_name(id)).await.as_deref() != Some(listing.token.as_str()) {
+            let _ = crate::issues::set_credential(&credential_name(id), Some(&listing.token)).await;
+            rekeyed.push(id.clone());
+        }
+    }
+    let (gone, saved) = {
+        let mut list = conns();
+        let mut gone = Vec::new();
+        let mut saved = false;
+        list.retain_mut(|conn| {
+            let listed = conn.saved.cloud.as_ref().is_none_or(|s| machines.iter().any(|(m, _, _)| &m.id == s));
+            if !listed {
+                if let Some(task) = conn.task.take() {
+                    task.abort();
+                }
+                gone.push(conn.saved.id.clone());
+            }
+            listed
+        });
+        for (machine, url, id) in machines {
+            match list.iter_mut().find(|c| c.saved.id == id) {
+                Some(conn) => {
+                    let was = conn.boat.as_ref().map(|row| row.phase);
+                    let phase = cloud_phase(was, machine.state);
+                    saved |= conn.saved.url != url;
+                    let moved = conn.saved.url != url || rekeyed.contains(&id);
+                    conn.saved.url = url;
+                    let row = conn.boat.get_or_insert_with(|| BoatRow::new(phase));
+                    row.phase = phase;
+                    row.note = (machine.state == cloud::State::Error).then(|| "Dray Cloud reports an error on it.".into());
+                    let woke = was == Some(BoatPhase::Stopped) && phase == BoatPhase::Running;
+                    let slept = was != Some(BoatPhase::Stopped) && phase == BoatPhase::Stopped;
+                    if moved || woke || slept {
+                        conn.restart();
+                    }
+                }
+                None => {
+                    let name = format!("cloud-{}", machine.id.strip_prefix("bx_").unwrap_or(&machine.id));
+                    let added = Saved {
+                        id,
+                        name,
+                        url,
+                        ssh: None,
+                        off: false,
+                        beta: false,
+                        ignored: None,
+                        boat: None,
+                        cloud: Some(machine.id),
+                        unknown: Default::default(),
+                    };
+                    // Under the lock, so `run` reads the phase before it connects.
+                    let mut conn = Conn::new(added);
+                    conn.boat = Some(BoatRow::new(cloud_phase(None, machine.state)));
+                    list.push(conn);
+                    saved = true;
+                }
+            }
+        }
+        let saved = saved || !gone.is_empty();
+        (gone, saved)
+    };
+    for id in &gone {
+        let _ = crate::issues::set_credential(&credential_name(id), None).await;
+    }
+    // Only on a change: the list is read every 30s, and each write tells the
+    // Mac's server to read the file again.
+    if saved {
+        let _ = save().await;
+    }
+    announce();
+}
+
+/// Lists the machines every [`CLOUD_READ`] while Dray Cloud is on.
+async fn watch_cloud() {
+    loop {
+        let _ = sync_cloud().await;
+        tokio::time::sleep(CLOUD_READ).await;
+    }
+}
+
+/// Saves the Dray Cloud key once the control plane takes it, and turns Dray
+/// Cloud on. An empty key forgets it and every cloud machine with it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn set_cloud_key(key: String) -> Result<(), String> {
+    let key = key.trim();
+    if key.is_empty() {
+        crate::issues::set_credential(cloud::KEY, None).await?;
+        *CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let _one = CLOUD_SYNC.lock().await;
+        apply_listing(cloud::Listing { token: String::new(), machines: Vec::new() }).await;
+        announce_cloud().await;
+        return Ok(());
+    }
+    let listing = cloud::list(key).await?;
+    crate::issues::set_credential(cloud::KEY, Some(key)).await?;
+    *CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    set_cloud_on(true).await?;
+    let _one = CLOUD_SYNC.lock().await;
+    apply_listing(listing).await;
+    Ok(())
+}
+
+/// Dray Cloud's switch. Off keeps every machine's row and stops connecting to
+/// them, the way a server's own switch does; the machines stop on their timer.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn set_cloud_on(on: bool) -> Result<(), String> {
+    crate::settings::update(|s| s.dray_cloud = on).await.map_err(|e| format!("{e:#}"))?;
+    let touched = {
+        let mut list = conns();
+        let mut touched = false;
+        for conn in list.iter_mut().filter(|c| c.saved.cloud.is_some() && c.saved.off == on) {
+            conn.saved.off = !on;
+            conn.restart();
+            touched = true;
+        }
+        touched
+    };
+    if touched {
+        save().await?;
+    }
+    announce();
+    announce_cloud().await;
+    if on {
+        tokio::spawn(sync_cloud());
+    }
+    Ok(())
+}
+
+/// Room for a new task when no cloud machine has any: the control plane
+/// resumes, forks or creates one. Answers its server id once it is connected,
+/// so placement can clone onto it straight away.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn add_cloud_room() -> Result<String, String> {
+    let key = cloud_key().await.ok_or("Dray Cloud has no key. Add it in Settings, Servers.")?;
+    let machine = cloud::add(&key).await?;
+    crate::analytics::track("feature_used", json!({ "feature": "cloud_room_added" }));
+    sync_cloud().await?;
+    let id = conns()
+        .iter()
+        .find(|c| c.saved.cloud.as_deref() == Some(machine.id.as_str()))
+        .map(|c| c.saved.id.clone())
+        .ok_or("Dray Cloud started a machine it then didn't list.")?;
+    wake(id.clone(), true).await?;
+    Ok(id)
 }
 
 /// Retries a saved tunnel address until it answers, with `ssh` left alone: a
@@ -1337,7 +1669,7 @@ pub async fn add_server(url: String, token: String, name: Option<String>, ticket
                 conn.saved.name = name;
                 conn.restart();
             } else {
-                list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, beta: false, ignored: None, boat: None, unknown: Default::default() }));
+                list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() }));
             }
         })
     };
@@ -1459,7 +1791,7 @@ pub async fn add_ssh_server(line: String, name: Option<String>, ticket: Option<S
             conn.saved.id.clone()
         } else {
             let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
-            list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, beta: false, ignored: None, boat: None, unknown: Default::default() }));
+            list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() }));
             id
         }
     };
@@ -2198,6 +2530,39 @@ pub async fn upload_attachment(server: String, path: String, id: String) -> Resu
 mod tests {
     use super::*;
 
+    /// A listing parks and wakes rows, but never closes a resume: the waiter on
+    /// it reads any other phase as the resume having failed.
+    #[test]
+    fn a_cloud_listing_moves_rows_but_not_a_resume() {
+        use cloud::State;
+        assert_eq!(cloud_phase(None, State::Starting), BoatPhase::Running);
+        assert_eq!(cloud_phase(Some(BoatPhase::Running), State::Stopping), BoatPhase::Stopped);
+        assert_eq!(cloud_phase(Some(BoatPhase::Stopped), State::Running), BoatPhase::Running);
+        assert_eq!(cloud_phase(Some(BoatPhase::Running), State::Error), BoatPhase::Stopped);
+        assert_eq!(cloud_phase(Some(BoatPhase::Resuming), State::Stopped), BoatPhase::Resuming);
+        assert_eq!(cloud_phase(Some(BoatPhase::Resuming), State::Running), BoatPhase::Resuming);
+        assert_eq!(cloud_phase(Some(BoatPhase::Stopped), State::Unknown), BoatPhase::Stopped);
+        assert_eq!(cloud_phase(None, State::Unknown), BoatPhase::Running);
+    }
+
+    #[test]
+    fn a_sandbox_id_cannot_leave_its_path() {
+        assert!(valid_sandbox("bx_ab23cdef"));
+        assert!(!valid_sandbox("../stop"));
+        assert!(!valid_sandbox("a/b"));
+        assert!(!valid_sandbox(""));
+    }
+
+    /// An older build carries the mark back untouched, and one without it
+    /// writes nothing new.
+    #[test]
+    fn the_cloud_mark_round_trips() {
+        let saved: Saved = serde_json::from_value(json!({ "id": "a", "name": "cloud-x", "url": "wss://x", "cloud": "bx_x" })).unwrap();
+        assert_eq!(saved.cloud.as_deref(), Some("bx_x"));
+        let plain: Saved = serde_json::from_value(json!({ "id": "b", "name": "vps", "url": "ws://y" })).unwrap();
+        assert!(!serde_json::to_string(&plain).unwrap().contains("cloud"));
+    }
+
     /// WebKit's box walk: after one block lands, every small ask is answered
     /// from it, and an answer never runs past the file's end.
     #[test]
@@ -2327,7 +2692,7 @@ mod tests {
     /// or a re-add after rotating a token. This Mac's row is no name to route to.
     #[test]
     fn a_name_belongs_to_one_server() {
-        let saved = |id: &str, name: &str| Saved { id: id.into(), name: name.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
+        let saved = |id: &str, name: &str| Saved { id: id.into(), name: name.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
         let list = vec![Conn::new(saved("a", "vps")), Conn::new(saved(LOCAL, "This Mac"))];
         assert!(refuse_taken(&list, "vps", None).is_err());
         assert!(refuse_taken(&list, "vps", Some("b")).is_err());
@@ -2339,7 +2704,7 @@ mod tests {
     /// loop is left to drain them, so they would wait for ever.
     #[test]
     fn turning_off_answers_calls_in_flight() {
-        let saved = Saved { id: "s".into(), name: "box".into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
+        let saved = Saved { id: "s".into(), name: "box".into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
         let mut conn = Conn::new(saved);
         let (reply, mut answer) = oneshot::channel();
         conn.pending.insert(1, reply);
@@ -2440,7 +2805,7 @@ mod tests {
         let (url, remote) = forwarding_server().await;
         // A row with no login, the way a Mac added by address is one.
         let id = "forward-no-ssh";
-        let saved = Saved { id: id.into(), name: "box".into(), url: url.clone(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
+        let saved = Saved { id: id.into(), name: "box".into(), url: url.clone(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
         let mut conn = Conn::new(saved);
         conn.status = ServerStatus::Connected;
         conn.live = Some((url, "t".into()));
@@ -2498,7 +2863,7 @@ mod tests {
     }
 
     async fn served_for(id: &str, answers: bool) -> Option<()> {
-        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
+        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
         conns().push(Conn::new(saved));
         let (ws, _) = admit(&fake_server(answers).await, "t").await.unwrap();
         let served = tokio::time::timeout(SILENCE * 3, serve(id, ws)).await.ok();

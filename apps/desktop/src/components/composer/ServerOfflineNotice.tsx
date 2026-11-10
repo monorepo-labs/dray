@@ -22,7 +22,7 @@ export default function ServerOfflineNotice({ server }: { server: ServerInfo }) 
         )}
       </span>
       <p className="min-w-0 flex-1 truncate text-ui text-foreground">
-        {server.name} is offline
+        {server.cloud ? "Its cloud machine" : server.name} is offline
         {reason && <span className="text-muted-foreground"> · {reason}</span>}
       </p>
       {!connecting && (

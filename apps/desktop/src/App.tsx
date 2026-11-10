@@ -152,8 +152,10 @@ import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailabil
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import ServerOfflineNotice from "@/components/composer/ServerOfflineNotice";
 import BoatNotice from "@/components/composer/BoatNotice";
+import CloudNotice from "@/components/composer/CloudNotice";
 import BoatWarnings from "@/components/BoatWarnings";
 import { boatAsleep, restoreHeld } from "@/lib/boat";
+import { usePlacing } from "@/lib/cloud";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
 import { serverConnected, serverName, useServers } from "@/lib/servers";
@@ -456,6 +458,7 @@ function App() {
   );
   // Stopped or waking, which a send can do something about, unlike offline.
   const sleepingBoat = allServers.find((s) => s.id === activeServer && boatAsleep(s));
+  const placing = usePlacing();
   useEffect(restoreHeld, []);
   // A turn or a background task on that server, which auto-extend keeps alive.
   // Read off the live maps, which hold every session whatever the sidebar
@@ -3097,7 +3100,9 @@ function App() {
             ) : null
           }
           pending={
-            sleepingBoat ? (
+            placing && !selectedSessionId ? (
+              <CloudNotice step={placing} />
+            ) : sleepingBoat ? (
               <BoatNotice server={sleepingBoat} />
             ) : selectedItem?.continueAt && (
               <AutoContinueNotice
