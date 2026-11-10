@@ -84,6 +84,7 @@ fn address_in(file: &str) -> Option<String> {
 /// seen: the file and the socket outlive a daemon that stopped answering.
 fn reachable(address: &str) -> bool {
     use std::os::linux::net::SocketAddrExt;
+    use std::os::unix::ffi::OsStringExt;
     use std::os::unix::net::{SocketAddr, UnixStream};
 
     let Some(params) = address.split(';').next().and_then(|a| a.strip_prefix("unix:")) else {
@@ -92,15 +93,38 @@ fn reachable(address: &str) -> bool {
     };
     for param in params.split(',') {
         if let Some(path) = param.strip_prefix("path=") {
-            return UnixStream::connect(Path::new(path)).is_ok();
+            let path = std::ffi::OsString::from_vec(unescape(path));
+            return UnixStream::connect(Path::new(&path)).is_ok();
         }
         if let Some(name) = param.strip_prefix("abstract=") {
-            return SocketAddr::from_abstract_name(name.as_bytes())
+            return SocketAddr::from_abstract_name(unescape(name))
                 .and_then(|addr| UnixStream::connect_addr(&addr))
                 .is_ok();
         }
     }
     true
+}
+
+/// A D-Bus address value's bytes: everything outside a small safe set travels
+/// as `%XX`, so `/home/A B` arrives as `/home/A%20B`.
+fn unescape(value: &str) -> Vec<u8> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok());
+        match (bytes[i], hex.and_then(|h| u8::from_str_radix(h, 16).ok())) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -133,6 +157,18 @@ mod tests {
         // The socket file stays behind when its listener goes, as IBus's does.
         drop(listener);
         assert!(!reachable(&address));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_escaped_path_reaches_its_socket() {
+        let dir = std::env::temp_dir().join(format!("dray ibus {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let escaped = path.display().to_string().replace(' ', "%20");
+        assert!(reachable(&format!("unix:path={escaped},guid=1")));
+        assert_eq!(unescape("a%2Cb%zz%"), b"a,b%zz%");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
