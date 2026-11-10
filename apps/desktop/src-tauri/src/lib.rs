@@ -34,6 +34,8 @@ pub mod cef;
 pub mod chromium;
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 mod trackpad;
+#[cfg(all(feature = "desktop", target_os = "linux"))]
+mod island;
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 mod cli;
 // `dray browser` on a server: a headless Chromium under the same verbs the

@@ -325,13 +325,22 @@ pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
 /// and it outlives Dray on purpose: it talks to the background server, which
 /// does too — so the launch also pings it, and an island left on a binary an
 /// update replaced restarts onto the new one. A build with no island inside it
-/// (`tauri dev`) only writes the pick.
+/// (`tauri dev`) only writes the pick. On Linux the island is the app's child
+/// instead, and quits with it: see `island.rs`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn configure_island(key: String) -> Result<(), String> {
-    use tokio::process::Command;
     if !matches!(key.as_str(), "control" | "option" | "command" | "off") {
         return Err(format!("unknown island key {key}"));
     }
+    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    return crate::island::configure(&key).await;
+    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    configure_mac_island(key).await
+}
+
+#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+async fn configure_mac_island(key: String) -> Result<(), String> {
+    use tokio::process::Command;
     async fn run(cmd: &mut Command) -> Result<std::process::Output, String> {
         cmd.output().await.map_err(|err| format!("could not configure the island: {err}"))
     }
