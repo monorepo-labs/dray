@@ -133,9 +133,13 @@ struct TranscriptView: View {
 /// One turn: the prompt, its work folded behind a summary line once the
 /// turn has finished, and the final answer. The desktop's `TurnBlock`.
 struct TurnView: View {
+    @Environment(Store.self) private var store
+    @Environment(\.imageServer) private var server
     let turn: Turn
     /// Per stretch between queued prompts, by index: a running turn only appends.
     @State private var open: Set<Int> = []
+    /// The gallery index the image viewer is open on.
+    @State private var viewing: Int?
 
     /// Below this many rows a fold costs a tap to reveal less than the line it stands in for.
     private static let collapseMin = 3
@@ -176,6 +180,17 @@ struct TurnView: View {
                 MarkdownText(text: text)
             }
             if let failure = turn.failure { FailureRow(text: failure) }
+        }
+        .environment(\.openImage) { ref in
+            guard let i = turn.gallery.firstIndex(where: { $0.ref == ref }) else { return }
+            instantly { viewing = i }
+        }
+        .fullScreenCover(isPresented: Binding(get: { viewing != nil }, set: { if !$0 { viewing = nil } })) {
+            ImageViewer(shots: turn.gallery, start: viewing ?? 0, store: store, server: server) {
+                instantly { viewing = nil }
+            }
+            .presentationBackground(.clear)
+            .environment(\.imageServer, server)
         }
     }
 
@@ -365,7 +380,7 @@ struct Thumbnails: View {
     var body: some View {
         ThumbnailRow(spacing: Theme.Space.xs) {
             ForEach(Array(images.enumerated()), id: \.offset) { _, ref in
-                ZoomableImage(ref: ref) {
+                ImageButton(ref: ref) {
                     RemoteImage(ref: ref, fill: true)
                         .frame(width: 72, height: 72)
                         .clipShape(.rect(cornerRadius: Theme.Radius.md, style: .continuous))
@@ -387,26 +402,20 @@ struct InlineImage: View {
     }
 }
 
-/// A picture that opens full screen on tap, and closes on the next.
-struct ZoomableImage<Content: View>: View {
-    @Environment(\.imageServer) private var server
+/// A picture that opens its turn's viewer on tap; outside a turn, just the picture.
+struct ImageButton<Content: View>: View {
+    @Environment(\.openImage) private var open
     let ref: ImageRef
     @ViewBuilder let content: Content
-    @State private var open = false
 
     var body: some View {
-        Button { open = true } label: { content }
-            .buttonStyle(.plain)
-            .fullScreenCover(isPresented: $open) {
-                RemoteImage(ref: ref)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.black)
-                    .contentShape(Rectangle())
-                    .onTapGesture { open = false }
-                    .environment(\.imageServer, server)
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityLabel("Close image")
-            }
+        if let open {
+            Button { open(ref) } label: { content }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open image")
+        } else {
+            content
+        }
     }
 }
 
@@ -451,7 +460,7 @@ struct ToolRow: View {
             .buttonStyle(RowButtonStyle())
             // A picture the tool handed back is the result itself, so it shows unasked.
             ForEach(Array(call.images.enumerated()), id: \.offset) { _, ref in
-                ZoomableImage(ref: ref) { InlineImage(ref: ref) }
+                ImageButton(ref: ref) { InlineImage(ref: ref) }
             }
             if open, let output = call.output {
                 ScrollView(.horizontal) {
@@ -560,7 +569,7 @@ struct MarkdownText: View {
                         .foregroundStyle(Theme.text)
                 case .image(_, let url):
                     let ref = ImageRef(path: nil, url: url, mimeType: nil)
-                    ZoomableImage(ref: ref) { InlineImage(ref: ref) }
+                    ImageButton(ref: ref) { InlineImage(ref: ref) }
                 }
             }
             ForEach(recordingPaths(in: text), id: \.self) { RecordingPlayer(path: $0) }

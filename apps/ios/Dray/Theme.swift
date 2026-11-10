@@ -87,6 +87,38 @@ enum Theme {
         static let footnoteStrong = TypeStyle(13, 18, .semibold, .footnote)
     }
 
+    /// The full-screen image viewer.
+    enum Viewer {
+        /// The strip's thumbnails, and the bar's round buttons.
+        static let thumb: CGFloat = 44
+        /// Around the current thumbnail: the page's colour, then a light ring.
+        static let ringGap: CGFloat = 2
+        static let ring: CGFloat = 1.5
+        /// The strip's other thumbnails, and what the page keeps behind a dragged image.
+        static let dim = 0.45
+        /// A disabled bar button.
+        static let off = 0.35
+        /// The bar holding Close, the count and Share.
+        static let bar: CGFloat = 56
+        /// The bar's glyphs.
+        static let glyph = SwiftUI.Font.system(size: 17, weight: .semibold)
+        /// "Couldn't load image"'s picture, and a failed thumbnail's.
+        static let mark = SwiftUI.Font.system(size: 32)
+        static let thumbMark = SwiftUI.Font.system(size: 18)
+        /// Try again's height.
+        static let button: CGFloat = 40
+        /// Strip to caption, and caption to the screen's foot past the home indicator.
+        static let stripGap: CGFloat = 18
+        static let foot: CGFloat = 10
+        /// A dragged image's lift.
+        static let shadow = Color.black.opacity(0.6)
+        static let shadowRadius: CGFloat = 25
+        static let shadowY: CGFloat = 20
+        /// How far down a drag goes before letting go dismisses.
+        static let dismissAt: CGFloat = 120
+        static let maxZoom: CGFloat = 4
+    }
+
     /// Quick and settling, never bouncy: what moves is a row arriving, not a toy.
     static let motion = Animation.snappy(duration: 0.28)
 }

@@ -110,6 +110,52 @@ func foldedImages(_ items: [Item]) -> [ImageRef] {
     }
 }
 
+/// One picture in a turn's gallery, and the line naming where it came from:
+/// "Read /tmp/hero.png", "Attached IMG_2041.jpg".
+struct Shot: Hashable {
+    let ref: ImageRef
+    let verb: String
+    let target: String?
+}
+
+extension Turn {
+    /// Every picture in the turn, in reading order: what the viewer pages through.
+    var gallery: [Shot] {
+        func attached(_ images: [ImageRef]) -> [Shot] {
+            images.map { Shot(ref: $0, verb: "Attached", target: fileName($0)) }
+        }
+        func calls(_ calls: [ToolCall]) -> [Shot] {
+            calls.flatMap { call in
+                call.images.map { Shot(ref: $0, verb: toolLabel(call.name, pending: false), target: call.summary) }
+            }
+        }
+        func shown(_ text: String) -> [Shot] {
+            markdownBlocks(text).compactMap {
+                guard case .image(let alt, let url) = $0 else { return nil }
+                let ref = ImageRef(path: nil, url: url, mimeType: nil)
+                return Shot(ref: ref, verb: "Image", target: alt.isEmpty ? fileName(ref) : alt)
+            }
+        }
+        var out = attached(prompt?.images ?? [])
+        for item in work {
+            switch item {
+            case .tool(let call): out += calls([call])
+            case .group(_, _, let c, _, _): out += calls(c)
+            case .prompt(_, _, _, let images): out += attached(images)
+            case .text(_, let text): out += shown(text)
+            case .failure: break
+            }
+        }
+        if finalLifted, let finalText { out += shown(finalText) }
+        return out
+    }
+}
+
+private func fileName(_ ref: ImageRef) -> String? {
+    // A `data:` URL has no name, only bytes.
+    (ref.path ?? ref.url).flatMap { $0.hasPrefix("data:") ? nil : $0.split(separator: "/").last.map(String.init) }
+}
+
 /// "3 tool calls · 1 message", the desktop's summary line.
 func summaryLabel(_ items: [Item]) -> String {
     var calls = 0, messages = 0
