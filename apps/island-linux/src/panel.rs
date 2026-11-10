@@ -4,7 +4,8 @@
 use crate::asks::{AskKind, Permission, Question, ToolLine};
 use crate::draft::{Field, Menu, Target};
 use crate::newtask::{self, STANCES};
-use crate::prefs::Placement;
+use crate::orb::Dictation;
+use crate::prefs::{Mode, Placement};
 use crate::{Island, Link};
 use crate::{ROOM, WIDTH};
 use gpui::{
@@ -112,7 +113,11 @@ impl Panel {
             let d = island.read(cx).draft();
             (d.list_shown, d.menu.is_some(), d.typing.read(cx).text().is_empty())
         };
+        let listening = island.read(cx).draft().listening();
         match (e.keystroke.key.as_str(), m.control, m.shift || m.alt || m.platform) {
+            ("escape", true, false) => later(&island, cx, |i, cx| crate::cancel_dictation(i, cx)),
+            // Mid-sentence Esc does nothing, so a recording never ends by accident.
+            ("escape", false, false) if listening => {}
             ("escape", false, false) => {
                 if menu || list {
                     island.update(cx, |island, cx| {
@@ -184,7 +189,7 @@ impl Render for Panel {
         } else {
             draft_view(&state, island, cx).into_any_element()
         };
-        let menu = island.menu.then(|| placement_menu(&state, island.placement));
+        let menu = island.menu.then(|| placement_menu(&state, island.placement, island.mode));
         let glass = island.glass;
         let top = island.placement == Placement::Top;
         let fill = if island.flash == Some("Denied") { rgb(DENIED) } else { rgb(0x000000) };
@@ -195,18 +200,25 @@ impl Render for Panel {
             .then(|| switcher(&state, island, glass, cx).into_any_element());
         // Room in the window for a bar dropdown, which hangs past the card.
         let dropdown_room = (draft_up && island.draft().menu.is_some()).then(|| div().h(px(MENU_ROOM)).into_any_element());
+        let recording = draft_up && island.draft().listening();
+        // Expanded records as the orb alone, over whatever is beneath; compact
+        // shrinks the card to its orb and clock.
+        let bare = recording && island.mode == Mode::Expanded && glass;
+        let fits = recording && island.mode == Mode::Compact;
         let body = div()
-            .w_full()
-            .bg(fill)
-            .border_color(white(0.12))
-            .map(|d| match (glass, top) {
-                // The notch shape: flush with the bar above, its bottom rounded,
-                // and no line along the top edge, which would read as a border on the bar.
-                (true, true) => d.rounded_b(px(20.)).border_l_1().border_r_1().border_b_1(),
-                (true, false) => d.rounded(px(20.)).border_1(),
-                (false, _) => d.border_1(),
+            .when(!fits, |d| d.w_full())
+            .when(!bare, |d| {
+                d.bg(fill)
+                    .border_color(white(0.12))
+                    .map(|d| match (glass, top) {
+                        // The notch shape: flush with the bar above, its bottom rounded,
+                        // and no line along the top edge, which would read as a border on the bar.
+                        (true, true) => d.rounded_b(px(20.)).border_l_1().border_r_1().border_b_1(),
+                        (true, false) => d.rounded(px(20.)).border_1(),
+                        (false, _) => d.border_1(),
+                    })
+                    .when(glass, |d| d.shadow(vec![shadow(gpui::hsla(0., 0., 0., 0.35), 5., 2.)]))
             })
-            .when(glass, |d| d.shadow(vec![shadow(gpui::hsla(0., 0., 0., 0.35), 5., 2.)]))
             .child(content);
         // The switcher is a card of its own on the far side from the edge the
         // panel hangs from, as on the Mac.
@@ -227,7 +239,7 @@ impl Render for Panel {
                     d.children(dropdown_room).children(switcher).child(card)
                 }
             })
-            .when(glass && top, |d| d.child(ear(true, fill.into())).child(ear(false, fill.into())));
+            .when(glass && top && !bare && !fits, |d| d.child(ear(true, fill.into())).child(ear(false, fill.into())));
         let fit = state.clone();
         div()
             // The window follows what it draws: its first child is the frame.
@@ -697,7 +709,20 @@ fn skip_question(state: &Entity<Island>, window: &mut Window, focus: &FocusHandl
     advance(state, window, focus, cx);
 }
 
-fn placement_menu(state: &Entity<Island>, placement: Placement) -> impl IntoElement {
+fn layout_item(state: &Entity<Island>, label: &'static str, pick: Mode, mode: Mode) -> impl IntoElement {
+    let state = state.clone();
+    div()
+        .id(label)
+        .px(px(10.))
+        .py_1()
+        .rounded(px(6.))
+        .text_color(if pick == mode { rgb(YELLOW).into() } else { white(0.85) })
+        .hover(|s| s.bg(white(0.1)))
+        .child(label)
+        .on_click(move |_, _, cx| later(&state, cx, move |i, cx| crate::set_mode(i, pick, cx)))
+}
+
+fn placement_menu(state: &Entity<Island>, placement: Placement, mode: Mode) -> impl IntoElement {
     let item = |label: &'static str, pick: Placement| {
         let state = state.clone();
         div()
@@ -733,13 +758,21 @@ fn placement_menu(state: &Entity<Island>, placement: Placement) -> impl IntoElem
         .border_color(white(0.15))
         .child(item("Top of screen", Placement::Top))
         .child(item("Bottom of screen", Placement::Bottom))
+        .child(div().h(px(1.)).my(px(4.)).bg(white(0.12)))
+        .child(layout_item(state, "Expanded", Mode::Expanded, mode))
+        .child(layout_item(state, "Compact", Mode::Compact, mode))
 }
 
 /// The draft: who it goes to — the title, or a new task's bar — the rows
 /// typed so far, the box and Send.
-fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> impl IntoElement {
+fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> AnyElement {
     let d = island.draft();
     let top = island.placement == Placement::Top;
+    let listening = d.listening();
+    let expanded = island.mode == Mode::Expanded;
+    if listening && !expanded {
+        return recording_bar(state, island).into_any_element();
+    }
     let head: AnyElement = match &d.target {
         Some(Target::Session(id)) => title_row(state, island, id).into_any_element(),
         _ => new_task_bar(state, island, top).into_any_element(),
@@ -762,7 +795,7 @@ fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> impl IntoEle
                     .p(px(8.))
                     .rounded(px(10.))
                     .bg(white(0.06))
-                    .child(div().w(px(16.)).flex_none().text_color(white(0.4)).child("›"))
+                    .child(div().w(px(16.)).flex_none().text_color(white(0.4)).child(if row.said { "∿" } else { "›" }))
                     .child(div().flex_1().min_w_0().child(row.input.clone()))
                     .child(
                         div()
@@ -792,13 +825,159 @@ fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> impl IntoEle
             .child("↑")
             .when(can_send, |d| d.on_click(move |_, _, cx| later(&state, cx, |i, cx| crate::send(i, cx))))
     };
+    // Kept in the layout while expanded records, only not drawn, so the
+    // orb's place never moves under it.
+    let gone = |e: gpui::Div| e.when(listening, |d| d.invisible());
+    let input = div()
+        .flex()
+        .items_end()
+        .gap_2()
+        .when(!expanded, |d| d.child(mic(state, island, 24., 24.)))
+        .child(div().flex_1().min_w_0().py(px(2.)).child(d.typing.clone()))
+        .child(send);
+    let notice = island.notice.clone().map(|n| {
+        let retry = d.retry_path.is_some().then(|| {
+            let state = state.clone();
+            div()
+                .id("retry")
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(white(0.8))
+                .hover(|s| s.text_color(white(1.)))
+                .child("Retry")
+                .on_click(move |_, _, cx| later(&state, cx, |i, cx| crate::retry_dictation(i, cx)))
+        });
+        div().flex().gap_2().text_size(px(ASIDE)).text_color(white(0.5)).child(n).children(retry)
+    });
     shell()
         .gap(px(8.))
-        .children(link_status(island))
-        .child(head)
-        .children(rows)
-        .child(div().flex().items_end().gap_2().child(div().flex_1().min_w_0().py(px(2.)).child(d.typing.clone())).child(send))
-        .children(island.notice.clone().map(|n| div().text_size(px(ASIDE)).text_color(white(0.5)).child(n)))
+        .children(link_status(island).map(|l| gone(div().child(l))))
+        .child(gone(div().child(head)))
+        .children(rows.map(|r| gone(div().child(r))))
+        .when(expanded, |d| d.child(orb_slot(state, island)))
+        .child(gone(input))
+        .children(notice.map(gone))
+        .into_any_element()
+}
+
+/// Expanded mode's centre: the orb in a 48pt slot, the 80pt lens orb scaled
+/// down at rest and grown to its full size about its own centre while it
+/// records, so starting moves nothing. Its clock shows under it on hover.
+fn orb_slot(state: &Entity<Island>, island: &Island) -> impl IntoElement {
+    const SLOT: f32 = 48.;
+    const FULL: f32 = 80.;
+    let recording = island.draft().listening();
+    let shown = if recording { FULL } else { SLOT };
+    let lift = (shown - SLOT) / 2.;
+    let clock = (recording && island.orb_hovered).then(|| {
+        div()
+            .absolute()
+            .top(px(SLOT + 16. - 2. + 8.))
+            .px(px(8.))
+            .py(px(3.))
+            .rounded_full()
+            .bg(rgb(0x000000))
+            .child(clock(island))
+    });
+    div()
+        .w_full()
+        .h(px(SLOT))
+        .flex()
+        .justify_center()
+        .relative()
+        .child(
+            div()
+                .absolute()
+                .top(px(-lift))
+                .size(px(shown))
+                .rounded_full()
+                // The lens orb's own shadow, which grounds it over the screen.
+                .shadow(vec![shadow(gpui::hsla(0., 0., 0., 0.3), shown * 0.06, shown * 0.08)])
+                .child(mic(state, island, shown, FULL)),
+        )
+        .children(clock)
+}
+
+/// Compact's recording: the orb, which stops it, and the clock.
+fn recording_bar(state: &Entity<Island>, island: &Island) -> impl IntoElement {
+    div().flex().items_center().gap_2().px(px(16.)).py(px(12.)).child(mic(state, island, 24., 24.)).child(clock(island))
+}
+
+/// How long the microphone has been open, m:ss; dim at 0:00 while it is still
+/// opening, so the bar is whole from the press.
+fn clock(island: &Island) -> impl IntoElement {
+    let since = island.draft().recording_since;
+    let secs = since.map_or(0, |s| s.elapsed().as_secs());
+    div()
+        .text_size(px(ASIDE))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .font_family("monospace")
+        .text_color(white(0.55))
+        .when(since.is_none(), |d| d.opacity(0.4))
+        .child(format!("{}:{:02}", secs / 60, secs % 60))
+}
+
+/// The orb is the microphone: a click starts dictating, another stops it,
+/// and it does nothing while the words are being worked out. `shown` is its
+/// size on screen, `shader` the size the shader draws it at — the lens orb is
+/// 80pt drawn smaller at rest, as the Mac scales it.
+fn mic(state: &Entity<Island>, island: &Island, shown: f32, shader: f32) -> impl IntoElement {
+    let working = island.draft().dictation == Dictation::Transcribing;
+    let (click, hover) = (state.clone(), state.clone());
+    div()
+        .id(("mic", shown as usize))
+        .flex_none()
+        .size(px(shown))
+        .rounded_full()
+        .child(orb(state, shown, shader))
+        .when(!working, |d| d.on_click(move |_, _, cx| later(&click, cx, |i, cx| crate::toggle_dictation(i, cx))))
+        .on_hover(move |on, _, cx| {
+            let on = *on;
+            hover.update(cx, |island, cx| {
+                island.orb_hovered = on;
+                cx.notify();
+            })
+        })
+}
+
+/// The orb itself: `orb::prism` run for this frame into an image GPUI draws.
+/// While it moves it asks for the next frame; at rest it draws the last again.
+fn orb(state: &Entity<Island>, shown: f32, shader: f32) -> impl IntoElement {
+    let (prep, done) = (state.clone(), state.clone());
+    canvas(
+        move |_, window, cx| {
+            let pixels = (shown * window.scale_factor()).round().max(1.) as u32;
+            let key = pixels ^ ((shader as u32) << 16);
+            let (moving, image) = prep.update(cx, |island, _| {
+                let (dictation, peak) = (island.draft().dictation, island.draft().peak);
+                let (frame, moving) = island.motion.frame(shader, dictation, peak);
+                if !moving
+                    && let Some((held, image)) = &island.orb_image
+                    && *held == key
+                {
+                    return (false, image.clone());
+                }
+                let bgra = crate::orb::render(&frame, pixels);
+                let buffer = image::RgbaImage::from_raw(pixels, pixels, bgra).expect("a square of pixels");
+                let image = std::sync::Arc::new(gpui::RenderImage::new([image::Frame::new(buffer)]));
+                if let Some((_, old)) = island.orb_image.replace((key, image.clone())) {
+                    island.retired_images.push(old);
+                }
+                (moving, image)
+            });
+            if moving {
+                window.request_animation_frame();
+            }
+            image
+        },
+        move |bounds, image, window, cx| {
+            let _ = window.paint_image(bounds, bounds, gpui::Corners::default(), image, 0, false);
+            // Each frame is a new image in the window's atlas; the last ones go.
+            for old in done.update(cx, |island, _| std::mem::take(&mut island.retired_images)) {
+                let _ = window.drop_image(old);
+            }
+        },
+    )
+    .size(px(shown))
 }
 
 /// What is wrong with the connection, over the draft, which stays: a draft
@@ -846,7 +1025,6 @@ fn lead_mark(island: &Island, id: &str) -> Option<gpui::Div> {
 /// Dray, since a title clicked without thinking must not switch apps;
 /// Ctrl-click is the deliberate way to Dray.
 fn title_row(state: &Entity<Island>, island: &Island, id: &str) -> impl IntoElement {
-    let key = crate::prefs::read().key.label();
     let title = island.session(id).map(|s| s.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| "Task".into());
     div()
         .flex()
@@ -867,7 +1045,7 @@ fn title_row(state: &Entity<Island>, island: &Island, id: &str) -> impl IntoElem
                 .child(div().truncate().child(title))
                 .on_mouse_down(MouseButton::Left, title_click(state.clone(), id.to_string(), |i, cx| crate::toggle_list(i, cx))),
         )
-        .child(hints(&format!("Ctrl+N New   ↑↓ Tasks   Tap {key} to close")))
+        .child(hints("Ctrl+N New   ↑↓ Tasks   Esc"))
 }
 
 fn hints(text: &str) -> impl IntoElement {

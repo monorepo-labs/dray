@@ -6,6 +6,7 @@ mod asks;
 mod draft;
 mod input;
 mod newtask;
+mod orb;
 mod panel;
 mod prefs;
 mod server;
@@ -121,6 +122,18 @@ pub struct Island {
     pub cards_first: bool,
     /// Asking Dray which session its window has open, before the panel shows.
     asking_app: bool,
+    /// A tap landed while asking: the double tap that opens listening.
+    dictate_on_open: bool,
+    /// The orb's motion, one for the process, as the Mac's `OrbClock` is.
+    pub motion: orb::Motion,
+    /// The orb's last frame, kept to draw again while it holds still and to
+    /// drop from the window's atlas once replaced.
+    pub orb_image: Option<(u32, std::sync::Arc<gpui::RenderImage>)>,
+    pub retired_images: Vec<std::sync::Arc<gpui::RenderImage>>,
+    /// The pointer is on the orb, which shows the clock beside it.
+    pub orb_hovered: bool,
+    /// The panel's layout, the reader's pick from the right-click menu.
+    pub mode: prefs::Mode,
 }
 
 impl Island {
@@ -218,6 +231,19 @@ impl Island {
 }
 
 fn main() {
+    // `--orb-png <dir>`: the orb's reference frames as PNGs, for setting the
+    // port beside the Mac's captures. No window, no server.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(dir) = args.iter().position(|a| a == "--orb-png").and_then(|i| args.get(i + 1)) {
+        return orb::write_references(std::path::Path::new(dir)).expect("orb frames written");
+    }
+    // `--orb-csv <uniforms.csv> <size> <scale> <dir>`: the Mac reference's rows.
+    if let Some(i) = args.iter().position(|a| a == "--orb-csv")
+        && let [csv, size, scale, dir] = &args[i + 1..(i + 5).min(args.len())]
+    {
+        let (size, scale) = (size.parse().expect("a size in points"), scale.parse().expect("a scale"));
+        return orb::write_from_csv(std::path::Path::new(csv), size, scale, std::path::Path::new(dir)).expect("orb frames written");
+    }
     let (tx, mut rx) = mpsc::unbounded::<Msg>();
     // Dray holds our stdin open for its life, so EOF is Dray gone however it
     // went — quit, crash or kill. Run by hand, the flag is left off.
@@ -243,6 +269,7 @@ fn main() {
         let draft = Draft::new(cx);
         let island = cx.new(|_| Island {
             placement: prefs::read().placement,
+            mode: prefs::read().mode,
             server: Some(server),
             draft: Some(draft),
             ..Default::default()
@@ -258,6 +285,12 @@ fn main() {
                     }
                     Msg::Quit => {
                         sound::forget();
+                        // Throws away what is being said, as quitting the Mac's does.
+                        if island.read(cx).draft().dictation != orb::Dictation::Idle
+                            && let Some(server) = &island.read(cx).server
+                        {
+                            let _ = server.call("cancel_transcription", json!({}));
+                        }
                         cx.quit();
                     }
                 });
@@ -411,12 +444,239 @@ pub fn pill_hovered(island: &Entity<Island>, hovered: bool, cx: &mut App) {
 
 /// A tap opens the panel, and one on an open panel closes it — until
 /// dictation lands (stage 4), when that second tap starts listening instead.
+/// The reader's tap: it opens the panel, and on an open panel starts or
+/// stops dictating, so a double tap opens it listening. Under Sent the panel
+/// is on its way out, so a tap keeps it open rather than dictating.
 fn toggle(island: &Entity<Island>, cx: &mut App) {
-    if island.read(cx).window.is_some() {
-        close(island, cx);
+    let (shown, asking, flashing) = {
+        let i = island.read(cx);
+        (i.window.is_some(), i.asking_app, i.flash.is_some())
+    };
+    if shown && flashing {
+        island.update(cx, |island, cx| {
+            island.flash = None;
+            island.flash_clock += 1;
+            cx.notify();
+        });
+    } else if shown {
+        toggle_dictation(island, cx);
+    } else if asking {
+        // The panel is on its way up, so this is the tap that dictates.
+        island.update(cx, |island, _| island.dictate_on_open = !island.dictate_on_open);
     } else {
         open(island, cx);
     }
+}
+
+pub fn toggle_dictation(island: &Entity<Island>, cx: &mut App) {
+    match island.read(cx).draft().dictation {
+        orb::Dictation::Recording => stop_dictation(island, false, cx),
+        orb::Dictation::Idle => start_dictation(island, cx),
+        _ => {}
+    }
+}
+
+
+fn call(island: &Entity<Island>, cmd: &str, args: serde_json::Value, cx: &App) -> Option<futures::channel::oneshot::Receiver<server::Reply>> {
+    island.read(cx).server.as_ref().map(|s| s.call(cmd, args))
+}
+
+/// Through the server to Dray's own recorder and model: one place sets up
+/// dictation — model, microphone, mute — and the server forwards these to the
+/// app over `host_call`. A server with no app answers "Open Dray to dictate".
+pub fn start_dictation(island: &Entity<Island>, cx: &mut App) {
+    if island.read(cx).draft().dictation != orb::Dictation::Idle {
+        return;
+    }
+    let Some(reply) = call(island, "start_transcription", json!({}), cx) else { return };
+    island.update(cx, |island, cx| {
+        island.notice = None;
+        let d = island.draft_mut();
+        d.dictation = orb::Dictation::Starting;
+        d.list_shown = false;
+        d.menu = None;
+        d.retry_path = None;
+        // The box leaves the panel while listening — gone in compact, hidden
+        // in expanded — so its keys go to the panel, where ⏎ and Ctrl+Esc are
+        // read; the box takes them back once the words land.
+        d.want_focus = Some(Field::Panel);
+        cx.notify();
+    });
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        let answer = wait(reply, cx).await;
+        cx.update(|cx| {
+            // Cancelled while it opened: a start that took is closed again.
+            if island.read(cx).draft().dictation != orb::Dictation::Starting {
+                if matches!(answer, Ok(serde_json::Value::Null)) {
+                    let _ = call(&island, "cancel_transcription", json!({}), cx);
+                }
+                return;
+            }
+            let refusal = match &answer {
+                Ok(serde_json::Value::Null) => None,
+                Ok(v) => Some(match v.get("kind").and_then(|k| k.as_str()) {
+                    Some("needsModel") => "Pick a dictation model in Dray → Settings → Transcription.".to_string(),
+                    _ => "Dray needs the microphone.".to_string(),
+                }),
+                Err(why) => Some(why.clone()),
+            };
+            match refusal {
+                Some(why) => island.update(cx, |island, cx| {
+                    let d = island.draft_mut();
+                    d.dictation = orb::Dictation::Idle;
+                    d.want_focus = Some(Field::Typing);
+                    island.notice = Some(why);
+                    cx.notify();
+                }),
+                None => {
+                    island.update(cx, |island, cx| {
+                        let d = island.draft_mut();
+                        d.dictation = orb::Dictation::Recording;
+                        d.recording_since = Some(std::time::Instant::now());
+                        cx.notify();
+                    });
+                    sound::dictation_started();
+                    poll_level(&island, cx);
+                }
+            }
+        });
+    })
+    .detach();
+}
+
+/// The microphone's level, polled rather than pushed, as the app's own
+/// composer reads it: a missed reading is a dropped frame.
+fn poll_level(island: &Entity<Island>, cx: &mut App) {
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        loop {
+            let reply = cx.update(|cx| {
+                (island.read(cx).draft().dictation == orb::Dictation::Recording)
+                    .then(|| call(&island, "transcription_level", json!({}), cx))
+                    .flatten()
+            });
+            let Some(reply) = reply else { break };
+            let peak = wait(reply, cx).await.ok().and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            cx.update(|cx| island.update(cx, |island, _| island.draft_mut().peak = peak));
+            cx.background_executor().timer(Duration::from_millis(50)).await;
+        }
+        cx.update(|cx| island.update(cx, |island, _| island.draft_mut().peak = 0.0));
+    })
+    .detach();
+}
+
+/// Stops and transcribes; the words become a row. `then_send` is a send that
+/// waited on the words still being said, and goes once they have landed.
+pub fn stop_dictation(island: &Entity<Island>, then_send: bool, cx: &mut App) {
+    if island.read(cx).draft().dictation != orb::Dictation::Recording {
+        return;
+    }
+    transcribe(island, "stop_transcription", json!({}), then_send, cx);
+}
+
+/// Runs the model again over the recording a failed run kept, so the words
+/// need not be said twice.
+pub fn retry_dictation(island: &Entity<Island>, cx: &mut App) {
+    let Some(path) = island.read(cx).draft().retry_path.clone() else { return };
+    if island.read(cx).draft().dictation != orb::Dictation::Idle {
+        return;
+    }
+    transcribe(island, "retry_transcription", json!({ "path": path }), false, cx);
+}
+
+/// How long the model may take over a long recording.
+const TRANSCRIBE_WITHIN: Duration = Duration::from_secs(180);
+
+fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, then_send: bool, cx: &mut App) {
+    let Some(reply) = call(island, cmd, args, cx) else { return };
+    island.update(cx, |island, cx| {
+        island.notice = None;
+        let d = island.draft_mut();
+        d.dictation = orb::Dictation::Transcribing;
+        d.recording_since = None;
+        d.retry_path = None;
+        cx.notify();
+    });
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        let timer = cx.background_executor().timer(TRANSCRIBE_WITHIN);
+        let answer = match futures::future::select(reply, Box::pin(timer)).await {
+            futures::future::Either::Left((answer, _)) => answer.unwrap_or_else(|_| Err("No answer from Dray.".into())),
+            futures::future::Either::Right(_) => Err("Dray didn't answer in time.".into()),
+        };
+        cx.update(|cx| {
+            let placed = island.update(cx, |island, cx| {
+                let placed = place_words(island, answer, cx);
+                let d = island.draft_mut();
+                d.dictation = orb::Dictation::Idle;
+                d.want_focus = Some(Field::Typing);
+                cx.notify();
+                placed
+            });
+            if placed && then_send {
+                send(&island, cx);
+            }
+        });
+    })
+    .detach();
+}
+
+/// Whether the model answered: words become a row, every other outcome a
+/// notice, and a failure keeps its recording for Retry.
+fn place_words(island: &mut Island, answer: server::Reply, cx: &mut App) -> bool {
+    let outcome = match answer {
+        Ok(v) => v,
+        Err(why) => {
+            island.notice = Some(why);
+            return false;
+        }
+    };
+    let value = outcome.get("value").cloned().unwrap_or_default();
+    let (notice, ok) = match outcome.get("kind").and_then(|k| k.as_str()) {
+        Some("text") => {
+            let text = value.as_str().unwrap_or_default().trim().to_string();
+            if !text.is_empty() {
+                island.draft_mut().add_said(&text, cx);
+                sound::dictation_stopped();
+            }
+            (None, true)
+        }
+        Some("empty") => (Some("No words heard.".to_string()), true),
+        Some("needsModel") => (Some("Pick a dictation model in Dray → Settings → Transcription.".to_string()), false),
+        Some("noAudio") => (Some("Dray heard nothing. Check the microphone.".to_string()), false),
+        _ => (Some(value.get("message").and_then(|m| m.as_str()).unwrap_or("Dictation failed.").to_string()), false),
+    };
+    island.notice = notice;
+    if !ok {
+        island.draft_mut().retry_path = value.get("audioPath").and_then(|p| p.as_str()).map(str::to_string);
+    }
+    ok
+}
+
+/// Ctrl+Esc: throws away what is being said and puts the panel away, the
+/// Mac's ⌘Esc.
+pub fn cancel_dictation(island: &Entity<Island>, cx: &mut App) {
+    if island.read(cx).draft().dictation != orb::Dictation::Idle {
+        let _ = call(island, "cancel_transcription", json!({}), cx);
+        island.update(cx, |island, cx| {
+            let d = island.draft_mut();
+            d.dictation = orb::Dictation::Idle;
+            d.recording_since = None;
+            cx.notify();
+        });
+    }
+    close(island, cx);
+}
+
+/// The reader's layout pick, kept and drawn at once.
+pub fn set_mode(island: &Entity<Island>, mode: prefs::Mode, cx: &mut App) {
+    prefs::set("mode", mode);
+    island.update(cx, |island, cx| {
+        island.mode = mode;
+        island.menu = false;
+        cx.notify();
+    });
 }
 
 /// The pill: the panel, on the cards, whatever the draft holds.
@@ -448,6 +708,9 @@ pub fn open(island: &Entity<Island>, cx: &mut App) {
                 pick_target(&island, Target::Session(id), cx);
             }
             show(&island, cx);
+            if island.update(cx, |island, _| std::mem::take(&mut island.dictate_on_open)) {
+                start_dictation(&island, cx);
+            }
         });
     })
     .detach();
@@ -488,6 +751,8 @@ fn show(island: &Entity<Island>, cx: &mut App) {
         let _ = server.call("island_opened", json!({}));
     }
     settle_target(island, cx);
+    let typing = island.read(cx).draft().typing.clone();
+    typing.update(cx, |t, cx| t.set_placeholder(draft::placeholder(), cx));
     sync_card(island, cx);
     let glass = x11::compositing();
     island.update(cx, |island, _| island.glass = glass);
@@ -977,6 +1242,11 @@ pub fn pick_project(island: &Entity<Island>, path: String, cx: &mut App) {
 /// task. Sent is said at once and the request runs behind it; a send that
 /// fails comes back as the draft, with the reason.
 pub fn send(island: &Entity<Island>, cx: &mut App) {
+    match island.read(cx).draft().dictation {
+        orb::Dictation::Recording => return stop_dictation(island, true, cx),
+        orb::Dictation::Idle => {}
+        _ => return,
+    }
     let (target, rows, typing, picks) = {
         let i = island.read(cx);
         let d = i.draft();

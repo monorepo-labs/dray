@@ -43,6 +43,18 @@ impl Key {
 pub struct Prefs {
     pub key: Key,
     pub placement: Placement,
+    pub mode: Mode,
+}
+
+/// The panel's layout, the reader's pick and never switched for them, as on
+/// the Mac: expanded, the orb alone in the middle with the box beneath it, or
+/// compact, one row with the orb beside the box.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    #[default]
+    Expanded,
+    Compact,
 }
 
 fn path() -> Option<PathBuf> {
@@ -66,7 +78,7 @@ pub fn read() -> Prefs {
     fn field<T: serde::de::DeserializeOwned + Default>(raw: &serde_json::Map<String, serde_json::Value>, name: &str) -> T {
         raw.get(name).cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
     }
-    Prefs { key: field(&raw, "key"), placement: field(&raw, "placement") }
+    Prefs { key: field(&raw, "key"), placement: field(&raw, "placement"), mode: field(&raw, "mode") }
 }
 
 /// One of the island's own fields, as last written; `None` where absent or

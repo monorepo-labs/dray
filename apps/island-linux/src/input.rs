@@ -71,6 +71,11 @@ impl TextInput {
         }
     }
 
+    pub fn set_placeholder(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.placeholder = text.into();
+        cx.notify();
+    }
+
     pub fn max_lines(mut self, lines: usize) -> Self {
         self.max_lines = lines.max(1);
         self
