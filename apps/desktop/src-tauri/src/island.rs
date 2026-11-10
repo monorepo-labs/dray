@@ -65,6 +65,21 @@ pub async fn configure(key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether the island this app started is still up, so a waiting card goes
+/// to it rather than to a banner. Reaps one that exited, which also lets the
+/// next launch start a fresh one.
+pub fn running() -> bool {
+    let mut island = ISLAND.lock().unwrap_or_else(|e| e.into_inner());
+    match island.as_mut().map(Child::try_wait) {
+        Some(Ok(None)) => true,
+        Some(_) => {
+            *island = None;
+            false
+        }
+        None => false,
+    }
+}
+
 /// Beside the app's own binary, where a release will carry it; in a dev
 /// build, the island crate's own target dir, since `tauri dev` builds the
 /// app alone.

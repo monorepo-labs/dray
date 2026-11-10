@@ -1,28 +1,48 @@
-//! Dray Island on Linux: GPUI draws the panel, `server` keeps a socket to
-//! This computer's `dray --serve`, and `x11` watches for the reader's
-//! modifier tapped alone. See PLAN.md.
+//! Dray Island on Linux: GPUI draws the panel and the pill, `server` keeps a
+//! socket to This computer's `dray --serve`, and `x11` watches for the
+//! reader's modifier tapped alone. See PLAN.md.
 
+mod asks;
+mod input;
+mod panel;
 mod prefs;
 mod server;
+mod sound;
 mod x11;
 
+use asks::{Ask, AskKind, Asks};
 use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui::{
-    App, Bounds, Context, Entity, FocusHandle, QuitMode, Hsla, KeyDownEvent, MouseButton, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, prelude::*, px, rgb, size,
+    App, AppContext, Bounds, Entity, Pixels, QuitMode, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions, px, size,
 };
+use input::TextInput;
+use panel::{Panel, Pill};
 use prefs::Placement;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use serde_json::json;
 use server::{Session, Update};
 use std::io::Read;
+use std::time::Duration;
 
 /// The Mac panel's composer width, so both islands read alike.
-const WIDTH: f32 = 520.;
+pub const WIDTH: f32 = 520.;
+/// The panel before it has measured what it draws.
 const HEIGHT: f32 = 128.;
-/// Clear of the work area's edge, since there is no notch to hang from.
+/// The pill before it has measured its words.
+const PILL: (f32, f32) = (260., 40.);
+/// Clear room around a see-through window for the card's shadow, and at the
+/// top for the notch shape's flared ears: the Mac's `shadowRoom` and `ear`.
+pub const ROOM: f32 = 12.;
+/// Clear of a dock at the bottom when there is no room to stand off in.
 const GAP: f32 = 8.;
-const YELLOW: u32 = 0xffd23f;
+/// How long a pointer rests on the pill before the cards open, as on the Mac.
+const DWELL: Duration = Duration::from_millis(150);
+/// How long the last answer's word stays before the panel closes.
+const FLASH: Duration = Duration::from_millis(900);
+/// How long news lights the pill's edge.
+const GLOW: Duration = Duration::from_secs(2);
 
 enum Msg {
     Tap,
@@ -40,31 +60,92 @@ enum Link {
     Refused(String),
 }
 
-/// Everything the panel draws, kept apart from the window: the window is made
-/// on each open and dropped on each close, and this lives for the process.
+/// What the reader has done with the card on screen: which question, what
+/// was picked or typed. Keyed on the ask, so answers never carry over.
 #[derive(Default)]
-struct Island {
+pub struct Card {
+    pub ask_id: String,
+    pub index: usize,
+    pub picks: Vec<Vec<String>>,
+    pub inputs: Vec<Entity<TextInput>>,
+    /// The free-text box is open; until clicked it is a button, so the card
+    /// never opens with the caret in it and digits stay picks.
+    pub editing: bool,
+    pub show_command: bool,
+    /// An answer is on its way.
+    pub busy: bool,
+}
+
+/// Everything the panel and pill draw, kept apart from their windows: those
+/// are made on each open and dropped on each close, and this lives for the
+/// process.
+#[derive(Default)]
+pub struct Island {
     link: Link,
     sessions: Vec<Session>,
     placement: Placement,
     window: Option<WindowHandle<Panel>>,
-    /// The panel's X window and whoever had the keyboard before it took it.
+    /// The panel's X window, and whoever had the keyboard before it took it.
     focus: Option<(u32, u32)>,
-    menu: bool,
+    x_window: Option<u32>,
+    pill_x_window: Option<u32>,
+    /// A compositor runs, so windows can be see-through and the card drawn
+    /// in its Mac shape with its shadow. Read at each open.
+    pub glass: bool,
+    pub menu: bool,
     server: Option<server::Server>,
+    pub asks: Asks,
+    pill: Option<WindowHandle<Pill>>,
+    /// The session whose card is up, picked from the list; the oldest when unpicked.
+    pub ask_tab: Option<String>,
+    /// The waiting sessions drawn as a list in place of the card.
+    pub listed: bool,
+    pub card: Card,
+    /// The last answer's word, drawn while the panel closes on it.
+    pub flash: Option<&'static str>,
+    /// Why the last answer did not land.
+    pub notice: Option<String>,
+    pub glowing: bool,
+    glow_clock: u64,
+    pill_hovered: bool,
+    hover_clock: u64,
 }
 
 impl Island {
     /// The session the panel is pinned to: the newest that is not hidden.
     /// The switcher and "last used" come with replying (stage 3).
-    fn pinned(&self) -> Option<&Session> {
+    pub fn pinned(&self) -> Option<&Session> {
         self.sessions
             .iter()
             .filter(|s| s.hidden != Some(true) && s.archived != Some(true))
             .max_by(|a, b| a.modified.cmp(&b.modified))
     }
 
-    fn apply(&mut self, update: Update) {
+    pub fn title(&self, session_id: &str) -> String {
+        self.sessions
+            .iter()
+            .find(|s| s.session_id == session_id)
+            .map(|s| s.title.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "Session".into())
+    }
+
+    /// The card the panel draws: the picked session's oldest ask, so
+    /// answering one moves to the next.
+    pub fn current(&self) -> Option<(String, Ask)> {
+        let keys = self.asks.attention();
+        let key = self.ask_tab.clone().filter(|k| keys.contains(k)).or_else(|| keys.first().cloned())?;
+        let ask = (*self.asks.waiting(&key).first()?).clone();
+        Some((key, ask))
+    }
+
+    fn status_of(&self, session_id: &str) -> Option<&str> {
+        self.sessions.iter().find(|s| s.session_id == session_id).map(|s| s.status.as_str())
+    }
+
+    /// Applies one update; `true` where an ask arrived that the island had
+    /// not seen, which is news.
+    fn apply(&mut self, update: Update) -> bool {
         match update {
             Update::Unreachable => self.link = Link::Unreachable,
             Update::Refused(why) => self.link = Link::Refused(why),
@@ -79,11 +160,15 @@ impl Island {
                 None => self.sessions.push(s),
             },
             Update::Status { session_id, status, modified } => {
+                let ended = status != "in_progress";
                 if let Some(s) = self.sessions.iter_mut().find(|s| s.session_id == session_id) {
                     s.status = status;
                     if let Some(m) = modified {
                         s.modified = m;
                     }
+                }
+                if ended {
+                    self.asks.strand(&session_id);
                 }
             }
             Update::Title { session_id, title } => {
@@ -91,7 +176,15 @@ impl Island {
                     s.title = title;
                 }
             }
+            Update::Live { asks, tasks } => return self.asks.replace(asks, tasks),
+            Update::Asked(ask) => return self.asks.add(ask),
+            Update::Decided { session_id, request_id } => self.asks.decided(&session_id, &request_id),
+            Update::Tasks { session_id, count } => {
+                let busy = self.status_of(&session_id) == Some("in_progress");
+                self.asks.set_tasks(&session_id, count, busy);
+            }
         }
+        false
     }
 }
 
@@ -117,21 +210,165 @@ fn main() {
     // Off a Mac GPUI quits once its last window closes, and the panel's
     // window goes on every close.
     gpui_platform::application().with_quit_mode(QuitMode::Explicit).run(move |cx: &mut App| {
+        input::bind_keys(cx);
         let island = cx.new(|_| Island { placement: prefs::read().placement, server: Some(server), ..Default::default() });
         cx.spawn(async move |cx| {
             while let Some(msg) = rx.next().await {
                 cx.update(|cx| match msg {
                     Msg::Tap => toggle(&island, cx),
-                    Msg::Server(update) => island.update(cx, |island, cx| {
-                        island.apply(update);
-                        cx.notify();
-                    }),
+                    Msg::Server(update) => {
+                        let had_cards = !island.read(cx).asks.attention().is_empty();
+                        let fresh = island.update(cx, |island, _| island.apply(update));
+                        asks_changed(&island, fresh, had_cards, cx);
+                    }
                     Msg::Quit => cx.quit(),
                 });
             }
         })
         .detach();
     });
+}
+
+/// After the asks moved: news is announced on a shut panel, the last card
+/// answered elsewhere closes the panel it was on, and the pill and card follow.
+fn asks_changed(island: &Entity<Island>, fresh: bool, had_cards: bool, cx: &mut App) {
+    let (open, empty, flashing) = {
+        let i = island.read(cx);
+        (i.window.is_some(), i.asks.attention().is_empty(), i.flash.is_some())
+    };
+    if fresh && !open {
+        announce(island, cx);
+    }
+    if empty && had_cards && open && !flashing {
+        close(island, cx);
+    }
+    island.update(cx, |island, cx| {
+        if island.asks.attention().len() < 2 {
+            island.listed = false;
+        }
+        cx.notify();
+    });
+    sync_card(island, cx);
+    sync_pill(island, cx);
+}
+
+/// News reaching a shut panel: the pill's edge lit for a moment, and the
+/// chime unless Dray's own window is in front, which sounds its own.
+fn announce(island: &Entity<Island>, cx: &mut App) {
+    if !x11::dray_in_front() {
+        sound::chime();
+    }
+    let clock = island.update(cx, |island, cx| {
+        island.glowing = true;
+        island.glow_clock += 1;
+        cx.notify();
+        island.glow_clock
+    });
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(GLOW).await;
+        cx.update(|cx| {
+            island.update(cx, |island, cx| {
+                if island.glow_clock == clock {
+                    island.glowing = false;
+                    cx.notify();
+                }
+            })
+        });
+    })
+    .detach();
+}
+
+/// Resets the card's state when the card on screen is a different ask.
+fn sync_card(island: &Entity<Island>, cx: &mut App) {
+    let Some((_, ask)) = island.read(cx).current() else { return };
+    if island.read(cx).card.ask_id == ask.id {
+        return;
+    }
+    let count = match &ask.kind {
+        AskKind::Questions(qs) => qs.len(),
+        AskKind::Permission(_) => 0,
+    };
+    let inputs = (0..count).map(|_| cx.new(|cx| TextInput::new("Something else…", cx))).collect();
+    island.update(cx, |island, cx| {
+        island.card = Card { ask_id: ask.id, picks: vec![Vec::new(); count], inputs, ..Default::default() };
+        cx.notify();
+    });
+}
+
+/// The pill is up while cards wait and the panel is shut.
+fn sync_pill(island: &Entity<Island>, cx: &mut App) {
+    let (want, has, placement) = {
+        let i = island.read(cx);
+        (i.window.is_none() && !i.asks.attention().is_empty(), i.pill.is_some(), i.placement)
+    };
+    if want && !has {
+        let glass = x11::compositing();
+        island.update(cx, |island, _| island.glass = glass);
+        let bounds = place(placement, PILL.0, PILL.1, glass, cx);
+        let state = island.clone();
+        let opened = cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: None,
+                kind: WindowKind::PopUp,
+                // Drawn, never focused: a pill must not take the keys from
+                // the app being typed in.
+                focus: false,
+                is_movable: false,
+                is_resizable: false,
+                is_minimizable: false,
+                window_background: background(glass),
+                app_id: Some("dray-island".into()),
+                ..Default::default()
+            },
+            move |_, cx| {
+                cx.new(|cx| {
+                    cx.observe(&state, |_, _, cx| cx.notify()).detach();
+                    Pill { island: state }
+                })
+            },
+        );
+        if let Ok(pill) = opened {
+            let xid = pill.update(cx, |_, window, _| x_window(window)).ok().flatten();
+            island.update(cx, |island, _| {
+                island.pill = Some(pill);
+                island.pill_x_window = xid;
+            });
+        }
+    } else if !want && has {
+        let pill = island.update(cx, |island, _| {
+            island.pill_hovered = false;
+            island.pill_x_window = None;
+            island.pill.take()
+        });
+        if let Some(pill) = pill {
+            let _ = pill.update(cx, |_, window, _| window.remove_window());
+        }
+    }
+}
+
+/// The pointer on the pill: the cards open once it has rested there.
+pub fn pill_hovered(island: &Entity<Island>, hovered: bool, cx: &mut App) {
+    let clock = island.update(cx, |island, _| {
+        island.pill_hovered = hovered;
+        island.hover_clock += 1;
+        island.hover_clock
+    });
+    if !hovered {
+        return;
+    }
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(DWELL).await;
+        cx.update(|cx| {
+            let i = island.read(cx);
+            if i.pill_hovered && i.hover_clock == clock && i.window.is_none() {
+                open(&island, cx);
+            }
+        });
+    })
+    .detach();
 }
 
 /// A tap opens the panel, and one on an open panel closes it — until
@@ -148,8 +385,11 @@ fn open(island: &Entity<Island>, cx: &mut App) {
     if let Some(server) = &island.read(cx).server {
         server.relist();
     }
+    sync_card(island, cx);
+    let glass = x11::compositing();
+    island.update(cx, |island, _| island.glass = glass);
     let placement = island.read(cx).placement;
-    let bounds = place(placement, cx);
+    let bounds = place(placement, panel_width(glass), HEIGHT, glass, cx);
     let state = island.clone();
     let opened = cx.open_window(
         WindowOptions {
@@ -162,7 +402,7 @@ fn open(island: &Entity<Island>, cx: &mut App) {
             is_movable: false,
             is_resizable: false,
             is_minimizable: false,
-            window_background: WindowBackgroundAppearance::Opaque,
+            window_background: background(glass),
             app_id: Some("dray-island".into()),
             ..Default::default()
         },
@@ -171,7 +411,7 @@ fn open(island: &Entity<Island>, cx: &mut App) {
             window.focus(&focus, cx);
             cx.new(|cx| {
                 cx.observe(&state, |_, _, cx| cx.notify()).detach();
-                Panel { island: state, focus }
+                Panel::new(state, focus)
             })
         },
     );
@@ -179,21 +419,28 @@ fn open(island: &Entity<Island>, cx: &mut App) {
         eprintln!("island: could not open the panel");
         return;
     };
-    let focus = handle
-        .update(cx, |_, window, _| x_window(window))
-        .ok()
-        .flatten()
-        .and_then(|ours| Some((ours, x11::take_focus(ours)?)));
+    let ours = handle.update(cx, |_, window, _| x_window(window)).ok().flatten();
+    let focus = ours.and_then(|ours| Some((ours, x11::take_focus(ours)?)));
     island.update(cx, |island, cx| {
         island.window = Some(handle);
+        island.x_window = ours;
         island.focus = focus;
         island.menu = false;
         cx.notify();
     });
+    sync_pill(island, cx);
 }
 
-fn close(island: &Entity<Island>, cx: &mut App) {
-    let (window, focus) = island.update(cx, |island, _| (island.window.take(), island.focus.take()));
+pub fn close(island: &Entity<Island>, cx: &mut App) {
+    let (window, focus) = island.update(cx, |island, cx| {
+        island.listed = false;
+        island.flash = None;
+        island.notice = None;
+        island.ask_tab = None;
+        island.x_window = None;
+        cx.notify();
+        (island.window.take(), island.focus.take())
+    });
     // Before the window goes, while the panel can still be asked whether it
     // holds the keyboard.
     if let Some((ours, before)) = focus {
@@ -202,6 +449,7 @@ fn close(island: &Entity<Island>, cx: &mut App) {
     if let Some(window) = window {
         let _ = window.update(cx, |_, window, _| window.remove_window());
     }
+    sync_pill(island, cx);
 }
 
 /// The panel's X window id, which GPUI hands out only as a raw handle.
@@ -213,16 +461,31 @@ fn x_window(window: &Window) -> Option<u32> {
     }
 }
 
+/// X pixels per GPUI pixel: the work area is in the former, bounds in the latter.
+fn scale(cx: &App) -> f32 {
+    let Some(display) = cx.primary_display() else { return 1. };
+    x11::screen_width().map_or(1., |w| w as f32 / display.bounds().size.width.as_f32())
+}
+
+fn background(glass: bool) -> WindowBackgroundAppearance {
+    if glass { WindowBackgroundAppearance::Transparent } else { WindowBackgroundAppearance::Opaque }
+}
+
+/// The panel window's width: the card, and the room beside it when clear.
+fn panel_width(glass: bool) -> f32 {
+    if glass { WIDTH + 2. * ROOM } else { WIDTH }
+}
+
 /// Centred on the primary display, against the work area's top or bottom so
-/// a panel bar or dock that reserves an edge is never covered.
-fn place(placement: Placement, cx: &App) -> Bounds<gpui::Pixels> {
-    let size = size(px(WIDTH), px(HEIGHT));
+/// a panel bar or dock that reserves an edge is never covered. At the top it
+/// hangs flush from the bar, as the Mac's hangs from the notch.
+fn place(placement: Placement, width: f32, height: f32, glass: bool, cx: &App) -> Bounds<Pixels> {
+    let size = size(px(width), px(height));
     let Some(display) = cx.primary_display() else {
         return Bounds::centered(None, size, cx);
     };
     let screen = display.bounds();
-    // The work area is in X pixels and GPUI's bounds are logical.
-    let scale = x11::screen_width().map_or(1., |w| w as f32 / screen.size.width.as_f32());
+    let scale = scale(cx);
     let (top, bottom) = match x11::work_area() {
         Some((_, y, _, h)) => (
             px(y as f32 / scale).max(screen.top()),
@@ -230,16 +493,31 @@ fn place(placement: Placement, cx: &App) -> Bounds<gpui::Pixels> {
         ),
         None => (screen.top(), screen.bottom()),
     };
-    let x = screen.center().x - px(WIDTH / 2.);
+    let x = screen.center().x - px(width / 2.);
     let y = match placement {
-        Placement::Top => top + px(GAP),
-        Placement::Bottom => bottom - px(HEIGHT + GAP),
+        Placement::Top => top,
+        // A clear window stands off by its own shadow room.
+        Placement::Bottom => bottom - px(height + if glass { 0. } else { GAP }),
     };
     Bounds::new(gpui::point(x, y), size)
 }
 
+/// Fits the open panel, or the pill, to what it draws, keeping it against
+/// its edge: at the bottom it grows upward.
+pub fn fit(island: &Entity<Island>, pill: bool, width: f32, height: f32, cx: &mut App) {
+    let (xid, placement, glass) = {
+        let i = island.read(cx);
+        (if pill { i.pill_x_window } else { i.x_window }, i.placement, i.glass)
+    };
+    let Some(xid) = xid else { return };
+    let bounds = place(placement, width, height, glass, cx);
+    let s = scale(cx);
+    let at = |p: Pixels| (p.as_f32() * s).round() as i32;
+    x11::configure(xid, at(bounds.origin.x), at(bounds.origin.y), at(bounds.size.width), at(bounds.size.height));
+}
+
 /// Moves an open panel to the reader's pick, and keeps the pick.
-fn set_placement(island: &Entity<Island>, placement: Placement, cx: &mut App) {
+pub fn set_placement(island: &Entity<Island>, placement: Placement, cx: &mut App) {
     prefs::set_placement(placement);
     island.update(cx, |island, _| island.placement = placement);
     // GPUI has no move for a window it made, so the panel is made again there.
@@ -247,112 +525,143 @@ fn set_placement(island: &Entity<Island>, placement: Placement, cx: &mut App) {
     open(island, cx);
 }
 
-struct Panel {
-    island: Entity<Island>,
-    focus: FocusHandle,
-}
-
-fn white(alpha: f32) -> Hsla {
-    gpui::hsla(0., 0., 1., alpha)
-}
-
-impl Render for Panel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let island = self.island.read(cx);
-        let key = prefs::read().key.label();
-        let (title, detail, busy) = match (&island.link, island.pinned()) {
-            (Link::Up, Some(s)) => (s.title.clone(), s.project().to_string(), s.status == "in_progress"),
-            (Link::Up, None) => ("No tasks yet".into(), "Start one in Dray".into(), false),
-            (Link::Connecting, _) => ("Connecting to Dray…".into(), String::new(), false),
-            (Link::Unreachable, _) => ("Dray isn't running".into(), "Open Dray to reach your tasks".into(), false),
-            (Link::Refused(why), _) => ("Dray turned the island away".into(), why.clone(), false),
-        };
-        let placement = island.placement;
-        let menu = island.menu;
-        let state = self.island.clone();
-
-        let header = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(div().size(px(8.)).rounded_full().bg(if busy { rgb(YELLOW).into() } else { white(0.25) }))
-            .child(div().flex_1().truncate().text_sm().text_color(white(0.92)).child(title))
-            .child(div().text_xs().text_color(white(0.45)).child(detail));
-        let composer = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .px_3()
-            .py_2()
-            .rounded_lg()
-            .bg(white(0.06))
-            .text_sm()
-            .child(div().text_color(white(0.35)).child("Reply…"))
-            .child(div().text_xs().text_color(white(0.3)).child(format!("Tap {key} to close · Esc")));
-
-        let mut root = div()
-            .id("panel")
-            .track_focus(&self.focus)
-            .size_full()
-            .flex()
-            .flex_col()
-            .justify_center()
-            .gap_3()
-            .p_4()
-            .bg(rgb(0x000000))
-            .border_1()
-            .border_color(white(0.12))
-            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
-                if e.keystroke.key == "escape" {
-                    let island = this.island.clone();
-                    cx.defer(move |cx| close(&island, cx));
-                }
-            }))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|this, _, _, cx| {
-                    this.island.update(cx, |island, cx| {
-                        island.menu = !island.menu;
-                        cx.notify();
-                    });
-                }),
-            )
-            .child(header)
-            .child(composer);
-
-        if menu {
-            let item = |label: &'static str, pick: Placement| {
-                let state = state.clone();
-                div()
-                    .id(label)
-                    .px_3()
-                    .py_1()
-                    .rounded_md()
-                    .text_sm()
-                    .text_color(if pick == placement { rgb(YELLOW).into() } else { white(0.85) })
-                    .hover(|s| s.bg(white(0.1)))
-                    .child(label)
-                    .on_click(move |_, _, cx| {
-                        let state = state.clone();
-                        cx.defer(move |cx| set_placement(&state, pick, cx));
-                    })
-            };
-            root = root.child(
-                div()
-                    .absolute()
-                    .right(px(12.))
-                    .top(px(8.))
-                    .flex()
-                    .flex_col()
-                    .p_1()
-                    .rounded_lg()
-                    .bg(rgb(0x1c1c1c))
-                    .border_1()
-                    .border_color(white(0.15))
-                    .child(item("Top of screen", Placement::Top))
-                    .child(item("Bottom of screen", Placement::Bottom)),
-            );
+/// Puts one session's cards away unanswered, or every session's with none
+/// named. They still wait in Dray, and the next new ask brings them back.
+pub fn dismiss(island: &Entity<Island>, session_id: Option<String>, cx: &mut App) {
+    let empty = island.update(cx, |island, cx| {
+        island.asks.dismiss(session_id.as_deref());
+        if session_id.is_none() || island.ask_tab == session_id {
+            island.ask_tab = None;
         }
-        root
+        island.listed = false;
+        cx.notify();
+        island.asks.attention().is_empty()
+    });
+    if empty {
+        close(island, cx);
     }
+    sync_card(island, cx);
+    sync_pill(island, cx);
+}
+
+/// Picks a session's card from the list.
+pub fn pick(island: &Entity<Island>, session_id: String, cx: &mut App) {
+    island.update(cx, |island, cx| {
+        island.ask_tab = Some(session_id);
+        island.listed = false;
+        cx.notify();
+    });
+    sync_card(island, cx);
+}
+
+/// Opens a session in Dray's window and puts the panel away.
+pub fn show_in_app(island: &Entity<Island>, session_id: String, cx: &mut App) {
+    let Some(reply) = island.read(cx).server.as_ref().map(|s| s.call("show_session", json!({ "sessionId": session_id })))
+    else {
+        return;
+    };
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        let answer = reply.await.unwrap_or_else(|_| Err("No answer from Dray.".into()));
+        cx.update(|cx| match answer {
+            Ok(_) => close(&island, cx),
+            Err(why) => island.update(cx, |island, cx| {
+                island.notice = Some(why);
+                cx.notify();
+            }),
+        });
+    })
+    .detach();
+}
+
+/// Answers the card on screen with a permission option.
+pub fn respond(island: &Entity<Island>, option_id: String, cx: &mut App) {
+    let Some((key, ask)) = island.read(cx).current() else { return };
+    let AskKind::Permission(p) = &ask.kind else { return };
+    let Some(option) = p.options.iter().find(|o| o.id == option_id) else { return };
+    let label = asks::answered_label(option);
+    let args = json!({ "sessionId": key, "requestId": ask.request_id, "optionId": option_id });
+    send_answer(island, key, ask, "respond_permission", args, label, cx);
+}
+
+/// Answers the card on screen's questions with what was picked and typed.
+pub fn answer(island: &Entity<Island>, cx: &mut App) {
+    let Some((key, ask)) = island.read(cx).current() else { return };
+    let AskKind::Questions(questions) = &ask.kind else { return };
+    let (picks, typed) = {
+        let card = &island.read(cx).card;
+        (card.picks.clone(), card.inputs.iter().map(|i| i.read(cx).text().to_string()).collect::<Vec<_>>())
+    };
+    let answers = asks::answers(questions, &picks, &typed);
+    let args = json!({ "sessionId": key, "requestId": ask.request_id, "answers": answers });
+    send_answer(island, key, ask, "answer_questions", args, "Sent", cx);
+}
+
+/// Sends an answer. The last card says what was done, then the panel
+/// closes; an answer that did not land leaves the card, with the reason.
+fn send_answer(
+    island: &Entity<Island>,
+    key: String,
+    ask: Ask,
+    cmd: &str,
+    args: serde_json::Value,
+    label: &'static str,
+    cx: &mut App,
+) {
+    let reply = island.update(cx, |island, cx| {
+        if island.card.busy {
+            return None;
+        }
+        let last = island.asks.attention() == [key.clone()] && island.asks.waiting(&key).len() == 1;
+        island.card.busy = true;
+        island.notice = None;
+        if last {
+            island.flash = Some(label);
+            sound::send();
+        }
+        cx.notify();
+        island.server.as_ref().map(|s| s.call(cmd, args))
+    });
+    let Some(reply) = reply else { return };
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        let answer = reply.await.unwrap_or_else(|_| Err("No answer from Dray.".into()));
+        let landed = answer.is_ok();
+        cx.update(|cx| {
+            let had_cards = !island.read(cx).asks.attention().is_empty();
+            island.update(cx, |island, cx| {
+                island.card.busy = false;
+                match answer {
+                    // The server's own `permission_decided` follows; retiring
+                    // it now keeps the card from lingering until it does.
+                    Ok(_) => island.asks.decided(&key, &ask.request_id),
+                    Err(why) => {
+                        island.flash = None;
+                        island.notice = Some(why);
+                    }
+                }
+                cx.notify();
+            });
+            asks_changed(&island, false, had_cards, cx);
+        });
+        if !landed {
+            return;
+        }
+        cx.background_executor().timer(FLASH).await;
+        cx.update(|cx| {
+            let (flashing, empty) = {
+                let i = island.read(cx);
+                (i.flash.is_some(), i.asks.attention().is_empty())
+            };
+            if flashing && empty {
+                close(&island, cx);
+            } else if flashing {
+                island.update(cx, |island, cx| {
+                    island.flash = None;
+                    cx.notify();
+                });
+            }
+        });
+    })
+    .detach();
 }

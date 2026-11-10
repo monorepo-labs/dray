@@ -83,6 +83,7 @@ const ISLAND: Sound[] = [
       "News held while the reader was busy in the panel, once the pill can be seen.",
       "A card held while the reader was busy in the open panel, as it comes into view there.",
       "A sandbox's stop warning began while the panel is shut.",
+      "On Linux, the first only: a card arrived while the panel is shut and Dray's window is not in front. Played through pw-play, paplay or aplay.",
     ],
   },
   {
@@ -107,6 +108,7 @@ const ISLAND: Sound[] = [
     where: [
       "A message sent from the island, as the panel says Sent, and once with the flash after the last card is answered. Not per card, nor on drafts.",
       "Shimmer lift, picked on the send-sound page and rendered at 25%.",
+      "On Linux, with the flash after the last card is answered; there is no message to send from there yet.",
     ],
   },
   {

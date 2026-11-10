@@ -32,11 +32,13 @@ export async function applyIsland(pick: { on?: boolean; key?: IslandKey } = {}) 
   }
 }
 
-/// Whether Dray Island is up to take permission and question cards: asked of the
+/// Whether Dray Island is up to take what would be a banner — `asks`, the
+/// permission and question cards, or `done`, a finished session: asked of the
 /// process, since the switch says nothing about an island the reader quit. A
 /// failed ask reads as no island, so the banner is the one lost to doubt never.
-export async function islandOn(): Promise<boolean> {
-  // Linux's island draws no cards yet (#833 stage 2), so the banner stays.
-  if (!IS_MAC || !enabled()) return false;
+export async function islandOn(what: "asks" | "done"): Promise<boolean> {
+  // Linux's island has no done pill yet, so a finished session keeps its banner.
+  const draws = IS_MAC || (IS_LINUX && what === "asks");
+  if (!draws || !enabled()) return false;
   return invoke<boolean>("island_running").catch(() => false);
 }

@@ -1156,6 +1156,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tungstenite",
+ "unicode-segmentation",
  "x11rb",
 ]
 

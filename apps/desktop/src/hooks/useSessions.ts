@@ -2896,14 +2896,14 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
     // and answers it in place, so a banner beside it says the same thing twice.
     // Every machine: the island follows this app's connections.
     if (kind === "asking") {
-      void islandOn().then((on) => on || notifyOS(sessionId, kind, label, item?.title ?? ""));
+      void islandOn("asks").then((on) => on || notifyOS(sessionId, kind, label, item?.title ?? ""));
       return false;
     }
     // A finished turn is the island's done pill, which names the session and
     // offers Open in app, so the banner would say it twice. A failed hand-off
     // falls back to the banner rather than saying nothing.
     if (kind === "completed") {
-      void islandOn().then((on) =>
+      void islandOn("done").then((on) =>
         on
           ? invoke("island_done", { sessionId }).catch(() => notifyOS(sessionId, kind, label, item?.title ?? ""))
           : notifyOS(sessionId, kind, label, item?.title ?? ""),

@@ -38,7 +38,39 @@ Swift island carries over.
   back on close, since `_NET_ACTIVE_WINDOW` is ignored for such a window.
 - **Placement is the reader's pick**, from the panel's right-click menu: top or
   bottom centre of the primary display, inside `_NET_WORKAREA` so a panel bar
-  or dock reserving an edge is never covered.
+  or dock reserving an edge is never covered. At the top it hangs flush from
+  the bar, as the Mac's hangs from the notch. The window is sized to what it
+  draws (`fit`, an X configure GPUI reads back), growing upward at the bottom.
+- **It looks like the Mac island where a compositor runs**: the black card
+  with its hairline edge and shadow, the notch shape's flared ears at the top
+  and 20pt corners at the bottom, the stack's peeks under it, the Mac's 13/12/11
+  type and row fills, a capsule or notch-shaped pill. A window's clear pixels
+  are only clear under a compositor (EWMH's `_NET_WM_CM_S<n>` owner, read at
+  each open), so without one it draws square and opaque instead. GPUI's blur
+  reaches about twice its radius, so the shadow's is 5 where the Mac's is 12,
+  or the window edge cuts it off square.
+- **Waiting cards come from every session**: `live_state`'s asks on each
+  connect, then `permission_requested`, `questions_asked`,
+  `permission_decided` and `background_tasks_changed`. The Mac's rules hold:
+  oldest ask first, a turn that ends with no task running strands its asks,
+  Dismiss and Dismiss all put cards away until a new ask brings them all back,
+  and the last answer flashes its word (the card red on a denial) and closes
+  the panel. An answer that does not land leaves the card with the server's
+  sentence under it.
+- **The pill opens the cards on a 150ms hover**, as on the Mac, and takes the
+  keyboard then, so digits and Enter answer at once. It is never focused
+  itself. News lights its edge for 2s and chimes, unless Dray's window is in
+  front (`_NET_ACTIVE_WINDOW`'s `WM_CLASS` is `dray`), which sounds its own.
+- **The chime is the app's `notification.wav`**, the one the Mac island plays,
+  handed to `pw-play`, `paplay` or `aplay`, whichever is installed, so the
+  island links no audio library.
+- **Free text is a GPUI text box of our own** (`input.rs`): GPUI ships none, so
+  it is GPUI's `examples/input.rs` cut down. Typing goes through GPUI's input
+  handler and XIM, as any GPUI app's does.
+- **The app hands asks to the island and keeps finished-session banners**:
+  `islandOn("asks")` is true on Linux while the island child lives
+  (`island::running`), `islandOn("done")` stays Mac-only until there is a done
+  pill.
 - **Prefs are `island.json` under the XDG config dir**, the stand-in for the
   Mac's `defaults` domain: the app writes `key`, the island writes
   `placement`, each keeping the other's field. Read at every tap.
@@ -51,9 +83,9 @@ Swift island carries over.
 
 Each its own PR.
 
-1. **Spike** (this): panel window, placement, modifier tap, connected to the
+1. **Spike** (#851): panel window, placement, modifier tap, connected to the
    server, pinned to the newest session.
-2. Waiting-card pill and answering cards.
+2. **Waiting-card pill and answering cards**, and the Mac look.
 3. Reply, new task, the session switcher, typed rows.
 4. Dictation rows, over `host_call` to the app as on the Mac.
 5. Screenshots and drawing on the live screen.
@@ -62,7 +94,10 @@ Each its own PR.
 
 - **X11 only.** Native Wayland is #839: a global key watch and screenshots go
   through portals there, and GNOME has no layer-shell. The app forces X11 too.
-- **Square, opaque edges.** Rounded, see-through corners need a compositor.
+- **Square, opaque edges without a compositor**, by design: see above.
+- **No done pill.** A finished session is still Dray's banner on Linux.
+- **This computer's sessions alone.** Other machines' (`island_links`) are not
+  read yet.
 - **Settings → Island stays hidden off a Mac** until the island has more to
   set than the key: the app hands over the default, Control.
 - **One display.** The panel opens on GPUI's primary display; the Mac's
