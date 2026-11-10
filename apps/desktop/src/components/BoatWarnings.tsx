@@ -61,7 +61,7 @@ export function ExtendBoat({
       <Button variant="ghost" size={icon} aria-label="Less time" disabled={busy || minutes <= EXTEND_STEP} onClick={() => step(-EXTEND_STEP)}>
         <Minus />
       </Button>
-      <span className="min-w-9 text-center text-ui-sm font-medium tabular-nums">{durationLabel(minutes)}</span>
+      <span className="min-w-9 text-center text-ui font-medium tabular-nums">{durationLabel(minutes)}</span>
       <Button variant="ghost" size={icon} aria-label="More time" disabled={busy || minutes >= MAX_EXTEND_MINUTES} onClick={() => step(EXTEND_STEP)}>
         <Plus />
       </Button>
@@ -99,7 +99,7 @@ export function Warning({
     <Alert className={cn(CARD, "relative overflow-hidden")}>
       <span className="flex min-w-0 items-start gap-2">
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="flex min-w-0 gap-1 text-ui-sm text-muted-foreground">
+          <span className="flex min-w-0 gap-1 text-ui text-muted-foreground">
             <span className="truncate" title={server.name}>
               {server.name}
             </span>
@@ -119,7 +119,7 @@ export function Warning({
           <X />
         </Button>
       </span>
-      {failed && <p className="text-ui-sm text-destructive">{failed}</p>}
+      {failed && <p className="text-ui text-destructive">{failed}</p>}
       <ExtendBoat id={server.id} onFail={setFailed} onDone={() => !offered && setOffer(true)} />
       <span
         aria-hidden

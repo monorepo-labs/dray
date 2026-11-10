@@ -228,7 +228,7 @@ function NoticeCard({
               </span>
             )}
           </AlertTitle>
-          <AlertDescription className="max-w-64 text-ui-sm text-muted-foreground">
+          <AlertDescription className="max-w-64 text-ui text-muted-foreground">
             {notice.detail}
           </AlertDescription>
         </span>
