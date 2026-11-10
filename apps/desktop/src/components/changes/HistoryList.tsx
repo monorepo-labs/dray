@@ -52,7 +52,11 @@ export default function HistoryList({
   /// it asked for.
   empty?: string;
 }) {
-  if (error) return <p className="px-3 py-6 text-ui text-destructive">{error}</p>;
+  // Alone only where there is nothing to keep: a failed "Load more" must not
+  // take the commits already on screen with it.
+  if (error && !commits.length) {
+    return <p className="px-3 py-6 text-ui text-destructive">{error}</p>;
+  }
   if (!commits.length) {
     return (
       <p className="px-3 py-6 text-ui text-muted-foreground">
@@ -63,6 +67,7 @@ export default function HistoryList({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
+      {error && <p className="px-3 py-2 text-ui text-destructive">{error}</p>}
       {commits.map((commit) => {
         const open = commit.sha === selected;
 

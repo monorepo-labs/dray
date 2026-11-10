@@ -8,18 +8,18 @@ use super::{send, unexpected};
 
 #[derive(Subcommand)]
 pub enum MachineCommand {
-    /// Add a machine to the app's list. It connects before it is saved, and
+    /// Add a machine this one can reach. It connects before it is saved, and
     /// its name must be one no other machine has.
     #[command(after_help = "dray machine add vps root@203.0.113.7
 dray machine add vps ssh -p 2222 root@203.0.113.7
 dray machine add vps my-ssh-alias
 cat serve-token | dray machine add vps ws://127.0.0.1:7317
-dray machine add --token-file serve-token vps ws://127.0.0.1:7317")]
+dray machine add --token-file token mac wss://….opentunnel.xyz")]
     Add(Add),
-    /// List the app's machines and whether each is connected.
+    /// List the machines this one reaches and whether each answers.
     Ls(ServerLs),
-    /// Take a machine off the app's list, and its token with it. Its agents
-    /// keep running there.
+    /// Take a machine off the list, and its token with it. Its agents keep
+    /// running there.
     Rm(Named),
     /// Rename a machine. An empty name puts back its host.
     Rename(Rename),
@@ -45,10 +45,11 @@ pub struct Add {
     /// one typed there lands in shell history and in `ps`.
     #[arg(long)]
     token_file: Option<PathBuf>,
-    /// What the app calls it.
+    /// What to call it, as `--machine` names it.
     name: String,
     /// The line you log in with (`user@host`, `ssh -p 2222 user@host`, an
-    /// alias from ~/.ssh/config), or a ws:// address.
+    /// alias from ~/.ssh/config), or a ws:// or wss:// address — a Mac's is
+    /// its Remote access address.
     #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
     address: Vec<String>,
 }
@@ -85,7 +86,7 @@ pub fn run(command: MachineCommand) -> Result<(), String> {
             let request = Request::AddServer(AddServer { name: args.name, address, token });
             match send(request)? {
                 Response::Server { server } => {
-                    eprintln!("Added {} ({}). It shows in the app's Settings → Servers.", server.name, server.address);
+                    eprintln!("Added {} ({}).", server.name, server.address);
                     Ok(())
                 }
                 Response::Error { message } => Err(message),

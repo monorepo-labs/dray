@@ -1,7 +1,7 @@
 # Dray
 
 A desktop home for your coding agents. Dray wraps coding-agent CLIs (Claude
-Code, Codex, fx, pi) in a native chat UI. Run many sessions at once. Each gets
+Code, Codex, pi, fx, Grok) in a native chat UI. Run many sessions at once. Each gets
 its own worktree, diff view, PR panel, issue panel and embedded browser.
 
 ## Sponsors
@@ -12,7 +12,7 @@ its own worktree, diff view, PR panel, issue panel and embedded browser.
 
 [![Greptile: The War on Bugs](https://www.greptile.com/badge.svg)](https://www.greptile.com/?utm_source=oss_badge&utm_medium=readme&utm_campaign=greptile_for_open_source)
 
-Want to sponsor Dray? [patreon.com/yogesharc](https://patreon.com/yogesharc)
+Want to sponsor Dray? [drayhq.com/support](https://www.drayhq.com/support)
 
 ## Layout
 
@@ -21,6 +21,8 @@ Want to sponsor Dray? [patreon.com/yogesharc](https://patreon.com/yogesharc)
 | `apps/desktop`      | The Tauri app. React 19 + Vite frontend, Rust backend. |
 | `apps/web`          | Marketing site. Next.js, deployed to Vercel.           |
 | `apps/docs`         | Docs at drayhq.com/docs. Blume, deployed to Vercel.    |
+| `apps/ios`          | iPhone and iPad client of a Dray server. SwiftUI.      |
+| `apps/island`       | Dray Island, the Mac companion panel. SwiftUI.         |
 | `apps/cli`          | The `dray` CLI agents use to fan work out.             |
 | `crates/dray-proto` | Wire types shared by the CLI and the app.              |
 

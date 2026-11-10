@@ -6,7 +6,10 @@ import Foundation
 struct Project: Decodable, Hashable {
     let path: String
     let name: String
-    let lastSelected: String
+    var lastSelected: String
+    /// The repository this checkout is of; `nil` from a server too old to say,
+    /// or where it has no shared remote.
+    var remote: String? = nil
 }
 
 struct AgentAvailability: Decodable, Hashable {
@@ -52,7 +55,7 @@ struct CloneProgress: Decodable {
 enum Picks {
     /// `DEFAULT_MODEL_FOR`. Empty is "let the harness decide", which pi and fx
     /// answer from their own settings.
-    static let defaultModel = ["claude_code": "opus", "codex": "gpt-6-sol", "pi": "", "fx": "", "grok": "grok-4.7"]
+    static let defaultModel = ["claude_code": "opus", "codex": "gpt-6.1-sol", "pi": "", "fx": "", "grok": "grok-4.7"]
     static let defaultEffort = "high"
     static let effortLabels = ["low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra High", "max": "Max", "ultra": "Ultra"]
     static let stances = [("bypassPermissions", "Bypass permissions"), ("manual", "Ask every time"), ("plan", "Plan"), ("auto", "Auto")]
@@ -61,7 +64,7 @@ enum Picks {
     private static let honoured: [String: [String]] = [
         "codex": ["bypassPermissions", "manual", "auto"],
         "pi": [],
-        "fx": ["manual", "auto"],
+        "fx": ["manual", "auto", "bypassPermissions"],
         "grok": ["manual", "auto", "bypassPermissions"],
     ]
 
@@ -78,7 +81,7 @@ enum Picks {
     static func stanceFor(_ harness: String, _ mode: String) -> String {
         if honours(harness, mode) { return mode }
         switch harness {
-        case "fx": return mode == "plan" ? "manual" : "auto"
+        case "fx", "codex": return mode == "plan" ? "manual" : "auto"
         case "grok": return mode == "plan" ? "manual" : "bypassPermissions"
         default: return "bypassPermissions"
         }

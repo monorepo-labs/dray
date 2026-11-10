@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -154,10 +155,10 @@ pub struct SessionIndexItem {
     pub modified: String,
     pub archived: bool,
     pub pinned: bool,
-    /// Left out of the sidebar and drawn only in its parent's crew — a review
-    /// session nobody means to read on its own. `dray new --hidden` sets it,
-    /// the crew row's menu clears it, and detaching clears it too, since a
-    /// session with no parent has no crew to be drawn in.
+    /// Left out of the sidebar, surfacing only as cards beside its parent — a
+    /// review session nobody means to read on its own. `dray new --hidden` sets
+    /// it, and detaching clears it, since a session with no parent would
+    /// surface nowhere.
     ///
     /// `#[serde(default)]`: an entry written before the field reads as shown.
     #[serde(default)]
@@ -317,7 +318,7 @@ async fn make_home_app_dir() -> Result<PathBuf> {
 ///
 /// Best-effort: a directory that cannot be narrowed is worth carrying on with,
 /// since the alternative is an app that refuses to start.
-async fn restrict_to_owner(path: &PathBuf) {
+pub(crate) async fn restrict_to_owner(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
 
     if let Err(e) = fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await {
@@ -1116,7 +1117,7 @@ pub async fn take_continue_at(session_id: &str, at: &str) -> Result<Option<(Sess
 pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>, Fail> {
     Ok(update_item(session_id, |item| {
         item.parent_session_id = None;
-        // No parent means no crew, so a hidden session would be listed nowhere.
+        // No parent to surface beside, so a hidden session would show nowhere.
         item.hidden = false;
         item.clone()
     })
@@ -1124,7 +1125,7 @@ pub async fn detach_session(session_id: &str) -> Result<Option<SessionIndexItem>
 }
 
 /// The hidden sessions `parent_id` started directly — the ones that follow it
-/// through settle, delete and worktree removal, since only its crew draws them.
+/// through settle, delete and worktree removal, since nothing on screen lists them.
 pub async fn hidden_children(parent_id: &str) -> Result<Vec<SessionIndexItem>> {
     Ok(read_index()
         .await?
@@ -1435,7 +1436,12 @@ pub async fn backfill_removed_worktrees() -> Result<()> {
 fn mark_relocated(items: &mut [SessionIndexItem], dir_exists: impl Fn(&str) -> bool) -> bool {
     let mut changed = false;
     for item in items.iter_mut() {
-        if !dir_exists(&item.cwd) {
+        // A fork into a new tree has no directory until its first send makes
+        // one, and `fork_from` is what says so. Read as a tree that was
+        // deleted, it lost `worktree_name` here and then spawned in the shared
+        // checkout it was forked to get away from.
+        let unmade_fork = item.fork_from.is_some() && item.worktree_name.is_some();
+        if !unmade_fork && !dir_exists(&item.cwd) {
             if let Some(root) = surviving_root(item, &dir_exists) {
                 item.project_path = root.clone();
                 item.cwd = root;
@@ -1717,8 +1723,23 @@ async fn read_page(
     file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
     end: u64,
     turns: u32,
-    mut chunk: u64,
+    chunk: u64,
 ) -> Result<SessionPage> {
+    let cut = |buf: &[u8], at_top: bool| turn_cut(buf, at_top, turns.max(1)).or(at_top.then_some(0));
+    let (events, begins) = read_back(file, end, chunk, cut).await?.unwrap_or_default();
+
+    Ok(SessionPage { events, older_before: (begins > 0).then_some(begins) })
+}
+
+/// Reads backwards from byte `end` in doubling chunks until `cut` names where
+/// in what is in hand to start, and parses only from there. `None` where `cut`
+/// finds nothing all the way to the top.
+async fn read_back(
+    file: &mut (impl tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin),
+    end: u64,
+    mut chunk: u64,
+    cut: impl Fn(&[u8], bool) -> Option<usize>,
+) -> Result<Option<(Vec<AgentEvent>, u64)>> {
     use std::io::SeekFrom;
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
@@ -1733,11 +1754,11 @@ async fn read_page(
         buf = head;
         start = from;
         chunk *= 2;
-        if let Some(cut) = turn_cut(&buf, start == 0, turns.max(1)) {
+        if let Some(cut) = cut(&buf, start == 0) {
             break cut;
         }
         if start == 0 {
-            break 0;
+            return Ok(None);
         }
     };
 
@@ -1747,16 +1768,14 @@ async fn read_page(
         .map(serde_json::from_str::<AgentEvent>)
         .collect::<Result<Vec<_>, _>>()
         .context("malformed session file")?;
-    let begins = start + cut as u64;
 
-    Ok(SessionPage { events, older_before: (begins > 0).then_some(begins) })
+    Ok(Some((events, start + cut as u64)))
 }
 
-/// Where in `buf` the `turns`-th newest turn opens, walking lines from the end.
-/// `None` until that many are in hand: the first line is only known whole where
-/// `at_top` says `buf` starts the file.
-fn turn_cut(buf: &[u8], at_top: bool, turns: u32) -> Option<usize> {
-    let mut found = 0;
+/// The newest whole line in `buf` that `matches`, as its start and its end
+/// past the newline, walking from the end. The first line is only known whole
+/// where `at_top` says `buf` starts the file.
+fn newest_line(buf: &[u8], at_top: bool, mut matches: impl FnMut(&[u8]) -> bool) -> Option<(usize, usize)> {
     let mut end = buf.len();
     while end > 0 {
         let body_end = if buf[end - 1] == b'\n' { end - 1 } else { end };
@@ -1765,15 +1784,62 @@ fn turn_cut(buf: &[u8], at_top: bool, turns: u32) -> Option<usize> {
             None if at_top => 0,
             None => return None,
         };
-        if opens_turn(&buf[start..body_end]) {
-            found += 1;
-            if found == turns {
-                return Some(start);
-            }
+        if matches(&buf[start..body_end]) {
+            return Some((start, end));
         }
         end = start;
     }
     None
+}
+
+/// Where in `buf` the `turns`-th newest turn opens, walking lines from the end.
+/// `None` until that many are in hand.
+fn turn_cut(buf: &[u8], at_top: bool, turns: u32) -> Option<usize> {
+    let mut found = 0;
+    newest_line(buf, at_top, |line| {
+        found += opens_turn(line) as u32;
+        found == turns
+    })
+    .map(|(start, _)| start)
+}
+
+/// Just past the newest line whose event id is in `held`.
+fn after_held(buf: &[u8], at_top: bool, held: &HashSet<String>) -> Option<usize> {
+    #[derive(Deserialize)]
+    struct Line {
+        id: String,
+    }
+    newest_line(buf, at_top, |line| {
+        serde_json::from_slice::<Line>(line).is_ok_and(|line| held.contains(&line.id))
+    })
+    .map(|(_, end)| end)
+}
+
+/// Everything logged after the newest event in `held`, for a client that kept
+/// a copy of the transcript and wants only what is new. `None` where no line
+/// names one — nothing held was ever logged — and the client reads the tail
+/// instead.
+///
+/// Keyed on event ids rather than a byte offset: a kept copy goes on taking
+/// live events long after the read that gave it an offset, so an offset would
+/// re-send all of those, where the ids the copy ends on say exactly where it
+/// stops. Never `seq`, which a subagent restarts.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn get_session_since(session_id: &str, after: Vec<String>) -> Result<Option<Vec<AgentEvent>>, Fail> {
+    Ok(read_since(session_id, after.into_iter().collect()).await?)
+}
+
+async fn read_since(session_id: &str, held: HashSet<String>) -> Result<Option<Vec<AgentEvent>>> {
+    let path = get_session_path(session_id).await?;
+    let mut file = match fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).context("could not open session file"),
+    };
+    let len = file.metadata().await?.len();
+    let found = read_back(&mut file, len, 64 * 1024, |buf, at_top| after_held(buf, at_top, &held)).await?;
+
+    Ok(found.map(|(events, _)| events))
 }
 
 /// A main-thread prompt that is not queued — the cut `buildTranscript` makes,
@@ -1950,6 +2016,10 @@ pub async fn append_session_event(session_id: &str, event: AgentEvent) -> Result
     let line = format!("{}\n", serde_json::to_string(&event)?);
 
     file.write_all(line.as_bytes()).await?;
+    // tokio's `write_all` answers once the bytes are handed to a blocking task,
+    // not once they are written. The flush waits for that write and carries its
+    // error, so a full disk is reported and two appends keep their order.
+    file.flush().await?;
 
     Ok(())
 }
@@ -2009,6 +2079,8 @@ pub async fn record_parse_failure(
         .context("failed to open parse failure log")?;
 
     file.write_all(line.as_bytes()).await?;
+    // Waited for, or the lock above is released before the write it guards.
+    file.flush().await?;
 
     Ok(())
 }
@@ -2496,7 +2568,7 @@ mod tests {
     /// `worktree add -B`, which resets the branch and takes its commits along.
     #[test]
     fn a_fork_records_its_parent_whichever_harness_it_is_on() {
-        for harness in [Harness::ClaudeCode, Harness::Pi, Harness::Grok] {
+        for harness in [Harness::ClaudeCode, Harness::Pi, Harness::Grok, Harness::Fx] {
             let parent = SessionIndexItem::new(
                 "parent",
                 harness,
@@ -2530,6 +2602,10 @@ mod tests {
         assert!(
             Harness::Grok.caps().fork_needs_cli,
             "its copy is a request, made on the child the first send spawns"
+        );
+        assert!(
+            !Harness::Fx.caps().fork_needs_cli,
+            "`fx session recover` made the copy at the press"
         );
     }
 
@@ -3019,6 +3095,38 @@ mod tests {
         );
     }
 
+    /// A fork into a new tree is indexed before the tree exists, and a server
+    /// restart in between must not read that as a tree someone deleted.
+    #[test]
+    fn a_fork_whose_tree_is_not_made_yet_keeps_its_worktree() {
+        let parent = SessionIndexItem::new(
+            "parent",
+            Harness::Codex,
+            "/p",
+            "/p",
+            None,
+            None,
+            "hi",
+            ModelId::new("gpt-6.1-sol"),
+            None,
+            ApprovalPolicy::Auto,
+            false,
+            None,
+        );
+        let mut items = vec![parent.fork("child", Some("calm-owl"))];
+
+        assert!(!mark_relocated(&mut items, |dir| dir == "/p"));
+        assert_eq!(items[0].cwd, "/p/.claude/worktrees/calm-owl");
+        assert_eq!(items[0].worktree_name.as_deref(), Some("calm-owl"));
+        assert!(!items[0].worktree_removed);
+
+        // Once it has spawned the instruction is cleared, and a missing tree
+        // means what it always did.
+        items[0].fork_from = None;
+        assert!(mark_relocated(&mut items, |dir| dir == "/p"));
+        assert_eq!(items[0].cwd, "/p");
+    }
+
     /// Dray's own delete used to set `cwd = project_path` flat, so a session
     /// whose project was the caller's tree landed in that caller's checkout —
     /// and the backfill could never heal it, since the result exists.
@@ -3219,5 +3327,29 @@ mod page_tests {
 
         assert_eq!(pages, 3);
         assert_eq!(seqs, (0..10).collect::<Vec<_>>());
+    }
+
+    /// A kept copy gets back what follows the newest event it holds, whatever
+    /// older ids it also names, and nothing where none of them were logged.
+    #[tokio::test]
+    async fn reads_only_what_follows_the_newest_held_event() {
+        let events: Vec<String> = (0..6u64).map(|t| prompt(t, false)).collect();
+        let log: String = events.concat();
+        let id = |line: &str| serde_json::from_str::<Value>(line).unwrap()["id"].as_str().unwrap().to_owned();
+        let since = |held: &[String]| {
+            let mut file = std::io::Cursor::new(log.clone().into_bytes());
+            let held: HashSet<String> = held.iter().cloned().collect();
+            let len = log.len() as u64;
+            async move {
+                read_back(&mut file, len, 7, |buf, top| after_held(buf, top, &held))
+                    .await
+                    .unwrap()
+                    .map(|(events, _)| events.iter().map(|e| e.seq).collect::<Vec<_>>())
+            }
+        };
+
+        assert_eq!(since(&[id(&events[1]), id(&events[3]), "unlogged".into()]).await, Some(vec![4, 5]));
+        assert_eq!(since(&[id(&events[5])]).await, Some(vec![]));
+        assert_eq!(since(&["unlogged".into()]).await, None);
     }
 }

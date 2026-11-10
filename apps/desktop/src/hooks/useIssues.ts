@@ -463,6 +463,12 @@ const defaultQuery = (tracker: IssueQuery["tracker"]): IssueQuery => ({
   settled: false,
 });
 
+/// The page's query as last set, kept past an unmount. The page hides rather
+/// than unmounts on a trip into a session, but the new-task view drops the
+/// whole column — and Work on this issue goes exactly there, so coming back
+/// from it had reset every filter.
+let heldQuery: IssueQuery | null = null;
+
 /// One list read, cached and debounced. The page runs two of these.
 ///
 /// `enabled` is what makes the settled half free: a read that is never asked
@@ -585,7 +591,9 @@ function useIssueList(query: IssueQuery, enabled: boolean, generation: number) {
 /// change it cannot disagree about what is on screen — the page draws what this
 /// answers and owns none of it.
 export function useIssues(active: boolean, tracker: IssueQuery["tracker"] = "linear") {
-  const [query, setQuery] = useState<IssueQuery>(() => defaultQuery(tracker));
+  const [query, setQuery] = useState<IssueQuery>(() =>
+    heldQuery?.tracker === tracker ? heldQuery : defaultQuery(tracker),
+  );
   const [filters, setFilters] = useState<IssueFilters | null>(null);
 
   // A tracker switch is a different workspace, so both the narrowing and the
@@ -677,6 +685,7 @@ export function useIssues(active: boolean, tracker: IssueQuery["tracker"] = "lin
     setQuery: useCallback(
       (next: IssueQuery) => {
         if (next.tracker === "github") setIssueRepo(next.teamId);
+        heldQuery = next;
         setQuery(next);
       },
       [],

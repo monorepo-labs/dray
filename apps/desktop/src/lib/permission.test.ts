@@ -61,7 +61,15 @@ describe("stanceFor", () => {
   it("records what will happen for an inherited stance nothing honours", () => {
     expect(stanceFor("pi", "auto")).toBe("bypassPermissions");
     expect(stanceFor("pi", "manual")).toBe("bypassPermissions");
-    expect(stanceFor("codex", "plan")).toBe("bypassPermissions");
+  });
+
+  /// A spawned session inherits its parent's stance, and codex.rs runs `plan`
+  /// read-only and `dontAsk` sandboxed. Full access is wider than either.
+  it("never widens an inherited stance on a harness that gates", () => {
+    for (const harness of ["codex", "fx", "grok"] as const) {
+      expect(stanceFor(harness, "plan")).toBe("manual");
+    }
+    expect(stanceFor("codex", "dontAsk")).toBe("auto");
   });
 
   /// The alarming direction to be wrong in. A session recorded `plan` and

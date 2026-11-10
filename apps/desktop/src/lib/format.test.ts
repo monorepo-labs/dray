@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { calendarDay } from "@/lib/format";
+import { calendarDay, truncate } from "@/lib/format";
 
 /// Fixed so "today" is a known afternoon rather than whenever the suite runs —
 /// every case here is about which side of a midnight a timestamp falls on, and
@@ -51,5 +51,17 @@ describe("calendarDay", () => {
   /// — reads as today rather than as a negative day count.
   it("reads a future stamp as today", () => {
     expect(calendarDay(new Date(2026, 7, 28, 9, 0).toISOString())).toBe("Today");
+  });
+});
+
+describe("truncate", () => {
+  it("cuts at the limit and leaves a short string whole", () => {
+    expect(truncate("abcdef", 3)).toBe("abc…");
+    expect(truncate("abc", 3)).toBe("abc");
+  });
+
+  it("never cuts through an emoji", () => {
+    expect(truncate("ab😀cd", 3)).toBe("ab…");
+    expect(truncate("ab😀cd", 4)).toBe("ab😀…");
   });
 });

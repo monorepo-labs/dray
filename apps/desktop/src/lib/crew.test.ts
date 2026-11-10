@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { crewAnchor, crewRows, crewSeen, hiddenChildren, inSidebar, withHiddenAsks } from "@/lib/crew";
+import { crewRows, crewSeen, hiddenChildren, inSidebar, withHiddenAsks } from "@/lib/crew";
 import type { SessionIndexItem, SessionStatus } from "@/types/events";
 
 const item = (
@@ -52,13 +52,22 @@ describe("crewRows", () => {
     expect(crewRows(items, null, quiet)).toEqual([]);
   });
 
-  // The depth cap allows a spawned session to spawn, so a grandchild exists.
-  // A flat list cannot say one row belongs to another, so it sat there as a
-  // peer of the session that started it. It is one ⌘-click away instead.
-  it("stops at the selected session's own children", () => {
-    const items = [item("a", null), item("b", "a"), item("c", "b")];
-    expect(ids(crewRows(items, "a", quiet))).toEqual(["b"]);
+  // A grandchild's card must surface on the root too: a hidden parent is
+  // never the selection, so it would otherwise be unanswerable.
+  it("walks every depth, each child followed by its own", () => {
+    const items = [
+      item("a", null),
+      item("b", "a", { created: "2026-09-02T00:00:00Z" }),
+      item("c", "b"),
+      item("d", "a", { created: "2026-09-01T00:00:00Z" }),
+    ];
+    expect(ids(crewRows(items, "a", quiet))).toEqual(["b", "c", "d"]);
     expect(ids(crewRows(items, "b", quiet))).toEqual(["c"]);
+  });
+
+  it("survives a cycle in the index", () => {
+    const items = [item("a", null), item("b", "a"), item("c", "b"), item("a", "c")];
+    expect(ids(crewRows(items, "a", quiet))).toEqual(["b", "c"]);
   });
 
   it("refuses a session that names itself as its own parent", () => {
@@ -66,8 +75,13 @@ describe("crewRows", () => {
     expect(ids(crewRows(items, "a2", quiet))).toEqual([]);
   });
 
-  it("drops archived sessions", () => {
-    const items = [item("a", null), item("b", "a", { archived: true }), item("c", "a")];
+  it("drops archived sessions, and what sits under them", () => {
+    const items = [
+      item("a", null),
+      item("b", "a", { archived: true }),
+      item("b2", "b"),
+      item("c", "a"),
+    ];
     expect(ids(crewRows(items, "a", quiet))).toEqual(["c"]);
   });
 
@@ -101,60 +115,6 @@ describe("crewRows", () => {
   });
 });
 
-describe("crewAnchor", () => {
-  const items = [item("a", null), item("b", "a"), item("c", "a"), item("solo", null)];
-
-  it("anchors a session that spawned something to itself", () => {
-    expect(crewAnchor(items, "a", null)).toBe("a");
-  });
-
-  // Opening a crew row selects it. Read straight off the selection the crew
-  // would delete itself on the first click it received.
-  it("survives one of its own rows being selected", () => {
-    expect(crewAnchor(items, "b", "a")).toBe("a");
-  });
-
-  it("goes when the reader leaves for a session it was not showing", () => {
-    expect(crewAnchor(items, "solo", "a")).toBe(null);
-    expect(crewAnchor(items, null, "a")).toBe(null);
-  });
-
-  // Narrower than "a child keeps its parent's crew": reached from the sidebar
-  // with no crew up, B is full width.
-  it("does not conjure a crew for a child reached from nowhere", () => {
-    expect(crewAnchor(items, "b", null)).toBe(null);
-  });
-
-  // A spawned session may spawn, so a row can have children of its own. Asking
-  // "does the selection have descendants" first made that row the anchor, which
-  // swapped the list and took the main column with it — the crew reading as a
-  // replacement for the conversation rather than a column beside it.
-  it("keeps the anchor when a row with children of its own is selected", () => {
-    const nested = [item("a", null), item("b", "a"), item("c", "b")];
-    expect(crewAnchor(nested, "b", "a")).toBe("a");
-  });
-
-  // The grandchild is not a row of A's crew, so nothing holds A — and C
-  // started nothing, so it anchors none of its own. Reaching it at all means
-  // having left the crew, which is what makes this the right answer.
-  it("lets go when the selection is below the crew it was showing", () => {
-    const nested = [item("a", null), item("b", "a"), item("c", "b")];
-    expect(crewAnchor(nested, "c", "a")).toBe(null);
-  });
-
-  // Reached with no crew up it still anchors its own, which is clause 2 doing
-  // its job rather than clause 1 being skipped.
-  it("still anchors a row with children when it is reached from nowhere", () => {
-    const nested = [item("a", null), item("b", "a"), item("c", "b")];
-    expect(crewAnchor(nested, "b", null)).toBe("b");
-  });
-
-  it("drops an anchor whose own rows have all been archived", () => {
-    const settled = [item("a", null), item("b", "a", { archived: true })];
-    expect(crewAnchor(settled, "a", "a")).toBe(null);
-  });
-});
-
 describe("crewSeen", () => {
   const items = [item("a", null), item("b", "a"), item("c", "a")];
 
@@ -168,8 +128,8 @@ describe("crewSeen", () => {
     expect(crewSeen(crewRows(items, "a", live), true)).toEqual(["b", "c"]);
   });
 
-  // Put away with the chord, behind another view tab, or anchored outside the
-  // active space: a child that cannot be seen must still announce.
+  // Behind another view tab, on the issues page or beside a split: a child
+  // whose card cannot be seen must still announce.
   it("names nobody where the column is not drawn", () => {
     expect(crewSeen(crewRows(items, "a", quiet), false)).toEqual([]);
   });
@@ -192,7 +152,7 @@ describe("hidden sessions", () => {
     expect(inSidebar(settled).map((i) => i.sessionId)).toEqual(["a"]);
   });
 
-  it("still draws it in the parent's crew", () => {
+  it("still lists it under the parent", () => {
     expect(ids(crewRows(items, "a", quiet))).toContain("review");
   });
 

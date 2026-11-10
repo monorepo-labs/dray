@@ -1,3 +1,4 @@
+import { splitPath } from "@/lib/transport";
 import type { Project } from "@/types/events";
 
 /// Where the active space is stored. Read outside React by `announce`, which
@@ -127,5 +128,5 @@ export function allowedInSpace(
 /// every absolute path on this machine shares, so it separates nothing and only
 /// costs the rest of the path a character of width.
 export function displayPath(path: string): string {
-  return path.replace(/^\//, "");
+  return splitPath(path).path.replace(/^\//, "");
 }

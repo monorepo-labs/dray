@@ -3,8 +3,9 @@
 //! `gh` rather than the REST API on purpose: it already holds the user's auth,
 //! their enterprise host config, and the token refresh we would otherwise have
 //! to own. The cost is that the feature is absent where `gh` isn't installed or
-//! isn't logged in — both surface as a readable line in the panel rather than
-//! an error, since this is a side view and never the reason the app is open.
+//! isn't logged in — both surface in the panel as the command that cures them
+//! rather than an error, since this is a side view and never the reason the
+//! app is open.
 
 use anyhow::Result;
 use serde::de::{DeserializeOwned, IgnoredAny};
@@ -200,7 +201,7 @@ fragment pr on PullRequest{
  commits(last:1){nodes{commit{statusCheckRollup{contexts(first:50){nodes{
    __typename
    ... on StatusContext{context state targetUrl avatarUrl}
-   ... on CheckRun{name status conclusion detailsUrl checkSuite{workflowRun{workflow{name}} app{name logoUrl}}}
+   ... on CheckRun{name status conclusion detailsUrl checkSuite{workflowRun{workflow{name}} app{logoUrl}}}
  }}}}}}
 }
 "#;
@@ -717,10 +718,9 @@ impl RawPr {
 /// Why there is nothing to show, when the reason is not "this branch has no PR".
 ///
 /// Typed rather than a string because the frontend acts differently on each:
-/// a missing `gh` hides the tab outright — the app has no business claiming a
-/// GitHub feature on a machine with no GitHub CLI — while a `gh` that is merely
-/// logged out keeps the tab and says so, since someone who installed it clearly
-/// works with GitHub and the fix is one command.
+/// no GitHub remote hides the tab outright, while a `gh` that is missing or
+/// logged out keeps it and names the command that cures it — the reader is in
+/// a GitHub repo, and the tab is the only place the app can say so.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "snake_case", tag = "kind", content = "detail")]
@@ -1176,11 +1176,28 @@ pub async fn delete_branch(cwd: String, number: u64) -> Result<(), String> {
 
     let branch = head_ref_to_delete(&out)?;
 
-    // `refs/heads/<branch>` is a path here, so a branch name carrying slashes
-    // needs no escaping — `fix/thing` addresses the ref it names.
-    let path = format!("repos/{owner}/{repo}/git/refs/heads/{branch}");
+    let path = format!("repos/{owner}/{repo}/git/refs/heads/{}", ref_path(&branch));
 
     gh(&cwd, &["api", "-X", "DELETE", &path]).await.map(|_| ())
+}
+
+/// A branch name as the tail of a REST path.
+///
+/// Slashes stay: `refs/heads/<branch>` is a path, so `fix/thing` addresses the
+/// ref it names. Everything else outside the unreserved set is escaped, because
+/// a ref may hold what a URL gives meaning to — `gh api` cuts the path at a
+/// `#`, so deleting `release#hotfix` sent the DELETE for `release`.
+fn ref_path(branch: &str) -> String {
+    let mut out = String::with_capacity(branch.len());
+    for byte in branch.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 /// The branch `delete_branch` may delete, or why it may not.
@@ -1486,10 +1503,6 @@ mod tests {
         assert_eq!((pr.additions, pr.deletions, pr.changed_files), (2155, 66, 22));
     }
 
-    /// `headRefName` outlives the branch — a merged PR goes on naming the one
-    /// it came from — so only `headRef` going null says the ref is gone.
-    /// Verified against the live API: deleting the branch flipped `headRef` to
-    /// null and left `headRefName` exactly as it was.
     /// The connections are read together, and the open one is not a filter
     /// on the other: a merged PR and an open one on the same branch both
     /// come back, open first, whichever alias each arrived under.
@@ -1502,6 +1515,10 @@ mod tests {
         assert_eq!(numbers, vec![9, 7]);
     }
 
+    /// `headRefName` outlives the branch — a merged PR goes on naming the one
+    /// it came from — so only `headRef` going null says the ref is gone.
+    /// Verified against the live API: deleting the branch flipped `headRef` to
+    /// null and left `headRefName` exactly as it was.
     #[test]
     fn head_ref_says_whether_the_branch_is_still_there() {
         let out = |head_ref: &str| {
@@ -1558,6 +1575,16 @@ mod tests {
     fn a_same_repo_branch_resolves_to_its_own_name() {
         let out = r#"{"headRefName":"fix/slash","isCrossRepository":false}"#;
         assert_eq!(head_ref_to_delete(out).unwrap(), "fix/slash");
+    }
+
+    /// A ref may hold what a URL reads as syntax, and the request must still
+    /// name that ref and no shorter one.
+    #[test]
+    fn a_branch_name_survives_being_a_url_path() {
+        assert_eq!(ref_path("fix/slash"), "fix/slash");
+        assert_eq!(ref_path("release#hotfix"), "release%23hotfix");
+        assert_eq!(ref_path("a?b%c d"), "a%3Fb%25c%20d");
+        assert_eq!(ref_path("naïve"), "na%C3%AFve");
     }
 
     /// Absence has to read as *gone*, not as there. The button is the one

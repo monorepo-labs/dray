@@ -35,6 +35,36 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// Trackpad pinches, read off a listen-only event tap. AppKit hands a pinch to the
+/// active app alone, which the island never is, and a global `NSEvent` monitor
+/// hears none either (measured), so the window server's own gesture events are
+/// read instead: type 29, zoom where field 110 is 8, step in 113, phase in 132.
+enum PinchTap {
+    /// Each step's change and its phase (1 began, 2 changed, 4 ended), on the main thread.
+    nonisolated(unsafe) static var onPinch: (Double, Int64) -> Void = { _, _ in }
+    nonisolated(unsafe) private static var tap: CFMachPort?
+
+    /// False where the system refused the tap; the menu's toggle still works.
+    static func start() -> Bool {
+        guard tap == nil else { return true }
+        tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .listenOnly,
+                                eventsOfInterest: 1 << 29, callback: { _, type, e, _ in
+            // A slow callback gets the tap disabled; turn it back on.
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                if let tap = PinchTap.tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            } else if e.getIntegerValueField(CGEventField(rawValue: 110)!) == 8 {
+                let zoom = e.getDoubleValueField(CGEventField(rawValue: 113)!)
+                let phase = e.getIntegerValueField(CGEventField(rawValue: 132)!)
+                DispatchQueue.main.async { PinchTap.onPinch(zoom, phase) }
+            }
+            return Unmanaged.passUnretained(e)
+        }, userInfo: nil)
+        guard let tap else { return false }
+        CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
+        return true
+    }
+}
+
 /// A panel that takes keys without making Dray Island the active app, so the
 /// app the reader is working in keeps its place in the window order.
 final class IslandPanel: NSPanel {
@@ -71,6 +101,14 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var composer: Composer?
     private var hotkey: ModifierTap?
     private var keys: Any?
+    private var swipes: Any?
+    /// One sideways swipe's travel so far, and whether it has stepped the open image yet.
+    private var swiped: CGFloat = 0
+    private var swipeStepped = false
+    /// One pinch's magnification so far: the event carries only each step's change.
+    private var pinched: CGFloat = 0
+    /// The pinch under way began over the card.
+    private var pinchOnCard = false
     /// ⌘Esc from anywhere, held while the panel is open: bare Esc only reaches it while it has focus,
     /// and AppKit never hands ⌘Esc to the key monitor at all.
     private var closeKey: HotKey?
@@ -78,6 +116,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var captureKey: HotKey?
     /// ⌘⏎ from anywhere, held while the done pill is up: Open in app on the newest.
     private var openKey: HotKey?
+    /// Bare Esc from anywhere, held while the done pill is up: the pill is never key, so no key monitor sees it.
+    private var dismissKey: HotKey?
     private static weak var shared: Delegate?
     /// The first of a double tap, while the panel is shut.
     private var lastTap: Date?
@@ -204,27 +244,65 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        // SwiftUI keeps every timeline ticking in a window nobody can see: an open panel left
+        // on another Space burned 11% of a core for a day (#759).
+        NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: panel, queue: .main) { [weak composer, weak panel] _ in
+            MainActor.assumeIsolated { composer?.onScreen = panel?.occlusionState.contains(.visible) ?? false }
+        }
         // Only losing the keys moves the hint; getting them back waits for the next open, so it never flickers.
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak composer] _ in
             MainActor.assumeIsolated { composer?.keyed = false }
         }
+        // A trackpad pinch over the card: out opens the transcript, in puts it away.
+        // Over the card only: the panel's clear part lets a pinch through to the app beneath.
+        PinchTap.onPinch = { [weak self, weak composer, weak panel] zoom, phase in
+            guard let self, let composer, let panel else { return }
+            // Judged once, where the pinch begins: one that starts elsewhere and
+            // drifts onto the card is not the card's, and starts its own count.
+            if phase == 1 {
+                pinched = 0
+                pinchOnCard = composer.shown
+                    && NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == panel.windowNumber
+            }
+            guard pinchOnCard, composer.shown else { return }
+            pinched += zoom
+            let want = pinched > 0.15 ? true : pinched < -0.15 ? false : composer.transcript
+            if want != composer.transcript {
+                composer.transcript = want
+                composer.pinched()
+                NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+            }
+        }
+        _ = PinchTap.start()
         // The panel's keys, here rather than on views, which answer only
         // while focus sits inside them. Key codes: Escape 53, N 45, F 3, ↓ 125, ↑ 126, A 0, E 14, T 17, P 35, Tab 48.
         keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak composer, weak panel] e in
             // A capture's overlay holds the keys while it runs: Esc there cancels it, not the panel.
             guard panel?.isVisible == true, let composer, composer.shown, !composer.capturing else { return e }
+            // An open image takes every key: ← → step it, Esc closes it, and nothing
+            // reaches the draft under it, or Return would send what the reader cannot see.
+            if composer.viewing != nil {
+                switch e.keyCode {
+                case 53: composer.viewing = nil
+                case 123: composer.step(-1)
+                case 124: composer.step(1)
+                default: break
+                }
+                return nil
+            }
             let mods = e.modifierFlags.intersection([.command, .shift, .option, .control])
             switch (e.keyCode, mods) {
             // Throwing away speech takes ⌘Esc, the hot key below: a bare Esc is too easy a slip mid-sentence.
             case (53, _) where composer.listening: break
             case (53, _): composer.escape()
             // A card takes Return to submit its answers, and digits to pick a permission option.
-            case (36, []) where composer.isQuestions: composer.submits += 1
+            case (36, []) where composer.isQuestions && !composer.listing: composer.submits += 1
             case (36, []) where composer.ask == nil:
                 if composer.listShown { composer.choose() } else { Task { await composer.send() } }
             // Unless the caret is in a card's text box, where a digit is typed.
             case (let code, []) where composer.ask != nil && Self.digits[code] != nil && !(panel?.firstResponder is NSText):
-                composer.pickOption(Self.digits[code]!)
+                // One press, one answer: a key held past the first card went on to answer the next one unread.
+                if !e.isARepeat { composer.pickOption(Self.digits[code]!) }
             case (45, .command): composer.pick(.new)
             case (3, .command): composer.searches += 1
             case (36, .command): composer.addTyped()
@@ -243,6 +321,21 @@ final class Delegate: NSObject, NSApplicationDelegate {
             }
             return nil
         }
+        // A two-finger sideways swipe steps an open image, once a swipe, the way
+        // the fingers went: left for the next. Its momentum is swallowed too.
+        swipes = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self, weak composer] e in
+            guard let self, let composer else { return e }
+            guard composer.viewing != nil else { return Self.sidewaysGoesSomewhere(e) ? e : nil }
+            if e.phase == .began { swiped = 0; swipeStepped = false }
+            guard e.phase == .changed, !swipeStepped, abs(e.scrollingDeltaX) > abs(e.scrollingDeltaY) else { return nil }
+            // Natural scrolling reports the fingers' own direction; the other setting flips it.
+            swiped += e.isDirectionInvertedFromDevice ? e.scrollingDeltaX : -e.scrollingDeltaX
+            if abs(swiped) > 30 {
+                swipeStepped = true
+                composer.step(swiped < 0 ? 1 : -1)
+            }
+            return nil
+        }
 
         hotkey = ModifierTap { [weak self] in self?.pressed() }
         // One chord to remember: mid-recording it throws the speech away, and
@@ -254,6 +347,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
         openKey = HotKey(key: kVK_Return, mods: cmdKey) { [weak composer] in
             guard let composer, composer.donePillUp, let key = composer.done.last else { return }
             composer.openDoneInApp(key)
+        }
+        dismissKey = HotKey(key: kVK_Escape, mods: 0) { [weak composer] in
+            guard let composer, composer.donePillUp else { return }
+            composer.done = []
         }
         composer.recordingChanged = { [weak self] recording in
             if recording { self?.startAnnotation() } else { self?.endAnnotation() }
@@ -289,6 +386,15 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 MainActor.assumeIsolated { Delegate.shared?.updateIfReplaced() }
             }
         }, "com.yogesh.dray.island.update" as CFString, nil, .deliverImmediately)
+        // Dray's window connected to a machine or lost one.
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), nil, { _, _, _, _, _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let composer = Delegate.shared?.composer else { return }
+                    Task { await composer.followApp() }
+                }
+            }
+        }, "com.yogesh.dray.island.links" as CFString, nil, .deliverImmediately)
         // The tap's twin for other processes: Dray.app, or a script driving the panel.
         DistributedNotificationCenter.default().addObserver(forName: .init("com.yogesh.dray.island.tap"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.pressed() }
@@ -391,6 +497,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         // is still reading the displays would otherwise start a second overlay.
         guard let composer, let panel, !composer.capturing, [.idle, .recording].contains(composer.dictation) else { return }
         composer.capturing = true
+        dismissKey?.held = false
         let recording = composer.dictation == .recording, wasShown = composer.shown
         let slot = composer.reserveShot()
         let cut = recording ? Task { await composer.cutDictation(before: slot) } : nil
@@ -406,6 +513,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         Task {
             defer {
                 composer.capturing = false
+                dismissKey?.held = composer.donePillUp
                 // Dictation may have stopped during the flight or the cut, where `endAnnotation` left the level to this.
                 panel.level = annotation == nil ? .statusBar : Self.overOverlay
                 if updatePending { updateIfReplaced() }
@@ -439,6 +547,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         composer.shown = true
         closeKey?.held = true
         openKey?.held = false
+        dismissKey?.held = false
     }
 
     /// Takes the window down once the close animation has run, unless
@@ -447,6 +556,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self, let panel, let composer, !composer.shown else { return }
             panel.orderOut(nil)
+            // A held transcript takes every event its session sends. The pinned one stays,
+            // or every open would read it again and the card grow under the reader.
+            composer.store.dropTranscripts(keeping: composer.key)
             if updatePending { updateIfReplaced() }
         }
     }
@@ -456,6 +568,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private func showPills() {
         guard let pills, let composer else { return }
         openKey?.held = composer.donePillUp
+        // A capture's overlay takes Esc to cancel; a hot key would get it first.
+        dismissKey?.held = composer.donePillUp && !composer.capturing
         if composer.hasPill {
             pills.orderFrontRegardless()
             pills.rejoinAllSpacesIfLost()
@@ -466,6 +580,19 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 self.pills?.orderOut(nil)
             }
         }
+    }
+
+    /// False for a sideways swipe over nothing that scrolls sideways, which is
+    /// dropped: AppKit rubber-bands whatever scroll view sits under it, and the
+    /// whole transcript slid with the fingers. A wide code block still scrolls.
+    private static func sidewaysGoesSomewhere(_ e: NSEvent) -> Bool {
+        guard abs(e.scrollingDeltaX) > abs(e.scrollingDeltaY) else { return true }
+        var view = e.window?.contentView?.hitTest(e.locationInWindow)
+        while let v = view {
+            if let s = v as? NSScrollView, (s.documentView?.frame.width ?? .infinity) > s.contentSize.width + 1 { return true }
+            view = v.superview
+        }
+        return false
     }
 
     /// Key codes of 1 through 9, which are not in order on the keyboard.

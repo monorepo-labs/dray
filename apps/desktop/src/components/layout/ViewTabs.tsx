@@ -2,7 +2,7 @@ import {
   ChatBubbleOvalLeftIcon,
   DocumentPlusIcon,
 } from "@heroicons/react/16/solid";
-import { Folder, Plus, X } from "lucide-react";
+import { Folder, Plus, Server, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 
 import AgentBeam from "@/components/browser/AgentBeam";
@@ -25,6 +25,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useDragReorder } from "@/hooks/useDragReorder";
+import { serverName, useServers } from "@/lib/servers";
+import { LOCAL, type ServerId } from "@/lib/transport";
 import { useDigitHotkey, useHotkey } from "@/hooks/useHotkey";
 import { activateFile, closeFile, reopenFile, useOpenFiles } from "@/hooks/useOpenFiles";
 import {
@@ -128,6 +130,7 @@ export default function ViewTabs({
   cwd,
   alignX = 0,
   rename,
+  machine,
   working = false,
 }: {
   /// Mid-turn: off Chat, the chat tab's icon says so, since the transcript
@@ -144,9 +147,15 @@ export default function ViewTabs({
   alignX?: number;
   /// The chat's tab, which stands for the session: `project / title`.
   title: string;
+  /// Which machine the session runs on. This Mac is never named: no name is
+  /// what says local.
+  machine?: ServerId;
   tab: ViewTab;
   onChange: (tab: ViewTab) => void;
 }) {
+  // Read for the re-render alone: a server renamed moves the name in the tab.
+  useServers();
+  const server = machine && machine !== LOCAL ? serverName(machine) : null;
   const loadedPages = useBrowserTabs(sessionId);
   const pages = loadedPages ?? [];
   const pending = usePendingTab(sessionId);
@@ -501,8 +510,14 @@ export default function ViewTabs({
         </span>
       )}
       {/* At the row's far end, where it gives way before any tab does. */}
+      {server && (
+        <span className="ml-auto flex min-w-6.5 shrink-[999] items-center gap-1 overflow-hidden pl-2 text-ui text-muted-foreground animate-in fade-in duration-200">
+          <Server className="size-3.5 shrink-0" />
+          <span className="truncate">{server}</span>
+        </span>
+      )}
       {branch && cwd && (
-        <span className="ml-auto flex min-w-6.5 shrink-[999] pl-2 text-ui animate-in fade-in duration-200">
+        <span className={cn("flex min-w-6.5 shrink-[999] pl-2 text-ui animate-in fade-in duration-200", !server && "ml-auto")}>
           <BranchButton branch={branch} cwd={cwd} />
         </span>
       )}

@@ -59,9 +59,10 @@ struct PrGlyph: View {
 /// one turn every 3s.
 struct ChecksSpinner: View {
     @Environment(\.accessibilityReduceMotion) private var still
+    @Environment(\.motionPaused) private var hidden
 
     var body: some View {
-        TimelineView(.animation(paused: still)) { timeline in
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: still || hidden)) { timeline in
             Circle()
                 .inset(by: 1.5)
                 .stroke(.yellow, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [2.4, 3]))

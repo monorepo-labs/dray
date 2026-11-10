@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::LazyLock,
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -38,6 +39,13 @@ pub struct Project {
     /// leaving takes it with them.
     #[serde(default)]
     pub space: Option<String>,
+    /// The repository this checkout is of, so one repo on several machines reads
+    /// as one project. Read from git on every list and never saved, since a
+    /// remote can change under us. Absent from a server older than this field
+    /// and from a repo with no shared remote, both of which group on `path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub remote: Option<String>,
     /// Which project launch reopens, and nothing else. It was the sort key too,
     /// which moved every picker's rows on each pick; order is now the file's
     /// own, set by the reader in Settings.
@@ -45,6 +53,7 @@ pub struct Project {
 }
 
 static PROJECTS_LOCK: Mutex<()> = Mutex::const_new(());
+const REMOTE_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Resolves symlinks and drops any trailing slash, so `/x/proj` and `/x/proj/`
 /// can't become two projects and split the sidebar's grouping. A leading `~/`
@@ -74,9 +83,43 @@ fn home() -> Result<PathBuf> {
 ///
 /// Unsorted on purpose: files written before order was manual were saved
 /// most-recent-first, so that is simply where an existing list starts.
+pub async fn read_projects() -> Result<Vec<Project>, Fail> {
+    Ok(read_json(&projects_path().await?).await?)
+}
+
+/// Every attached project, each with its remote read off git.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_projects() -> Result<Vec<Project>, Fail> {
-    Ok(read_json(&projects_path().await?).await?)
+    refresh_remotes().await;
+    Ok(with_remotes(read_projects().await?))
+}
+
+/// Each project's remote as last read. Shared rather than local to a command, so
+/// a checkout another request attached while this one read still answers its own.
+static REMOTES: LazyLock<std::sync::Mutex<HashMap<String, Option<String>>>> = LazyLock::new(Default::default);
+
+/// One checkout's remote. A stalled disk answers none rather than holding
+/// everything back, and the checkout groups on its path until it recovers.
+async fn refresh_remote(path: &str) {
+    let found = tokio::time::timeout(REMOTE_WAIT, git::shared_remote(path)).await.ok().flatten();
+    REMOTES.lock().unwrap_or_else(|e| e.into_inner()).insert(path.to_string(), found);
+}
+
+/// Every attached project's remote, one `git` at once per project. Every command
+/// answering a list calls this first and takes the lock after: an answer is the
+/// whole list and the client keeps the last to arrive, so git run after the write
+/// let an older answer land last and put a removed project back.
+async fn refresh_remotes() {
+    let projects = read_projects().await.unwrap_or_default();
+    futures_util::future::join_all(projects.iter().map(|p| refresh_remote(&p.path))).await;
+}
+
+fn with_remotes(projects: Vec<Project>) -> Vec<Project> {
+    let remotes = REMOTES.lock().unwrap_or_else(|e| e.into_inner());
+    projects
+        .into_iter()
+        .map(|project| Project { remote: remotes.get(&project.path).cloned().flatten(), ..project })
+        .collect()
 }
 
 async fn projects_path() -> Result<std::path::PathBuf> {
@@ -95,10 +138,12 @@ async fn write_projects(projects: &[Project]) -> Result<()> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn add_project(path: &str) -> Result<Vec<Project>, Fail> {
     let path = canonical(path).await?;
+    refresh_remotes().await;
+    refresh_remote(&path).await;
 
     let _guard = PROJECTS_LOCK.lock().await;
     let _across = crate::store::lock_across_processes("projects.json").await;
-    let mut projects = list_projects().await?;
+    let mut projects = read_projects().await?;
     let now = now_rfc3339();
 
     match projects.iter_mut().find(|p| p.path == path) {
@@ -107,27 +152,29 @@ pub async fn add_project(path: &str) -> Result<Vec<Project>, Fail> {
             name: basename(&path),
             path,
             space: None,
+            remote: None,
             last_selected: now,
         }),
     }
 
     write_projects(&projects).await?;
 
-    Ok(projects)
+    Ok(with_remotes(projects))
 }
 
 /// Detaches a project. Sessions that ran in it are untouched — they keep their
 /// own recorded paths and stay in the sidebar.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn remove_project(path: &str) -> Result<Vec<Project>, Fail> {
+    refresh_remotes().await;
     let _guard = PROJECTS_LOCK.lock().await;
     let _across = crate::store::lock_across_processes("projects.json").await;
-    let mut projects = list_projects().await?;
+    let mut projects = read_projects().await?;
 
     projects.retain(|p| p.path != path);
     write_projects(&projects).await?;
 
-    Ok(projects)
+    Ok(with_remotes(projects))
 }
 
 /// Stamps a project as the most recently selected, which is what launch
@@ -137,7 +184,7 @@ pub async fn remove_project(path: &str) -> Result<Vec<Project>, Fail> {
 pub async fn set_last_selected_project(path: &str) -> Result<(), Fail> {
     let _guard = PROJECTS_LOCK.lock().await;
     let _across = crate::store::lock_across_processes("projects.json").await;
-    let mut projects = list_projects().await?;
+    let mut projects = read_projects().await?;
 
     let Some(project) = projects.iter_mut().find(|p| p.path == path) else {
         return Ok(());
@@ -153,35 +200,37 @@ pub async fn set_last_selected_project(path: &str) -> Result<(), Fail> {
 /// switcher that nothing could ever be moved out of.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_project_space(path: &str, space: Option<String>) -> Result<Vec<Project>, Fail> {
+    refresh_remotes().await;
     let _guard = PROJECTS_LOCK.lock().await;
     let _across = crate::store::lock_across_processes("projects.json").await;
-    let mut projects = list_projects().await?;
+    let mut projects = read_projects().await?;
 
     // By index, not `iter_mut().find()`: the borrow checker will not let the
     // not-found arm hand the list back while a mutable borrow of it is alive.
     let Some(i) = projects.iter().position(|p| p.path == path) else {
-        return Ok(projects);
+        return Ok(with_remotes(projects));
     };
 
     projects[i].space = normalize_space(space);
     write_projects(&projects).await?;
 
-    Ok(projects)
+    Ok(with_remotes(projects))
 }
 
 /// Steps a project `delta` places in the order every picker draws. Past either
 /// end is a no-op rather than a wrap, matching the spaces list beside it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn move_project(path: &str, delta: isize) -> Result<Vec<Project>, Fail> {
+    refresh_remotes().await;
     let _guard = PROJECTS_LOCK.lock().await;
     let _across = crate::store::lock_across_processes("projects.json").await;
-    let mut projects = list_projects().await?;
+    let mut projects = read_projects().await?;
 
     if move_by(&mut projects, path, delta) {
         write_projects(&projects).await?;
     }
 
-    Ok(projects)
+    Ok(with_remotes(projects))
 }
 
 /// The edit [`move_project`] makes, split from the file so it can be tested.
@@ -232,9 +281,10 @@ fn retag(projects: &mut [Project], from: &str, to: Option<String>) -> bool {
 /// lock, so it either all lands or none of it does.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>, Fail> {
+    refresh_remotes().await;
     let _guard = PROJECTS_LOCK.lock().await;
     let _across = crate::store::lock_across_processes("projects.json").await;
-    let mut projects = list_projects().await?;
+    let mut projects = read_projects().await?;
 
     // A space nobody had filled yet carries no tag, so changing nothing is the
     // ordinary path for renaming one — and a rewrite that moves no value is one
@@ -243,7 +293,7 @@ pub async fn retag_space(from: &str, to: Option<String>) -> Result<Vec<Project>,
         write_projects(&projects).await?;
     }
 
-    Ok(projects)
+    Ok(with_remotes(projects))
 }
 
 // ── attaching from GitHub ─────────────────────────────────────────────────────
@@ -321,7 +371,7 @@ pub async fn github_repos() -> Result<Vec<GithubRepo>, PrUnavailable> {
 /// Lowercased `owner/name` → where that repo already lives here. Attached
 /// projects are read first and win, being the copy the reader chose.
 async fn local_copies(home: &Path) -> HashMap<String, String> {
-    let mut dirs: Vec<String> = list_projects()
+    let mut dirs: Vec<String> = read_projects()
         .await
         .unwrap_or_default()
         .into_iter()
@@ -505,6 +555,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_list_takes_each_projects_remote_and_none_for_a_path_not_read() {
+        REMOTES.lock().unwrap().insert("/remotes-a".to_string(), Some("github.com/x/y".to_string()));
+        let list = with_remotes(vec![filed("/remotes-a", None), filed("/remotes-b", None)]);
+        assert_eq!(list[0].remote.as_deref(), Some("github.com/x/y"));
+        assert_eq!(list[1].remote, None);
+    }
+
+    #[test]
     fn a_project_written_before_spaces_existed_still_reads() {
         // The file is rewritten whole, so one entry failing to parse is the
         // whole index of projects gone.
@@ -521,6 +579,7 @@ mod tests {
             path: path.into(),
             name: path.into(),
             space: space.map(Into::into),
+            remote: None,
             last_selected: "2026-08-01T00:00:00Z".into(),
         }
     }

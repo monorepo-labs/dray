@@ -88,6 +88,27 @@ pub(crate) fn image_mime(path: &Path) -> Option<&'static str> {
 /// an unreadable path, which the command below drops rather than propagating —
 /// dragging a folder in alongside two files should attach the two files.
 async fn describe(path: &str) -> Result<Attachment> {
+    let mut attachment = inspect(path).await?;
+
+    // Read only for a thumbnail we will actually draw. The bytes are re-read at
+    // send time; paying twice is cheaper than holding every attachment's data
+    // in the frontend and shipping it back down.
+    if attachment.is_image {
+        let bytes = fs::read(path).await.context("could not read image")?;
+        attachment.preview = Some(format!(
+            "data:{};base64,{}",
+            attachment.mime_type.as_deref().unwrap_or("image/png"),
+            STANDARD.encode(&bytes)
+        ));
+    }
+
+    Ok(attachment)
+}
+
+/// [`describe`] without the thumbnail: what a path is, read off its metadata
+/// alone. What a send asks, since it reads an image's bytes itself and a
+/// preview built first was the same file read and encoded twice.
+async fn inspect(path: &str) -> Result<Attachment> {
     let meta = fs::metadata(path).await.context("could not stat path")?;
     if meta.is_dir() {
         anyhow::bail!("{path} is a directory");
@@ -103,27 +124,13 @@ async fn describe(path: &str) -> Result<Attachment> {
     let mime = image_mime(&buf);
     let is_image = mime.is_some() && size <= MAX_IMAGE_BYTES;
 
-    // Read only for a thumbnail we will actually draw. The bytes are re-read at
-    // send time; paying twice is cheaper than holding every attachment's data
-    // in the frontend and shipping it back down.
-    let preview = if is_image {
-        let bytes = fs::read(path).await.context("could not read image")?;
-        Some(format!(
-            "data:{};base64,{}",
-            mime.unwrap_or("image/png"),
-            STANDARD.encode(&bytes)
-        ))
-    } else {
-        None
-    };
-
     Ok(Attachment {
         path: path.to_string(),
         name,
         mime_type: mime.map(str::to_string),
         size,
         is_image,
-        preview,
+        preview: None,
     })
 }
 
@@ -479,7 +486,7 @@ pub async fn prepare(
     let mut mentions = Vec::new();
 
     for path in paths {
-        let Ok(attachment) = describe(path).await else {
+        let Ok(attachment) = inspect(path).await else {
             continue;
         };
 

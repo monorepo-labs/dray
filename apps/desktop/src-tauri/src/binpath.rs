@@ -117,6 +117,18 @@ pub fn forget_gh() {
     LOGIN_PATH_STALE.store(true, Ordering::Release);
 }
 
+/// The absolute path to `boat`, or `None` where it isn't here. Asked again each
+/// time rather than cached, and with no login shell: only a boat machine asks,
+/// and a reader installing it mid-session should not need a restart.
+#[cfg(feature = "desktop")]
+pub fn boat() -> Option<PathBuf> {
+    let installed = std::env::home_dir()?.join(".ascii/bin/boat");
+    if is_executable(&installed) {
+        return Some(installed);
+    }
+    search_path("boat").or_else(|| search_known_dirs("boat"))
+}
+
 /// The absolute path to a `codex` that can actually speak app-server.
 ///
 /// Unlike [`claude`], finding *a* binary is not enough. Verified against a real
@@ -213,21 +225,21 @@ mod pi_resolution_tests {
 
 /// Whether the agent's CLI is installed and usable.
 ///
-/// Read off the resolver's own answer rather than probing again: both cache in
-/// a `OnceLock`, absence included, so this costs nothing after the first call —
-/// which matters, since a failed resolution is the expensive one (it ends in a
-/// login shell reading the whole rc chain).
+/// Read off the resolver's own answer rather than probing again: each caches
+/// in a `OnceCell`, absence included, so this costs nothing after the first
+/// call — which matters, since a failed resolution is the expensive one (it
+/// ends in a login shell reading the whole rc chain).
 ///
 /// **The test is `is_absolute`.** A successful resolution is always an absolute
-/// path; the bare-name fallback both resolvers end at is the only relative
-/// answer either can give. For Codex that covers the stale binary for free: one
+/// path; the bare-name fallback every resolver ends at is the only relative
+/// answer any of them can give. For Codex that covers the stale binary for free: one
 /// with no `app-server` subcommand never satisfies `speaks_app_server`, so it
 /// falls through to the bare name exactly like an absent one — and "installed
 /// but cannot be driven" is the same answer to the reader as "not installed".
 ///
 /// The cache never invalidates, so a CLI installed while the app runs still
-/// reads as missing until restart. That is the same bargain `gh` already makes,
-/// and it is why nothing here offers to install anything: the reader is at a
+/// reads as missing until restart — `gh` alone has a recheck, [`forget_gh`].
+/// It is why nothing here offers to install anything: the reader is at a
 /// terminal by then anyway.
 pub async fn agent_available(harness: Harness) -> bool {
     harness.names_a_cli() && agent_installed(harness).await
@@ -292,10 +304,10 @@ async fn speaks_app_server(bin: &Path) -> bool {
     String::from_utf8_lossy(&output.stdout).contains("app-server")
 }
 
-/// The installed `dray` CLI, or `None`. Uncached: it is asked once per app
-/// version, and the reader may install it between two asks.
-pub async fn dray() -> Option<PathBuf> {
-    resolve("dray").await
+/// The `dray` the reader's own shell runs, which a CLI installed with
+/// `DRAY_INSTALL_DIR` can put ahead of the app's copy in `~/.local/bin`.
+pub async fn shell_dray() -> Option<PathBuf> {
+    login_shell_which("dray").await
 }
 
 /// Looks for `bin` on the inherited `PATH`, then in the usual install
@@ -374,7 +386,7 @@ pub fn resolved_bin_dirs() -> Vec<PathBuf> {
     // Read, never probed: this runs on the spawn path, and `gh`'s slot is the
     // one here that can be empty because nothing has asked yet.
     let gh = GH_PATH.read().unwrap().clone().flatten();
-    [CLAUDE_PATH.get(), CODEX_PATH.get(), PI_PATH.get()]
+    [CLAUDE_PATH.get(), CODEX_PATH.get(), PI_PATH.get(), FX_PATH.get(), GROK_PATH.get()]
         .into_iter()
         .flatten()
         .cloned()

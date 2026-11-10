@@ -23,6 +23,7 @@ import { ChatSessionContext } from "@/hooks/useChatSession";
 import { useHotkey } from "@/hooks/useHotkey";
 import type { ApiRetryState, QueuedPrompt, Working } from "@/hooks/useSessions";
 import { useStreamingBlock, useStreamingKind } from "@/hooks/useStreamingBlock";
+import { RANK_OWN } from "@/lib/cardKeys";
 import { planAsked, setPlan } from "@/lib/plan";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
@@ -88,10 +89,6 @@ type ChatProps = {
   /// than unmounted when another view tab is picked, so ⌘↓ has to be told to
   /// stop listening — otherwise it scrolls a pane nobody can see.
   active?: boolean;
-  /// Draw only the newest N turns and mount nothing above them. The crew's
-  /// strips take it; the main column does not — see [`CREW_TAIL`]. Unset is the
-  /// whole conversation, backfilled.
-  tail?: number;
 };
 
 /// How long an answered permission card holds its place before going.
@@ -127,8 +124,12 @@ const RAIL_MIN = 2;
 const AT_BOTTOM_PX = 40;
 
 /// The cards to draw: the live set, but one beat behind when it empties.
-function useLingeringCards(pending: PendingAsk[]): PendingAsk[] {
-  const [shown, setShown] = useState(pending);
+///
+/// Held with the session they belong to. The single view keeps one `Chat`
+/// across a switch, so cards held bare drew session A's card in B for the
+/// length of the exit, answered under B's id, and copied A's plan into B.
+function useLingeringCards(sessionId: string | null, pending: PendingAsk[]): PendingAsk[] {
+  const [shown, setShown] = useState({ sessionId, cards: pending });
 
   // Identity changes on every event, so the effect keys off the ids instead —
   // re-running it per event would set state in a loop.
@@ -139,18 +140,34 @@ function useLingeringCards(pending: PendingAsk[]): PendingAsk[] {
   useEffect(() => {
     // Arrivals are never delayed; the agent is blocked on them.
     if (latest.current.length > 0) {
-      setShown(latest.current);
+      setShown({ sessionId, cards: latest.current });
       return;
     }
 
     const timer = setTimeout(
-      () => setShown((prev) => (prev.length === 0 ? prev : [])),
+      () =>
+        setShown((prev) =>
+          prev.sessionId === sessionId && prev.cards.length === 0 ? prev : { sessionId, cards: [] },
+        ),
       CARD_EXIT_MS,
     );
     return () => clearTimeout(timer);
-  }, [key]);
+  }, [key, sessionId]);
 
-  return shown;
+  return shown.sessionId === sessionId ? shown.cards : pending;
+}
+
+/// Double-click on inline code selects the whole run, not the word under the
+/// pointer — a path or command split at `/` or `-` is never what was wanted.
+/// Code inside `pre` keeps the browser's word selection.
+function selectInlineCode(e: React.MouseEvent) {
+  const code = (e.target as Element).closest?.("code");
+  if (!code || code.closest("pre")) return;
+  const range = document.createRange();
+  range.selectNodeContents(code);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
 }
 
 export default function Chat({
@@ -172,7 +189,6 @@ export default function Chat({
   crowded = false,
   rail = true,
   active = true,
-  tail,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -222,13 +238,13 @@ export default function Chat({
     [session?.events, busy, liveTaskIds],
   );
 
-  const cards = useLingeringCards(pendingAsks);
+  const sessionId = session?.sessionId ?? null;
+  const cards = useLingeringCards(sessionId, pendingAsks);
 
   // The plan is copied out of the ask because the ask is the only place it
   // exists: a permission request is never persisted, and the `exit_plan_mode`
   // call beside it carries an empty input. Safe in an effect that re-runs on
   // every session event, since `setPlan` ignores a text it already holds.
-  const sessionId = session?.sessionId ?? null;
   useEffect(() => {
     for (const ask of cards) {
       if (ask.type !== "permission_requested") continue;
@@ -335,6 +351,24 @@ export default function Chat({
   const streamingTurn =
     streamingKind && lastTurn && !lastTurn.completed ? lastTurn : null;
 
+  // One element across renders. `TurnBlock`'s memo compares its footer by
+  // identity, so built inline the turn being streamed into re-rendered every
+  // time this component did, whatever had changed. Both hosts are the last
+  // turn or nothing, which is what lets one element serve.
+  const previewShown = !!streamingTurn;
+  const orbShown = !!waitingTurn;
+  const orbTokens = working?.tokens ?? 0;
+  const liveFooter = useMemo(
+    () =>
+      sessionId && (previewShown || orbShown) ? (
+        <>
+          {previewShown && <StreamingPreview sessionId={sessionId} />}
+          {orbShown && <WorkingIndicator tokens={orbTokens} />}
+        </>
+      ) : undefined,
+    [sessionId, previewShown, orbShown, orbTokens],
+  );
+
   // A new session resets the pin, or the previous session's scroll position
   // would decide whether this one follows. Must run before the pin effect below,
   // which is why it sits first.
@@ -369,19 +403,12 @@ export default function Chat({
     sessionId: null,
     key: null,
   });
-  //
-  // `tail` replaces the whole arrangement rather than seeding it: a capped
-  // transcript draws its newest `tail` turns and mounts nothing above them, so
-  // the window is a plain count from the end with no state to key and no step
-  // to schedule.
   const mounted =
-    tail != null
-      ? Math.max(0, turns.length - tail)
-      : mount.sessionId === session?.sessionId
-        ? Math.max(0, turns.findIndex((turn) => turn.key === mount.key))
-        : firstMount(turns.length);
+    mount.sessionId === session?.sessionId
+      ? Math.max(0, turns.findIndex((turn) => turn.key === mount.key))
+      : firstMount(turns.length);
   const shownTurns = mountedTurns(turns, mounted);
-  const backfilling = tail == null && mounted > 0;
+  const backfilling = mounted > 0;
 
   // Where the oldest mounted turn sat before a step lands, for the
   // compensation below. A node, not the scroller's height: anything else
@@ -402,7 +429,7 @@ export default function Chat({
   useEffect(() => {
     if (!session) return;
     if (!backfilling) {
-      if (tail == null && olderBefore != null) loadOlder(session.sessionId);
+      if (olderBefore != null) loadOlder(session.sessionId);
       return;
     }
     const sessionId = session.sessionId;
@@ -614,9 +641,10 @@ export default function Chat({
   // Bound whether or not the button is drawn: the button is the affordance for
   // this, not its gate, and pressing it while already at the bottom re-arms the
   // pin — which is the useful half when a turn has scrolled you off it.
-  useHotkey("chat.bottom", () => {
-    if (active && session) scrollToBottom();
-  });
+  //
+  // Unregistered while hidden rather than made a no-op: the chord is claimed
+  // before the handler runs, and ⌘↓ belongs to whatever view is on screen.
+  useHotkey("chat.bottom", scrollToBottom, { enabled: active && !!session });
 
   // One object per session rather than per render: every file-path span in
   // every message reads this context, and a fresh value re-renders all of them
@@ -654,6 +682,7 @@ export default function Chat({
           ref={scrollRef}
           onScroll={onScroll}
           onWheel={onWheel}
+          onDoubleClick={selectInlineCode}
           className="h-full overflow-y-auto"
         >
           <div
@@ -682,18 +711,7 @@ export default function Chat({
                   // the preview belongs to this turn, not after it. Where both
                   // draw, the orb goes under the preview, which is where the
                   // reader is already looking and where it sits on its own.
-                  footer={
-                    turn !== streamingTurn && turn !== waitingTurn ? undefined : (
-                      <>
-                        {turn === streamingTurn && (
-                          <StreamingPreview sessionId={session.sessionId} />
-                        )}
-                        {turn === waitingTurn && (
-                          <WorkingIndicator tokens={working?.tokens ?? 0} />
-                        )}
-                      </>
-                    )
-                  }
+                  footer={turn === lastTurn ? liveFooter : undefined}
                 />
               </div>
             ))}
@@ -710,6 +728,7 @@ export default function Chat({
                   // The pane the composer serves is the one whose card may
                   // take the caret.
                   autoFocus={active}
+                  keyRank={active ? RANK_OWN : undefined}
                 />
               ) : (
                 <PermissionRequest
@@ -732,6 +751,7 @@ export default function Chat({
                   onViewPlan={
                     planAsked(ask.toolName, ask.input) ? onOpenPlan : undefined
                   }
+                  keyRank={active ? RANK_OWN : undefined}
                 />
               ),
             )}
@@ -749,6 +769,7 @@ export default function Chat({
             <QueuedMessages
               messages={queuedMessages}
               onSendNow={session.harness === "fx" && active ? onSendNow : undefined}
+              active={active}
             />
 
             {backgroundTaskCount > 0 && (

@@ -56,7 +56,7 @@ Options:
 
 ### Fast mode
 
-Claude Code, Codex and fx each have a faster tier, and each charges for it —
+Claude Code, Codex, fx and Grok each have a faster tier, and each charges for it —
 Codex's own words for it are "2x speed, increased usage". pi has none, and the
 flag is ignored there.
 
@@ -361,6 +361,28 @@ so the user checks your work by watching instead of redoing it. Clicks are
 marked with a ring and pauses between your actions are cut to a second, so
 don't rush or pad. Screenshots work while recording.
 
+**Every other video goes through `dray video add`.** A screen recording, a clip
+from a test run: the chat plays nothing else, and a path of your own draws a link.
+
+```bash
+dray video add ~/Desktop/run.mov "login flow"  # prints the path to put in your reply
+```
+
+It works out the folder and the session itself, keeps an MP4 as it is and
+converts anything else: with `avconvert` on a Mac, `ffmpeg` where that cannot read
+it and on Linux. A machine with no way to convert it says so; `dray server
+install` offers ffmpeg on a server. **It runs on the machine serving this session**,
+so a video made on another machine, a VM or a remote box has to be copied here
+first. Name no environment variable to find any of this, and don't build the path
+by hand: the home moves. It is deleted with the session.
+
+**Keep a video of the test that confirms UI work or work on another machine**,
+and show it the same way, so the user can watch it pass.
+
+**On a Mac, `screencapture -v` needs Screen Recording for Dray.** Until the user
+turns it on in System Settings it exits 1 and prints nothing, and raises a prompt
+only they can answer. Say so rather than retrying.
+
 `open` waits for the page to load; `click` and `press` wait for any navigation
 they cause. A local dev server is the usual page — start it in the background
 first, then open it. `--json` on any verb answers as JSON for scripting.
@@ -381,27 +403,56 @@ without publishing anything. The link shows on that server's row in the app,
 where the user can stop it, and it goes when the session is settled or deleted.
 Sharing the same port from the same session again gives the same link.
 
-## The app's machines
+## Other machines
 
 ```bash
 dray machine add vps root@203.0.113.7                   # or ssh -p 2222 …, or an ~/.ssh/config alias
 dray machine add --token-file t vps ws://127.0.0.1:7317  # a token from stdin works too
+dray machine add --token-file t mac wss://….opentunnel.xyz   # a Mac, by its Remote access address
 dray machine ls                                          # name, address, connected or not; --json
 dray machine rename vps box                              # '' puts back the host
-dray machine disconnect vps                              # stays listed; the app stops connecting
+dray machine disconnect vps                              # stays listed; requests to it are refused
 dray machine connect vps                                 # tries now, says if it worked
 dray machine rm vps
 ```
 
-The same list as Settings → Servers on the user's Mac, and it moves there as
-you run these. A name belongs to one machine: `add` and `rename` refuse one
-another machine already has. Reach for it after you have set a machine up and the user wants
-it in the app. `add` connects before it saves, so a refusal is the app telling
-you what is wrong — an unknown host key, a password login, no Dray on the
-server — and its fix is the user's to make, never yours: do not accept a host
-key on their behalf. A token never goes on the command line. Remove only
-machines the user named. On a server with no app — Linux, or a headless Mac —
-`dray machine` is refused: the list lives in the Mac app.
+The machines this one can reach, on any Dray server — a Mac, a Linux box, a
+headless Mac. On a Mac it is the same list as Settings → Servers. A name
+belongs to one machine: `add` and `rename` refuse one another machine already
+has. Reach for it after you have set a machine up and the user wants it
+reachable. A Mac is reached by its Remote access address and token (Settings →
+This Mac), never over SSH. `add` connects before it saves, so a refusal is the
+machine telling you what is wrong — an unknown host key, a password login, no
+Dray on the server — and its fix is the user's to make, never yours: do not
+accept a host key on their behalf. An SSH add uses this machine's own `ssh`,
+so its key must already be authorized there. A token never goes on the command
+line. Remove only machines the user named.
+
+## Working on another machine
+
+```bash
+dray --machine vps session new "Run the load test" --title "Load test"
+dray --machine vps session ls                # that machine's sessions
+dray session ls --machine all                # this one's and every connected machine's
+dray session send <session-id> "Use the staging DB"   # finds the machine on its own
+```
+
+`--machine <name>` runs a `session`, `draft`, `issue`, `browser` or `share`
+command on a machine from `dray machine ls`, through this machine's Dray
+server — app open or not. A session id needs no `--machine`: one this machine
+has never heard of is looked for on every machine it reaches.
+
+A new session there runs in that machine's checkout of the same repository,
+found by its `origin` remote; pass `--project <path on that machine>` where it
+has none. `--base <session-id>` names that session's branch, which the other
+machine can only see once it is pushed. Model, effort, agent and fast mode
+inherit from you as they do here.
+
+**Reach follows tokens.** You reach a machine this one added; it reaches you
+only if it added this one too. A session you start there can message you back
+with `dray session send <your-id>` where it can — otherwise check on it with
+`dray session ls --machine <name>`, and ask it to open a PR or push a branch
+when its result should come back.
 
 ## This machine's server
 
@@ -443,6 +494,10 @@ have.
 `dray update --force` installs the newest release even when it is the one you
 have, which repairs a damaged binary. A beta build updates to betas and a stable
 one to stable releases; `--channel beta` or `--channel stable` switches.
+
+On a Mac with the Dray app, the app ships this CLI and puts it in
+`~/.local/bin` each launch, so `dray update` there says so and does nothing.
+Updating the app is how the CLI moves.
 
 The app and this CLI ship separately, so they can drift. When they disagree about
 the protocol the app **refuses the command** — every command, not just whichever
@@ -490,6 +545,9 @@ the cure is safe.
   dialogs are out of reach.
 - **No reading transcripts.** You can create, list and message. You cannot read
   what another session said — ask it to send you a summary instead.
+- **Another machine answers only where it can reach this one.** A session
+  there can be started, messaged and listed from here; it can message you back
+  only if its machine added this one — see *Working on another machine*.
 - **Two levels deep.** A session you create may create sessions of its own; those
   may not. If you hit this, say so — the user can start the next batch from a
   top-level session.

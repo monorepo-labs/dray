@@ -58,9 +58,10 @@ const NUMBERED = 9;
 /// it said when it was only a picture; hover is where it admits to being a
 /// control.
 ///
-/// **A `span`, not a `button`.** The issues page's row is itself a `button` and
-/// one cannot nest another — the same bargain `FileLink` makes, and the reason
-/// the "Work on it" control beside this is a span too.
+/// **A `span`, not a `button`.** Both rows it sits in are divs carrying
+/// `role="button"`, and a real `button` inside one is invalid nesting — the
+/// same bargain `FileLink` makes, and the reason the "Work on it" control
+/// beside this is a span too.
 ///
 /// Two containment rules, and they are not the same rule twice:
 ///
@@ -71,9 +72,8 @@ const NUMBERED = 9;
 /// - **The keydown is stopped nowhere.** `useHotkey` listens on `document`, and
 ///   Radix returns focus to this trigger when the menu closes — so a blanket
 ///   `stopPropagation` here silently killed every shortcut in the app from the
-///   first time anybody opened one of these. Nothing needs it: the panel's row
-///   ignores keys whose target is not itself, and a `button` row only activates
-///   on its own focus.
+///   first time anybody opened one of these. Nothing needs it: both rows ignore
+///   keys whose target is not themselves.
 function GlyphMenu({
   label,
   children,

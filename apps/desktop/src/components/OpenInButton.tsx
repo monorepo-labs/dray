@@ -39,7 +39,11 @@ const FAILED_MS = 4000;
 /// Nothing for a path on a remote server: there is no copy on this Mac for
 /// an app here to open.
 export default function OpenInButton(props: Parameters<typeof LocalOpenInButton>[0]) {
-  return serverOfPath(props.path) === LOCAL ? <LocalOpenInButton {...props} /> : null;
+  // Keyed by opener: the panel flips one slot between the directory button and
+  // the file one, and the pick is read from storage once per mount — unkeyed,
+  // the file button opened with the directory's app.
+  const key = (props.opener ?? DIR_OPENER).key;
+  return serverOfPath(props.path) === LOCAL ? <LocalOpenInButton key={key} {...props} /> : null;
 }
 
 function LocalOpenInButton({

@@ -4,6 +4,7 @@ import { highlightSegments } from "@/lib/highlight";
 import {
   ambiguousTitles,
   applySession,
+  canTagFrom,
   filterSessions,
   parseSessionTag,
   sessionSpan,
@@ -160,5 +161,22 @@ describe("highlightSegments", () => {
 
     expect(tag.sessionId).toBe(ID);
     expect(tag.inner).toBe("&Investigate");
+  });
+});
+
+describe("canTagFrom", () => {
+  const NONE = new Set<string>();
+
+  it("lets This Mac tag every machine", () => {
+    expect(canTagFrom("local", ID, "dray://vps/repo", NONE)).toBe(true);
+    expect(canTagFrom("local", ID, "/repo", NONE)).toBe(true);
+  });
+
+  it("lets a remote tag itself and only what it reaches", () => {
+    expect(canTagFrom("vps", ID, "dray://vps/repo", NONE)).toBe(true);
+    expect(canTagFrom("vps", ID, "/repo", NONE)).toBe(false);
+    expect(canTagFrom("vps", ID, "dray://box/repo", NONE)).toBe(false);
+    expect(canTagFrom("vps", ID, "/repo", new Set([ID]))).toBe(true);
+    expect(canTagFrom("vps", OTHER, "/repo", new Set([ID]))).toBe(false);
   });
 });

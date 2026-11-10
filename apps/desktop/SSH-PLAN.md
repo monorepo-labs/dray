@@ -73,6 +73,18 @@ fail2ban bans. The row parks on the problem and waits for Try again (or the
 toggle, which is the same command). Network failures — no route, timeout, refused — keep retrying, since
 a Mac waking from sleep is the common case.
 
+**A saved tunnel address never parks (#781).** Where the last good login read
+one, a stopping failure retries the address alone on the same backoff, with
+`ssh` left alone and the row still showing why it could not log in. Connecting
+by tunnel accepts no host key: the reader still has to settle that. A server
+coming back attaches its tunnel late — 7s from a clean stop, 66s to 183s
+measured where the old machine vanished with its session open — so one failed
+try says little, and `tunnel-url` is missing for all of that time. The login
+script says `tunnel-coming` when `settings.json` has Remote access on with no
+address yet, and the app keeps what it saved. Treating that as "no tunnel" forgot
+the address, which left the next host key change with nothing to fall back on
+and Try again failing against a server that was up.
+
 `fetch_file` reads the address and token the live connection was admitted
 with, for both kinds, rather than `servers.json` and the credential store.
 
@@ -85,7 +97,7 @@ with, for both kinds, rather than `servers.json` and the credential store.
 |---|---|---|
 | `needs_key` | `Permission denied` | "Set up a key first" + `ssh-copy-id [-p N] dest` to copy |
 | `unknown_host` | `Host key verification failed` | host-key dialog |
-| `changed_host` | `REMOTE HOST IDENTIFICATION HAS CHANGED` | ssh's warning in its words + `ssh-keygen -R host` to copy |
+| `changed_host` | `REMOTE HOST IDENTIFICATION HAS CHANGED` | ssh's warning in its words + `ssh-keygen -R host -f file` to copy, the file being whichever of `ssh -G`'s `UserKnownHostsFile` lists the host |
 | `not_installed` | `DRAY-SSH missing` | "Dray isn't installed there" + the install line to copy |
 | `other` | everything else | ssh's last stderr line, or the script's output |
 

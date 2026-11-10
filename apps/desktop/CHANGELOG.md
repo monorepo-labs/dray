@@ -19,6 +19,134 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.29.19 · 2026-11-09 · notify
+
+### New
+
+- **Break reminders.** After an hour of active use, Dray asks you to
+  stand up and stretch. Set the interval or turn it off in Settings →
+  Breaks.
+
+  ![](changelog/break-reminder.png)
+
+- **Crew shows only what needs you.** When a session you started waits on
+  a permission or a question, its card shows above your composer. Arrows
+  step through several; number keys answer.
+- ⌘⇧S picks the next machine on a new task.
+
+### Improved
+
+- The Island stacks waiting cards, and lists them all from the header.
+  Dismiss hides them until the next new ask.
+- A remote session's machine name sits beside its branch in the header.
+- Dictation works in remote chats.
+
+### Fixed
+
+- A Mac running Dray as a server now says when it's behind.
+- Extending a boat sandbox clears the Island's warning at once.
+- `dray` keeps working after its socket file is deleted or replaced.
+- Pressing Escape or Tab in the browser no longer opens About Dray.
+
+## 0.29.18 · 2026-11-08
+
+### New
+
+- **Agent CLIs update themselves.** When Claude Code or another agent is
+  behind, Dray updates it in the background. Turn it off in Settings →
+  Accounts to get the Update button back.
+- **Projects grouped across machines.** A repo cloned on several machines
+  is one project, and new tasks get a dropdown to pick which machine runs
+  them.
+- **Videos play in the chat.** Any video an agent makes with
+  `dray video add` plays inline, on any machine.
+- **boat sandboxes.** A stopped sandbox shows Resume, sending to it wakes
+  it, and a warning with Extend shows before it auto-stops.
+
+### Improved
+
+- The Island shows sessions on every connected machine and can start
+  tasks on them.
+- `&` in the composer lists the project's tasks on other machines too.
+- Dev servers on a server added by address open without SSH.
+
+### Fixed
+
+- Opening a running session no longer replays its rows sliding by.
+- Settling, pinning or setting aside a task shows up on every Mac
+  connected to that server.
+- A remote chat that fell behind catches up when you open it.
+- A server with a saved tunnel keeps retrying after its host key changes,
+  instead of failing for good.
+
+## 0.29.17 · 2026-11-03
+
+### New
+
+- **The `dray` CLI comes with the app.** Dray keeps `~/.local/bin/dray` up
+  to date on every launch, so there's nothing to install or update by hand.
+- fx sessions can be forked.
+
+### Improved
+
+- ⌘U updates the agent's CLI from the new-task composer when an update is
+  available.
+- fx shell commands show their whole output.
+
+### Fixed
+
+- Fast mode is off for Opus 4.8, where Claude Code has retired it.
+- Session titles no longer run to the sidebar's edge with overlay
+  scrollbars.
+
+## 0.29.16 · 2026-11-02
+
+### Improved
+
+- Every Dray server reaches other machines on its own, so
+  `dray --machine` works from a Linux server and with the app closed.
+- The Island uses far less CPU: it stops animating at rest and when it's
+  out of sight.
+
+## 0.29.15 · 2026-11-01
+
+### New
+
+- **Sessions on other machines.** Agents can reach sessions on servers you
+  added with `dray --machine <name>`, and `dray session ls --machine all`
+  lists them all.
+
+### Improved
+
+- The agent keeps its own browser tab, so clicking or duplicating tabs no
+  longer moves its work into yours.
+- Prompts queued from the Island or `dray session send` show up in the chat
+  right away.
+- Double-click selects a whole bit of inline code in the chat.
+- Esc dismisses the Island's done pill.
+- The Island's lens is a grey smoked glass, expanded is its default layout,
+  and its card has a thin outline so it shows on black.
+
+## 0.29.14 · 2026-10-30
+
+### Improved
+
+- Images in a session show up in the Island's transcript.
+
+## 0.29.13 · 2026-10-30
+
+### New
+
+- **Transcript in the Island.** The Island shows the pinned session's latest
+  turns above the input. Scroll up for more, or pinch to hide it.
+
+### Improved
+
+- Remote sessions open much faster on slow links: transcripts and
+  screenshots are compressed, kept and fetched only when new.
+- The Island's recording orb grows in place and looks like glass.
+- A newer update is still found after one is ready to install.
+
 ## 0.29.12 · 2026-10-28
 
 ### Improved

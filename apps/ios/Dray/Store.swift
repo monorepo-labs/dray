@@ -25,6 +25,7 @@ final class Store {
     private(set) var transcripts: [SessionKey: Transcript] = [:]
     private(set) var asks: [SessionKey: [AgentEvent]] = [:] { didSet { asksChanged() } }
     private(set) var queued: [SessionKey: [Queued]] = [:]
+    private(set) var boatAlerts: [BoatAlert] = [] { didSet { boatChanged() } }
     private(set) var projects: [UUID: [Project]] = [:]
     /// Each repo's PR marks by branch, as `pr_marks` last answered.
     private(set) var marks: [ProjectKey: [String: PrMark]] = [:]
@@ -42,14 +43,23 @@ final class Store {
     private(set) var olderErrors: [SessionKey: String] = [:]
     private(set) var tasks: [SessionKey: Int] = [:]
 
-    /// For a client that reacts beside drawing: the Island opens itself on a card.
+    /// For a client that reacts beside drawing: the Island chimes and counts a new card on its pill.
     @ObservationIgnored var asksChanged: () -> Void = {}
+    /// The Island's: its own server came up, or Dray's window came or went, so
+    /// the machines it follows may have moved.
+    @ObservationIgnored var linksMayHaveMoved: () -> Void = {}
+    /// The Island's This Mac; the phone has none.
+    @ObservationIgnored private var home: UUID?
+    @ObservationIgnored var boatChanged: () -> Void = {}
     @ObservationIgnored private let path = NWPathMonitor()
     @ObservationIgnored private var reading: Set<UUID> = []
     @ObservationIgnored private var statuses: [SessionKey: StatusEvent] = [:]
     @ObservationIgnored private var connections: [UUID: Connection] = [:]
     @ObservationIgnored private var marksAt: [ProjectKey: Date] = [:]
     @ObservationIgnored private var marking: Set<ProjectKey> = []
+    /// `dropTranscripts` calls so far, and the session the last one kept, so a read out across a drop knows.
+    @ObservationIgnored private var drops = 0
+    @ObservationIgnored private var kept: SessionKey?
 
     init() {
         if let data = UserDefaults.standard.data(forKey: "servers"),
@@ -64,6 +74,7 @@ final class Store {
     /// Keychain — the Island's This Mac, whose port and token are files.
     init(local s: Server, read: @escaping () -> (url: String, token: String)?) {
         servers = [s]
+        home = s.id
         start(s, read: read, client: "island")
         watchNetwork()
     }
@@ -97,17 +108,42 @@ final class Store {
     }
 
     func removeServer(_ s: Server) {
-        connections.removeValue(forKey: s.id)?.stop()
+        forget(s.id)
         Keychain.delete(s.id.uuidString)
-        servers.removeAll { $0.id == s.id }
-        serverState[s.id] = nil
-        for key in items.keys where key.server == s.id { items[key] = nil }
-        for key in transcripts.keys where key.server == s.id { transcripts[key] = nil }
-        for key in asks.keys where key.server == s.id { asks[key] = nil }
-        for key in marks.keys where key.server == s.id { marks[key] = nil }
-        projects[s.id] = nil
-        loadErrors[s.id] = nil
         save()
+    }
+
+    private func forget(_ id: UUID) {
+        connections.removeValue(forKey: id)?.stop()
+        servers.removeAll { $0.id == id }
+        serverState[id] = nil
+        for key in items.keys where key.server == id { items[key] = nil }
+        for key in transcripts.keys where key.server == id { transcripts[key] = nil }
+        for key in asks.keys where key.server == id { asks[key] = nil }
+        for key in marks.keys where key.server == id { marks[key] = nil }
+        for key in tasks.keys where key.server == id { tasks[key] = nil }
+        for key in queued.keys where key.server == id { queued[key] = nil }
+        projects[id] = nil
+        loadErrors[id] = nil
+    }
+
+    /// The Island's machines beyond This Mac, as Dray's window last listed them:
+    /// nothing saved, since the window is the list. A login that moved its port
+    /// or token reconnects and keeps what is held.
+    func follow(_ links: [(server: Server, url: String, token: String)]) {
+        for s in servers where s.id != home && !links.contains(where: { $0.server.id == s.id }) { forget(s.id) }
+        for link in links {
+            let s = link.server
+            if let i = servers.firstIndex(where: { $0.id == s.id }) { servers[i].name = s.name } else { servers.append(s) }
+            if let held = connections[s.id], held.url == link.url, held.token == link.token { continue }
+            connections[s.id]?.stop()
+            start(s, read: { (link.url, link.token) })
+        }
+    }
+
+    /// The name a remote machine goes by beside a title. This Mac has none, which is what says local.
+    func machine(_ server: UUID) -> String? {
+        server == home ? nil : name(of: server)
     }
 
     func renameServer(_ id: UUID, to name: String) {
@@ -188,6 +224,7 @@ final class Store {
     /// A fresh connection re-reads the index and the tail of every open
     /// transcript, so nothing that happened while it was down is missed.
     private func connected(_ server: UUID) async {
+        if server == home { linksMayHaveMoved() }
         // Heard on the old socket, so older than the read below — and a read
         // never moves `modified`, so a stale `completed` would win the tie.
         for key in statuses.keys where key.server == server { statuses[key] = nil }
@@ -253,12 +290,29 @@ final class Store {
         guard let c = connections[server] else { return }
         do {
             let list: [SessionItem] = try await c.call("list_session_index_items", ["archived": false])
-            for key in items.keys where key.server == server { items[key] = nil }
+            // Settled rows are the settled view's to replace; this read never holds them.
+            for key in items.keys where key.server == server && items[key]?.archived != true { items[key] = nil }
             for item in list { store(SessionKey(server: server, id: item.sessionId), item) }
             loadErrors[server] = nil
         } catch {
             // The rows already listed stay; the list says this read failed beside them.
             loadErrors[server] = error.localizedDescription
+        }
+    }
+
+    /// Settled sessions, read only when the settled view asks: the live read
+    /// leaves them out, and its next pass clears them again.
+    func loadSettled() async {
+        for s in servers where serverState[s.id] == .connected {
+            // Rows held before the read; one the reply leaves out was deleted, unless an event
+            // moved it meanwhile. Unsettling leaves `modified` alone, so `archived` is read again too.
+            let held = items.filter { $0.key.server == s.id && $0.value.archived == true }.mapValues(\.modified)
+            guard let list: [SessionItem] = try? await call(s.id, "list_session_index_items", ["archived": true]) else { continue }
+            let listed = Set(list.map(\.sessionId))
+            for (key, modified) in held where !listed.contains(key.id) {
+                if let now = items[key], now.archived == true, now.modified == modified { items[key] = nil }
+            }
+            for item in list { store(SessionKey(server: s.id, id: item.sessionId), item) }
         }
     }
 
@@ -275,12 +329,13 @@ final class Store {
 
     // MARK: Sessions
 
-    /// What the list draws, in the desktop sidebar's runs, narrowed to one
-    /// project first when a chip is picked.
-    func runs(_ project: ProjectKey?) -> [(stage: Stage, rows: [ListRow])] {
-        let list = items.filter { key, item in
-            item.hidden != true && item.archived != true
-                && (project.map { $0 == ProjectKey(server: key.server, path: item.projectPath) } ?? true)
+    /// What the list draws, in the desktop sidebar's runs: the live sessions,
+    /// or the settled ones, narrowed to one project by name when one is picked —
+    /// by name, so a repo checked out on two machines is one project.
+    func runs(project: String?, settled: Bool = false) -> [(stage: Stage, rows: [ListRow])] {
+        let list = items.filter { _, item in
+            item.hidden != true && (item.archived == true) == settled
+                && (project.map { $0 == item.project } ?? true)
         }.map { (key: $0.key, item: $0.value) }
         return stageRuns(list) { stage($0.key, $0.item) }
     }
@@ -307,6 +362,16 @@ final class Store {
         }
     }
 
+    /// Lets go of every transcript held but `kept`'s. The Island's close: held, each
+    /// grew by every event its session sent, and a day of them stayed in memory.
+    func dropTranscripts(keeping kept: SessionKey?) {
+        transcripts = transcripts.filter { $0.key == kept }
+        transcriptErrors = [:]
+        olderErrors = [:]
+        drops += 1
+        self.kept = kept
+    }
+
     /// Starts following a transcript without marking the session read.
     func load(_ key: SessionKey) async {
         if transcripts[key] == nil { await reload(key) }
@@ -325,9 +390,16 @@ final class Store {
     private func reload(_ key: SessionKey) async {
         guard let c = connections[key.server] else { return }
         let before = transcripts[key]?.ids ?? []
+        let drop = drops
         do {
             let snap: Snapshot? = try await c.call("get_session_by_id", ["sessionId": .string(key.id), "turns": 8])
-            guard let snap else { return }
+            // Dropped while the read was out: writing it back would hold it, growing, until the next drop.
+            guard drop == drops || key == kept else { return }
+            // Deleted from another client. Said, or the transcript waits on a read that already answered.
+            guard let snap else {
+                transcriptErrors[key] = "Session not found."
+                return
+            }
             let read = Set(snap.events.map(\.id))
             let held = transcripts[key]?.events ?? []
             let live = held.filter { !before.contains($0.id) && !read.contains($0.id) }
@@ -386,7 +458,8 @@ final class Store {
                 "baseRef": nil,
                 "isNewSession": false,
             ])
-            if let q = outcome.queued { queued[key, default: []].append(q) }
+            // By id: the server's `queue_changed` usually lands before this reply.
+            if let q = outcome.queued, !(queued[key]?.contains(q) ?? false) { queued[key, default: []].append(q) }
             return true
         } catch {
             lastError = error.localizedDescription
@@ -447,6 +520,21 @@ final class Store {
             for t in live.tasks {
                 if case .backgroundTasks(let n) = t.payload { tasks[SessionKey(server: server, id: t.sessionId)] = n }
             }
+            // This Mac's alone: its app reads the timers and answers Extend. Another
+            // Mac's would name servers this one has never heard of.
+            if server == home, let boat = live.boat { boatAlerts = boat }
+            if let held = live.queued {
+                for key in queued.keys where key.server == server { queued[key] = nil }
+                for q in held where !q.queued.isEmpty { queued[SessionKey(server: server, id: q.sessionId)] = q.queued }
+            }
+        case "boat_alerts":
+            guard server == home,
+                  let frame = try? decoder.decode(EventFrame<BoatAlerts>.self, from: data).payload else { return }
+            boatAlerts = frame.alerts
+        case "queue_changed":
+            // Every client's sends, the desktop's and the CLI's included; `send_msg` answers only its caller.
+            guard let q = try? decoder.decode(EventFrame<QueueChanged>.self, from: data).payload else { return }
+            queued[SessionKey(server: server, id: q.sessionId)] = q.queued.isEmpty ? nil : q.queued
         case "session_status":
             guard let s = try? decoder.decode(EventFrame<StatusEvent>.self, from: data).payload else { return }
             let key = SessionKey(server: server, id: s.sessionId)
@@ -465,6 +553,8 @@ final class Store {
         case "clone_progress":
             guard let p = try? decoder.decode(EventFrame<CloneProgress>.self, from: data).payload else { return }
             cloneProgress[server, default: [:]][p.slug] = p.line
+        case "host_changed":
+            linksMayHaveMoved()
         case "session_created", "session_changed":
             guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload else { return }
             items[SessionKey(server: server, id: item.sessionId)] = item
@@ -474,9 +564,9 @@ final class Store {
         }
     }
 
-    /// A session another client started reaches this one as events alone —
-    /// `send_msg` hands its entry back to the caller — so an id the index
-    /// does not name re-reads it, once per burst.
+    /// An id the index does not name re-reads it, once per burst.
+    /// `session_created` carries a new session's entry to every client, so this
+    /// is what is left for a server from before that event.
     private func notice(_ key: SessionKey) {
         guard items[key] == nil, !reading.contains(key.server) else { return }
         reading.insert(key.server)
@@ -500,7 +590,7 @@ final class Store {
         case .backgroundTasks(let n):
             tasks[key] = n
             if n == 0 && items[key]?.busy != true { strand(key) }
-        case .userMessage(let text, _, _, _):
+        case .userMessage(let text, _, _, _, _):
             queued[key]?.removeAll { $0.text == text }
         default:
             break

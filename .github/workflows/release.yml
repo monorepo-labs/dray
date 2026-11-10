@@ -1,5 +1,10 @@
 name: Release
 
+# Third-party actions are pinned to commit SHAs, for release-cli.yml's reason:
+# a tag can be moved by whoever owns the action, and this job holds the signing
+# and upload keys. The trailing comment is the readable version; bump both
+# together. desktop-setup and warm-cache.yml follow the same rule.
+
 # A tag is the whole trigger, and its shape picks the channel: `v0.3.0` is
 # stable, `v0.3.0-beta.1` is beta. Semver's own prerelease rule is what makes
 # that work end to end — the updater compares versions, and `0.3.0-beta.1` is
@@ -36,7 +41,7 @@ jobs:
       channel: ${{ steps.channel.outputs.channel }}
       dmg: ${{ steps.mirror.outputs.dmg }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # The manifest's version is the app's, not the tag's — a tag that names a
       # version the conf doesn't carry publishes a manifest no client considers
@@ -107,7 +112,7 @@ jobs:
       #
       # It used to run as its own step ahead of the action, with a cargo build
       # of its own. See the script for why that compiled the tree twice.
-      - uses: apple-actions/import-codesign-certs@v3
+      - uses: apple-actions/import-codesign-certs@63fff01cd422d4b7b855d40ca1e9d34d2de9427d # v3
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -121,7 +126,14 @@ jobs:
           brew install xcodegen
           apps/island/build.sh apps/desktop/src-tauri/target/island
 
-      - uses: tauri-apps/tauri-action@v0
+      # The `dray` CLI, shipped inside the app so every Mac with Dray has one
+      # matching it (cli.rs copies it out on launch). Built here and not as
+      # `beforeBundleCommand`: tauri-build copies the per-arch sidecar while
+      # compiling the app, before that hook runs.
+      - name: Build the dray CLI
+        run: apps/desktop/scripts/cli-sidecar.sh apps/desktop/src-tauri/target/cli
+
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Signs the updater bundle. Separate from Apple's signature and not
@@ -154,8 +166,9 @@ jobs:
           # entry into per-arch keys in `latest.json`, so a client asking for
           # `darwin-aarch64` finds it. `cef` turns the browser on, and the
           # overlay config puts the helper apps in Contents/Frameworks; the
-          # island one puts Dray Island in Contents/Helpers.
-          args: --target universal-apple-darwin --features cef --config src-tauri/tauri.cef.conf.json --config src-tauri/tauri.island.conf.json
+          # island one puts Dray Island in Contents/Helpers, the cli one the
+          # CLI in Contents/MacOS.
+          args: --target universal-apple-darwin --features cef --config src-tauri/tauri.cef.conf.json --config src-tauri/tauri.island.conf.json --config src-tauri/tauri.cli.conf.json
 
       # The bundler *warns* and carries on when notarization credentials are
       # missing or rejected — only an absent team id is fatal. So a release
@@ -183,6 +196,17 @@ jobs:
           done
           codesign -d --entitlements - "$APP" 2>&1 | grep -q disable-library-validation
           codesign --verify --strict "$APP/Contents/Helpers/Dray Island.app"
+
+      # Copied out of the bundle to ~/.local/bin, where it runs on its own
+      # signature. Both arches, or an Intel Mac gets a CLI it cannot run.
+      - name: Verify the bundled CLI
+        run: |
+          APP="apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/$(jq -r .productName apps/desktop/src-tauri/tauri.conf.json).app"
+          CLI="$APP/Contents/MacOS/dray-cli"
+          codesign --verify --strict "$CLI"
+          codesign -d --verbose=2 "$CLI" 2>&1 | grep -q 'flags=.*runtime'
+          lipo "$CLI" -verify_arch arm64 x86_64
+          "$CLI" --version
 
       # Downloads are served from R2, not the release: GitHub's asset CDN has
       # had whole afternoons of a 42MB dmg taking 45 minutes. Versioned keys
@@ -233,7 +257,7 @@ jobs:
       appimage: ${{ steps.mirror.outputs.appimage }}
       signature: ${{ steps.mirror.outputs.signature }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # WebKitGTK and the tray for Tauri; ALSA and cmake for dictation's
       # engine, which compiles here though the app hides it off a Mac; FUSE to
@@ -247,12 +271,12 @@ jobs:
             librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev libasound2-dev cmake file patchelf libfuse2 \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good
 
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
       - run: pnpm install --frozen-lockfile
 
       # `createUpdaterArtifacts` signs the AppImage itself into a `.sig`
@@ -291,7 +315,7 @@ jobs:
           echo "appimage=$(basename "$IMAGE")" >> "$GITHUB_OUTPUT"
           echo "signature=$(cat "$IMAGE.sig")" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: appimage
           path: apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
@@ -310,13 +334,13 @@ jobs:
     if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: updates
           fetch-depth: 1
 
       - if: needs.linux.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: appimage
           path: ${{ runner.temp }}/appimage

@@ -222,12 +222,12 @@ pub fn read_models(reply: &Value) -> Vec<Model> {
     fold(state.available_models, images)
 }
 
-/// The rows the picker draws, in the order it draws them.
+/// Every row grok lists, fast twins included, in grok's own order.
 ///
-/// grok lists newest first, so position is the ranking and the top two are its
-/// flagship and that flagship's fast twin — the pair a session is flipped
-/// between. Everything below is left out of the default shortlist, and so out
-/// of Shift+Tab's cycle until the reader turns it on.
+/// grok lists newest first, so position is the ranking and the first two rows
+/// the picker draws are its top level — the pair Shift+Tab flips between.
+/// Everything below folds into "More models", and a twin, hidden, takes no
+/// slot.
 fn fold(rows: Vec<Row>, images: bool) -> Vec<Model> {
     // Mapped over the whole set rather than one row at a time, because
     // `supports_fast` is a lookup *in* that set: a model's fast tier is another

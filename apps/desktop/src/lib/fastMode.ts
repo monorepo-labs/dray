@@ -55,6 +55,17 @@ export function offersFast(
   return model?.supportsFast ?? standsWithNoModel(harness);
 }
 
+/// Whether this is a Claude model whose fast mode was retired, which is where
+/// the picker points the reader at Opus 5.5 instead.
+///
+/// Claude Code deprecated Opus 4.8's fast mode in v2.1.316 and removes it on
+/// 2026-11-30, after which a fast request there fails the turn. The backend's
+/// `fast_retired` is what takes `supportsFast` off the row; this only decides
+/// whether to say where the speedup went.
+export function fastRetired(harness: Harness, model: Model | null | undefined): boolean {
+  return harness === "claude_code" && !!model?.id.includes("opus-4-8");
+}
+
 /// What actually gets sent, given the reader's pick.
 ///
 /// The pick is per session and survives a model switch, so it has to be read

@@ -6,7 +6,7 @@
 // than the page view happened.
 //
 // **Three things are off on purpose.** Autocapture, because a click on every
-// element is a lot of events for a five-section page and none of them answer a
+// element is a lot of events for a handful of pages and none of them answer a
 // question anybody asked. Session recording, for the same reason it is off in
 // the app — it is somebody's screen. Person profiles, because nothing here ever
 // calls `identify` and an anonymous event is the cheaper meter.
@@ -33,8 +33,8 @@ if (key) {
     persistence: "localStorage+cookie",
     autocapture: false,
     disable_session_recording: true,
-    // The site is one route today, but a pageview that only fires on hard
-    // navigation is a bug waiting for the second one.
+    // The site has several routes, and a pageview that only fires on hard
+    // navigation misses every client-side move between them.
     capture_pageview: "history_change",
     person_profiles: "identified_only",
     // The desktop app reports into this same project under a stable install

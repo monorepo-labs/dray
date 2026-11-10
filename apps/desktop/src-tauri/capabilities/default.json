@@ -10,6 +10,9 @@
     "core:window:allow-start-dragging",
     "core:window:allow-set-badge-count",
     "core:window:allow-set-theme",
+    "core:window:allow-unminimize",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
     "core:webview:allow-set-webview-zoom",
     "opener:default",
     "dialog:default"

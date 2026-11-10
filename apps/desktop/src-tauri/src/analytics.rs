@@ -1,9 +1,8 @@
 //! Anonymous usage analytics over PostHog.
 //!
 //! Five events — a launch, a day the app was used, a session starting, a
-//! feature being reached for the first time in a run, and something breaking —
-//! carrying no content and no identity beyond a random id minted on this
-//! machine. What they answer is how many people run Dray, on which version,
+//! feature being used, and something breaking — carrying no content and no
+//! identity beyond a random id minted on this machine. What they answer is how many people run Dray, on which version,
 //! whether they come back, which of the things built here anybody actually
 //! uses, and whether the build is failing under them in a way nothing else
 //! would ever tell us.
@@ -224,8 +223,10 @@ fn claim_day(key: String, day: String) -> bool {
 /// `send_msg` command** covers a reader who leaves the app open and frontmost
 /// across a date boundary — the *command*, not `SessionManager::send_msg` one
 /// call down, since the orchestration socket reaches that directly to relay a
-/// `dray send` and to start a session `dray new` asked for. A Tauri command is
-/// reachable from the webview alone, so it needs no gate to mean a person.
+/// `dray session send` and to start a session `dray session new` asked for.
+/// Only a client somebody is typing into reaches the command — the app, the
+/// island, a phone — and one that counts for itself is skipped
+/// ([`client_counts`]).
 ///
 /// The throttle is what makes a third site free rather than a third event: all
 /// three share one key, so whichever gets there first claims the day and the

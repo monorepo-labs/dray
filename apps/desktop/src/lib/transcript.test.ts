@@ -621,6 +621,66 @@ describe("a call whose background task the child still holds", () => {
     expect(subagentById.get("c2")?.background).toBe(false);
   });
 
+  /// A Claude Code subagent numbers its events from 0 again, so its newest
+  /// call sorts ahead of every later prompt on the main thread. That prompt
+  /// says nothing about it: the call is open for as long as its run is.
+  describe("the subagent's own call", () => {
+    const inner = (seq: number, callId: string, runId: string): AgentEvent => ({
+      ...callStarted(seq, callId),
+      subagent: { id: runId, label: "Explore" },
+    });
+    const answered = (seq: number, callId: string): AgentEvent =>
+      event(seq, {
+        type: "tool_call_completed",
+        callId,
+        result: { text: "", isError: false, structured: null, exitCode: null, durationMs: null, images: [] },
+      } as AgentEventPayload);
+
+    it("stays pending under a prompt its restarted seq sorts ahead of", () => {
+      const { resultByCallId } = buildTranscript(
+        [
+          prompt(0, "first", false),
+          completed(10),
+          prompt(11, "second", false),
+          callStarted(12, "c1"),
+          spawn(13, "c1", "t1"),
+          inner(5, "inner", "c1"),
+        ],
+        true,
+        new Set(["t1"]),
+      );
+
+      expect(resultByCallId.get("inner")).toBeUndefined();
+    });
+
+    it("is abandoned once its run is over", () => {
+      const { resultByCallId, subagentById } = buildTranscript(
+        [
+          prompt(0, "first", false),
+          callStarted(1, "c1"),
+          spawn(2, "c1", "t1"),
+          inner(5, "inner", "c1"),
+          answered(6, "c1"),
+          completed(10),
+          prompt(11, "second", false),
+        ],
+        true,
+      );
+
+      expect(subagentById.get("c1")?.done).toBe(true);
+      expect(resultByCallId.get("inner")?.text).toMatch(ABANDONED);
+    });
+
+    it("is abandoned with everything else once nothing is running", () => {
+      const { resultByCallId } = buildTranscript(
+        [prompt(0, "go", false), callStarted(1, "c1"), spawn(2, "c1", "t1"), inner(5, "inner", "c1")],
+        false,
+      );
+
+      expect(resultByCallId.get("inner")?.text).toMatch(ABANDONED);
+    });
+  });
+
   /// The abandoned stand-in is a result too, and must not count: nothing
   /// answered, the child died.
   it("does not read an abandoned run as background", () => {
@@ -837,6 +897,22 @@ describe("segmentMedia", () => {
 
   /// A file that only mentions a recording path — this very test file, read
   /// back by an agent, or searched for the command — is not a recording.
+  it("reads a video add's output, in any home", () => {
+    const moved = "/srv/dray/browser/recordings/s1/screen.mp4";
+    const items = [
+      { seq: 1, payload: { type: "tool_call_started", callId: "add", input: { command: `dray video add /tmp/screen.mov` } } },
+    ] as never[];
+    const results = new Map([["add", { text: `${moved}\n` }]]) as never;
+    expect(segmentMedia(items, null, results)).toEqual([{ video: moved }]);
+  });
+
+  it("does not read a home-relative path as an absolute one", () => {
+    const items = [
+      { seq: 1, payload: { type: "assistant_text", text: "see ~/.dray/browser/recordings/s1/a.mp4 for it" } },
+    ] as never[];
+    expect(segmentMedia(items, null, new Map())).toEqual([]);
+  });
+
   it("reads recordings out of record stop's output alone", () => {
     const fixture = `const video = "${video}"`;
     expect(paths([callStarted(1, "a", { file_path: "/x/transcript.test.ts" }), result(2, "a", fixture, 0)])).toEqual([]);

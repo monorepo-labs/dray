@@ -312,7 +312,7 @@ pub enum AgentEventPayload {
     PermissionRequested {
         /// Correlates the reply. Also what
         /// [`PermissionDecided`](Self::PermissionDecided) joins on, which is how
-        /// a reloaded transcript knows an answered request from a live one.
+        /// the transcript knows an answered request from a live one.
         request_id: String,
         /// The call being held. The matching
         /// [`ToolCallStarted`](Self::ToolCallStarted) is already in the
@@ -365,8 +365,8 @@ pub enum AgentEventPayload {
     },
     /// How a [`PermissionRequested`](Self::PermissionRequested) was answered.
     /// Minted by the app when it replies, not by the harness — the CLI's own ack
-    /// carries nothing worth keeping — so the transcript survives a reload with
-    /// the outcome intact.
+    /// carries nothing worth keeping. Emitted and never logged, like the request
+    /// it retires: only the child that asked could act on either.
     PermissionDecided {
         request_id: String,
         tool_use_id: String,
@@ -731,6 +731,10 @@ pub struct ToolResult {
 pub struct MessageSender {
     pub session_id: String,
     pub title: String,
+    /// The machine the sender runs on, where that is not this one. Stamped by
+    /// the forwarding app, so it names the machine it came from.
+    #[serde(default)]
+    pub machine: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -978,7 +982,7 @@ mod tests {
         assert!(matches!(v, AgentEventPayload::Unrecognized));
     }
 
-    /// The nested tag-in-tag shape (`kind` outer, `type` inner) survives a
+    /// The nested tag-in-tag shape (`type` outer, `delta` inner) survives a
     /// round trip.
     #[test]
     fn delta_round_trips() {

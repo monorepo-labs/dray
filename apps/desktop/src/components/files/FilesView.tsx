@@ -117,11 +117,12 @@ export default function FilesView({
     : null;
 
   // The agent's writes are why an open file goes stale, and a turn ending is
-  // when it has finished making them. The watcher covers everything between.
+  // when it has finished making them. The watcher covers everything between —
+  // but only while this session is the one mounted, so coming back on screen
+  // re-reads too.
   useEffect(() => {
     if (active) refreshOpenFiles(sessionId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [revision, sessionId]);
+  }, [revision, sessionId, active]);
 
   // ⌘⇧← / ⌘⇧→ step the tab strip, the same shape the Diff view's sub-tabs and
   // the Docs panel's chips are stepped with. Clamped rather than wrapped, and

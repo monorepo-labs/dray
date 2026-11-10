@@ -39,28 +39,35 @@ struct Rail: View {
 /// the pull request. Each at its own width, so the title sits close behind it.
 struct LeadMark: View {
     let marks: Marks
+    /// Off where the title shimmers instead, which says the same.
+    var orb = true
+    @Environment(\.motionPaused) private var hidden
 
     var body: some View {
         if marks.checksRunning {
             ChecksSpinner()
-        } else if marks.busy {
-            Orb(state: .working, size: 16).foregroundStyle(.white.opacity(0.7))
+        } else if marks.busy && orb {
+            Orb(state: .working, size: 16, paused: hidden).foregroundStyle(.white.opacity(0.7))
         } else if let pr = marks.pr {
             PrGlyph(mark: pr, size: 13)
         }
     }
 
-    var shown: Bool { marks.checksRunning || marks.busy || marks.pr != nil }
+    var shown: Bool { marks.checksRunning || (marks.busy && orb) || marks.pr != nil }
 }
 
 /// The selected session's title row: the title opens the task list behind its
 /// lead mark, ⌘-click opens the session in Dray, and the hints teach the keys.
 struct TitleRow: View {
     let title: String
+    /// Beside the title rather than in it, since a long title is cut and this must not be.
+    var machine: String? = nil
     let marks: Marks
     let close: String
     let list: () -> Void
     let openInApp: () -> Void
+    /// A gesture to teach, ahead of the keys, until the reader has used it.
+    var hint: String? = nil
     @State private var hovered = false
 
     var body: some View {
@@ -69,11 +76,15 @@ struct TitleRow: View {
                 if NSEvent.modifierFlags.contains(.command) { openInApp() } else { list() }
             } label: {
                 HStack(spacing: 4) {
-                    let lead = LeadMark(marks: marks)
+                    let lead = LeadMark(marks: marks, orb: false)
                     if lead.shown { lead }
                     Text(title).lineLimit(1)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white.opacity(hovered ? 1 : 0.7))
+                        .shimmer(marks.busy, period: 1.4)
+                    if let machine {
+                        Text(machine).font(.system(size: 13)).foregroundStyle(.white.opacity(0.4)).lineLimit(1).fixedSize()
+                    }
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
@@ -82,6 +93,10 @@ struct TitleRow: View {
             .onHover { hovered = $0 }
             .animation(.easeOut(duration: 0.12), value: hovered)
             .help("Tasks, ⌘-click to open in Dray")
+            if let hint {
+                Text(hint).font(.system(size: 12)).foregroundStyle(.white.opacity(0.3)).fixedSize()
+                    .transition(.opacity)
+            }
             KeyHints(new: true, close: close)
         }
     }
@@ -133,56 +148,6 @@ struct SessionRow: View {
     }
 }
 
-/// The sessions waiting on the reader, oldest first, scrolling sideways past
-/// the card's width.
-struct AskTabs: View {
-    let titles: [String]
-    let active: Int
-    let pick: (Int) -> Void
-    let openInApp: (Int) -> Void
-
-    var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 4) {
-                ForEach(Array(titles.enumerated()), id: \.offset) { i, title in
-                    AskTab(title: title, active: i == active) {
-                        if NSEvent.modifierFlags.contains(.command) { openInApp(i) } else { pick(i) }
-                    }
-                }
-            }
-        }
-        .scrollIndicators(.never)
-    }
-}
-
-/// One waiting session over the card, as a browser tab: the active one names
-/// itself, the others are clipped short. ⌘-click opens it in Dray.
-struct AskTab: View {
-    let title: String
-    let active: Bool
-    let pick: () -> Void
-    @State private var hovered = false
-
-    var body: some View {
-        Button(action: pick) {
-            Text(title).lineLimit(1)
-                .font(.system(size: 12, weight: active ? .semibold : .regular))
-                .foregroundStyle(.white.opacity(active || hovered ? 0.9 : 0.5))
-                .padding(.horizontal, 8)
-            .frame(maxWidth: active ? 200 : 72, alignment: .leading)
-            .frame(height: 24)
-            .background(.white.opacity(active ? 0.12 : hovered ? 0.08 : 0.04), in: RoundedRectangle(cornerRadius: 7))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .fixedSize(horizontal: active, vertical: false)
-        // A clipped title reads in full on hover, without the strip moving under the cursor.
-        .help(active ? "" : title)
-        .onHover { hovered = $0 }
-        .animation(.snappy(duration: 0.2), value: hovered)
-    }
-}
-
 /// Hangs from the notch while the panel is shut and sessions wait on the
 /// reader, until every one is answered. Resting the pointer on it opens the
 /// panel on the cards; a short dwell keeps a pointer passing by from doing so.
@@ -213,6 +178,91 @@ struct AttentionPill: View {
                 if !Task.isCancelled { action() }
             }
         }
+    }
+}
+
+/// A boat sandbox about to auto-stop, with the way to give it more time. Stands
+/// until extended, stopped or dismissed, since missing it costs running work.
+struct BoatPill: View {
+    let notch: Bool
+    let notchHeight: CGFloat
+    let alert: BoatAlert
+    let refused: String?
+    let extend: (Int) async -> Void
+    let dismiss: () -> Void
+    var glowing = false
+
+    var body: some View {
+        PillShell(notch: notch, notchHeight: notchHeight, glow: glowing ? StatusDot.waiting : nil) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(alert.name) stops in").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                    .frame(maxWidth: .infinity)
+                // Redrawn each second, or the count would stand still. White
+                // outright: the pills' window takes the system's appearance.
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    Text(alert.countdown).font(.system(size: 20, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(alert.urgent ? Color.red : .white)
+                        .frame(maxWidth: .infinity)
+                }
+                BoatExtendChoices(size: 12, extend: extend, dismiss: dismiss)
+                    .padding(.top, 2)
+                if let refused {
+                    Text(refused).font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+                        .frame(maxWidth: 300, alignment: .leading)
+                }
+            }
+        }
+    }
+}
+
+/// Extend by a length stepped in 30-minute steps from 2 hours, the app card's
+/// own control: a stepper because the pills' window never takes the keys.
+struct BoatExtendChoices: View {
+    let size: CGFloat
+    /// Minutes. Returns once the app has answered.
+    let extend: (Int) async -> Void
+    var dismiss: (() -> Void)? = nil
+    @State private var minutes = 120
+    @State private var extending = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            step("minus", by: -30).disabled(extending || minutes <= 30)
+            Text(Self.label(minutes)).font(.system(size: size, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.white).frame(minWidth: size * 4)
+            step("plus", by: 30).disabled(extending || minutes >= 30 * 24 * 60)
+            Spacer(minLength: 16)
+            if let dismiss {
+                Button("Dismiss", action: dismiss)
+                    .buttonStyle(.plain)
+                    .font(.system(size: size, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .help("Hide this warning. It comes back if the stop time changes.")
+            }
+            Button(extending ? "Extending…" : "Extend") {
+                extending = true
+                Task {
+                    await extend(minutes)
+                    extending = false
+                }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: size, weight: .semibold))
+            .foregroundStyle(.white.opacity(extending ? 0.55 : 1))
+            .disabled(extending)
+        }
+    }
+
+    /// "2h", "2h 30m", "30m".
+    static func label(_ minutes: Int) -> String {
+        let (h, m) = (minutes / 60, minutes % 60)
+        return [h > 0 ? "\(h)h" : nil, m > 0 ? "\(m)m" : nil].compactMap { $0 }.joined(separator: " ")
+    }
+
+    private func step(_ symbol: String, by delta: Int) -> some View {
+        Button { minutes += delta } label: { Image(systemName: symbol).font(.system(size: size - 2, weight: .semibold)) }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white.opacity(0.7))
     }
 }
 

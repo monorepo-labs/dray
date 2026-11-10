@@ -32,8 +32,8 @@ pub enum ControlRequest<'a> {
     /// task lifecycle events carry.
     ///
     /// Not what `Interrupt` does, and the gap is why this exists: an interrupt
-    /// with no turn in flight acks and leaves every running task alone, which
-    /// strands the session in-progress until the task finishes on its own.
+    /// stops a turn and leaves every running task alone, so the subagent
+    /// panel's per-task stop has no other way to end one.
     /// Verified against v2.1.232 on both task types — the reply is `{}` and the
     /// set republishes empty within the same millisecond. `not_found` and
     /// `not_running` also answer success, so a second click cannot error.

@@ -180,21 +180,22 @@ export function segmentWork(turn: Turn, resultByCallId?: Map<string, ToolResult>
   return segments;
 }
 
-/// Every `dray browser record` video named in a text, absolute paths only —
-/// the asset protocol reads nothing else. Unanchored where Markdown's own test
-/// is anchored, since this searches prose and tool output rather than judging
-/// one path.
+/// Every recording named in a text, absolute paths only — the asset protocol
+/// reads nothing else. Unanchored where Markdown's own test is anchored, since
+/// this searches prose and tool output rather than judging one path. Any home,
+/// since `DRAY_HOME` moves it. The group is the path, and what it must follow
+/// is what keeps `~/.dray/…` from reading as `/.dray/…`.
 const RECORDING_IN_TEXT =
-  /\/[^\s"'`()<>]*\/\.dray(?:-dev|-worktrees\/[^/\s"'`()<>]+)?\/browser(?:-dev)?\/recordings\/[^/\s"'`()<>]+\/[^/\s"'`()<>]+\.mp4/g;
+  /(?:^|[\s"'`(<>\[=:])(\/[^\s"'`()<>]*\/browser(?:-dev)?\/recordings\/[^/\s"'`()<>]+\/[^/\s"'`()<>]+\.mp4)/gm;
 
-/// `dray browser record stop` run as a command: opening it, after a shell
-/// separator, or quoted after `-c` the way Codex wraps every command.
-/// `rg 'dray browser record stop'` only quotes it, and prints a fixture's fake
-/// path beside it.
-const RECORD_STOP = /(?:^|[;&|(\n]|\s-\w*c\s+['"])\s*dray\s+browser\s+record\s+stop\b/;
+/// A command that prints a recording's path, run as a command: opening it,
+/// after a shell separator, or quoted after `-c` the way Codex wraps every
+/// command. `rg 'dray browser record stop'` only quotes it, and prints a
+/// fixture's fake path beside it.
+const RECORD_STOP = /(?:^|[;&|(\n]|\s-\w*c\s+['"])\s*dray\s+(?:browser\s+record\s+stop|video\s+add)\b/;
 
-/// The call's id where it is a `dray browser record stop`, which prints the
-/// MP4's path. No other tool's output is read for one, or a file that merely
+/// The call's id where it is a `dray browser record stop` or `dray video add`,
+/// which print the MP4's path. No other tool's output is read for one, or a file that merely
 /// mentions a path — a test fixture read back — draws a player for a video
 /// that was never made. Every string in the input is tried, since each harness
 /// shapes a shell command its own way.
@@ -225,9 +226,9 @@ export function segmentMedia(
   const media: Media[] = [];
   // Seeded with the final message's own, which it plays itself — wherever else
   // in the stretch the same path turns up.
-  const seen = new Set(finalText ? [...finalText.matchAll(RECORDING_IN_TEXT)].map(([path]) => path) : []);
+  const seen = new Set(finalText ? [...finalText.matchAll(RECORDING_IN_TEXT)].map(([, path]) => path) : []);
   const scan = (text: string) => {
-    for (const [path] of text.matchAll(RECORDING_IN_TEXT)) {
+    for (const [, path] of text.matchAll(RECORDING_IN_TEXT)) {
       if (seen.has(path)) continue;
       seen.add(path);
       media.push({ video: path });
@@ -261,7 +262,7 @@ export function sessionMedia(events: AgentEvent[]): SessionMedia[] {
     media.push(m);
   };
   const scan = (text: string) => {
-    for (const [path] of text.matchAll(RECORDING_IN_TEXT)) add(path, { video: path, byYou: false });
+    for (const [, path] of text.matchAll(RECORDING_IN_TEXT)) add(path, { video: path, byYou: false });
   };
   const images = (list: ImageRef[], byYou: boolean) => {
     for (const image of list) {
@@ -674,19 +675,16 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
   return turns;
 }
 
-/// Splits the event log into the main thread and the subagent runs the panel
-/// lists.
-///
-/// Correlation is `envelope.subagent.id === the spawning call's callId`, not the
-/// `agentId` on the subagent payloads — that is the harness's own handle and
-/// matches nothing else.
+/// The live-task set of a session with none. One shared instance, because
+/// `buildTranscript`'s memo compares the set by identity: two empty sets from
+/// two readers of one session cost a second walk per event.
+export const EMPTY_TASKS: ReadonlySet<string> = new Set();
+
 /// Stands in for the result a call will now never get.
 ///
 /// Not an error: nothing went wrong with the call, the process it belonged to
 /// stopped existing. Flagging it would tint the row red and spring it open on
 /// load, which is a lot of noise for "this didn't finish".
-const EMPTY_TASKS: ReadonlySet<string> = new Set();
-
 const ABANDONED: ToolResult = {
   text: "No result — the session ended before this call finished.",
   isError: false,
@@ -727,6 +725,12 @@ export function buildTranscript(
   return result;
 }
 
+/// Splits the event log into the main thread and the subagent runs the panel
+/// lists.
+///
+/// Correlation is `envelope.subagent.id === the spawning call's callId`, not the
+/// `agentId` on the subagent payloads — that is the harness's own handle and
+/// matches nothing else.
 function build(
   source: AgentEvent[],
   /// Whether a child is actually running this session. A call with no result is
@@ -812,9 +816,18 @@ function build(
     // already running, and the CLI folds it into that turn — so the calls open
     // in front of it are still live, and marking them here would stop a running
     // tool's row shimmering while it is genuinely still working.
+    //
+    // The main thread's calls only. A subagent's are judged with its run,
+    // below: a prompt does not end a background run, and this walk cannot
+    // place one against the main thread in the first place — a Claude Code
+    // subagent numbers its events from 0 again, so its newest call sorts ahead
+    // of every later prompt and was filed abandoned while it was still running.
     if (event.payload.type === "user_message" && !event.payload.queued) {
-      for (const callId of open) abandoned.add(callId);
-      open.clear();
+      for (const callId of open) {
+        if (callById.get(callId)?.subagent) continue;
+        abandoned.add(callId);
+        open.delete(callId);
+      }
     }
     if (
       event.payload.type === "permission_requested" ||
@@ -918,6 +931,13 @@ function build(
   for (const run of subagentById.values()) {
     if (run.done || (run.taskId !== null && liveTaskIds.has(run.taskId))) continue;
     run.done = resultByCallId.has(run.id);
+  }
+
+  // A subagent's call left open is pending for exactly as long as its run is.
+  for (const callId of open) {
+    if (resultByCallId.has(callId)) continue;
+    const ref = callById.get(callId)?.subagent;
+    if (ref && subagentById.get(ref.id)?.done) resultByCallId.set(callId, ABANDONED);
   }
 
   const mainThread = events.filter((event) => !event.subagent);
