@@ -21,6 +21,25 @@ pub struct Row {
     pub input: Entity<TextInput>,
     /// Dictated rather than typed, which its mark says.
     pub said: bool,
+    /// A screenshot or a dropped file, riding the prompt as an attachment.
+    pub file: Option<String>,
+    /// A screenshot's place, held from the press so speech said meanwhile
+    /// lands around it rather than ahead of it. Drawn as nothing.
+    pub pending: bool,
+    /// An image file's size, read once from its header, so its thumbnail has
+    /// its height before the picture loads and the rows scroll to the true end.
+    pub size: Option<(u32, u32)>,
+    /// Travels as an image block, so it is numbered; decided once, as the
+    /// rule reads the file's size.
+    pub image: bool,
+}
+
+/// A row as it is sent or restored: its words, or its file.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RowData {
+    pub text: String,
+    pub file: Option<String>,
+    pub said: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +69,8 @@ pub struct Draft {
     pub list_shown: bool,
     /// The switcher's scroll, so ↑/↓ keep the highlighted row in view.
     pub list_scroll: ScrollHandle,
+    /// The rows' scroll, held at the newest as each lands, as the Mac's is.
+    pub rows_scroll: ScrollHandle,
     pub sending: bool,
     pub menu: Option<Menu>,
     /// The model row the pointer is on, whose effort levels fly out beside it.
@@ -70,6 +91,12 @@ pub struct Draft {
     /// start goes out until the first has been answered and, if cancelled,
     /// closed again — or that close could stop the new recording.
     pub start_pending: bool,
+    /// The send the reader asked for that still waits: on the words being
+    /// transcribed, or on a screenshot or moment still landing.
+    pub pinned: Option<Pinned>,
+    /// Counts recordings thrown away, which void a cut still transcribing;
+    /// `run` would not do, as starting again moves it too.
+    pub thrown: u64,
 }
 
 /// A send that waits on the words still being said: where it goes and the
@@ -80,6 +107,8 @@ pub struct Draft {
 pub struct Pinned {
     pub target: Option<Target>,
     pub rows: Vec<u64>,
+    /// The stop's words are still being transcribed, and belong to it.
+    pub awaiting_words: bool,
 }
 
 impl Draft {
@@ -92,6 +121,7 @@ impl Draft {
             search: cx.new(|cx| TextInput::new("Search tasks  Ctrl+F", cx).max_lines(1)),
             list_shown: false,
             list_scroll: ScrollHandle::new(),
+            rows_scroll: ScrollHandle::new(),
             sending: false,
             menu: None,
             hovered_model: None,
@@ -103,6 +133,8 @@ impl Draft {
             retry_path: None,
             run: 0,
             start_pending: false,
+            pinned: None,
+            thrown: 0,
         }
     }
 
@@ -130,8 +162,94 @@ impl Draft {
             input
         });
         self.next_row += 1;
-        self.rows.push(Row { id: self.next_row, input, said });
+        self.rows.push(Row { id: self.next_row, input, said, file: None, pending: false, size: None, image: false });
+        self.rows_scroll.scroll_to_bottom();
         self.next_row
+    }
+
+    /// A file row: a screenshot taken, or a file dropped on the panel.
+    pub fn add_file(&mut self, path: &str, cx: &mut App) -> u64 {
+        let id = self.push_row("", false, cx);
+        if let Some(row) = self.rows.last_mut() {
+            row.file = Some(path.to_string());
+            row.image = crate::capture::is_image(path);
+            row.size = image_size(path);
+        }
+        id
+    }
+
+    /// Holds the next screenshot's place at the end of the draft.
+    pub fn reserve_shot(&mut self, cx: &mut App) -> u64 {
+        let id = self.push_row("", false, cx);
+        if let Some(row) = self.rows.last_mut() {
+            row.pending = true;
+        }
+        id
+    }
+
+    /// The shot taken into the place held for it, or the place let go.
+    pub fn fill_shot(&mut self, id: u64, path: Option<&str>) {
+        match path {
+            Some(path) => {
+                if let Some(row) = self.rows.iter_mut().find(|r| r.id == id) {
+                    row.file = Some(path.to_string());
+                    row.image = crate::capture::is_image(path);
+                    row.size = image_size(path);
+                    row.pending = false;
+                }
+                self.rows_scroll.scroll_to_bottom();
+            }
+            None => self.rows.retain(|r| r.id != id),
+        }
+    }
+
+    /// Inserts dictated words just before the row `before`, or at the end.
+    pub fn add_said_before(&mut self, text: &str, before: u64, cx: &mut App) -> u64 {
+        let id = self.push_row(text, true, cx);
+        let row = self.rows.pop().expect("just pushed");
+        let at = self.rows.iter().position(|r| r.id == before).unwrap_or(self.rows.len());
+        self.rows.insert(at, row);
+        // Words cut ahead of a shot in a waiting send are that send's.
+        if let Some(p) = self.pinned.as_mut().filter(|p| p.rows.contains(&before)) {
+            p.rows.push(id);
+        }
+        id
+    }
+
+    /// Rows as they would be sent, `only` those ids where given; held places
+    /// are left out.
+    pub fn snapshot(&self, only: Option<&[u64]>, cx: &App) -> Vec<RowData> {
+        self.rows
+            .iter()
+            .filter(|r| !r.pending && only.is_none_or(|ids| ids.contains(&r.id)))
+            .map(|r| RowData { text: r.input.read(cx).text().to_string(), file: r.file.clone(), said: r.said })
+            .collect()
+    }
+
+    /// Puts rows back, as a failed send restores them.
+    pub fn restore_rows(&mut self, rows: &[RowData], cx: &mut App) {
+        for r in rows {
+            match &r.file {
+                Some(path) => {
+                    self.add_file(path, cx);
+                }
+                None => {
+                    self.push_row(&r.text, r.said, cx);
+                }
+            }
+        }
+    }
+
+    /// An image row's label: its place among the draft's images, the order
+    /// its block reaches the model in.
+    pub fn label(&self, id: u64) -> String {
+        let Some(row) = self.rows.iter().find(|r| r.id == id) else { return String::new() };
+        let Some(path) = &row.file else { return String::new() };
+        if !row.image {
+            return std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path).to_string();
+        }
+        let before = self.rows.iter().take_while(|r| r.id != id).filter(|r| r.image).count();
+        format!("Image {}", before + 1)
     }
 
     /// Every row's text and then the box's, in order.
@@ -157,6 +275,26 @@ impl Draft {
 /// The box's prompt, naming the reader's key, which Dray's Settings can move.
 pub fn placeholder() -> String {
     format!("{} to speak, Ctrl+⏎ Queue, ⏎ Send", crate::prefs::read().key.label())
+}
+
+/// The message as sent and its attachments. Each file stands in the text
+/// where it sits — `[Image 1]`, or a file's name — so the model can tell which
+/// words are about which image when the images arrive as blocks of their own.
+pub fn compose(rows: &[RowData], typing: &str) -> (String, Vec<String>) {
+    let mut images = 0;
+    let parts: Vec<String> = rows
+        .iter()
+        .map(|r| match &r.file {
+            Some(path) if crate::capture::is_image(path) => {
+                images += 1;
+                format!("[Image {images}]")
+            }
+            Some(path) => format!("[{}]", std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path)),
+            None => r.text.clone(),
+        })
+        .collect();
+    let files = rows.iter().filter_map(|r| r.file.clone()).collect();
+    (prompt(&parts, typing), files)
 }
 
 /// The message as sent: each row, then what is still in the box, trimmed and
@@ -224,6 +362,26 @@ mod tests {
     }
 
     #[test]
+    fn files_stand_in_the_text_where_they_sit() {
+        // Real files, since what counts as an image reads the size.
+        let dir = std::env::temp_dir().join(format!("dray-island-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, len: usize| {
+            let path = dir.join(name);
+            std::fs::write(&path, vec![0u8; len]).unwrap();
+            path.to_string_lossy().to_string()
+        };
+        let (a, notes, big, b) = (file("a.png", 10), file("notes.txt", 10), file("big.png", 5 * 1024 * 1024 + 1), file("b.jpg", 10));
+        let row = |text: &str, file: Option<&str>| RowData { text: text.into(), file: file.map(str::to_string), said: false };
+        let rows = [row("look at", None), row("", Some(&a)), row("and", None), row("", Some(&notes)), row("", Some(&big)), row("", Some(&b))];
+        let (text, files) = compose(&rows, "thanks");
+        // Over 5MB the server sends a path, not a block, so it takes no number.
+        assert_eq!(text, "look at [Image 1] and [notes.txt] [big.png] [Image 2] thanks");
+        assert_eq!(files, [a, notes, big, b]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn rows_and_the_box_join_into_one_prompt() {
         assert_eq!(prompt(&["  first ".into(), "".into(), "second".into()], " third "), "first second third");
         assert_eq!(prompt(&[], "  "), "");
@@ -251,4 +409,8 @@ mod tests {
         assert_eq!(rfc3339(1_794_318_897), "2026-11-10T13:54:57Z");
         assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
     }
+}
+
+fn image_size(path: &str) -> Option<(u32, u32)> {
+    crate::capture::is_image(path).then(|| image::image_dimensions(path).ok()).flatten()
 }

@@ -110,6 +110,29 @@ Swift island carries over.
   a 24pt orb in the box's row and shrinks the card to orb and clock. Expanded's
   80pt orb is the Mac's `LensOrb` without its screen capture, which is the
   prism orb exactly; see Known limits.
+- **Screenshots freeze the screen first.** The camera or Super+Shift+2 (the
+  Mac's ⌘⇧2) hides our windows, reads the root window, and draws that still
+  under a dimmed overlay: drag a region, draw on it, Enter or Done. Enter with
+  no region takes the whole screen. The Mac's drag rules, Ctrl+Z, Delete on a
+  picked mark. A still works with or without a compositor; a clear overlay
+  would only work with one. With the panel shut the shot flies to the pill and
+  waits in the draft, as on the Mac.
+- **While dictating, the words so far are cut ahead of the shot**
+  (`cut_transcription`) with the microphone left open, and its place in the
+  draft is held from the press, so speech lands around it.
+- **Drawing while dictating is Shift alone held.** With a compositor a clear
+  overlay takes the mouse only while Shift is down, so the page underneath
+  still works; 1.5s after the last stroke the marks' area, padded 160px, is
+  read with our windows unmapped and inked on the CPU. Without one, Shift
+  freezes the screen to draw on. "Hold Shift to draw" shows beside the clock
+  for the first five recordings.
+- **Our windows are unmapped for every screen read**, since a composited root
+  includes them. The window that held the keyboard takes it back after, or ⏎
+  lands in the app underneath.
+- **Files are PNG, else JPEG at falling quality under 5MB**, in
+  `$TMPDIR/dray-island-<uid>`, swept after seven days. They ride `send_msg`'s
+  `attachmentPaths`, named `[Image N]` or `[file name]` in the prompt where
+  they sat in the draft. Files dropped on the panel are rows too.
 - **The app hands asks to the island and keeps finished-session banners**:
   `islandOn("asks")` is true on Linux while the island child lives
   (`island::running`), `islandOn("done")` stays Mac-only until there is a done
@@ -130,8 +153,9 @@ Each its own PR.
    server, pinned to the newest session.
 2. **Waiting-card pill and answering cards**, and the Mac look (#860).
 3. **Reply, new task, the session switcher, typed rows** (#862).
-4. **Dictation rows, over `host_call` to the app as on the Mac**, and the orb.
-5. Screenshots and drawing on the live screen.
+4. **Dictation rows, over `host_call` to the app as on the Mac**, and the orb
+   (#866).
+5. **Screenshots and drawing on the live screen.**
 
 ## Known limits
 
@@ -150,6 +174,10 @@ Each its own PR.
 - **Not yet from the Mac's draft**: Ctrl+S saving it as a Dray draft,
   dragging rows to reorder, the last turns of the transcript above it, and
   the bar's step-through chords (⌘⇧A and the rest).
+- **The release bundle doesn't carry the island yet.** The app starts it as a
+  child where it finds the binary, which today is a dev build.
+- **A shot sees one screen.** The overlay covers GPUI's primary display, and
+  the still is the whole root window.
 - **Settings → Island stays hidden off a Mac** until the island has more to
   set than the key: the app hands over the default, Control.
 - **One display.** The panel opens on GPUI's primary display; the Mac's

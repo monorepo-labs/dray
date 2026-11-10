@@ -23,9 +23,9 @@ serde_json = "1"
 tungstenite = "0.30"
 unicode-segmentation = "1"
 uuid = { version = "1", features = ["v4"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 raw-window-handle = "0.6"
-x11rb = { version = "0.13", features = ["xinput"] }
+x11rb = { version = "0.13", features = ["xinput", "shape"] }
 
 [profile.release]
 strip = true

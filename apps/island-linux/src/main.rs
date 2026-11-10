@@ -3,10 +3,12 @@
 //! reader's modifier tapped alone. See PLAN.md.
 
 mod asks;
+mod capture;
 mod draft;
 mod input;
 mod newtask;
 mod orb;
+mod overlay;
 mod panel;
 mod prefs;
 mod server;
@@ -50,6 +52,10 @@ const GLOW: Duration = Duration::from_secs(2);
 
 enum Msg {
     Tap,
+    /// The screenshot key.
+    Capture,
+    /// Shift alone held, or let go: the pen armed while dictating.
+    Shift(bool),
     Server(Update),
     /// Dray quit: the island does not outlive it.
     Quit,
@@ -134,6 +140,41 @@ pub struct Island {
     pub orb_hovered: bool,
     /// The panel's layout, the reader's pick from the right-click menu.
     pub mode: prefs::Mode,
+    /// A screenshot under way: its overlay's state, and the run around it.
+    pub shooting: Option<overlay::Shooting>,
+    shot: Option<ShotRun>,
+    /// Ink on the live screen while dictating, and its overlay.
+    pub inking: Option<overlay::Inking>,
+    ink_window: Option<(WindowHandle<overlay::InkOverlay>, Option<u32>)>,
+    /// The full screen the ink is drawn over where there is no compositor.
+    ink_still: Option<image::RgbaImage>,
+    /// The moment being drawn: the row held for it and the cut placing the
+    /// words said before it.
+    moment: Option<Moment>,
+    rest_clock: u64,
+    /// "Hold Shift to draw" in the recording tools, for a reader's first
+    /// dictations, until the first stroke.
+    pub draw_hint: bool,
+    /// The pointer is on the camera, which shows its key beside it.
+    pub camera_hovered: bool,
+}
+
+/// One screenshot's run: the row held for it, whether dictation was
+/// recording (the panel stays up over the overlay) or the panel was open
+/// (it steps aside and comes back), and the cut placing words said before it.
+struct ShotRun {
+    slot: u64,
+    recording: bool,
+    was_open: bool,
+    cut: Option<futures::channel::oneshot::Receiver<()>>,
+    window: Option<(WindowHandle<overlay::CaptureOverlay>, Option<u32>)>,
+    /// Whoever had the keyboard before the overlay took it.
+    focus_before: Option<u32>,
+}
+
+struct Moment {
+    slot: u64,
+    cut: Option<futures::channel::oneshot::Receiver<()>>,
 }
 
 impl Island {
@@ -254,10 +295,18 @@ fn main() {
             let _ = tx.unbounded_send(Msg::Quit);
         });
     }
-    let taps = tx.clone();
-    x11::watch_taps(move || {
-        let _ = taps.unbounded_send(Msg::Tap);
-    });
+    let (taps, shots, shift) = (tx.clone(), tx.clone(), tx.clone());
+    x11::watch_taps(
+        move || {
+            let _ = taps.unbounded_send(Msg::Tap);
+        },
+        move || {
+            let _ = shots.unbounded_send(Msg::Capture);
+        },
+        move |armed| {
+            let _ = shift.unbounded_send(Msg::Shift(armed));
+        },
+    );
     let server = server::run(move |update| {
         let _ = tx.unbounded_send(Msg::Server(update));
     });
@@ -278,6 +327,8 @@ fn main() {
             while let Some(msg) = rx.next().await {
                 cx.update(|cx| match msg {
                     Msg::Tap => toggle(&island, cx),
+                    Msg::Capture => start_capture(&island, cx),
+                    Msg::Shift(armed) => set_armed(&island, armed, cx),
                     Msg::Server(update) => {
                         let had_cards = !island.read(cx).asks.attention().is_empty();
                         let fresh = island.update(cx, |island, _| island.apply(update));
@@ -373,7 +424,7 @@ fn sync_card(island: &Entity<Island>, cx: &mut App) {
 fn sync_pill(island: &Entity<Island>, cx: &mut App) {
     let (want, has, placement) = {
         let i = island.read(cx);
-        (i.window.is_none() && !i.asks.attention().is_empty(), i.pill.is_some(), i.placement)
+        (i.window.is_none() && !i.asks.attention().is_empty() && i.shot.is_none(), i.pill.is_some(), i.placement)
     };
     if want && !has {
         let glass = x11::compositing();
@@ -550,6 +601,7 @@ pub fn start_dictation(island: &Entity<Island>, cx: &mut App) {
                     });
                     sound::dictation_started();
                     poll_level(&island, cx);
+                    start_annotation(&island, cx);
                 }
             }
         });
@@ -586,19 +638,61 @@ pub fn stop_dictation(island: &Entity<Island>, then_send: bool, cx: &mut App) {
     }
     // A send waiting on the words goes where the reader pressed ⏎ with what
     // was there then, whatever they pick or write while the model works.
-    let pinned = then_send.then(|| {
-        // The box's text joins the send as a row of its own, and the box
-        // empties: what is typed next is not this message's.
-        let typing = island.read(cx).draft().typing.clone();
-        let text = typing.read(cx).text().trim().to_string();
-        if !text.is_empty() {
-            island.update(cx, |island, cx| island.draft_mut().add_row(&text, cx));
-            typing.update(cx, |t, cx| t.clear(cx));
-        }
-        let d = island.read(cx).draft();
-        Pinned { target: d.target.clone(), rows: d.rows.iter().map(|r| r.id).collect() }
+    if then_send && !pin(island, true, cx) {
+        return;
+    }
+    transcribe(island, "stop_transcription", json!({}), then_send, cx);
+}
+
+/// Holds the send as it stands at ⏎ in the draft until what it waits on has
+/// landed. The box's text joins it as a row of its own, and the box empties:
+/// what is typed next is not this message's. A send already waiting for the
+/// same task takes the new rows in; one waiting for another refuses, as one
+/// pin is all there is and the rows must not go to the wrong task.
+fn pin(island: &Entity<Island>, awaiting_words: bool, cx: &mut App) -> bool {
+    let clash = island.read(cx).draft().pinned.as_ref().is_some_and(|p| p.target != island.read(cx).draft().target);
+    if clash {
+        island.update(cx, |island, cx| {
+            island.notice = Some("The last message is still waiting on its screenshot.".into());
+            cx.notify();
+        });
+        return false;
+    }
+    let typing = island.read(cx).draft().typing.clone();
+    let text = typing.read(cx).text().trim().to_string();
+    if !text.is_empty() {
+        island.update(cx, |island, cx| island.draft_mut().add_row(&text, cx));
+        typing.update(cx, |t, cx| t.clear(cx));
+    }
+    island.update(cx, |island, cx| {
+        let d = island.draft_mut();
+        let rows: Vec<u64> = d.rows.iter().map(|r| r.id).collect();
+        let target = d.target.clone();
+        let p = d.pinned.get_or_insert(Pinned { target, rows: Vec::new(), awaiting_words: false });
+        let fresh: Vec<u64> = rows.into_iter().filter(|id| !p.rows.contains(id)).collect();
+        p.rows.extend(fresh);
+        p.awaiting_words |= awaiting_words;
+        cx.notify();
     });
-    transcribe(island, "stop_transcription", json!({}), pinned, cx);
+    true
+}
+
+/// Whether any of `ids` is a screenshot or moment still landing.
+fn landing(d: &Draft, ids: &[u64]) -> bool {
+    d.rows.iter().any(|r| r.pending && ids.contains(&r.id))
+}
+
+/// Something a waiting send held for has landed: it goes once its words
+/// are in and no screenshot or moment is still landing.
+fn release_send(island: &Entity<Island>, cx: &mut App) {
+    let d = island.read(cx).draft();
+    // One request at a time: a send still running releases this one when done.
+    if d.sending || d.pinned.as_ref().is_none_or(|p| p.awaiting_words || landing(d, &p.rows)) {
+        return;
+    }
+    if let Some(pinned) = island.update(cx, |island, _| island.draft_mut().pinned.take()) {
+        send_to_target(island, Some(pinned), cx);
+    }
 }
 
 /// Runs the model again over the recording a failed run kept, so the words
@@ -608,14 +702,17 @@ pub fn retry_dictation(island: &Entity<Island>, cx: &mut App) {
     if island.read(cx).draft().dictation != orb::Dictation::Idle {
         return;
     }
-    transcribe(island, "retry_transcription", json!({ "path": path }), None, cx);
+    transcribe(island, "retry_transcription", json!({ "path": path }), false, cx);
 }
 
 /// How long the model may take over a long recording.
 const TRANSCRIBE_WITHIN: Duration = Duration::from_secs(180);
 
-fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, send_to: Option<Pinned>, cx: &mut App) {
+fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, then_send: bool, cx: &mut App) {
     let Some(reply) = call(island, cmd, args, cx) else { return };
+    // The microphone closes, and the screen with it: a moment still being
+    // drawn is taken first.
+    end_annotation(island, cx);
     let run = island.update(cx, |island, cx| {
         island.notice = None;
         let d = island.draft_mut();
@@ -648,9 +745,19 @@ fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, send_
                 cx.notify();
                 placed
             });
-            if placed && let Some(mut pinned) = send_to {
-                pinned.rows.extend(row);
-                send_to_target(&island, Some(pinned), cx);
+            if then_send {
+                // A failed run keeps the draft open, its notice and Retry
+                // with it, so the send waits for the reader again.
+                island.update(cx, |island, _| {
+                    let d = island.draft_mut();
+                    if !placed {
+                        d.pinned = None;
+                    } else if let Some(p) = d.pinned.as_mut() {
+                        p.rows.extend(row);
+                        p.awaiting_words = false;
+                    }
+                });
+                release_send(&island, cx);
             }
         });
     })
@@ -708,10 +815,14 @@ fn throw_away(island: &Entity<Island>, cx: &mut App) {
     if island.read(cx).draft().dictation == orb::Dictation::Idle {
         return;
     }
+    end_annotation(island, cx);
     let _ = call(island, "cancel_transcription", json!({}), cx);
     island.update(cx, |island, cx| {
         let d = island.draft_mut();
         d.run += 1;
+        d.thrown += 1;
+        // A send waiting on these words is called off; its rows stay.
+        d.pinned = None;
         d.dictation = orb::Dictation::Idle;
         d.recording_since = None;
         d.peak = 0.0;
@@ -859,6 +970,9 @@ pub fn close(island: &Entity<Island>, cx: &mut App) {
         // The text box's focus goes with the window, so it reopens as the
         // button showing what was typed; a click takes the keyboard back.
         island.card.editing = false;
+        // A window going away under the pointer never hears it leave.
+        island.camera_hovered = false;
+        island.orb_hovered = false;
         island.listed = false;
         island.flash = None;
         island.notice = None;
@@ -1063,7 +1177,10 @@ async fn after_flash(island: &Entity<Island>, clock: u64, cx: &mut gpui::AsyncAp
             let i = island.read(cx);
             (i.flash.is_some() && i.flash_clock == clock, i.asks.attention().is_empty())
         };
-        if flashing && empty {
+        // A waiting send can go while the reader dictates or writes the
+        // next one; closing then would throw that away.
+        let busy = island.read(cx).draft().busy(cx);
+        if flashing && empty && !busy {
             close(island, cx);
         } else if flashing {
             island.update(cx, |island, cx| {
@@ -1301,10 +1418,35 @@ pub fn send(island: &Entity<Island>, cx: &mut App) {
 /// `send`, to `pinned` where a send waited on dictation, else to the task
 /// picked now.
 fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App) {
-    match island.read(cx).draft().dictation {
-        orb::Dictation::Recording => return stop_dictation(island, true, cx),
-        orb::Dictation::Idle => {}
-        _ => return,
+    // A pinned send's rows are fixed, so a recording started since is
+    // neither its business nor stopped by it.
+    if pinned.is_none() {
+        match island.read(cx).draft().dictation {
+            orb::Dictation::Recording => return stop_dictation(island, true, cx),
+            orb::Dictation::Idle => {}
+            _ => return,
+        }
+    }
+    // This send's rows: a pinned one's own, else every row no waiting send
+    // holds, so a second ⏎ sends what came after without waiting on the first.
+    let own: Vec<u64> = match &pinned {
+        Some(p) => p.rows.clone(),
+        None => {
+            let d = island.read(cx).draft();
+            let waiting = d.pinned.as_ref().map(|p| p.rows.clone()).unwrap_or_default();
+            d.rows.iter().map(|r| r.id).filter(|id| !waiting.contains(id)).collect()
+        }
+    };
+    // A screenshot or moment still landing is part of this message: the send
+    // waits for it, holding the rows as they are now.
+    if landing(island.read(cx).draft(), &own) {
+        match pinned {
+            Some(p) => island.update(cx, |island, _| island.draft_mut().pinned = Some(p)),
+            None => {
+                pin(island, false, cx);
+            }
+        }
+        return;
     }
     let (target, rows, typing, picks) = {
         let i = island.read(cx);
@@ -1312,11 +1454,8 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
         // A pinned send reads only its own rows, never the box or rows
         // written since ⏎.
         let (rows, typing) = match &pinned {
-            Some(p) => (
-                d.rows.iter().filter(|r| p.rows.contains(&r.id)).map(|r| r.input.read(cx).text().to_string()).collect(),
-                String::new(),
-            ),
-            None => d.parts(cx),
+            Some(_) => (d.snapshot(Some(&own), cx), String::new()),
+            None => (d.snapshot(Some(&own), cx), d.typing.read(cx).text().to_string()),
         };
         let p = &d.picks;
         let picks = json!({
@@ -1333,9 +1472,11 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
         };
         (target, rows, typing, picks)
     };
-    let text = draft::prompt(&rows, &typing);
+    let (text, files) = draft::compose(&rows, &typing);
     let Some(target) = target else { return };
-    if text.is_empty() || island.read(cx).draft().sending {
+    // An image alone is a message, as in Dray's own composer; a screenshot
+    // still being taken is not yet one.
+    if (text.is_empty() && files.is_empty()) || island.read(cx).draft().sending {
         return;
     }
     if target == Target::New && picks["cwd"].is_null() {
@@ -1352,12 +1493,13 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
         typing_box.update(cx, |t, cx| t.clear(cx));
     }
     let clock = island.update(cx, |island, cx| {
-        island.notice = None;
-        let draft = island.draft_mut();
-        match &pinned {
-            Some(p) => draft.rows.retain(|r| !p.rows.contains(&r.id)),
-            None => draft.rows.clear(),
+        // A waiting send goes on its own, often as another fails; that
+        // failure's notice is the reader's to read, not this send's to clear.
+        if pinned.is_none() {
+            island.notice = None;
         }
+        let draft = island.draft_mut();
+        draft.rows.retain(|r| !own.contains(&r.id));
         draft.sending = true;
         draft.list_shown = false;
         draft.menu = None;
@@ -1385,7 +1527,7 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
             args["branch"] = serde_json::Value::Null;
             args["worktreeName"] = serde_json::Value::Null;
             args["baseRef"] = serde_json::Value::Null;
-            args["attachmentPaths"] = json!([]);
+            args["attachmentPaths"] = json!(files);
             args["isNewSession"] = json!(true);
             server(cx, "send_msg", args).map(|reply| (id, reply))
         }
@@ -1400,7 +1542,7 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
                     Ok(item) => match serde_json::from_value::<Session>(item) {
                         Ok(s) => {
                             let args = json!({
-                                "sessionId": id, "prompt": text, "attachmentPaths": [],
+                                "sessionId": id, "prompt": text, "attachmentPaths": files,
                                 "harness": s.harness, "model": s.model, "effort": s.effort,
                                 "permissionMode": s.permission_mode, "fast": s.fast.unwrap_or(false),
                                 "cwd": s.cwd, "branch": null, "useWorktree": false,
@@ -1421,17 +1563,21 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
             }
             _ => Err("Dray's server isn't reachable.".into()),
         };
-        cx.update(|cx| match outcome {
-            Ok(id) => {
-                state.update(cx, |island, _| island.draft_mut().sending = false);
-                // A pick made while the request ran is the reader's, and outranks this one.
-                if state.read(cx).draft().target.as_ref() == Some(&target) {
-                    pick_target(&state, Target::Session(id), cx);
-                } else {
-                    prefs::set("lastSession", &id);
+        cx.update(|cx| {
+            match outcome {
+                Ok(id) => {
+                    state.update(cx, |island, _| island.draft_mut().sending = false);
+                    // A pick made while the request ran is the reader's, and outranks this one.
+                    if state.read(cx).draft().target.as_ref() == Some(&target) {
+                        pick_target(&state, Target::Session(id), cx);
+                    } else {
+                        prefs::set("lastSession", &id);
+                    }
                 }
+                Err(why) => restore(&state, rows, typing, target, why, cx),
             }
-            Err(why) => restore(&state, rows, typing, target, why, cx),
+            // A send that came ready while this one ran goes now.
+            release_send(&state, cx);
         });
     })
     .detach();
@@ -1442,7 +1588,7 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
 /// in order: the failed box text becomes a row ahead of newer rows. A draft
 /// begun since for somewhere else is the reader's and is left alone, so the
 /// failed message goes to the clipboard instead, as on the Mac.
-fn restore(island: &Entity<Island>, rows: Vec<String>, typing: String, target: Target, why: String, cx: &mut App) {
+fn restore(island: &Entity<Island>, rows: Vec<draft::RowData>, typing: String, target: Target, why: String, cx: &mut App) {
     let typing_box = island.read(cx).draft().typing.clone();
     let now = typing_box.read(cx).text().to_string();
     let (same, empty) = {
@@ -1453,7 +1599,9 @@ fn restore(island: &Entity<Island>, rows: Vec<String>, typing: String, target: T
     if empty {
         typing_box.update(cx, |t, cx| t.set_text(&typing, cx));
     } else if !same {
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(draft::prompt(&rows, &typing)));
+        // Each file as its path, since a label like `[Image 1]` would lose it.
+        let parts: Vec<String> = rows.iter().map(|r| r.file.clone().unwrap_or_else(|| r.text.clone())).collect();
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(draft::prompt(&parts, &typing)));
         why.push_str(" The message is on the clipboard.");
     }
     island.update(cx, |island, cx| {
@@ -1463,9 +1611,7 @@ fn restore(island: &Entity<Island>, rows: Vec<String>, typing: String, target: T
         if same || empty {
             draft.target = Some(target);
             let held = std::mem::take(&mut draft.rows);
-            for text in &rows {
-                draft.add_row(text, cx);
-            }
+            draft.restore_rows(&rows, cx);
             if !empty && !typing.trim().is_empty() {
                 draft.add_row(&typing, cx);
             }
@@ -1479,6 +1625,561 @@ fn restore(island: &Entity<Island>, rows: Vec<String>, typing: String, target: T
     // Last: opening the panel clears it.
     island.update(cx, |island, cx| {
         island.notice = Some(why);
+        cx.notify();
+    });
+}
+
+/// What one window of ours is in X: its id, read through the raw handle.
+fn x_of<V: 'static>(window: &WindowHandle<V>, cx: &mut App) -> Option<u32> {
+    window.update(cx, |_, window, _| x_window(window)).ok().flatten()
+}
+
+/// The primary display's whole area, in GPUI's logical pixels.
+fn screen_bounds(cx: &App) -> Bounds<Pixels> {
+    cx.primary_display().map(|d| d.bounds()).unwrap_or_else(|| Bounds::centered(None, size(px(1280.), px(800.)), cx))
+}
+
+fn overlay_options(glass: bool, focus: bool, cx: &App) -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(screen_bounds(cx))),
+        titlebar: None,
+        kind: WindowKind::PopUp,
+        focus,
+        is_movable: false,
+        is_resizable: false,
+        is_minimizable: false,
+        window_background: background(glass),
+        app_id: Some("dray-island".into()),
+        ..Default::default()
+    }
+}
+
+/// The words said so far, cut off into a row just ahead of `before`, with
+/// the microphone left open: a screenshot or a moment of ink lands where it
+/// was taken in the speech. Answers once the words are placed.
+fn cut_dictation(island: &Entity<Island>, before: u64, cx: &mut App) -> Option<futures::channel::oneshot::Receiver<()>> {
+    let reply = call(island, "cut_transcription", json!({}), cx)?;
+    let thrown = island.read(cx).draft().thrown;
+    let (done, placed) = futures::channel::oneshot::channel();
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        let timer = cx.background_executor().timer(TRANSCRIBE_WITHIN);
+        let answer = match futures::future::select(reply, Box::pin(timer)).await {
+            futures::future::Either::Left((answer, _)) => answer.unwrap_or_else(|_| Err("No answer from Dray.".into())),
+            futures::future::Either::Right(_) => Err("Dray didn't answer in time.".into()),
+        };
+        cx.update(|cx| {
+            island.update(cx, |island, cx| {
+                // Thrown away meanwhile: its words are void, as a stop's are.
+                if island.draft().thrown != thrown {
+                    return;
+                }
+                match answer {
+                    Ok(o) => match o.get("kind").and_then(|k| k.as_str()) {
+                        Some("text") => {
+                            let text = o.get("value").and_then(|v| v.as_str()).unwrap_or_default().trim().to_string();
+                            if !text.is_empty() {
+                                island.draft_mut().add_said_before(&text, before, cx);
+                            }
+                        }
+                        // Silence before the shot is ordinary, so it says nothing.
+                        Some("empty" | "noAudio") => {}
+                        _ => {
+                            let message = o.get("value").and_then(|v| v.get("message")).and_then(|m| m.as_str());
+                            island.notice = Some(message.unwrap_or("Speech before a screenshot didn't transcribe.").to_string());
+                        }
+                    },
+                    Err(why) => island.notice = Some(why),
+                }
+                cx.notify();
+            })
+        });
+        let _ = done.send(());
+    })
+    .detach();
+    Some(placed)
+}
+
+/// The camera, or the screenshot key: a clear overlay over the screen as it
+/// is now, where a dragged region is the shot. While dictating, the words so
+/// far are cut ahead of it with the microphone left open, and the panel stays
+/// up over the overlay; otherwise the panel steps aside and comes back.
+pub fn start_capture(island: &Entity<Island>, cx: &mut App) {
+    let (busy, dictation, open) = {
+        let i = island.read(cx);
+        (i.shot.is_some(), i.draft().dictation, i.window.is_some())
+    };
+    // Claimed here, before the first wait: a second press while the first is
+    // still reading the screen would otherwise start a second overlay.
+    if busy || !matches!(dictation, orb::Dictation::Idle | orb::Dictation::Recording) {
+        return;
+    }
+    let recording = dictation == orb::Dictation::Recording;
+    let slot = island.update(cx, |island, cx| island.draft_mut().reserve_shot(cx));
+    let cut = if recording { cut_dictation(island, slot, cx) } else { None };
+    island.update(cx, |island, _| {
+        island.shot = Some(ShotRun { slot, recording, was_open: open, cut, window: None, focus_before: None });
+        island.camera_hovered = false;
+    });
+    let hidden = hide_own(island, recording, open, cx);
+    sync_pill(island, cx);
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        // The windows going away is a repaint for the apps under them.
+        cx.background_executor().timer(Duration::from_millis(150)).await;
+        let still = x11::screen_size().and_then(|(w, h)| x11::capture(0, 0, w, h));
+        cx.update(|cx| {
+            show_own(&hidden);
+            let Some(still) = still else {
+                island.update(cx, |island, _| island.notice = Some("Couldn't read the screen.".into()));
+                return end_capture(&island, None, cx);
+            };
+            let scale = scale(cx);
+            let image = overlay::render_image(&still);
+            island.update(cx, |island, _| {
+                island.shooting = Some(overlay::Shooting::new(capture::Marking::new(still), image, scale));
+            });
+            let state = island.clone();
+            let opened = cx.open_window(overlay_options(false, true, cx), move |window, cx| {
+                let focus = cx.focus_handle();
+                window.focus(&focus, cx);
+                cx.new(|_| overlay::CaptureOverlay::new(state, focus))
+            });
+            let Ok(handle) = opened else {
+                return end_capture(&island, None, cx);
+            };
+            let xid = x_of(&handle, cx);
+            let before = xid.and_then(x11::take_focus);
+            island.update(cx, |island, _| {
+                if let Some(run) = island.shot.as_mut() {
+                    run.window = Some((handle, xid));
+                    run.focus_before = before;
+                }
+            });
+            // Dictation stays in sight and in reach, over the overlay.
+            if recording && let Some(id) = island.read(cx).x_window {
+                x11::raise(id);
+            }
+        });
+    })
+    .detach();
+}
+
+/// The island's own windows taken off the screen for a read of it: the
+/// Mac's capture leaves its app's windows out, X11 cannot. Answers what to
+/// put back.
+fn hide_own(island: &Entity<Island>, recording: bool, open: bool, cx: &mut App) -> Hidden {
+    let mut ids = Vec::new();
+    if recording || !open {
+        let i = island.read(cx);
+        ids.extend(i.x_window);
+        ids.extend(i.ink_window.as_ref().and_then(|w| w.1));
+        ids.extend(i.pill_x_window);
+    } else {
+        close(island, cx);
+    }
+    unmap_own(ids)
+}
+
+/// Our windows off the screen for a read of it, and which held the keyboard.
+struct Hidden {
+    ids: Vec<u32>,
+    focused: Option<u32>,
+}
+
+fn unmap_own(ids: Vec<u32>) -> Hidden {
+    let focus = x11::focus();
+    let focused = focus.filter(|f| ids.contains(f));
+    for id in &ids {
+        x11::unmap(*id);
+    }
+    Hidden { ids, focused }
+}
+
+/// Puts them back. An unmapped window loses the keyboard to whatever is
+/// under it, so the one that held it takes it back, or ⏎ goes to that app.
+fn show_own(hidden: &Hidden) {
+    for id in &hidden.ids {
+        x11::map(*id);
+    }
+    if let Some(id) = hidden.focused {
+        let _ = x11::take_focus(id);
+    }
+}
+
+/// Done or Cancel on the screenshot's overlay.
+pub fn finish_capture(island: &Entity<Island>, done: bool, cx: &mut App) {
+    let shot = island.update(cx, |island, _| {
+        let s = island.shooting.take()?;
+        let image = if done { s.marking.done() } else { None };
+        Some((image, s.marking.region, s.scale))
+    });
+    let Some((image, region, scale)) = shot else { return };
+    end_capture(island, image.map(|i| (i, region.unwrap_or_default(), scale)), cx);
+}
+
+/// Puts the screen back, and the shot into the place held for it: the
+/// picture flies from where it was taken into the panel first.
+fn end_capture(island: &Entity<Island>, shot: Option<(image::RgbaImage, capture::Rect, f32)>, cx: &mut App) {
+    let Some(run) = island.update(cx, |island, _| island.shot.take()) else { return };
+    island.update(cx, |island, _| island.shooting = None);
+    if let Some((window, _)) = run.window {
+        let _ = window.update(cx, |_, window, _| window.remove_window());
+    }
+    if run.recording {
+        // The keys go back to the panel, which dictation is still in.
+        if let Some(id) = island.read(cx).x_window {
+            x11::raise(id);
+            let _ = x11::take_focus(id);
+        }
+    } else {
+        if let Some(before) = run.focus_before {
+            x11::refocus(before);
+        }
+        if run.was_open {
+            show(island, cx);
+        }
+    }
+    sync_pill(island, cx);
+    let written = shot.as_ref().map(|(image, _, _)| capture::write(image));
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        let path = match written {
+            Some(Ok(path)) => Some(path.to_string_lossy().to_string()),
+            Some(Err(err)) => {
+                cx.update(|cx| island.update(cx, |island, _| island.notice = Some(format!("Couldn't save the screenshot: {err}"))));
+                None
+            }
+            None => None,
+        };
+        if let (Some((image, region, scale)), Some(_)) = (&shot, &path) {
+            fly(&island, image, *region, *scale, cx).await;
+        }
+        // The cut transcribes while the overlay is up; its words go first.
+        if let Some(cut) = run.cut {
+            let _ = cut.await;
+        }
+        cx.update(|cx| {
+            island.update(cx, |island, cx| {
+                island.draft_mut().fill_shot(run.slot, path.as_deref());
+                cx.notify();
+            });
+            release_send(&island, cx);
+        });
+    })
+    .detach();
+}
+
+/// The picture shrinks from where it was taken into the panel, or into its
+/// edge of the screen while the panel is away, so the reader sees where it
+/// went: the Mac's `Capture.fly`, half a second, eased.
+async fn fly(island: &Entity<Island>, image: &image::RgbaImage, region: capture::Rect, scale: f32, cx: &mut gpui::AsyncApp) {
+    let from = (region.0 / scale, region.1 / scale, region.2.max(1.) / scale, region.3.max(1.) / scale);
+    let k = (96. / from.2).min(72. / from.3).min(1.);
+    let to_size = (from.2 * k, from.3 * k);
+    let target = cx.update(|cx| {
+        let screen = screen_bounds(cx);
+        let i = island.read(cx);
+        let (cx_, top) = (screen.center().x.as_f32(), i.placement == Placement::Top);
+        let y = match (top, i.window.is_some()) {
+            (true, true) => screen.top().as_f32() + 70.,
+            (true, false) => screen.top().as_f32() + 20.,
+            (false, true) => screen.bottom().as_f32() - 120.,
+            (false, false) => screen.bottom().as_f32() - 40.,
+        };
+        (cx_, y)
+    });
+    let rendered = overlay::render_image(image);
+    let opened = cx.update(|cx| {
+        let mut options = overlay_options(false, false, cx);
+        options.window_bounds = Some(WindowBounds::Windowed(Bounds::new(gpui::point(px(from.0), px(from.1)), size(px(from.2), px(from.3)))));
+        cx.open_window(options, move |_, cx| cx.new(|_| overlay::Flight { image: rendered }))
+    });
+    let Ok(handle) = opened else { return };
+    let xid = cx.update(|cx| x_of(&handle, cx));
+    let started = std::time::Instant::now();
+    loop {
+        let t = (started.elapsed().as_secs_f32() / 0.5).min(1.);
+        let e = orb::bezier_curve(t, 0.3, 0.0, 0.2, 1.0);
+        let w = from.2 + (to_size.0 - from.2) * e;
+        let h = from.3 + (to_size.1 - from.3) * e;
+        let x = (from.0 + from.2 / 2.) + (target.0 - (from.0 + from.2 / 2.)) * e - w / 2.;
+        let y = (from.1 + from.3 / 2.) + (target.1 - (from.1 + from.3 / 2.)) * e - h / 2.;
+        if let Some(id) = xid {
+            let at = |v: f32| (v * scale).round() as i32;
+            x11::configure(id, at(x), at(y), at(w).max(1), at(h).max(1));
+        }
+        if t >= 1. {
+            break;
+        }
+        cx.background_executor().timer(Duration::from_millis(16)).await;
+    }
+    cx.update(|cx| {
+        let _ = handle.update(cx, |_, window, _| window.remove_window());
+    });
+}
+
+/// Drawing on the screen is part of dictating: the ink's overlay is up while
+/// the microphone records, letting the mouse through until Shift is held.
+/// With no compositor there is nothing to see through, so the overlay waits
+/// for Shift and then shows the screen as it was.
+fn start_annotation(island: &Entity<Island>, cx: &mut App) {
+    if island.read(cx).inking.is_some() {
+        return;
+    }
+    // "Hold Shift to draw" until the first stroke, for the first five dictations.
+    let hints: u32 = prefs::get("drawHints").unwrap_or(0);
+    if hints < 5 {
+        prefs::set("drawHints", hints + 1);
+    }
+    let scale = scale(cx);
+    island.update(cx, |island, _| {
+        island.inking = Some(overlay::Inking::new(scale));
+        island.draw_hint = hints < 5;
+    });
+    if island.read(cx).glass {
+        open_ink(island, cx);
+        // ⇧ may already be down from before the microphone opened.
+        if x11::shift_alone() {
+            set_armed(island, true, cx);
+        }
+    }
+}
+
+fn open_ink(island: &Entity<Island>, cx: &mut App) {
+    let glass = island.read(cx).glass;
+    let state = island.clone();
+    let Ok(handle) = cx.open_window(overlay_options(glass, false, cx), move |_, cx| cx.new(|_| overlay::InkOverlay { island: state })) else {
+        return;
+    };
+    let xid = x_of(&handle, cx);
+    if let Some(id) = xid {
+        // The page under the ink keeps the mouse until the pen is armed.
+        let armed = island.read(cx).inking.as_ref().is_some_and(|i| i.armed);
+        x11::pass_mouse(id, !armed);
+    }
+    island.update(cx, |island, _| island.ink_window = Some((handle, xid)));
+    if let Some(id) = island.read(cx).x_window {
+        x11::raise(id);
+    }
+}
+
+fn close_ink(island: &Entity<Island>, cx: &mut App) {
+    if let Some((window, _)) = island.update(cx, |island, _| island.ink_window.take()) {
+        let _ = window.update(cx, |_, window, _| window.remove_window());
+    }
+    island.update(cx, |island, _| island.ink_still = None);
+}
+
+/// Shift alone held or let go while dictating: the overlay takes the mouse
+/// or lets it through. A stroke in progress keeps the mouse until it lets go.
+fn set_armed(island: &Entity<Island>, armed: bool, cx: &mut App) {
+    let Some(drawing) = island.update(cx, |island, cx| {
+        let s = island.inking.as_mut()?;
+        s.armed = armed;
+        cx.notify();
+        Some(s.drawing)
+    }) else {
+        return;
+    };
+    let (glass, ink) = {
+        let i = island.read(cx);
+        (i.glass, i.ink_window.as_ref().and_then(|w| w.1))
+    };
+    if glass {
+        if let Some(id) = ink
+            && !drawing
+        {
+            x11::pass_mouse(id, !armed);
+        }
+        return;
+    }
+    // No compositor: Shift freezes the screen to draw on.
+    if armed && island.read(cx).ink_window.is_none() {
+        let hidden = unmap_own(island.read(cx).x_window.into_iter().chain(island.read(cx).pill_x_window).collect());
+        let island = island.clone();
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(Duration::from_millis(120)).await;
+            let still = x11::screen_size().and_then(|(w, h)| x11::capture(0, 0, w, h));
+            cx.update(|cx| {
+                show_own(&hidden);
+                let Some(still) = still else { return };
+                let armed = island.read(cx).inking.as_ref().is_some_and(|s| s.armed);
+                if !armed || island.read(cx).inking.is_none() {
+                    return;
+                }
+                let image = overlay::render_image(&still);
+                island.update(cx, |island, _| {
+                    island.ink_still = Some(still);
+                    if let Some(s) = island.inking.as_mut() {
+                        s.still = Some(image);
+                    }
+                });
+                open_ink(&island, cx);
+            });
+        })
+        .detach();
+    } else if !armed {
+        idle_ink(island, cx);
+    }
+}
+
+/// Without a compositor the frozen screen goes once nothing on it waits to
+/// be taken and the pen is down.
+fn idle_ink(island: &Entity<Island>, cx: &mut App) {
+    let i = island.read(cx);
+    if i.glass || i.moment.is_some() {
+        return;
+    }
+    let quiet = i.inking.as_ref().is_some_and(|s| !s.armed && !s.drawing && s.marks.is_empty());
+    if quiet {
+        close_ink(island, cx);
+        island.update(cx, |island, _| {
+            if let Some(s) = island.inking.as_mut() {
+                s.still = None;
+            }
+        });
+    }
+}
+
+/// A stroke's first touch: strokes made close together are one moment, and
+/// the first of one holds its place in the draft and cuts the words before it.
+pub fn stroke_began(island: &Entity<Island>, cx: &mut App) {
+    island.update(cx, |island, _| {
+        island.rest_clock += 1;
+        island.draw_hint = false;
+    });
+    if island.read(cx).moment.is_some() {
+        return;
+    }
+    let slot = island.update(cx, |island, cx| island.draft_mut().reserve_shot(cx));
+    let cut = cut_dictation(island, slot, cx);
+    island.update(cx, |island, _| island.moment = Some(Moment { slot, cut }));
+}
+
+/// The pen lifted: once it has rested 1.5s, the moment is taken.
+pub fn stroke_ended(island: &Entity<Island>, cx: &mut App) {
+    let (glass, ink, armed) = {
+        let i = island.read(cx);
+        (i.glass, i.ink_window.as_ref().and_then(|w| w.1), i.inking.as_ref().is_some_and(|s| s.armed))
+    };
+    if glass && let Some(id) = ink {
+        x11::pass_mouse(id, !armed);
+    }
+    let clock = island.update(cx, |island, _| {
+        island.rest_clock += 1;
+        island.rest_clock
+    });
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(Duration::from_millis(1500)).await;
+        cx.update(|cx| {
+            if island.read(cx).rest_clock == clock {
+                take_moment(&island, cx);
+            }
+        });
+    })
+    .detach();
+}
+
+/// The moment's area with its ink, into the place held for it, and the ink
+/// goes from the screen. Strokes begun after this belong to the next moment.
+fn take_moment(island: &Entity<Island>, cx: &mut App) {
+    let Some(moment) = island.update(cx, |island, _| island.moment.take()) else { return };
+    let marks: Vec<capture::Mark> = island.update(cx, |island, cx| {
+        let Some(s) = island.inking.as_mut() else { return Vec::new() };
+        let taken: Vec<capture::Mark> = s.marks.iter().filter(|m| !s.claimed.contains(&m.id)).cloned().collect();
+        s.claimed.extend(taken.iter().map(|m| m.id));
+        cx.notify();
+        taken
+    });
+    let area = x11::screen_size().and_then(|size| capture::moment_area(&marks, size));
+    let glass = island.read(cx).glass;
+    let still = island.read(cx).ink_still.clone();
+    let hidden = if glass && area.is_some() {
+        let i = island.read(cx);
+        unmap_own(i.x_window.into_iter().chain(i.ink_window.as_ref().and_then(|w| w.1)).chain(i.pill_x_window).collect())
+    } else {
+        Hidden { ids: Vec::new(), focused: None }
+    };
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        let image = match (area, glass) {
+            (Some(a), true) => {
+                cx.background_executor().timer(Duration::from_millis(120)).await;
+                let read = x11::capture(a.0 as i32, a.1 as i32, a.2 as u32, a.3 as u32);
+                read.map(|r| {
+                    let local: Vec<capture::Mark> =
+                        marks.iter().map(|m| capture::Mark { id: m.id, points: m.points.iter().map(|p| (p.0 - a.0, p.1 - a.1)).collect() }).collect();
+                    capture::inked(&r, &local, (0.0, 0.0, a.2, a.3))
+                })
+            }
+            (Some(a), false) => still.as_ref().map(|s| capture::inked(s, &marks, a)),
+            _ => None,
+        };
+        cx.update(|cx| {
+            show_own(&hidden);
+            if let Some(id) = island.read(cx).x_window {
+                x11::raise(id);
+            }
+            island.update(cx, |island, cx| {
+                if let Some(s) = island.inking.as_mut() {
+                    let taken: Vec<u64> = marks.iter().map(|m| m.id).collect();
+                    s.marks.retain(|m| !taken.contains(&m.id));
+                    s.claimed.retain(|id| !taken.contains(id));
+                }
+                cx.notify();
+            });
+            idle_ink(&island, cx);
+        });
+        let written = image.as_ref().map(capture::write);
+        let path = match written {
+            Some(Ok(p)) => Some(p.to_string_lossy().to_string()),
+            Some(Err(err)) => {
+                cx.update(|cx| island.update(cx, |island, _| island.notice = Some(format!("Couldn't save the drawing: {err}"))));
+                None
+            }
+            None => None,
+        };
+        if let (Some(image), Some(a), Some(_)) = (&image, area, &path) {
+            let scale = cx.update(|cx| scale(cx));
+            fly(&island, image, a, scale, cx).await;
+        }
+        if let Some(cut) = moment.cut {
+            let _ = cut.await;
+        }
+        cx.update(|cx| {
+            island.update(cx, |island, cx| {
+                island.draft_mut().fill_shot(moment.slot, path.as_deref());
+                cx.notify();
+            });
+            release_send(&island, cx);
+        });
+    })
+    .detach();
+}
+
+/// Takes any moment still being drawn, then puts the screen back.
+fn end_annotation(island: &Entity<Island>, cx: &mut App) {
+    if island.read(cx).inking.is_none() {
+        return;
+    }
+    island.update(cx, |island, _| island.rest_clock += 1);
+    take_moment(island, cx);
+    island.update(cx, |island, _| {
+        island.inking = None;
+        island.draw_hint = false;
+    });
+    close_ink(island, cx);
+}
+
+/// Files dropped on the panel ride the message as rows, folders left out,
+/// since the server skips them.
+pub fn drop_files(island: &Entity<Island>, paths: &[std::path::PathBuf], cx: &mut App) {
+    island.update(cx, |island, cx| {
+        for p in paths.iter().filter(|p| p.is_file()) {
+            island.draft_mut().add_file(&p.to_string_lossy(), cx);
+        }
         cx.notify();
     });
 }
