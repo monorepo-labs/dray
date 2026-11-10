@@ -186,9 +186,13 @@ pub fn mute_other_audio(ticket: u64) {
 
     // A reading already held is the one from before we touched anything, and
     // the only thing that can put the sound back. Overwriting it with our own
-    // `true` is what would leave a machine muted for good.
-    if prior.is_some() {
-        return;
+    // `true` is what would leave a machine muted for good — unless the output
+    // it names is gone, an unplugged headset, which no restore can reach.
+    if let Some((output, _)) = prior.as_ref() {
+        if !output_gone(output) {
+            return;
+        }
+        *prior = None;
     }
 
     let Some((output, was_muted)) = read_output() else {
@@ -281,6 +285,12 @@ fn set_output(_output: &Output, muted: bool) -> bool {
     set_muted(muted)
 }
 
+/// The system output never goes away.
+#[cfg(not(target_os = "linux"))]
+fn output_gone(_output: &Output) -> bool {
+    false
+}
+
 /// A Linux output, named by the tool that read it so the restore asks the same
 /// server about the same device.
 #[cfg(target_os = "linux")]
@@ -323,6 +333,35 @@ fn set_output(output: &Output, muted: bool) -> bool {
         Output::Pactl(sink) => run("pactl", &["set-sink-mute", sink, flag]).is_some(),
         Output::Wpctl(id) => run("wpctl", &["set-mute", id, flag]).is_some(),
     }
+}
+
+/// Whether the server answered and lists no such output any more. A server
+/// that does not answer is not proof: that may pass, and dropping the reading
+/// then would lose the only record of what to put back.
+#[cfg(target_os = "linux")]
+fn output_gone(output: &Output) -> bool {
+    match output {
+        Output::Pactl(sink) => run("pactl", &["list", "short", "sinks"])
+            .is_some_and(|list| !lists_pactl_sink(&list, sink)),
+        Output::Wpctl(id) => run("wpctl", &["status"]).is_some_and(|status| !lists_wpctl_node(&status, id)),
+    }
+}
+
+/// `pactl list short sinks` is one tab-separated row per sink, name second.
+#[cfg(any(target_os = "linux", test))]
+fn lists_pactl_sink(list: &str, sink: &str) -> bool {
+    list.lines().any(|row| row.split('\t').nth(1) == Some(sink))
+}
+
+/// `wpctl status` draws each node as `33. Name`, after tree glyphs and an
+/// optional `*` for the default.
+#[cfg(any(target_os = "linux", test))]
+fn lists_wpctl_node(status: &str, id: &str) -> bool {
+    status.lines().any(|line| {
+        line.split_whitespace()
+            .find(|word| word.chars().next().is_some_and(|c| c.is_ascii_digit()))
+            .is_some_and(|word| word.strip_suffix('.') == Some(id))
+    })
 }
 
 /// The node id off `wpctl inspect`'s first line, `id 33, type PipeWire:…`.
@@ -879,6 +918,23 @@ mod tests {
         assert_eq!(parse_pactl_muted("Mute: no"), Some(false));
         assert_eq!(parse_wpctl_muted("Volume: 0.40 [MUTED]\n"), Some(true));
         assert_eq!(parse_wpctl_muted("Volume: 1.00"), Some(false));
+    }
+
+    /// An unplugged output is told from a present one, so a reading naming it
+    /// stops blocking every later mute.
+    #[test]
+    fn a_listed_output_is_found_and_an_unplugged_one_is_not() {
+        let sinks = "1\tSunshineSink\tmodule-null-sink.c\ts16le 2ch 44100Hz\tSUSPENDED\n\
+                     7\talsa_output.usb-headset\tmodule-alsa-card.c\ts16le 2ch 48000Hz\tRUNNING\n";
+        assert!(lists_pactl_sink(sinks, "alsa_output.usb-headset"));
+        assert!(!lists_pactl_sink(sinks, "alsa_output.usb"));
+        assert!(!lists_pactl_sink("", "SunshineSink"));
+
+        let status = "Audio\n ├─ Sinks:\n │  *   33. Built-in Audio Analog Stereo [vol: 0.40]\n │      47. USB Headset [vol: 1.00]\n";
+        assert!(lists_wpctl_node(status, "33"));
+        assert!(lists_wpctl_node(status, "47"));
+        assert!(!lists_wpctl_node(status, "4"));
+        assert!(!lists_wpctl_node(status, "52"));
     }
 
     /// What either CLI prints with no sound server behind it. Read as "not
