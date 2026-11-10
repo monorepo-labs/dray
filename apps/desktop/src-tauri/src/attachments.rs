@@ -263,11 +263,23 @@ async fn read_pasteboard() -> Pasted {
     // GTK is main thread only, and the default context is the loop tao runs
     // there. Every read below is a callback, so that loop never blocks on one.
     gtk::glib::MainContext::default().invoke(move || gtk_clipboard::read(tx));
-    tokio::time::timeout(gtk_clipboard::PASTE_WAIT, rx)
+    let fetched = tokio::time::timeout(gtk_clipboard::PASTE_WAIT, rx)
         .await
         .ok()
-        .and_then(Result::ok)
-        .unwrap_or(Pasted::Text)
+        .and_then(Result::ok);
+    match fetched {
+        Some(gtk_clipboard::Fetched::Ready(pasted)) => pasted,
+        // Decoding and encoding can take a while on a big image, and on the
+        // main thread that would freeze the window for it.
+        Some(gtk_clipboard::Fetched::Convert(bytes)) => {
+            tokio::task::spawn_blocking(move || gtk_clipboard::to_png(&bytes))
+                .await
+                .ok()
+                .flatten()
+                .map_or(Pasted::Text, Pasted::Image)
+        }
+        None => Pasted::Text,
+    }
 }
 
 #[cfg(not(any(target_os = "macos", all(target_os = "linux", feature = "desktop"))))]
@@ -288,14 +300,31 @@ mod gtk_clipboard {
     /// whose first line is `copy` or `cut`.
     const FILE_TARGETS: [&str; 2] = ["text/uri-list", "x-special/gnome-copied-files"];
 
+    /// Formats gdk-pixbuf reads out of the box, tried before any other
+    /// `image/*` an app might offer.
+    const IMAGE_TARGETS: [&str; 5] = [
+        "image/jpeg",
+        "image/bmp",
+        "image/tiff",
+        "image/gif",
+        "image/webp",
+    ];
+
     /// What to fetch, decided from the target names alone.
     #[derive(Debug, PartialEq)]
     pub(super) enum Want {
         Files(&'static str),
         Text,
         Png,
-        /// Any other `image/*`, converted through gdk-pixbuf.
-        Image,
+        /// Any other `image/*`, by name, for [`to_png`] to convert.
+        Image(String),
+    }
+
+    /// What the main thread hands back: an answer, or image bytes still to be
+    /// converted off it.
+    pub(super) enum Fetched {
+        Ready(Pasted),
+        Convert(Vec<u8>),
     }
 
     /// Files, then text, then an image: the Mac's order, for the Mac's reason.
@@ -317,24 +346,43 @@ mod gtk_clipboard {
         if has("image/png") {
             return Some(Want::Png);
         }
-        targets
-            .iter()
-            .any(|t| t.starts_with("image/"))
-            .then_some(Want::Image)
+        let image = IMAGE_TARGETS.into_iter().find(|t| has(t)).or_else(|| {
+            targets
+                .iter()
+                .map(String::as_str)
+                .find(|t| t.starts_with("image/"))
+        });
+        image.map(|t| Want::Image(t.to_string()))
     }
 
     /// The local paths in a file list, skipping the `copy`/`cut` line and any
-    /// URI that names no local file.
+    /// URI that names no local file — one on another host included, whose path
+    /// could name a different file here.
     pub(super) fn paths(list: &str) -> Vec<String> {
+        let here = gtk::glib::host_name();
         list.lines()
             .filter_map(|line| gtk::glib::filename_from_uri(line.trim()).ok())
+            .filter(|(_, host)| {
+                host.as_deref()
+                    .is_none_or(|h| h == "localhost" || h == here.as_str())
+            })
             .map(|(path, _)| path.to_string_lossy().into_owned())
             .collect()
     }
 
+    /// Any image gdk-pixbuf can read, as PNG. Off the main thread: the loader
+    /// and its pixbuf are made and dropped here, never shared with GTK.
+    pub(super) fn to_png(bytes: &[u8]) -> Option<Vec<u8>> {
+        use gtk::gdk_pixbuf::prelude::*;
+        let loader = gtk::gdk_pixbuf::PixbufLoader::new();
+        loader.write(bytes).ok()?;
+        loader.close().ok()?;
+        loader.pixbuf()?.save_to_bufferv("png", &[]).ok()
+    }
+
     /// Asks for the clipboard's targets, then for the one [`choose`] picks,
     /// and sends what came back.
-    pub(super) fn read(tx: Sender<Pasted>) {
+    pub(super) fn read(tx: Sender<Fetched>) {
         let clipboard = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
         clipboard.request_contents(&gdk::Atom::intern("TARGETS"), move |clipboard, data| {
             let names: Vec<String> = data
@@ -348,31 +396,30 @@ mod gtk_clipboard {
                     clipboard.request_contents(&gdk::Atom::intern(target), move |_, data| {
                         let files = paths(&String::from_utf8_lossy(&data.data()));
                         // A list of web links alone is text to whoever copied it.
-                        let _ = tx.send(if files.is_empty() {
+                        let _ = tx.send(Fetched::Ready(if files.is_empty() {
                             Pasted::Text
                         } else {
                             Pasted::Files(files)
-                        });
+                        }));
                     });
                 }
                 Some(Want::Png) => {
                     clipboard.request_contents(&gdk::Atom::intern("image/png"), move |_, data| {
                         let png = data.data();
-                        let _ = tx.send(if png.starts_with(b"\x89PNG") {
+                        let _ = tx.send(Fetched::Ready(if png.starts_with(b"\x89PNG") {
                             Pasted::Image(png)
                         } else {
                             Pasted::Text
-                        });
+                        }));
                     });
                 }
-                Some(Want::Image) => {
-                    clipboard.request_image(move |_, pixbuf| {
-                        let png = pixbuf.and_then(|p| p.save_to_bufferv("png", &[]).ok());
-                        let _ = tx.send(png.map_or(Pasted::Text, Pasted::Image));
+                Some(Want::Image(target)) => {
+                    clipboard.request_contents(&gdk::Atom::intern(&target), move |_, data| {
+                        let _ = tx.send(Fetched::Convert(data.data()));
                     });
                 }
                 Some(Want::Text) | None => {
-                    let _ = tx.send(Pasted::Text);
+                    let _ = tx.send(Fetched::Ready(Pasted::Text));
                 }
             }
         });
@@ -727,19 +774,46 @@ mod tests {
         );
         assert_eq!(pick("text/plain;charset=utf-8 image/png"), Some(Want::Text));
         assert_eq!(pick("text/html image/png image/bmp"), Some(Want::Png));
-        assert_eq!(pick("image/bmp TARGETS"), Some(Want::Image));
+        assert_eq!(
+            pick("image/x-art image/bmp"),
+            Some(Want::Image("image/bmp".into()))
+        );
+        assert_eq!(
+            pick("image/x-art TARGETS"),
+            Some(Want::Image("image/x-art".into()))
+        );
         assert_eq!(pick("TARGETS TIMESTAMP"), None);
     }
 
-    /// Nautilus's leading `copy`, a percent-escaped space and a web link.
+    /// Nautilus's leading `copy`, a percent-escaped space, a web link, and a
+    /// file on another machine whose path may well exist here too.
     #[cfg(all(target_os = "linux", feature = "desktop"))]
     #[test]
     fn reads_local_paths_out_of_a_copied_file_list() {
-        let list = "copy\nfile:///tmp/a%20b.txt\r\nhttps://example.com/x\nfile:///home/me/c.png";
+        let list = "copy\nfile:///tmp/a%20b.txt\r\nhttps://example.com/x\n\
+            file://other-box/etc/hosts\nfile://localhost/home/me/c.png";
         assert_eq!(
             gtk_clipboard::paths(list),
             vec!["/tmp/a b.txt", "/home/me/c.png"]
         );
+    }
+
+    /// A BMP comes back as PNG, and bytes that are no image as nothing.
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
+    #[test]
+    fn converts_a_pasted_image_to_png() {
+        let mut bmp = b"BM".to_vec();
+        bmp.extend_from_slice(&58u32.to_le_bytes());
+        bmp.extend_from_slice(&[0, 0, 0, 0, 54, 0, 0, 0, 40, 0, 0, 0]);
+        bmp.extend_from_slice(&1i32.to_le_bytes());
+        bmp.extend_from_slice(&1i32.to_le_bytes());
+        bmp.extend_from_slice(&[1, 0, 24, 0]);
+        bmp.extend_from_slice(&[0; 24]);
+        bmp.extend_from_slice(&[0, 200, 255, 0]);
+
+        let png = gtk_clipboard::to_png(&bmp).expect("png");
+        assert!(png.starts_with(b"\x89PNG"));
+        assert_eq!(gtk_clipboard::to_png(b"not an image"), None);
     }
 
     /// A file is named the way the CLI reading it can act on.
