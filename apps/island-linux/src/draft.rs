@@ -66,6 +66,20 @@ pub struct Draft {
     /// Counts dictation runs; a reply for any run but the current one —
     /// cancelled, or replaced — is ignored whole.
     pub run: u64,
+    /// A start is still unanswered. The recorder is shared, so no second
+    /// start goes out until the first has been answered and, if cancelled,
+    /// closed again — or that close could stop the new recording.
+    pub start_pending: bool,
+}
+
+/// A send that waits on the words still being said: where it goes and what
+/// it holds, both as they stood at ⏎, so a pick or text made meanwhile is
+/// never swept into it.
+#[derive(Clone, Debug)]
+pub struct Pinned {
+    pub target: Option<Target>,
+    pub rows: Vec<u64>,
+    pub typing: String,
 }
 
 impl Draft {
@@ -88,6 +102,7 @@ impl Draft {
             recording_since: None,
             retry_path: None,
             run: 0,
+            start_pending: false,
         }
     }
 
@@ -102,12 +117,12 @@ impl Draft {
         self.push_row(text, false, cx);
     }
 
-    /// Dictated words, as a row of their own.
-    pub fn add_said(&mut self, text: &str, cx: &mut App) {
-        self.push_row(text, true, cx);
+    /// Dictated words, as a row of their own; answers its id.
+    pub fn add_said(&mut self, text: &str, cx: &mut App) -> u64 {
+        self.push_row(text, true, cx)
     }
 
-    fn push_row(&mut self, text: &str, said: bool, cx: &mut App) {
+    fn push_row(&mut self, text: &str, said: bool, cx: &mut App) -> u64 {
         let text = text.to_string();
         let input = cx.new(|cx| {
             let mut input = TextInput::new("", cx).max_lines(4);
@@ -116,6 +131,7 @@ impl Draft {
         });
         self.next_row += 1;
         self.rows.push(Row { id: self.next_row, input, said });
+        self.next_row
     }
 
     /// Every row's text and then the box's, in order.

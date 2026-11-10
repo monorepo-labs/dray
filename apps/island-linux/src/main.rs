@@ -14,7 +14,7 @@ mod sound;
 mod x11;
 
 use asks::{Ask, AskKind, Asks};
-use draft::{Draft, Field, Target};
+use draft::{Draft, Field, Pinned, Target};
 use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui::{
@@ -310,7 +310,9 @@ fn asks_changed(island: &Entity<Island>, fresh: bool, had_cards: bool, cx: &mut 
     if fresh && !open {
         announce(island, cx);
     }
-    if empty && had_cards && open && !flashing {
+    // Not while the reader is busy in the draft — dictating, or writing: a
+    // card answered elsewhere leaves them to it, as on the Mac.
+    if empty && had_cards && open && !flashing && !island.read(cx).draft().busy(cx) {
         close(island, cx);
     }
     island.update(cx, |island, cx| {
@@ -485,7 +487,8 @@ fn call(island: &Entity<Island>, cmd: &str, args: serde_json::Value, cx: &App) -
 /// dictation — model, microphone, mute — and the server forwards these to the
 /// app over `host_call`. A server with no app answers "Open Dray to dictate".
 pub fn start_dictation(island: &Entity<Island>, cx: &mut App) {
-    if island.read(cx).draft().dictation != orb::Dictation::Idle {
+    let d = island.read(cx).draft();
+    if d.dictation != orb::Dictation::Idle || d.start_pending {
         return;
     }
     let Some(reply) = call(island, "start_transcription", json!({}), cx) else { return };
@@ -496,6 +499,7 @@ pub fn start_dictation(island: &Entity<Island>, cx: &mut App) {
         island.cards_first = false;
         let d = island.draft_mut();
         d.run += 1;
+        d.start_pending = true;
         d.dictation = orb::Dictation::Starting;
         d.list_shown = false;
         d.menu = None;
@@ -510,7 +514,9 @@ pub fn start_dictation(island: &Entity<Island>, cx: &mut App) {
     cx.spawn(async move |cx| {
         let answer = wait(reply, cx).await;
         cx.update(|cx| {
+            island.update(cx, |island, _| island.draft_mut().start_pending = false);
             // Cancelled while it opened: a start that took is closed again.
+            // No newer start can be under way, so this closes only its own.
             let d = island.read(cx).draft();
             if d.run != run || d.dictation != orb::Dictation::Starting {
                 if matches!(answer, Ok(serde_json::Value::Null)) {
@@ -577,10 +583,17 @@ pub fn stop_dictation(island: &Entity<Island>, then_send: bool, cx: &mut App) {
     if island.read(cx).draft().dictation != orb::Dictation::Recording {
         return;
     }
-    // A send waiting on the words goes where the reader pressed ⏎, whatever
-    // they pick while the model works.
-    let target = then_send.then(|| island.read(cx).draft().target.clone()).flatten();
-    transcribe(island, "stop_transcription", json!({}), target, cx);
+    // A send waiting on the words goes where the reader pressed ⏎ with what
+    // was there then, whatever they pick or write while the model works.
+    let pinned = then_send.then(|| {
+        let d = island.read(cx).draft();
+        Pinned {
+            target: d.target.clone(),
+            rows: d.rows.iter().map(|r| r.id).collect(),
+            typing: d.typing.read(cx).text().to_string(),
+        }
+    });
+    transcribe(island, "stop_transcription", json!({}), pinned, cx);
 }
 
 /// Runs the model again over the recording a failed run kept, so the words
@@ -596,7 +609,7 @@ pub fn retry_dictation(island: &Entity<Island>, cx: &mut App) {
 /// How long the model may take over a long recording.
 const TRANSCRIBE_WITHIN: Duration = Duration::from_secs(180);
 
-fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, send_to: Option<Target>, cx: &mut App) {
+fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, send_to: Option<Pinned>, cx: &mut App) {
     let Some(reply) = call(island, cmd, args, cx) else { return };
     let run = island.update(cx, |island, cx| {
         island.notice = None;
@@ -622,7 +635,7 @@ fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, send_
             if island.read(cx).draft().run != run {
                 return;
             }
-            let placed = island.update(cx, |island, cx| {
+            let (placed, row) = island.update(cx, |island, cx| {
                 let placed = place_words(island, answer, cx);
                 let d = island.draft_mut();
                 d.dictation = orb::Dictation::Idle;
@@ -630,8 +643,9 @@ fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, send_
                 cx.notify();
                 placed
             });
-            if placed && let Some(target) = send_to {
-                send_to_target(&island, Some(target), cx);
+            if placed && let Some(mut pinned) = send_to {
+                pinned.rows.extend(row);
+                send_to_target(&island, Some(pinned), cx);
             }
         });
     })
@@ -640,21 +654,22 @@ fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, send_
 
 /// Whether the model answered: words become a row, every other outcome a
 /// notice, and a failure keeps its recording for Retry.
-fn place_words(island: &mut Island, answer: server::Reply, cx: &mut App) -> bool {
+fn place_words(island: &mut Island, answer: server::Reply, cx: &mut App) -> (bool, Option<u64>) {
     let outcome = match answer {
         Ok(v) => v,
         // Nothing was read or deleted: whatever Retry held still stands.
         Err(why) => {
             island.notice = Some(why);
-            return false;
+            return (false, None);
         }
     };
+    let mut row = None;
     let value = outcome.get("value").cloned().unwrap_or_default();
     let (notice, ok) = match outcome.get("kind").and_then(|k| k.as_str()) {
         Some("text") => {
             let text = value.as_str().unwrap_or_default().trim().to_string();
             if !text.is_empty() {
-                island.draft_mut().add_said(&text, cx);
+                row = Some(island.draft_mut().add_said(&text, cx));
                 sound::dictation_stopped();
             }
             (None, true)
@@ -672,7 +687,7 @@ fn place_words(island: &mut Island, answer: server::Reply, cx: &mut App) -> bool
     } else if kept.is_some() {
         d.retry_path = kept;
     }
-    ok
+    (ok, row)
 }
 
 /// Ctrl+Esc: throws away what is being said and puts the panel away, the
@@ -1280,7 +1295,7 @@ pub fn send(island: &Entity<Island>, cx: &mut App) {
 
 /// `send`, to `pinned` where a send waited on dictation, else to the task
 /// picked now.
-fn send_to_target(island: &Entity<Island>, pinned: Option<Target>, cx: &mut App) {
+fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App) {
     match island.read(cx).draft().dictation {
         orb::Dictation::Recording => return stop_dictation(island, true, cx),
         orb::Dictation::Idle => {}
@@ -1289,7 +1304,13 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Target>, cx: &mut App)
     let (target, rows, typing, picks) = {
         let i = island.read(cx);
         let d = i.draft();
-        let (rows, typing) = d.parts(cx);
+        let (rows, typing) = match &pinned {
+            Some(p) => (
+                d.rows.iter().filter(|r| p.rows.contains(&r.id)).map(|r| r.input.read(cx).text().to_string()).collect(),
+                p.typing.clone(),
+            ),
+            None => d.parts(cx),
+        };
         let p = &d.picks;
         let picks = json!({
             "harness": p.harness,
@@ -1299,7 +1320,11 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Target>, cx: &mut App)
             "cwd": p.project,
             "useWorktree": p.worktree(),
         });
-        (pinned.clone().or_else(|| d.target.clone()), rows, typing, picks)
+        let target = match &pinned {
+            Some(p) => p.target.clone(),
+            None => d.target.clone(),
+        };
+        (target, rows, typing, picks)
     };
     let text = draft::prompt(&rows, &typing);
     let Some(target) = target else { return };
@@ -1314,13 +1339,18 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Target>, cx: &mut App)
         return;
     }
     // The message leaves the draft whole first, so nothing typed after
-    // Return can join it.
+    // Return can join it; a pinned one takes only what it held.
     let typing_box = island.read(cx).draft().typing.clone();
-    typing_box.update(cx, |t, cx| t.clear(cx));
+    if pinned.as_ref().is_none_or(|p| typing_box.read(cx).text() == p.typing) {
+        typing_box.update(cx, |t, cx| t.clear(cx));
+    }
     let clock = island.update(cx, |island, cx| {
         island.notice = None;
         let draft = island.draft_mut();
-        draft.rows.clear();
+        match &pinned {
+            Some(p) => draft.rows.retain(|r| !p.rows.contains(&r.id)),
+            None => draft.rows.clear(),
+        }
         draft.sending = true;
         draft.list_shown = false;
         draft.menu = None;
