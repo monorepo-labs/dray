@@ -125,5 +125,5 @@ until #580, renamed since it sits above the Dock as often as at the notch.
 ## Stack
 
 SwiftUI in an `NSPanel` (`.nonactivatingPanel`, `.statusBar` level, joins all
-spaces), macOS 26. No dependencies. XcodeGen `project.yml`, like `apps/ios`.
+spaces), macOS 15 or later (`project.yml`). No dependencies. XcodeGen `project.yml`, like `apps/ios`.
 Bundle id `com.yogesh.dray.island`, `LSUIElement`.
