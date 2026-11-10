@@ -28,6 +28,12 @@ struct PullRequest: Decodable, Identifiable {
     var settling: Bool {
         state == "OPEN" && (mergeable == "UNKNOWN" || checks.contains { $0.state == "pending" })
     }
+    var failingChecks: Int { checks.filter { $0.state == "failure" }.count }
+    /// Checks running or failing on a PR that could otherwise merge: the merge button stays shut.
+    var checksHold: Bool {
+        state == "OPEN" && !isDraft && verdict != .conflict
+            && (failingChecks > 0 || checks.contains { $0.state == "pending" })
+    }
 }
 
 struct PrCheck: Decodable, Hashable {
@@ -106,8 +112,14 @@ func mergeVerdict(state: String, isDraft: Bool, mergeable: String, mergeStateSta
 }
 
 /// The verdict in the reader's words: a label, and a line of why where one helps.
+/// Checks speak before the merge state, since `BLOCKED` is usually them.
 func readiness(_ pr: PullRequest) -> (label: String, detail: String?) {
-    switch pr.verdict {
+    if pr.checksHold {
+        let n = pr.failingChecks
+        return n > 0 ? ("Checks not passing", n == 1 ? "1 check failed." : "\(n) checks failed.")
+            : ("Waiting on checks", "Merge opens once they pass.")
+    }
+    return switch pr.verdict {
     case .merged: ("Merged", nil)
     case .closed: ("Closed without merging", nil)
     case .conflict: ("Conflicts with base", "Resolve against \(pr.baseRefName) before merging.")

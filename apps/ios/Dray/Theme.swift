@@ -18,7 +18,8 @@ enum Theme {
     /// `--surface-selected`: the current row.
     static let selected = Color(hex: 0x2B2B2B)
     /// An icon's tile or a control on a raised card: a server, Add server,
-    /// Scan QR code, Local servers' round and pill buttons.
+    /// Scan QR code, Local servers' round and pill buttons, the PR sheet's
+    /// Reopen and avatar placeholder.
     static let tile = Color(hex: 0x333333)
     /// A switch's track when off.
     static let off = Color(hex: 0x3A3A3A)
@@ -66,7 +67,7 @@ enum Theme {
         static let lg: CGFloat = 14
         /// Icon tiles.
         static let tile: CGFloat = 12
-        /// Settings' server cards and a server's own groups.
+        /// Settings' server cards, a server's own groups, the PR sheet's raised groups.
         static let group: CGFloat = 18
         /// The composer and the sent bubble.
         static let xl: CGFloat = 20
@@ -230,15 +231,17 @@ struct PrimaryButtonStyle: ButtonStyle {
     }
 }
 
-/// The full-width white capsule inside a server's status card: Update, Scan QR code.
+/// The full-width white capsule inside a server's status card (Update, Scan QR
+/// code) and on the PR sheet (Ready for review, Check again).
 struct CapsuleButtonStyle: ButtonStyle {
+    var height: CGFloat = 44
     @Environment(\.isEnabled) private var enabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(Theme.Font.headline)
             .foregroundStyle(enabled ? Theme.page : Theme.tertiary)
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .frame(maxWidth: .infinity, minHeight: height)
             .background(enabled ? Theme.text : Theme.raised, in: Capsule())
             .pressed(configuration.isPressed)
     }
@@ -272,6 +275,8 @@ struct SwitchStyle: ToggleStyle {
 /// The second action: a fill one step above its surface, no shadow.
 struct SecondaryButtonStyle: ButtonStyle {
     var ink = Theme.text
+    var fill = Theme.raised
+    var capsule = false
     @Environment(\.isEnabled) private var enabled
 
     func makeBody(configuration: Configuration) -> some View {
@@ -280,7 +285,7 @@ struct SecondaryButtonStyle: ButtonStyle {
             .foregroundStyle(enabled ? ink : Theme.tertiary)
             .padding(.horizontal, Theme.Space.l)
             .frame(minHeight: 44)
-            .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.md, style: .continuous))
+            .background(fill, in: .rect(cornerRadius: capsule ? 22 /* half of 44 */ : Theme.Radius.md, style: .continuous))
             .pressed(configuration.isPressed)
     }
 }

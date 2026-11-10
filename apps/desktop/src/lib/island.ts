@@ -1,5 +1,5 @@
 import { readLocalStorage } from "@/hooks/useLocalStorage";
-import { IS_MAC } from "@/lib/platform";
+import { IS_LINUX, IS_MAC } from "@/lib/platform";
 import { invoke } from "@/lib/transport";
 
 /// The modifier tapped alone to open Dray Island, and again to dictate.
@@ -22,7 +22,7 @@ const enabled = () => readLocalStorage<boolean>(ISLAND_ENABLED, true);
 /// just made is passed in, since storage is written inside a state updater
 /// React may not have run yet.
 export async function applyIsland(pick: { on?: boolean; key?: IslandKey } = {}) {
-  if (!IS_MAC) return;
+  if (!IS_MAC && !IS_LINUX) return;
   const on = pick.on ?? enabled();
   const key = on ? (pick.key ?? readLocalStorage<IslandKey>(ISLAND_KEY, "control")) : "off";
   try {
@@ -36,6 +36,7 @@ export async function applyIsland(pick: { on?: boolean; key?: IslandKey } = {}) 
 /// process, since the switch says nothing about an island the reader quit. A
 /// failed ask reads as no island, so the banner is the one lost to doubt never.
 export async function islandOn(): Promise<boolean> {
+  // Linux's island draws no cards yet (#833 stage 2), so the banner stays.
   if (!IS_MAC || !enabled()) return false;
   return invoke<boolean>("island_running").catch(() => false);
 }

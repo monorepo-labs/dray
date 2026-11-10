@@ -16,12 +16,13 @@ import "../App.css";
 /// thing this page fakes, and it fakes it *outside* the components, so nothing
 /// in `src/` carries a demo seam.
 const TERMINALS: ExternalApp[] = [
-  { path: "/Applications/Ghostty.app", name: "Ghostty", kind: "terminal", icon: null },
+  { path: "/Applications/Ghostty.app", name: "Ghostty", kind: "terminal", icon: null, folders: true },
   {
     path: "/System/Applications/Utilities/Terminal.app",
     name: "Terminal",
     kind: "terminal",
     icon: null,
+    folders: true,
   },
 ];
 

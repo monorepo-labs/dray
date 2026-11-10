@@ -57,6 +57,7 @@ import {
 } from "@/lib/openWith";
 import AccountsSettings from "@/components/settings/AccountsSettings";
 import AppShell from "@/components/layout/AppShell";
+import WindowControls from "@/components/layout/WindowControls";
 import { SettingsHeaderSlot } from "@/components/settings/headerAction";
 import ServersSettings from "@/components/settings/ServersSettings";
 import HandoffSettings from "@/components/settings/HandoffSettings";
@@ -65,7 +66,7 @@ import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
 import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
 import { useTranscriptionSettings } from "@/hooks/useTranscription";
-import { HAS_DICTATION, IS_MAC } from "@/lib/platform";
+import { HAS_DICTATION, IS_LINUX, IS_MAC } from "@/lib/platform";
 import { applyIsland, ISLAND_ENABLED, ISLAND_KEY, ISLAND_KEYS, type IslandKey } from "@/lib/island";
 import { captureCaps, captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/islandCapture";
 import { useWindowFocused } from "@/lib/focus";
@@ -398,11 +399,13 @@ function OpenFilesRow() {
   const choices = fileOpenerChoices(apps ?? []);
   const pick = pickFileOpener(apps ?? [], stored);
   const editors = choices.filter((app) => app.kind === "editor");
+  // Finder on a Mac; on Linux whichever file manager the scan listed.
+  const files = choices.find((app) => app.kind === "files")?.name ?? (IS_MAC ? "Finder" : "the file manager");
 
-  const unavailable = !IS_MAC
-    ? "Opening a file in another app is macOS-only for now."
+  const unavailable = !IS_MAC && !IS_LINUX
+    ? "Opening a file in another app needs macOS or Linux for now."
     : apps !== null && editors.length === 0
-      ? "No editor Dray knows about is installed, so filenames open in Finder."
+      ? `No editor Dray knows about is installed, so filenames open in ${files}.`
       : null;
 
   return (
@@ -411,7 +414,7 @@ function OpenFilesRow() {
       label="Open files with"
       description={
         unavailable ??
-        "Where a filename in the chat opens. Markdown opens in the panel instead, and Finder selects a file rather than opening it."
+        `Where a filename in the chat opens. Markdown opens in the panel instead, and ${files} selects a file rather than opening it.`
       }
     >
       {/* Opening the menu re-reads the list — see `refresh`. */}
@@ -1482,7 +1485,7 @@ function SettingsTabs({
       // header to hold over the sheet.
       tall
       header={
-        <header className="relative h-(--titlebar-h)" data-tauri-drag-region="deep">
+        <header className="relative flex h-(--titlebar-h) items-center justify-end px-3" data-tauri-drag-region="deep">
           {/* Where the gear that opened this sits: the sidebar's right end. */}
           <div className="absolute top-1/2 right-[calc(100%-15rem+0.5rem)] -translate-y-1/2">
             <Tooltip>
@@ -1503,6 +1506,7 @@ function SettingsTabs({
               </TooltipContent>
             </Tooltip>
           </div>
+          <WindowControls />
         </header>
       }
       sidebar={

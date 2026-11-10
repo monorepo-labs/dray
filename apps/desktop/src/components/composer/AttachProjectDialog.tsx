@@ -22,6 +22,7 @@ import {
 import { Input } from "@/components/ui/input";
 import Spinner from "@/components/ui/spinner";
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
+import { MACHINE } from "@/lib/platform";
 import { serverName, useServers } from "@/lib/servers";
 import { invoke, listen, LOCAL, qualify, type ServerId } from "@/lib/transport";
 import { cn } from "@/lib/utils";
@@ -151,7 +152,7 @@ export default function AttachProjectDialog({
   const shown = (repos ?? []).filter(
     (r) => !needle || r.slug.toLowerCase().includes(needle) || r.description?.toLowerCase().includes(needle),
   );
-  const where = server === LOCAL ? "this Mac" : serverName(server);
+  const where = server === LOCAL ? `this ${MACHINE}` : serverName(server);
   // A pick the search has since hidden is not one the reader can see they
   // are attaching.
   const repo = shown.find((r) => r.slug === picked);

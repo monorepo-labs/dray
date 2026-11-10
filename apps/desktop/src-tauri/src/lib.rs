@@ -34,6 +34,8 @@ pub mod cef;
 pub mod chromium;
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 mod trackpad;
+#[cfg(all(feature = "desktop", target_os = "linux"))]
+mod island;
 #[cfg(all(feature = "desktop", any(target_os = "macos", target_os = "linux")))]
 mod cli;
 // `dray browser` on a server: a headless Chromium under the same verbs the
@@ -790,9 +792,14 @@ pub fn run() {
             trackpad::watch(app.handle());
             // GTK draws the menu as a bar inside the window, over the app's own
             // titlebar strip. The webview answers the edit chords without it.
+            // The window manager's bar sat above that strip too, so it goes and
+            // `WindowControls` draws its buttons. tauri.linux.conf.json already
+            // says so; this is for the window-state plugin, which restores a
+            // `decorated` flag saved by a build that still had the bar.
             #[cfg(target_os = "linux")]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.remove_menu();
+                let _ = window.set_decorations(false);
             }
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             cli::install();

@@ -6,6 +6,7 @@
 // It also picks the dev server's port, because Vite and Tauri have to agree on
 // one and only this side can choose it before either starts.
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 
 /// A port nothing holds, from the OS: `listen(0)` hands out one no socket on
@@ -39,6 +40,14 @@ if (args[0] === "dev" && !args.some((a) => a === "-c" || a === "--config")) {
   // Merged in order, so the port lands over whatever the dev flavour says.
   args.push("--config", "src-tauri/tauri.dev.conf.json");
   args.push("--config", JSON.stringify({ build: { devUrl: `http://localhost:${port}` } }));
+  // Linux's window is opaque and undecorated (tauri.linux.conf.json), but the
+  // dev flavour restates the window list whole after it, which brings back
+  // the Mac's transparency and the window manager's bar.
+  if (process.platform === "linux") {
+    const { app } = JSON.parse(readFileSync("src-tauri/tauri.dev.conf.json", "utf8"));
+    const windows = app.windows.map((w) => ({ ...w, transparent: false, decorations: false }));
+    args.push("--config", JSON.stringify({ app: { windows } }));
+  }
 }
 
 const child = spawn("tauri", args, { stdio: "inherit", env });
