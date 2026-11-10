@@ -142,16 +142,20 @@ final class Store {
 
     private func forget(_ id: UUID) {
         drop(id)
+        for key in transcripts.keys where key.server == id { transcripts[key] = nil }
         servers.removeAll { $0.id == id }
     }
 
+    /// Transcripts stay: a session left open across off and on is reloaded by `connected`,
+    /// which finds it only through them, and its view never asks again.
     private func drop(_ id: UUID) {
         connections.removeValue(forKey: id)?.stop()
         serverState[id] = nil
         for key in items.keys where key.server == id { items[key] = nil }
-        for key in transcripts.keys where key.server == id { transcripts[key] = nil }
         for key in asks.keys where key.server == id { asks[key] = nil }
         for key in marks.keys where key.server == id { marks[key] = nil }
+        // Or a reconnect inside the poll's gap skips the read that would bring them back.
+        for key in marksAt.keys where key.server == id { marksAt[key] = nil }
         for key in tasks.keys where key.server == id { tasks[key] = nil }
         for key in queued.keys where key.server == id { queued[key] = nil }
         projects[id] = nil
