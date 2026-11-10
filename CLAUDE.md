@@ -29,7 +29,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 `gh` missing or logged out → say so, then carry on with the work. Tell reader at the end which issue still want creating.
 
-**Don't commit unprompted.** Stage + describe change, then wait — even when finished and passing. Asked = approval for that commit only, not ones after. Same for `git push`, branches, anything rewriting history. One exception: greploop's own commit-and-push, step 4 above.
+**Commit, push and open the PR unasked once the work is done and tested** — the default road above. **Hold the PR where Yogesh has to test something himself first**: commit, say what to try, and wait. Still ask before anything rewriting history, and before a branch nobody asked for.
 
 **Always write commit message with `caveman-commit` skill.** Invoke it, don't imitate — skill carry format and it can change under you. Every commit here, amend included.
 
