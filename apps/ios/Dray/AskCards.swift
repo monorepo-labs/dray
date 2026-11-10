@@ -49,7 +49,7 @@ private struct PermissionAsk: View {
                     .lineLimit(3)
                 // What Allow will run, whenever the description put something else in its place.
                 if let argument, argument != beside {
-                    Text(argument).font(Theme.Font.footnote).foregroundStyle(Theme.text.opacity(0.5))
+                    Text(argument).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                         .lineLimit(4)
                         .textSelection(.enabled)
                 }

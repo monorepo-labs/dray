@@ -305,6 +305,8 @@ final class Store {
     func loadSettled() async {
         for s in servers where serverState[s.id] == .connected {
             guard let list: [SessionItem] = try? await call(s.id, "list_session_index_items", ["archived": true]) else { continue }
+            // Replaced whole, so one deleted meanwhile leaves the view.
+            for key in items.keys where key.server == s.id && items[key]?.archived == true { items[key] = nil }
             for item in list { store(SessionKey(server: s.id, id: item.sessionId), item) }
         }
     }
