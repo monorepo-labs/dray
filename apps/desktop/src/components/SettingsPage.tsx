@@ -422,8 +422,7 @@ function OpenFilesRow() {
             variant="outline"
             size="sm"
             // `apps === null` is the read not having landed. Disabled rather
-            // than drawn from a guess, the same bargain the analytics switch
-            // makes — either guess is wrong for somebody.
+            // than drawn from a guess — either guess is wrong for somebody.
             disabled={apps === null || unavailable !== null}
             className="justify-between font-normal"
           >
@@ -491,11 +490,10 @@ const MODES: { id: ThemeMode; label: string }[] = [
 /// of System is that it reads Dark today and Light tonight, and a control drawn from
 /// what is on screen would show Dark and lose the distinction.
 ///
-/// The group disables whole on a dark-only theme rather than dropping its light
-/// segments. Two segments where there were three reads as the control being broken,
+/// On a dark-only theme the whole group gives way to a sentence saying so, rather
+/// than dropping its light segments. Two segments where there were three reads as the control being broken,
 /// and it would still be lying — `system` is not offerable either, since the OS can
-/// resolve it to light. The selected segment reads `modeFor`, so it is honest about
-/// what is rendering.
+/// resolve it to light.
 function ModeRow() {
   const id = useId();
   useShortcutOverrides();
@@ -590,8 +588,8 @@ function SegmentedRadio<T extends string>({
 /// reads as broken. A button carries the ask honestly: its label names the act
 /// (Turn on / Turn off), which also says which channel is live.
 ///
-/// Sits in About because that tab is where the app talks about itself: which
-/// build you are running, and what it reports back.
+/// Sits in About because that tab is where the app talks about itself, beside
+/// the row saying which build you are running.
 ///
 /// The description is one line, and deliberately not the mechanism. An earlier
 /// draft spent a second sentence on the fact that switching back is not a
@@ -1044,27 +1042,17 @@ function SupportBlock() {
   );
 }
 
-/// A run of rows, optionally under a quiet heading.
-///
-/// The heading is the exception now that the groups are tabs: the tab's own
-/// label already names what is below it, so a heading repeating it is a second
-/// copy of one word. What still earns one is a block carrying no label of its
-/// own, which is the support and feedback links and nothing else.
-///
-/// Untitled it is still worth being: the tab panel spaces its groups apart at
-/// `gap-7` and this holds rows together at `gap-4`, which is the whole of how a
-/// heading ends up nearer what it names than what it follows.
+const ISLAND_TAPS = [
+  { id: "single", label: "Single tap" },
+  { id: "double", label: "Double tap" },
+] as const;
+
 /// Dray Island's picks. The switch and the key are Dray's to keep, in local
 /// storage, and handed to the island at every launch; the rest are the island's
 /// own preferences, which its right-click menu writes too, so they are read
 /// back from it — on arrival and every few seconds while the window is in
 /// front, since a pick made in the island's menu moves no focus here. Every row
 /// works while the island is off, so it opens the way the reader left it.
-const ISLAND_TAPS = [
-  { id: "single", label: "Single tap" },
-  { id: "double", label: "Double tap" },
-] as const;
-
 function IslandSettings() {
   const [on, setOn] = useLocalStorage<boolean>(ISLAND_ENABLED, true);
   const [key, setKey] = useLocalStorage<IslandKey>(ISLAND_KEY, "control");
@@ -1378,6 +1366,16 @@ function CaptureKeyRow({
   );
 }
 
+/// A run of rows, optionally under a quiet heading.
+///
+/// The heading is the exception now that the groups are tabs: the tab's own
+/// label already names what is below it, so a heading repeating it is a second
+/// copy of one word. What still earns one is a block carrying no label of its
+/// own, which is the support and feedback links and nothing else.
+///
+/// Untitled it is still worth being: the tab panel spaces its groups apart at
+/// `gap-7` and this holds rows together at `gap-4`, which is the whole of how a
+/// heading ends up nearer what it names than what it follows.
 function Section({ title, children }: { title?: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-4">
@@ -1424,10 +1422,10 @@ const TAB_SUBTITLES: Partial<Record<SettingsTab, string>> = {
 /// The page's groups as a list down the left, standing where the sidebar
 /// stands, with the picked group filling the rest of the window.
 ///
-/// **About holds privacy and feedback**, which is the one grouping worth
-/// arguing about. Both answer what the app does with you rather than what it
-/// does for you: what is collected, and how to reach the person who wrote it.
-/// Privacy alone was too thin to be a tab and reads oddly next to Appearance.
+/// **About holds updates, support and feedback**, which is the one grouping
+/// worth arguing about. Each is the app talking about itself rather than doing
+/// something for you: which build this is, and how to reach the person who
+/// wrote it.
 ///
 /// Bodies are switched, not hidden, unlike the right panel's. There is no
 /// scroll position or expensive render to preserve here, and mounting them all

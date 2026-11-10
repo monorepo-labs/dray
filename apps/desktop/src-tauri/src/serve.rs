@@ -430,9 +430,8 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
 }
 
 /// What every client of this process hears: each event the core emits, and
-/// [`Live`] beside it for a client that connects later. `dray-serve` builds
-/// its `Sink` on one; the desktop app's `Sink` publishes into [`HUB`] as well
-/// as its webview, so the app can serve the same stream.
+/// [`Live`] beside it for a client that connects later. Both servers,
+/// `dray-serve` and the Mac's `dray --serve`, build their `Sink` on [`HUB`].
 #[derive(Clone)]
 pub struct Hub {
     events: broadcast::Sender<Arc<str>>,

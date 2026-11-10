@@ -316,8 +316,6 @@ export function streamingLabel(name: string): string {
   return `${groupVerb(name, true)} ${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun}`;
 }
 
-/// Absolute paths dominate the row otherwise; the last two segments are enough
-/// to recognize a file and still fit beside the tool name.
 /// An MCP call, split into the server and the method a reader would name it by.
 ///
 /// The two harnesses spell the same call differently and both spell it for a
@@ -409,6 +407,8 @@ export function fileTarget(toolType: ToolType, input: JsonValue): string | null 
   return path?.startsWith("/") ? path : null;
 }
 
+/// Absolute paths dominate the row otherwise; the last two segments are enough
+/// to recognize a file and still fit beside the tool name.
 export function shortenPath(path: string): string {
   const parts = path.split("/").filter(Boolean);
   if (parts.length <= 2) return path;

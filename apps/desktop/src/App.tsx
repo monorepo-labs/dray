@@ -1181,10 +1181,8 @@ function App() {
     // than waiting to be asked. Fires at most once per PR — see `onOpened`.
     //
     // It moves the pick as well as opening the pane, and has to: `activeTab`
-    // honours a standing pick over the derived default, and the pick is written
-    // by the app itself — `handleTogglePanel` stores "changes" every time the
-    // pane is opened onto a turn that touched files. So opening alone landed on
-    // Changes for anyone who had ever used ⌘E, which is everyone.
+    // honours a standing pick over the derived default, so opening alone lands
+    // on whichever tab the reader last chose.
     // A fresh closure each render is fine: the hook holds it in a ref.
     () => showPanel("pr"),
     // A merge or a reopen changes what the sidebar's mark should say, and that
@@ -1372,8 +1370,6 @@ function App() {
   // Moves along the visible row, wrapping. Off `tabs` rather than `PANEL_TABS`,
   // so a session with no PR tab cycles through two and never lands on one that
   // isn't drawn.
-  // With the pane shut, the Browser view's strip is the only row of tabs on
-  // screen, so ⌘⇧[ ] means that one rather than nothing.
   const stepTab = (delta: number) => {
     // A shut pane opens on its first tab, so the chord alone gets the reader
     // moving; ⌘E is what shuts it again.
@@ -1807,8 +1803,7 @@ function App() {
   //
   // The pick moves as well as the pane, and has to, for the same reason
   // `usePullRequest`'s `onOpened` writes one: `activeTab` honours a standing
-  // pick over the derived default, and `handleTogglePanel` stores "changes"
-  // every time the pane opens onto a turn that touched files.
+  // pick over the derived default.
   const lastOpened = useRef(docsOpened);
   useEffect(() => {
     if (docsOpened === lastOpened.current) return;
@@ -2422,19 +2417,18 @@ function App() {
   useHotkey("tab.close", closeTabOrPane, { enabled: hasCloseTarget });
   // ⌘E for the right pane against ⌘B for the left.
   //
-  // Bound to the raw toggle rather than to `handleTogglePanel`, deliberately:
-  // that one picks a tab on the way open, which is right for a button the
-  // reader aimed at and wrong for a chord that draws nothing and so promises
-  // nothing. Off on the issues page, whose own binding opens and shuts the
+  // Bound to the bare toggle, deliberately: the titlebar's PR face picks its
+  // tab on the way open, which is right for a button the reader aimed at and
+  // wrong for a chord that draws nothing and so promises nothing. Off on the
+  // issues page, whose own binding opens and shuts the
   // issue pane — only the list knows which row to put back.
   useHotkey("panel.toggle", togglePanel, { enabled: !issuesOpen });
   // ⌘⌥E, the side beside ⌘E's visibility. Moves a hidden pane too: the pick
   // is a preference, and it lands wherever the pane next opens.
   useHotkey("panel.side", () => setPanelSide((s) => (s === "left" ? "right" : "left")));
-  // ⌘⇧[ / ⌘⇧] — the browser and editor chord for stepping through tabs, so it
-  // arrives already known. The shift layout reaches `key`, so the character is
-  // `{` rather than `[`; the physical key rides along for the engines that
-  // report the unshifted one — see `code`.
+  // ⌘⌥[ / ⌘⌥] — ⌥ because ⌘⇧[ ] steps the titlebar's tabs, every browser's
+  // chord. The physical key rides along, since ⌥ moves the character `key`
+  // reports — see `code`.
   useHotkey("panel.tab.prev", () => stepTab(-1));
   useHotkey("panel.tab.next", () => stepTab(1));
   // ⌘R re-reads whatever the panel is showing — the same one button in the tab
@@ -3303,7 +3297,7 @@ function App() {
       // The session and the pane both, since the card is about something the
       // transcript does not show. The pick is written the same way
       // `usePullRequest`'s `onOpened` writes it — `activeTab` honours a
-      // standing pick, and opening the pane stores "changes" on its own.
+      // standing pick over the derived default.
       onOpenPr={(id) =>
         goToSession(() => {
           void openFromNotice(id);

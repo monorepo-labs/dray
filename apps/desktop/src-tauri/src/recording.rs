@@ -32,8 +32,8 @@ const HOLD_LAST: Duration = Duration::from_millis(1500);
 const MAX_BYTES: u64 = u32::MAX as u64 - (64 << 20);
 const TIMESCALE: u32 = 1000;
 /// Frames waiting for the writer. Each is ~100KB of base64, so this is a few
-/// megabytes at most; a frame arriving to a full queue is dropped, since the
-/// sender is CEF's UI thread and must never wait on a disk.
+/// megabytes at most; a frame arriving to a full queue is turned away, since
+/// the sender is the capture loop and must never wait on a disk.
 const QUEUE: usize = 64;
 
 struct Frame {

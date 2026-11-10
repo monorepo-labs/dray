@@ -19,9 +19,9 @@ enum Target: Hashable {
     case new
 }
 
-/// The panel's layout, the reader's pick from its right-click menu and never
-/// switched for them: compact, one row with the orb beside the input, or voice,
-/// the orb alone in the middle.
+/// The panel's layout, the reader's pick and never switched for them: compact,
+/// one row with the orb beside the input, or expanded, the orb alone in the
+/// middle with input and send beneath it.
 enum InputMode: String, CaseIterable {
     case compact, expanded
 

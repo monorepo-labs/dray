@@ -100,7 +100,7 @@ pub enum ControlRequest {
     CanUseTool(PermissionRequest),
     /// A subtype this build doesn't answer. Distinct from a parse failure: the
     /// line is understood well enough to know it needs a reply we can't give,
-    /// which the mapper turns into an automatic denial so the turn proceeds.
+    /// which the read loop turns into an automatic denial so the turn proceeds.
     #[serde(other)]
     Unsupported,
 }
@@ -352,8 +352,8 @@ pub enum SystemEvent {
     },
     /// The full set of outstanding background tasks, republished whenever it
     /// changes — an empty `tasks` means everything has drained. A turn's
-    /// `result` can arrive while this is non-empty, so the two together are what
-    /// say whether the session is idle.
+    /// `result` can arrive while this is non-empty and the turn is over all the
+    /// same: the set says what still runs behind it, never whether it ended.
     BackgroundTasksChanged {
         tasks: Vec<BackgroundTask>,
         session_id: String,
@@ -552,13 +552,12 @@ pub enum ResultEvent {
         #[serde(default)]
         num_turns: u32,
     },
-    /// A turn that ended without completing — today, the user interrupting a
-    /// streaming response.
+    /// A turn that ended without completing — today, the user interrupting it,
+    /// mid-stream or mid-tool.
     ///
-    /// Not a field-optional [`Success`]: there is no `result` text to report,
-    /// `stop_reason` is null where `Success` always carries one, and `errors`
-    /// exists nowhere else. Branch on `terminal_reason`, not on the prose the
-    /// CLI emits alongside it as a `user` text block.
+    /// Not a field-optional [`Success`]: there is no `result` text to report
+    /// and `errors` exists nowhere else. Branch on `terminal_reason`, not on
+    /// the prose the CLI emits alongside it as a `user` text block.
     ///
     /// [`Success`]: Self::Success
     ErrorDuringExecution {
@@ -1048,9 +1047,8 @@ mod tests {
         }
     }
 
-    /// Unknown frame and delta types degrade instead of failing the line —
-    /// `thinking` blocks appear in neither fixture, so this is the safety net
-    /// for shapes we haven't captured.
+    /// Unknown frame and delta types degrade instead of failing the line — the
+    /// safety net for shapes we haven't captured.
     #[test]
     fn unknown_stream_shapes_degrade() {
         let line = r#"{"type":"stream_event","event":{"type":"some_future_frame"},"session_id":"s","parent_tool_use_id":null,"uuid":"u"}"#;
@@ -1075,8 +1073,7 @@ mod tests {
         ));
     }
 
-    /// `thinking` blocks stream as their own block and delta types. Neither
-    /// fixture contains one, so this pins the shape from the documented format.
+    /// `thinking` blocks stream as their own block and delta types.
     #[test]
     fn parses_thinking_blocks() {
         let line = r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":null}},"session_id":"s","parent_tool_use_id":null,"uuid":"u"}"#;
@@ -1515,7 +1512,7 @@ mod tests {
         )));
 
         // Published non-empty while the subagent runs, then empty once it
-        // drains — the pair is what distinguishes "turn over" from "idle".
+        // drains — after the `result` of the turn that started it.
         let task_sets: Vec<usize> = events
             .iter()
             .filter_map(|event| match event {

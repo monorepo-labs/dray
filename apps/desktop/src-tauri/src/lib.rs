@@ -68,7 +68,7 @@ pub mod projects;
 pub mod quit;
 #[cfg(feature = "desktop")]
 pub mod launchd;
-// The desktop app serves too, behind Remote access (remote_access.rs).
+// The desktop binary is the Mac's server too, run with `--serve`.
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod serve;
 #[cfg(any(feature = "serve", feature = "desktop"))]
@@ -219,12 +219,13 @@ async fn send_msg(
 
     // Reported here rather than inside `SessionManager::send_msg`, which is the
     // chokepoint for *prompts* and not for people: the orchestration socket
-    // reaches that function directly, both to relay a `dray send` and to start
-    // a session `dray new` asked for, and an agent finishing at 3am would mark
-    // the day active with nobody in the room. A Tauri command is reachable from
-    // the webview alone, so getting here means somebody pressed send. Not for
-    // another Mac's app sending here: that reader was active on their own
-    // install, not this one.
+    // reaches that function directly, both to relay a `dray session send` and
+    // to start a session `dray session new` asked for, and an agent finishing
+    // at 3am would mark the day active with nobody in the room. Only a client
+    // somebody is typing into reaches this command — the app, the island, a
+    // phone — so getting here means somebody pressed send. Not for another
+    // Mac's app sending here: that reader was active on their own install, not
+    // this one.
     if !analytics::client_counts() {
         analytics::track_active_day();
     }
@@ -315,23 +316,17 @@ async fn agent_availability() -> Vec<AgentAvailability> {
 /// What to say about an agent that cannot run, and whether the install command
 /// is what fixes it.
 ///
-/// Three answers wearing one word before this, and each wants a different cure.
-/// A CLI that is not on the machine is fixed by installing it. One that is
-/// present and too old is fixed by *re-running* the same installer, so the
-/// buttons still help — but a sentence saying "not installed" tells the reader
-/// to fix something they already have. And a harness this build cannot drive
-/// yet is fixed by neither, so it draws the sentence alone: sending someone to
-/// an installer for a CLI that is sitting right there is the worst of the
-/// three.
+/// Two answers, each with its own cure. A CLI that is not on the machine — or
+/// a Codex too old to speak `app-server`, which resolves the same way — is
+/// fixed by the installer, so the buttons ride along. One that is installed
+/// draws the sentence alone, since an installer for a CLI sitting right there
+/// cures nothing; every harness in `Harness::ALL` is drivable today, so that
+/// one is built for each installed agent and drawn for none.
 async fn unavailable_reason(harness: harness::Harness) -> (String, bool) {
     let label = harness.label();
 
-    // Asked before drivability, and the order is the whole of it. A CLI that is
-    // not on the machine is missing whatever this build could do with it, and
-    // the install command is the answer — the same one Claude and Codex give.
-    // Checking drivability first told a reader with no pi at all that Dray
-    // cannot run pi, which is true, useless, and hides the one thing they could
-    // have done about it.
+    // Asked first: a CLI that is not on the machine is missing whatever this
+    // build could do with it, and the install command is the answer.
     if !binpath::agent_installed(harness).await {
         return (
             format!("{label} isn't installed, so this session can't start."),

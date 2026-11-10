@@ -108,8 +108,8 @@ describe("findFilePaths", () => {
   });
 
   /// `file_path:line_number` is what this app's own harness prompt asks for, so
-  /// it is the commonest shape a path takes in a transcript. The number cannot
-  /// reach the editor through `open -a`, so it stays prose.
+  /// it is the commonest shape a path takes in a transcript. The locator is no
+  /// part of the file, so `path` comes back without it.
   it("drops a line locator, keeping the path", () => {
     expect(paths("fix /a/b.ts:12 now")).toEqual(["/a/b.ts"]);
     expect(paths("fix /a/b.ts:12:5 now")).toEqual(["/a/b.ts"]);

@@ -104,8 +104,6 @@ struct EventFrame<T: Decodable>: Decodable {
 
 // MARK: Sessions
 
-/// One index entry. Fields the phone does not read are left undecoded, so a
-/// newer server adding some costs nothing.
 func parseDate(_ s: String) -> Date? {
     let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -119,6 +117,8 @@ struct Welcome: Decodable {
     let dictation: Bool?
 }
 
+/// One index entry. Fields the phone does not read are left undecoded, so a
+/// newer server adding some costs nothing.
 struct SessionItem: Decodable, Hashable {
     let sessionId: String
     let harness: String

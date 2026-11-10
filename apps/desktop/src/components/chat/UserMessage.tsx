@@ -32,7 +32,7 @@ import type { ImageRef, IssueRef, MessageSender } from "@/types/events";
 /// A slash command and a file mention are coloured and nothing more — same size,
 /// same weight, same line. Each stays part of the sentence it sits in, which a
 /// chip or a monospace run made them stop being. The segments come from the same
-/// function the composer's overlay uses, so a word coloured while typing is
+/// function the composer's editor uses, so a word coloured while typing is
 /// still coloured once sent.
 ///
 /// Images sit **outside the bubble**. The bubble is a container for speech, and

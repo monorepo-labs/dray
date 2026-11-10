@@ -290,11 +290,6 @@ impl Mapper {
             // indicator, which takes the working one's place — the turn is
             // genuinely open and drawing nothing, so every working test passes,
             // but the agent is not thinking, it is waiting on a retry.
-            //
-            // Both counts are defaulted rather than dropped: the indicator's
-            // whole message is "attempt N of M", and a retry that arrives
-            // without them still has to draw something. `1` is the honest floor
-            // for an attempt nobody numbered.
             PiEvent::AutoRetryStart {
                 attempt,
                 max_attempts,
@@ -376,9 +371,9 @@ impl Mapper {
                 })]
             }
 
-            // Everything else is modelled and drawn as nothing, not wired yet —
-            // approvals — or a line this build has never seen. None draws a
-            // row, and the read loop files the unknown ones.
+            // Everything else is modelled and drawn as nothing. An extension's
+            // dialog and a line this build has never seen stop in the read
+            // loop, which answers one and files the other.
             _ => Vec::new(),
         }
     }
@@ -869,9 +864,9 @@ mod tests {
     /// the session sits `in_progress` forever with a complete transcript on
     /// screen, which reads as Dray being broken rather than as a stale CLI.
     ///
-    /// This is what the capability check in `binpath` is for. If this test ever
-    /// starts failing because the turn *did* close, the floor can be dropped —
-    /// so it is pinned here rather than left as a sentence in a doc.
+    /// Nothing refuses such a pi yet — `binpath::pi` says what will. If this
+    /// test ever starts failing because the turn *did* close, no floor is
+    /// needed — so it is pinned here rather than left as a sentence in a doc.
     #[test]
     fn a_cli_without_agent_settled_never_closes_its_turn() {
         let events = mapped(FAILED);

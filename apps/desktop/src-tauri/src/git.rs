@@ -334,7 +334,8 @@ async fn run(cwd: &str, args: &[&str]) -> Result<()> {
 }
 
 /// One git invocation: stdout on success, git's own stderr as the error.
-/// Every spawn but `cat-file`'s streamed one goes through here.
+/// Every spawn goes through here but `cat-file`'s streamed one and
+/// [`shared_remote`]'s, which has to die with its caller's timeout.
 async fn exec(cwd: &str, envs: &[(&str, &str)], args: &[&str]) -> Result<String> {
     let mut cmd = Command::new("git");
     cmd.args(args).current_dir(cwd);
@@ -2973,10 +2974,10 @@ mod tests {
         fs::remove_dir_all(&dir).await.ok();
     }
 
-    /// The `-w` shape, forked from `origin/<default>`, and the reason the
-    /// default base is excluded as well as the fork point: a session that
-    /// merges upstream in mid-flight pulls commits into HEAD that the fork
-    /// point predates. Drop the `default_base` exclusion and this one fails.
+    /// The `-w` shape, forked from `origin/<default>`, and the reason the log
+    /// walks `--first-parent`: a session that merges upstream in mid-flight
+    /// pulls commits into HEAD that the fork point predates. Drop the flag and
+    /// this one fails.
     #[tokio::test]
     async fn upstream_merged_in_after_the_fork_is_not_this_branch_s_work() {
         let dir = scratch_repo().await;
@@ -3213,7 +3214,7 @@ mod tests {
         fs::remove_dir_all(&remote).await.ok();
     }
 
-    /// What a pull request would contain, which is not what [`SyncStatus::ahead`]
+    /// What a pull request would contain, which is not what [`WorkStatus::ahead`]
     /// counts. A branch pushed in full is level with its upstream and still ahead
     /// of the base — the case where the button is most wanted, and the one
     /// reading `ahead` would hide.

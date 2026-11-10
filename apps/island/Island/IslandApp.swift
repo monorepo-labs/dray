@@ -582,7 +582,6 @@ final class Delegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Key codes of 1 through 9, which are not in order on the keyboard.
     /// False for a sideways swipe over nothing that scrolls sideways, which is
     /// dropped: AppKit rubber-bands whatever scroll view sits under it, and the
     /// whole transcript slid with the fingers. A wide code block still scrolls.
@@ -596,6 +595,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    /// Key codes of 1 through 9, which are not in order on the keyboard.
     private static let digits: [UInt16: Int] = [18: 0, 19: 1, 20: 2, 21: 3, 23: 4, 22: 5, 26: 6, 28: 7, 25: 8]
 
     /// The ⌘ and ⌘⇧ chords a text box answers: A C V X Z by letter, so any

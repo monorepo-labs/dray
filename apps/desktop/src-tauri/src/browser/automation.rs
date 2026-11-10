@@ -1290,7 +1290,7 @@ async fn capture(tab: i32, w: u32, h: u32, full: bool) -> Result<Vec<u8>, String
 
 /// Opens and closes the pane's shutter. The capture lays the page out at
 /// the asked-for size, and the widget the reader is watching is the one
-/// doing it — so the pane hides the view and draws a camera card for the
+/// doing it — so the pane hides the view behind a still of the page for the
 /// length of the shot, rather than showing a page reflowing to a size
 /// nobody asked to look at. `shot` names it, so the pane's ack can name it
 /// back; see the Mac's `cover`.

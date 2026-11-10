@@ -1,11 +1,11 @@
-//! Remote Dray servers the desktop app is connected to, beside its own
-//! in-process core. Each is a `dray-serve` reached over its WebSocket; this
-//! module holds the connections so the token never leaves Rust, and the
-//! frontend reaches a server through `server_invoke` and hears it through
-//! `server_event`. See SERVERS-PLAN.md.
+//! The Dray servers the desktop app is connected to: this Mac's own background
+//! server ([`LOCAL`]) and every remote `dray-serve`, each reached over its
+//! WebSocket. This module holds the connections so the token never leaves
+//! Rust, and the frontend reaches a server through `server_invoke` and hears
+//! it through `server_event`. See SERVERS-PLAN.md.
 //!
-//! The list is device-local: `servers.json` holds id, name and address, and
-//! each token sits in `credentials.json` under `server:<id>`, never on a
+//! The remote list is device-local: `servers.json` holds id, name and address,
+//! and each token sits in `credentials.json` under `server:<id>`, never on a
 //! struct the frontend is handed.
 
 use crate::machines::{admit_with, credential_name, default_name, normalize, BoatLink, Saved, Socket, Welcome, ADMIT};

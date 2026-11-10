@@ -38,13 +38,13 @@ pub const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
 /// because the reader can switch models in settings while one is loaded, and
 /// the *only* way to notice is to compare against what was asked for.
 ///
-/// Cloneable, so [`Engine::warm`] can be spawned off a command that only
-/// borrows the managed state.
+/// Cloneable, so a press can spawn its load off a command that only borrows
+/// the managed state.
 #[derive(Clone)]
 pub struct Engine {
     loaded: Arc<Mutex<Option<Loaded>>>,
     /// Bumped by every [`Engine::unload`], so a warm that started before one
-    /// can tell its answer is stale. Without it a load begun at launch lands
+    /// can tell its answer is stale. Without it a load begun at a press lands
     /// after a switch or a delete and installs a model the reader is done
     /// with — for a delete, one whose weights are no longer on disk.
     generation: Arc<AtomicU64>,
@@ -267,8 +267,9 @@ impl Engine {
     /// has made it unwanted since `token` was taken.
     ///
     /// One loader for both entry points, since the expensive part must happen
-    /// once however many callers ask for it at the same moment — a warm at
-    /// launch and a mic press a second later are the ordinary case.
+    /// once however many callers ask for it at the same moment — a press's
+    /// warm still loading when a quick stop asks to transcribe is the ordinary
+    /// case.
     async fn ensure_loaded(&self, token: u64, model_id: &str, path: &Path) -> Result<()> {
         loop {
             // Created before the check, so a return landing between the two

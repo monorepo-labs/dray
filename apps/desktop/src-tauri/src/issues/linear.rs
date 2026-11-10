@@ -284,12 +284,13 @@ pub async fn verify(key: &str) -> Result<TrackerAccount, IssueUnavailable> {
     })
 }
 
-/// Issues matching `query`, most urgent first.
+/// Issues matching `filters`: the unfinished half most urgent first, the
+/// settled half newest filed first.
 ///
 /// Sorted here rather than by the API. Linear orders by `createdAt` or
 /// `updatedAt` and nothing else, and "what should I pick up" is a priority
 /// question — so the API's own order is asked for as the *tiebreak* (newest
-/// touched first) and the levels are applied over it.
+/// filed first) and the levels are applied over it.
 pub async fn list_issues(
     key: &str,
     filters: &IssueQuery,

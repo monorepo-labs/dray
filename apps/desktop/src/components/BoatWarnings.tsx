@@ -201,9 +201,10 @@ function LiveWarning(props: Omit<Parameters<typeof Warning>[0], "now">) {
 
 /// A sandbox about to auto-stop, floating at the sidebar's foot. Drawn outside
 /// `<aside>` so collapsing it hides nothing, but sized to the default sidebar
-/// (`SIDEBAR_MIN`, 240) less its rows' inset, so it reads as part of it. No
-/// countdown bar unlike a notice card: it stands until the time is extended or
-/// it stops, since missing it costs running work.
+/// (`SIDEBAR_MIN`, 240) less its rows' inset, so it reads as part of it. Its
+/// bar drains like a notice card's but takes nothing down: the card stands
+/// until the reader extends or dismisses it or the sandbox stops, since missing
+/// it costs running work.
 export default function BoatWarnings({ busy }: { busy: (server: string) => boolean }) {
   const servers = useServers();
   const { auto } = useBoatPrefs();

@@ -46,8 +46,8 @@ pub struct Mapper {
     /// this, and the two are only joined on the index entry.
     session_id: String,
     seq: Arc<AtomicU64>,
-    /// Whether a prompt is running. Read by the read loop too: a title landing
-    /// outside a turn is `session/resume` restating one Dray already holds.
+    /// Whether this turn's `TurnStarted` has gone out. fx sends no start line,
+    /// so the first update mints one and this keeps the rest from repeating it.
     turn_open: bool,
     /// The one block streaming right now. fx interleaves thought and text
     /// chunks with no ids on the thoughts, so at most one block is open and a
@@ -975,10 +975,6 @@ mod tests {
         );
     }
 
-    /// fx 0.0.15's close is the output, cut at 200 bytes and marked — the
-    /// shape `shellUpdateContentText` writes, in fx's own tests. The stream
-    /// carried all of it, so the stream wins; a shell refused before it ran
-    /// streamed nothing, and its close is the only reason there is.
     /// A shell whose closing update never comes — the turn ended under it —
     /// leaves nothing behind for the life of the session.
     #[test]
@@ -1011,6 +1007,10 @@ mod tests {
         assert_eq!(result.exit_code, Some(0));
     }
 
+    /// fx 0.0.15's close is the output, cut at 200 bytes and marked — the
+    /// shape `shellUpdateContentText` writes, in fx's own tests. The stream
+    /// carried all of it, so the stream wins; a shell refused before it ran
+    /// streamed nothing, and its close is the only reason there is.
     #[test]
     fn a_shell_keeps_its_stream_over_fxs_cut_close() {
         let long = "x".repeat(500);

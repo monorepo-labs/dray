@@ -43,7 +43,7 @@ final class Store {
     private(set) var olderErrors: [SessionKey: String] = [:]
     private(set) var tasks: [SessionKey: Int] = [:]
 
-    /// For a client that reacts beside drawing: the Island opens itself on a card.
+    /// For a client that reacts beside drawing: the Island chimes and counts a new card on its pill.
     @ObservationIgnored var asksChanged: () -> Void = {}
     /// The Island's: its own server came up, or Dray's window came or went, so
     /// the machines it follows may have moved.
@@ -546,9 +546,9 @@ final class Store {
         }
     }
 
-    /// A session another client started reaches this one as events alone —
-    /// `send_msg` hands its entry back to the caller — so an id the index
-    /// does not name re-reads it, once per burst.
+    /// An id the index does not name re-reads it, once per burst.
+    /// `session_created` carries a new session's entry to every client, so this
+    /// is what is left for a server from before that event.
     private func notice(_ key: SessionKey) {
         guard items[key] == nil, !reading.contains(key.server) else { return }
         reading.insert(key.server)

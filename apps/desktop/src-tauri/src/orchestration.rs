@@ -1477,12 +1477,6 @@ async fn list_sessions(list: ListSessions) -> Result<Response> {
     Ok(Response::Listed { sessions })
 }
 
-/// How many creates deep this session already sits, up to [`MAX_DEPTH`]. A
-/// session with no parent is depth 0, one created by an agent is depth 1.
-///
-/// The walk stops at the cap rather than counting on: anything past it is
-/// refused whatever the number, and stopping is what keeps an index that
-/// somehow points at itself from hanging the caller's turn.
 /// Refuses a create from a caller already [`MAX_DEPTH`] deep.
 fn check_depth(depth: Option<usize>) -> Result<()> {
     let Some(depth) = depth else { return Ok(()) };
@@ -1496,6 +1490,12 @@ fn check_depth(depth: Option<usize>) -> Result<()> {
     Ok(())
 }
 
+/// How many creates deep this session already sits, up to [`MAX_DEPTH`]. A
+/// session with no parent is depth 0, one created by an agent is depth 1.
+///
+/// The walk stops at the cap rather than counting on: anything past it is
+/// refused whatever the number, and stopping is what keeps an index that
+/// somehow points at itself from hanging the caller's turn.
 async fn depth_of(item: &SessionIndexItem) -> Result<usize> {
     let mut depth = 0;
     let mut cursor = item.parent_session_id.clone();

@@ -312,5 +312,5 @@ function textOf(node: React.ReactNode): string | null {
   return null;
 }
 
-// Every delta re-renders the transcript, so identical text must not re-parse.
+// Every event re-renders the running turn, so identical text must not re-parse.
 export const Markdown = memo(MarkdownImpl);

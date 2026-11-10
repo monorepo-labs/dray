@@ -591,12 +591,6 @@ fn stance_meta(mode: ApprovalPolicy) -> Option<(&'static str, bool)> {
     }
 }
 
-/// Moves a live session onto another model.
-///
-/// `session/set_config_option` answers the whole updated option list and
-/// mirrors it as a `config_option_update`, verified live. The value is a **bare
-/// string**: the `{value: …}` wrapper the docs print is refused (`did not match
-/// any variant of untagged enum SessionConfigOptionValue`).
 /// Moves a live session onto another model — **and onto its fast tier or off
 /// it**, which here is the same request.
 ///
@@ -637,6 +631,10 @@ pub async fn set_effort(session: &GrokSession, model: Option<&Model>, effort: Ef
     Ok(())
 }
 
+/// `session/set_config_option` answers the whole updated option list and
+/// mirrors it as a `config_option_update`, verified live. The value is a **bare
+/// string**: the `{value: …}` wrapper the docs print is refused (`did not match
+/// any variant of untagged enum SessionConfigOptionValue`).
 async fn set_config(session: &GrokSession, config_id: &str, value: &str) -> Result<Value> {
     session
         .client
