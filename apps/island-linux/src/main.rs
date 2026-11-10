@@ -638,7 +638,9 @@ pub fn stop_dictation(island: &Entity<Island>, then_send: bool, cx: &mut App) {
     }
     // A send waiting on the words goes where the reader pressed ⏎ with what
     // was there then, whatever they pick or write while the model works.
-    let then_send = then_send && pin(island, true, cx);
+    if then_send && !pin(island, true, cx) {
+        return;
+    }
     transcribe(island, "stop_transcription", json!({}), then_send, cx);
 }
 
@@ -684,7 +686,8 @@ fn landing(d: &Draft, ids: &[u64]) -> bool {
 /// are in and no screenshot or moment is still landing.
 fn release_send(island: &Entity<Island>, cx: &mut App) {
     let d = island.read(cx).draft();
-    if d.pinned.as_ref().is_none_or(|p| p.awaiting_words || landing(d, &p.rows)) {
+    // One request at a time: a send still running releases this one when done.
+    if d.sending || d.pinned.as_ref().is_none_or(|p| p.awaiting_words || landing(d, &p.rows)) {
         return;
     }
     if let Some(pinned) = island.update(cx, |island, _| island.draft_mut().pinned.take()) {
@@ -1556,17 +1559,21 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
             }
             _ => Err("Dray's server isn't reachable.".into()),
         };
-        cx.update(|cx| match outcome {
-            Ok(id) => {
-                state.update(cx, |island, _| island.draft_mut().sending = false);
-                // A pick made while the request ran is the reader's, and outranks this one.
-                if state.read(cx).draft().target.as_ref() == Some(&target) {
-                    pick_target(&state, Target::Session(id), cx);
-                } else {
-                    prefs::set("lastSession", &id);
+        cx.update(|cx| {
+            match outcome {
+                Ok(id) => {
+                    state.update(cx, |island, _| island.draft_mut().sending = false);
+                    // A pick made while the request ran is the reader's, and outranks this one.
+                    if state.read(cx).draft().target.as_ref() == Some(&target) {
+                        pick_target(&state, Target::Session(id), cx);
+                    } else {
+                        prefs::set("lastSession", &id);
+                    }
                 }
+                Err(why) => restore(&state, rows, typing, target, why, cx),
             }
-            Err(why) => restore(&state, rows, typing, target, why, cx),
+            // A send that came ready while this one ran goes now.
+            release_send(&state, cx);
         });
     })
     .detach();
