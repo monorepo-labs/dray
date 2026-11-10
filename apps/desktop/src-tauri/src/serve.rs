@@ -140,7 +140,11 @@ pub async fn run(port: u16) -> Result<()> {
         let _ = STARTED_FROM.set((exe.clone(), stamp_of(&exe)));
     }
     let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
-    let home = start_core(sink.clone()).await?;
+    let boat = crate::cloud::boat_id().await;
+    let home = start_core(sink.clone(), boat.as_deref()).await?;
+    if let Some(sandbox) = boat {
+        tokio::spawn(crate::cloud::heartbeat(home.clone(), sandbox));
+    }
 
     let (token, token_path) = mint_token().await?;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -169,7 +173,7 @@ pub async fn run(port: u16) -> Result<()> {
 #[cfg(feature = "desktop")]
 pub async fn run_mac() -> Result<()> {
     let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
-    let home = start_core(sink.clone()).await?;
+    let home = start_core(sink.clone(), None).await?;
     // launchd appends stdout and stderr here for the life of the login, so
     // past 10MB it starts over. The fd launchd opened is `O_APPEND`, so the
     // next line lands at the start of the emptied file.
@@ -482,8 +486,9 @@ async fn sweep_browser_profiles() {
 }
 
 /// What every server does before it listens: refuse a home another Dray
-/// holds, reset what no child survived, and serve the orchestration socket.
-async fn start_core(sink: Sink) -> Result<PathBuf> {
+/// holds, drop what a boat fork copied, reset what no child survived, and
+/// serve the orchestration socket. `boat` is this sandbox's id, on boat.
+async fn start_core(sink: Sink, boat: Option<&str>) -> Result<PathBuf> {
     crate::SERVER.store(true, std::sync::atomic::Ordering::Relaxed);
     // Two processes on one home reset each other's sessions at start, take
     // each other's socket and rewrite one index whole, each over the other.
@@ -511,6 +516,12 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
         );
     }
 
+    // Before anything reads the index, which on a fork is the source's. A
+    // failure is said and served through: a server that will not start
+    // costs the whole machine.
+    if let Some(Err(e)) = boat.map(|id| crate::cloud::scrub_if_forked(&home, id)) {
+        eprintln!("[cloud] {e:#}");
+    }
     if let Err(e) = store::reset_in_progress_sessions().await {
         eprintln!("[status reset err] {e}");
     }
@@ -1569,6 +1580,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         // not yet listening when it connected — `dray-serve` included, which
         // an app installed after it meets as This Mac.
         live_state() => ok(HUB.live.lock().unwrap_or_else(|e| e.into_inner()).payload());
+        // Dray Cloud's placement: turns running here and memory left.
+        machine_load() => ok(crate::cloud::machine_load().await);
         // Sessions.
         send_msg(
             session_id: String, prompt: String, attachment_paths: Vec<String>,

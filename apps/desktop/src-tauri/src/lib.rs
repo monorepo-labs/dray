@@ -76,6 +76,8 @@ pub mod remote_access;
 // Every server reaches other machines on its own (#760).
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod machines;
+#[cfg(any(feature = "serve", feature = "desktop"))]
+pub mod cloud;
 #[cfg(feature = "desktop")]
 pub mod boat;
 #[cfg(feature = "desktop")]

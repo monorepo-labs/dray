@@ -712,6 +712,29 @@ impl SessionManager {
         false
     }
 
+    /// How many sessions have a turn running, and whether anything at all is
+    /// working, background tasks included: Dray Cloud's `machine_load` and its
+    /// heartbeat. A slot locked by a send or a respawn counts as a turn, as in
+    /// [`Self::any_turn_in_flight`].
+    pub async fn load(&self) -> (usize, bool) {
+        let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
+        let (mut turns, mut busy) = (0, false);
+        for slot in slots {
+            let Ok(guard) = slot.try_lock() else {
+                turns += 1;
+                continue;
+            };
+            let Some(session) = guard.as_ref() else { continue };
+            let Ok(tracker) = session.status.try_lock() else {
+                turns += 1;
+                continue;
+            };
+            turns += usize::from(tracker.turn_in_flight());
+            busy |= tracker.has_outstanding_work();
+        }
+        (turns, busy || turns > 0)
+    }
+
     /// Takes the live child out, leaving the slot empty for the next send.
     async fn take(&self, id: &str) -> Option<Session> {
         self.existing(id).await?.lock().await.take()
