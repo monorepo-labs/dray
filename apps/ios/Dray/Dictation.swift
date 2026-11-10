@@ -58,6 +58,9 @@ final class Dictations {
     /// The server each draft's recording goes to, taken at the press.
     @ObservationIgnored private var servers: [SessionKey: UUID] = [:]
     @ObservationIgnored private var recorders: [SessionKey: AVAudioRecorder] = [:]
+    /// The transcription each draft is waiting on. Cancel clears it, so an
+    /// answer landing after that is dropped rather than written in.
+    @ObservationIgnored private var pending: [SessionKey: UUID] = [:]
 
     func state(_ draft: SessionKey) -> Dictation { phase[draft] ?? .idle }
 
@@ -126,6 +129,7 @@ final class Dictations {
             release()
         }
         since[draft] = nil
+        pending[draft] = nil
         phase[draft] = nil
     }
 
@@ -144,11 +148,19 @@ final class Dictations {
     /// The file goes once the server has answered, whatever it said; a send
     /// that never reached it keeps the file for Retry.
     private func send(_ store: Store, _ server: UUID, _ draft: SessionKey, _ url: URL) async {
+        let run = UUID()
+        pending[draft] = run
         phase[draft] = .transcribing
-        defer { phase[draft] = nil }
+        defer {
+            if pending[draft] == run {
+                pending[draft] = nil
+                phase[draft] = nil
+            }
+        }
         do {
             let outcome = try await store.transcribe(server, wav: url)
             try? FileManager.default.removeItem(at: url)
+            guard pending[draft] == run else { return }
             switch outcome {
             case .text(let words):
                 store.appendToDraft(draft, words)
@@ -159,6 +171,10 @@ final class Dictations {
             case .failed(let message): notes[draft] = sentence(message)
             }
         } catch {
+            guard pending[draft] == run else {
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
             kept[draft] = url
             notes[draft] = "Couldn't transcribe: \(error.localizedDescription)"
         }

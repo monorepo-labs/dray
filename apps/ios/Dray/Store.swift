@@ -236,6 +236,9 @@ final class Store {
         await loadMarks(server, force: false)
     }
 
+    /// A project list a command answered with, such as `add_project`'s.
+    func attached(_ server: UUID, _ list: [Project]) { projects[server] = list }
+
     private func loadProjects(_ server: UUID) async {
         if let list: [Project] = try? await connections[server]?.call("list_projects", [:]) { projects[server] = list }
     }

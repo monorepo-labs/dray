@@ -19,8 +19,12 @@ phone reads and drives it over the same WebSocket the desktop uses
   highlighting, no images.
 - **Reply** to a session, **Stop** a turn.
 - **Permission and question cards**, answered in place.
-- **New session** with the desktop composer's picks: project, harness, model,
-  effort, stance, fast mode, worktree, branch.
+- **New task by voice**, from a dock under the list: hold the orb to talk,
+  and the recording runs hands-free until Done or Cancel. The words land as
+  the task's text; holding again adds to them, the keyboard edits them in a
+  sheet, and Cancel offers Save draft (`create_draft`), Keep or Discard.
+  Picks under the orb: harness, model, effort, project, machine, and behind
+  "···" stance and worktree. A task always starts on the default branch.
 - **Pairing** by paste or by QR, and every server's name, token and removal
   in one Settings screen.
 - **Pull request** sheet from the session view: readiness in the desktop's
@@ -29,8 +33,8 @@ phone reads and drives it over the same WebSocket the desktop uses
 - **Dictation**, transcribed on the Mac: the phone records a 16kHz mono WAV,
   uploads it through `POST /upload` and calls `transcribe_upload`. Only the
   Mac's server has that command, and its welcome frame says `dictation: true`,
-  so the mic is drawn nowhere else. Both composers carry it, and the Island's
-  voice orb takes the row while it records.
+  so the orb says "Type instead" where no server can. The Island's `VoiceOrb`
+  draws it.
 
 Left out: push, attachments, the Diff/Files/Browser views,
 forks, settle/pin, the settled list, spaces, issues.
@@ -126,10 +130,10 @@ Commands used: `list_session_index_items`, `get_session_by_id`,
 `list_branches`, `checkout_branch`, `mark_session_read`, `work_status`,
 `prs_for_branch`, `merge_pr`, `mark_pr_ready`, `reopen_pr`, `set_last_selected_project`,
 `add_project`, `github_repos`, `clone_github_repo`, `recheck_gh`, `pr_marks`,
-`transcribe_upload`.
+`transcribe_upload`, `create_draft`, `delete_draft`.
 
-**New session restates the desktop composer's rules** (`Picks` in
-`NewSessionView.swift`): which stances each harness honours (`permission.ts`),
+**A new task restates the desktop composer's rules** (`Picks` in
+`Picks.swift`): which stances each harness honours (`permission.ts`),
 fast mode only where the harness has a route and the model a faster tier
 (`fastMode.ts`), the effort ladder per model and the model fallback
 (`model.ts`). Change one there, change it here.

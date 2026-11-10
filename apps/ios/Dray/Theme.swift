@@ -29,6 +29,8 @@ enum Theme {
     // Edges: seams, never drawn rules.
     static let hairline = Color.white.opacity(0.06)
     static let border = Color.white.opacity(0.1)
+    /// Claude's rust, on its mark in the picks row alone.
+    static let claude = Color(hex: 0xD97757)
     /// A child session's elbow back to its parent.
     static let connector = Color(hex: 0x404040)
 
@@ -83,6 +85,8 @@ enum Theme {
         static let pill = TypeStyle(15, 20, .semibold, .subheadline)
         /// Meta, times, section labels, the picks row.
         static let footnote = TypeStyle(13, 18, .regular, .footnote)
+        /// Words just spoken, large and dim at the top of the open voice dock.
+        static let spoken = TypeStyle(20, 26, .regular, .title3)
         /// The model's name in the picks row, and nothing else.
         static let footnoteStrong = TypeStyle(13, 18, .semibold, .footnote)
     }

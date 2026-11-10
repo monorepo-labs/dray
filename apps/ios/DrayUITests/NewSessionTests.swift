@@ -1,6 +1,6 @@
 import XCTest
 
-/// Starts a session from the phone and sees its first reply, against a scratch
+/// Starts a task from the phone's dock and sees its first reply, against a scratch
 /// `dray-serve`. Attaches the project by path first, so the server needs
 /// nothing but a git repo on disk:
 ///   TEST_RUNNER_DRAY_URL=ws://127.0.0.1:7399 TEST_RUNNER_DRAY_TOKEN=…
@@ -16,7 +16,7 @@ final class NewSessionTests: XCTestCase {
         }
         let app = try openNewSession()
 
-        app.buttons["Attach project…"].tap()
+        pick(app, "Project", "Attach project…")
         XCTAssertTrue(app.buttons["Enter path"].waitForExistence(timeout: 15))
         snap(app, "1-attach")
         app.buttons["Enter path"].tap()
@@ -25,19 +25,18 @@ final class NewSessionTests: XCTestCase {
         path.typeText(project)
         app.alerts.buttons["Attach"].tap()
 
-        let prompt = app.textFields["Prompt"]
-        XCTAssertTrue(prompt.waitForExistence(timeout: 15))
-        prompt.tap()
+        XCTAssertTrue(app.staticTexts[(project as NSString).lastPathComponent].waitForExistence(timeout: 15))
+        app.buttons["Keyboard"].tap()
+        let prompt = app.textViews["New task"]
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
         prompt.typeText("Reply with the single word HELLO and nothing else.")
+        app.buttons["Done"].tap()
 
-        pick(app, "Model", "Haiku 4.5")
-        pick(app, "Permissions", "Ask every time")
-        // Haiku takes no effort level, so the row is gone.
-        XCTAssertFalse(app.buttons["Effort"].exists)
-        app.swipeUp()
-        snap(app, "2-new-session")
+        pick(app, "Model", "Haiku 5.5")
+        pick(app, "More picks", "Permissions", "Ask every time")
+        snap(app, "2-new-task")
 
-        app.buttons["Start"].tap()
+        app.buttons["Start task"].tap()
 
         let reply = app.staticTexts["HELLO"]
         XCTAssertTrue(reply.waitForExistence(timeout: 120), "reply never landed")
@@ -52,7 +51,7 @@ final class NewSessionTests: XCTestCase {
             throw XCTSkip("set TEST_RUNNER_DRAY_CLONE to a small repo of the server's GitHub account")
         }
         let app = try openNewSession()
-        app.buttons["Attach project…"].tap()
+        pick(app, "Project", "Attach project…")
 
         // Rows are lazy: one below the fold does not exist until searched for.
         let search = app.searchFields["Search repositories"]
@@ -68,13 +67,12 @@ final class NewSessionTests: XCTestCase {
         snap(app, "2-cloning")
 
         let name = String(slug.split(separator: "/").last ?? "")
-        let picked = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Project' AND label CONTAINS %@", name)).firstMatch
-        XCTAssertTrue(picked.waitForExistence(timeout: 120), "clone never attached")
+        XCTAssertTrue(app.staticTexts[name].waitForExistence(timeout: 120), "clone never attached")
         snap(app, "3-attached")
     }
 
-    /// Launches with no saved servers, adds the one under test, and opens New
-    /// session — so servers left over from earlier runs cannot change the answer.
+    /// Launches with no saved servers and adds the one under test, so servers
+    /// left over from earlier runs cannot change the answer.
     private func openNewSession() throws -> XCUIApplication {
         let env = ProcessInfo.processInfo.environment
         guard let url = env["DRAY_URL"], let token = env["DRAY_TOKEN"] else {
@@ -91,22 +89,21 @@ final class NewSessionTests: XCTestCase {
         secret.tap()
         secret.typeText(token)
         app.buttons["Add"].tap()
-        let start = app.buttons["New session"]
-        XCTAssertTrue(start.waitForExistence(timeout: 15))
-        start.tap()
-        // Drawn once the server is connected, which can trail the button above.
-        XCTAssertTrue(app.buttons["Attach project…"].waitForExistence(timeout: 30))
+        // The dock is drawn once the server is connected.
+        XCTAssertTrue(app.buttons["Keyboard"].waitForExistence(timeout: 30))
         return app
     }
 
-    /// A menu picker in a Form is a button labelled with its title.
-    private func pick(_ app: XCUIApplication, _ row: String, _ option: String) {
-        let button = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", row)).firstMatch
-        XCTAssertTrue(button.waitForExistence(timeout: 15), "no \(row) row")
+    /// Opens one of the dock's pick menus and walks down it, submenu by submenu.
+    private func pick(_ app: XCUIApplication, _ menu: String, _ path: String...) {
+        let button = app.buttons[menu].firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 15), "no \(menu) menu")
         button.tap()
-        let item = app.buttons[option]
-        XCTAssertTrue(item.waitForExistence(timeout: 5), "no \(option) in \(row)")
-        item.tap()
+        for option in path {
+            let item = app.buttons[option].firstMatch
+            XCTAssertTrue(item.waitForExistence(timeout: 5), "no \(option) in \(menu)")
+            item.tap()
+        }
     }
 
     private func snap(_ app: XCUIApplication, _ name: String) {

@@ -83,15 +83,15 @@ final class DesignTests: XCTestCase {
         back(app)
         app.buttons["Done"].tap()
 
-        app.buttons["New session"].firstMatch.tap()
-        let prompt = app.textFields["Prompt"]
+        app.buttons["Keyboard"].tap()
+        let prompt = app.textViews["New task"]
         XCTAssertTrue(prompt.waitForExistence(timeout: 15))
-        sleep(2)
-        snap(app, "16-new-session")
-        prompt.tap()
         prompt.typeText("Add a dark mode toggle to the settings page")
-        snap(app, "17-new-session-typed")
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Model'")).firstMatch.tap()
+        snap(app, "16-new-task-typed")
+        app.buttons["Done"].tap()
+        sleep(1)
+        snap(app, "17-new-task-ready")
+        app.buttons["Model"].firstMatch.tap()
         snap(app, "18-model-menu")
     }
 
@@ -148,17 +148,16 @@ final class DesignTests: XCTestCase {
         }
         back(app)
 
-        app.buttons["New session"].firstMatch.tap()
-        XCTAssertTrue(app.textFields["Prompt"].waitForExistence(timeout: 15))
+        let orb = app.descendants(matching: .any)["orb"]
+        XCTAssertTrue(orb.waitForExistence(timeout: 15))
         sleep(2)
-        snap(app, "35-new-session-failed-load")
-        if app.buttons["dictate"].exists {
-            app.buttons["dictate"].tap()
-            if app.buttons["Stop dictation"].waitForExistence(timeout: 10) {
-                sleep(2)
-                snap(app, "36-new-session-recording")
-                app.buttons["Cancel dictation"].tap()
-            }
+        snap(app, "35-dock-failed-load")
+        orb.press(forDuration: 0.6)
+        if app.buttons["Done"].waitForExistence(timeout: 10) {
+            sleep(2)
+            snap(app, "36-dock-recording")
+            app.buttons["Cancel"].tap()
+            app.buttons["Discard"].tap()
         }
     }
 

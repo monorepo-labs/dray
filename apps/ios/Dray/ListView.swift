@@ -17,6 +17,7 @@ struct DraftItem: Decodable, Identifiable {
 
 struct SessionList: View {
     @Environment(Store.self) private var store
+    @Environment(NewTask.self) private var task
     @Binding var selection: SessionKey?
     @Binding var sheet: RootSheet?
     @State private var project: String?
@@ -68,6 +69,8 @@ struct SessionList: View {
             }
             .listStyle(.plain)
             .contentMargins(.top, Theme.Space.m, for: .scrollContent)
+            // The resting dock's height, so the last row scrolls clear of the orb.
+            .contentMargins(.bottom, store.servers.isEmpty ? 0 : 160, for: .scrollContent)
             // The breaks between runs are 16pt, under the 44pt a list row otherwise takes.
             .environment(\.defaultMinListRowHeight, 1)
             .themedList()
@@ -76,6 +79,11 @@ struct SessionList: View {
                 await store.refresh()
                 if mode == .drafts { await loadDrafts() }
                 if mode == .settled { await store.loadSettled() }
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if !store.servers.isEmpty {
+                VoiceDock(task: task) { selection = $0 }
             }
         }
         .page()
@@ -96,10 +104,6 @@ struct SessionList: View {
                 .accessibilityLabel("Settings")
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
-            // ponytail: New session keeps a button here until the voice dock lands with it.
-            Button { sheet = .new } label: { Image(systemName: "square.and.pencil") }
-                .disabled(store.servers.isEmpty)
-                .accessibilityLabel("New session")
             viewToggle(.drafts, label: "Drafts") { Image(systemName: "circle.dashed") }
             viewToggle(.settled, label: "Settled") { CheckCheck().frame(width: 20, height: 20) }
         }
@@ -124,8 +128,11 @@ struct SessionList: View {
         }
         ForEach(shown, id: \.draft.id) { entry in
             Button {
-                store.drafts[.newSession] = entry.draft.prompt
-                sheet = .new
+                task.text = entry.draft.prompt
+                task.draftId = (entry.server, entry.draft.id)
+                if let name = entry.draft.project { task.projectName = name }
+                task.pickedServer = entry.server
+                mode = .live
             } label: {
                 RowLine(title: entry.draft.title, time: entry.draft.created.flatMap(parseDate))
             }
@@ -168,11 +175,8 @@ struct SessionList: View {
                 Orb(.reconnecting, size: 40)
             }
         } else if store.servers.contains(where: { store.serverState[$0.id] == .connected }) {
-            EmptyState(title: "No sessions yet", message: "Start one here, or on your Mac, and it shows up in this list.") {
+            EmptyState(title: "No tasks yet", message: "Hold the orb to start one.") {
                 Orb(state: .idle, size: 40)
-            } actions: {
-                Button { sheet = .new } label: { Text("New session").frame(maxWidth: .infinity) }
-                    .buttonStyle(PrimaryButtonStyle())
             }
         } else {
             EmptyState(title: "Nothing to show yet", message: "Sessions show up here once a server connects.") {
