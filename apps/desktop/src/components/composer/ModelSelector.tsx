@@ -33,7 +33,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { invoke, type ServerId } from "@/lib/transport";
-import { offersFast } from "@/lib/fastMode";
+import { fastRetired, offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { FX_PROVIDERS, isUnsetModel } from "@/lib/model";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
@@ -509,7 +509,9 @@ export default function ModelSelector({
                   competes with the yellow the sidebar spends on sessions
                   wanting the reader. A glyph was the other try; among two words
                   it read as a badge stuck on the label. */}
-              {fast && <span className="text-muted-foreground/60">Fast</span>}
+              {fast && offersFast(harness, selected) && (
+                <span className="text-muted-foreground/60">Fast</span>
+              )}
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
@@ -716,6 +718,13 @@ export default function ModelSelector({
               <p className="px-2 pb-1.5 text-ui text-muted-foreground">{fastNote}</p>
             )}
           </>
+        )}
+        {/* Where the switch went, so a reader used to it on Opus 4.8 is not
+            left guessing. Plain text for `fastNote`'s reason: nothing to pick. */}
+        {fastRetired(harness, selected) && (
+          <p className="px-2 py-1.5 text-ui text-muted-foreground">
+            Fast mode is retired on {selected?.label}. Opus 5.5 has it.
+          </p>
         )}
 
         {/* No rule above it. The row is already a different shape to the models

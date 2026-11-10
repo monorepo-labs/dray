@@ -5,6 +5,7 @@ import CommandChip from "@/components/settings/CommandChip";
 import { CancelOrConfirm } from "@/components/settings/InRowConfirm";
 import SettingsHeaderAction from "@/components/settings/headerAction";
 import ServerSetupDialog from "@/components/settings/ServerSetupDialog";
+import { ExtendBoat } from "@/components/BoatWarnings";
 import { SpaceNameField } from "@/components/settings/SpacesSettings";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { useCopied } from "@/hooks/useCopied";
+import { AUTO_EXTEND_MINUTES, boatAsleep, resumeBoat, setBoatPrefs, useBoatPrefs } from "@/lib/boat";
 import { useLocalServer, useServers } from "@/lib/servers";
 import { invoke, listen, LOCAL } from "@/lib/transport";
 import { cn } from "@/lib/utils";
@@ -58,8 +60,11 @@ function StatusDot({ status }: { status: ServerStatus }) {
 function detailOf(server: ServerInfo): string {
   const address = server.beta ? `${server.ssh ?? server.url} · Beta` : (server.ssh ?? server.url);
   if (!server.on) return `Off · ${address}`;
+  if (server.boat?.phase === "resuming") return "Resuming… This can take a few minutes.";
+  if (server.boat?.phase === "stopped") return server.boat.note ? `Stopped · ${server.boat.note}` : "Stopped";
+  if (server.boat?.warning && server.boat.stopsAt) return `Stops in ${Math.max(1, Math.ceil((new Date(server.boat.stopsAt).getTime() - Date.now()) / 60_000))} min · ${address}`;
   if (server.status === "connecting" && server.stage) return STAGE_LABELS[server.stage];
-  if (server.status === "disconnected" && server.error) return server.error;
+  if (server.status === "disconnected" && (server.boat?.note || server.error)) return server.boat?.note ?? server.error!;
   return address;
 }
 
@@ -135,8 +140,17 @@ export default function ServersSettings() {
             onNewAddress={(url) => invoke("set_server_address", { id: server.id, url: splitConnectLine(url).url }, LOCAL)}
             on={server.on}
             onToggle={(on) => void invoke("set_server_on", { id: server.id, on }, LOCAL).catch(console.error)}
+            action={
+              server.boat?.phase === "stopped" ? (
+                <Button variant="secondary" size="sm" onClick={() => void resumeBoat(server.id).catch(console.error)}>
+                  Resume
+                </Button>
+              ) : server.boat?.warning ? (
+                <ExtendBoat id={server.id} size="sm" onFail={console.error} />
+              ) : undefined
+            }
             onRetry={
-              !server.on || server.status !== "disconnected"
+              !server.on || server.status !== "disconnected" || boatAsleep(server)
                 ? undefined
                 : server.fix?.kind === "install"
                   ? () =>
@@ -171,6 +185,7 @@ export default function ServersSettings() {
           </Row>
           </div>
         ))}
+        {servers.some((s) => s.boat) && <AutoExtendRow />}
       </div>
 
       <AddServerDialog
@@ -200,6 +215,23 @@ export default function ServersSettings() {
         />
       )}
     </>
+  );
+}
+
+/// Off by default, offered once after the first Extend; this is where it goes
+/// back off. Drawn only once a boat sandbox is on the list.
+function AutoExtendRow() {
+  const { auto } = useBoatPrefs();
+  return (
+    <div className="flex min-h-7 items-center gap-3 py-1.5 pl-4.5">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="text-ui font-medium">Keep busy sandboxes running</span>
+        <span className="text-ui text-muted-foreground">
+          Adds {AUTO_EXTEND_MINUTES} minutes when a boat sandbox is about to stop with a turn or background task running.
+        </span>
+      </div>
+      <Switch aria-label="Keep busy sandboxes running" checked={auto} onCheckedChange={(on) => setBoatPrefs({ auto: on, offered: true })} />
+    </div>
   );
 }
 
@@ -268,6 +300,22 @@ function UpdateLine({
             Restart now
           </Button>
         )}
+      </>
+    );
+  } else if (connected && server.latest && server.app) {
+    // Another Mac's Dray.app serves this, so only that app's updater moves it.
+    line = (
+      <>
+        {label(`v${server.latest} is out · update Dray on that Mac`)}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() =>
+            void invoke("ignore_server_update", { id: server.id, version: server.latest }, LOCAL).catch(console.error)
+          }
+        >
+          Ignore
+        </Button>
       </>
     );
   } else if (connected && server.latest) {
@@ -664,6 +712,12 @@ function AddServerDialog({
   const [trusting, setTrusting] = useState<TrustHost | null>(null);
   // Pressing Add starts the setup, and from then on only the buttons leave.
   const [started, setStarted] = useState(false);
+  // Which add the dialog is waiting on. Leaving bumps it, so an add that
+  // answers after Cancel writes nothing and opens nothing.
+  const run = useRef(0);
+  // That add's name on the Rust side, so Cancel stops it and no other: the
+  // `dray` CLI adds servers through the same commands.
+  const ticket = useRef<string | null>(null);
 
   useEffect(() => {
     if (!busy || !viaSsh) return;
@@ -678,7 +732,14 @@ function AddServerDialog({
     };
   }, [busy, viaSsh]);
 
-  const close = () => {
+  /// `leaving` is the reader walking away, by Cancel or a dismissal, rather
+  /// than the add finishing: an add still out is stopped, where it used to
+  /// run on and add the server after the dialog had gone.
+  const close = (leaving = false) => {
+    run.current += 1;
+    if (leaving && busy && ticket.current) {
+      void invoke("cancel_add_server", { ticket: ticket.current }, LOCAL).catch(() => undefined);
+    }
     setLine("");
     setUrl("");
     setToken("");
@@ -690,18 +751,22 @@ function AddServerDialog({
   };
 
   const add = async () => {
+    const mine = (run.current += 1);
+    const id = crypto.randomUUID();
+    ticket.current = id;
     setStarted(true);
     setBusy(true);
     setStage(null);
     setFailure(null);
     try {
       if (viaSsh) {
-        await invoke<ServerInfo>("add_ssh_server", { line, name: name.trim() || null }, LOCAL);
+        await invoke<ServerInfo>("add_ssh_server", { line, name: name.trim() || null, ticket: id }, LOCAL);
       } else {
-        await invoke<ServerInfo>("add_server", { url, token, name: name.trim() || null }, LOCAL);
+        await invoke<ServerInfo>("add_server", { url, token, name: name.trim() || null, ticket: id }, LOCAL);
       }
-      close();
+      if (run.current === mine) close();
     } catch (err) {
+      if (run.current !== mine) return;
       const failed = asFailure(err);
       if (failed.fix?.kind === "install") {
         const [l, n] = [line.trim(), name.trim()];
@@ -725,7 +790,7 @@ function AddServerDialog({
   const ready = viaSsh ? line.trim() : url.trim() && token.trim();
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && close()}>
+    <Dialog open={open} onOpenChange={(next) => !next && close(true)}>
       <DialogContent className="grid-cols-[minmax(0,1fr)]" showClose={false} dismissible={!started}>
         <DialogHeader>
           <DialogTitle>Add server</DialogTitle>
@@ -772,7 +837,7 @@ function AddServerDialog({
               </Field>
             </>
           )}
-          <Field label="Name" hint="Optional. Drawn after its projects' names in the sidebar.">
+          <Field label="Name" hint="Optional. Names this server in a session's tab and after its projects.">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="vps" />
           </Field>
           {failure && (
@@ -800,7 +865,7 @@ function AddServerDialog({
             {viaSsh ? "Use an address and token instead" : "Use an SSH login instead"}
           </Button>
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={close}>
+            <Button type="button" variant="ghost" onClick={() => close(true)}>
               Cancel
             </Button>
             <Button type="submit" disabled={busy || !ready}>

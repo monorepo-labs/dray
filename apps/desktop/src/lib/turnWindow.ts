@@ -14,32 +14,12 @@ export const FIRST_MOUNT = 8;
 /// finishes in under ten.
 export const MOUNT_STEP = 8;
 
-/// How many turns a crew strip draws, and it never mounts anything above them.
-///
-/// A different question from `FIRST_MOUNT`, which is a *cost* window — it holds
-/// the open cheap and then quietly fills the rest in, because the reader asked
-/// for the whole conversation. A crew strip is a look in on work happening
-/// elsewhere, in a 320px column beside the one the reader is actually in, so the
-/// whole conversation is not what they asked for: scrolling somebody else's
-/// transcript back through an afternoon is what ⌘-click and full view are for.
-///
-/// Two, which is the smallest number that can hold an exchange — the prompt and
-/// what came back — where one would cut between them on every other reading. A
-/// turn still running counts as one, so a strip watching a live session shows
-/// the work landing under the prompt that asked for it.
-///
-/// Counting *rows* instead was built and cut. It reads better on paper: a turn
-/// is unbounded, so two of them is no cap at all on a session that ran forty
-/// tool calls. But the cut then lands mid-turn, and a fragment of somebody
-/// else's work with no prompt over it answers none of the question a strip is
-/// there for.
-export const CREW_TAIL = 2;
-
-/// The window is the index of the oldest mounted turn, not a count from the
-/// end. A count would re-anchor on every turn the live session appends —
-/// evicting the oldest mounted turn until the next step put it back, losing
-/// its expansion state and shifting an unpinned reader's view. An index only
-/// ever moves down, and a turn appended at the end is inside the window by
+/// The window starts at the oldest mounted turn, not a count from the end. A
+/// count would re-anchor on every turn the live session appends — evicting the
+/// oldest mounted turn until the next step put it back, losing its expansion
+/// state and shifting an unpinned reader's view. `Chat` holds that turn by key
+/// and finds its index each render, since a page of older turns landing above
+/// shifts every index; a turn appended at the end is inside the window by
 /// construction.
 export function firstMount(total: number): number {
   return Math.max(0, total - FIRST_MOUNT);

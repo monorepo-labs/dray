@@ -131,9 +131,10 @@ function unwrapArgs(args: Rec): { args: Rec; server: ServerId | null } {
 }
 
 /// Commands that name a session but act on this Mac — its browser tabs, its
-/// banners, the island's pick — and so never follow the session to its server.
+/// banners, the island's pick and its done pill — and so never follow the
+/// session to its server.
 const onThisMac = (cmd: string): boolean =>
-  cmd.startsWith("browser_") || cmd === "notify_session" || cmd === "set_app_selection";
+  cmd.startsWith("browser_") || ["notify_session", "set_app_selection", "island_done"].includes(cmd);
 
 /// What the app answers itself: the browser, dictation, banners, the updater,
 /// the server list, opening apps and terminals. Every other local command goes
@@ -155,6 +156,7 @@ export const APP_COMMANDS = new Set([
   "check_server_update",
   "forward_port",
   "add_ssh_server",
+  "cancel_add_server",
   "set_server_on",
   "rename_server",
   "set_server_address",
@@ -164,6 +166,8 @@ export const APP_COMMANDS = new Set([
   "run_server_login",
   "run_gh_login",
   "upload_attachment",
+  "resume_boat",
+  "extend_boat",
   "paste_attachments",
   "read_file",
   "browser_open",
@@ -191,6 +195,7 @@ export const APP_COMMANDS = new Set([
   "configure_island",
   "island_running",
   "set_app_selection",
+  "idle_seconds",
   "island_done",
   "island_prefs",
   "set_island_pref",

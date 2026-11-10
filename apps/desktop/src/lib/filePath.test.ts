@@ -108,8 +108,8 @@ describe("findFilePaths", () => {
   });
 
   /// `file_path:line_number` is what this app's own harness prompt asks for, so
-  /// it is the commonest shape a path takes in a transcript. The number cannot
-  /// reach the editor through `open -a`, so it stays prose.
+  /// it is the commonest shape a path takes in a transcript. The locator is no
+  /// part of the file, so `path` comes back without it.
   it("drops a line locator, keeping the path", () => {
     expect(paths("fix /a/b.ts:12 now")).toEqual(["/a/b.ts"]);
     expect(paths("fix /a/b.ts:12:5 now")).toEqual(["/a/b.ts"]);
@@ -127,6 +127,13 @@ describe("findFilePaths", () => {
     expect(match).toMatchObject({ path: "/a/b.ts", line: 12 });
     expect(findFilePaths("fix /a/b.ts#L7")[0].line).toBe(7);
     expect(findFilePaths("fix /a/b.ts now")[0].line).toBeUndefined();
+  });
+
+  /// A range is what an agent cites a block with. Left unread, the range stayed
+  /// in the path and the link named a file that does not exist.
+  it("reads a line range as its first line", () => {
+    expect(findFilePaths("see /a/b.ts:12-20 there")[0]).toMatchObject({ path: "/a/b.ts", line: 12 });
+    expect(findFilePaths("see /a/b.ts#L12-L20 there")[0]).toMatchObject({ path: "/a/b.ts", line: 12 });
   });
 
   /// The locator strip runs before the path is judged, so what is left of a

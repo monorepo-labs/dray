@@ -34,6 +34,8 @@ pub mod cef;
 pub mod chromium;
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 mod trackpad;
+#[cfg(all(feature = "desktop", target_os = "macos"))]
+mod cli;
 // `dray browser` on a server: a headless Chromium under the same verbs the
 // Mac's CEF answers. In the desktop build too, since that binary is also the
 // Mac's background server. See HEADLESS-PLAN.md.
@@ -66,17 +68,22 @@ pub mod projects;
 pub mod quit;
 #[cfg(feature = "desktop")]
 pub mod launchd;
-// The desktop app serves too, behind Remote access (remote_access.rs).
+// The desktop binary is the Mac's server too, run with `--serve`.
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod serve;
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod remote_access;
+// Every server reaches other machines on its own (#760).
+#[cfg(any(feature = "serve", feature = "desktop"))]
+pub mod machines;
+#[cfg(feature = "desktop")]
+pub mod boat;
 #[cfg(feature = "desktop")]
 pub mod servers;
 pub mod session;
 pub mod share;
 pub mod tunnel;
-#[cfg(feature = "desktop")]
+#[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod ssh;
 pub mod settings;
 pub mod sink;
@@ -110,8 +117,12 @@ pub fn is_server() -> bool {
 
 /// Spawns onto the async runtime from anywhere, including a thread that is
 /// not one of its workers — CEF's main thread calls `analytics::track`.
-/// Tauri's runtime is global for that reason; the server only ever calls from
-/// inside its own.
+/// Tauri's runtime is global for that reason.
+///
+/// The server's is not, and one caller there is off it: the panic hook reports
+/// through here from whichever thread panicked. `tokio::spawn` panics with no
+/// runtime entered, and a panic inside the hook aborts the process — every
+/// running agent with it — so such a task is dropped instead.
 pub fn spawn<F>(task: F)
 where
     F: std::future::Future + Send + 'static,
@@ -120,7 +131,9 @@ where
     #[cfg(feature = "desktop")]
     tauri::async_runtime::spawn(task);
     #[cfg(not(feature = "desktop"))]
-    tokio::spawn(task);
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        runtime.spawn(task);
+    }
 }
 
 /// A command's failure as the frontend sees it: the outermost message, as a
@@ -206,12 +219,13 @@ async fn send_msg(
 
     // Reported here rather than inside `SessionManager::send_msg`, which is the
     // chokepoint for *prompts* and not for people: the orchestration socket
-    // reaches that function directly, both to relay a `dray send` and to start
-    // a session `dray new` asked for, and an agent finishing at 3am would mark
-    // the day active with nobody in the room. A Tauri command is reachable from
-    // the webview alone, so getting here means somebody pressed send. Not for
-    // another Mac's app sending here: that reader was active on their own
-    // install, not this one.
+    // reaches that function directly, both to relay a `dray session send` and
+    // to start a session `dray session new` asked for, and an agent finishing
+    // at 3am would mark the day active with nobody in the room. Only a client
+    // somebody is typing into reaches this command — the app, the island, a
+    // phone — so getting here means somebody pressed send. Not for another
+    // Mac's app sending here: that reader was active on their own install, not
+    // this one.
     if !analytics::client_counts() {
         analytics::track_active_day();
     }
@@ -302,23 +316,17 @@ async fn agent_availability() -> Vec<AgentAvailability> {
 /// What to say about an agent that cannot run, and whether the install command
 /// is what fixes it.
 ///
-/// Three answers wearing one word before this, and each wants a different cure.
-/// A CLI that is not on the machine is fixed by installing it. One that is
-/// present and too old is fixed by *re-running* the same installer, so the
-/// buttons still help — but a sentence saying "not installed" tells the reader
-/// to fix something they already have. And a harness this build cannot drive
-/// yet is fixed by neither, so it draws the sentence alone: sending someone to
-/// an installer for a CLI that is sitting right there is the worst of the
-/// three.
+/// Two answers, each with its own cure. A CLI that is not on the machine — or
+/// a Codex too old to speak `app-server`, which resolves the same way — is
+/// fixed by the installer, so the buttons ride along. One that is installed
+/// draws the sentence alone, since an installer for a CLI sitting right there
+/// cures nothing; every harness in `Harness::ALL` is drivable today, so that
+/// one is built for each installed agent and drawn for none.
 async fn unavailable_reason(harness: harness::Harness) -> (String, bool) {
     let label = harness.label();
 
-    // Asked before drivability, and the order is the whole of it. A CLI that is
-    // not on the machine is missing whatever this build could do with it, and
-    // the install command is the answer — the same one Claude and Codex give.
-    // Checking drivability first told a reader with no pi at all that Dray
-    // cannot run pi, which is true, useless, and hides the one thing they could
-    // have done about it.
+    // Asked first: a CLI that is not on the machine is missing whatever this
+    // build could do with it, and the install command is the answer.
     if !binpath::agent_installed(harness).await {
         return (
             format!("{label} isn't installed, so this session can't start."),
@@ -571,18 +579,22 @@ async fn set_session_flags(
     pinned: Option<bool>,
     hidden: Option<bool>,
     aside: Option<bool>,
+    sink: Sink,
 ) -> Result<Option<SessionIndexItem>, Fail> {
     let updated = store::set_session_flags(session_id, archived, pinned, hidden, aside).await?;
     if updated.is_none() {
         return Ok(None);
     }
-    // A hidden child settles and unsettles with its parent, since only the
-    // parent's crew draws it. Here off the whole index, where the frontend
+    // A hidden child settles and unsettles with its parent, since nothing on
+    // screen lists it. Here off the whole index, where the frontend
     // holds one side of the split and can miss a child on the other.
     let mut settling = vec![session_id.to_string()];
     if let Some(archived) = archived {
         settling.extend(store::archive_hidden_descendants(session_id, archived).await?);
     }
+    // The answer reaches the caller alone, and a server has other clients.
+    // Ahead of the stop, which can take seconds.
+    orchestration::announce_change(&settling, &sink).await;
     if archived == Some(true) {
         for id in &settling {
             if let Err(e) = manager().settle(id).await {
@@ -658,8 +670,9 @@ async fn stop_task(
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn cancel_queued(
     session_id: &str,
+    sink: Sink,
 ) -> Result<Option<QueuedMessage>, Fail> {
-    Ok(manager().cancel_queued(session_id).await)
+    Ok(manager().cancel_queued(session_id, &sink).await)
 }
 
 /// Answers a permission request the agent is blocked on. `option_id` names one
@@ -759,6 +772,16 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // The configured scope names every home but one `DRAY_HOME` moved.
+            // Both things the webview loads from disk: recordings alone left
+            // every sent and tool-returned image broken under a moved home.
+            if let Some(home) = store::home_override() {
+                for dir in ["browser/recordings", "attachments"] {
+                    let dir = home.join(dir);
+                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = app.asset_protocol_scope().allow_directory(&dir, true);
+                }
+            }
             // Chromium first: it patches NSApp and starts its pump, and every
             // window already exists here for it to parent a view into.
             #[cfg(all(feature = "cef", target_os = "macos"))]
@@ -771,6 +794,8 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.remove_menu();
             }
+            #[cfg(target_os = "macos")]
+            cli::install();
             // Dictations kept past a failure. Pruning on write alone left the
             // last one on disk forever, since nothing else sweeps them and a
             // reader who gives up after one failure writes no more.
@@ -810,6 +835,11 @@ pub fn run() {
             // `drayserver://localhost/?server=<id>&path=<path>`: a remote
             // server's file, fetched with its token in a header.
             let query = request.uri().query().unwrap_or_default().to_string();
+            let range = request
+                .headers()
+                .get(tauri::http::header::RANGE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
             tauri::async_runtime::spawn(async move {
                 let (mut server, mut path) = (String::new(), String::new());
                 for (key, value) in form_urlencoded::parse(query.as_bytes()) {
@@ -819,10 +849,26 @@ pub fn run() {
                         _ => {}
                     }
                 }
-                let response = match servers::fetch_file(&server, &path).await {
-                    Ok((kind, body)) => tauri::http::Response::builder()
-                        .header("Content-Type", kind)
-                        .body(body),
+                let fetched = match range {
+                    Some(range) => servers::fetch_range(&server, &path, &range).await,
+                    None => servers::fetch_file(&server, &path).await.map(|(kind, body)| servers::FetchedFile {
+                        status: 200,
+                        kind,
+                        content_range: None,
+                        body,
+                    }),
+                };
+                let response = match fetched {
+                    Ok(file) => {
+                        let mut response = tauri::http::Response::builder()
+                            .status(file.status)
+                            .header("Content-Type", file.kind)
+                            .header("Accept-Ranges", "bytes");
+                        if let Some(content_range) = file.content_range {
+                            response = response.header("Content-Range", content_range);
+                        }
+                        response.body(file.body)
+                    }
                     Err(e) => {
                         eprintln!("[drayserver {server}] {path}: {e}");
                         tauri::http::Response::builder().status(404).body(Vec::new())
@@ -851,6 +897,7 @@ pub fn run() {
             servers::check_server_update,
             servers::forward_port,
             servers::add_ssh_server,
+            servers::cancel_add_server,
             servers::set_server_on,
             servers::rename_server,
             servers::set_server_address,
@@ -860,6 +907,8 @@ pub fn run() {
             servers::run_server_login,
             servers::run_gh_login,
             servers::upload_attachment,
+            servers::resume_boat,
+            servers::extend_boat,
             attachments::paste_attachments,
             // Here and not on the server: a video plays through this
             // webview's asset protocol, which only this process can widen.
@@ -904,6 +953,7 @@ pub fn run() {
             apps::configure_island,
             apps::island_running,
             apps::set_app_selection,
+            apps::idle_seconds,
             apps::island_done,
             apps::island_prefs,
             apps::set_island_pref,

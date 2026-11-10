@@ -144,6 +144,12 @@ describe("highlightSegments", () => {
       { kind: "url", text: "https://en.wikipedia.org/wiki/Foo_(bar)", href: "https://en.wikipedia.org/wiki/Foo_(bar)" },
       { kind: "text", text: ")" },
     ]);
+    // The dot sits inside the paren, so one strip of each kind left it on.
+    expect(highlightSegments("(see https://example.com/docs.)")).toEqual([
+      { kind: "text", text: "(see " },
+      { kind: "url", text: "https://example.com/docs", href: "https://example.com/docs" },
+      { kind: "text", text: ".)" },
+    ]);
     expect(highlightSegments("nothttps://x.y and http:// alone")).toEqual([
       { kind: "text", text: "nothttps://x.y and http:// alone" },
     ]);
@@ -234,6 +240,15 @@ describe("highlightSegments", () => {
     expect(highlightSegments("channel#DRA-1")).toEqual([
       { kind: "text", text: "channel#DRA-1" },
     ]);
+  });
+
+  /// Rust trims brackets off the front of a whitespace token only, so a
+  /// bracket in the middle of one opens nothing there and must not here.
+  it("leaves a tag behind a bracket mid-word plain", () => {
+    expect(highlightSegments("call(#DRA-53) now")).toEqual([
+      { kind: "text", text: "call(#DRA-53) now" },
+    ]);
+    expect(highlightSegments('say ("#DRA-53") now').some((s) => s.kind === "issue")).toBe(true);
   });
 
   it("marks the inline runs, delimiters kept on the segment", () => {
@@ -493,6 +508,29 @@ describe("withPaths", () => {
   });
 });
 
+
+describe("findPromptPaths under-matches", () => {
+  const found = (text: string) => findPromptPaths(text).map((m) => m.path);
+
+  // The scan splits at an opener, so these used to link the half after it.
+  it("links nothing for a path holding a bracketed segment", () => {
+    expect(found("see apps/web/src/app/[slug]/page.tsx now")).toEqual([]);
+    expect(found("see apps/web/src/app/(marketing)/page.tsx now")).toEqual([]);
+  });
+
+  it("links nothing for a path anchored outside the cwd", () => {
+    expect(found("read ~/.dray/parse_failures.jsonl after")).toEqual([]);
+    expect(found("read $HOME/x/a.ts after")).toEqual([]);
+  });
+
+  it("links nothing for a flag's value", () => {
+    expect(found("run --filter=apps/web/x.ts")).toEqual([]);
+  });
+
+  it("still links a bracketed path whole", () => {
+    expect(found("open (src/a.ts) and [src/b.ts]")).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+});
 
 describe("findPromptPaths overlap", () => {
   const round = (text: string) =>

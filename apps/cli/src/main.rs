@@ -15,8 +15,8 @@ mod machine;
 mod setup;
 use draft::DraftCommand;
 use dray_proto::{
-    encode_line, BrowserAction, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
-    LinkIssues, ListSessions, Locator, RenameSession, Request, Response, SendMessage, SessionRef,
+    encode_line, AddVideo, BrowserAction, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
+    LinkIssues, ListSessions, Locator, OnMachine, RenameSession, Request, Response, SendMessage, SessionRef,
     SessionSummary, SetAside, SettleSession, ShareAction, ShareRequest,
 };
 use std::io::{BufRead, BufReader, ErrorKind, Write};
@@ -44,7 +44,15 @@ const INSTALLER_URL: &str = "https://www.drayhq.com/install.sh";
 struct Cli {
     #[command(subcommand)]
     command: Command,
+
+    /// Run this on another machine, as `dray machine ls` names it. `session ls` also takes `all`. A session id finds its
+    /// machine on its own.
+    #[arg(long, global = true, value_name = "NAME")]
+    machine: Option<String>,
 }
+
+/// `--machine`, read by [`send`] so every request can carry it.
+static MACHINE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 #[derive(Subcommand)]
 enum Command {
@@ -59,11 +67,14 @@ enum Command {
     Draft(DraftCommand),
     /// Drive this session's browser: open pages, read them, click and type.
     Browser(BrowserCommand),
+    /// Put a video where this session's chat plays it.
+    #[command(subcommand, arg_required_else_help = true)]
+    Video(VideoCommand),
     /// Publish one of this session's dev servers as a public link, list the
     /// live ones, or stop one.
     #[command(arg_required_else_help = true, args_conflicts_with_subcommands = true)]
     Share(ShareArgs),
-    /// The machines the app connects to: add, list, rename, connect, remove.
+    /// The machines this one reaches: add, list, rename, connect, remove.
     #[command(subcommand, arg_required_else_help = true)]
     Machine(machine::MachineCommand),
     /// This machine's Dray server: install, start, stop, run in the foreground.
@@ -359,9 +370,29 @@ enum ShareCommand {
 }
 
 #[derive(Subcommand)]
+enum VideoCommand {
+    /// File a video on this machine for the chat, converting it to MP4 if it
+    /// needs it, and print the path to put in your reply.
+    Add(VideoAdd),
+}
+
+#[derive(Args)]
+struct VideoAdd {
+    /// The video. It must be on this machine: copy one made elsewhere here first.
+    file: PathBuf,
+    /// What to call it, since the file travels by its name. Defaults to the
+    /// file's own.
+    name: Option<String>,
+    /// The session whose chat it plays in. Defaults to the session running this
+    /// command.
+    #[arg(long)]
+    session: Option<String>,
+}
+
+#[derive(Subcommand)]
 enum SkillCommand {
-    /// Write the skill to ~/.claude/skills/dray/ and ~/.codex/skills/dray/,
-    /// where Claude Code and Codex find it.
+    /// Write the skill to ~/.claude/skills/dray/, ~/.codex/skills/dray/ and
+    /// ~/.agents/skills/dray/, where Claude Code, Codex and pi find it.
     Install,
 }
 
@@ -376,12 +407,31 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    if let Some(machine) = cli.machine {
+        // These act on this machine, or on nothing a server answers.
+        if !matches!(
+            cli.command,
+            Command::Session(_)
+                | Command::Issue(_)
+                | Command::Draft(_)
+                | Command::Browser(_)
+                | Command::Share(_)
+                | Command::New(_)
+                | Command::Ls(_)
+                | Command::Send(_)
+        ) {
+            return Err("--machine takes session, draft, issue, browser and share commands".into());
+        }
+        let _ = MACHINE.set(machine);
+    }
+    match cli.command {
         Command::Session(command) => session(command),
         Command::Issue(IssueCommand::Link(args)) => link_issues(args, false),
         Command::Issue(IssueCommand::Unlink(args)) => link_issues(args, true),
         Command::Draft(command) => draft::run(command),
         Command::Browser(args) => browser(args),
+        Command::Video(VideoCommand::Add(args)) => add_video(args),
         Command::Share(args) => share(args),
         Command::Machine(command) => machine::run(command),
         Command::Server(command) => setup::server(command),
@@ -464,8 +514,9 @@ fn new(args: New) -> Result<(), String> {
             // usable; everything a human wants goes to stderr beside it.
             println!("{}", session.session_id);
             eprintln!(
-                "Started \"{}\"{}{}",
+                "Started \"{}\"{}{}{}",
                 session.title,
+                on_machine(&session),
                 match &session.worktree_name {
                     Some(name) => format!(" in worktree {name}"),
                     None => String::new(),
@@ -588,6 +639,31 @@ fn browser(args: BrowserCommand) -> Result<(), String> {
             } else {
                 println!("{output}");
             }
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
+    }
+}
+
+/// Resolved here, not by the server: a relative path means this shell's
+/// directory, and the server stands in another.
+fn add_video(args: VideoAdd) -> Result<(), String> {
+    let session_id = args
+        .session
+        .or_else(parent_session_id)
+        .ok_or("which session? Pass --session <id>, or run this from inside a Dray session.")?;
+    let path = std::fs::canonicalize(&args.file).map_err(|e| {
+        format!("{}: {e}. A video made on another machine has to be copied here first.", args.file.display())
+    })?;
+    let request = Request::AddVideo(AddVideo {
+        session_id,
+        path: path.to_string_lossy().into_owned(),
+        name: args.name,
+    });
+    match send(request)? {
+        Response::Video { path } => {
+            println!("{path}");
             Ok(())
         }
         Response::Error { message } => Err(message),
@@ -915,8 +991,9 @@ fn print_table(sessions: &[SessionSummary]) {
             .map(|id| format!("  spawned by {id}"))
             .unwrap_or_default();
         let hidden = if s.hidden { "  hidden" } else { "" };
+        let machine = on_machine(s);
         println!(
-            "{}  {:<12} {:<40.40}  {:<24}{parent}{hidden}",
+            "{}  {:<12} {:<40.40}  {:<24}{parent}{hidden}{machine}",
             s.session_id,
             s.status,
             s.title,
@@ -931,6 +1008,14 @@ fn print_table(sessions: &[SessionSummary]) {
 /// into a shell a failed download runs an empty script and reports success.
 /// curl or wget, the pair the installer itself accepts.
 fn update(args: Update) -> Result<(), String> {
+    // The app writes the CLI it ships to ~/.local/bin on every launch, so an
+    // update here would fight it: undone at the next launch, and until then
+    // a CLI the app was not released beside. A server on its own `DRAY_HOME`
+    // still updates its `dray-serve` here.
+    if setup::app_runs_this_home() {
+        eprintln!("The Dray app keeps this CLI up to date. Update the app to update it.");
+        return Ok(());
+    }
     let exe = std::env::current_exe()
         .map_err(|e| format!("could not find the running dray binary: {e}"))?;
     let dir = exe
@@ -952,19 +1037,29 @@ fn update(args: Update) -> Result<(), String> {
     .env("DRAY_UPDATING", "1")
     .env("DRAY_CHANNEL", args.channel.as_deref().unwrap_or(own_channel()));
 
-    if args.force {
+    let current = if setup::app_on_this_mac() { serve_tag_beside(dir) } else { Some(current_tag()) };
+    match current.filter(|_| !args.force) {
+        Some(tag) => {
+            sh.env("DRAY_CURRENT_VERSION", tag);
+        }
         // Cleared rather than left alone, or a value the caller exported makes
         // the flag do nothing.
-        sh.env_remove("DRAY_CURRENT_VERSION");
-    } else {
-        sh.env("DRAY_CURRENT_VERSION", current_tag());
+        None => {
+            sh.env_remove("DRAY_CURRENT_VERSION");
+        }
     }
+
+    // The installer exits 0 on "already installed" too, so success alone says
+    // nothing about the server being left behind. A replaced binary does.
+    let serve = dir.join("dray-serve");
+    let stamp = || std::fs::metadata(&serve).and_then(|meta| meta.modified()).ok();
+    let before = stamp();
 
     match sh.status() {
         Ok(status) if status.success() => {
             // Not restarted for the reader: that stops every agent running on
             // it, and the usual caller here is one of those agents.
-            if let Some(restart) = setup::installed_restart() {
+            if let Some(restart) = setup::installed_restart().filter(|_| stamp() != before) {
                 eprintln!(
                     "The background server runs the old version until restarted, which \
                      stops running agents: {restart}"
@@ -975,6 +1070,27 @@ fn update(args: Update) -> Result<(), String> {
         Ok(status) => Err(format!("the installer failed ({status})")),
         Err(e) => Err(format!("could not run the installer: {e}")),
     }
+}
+
+/// The release the `dray-serve` beside this binary was built as, for a Mac with
+/// the app: its launches rewrite `dray` and never `dray-serve`, so this binary's
+/// version would stop the installer at "already current" with the server left
+/// behind. No `dray-serve` there is no pair to keep, so this binary's tag; one
+/// too old to say is reinstalled.
+fn serve_tag_beside(dir: &std::path::Path) -> Option<String> {
+    let serve = dir.join("dray-serve");
+    if !serve.exists() {
+        return Some(current_tag());
+    }
+    let out = std::process::Command::new(serve)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let version = String::from_utf8_lossy(&out.stdout);
+    let version = version.trim().strip_prefix("dray-serve ")?;
+    (out.status.success() && version != "dev").then(|| format!("cli-v{version}"))
 }
 
 /// The release tag this binary was built as — the one fact the installer cannot
@@ -1057,9 +1173,19 @@ fn connect_failure(error: &std::io::Error, endpoint: &str) -> String {
     }
 }
 
-/// One request, one response, connection closed.
+/// `" on <machine>"` for a session another machine runs, else nothing.
+fn on_machine(session: &SessionSummary) -> String {
+    session.machine.as_deref().map(|m| format!(" on {m}")).unwrap_or_default()
+}
+
+/// One request, one response, connection closed. With `--machine` the request
+/// rides inside `on_machine`, and this machine's server carries it there.
 fn send(request: Request) -> Result<Response, String> {
     let endpoint = dray_proto::endpoint().ok_or("could not work out where Dray is listening")?;
+    let request = match MACHINE.get() {
+        Some(machine) => Request::OnMachine(OnMachine { machine: machine.clone(), request: Box::new(request) }),
+        None => request,
+    };
     send_to(&endpoint, request)
 }
 
@@ -1149,6 +1275,14 @@ fn parent_session_id() -> Option<String> {
 /// session's own project, and only refuses when there is no parent either.
 fn resolve_project(explicit: Option<PathBuf>) -> Option<String> {
     if let Some(path) = explicit {
+        // Made absolute here, as `add_video` resolves its file: a relative
+        // path means this shell's directory, and the server stands in another
+        // — under launchd that is `/`, so `--project .` matched no session.
+        // Left as typed for another machine, where the path is that machine's.
+        let path = match MACHINE.get() {
+            None => std::path::absolute(&path).unwrap_or(path),
+            Some(_) => path,
+        };
         return Some(path.to_string_lossy().into_owned());
     }
 
@@ -1205,6 +1339,28 @@ fn main_worktree(porcelain: &str) -> Option<String> {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    /// A wrong answer either stops the installer with the server left behind
+    /// or lets leaving beta downgrade it.
+    #[test]
+    fn hands_the_installer_the_servers_version() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("dray-serve-tag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(serve_tag_beside(&dir), Some(current_tag()), "no server: no pair");
+
+        let serve = dir.join("dray-serve");
+        let answer = |script: &str| {
+            std::fs::write(&serve, format!("#!/bin/sh\n{script}\n")).unwrap();
+            std::fs::set_permissions(&serve, std::fs::Permissions::from_mode(0o755)).unwrap();
+            serve_tag_beside(&dir)
+        };
+        assert_eq!(answer("echo 'dray-serve 0.14.0-beta.1'").as_deref(), Some("cli-v0.14.0-beta.1"));
+        assert_eq!(answer("echo 'dray-serve dev'"), None, "a local build says nothing");
+        assert_eq!(answer("echo usage >&2; exit 2"), None, "too old to answer");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     /// Collapses every run of whitespace to one space, so an assertion about
     /// prose cannot fail over a line break.
@@ -1451,12 +1607,20 @@ mod tests {
         for group in ["session", "server", "machine", "share", "draft"] {
             assert_eq!(parses(&["dray", group]), help, "{group}");
         }
-        let Ok(Cli { command: Command::Session(SessionCommand::New(new)) }) =
+        let Ok(Cli { command: Command::Session(SessionCommand::New(new)), .. }) =
             Cli::try_parse_from(["dray", "session", "new", "x", "--from", "main"])
         else {
             panic!("not a create");
         };
         assert_eq!(new.base.as_deref(), Some("main"));
+        // Global, so it reads after the verb as well as before it.
+        for argv in [
+            &["dray", "--machine", "vps", "session", "ls"][..],
+            &["dray", "session", "send", "id", "hi", "--machine", "vps"],
+        ] {
+            let cli = Cli::try_parse_from(argv).unwrap();
+            assert_eq!(cli.machine.as_deref(), Some("vps"), "{argv:?}");
+        }
     }
 
     #[test]

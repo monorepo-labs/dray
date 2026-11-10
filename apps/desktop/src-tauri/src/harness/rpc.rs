@@ -112,6 +112,16 @@ impl<K: Eq + Hash, E: Display> Pending<K, E> {
         }
     }
 
+    /// Fails every waiter at once, for a child whose stdout has ended.
+    ///
+    /// Dropping the senders is what answers them: `wait` reads a dropped sender
+    /// as "exited". The map is shared with every clone of the client, so the
+    /// child going took nothing with it, and a request in flight sat out its
+    /// whole timeout — under the session's lock, with Stop and sends behind it.
+    pub fn fail_all(&self) {
+        self.0.lock().unwrap().clear();
+    }
+
     /// Waits on a registered slot, up to `timeout`. `what` names the request
     /// and `who` the child, for the sentence a failure carries.
     pub async fn wait(
@@ -125,8 +135,8 @@ impl<K: Eq + Hash, E: Display> Pending<K, E> {
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(Ok(value))) => Ok(value),
             Ok(Ok(Err(err))) => bail!("{what} failed: {err}"),
-            // The sender was dropped without answering, which only happens when
-            // the child died and took the pending map with it.
+            // The sender was dropped without answering: the read loop reached
+            // the end of the child's output and called `fail_all`.
             Ok(Err(_)) => bail!("{what} was never answered — {who} exited"),
             // Giving up on the answer has to give up the slot too, or an
             // unresponsive child leaks one entry per attempt.
@@ -140,5 +150,31 @@ impl<K: Eq + Hash, E: Display> Pending<K, E> {
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.0.lock().unwrap().is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The read loop ending is the only notice a waiter gets that its child is
+    /// gone. It must hear at once, in the "exited" words, and not sit out a
+    /// timeout holding the session's lock.
+    #[tokio::test]
+    async fn a_waiter_learns_the_child_exited_without_waiting_out_its_timeout() {
+        let pending: Pending<i64, String> = Pending::new();
+        let rx = pending.register(7);
+
+        pending.fail_all();
+        assert!(pending.is_empty());
+
+        let err = tokio::time::timeout(
+            Duration::from_secs(1),
+            pending.wait(&7, rx, Duration::from_secs(30), "turn/start", "the agent"),
+        )
+        .await
+        .expect("the wait ended at once")
+        .unwrap_err();
+        assert!(err.to_string().contains("the agent exited"), "{err}");
     }
 }

@@ -17,7 +17,8 @@ called out where they matter (§7, §9). That is the whole reason the live pair
 exists: a design written against the stub alone would have derived the context
 ring from streamed usage that a real provider leaves at zero.
 
-No harness code is written yet. This is the design.
+This is the design as written before any harness code; the harness has since
+shipped under `src-tauri/src/harness/pi/`.
 
 ## What the live captures corrected
 

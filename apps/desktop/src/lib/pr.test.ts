@@ -315,6 +315,8 @@ describe("isSettling", () => {
   it("is true only while something can still change by itself", () => {
     expect(isSettling(pr({ checks: [check("pending")] }))).toBe(true);
     expect(isSettling(pr({ mergeable: "UNKNOWN" }))).toBe(true);
+    // The panel reads "Checking mergeability…" for this one too.
+    expect(isSettling(pr({ mergeable: "MERGEABLE", mergeStateStatus: "UNKNOWN" }))).toBe(true);
     expect(isSettling(pr({ checks: [check("success")] }))).toBe(false);
     // A closed PR's pending check will never report.
     expect(isSettling(pr({ state: "CLOSED", checks: [check("pending")] }))).toBe(false);

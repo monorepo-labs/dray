@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Markdown } from "@/components/chat/Markdown";
 import { Button } from "@/components/ui/button";
+import { useCardKeys } from "@/lib/cardKeys";
+import { cn } from "@/lib/utils";
 import type { PermissionOption, PermissionOptionKind } from "@/types/events";
 
 /// Ordered by how much they grant, which is not the order the CLI suggests them
@@ -37,6 +39,7 @@ export default function PermissionRequest({
   options,
   onRespond,
   onViewPlan,
+  keyRank,
 }: {
   /// The agent's own summary of the call. Filled in upstream when the harness
   /// sends none, so it is never empty.
@@ -54,11 +57,35 @@ export default function PermissionRequest({
   /// is one question rather than two — a card carrying a plan is exactly the
   /// card whose description was written as one.
   onViewPlan?: () => void;
+  /// Answers number keys and Return pressed outside a text field — see
+  /// [useCardKeys]. Undefined takes no keys.
+  keyRank?: number;
 }) {
   // Never cleared: the reply is one-shot in the backend, so a second click has
   // nothing to answer. This keeps the buttons from inviting one during the round
   // trip that mints the decision event.
   const [sent, setSent] = useState<string | null>(null);
+  const sorted = [...options].sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
+  // Return alone is Allow once: the answer that commits to nothing past this
+  // call. Numbers move the pick.
+  const [picked, setPicked] = useState(() => options.find((o) => o.kind === "once")?.id ?? null);
+  const respond = (id: string) => {
+    setSent(id);
+    onRespond(id);
+  };
+
+  const cardRef = useRef<HTMLDivElement>(null);
+  const { owns, contested } = useCardKeys(cardRef, sent === null ? keyRank : undefined, (e) => {
+    if (e.key === "Enter") {
+      if (!picked) return false;
+      respond(picked);
+      return true;
+    }
+    const option = sorted[Number(e.key) - 1];
+    if (!option) return false;
+    setPicked(option.id);
+    return true;
+  });
 
   return (
     // `--card`, the app's one surface-above-the-page token, rather than a wash
@@ -73,7 +100,14 @@ export default function PermissionRequest({
     // holding the one question in the transcript that blocks the agent is the
     // wrong way round: it has to read as sitting above the conversation rather
     // than as another row in it.
-    <div className="rounded-2xl border border-border bg-card p-4 shadow-(--shadow-card)">
+    // Ringed only while another card is up too, to say which one the keys reach.
+    <div
+      ref={cardRef}
+      className={cn(
+        "rounded-2xl border border-border bg-card p-4 shadow-(--shadow-card)",
+        owns && contested && "ring-2 ring-ring/50",
+      )}
+    >
       {/* Outlined rather than filled: the card already sits on a raised
           surface, and a second fill inside it reads as a third. */}
       {argument && (
@@ -120,9 +154,7 @@ export default function PermissionRequest({
             View plan
           </Button>
         )}
-        {[...options]
-          .sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind])
-          .map((option) => (
+        {sorted.map((option, i) => (
             <Button
               key={option.id}
               size="sm"
@@ -132,15 +164,20 @@ export default function PermissionRequest({
               // comment above promises. Wrapping inside the button is what
               // keeps the subject readable; truncating would hide the half of
               // the label that says what is being granted.
-              className="h-auto min-h-7 max-w-full py-1 text-left wrap-anywhere whitespace-normal"
+              className={cn(
+                "h-auto min-h-7 max-w-full py-1 text-left wrap-anywhere whitespace-normal",
+                owns && picked === option.id && "ring-2 ring-ring/60 ring-offset-1 ring-offset-card",
+              )}
               variant={optionVariant(option.kind)}
               disabled={sent !== null}
-              onClick={() => {
-                setSent(option.id);
-                onRespond(option.id);
-              }}
+              onClick={() => respond(option.id)}
             >
               {option.label}
+              {owns && i < 9 && (
+                <span aria-hidden className="ml-0.5 font-mono text-[0.625rem] opacity-60">
+                  {i + 1}
+                </span>
+              )}
             </Button>
           ))}
       </div>

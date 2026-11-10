@@ -182,6 +182,9 @@ fn dev_framework() -> Option<PathBuf> {
     paths().filter(|p| p.framework.starts_with(&p.helpers)).map(|p| p.framework)
 }
 
+/// See the headless module's: this Chromium reads CSS pixels under a recording's override.
+const INPUT_IN_DEVICE_PIXELS: bool = false;
+
 /// A dev build's profile root is in its own home, as its socket is:
 /// Chromium holds a singleton lock on the root, so a dev build sharing the
 /// release app's, or another worktree's, would fail to initialize and exit
@@ -1593,15 +1596,15 @@ wrap_load_handler! {
             });
         }
 
-        /// The main frame leaving its document takes the picker's script
-        /// with it. Judged here and not on the loading state, which reports
-        /// the whole browser: an iframe loading would disarm a picker whose
-        /// document is still there.
         fn on_load_end(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _http_status_code: ::std::os::raw::c_int) {
             let Some(frame) = frame.filter(|f| f.is_main() != 0) else { return };
             frame.execute_java_script(Some(&CefString::from(BG_JS)), None, 0);
         }
 
+        /// The main frame leaving its document takes the picker's script
+        /// with it. Judged here and not on the loading state, which reports
+        /// the whole browser: an iframe loading would disarm a picker whose
+        /// document is still there.
         fn on_load_start(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
             if !frame.map(|f| f.is_main() != 0).unwrap_or(false) {
                 return;
@@ -1737,6 +1740,24 @@ wrap_keyboard_handler! {
             }
             1
         }
+
+        /// Keeps a characterless keydown the page left unhandled away from
+        /// the menu bar. CEF hands every such key to `performKeyEquivalent:`,
+        /// and an `NSEvent` with no characters matches the first item with no
+        /// shortcut — About. `dray browser press Escape`, Tab, arrows and any
+        /// textless chord all synthesize one; a real key always carries
+        /// characters, and no menu item answers to a function key.
+        fn on_key_event(
+            &self,
+            _browser: Option<&mut Browser>,
+            event: Option<&KeyEvent>,
+            _os_event: *mut u8,
+        ) -> ::std::os::raw::c_int {
+            let Some(event) = event else { return 0 };
+            let up = sys::cef_key_event_type_t::from(event.type_)
+                == sys::cef_key_event_type_t::KEYEVENT_KEYUP;
+            (!up && event.character == 0 && event.unmodified_character == 0) as _
+        }
     }
 }
 
@@ -1830,12 +1851,12 @@ async fn awake(tab: i32) -> Result<(), String> {
     automation::wait_loaded(tab).await
 }
 
-async fn open_url(session: &str, url: String, new_tab: bool) -> Result<(), String> {
-    browser_open(session.to_string(), url, new_tab)
+async fn open_url(session: &str, url: String, tab: Option<i32>) -> Result<(), String> {
+    load(session.to_string(), url, tab)
 }
 
-async fn nav(session: &str, verb: &str) -> Result<(), String> {
-    browser_nav(session.to_string(), verb.to_string())
+async fn nav(tab: i32, verb: &str) -> Result<(), String> {
+    go(Some(tab), verb.to_string())
 }
 
 async fn close_tab(session: &str, id: i32) -> Result<(), String> {
@@ -2003,24 +2024,27 @@ pub fn browser_shutter_ready(shot: u64) {
 /// its pending tab standing otherwise, with nothing to say why.
 #[tauri::command]
 pub fn browser_open(session_id: String, url: String, new_tab: bool) -> Result<(), String> {
+    let tab = if new_tab { None } else { active_id(&session_id) };
+    load(session_id, url, tab)
+}
+
+/// Loads `url` in `tab`, or in a new tab where that is `None` or has no
+/// browser. `dray browser` names the agent's tab, which is not the reader's.
+fn load(session_id: String, url: String, tab: Option<i32>) -> Result<(), String> {
     let (tx, rx) = mpsc::channel();
     on_main(move || {
-        if !new_tab {
-            if let Some((id, frame)) = active_id(&session_id)
-                .and_then(|id| Some((id, browser_of(id)?.main_frame()?)))
-            {
-                frame.load_url(Some(&CefString::from(url.as_str())));
-                // Drawn at once, as a browser does: the address otherwise
-                // waits for the commit, and a page that never answers never
-                // shows what was asked for.
-                update_tab(id, |t| {
-                    t.url = url;
-                    t.loading = true;
-                    t.error = None;
-                });
-                let _ = tx.send(Ok(()));
-                return;
-            }
+        if let Some((id, frame)) = tab.and_then(|id| Some((id, browser_of(id)?.main_frame()?))) {
+            frame.load_url(Some(&CefString::from(url.as_str())));
+            // Drawn at once, as a browser does: the address otherwise
+            // waits for the commit, and a page that never answers never
+            // shows what was asked for.
+            update_tab(id, |t| {
+                t.url = url;
+                t.loading = true;
+                t.error = None;
+            });
+            let _ = tx.send(Ok(()));
+            return;
         }
         let _ = tx.send(create_tab(&session_id, &url, true, None));
     })?;
@@ -2143,8 +2167,12 @@ pub fn browser_close(session_id: String, id: i32) -> Result<(), String> {
 /// Back, forward, reload or stop, on the active tab.
 #[tauri::command]
 pub fn browser_nav(session_id: String, action: String) -> Result<(), String> {
+    go(active_id(&session_id), action)
+}
+
+fn go(tab: Option<i32>, action: String) -> Result<(), String> {
     on_main(move || {
-        let Some(browser) = active_id(&session_id).and_then(browser_of) else { return };
+        let Some(browser) = tab.and_then(browser_of) else { return };
         match action.as_str() {
             "back" => browser.go_back(),
             "forward" => browser.go_forward(),
@@ -2241,7 +2269,8 @@ pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
                 .map_err(|_| "a screenshot is in progress")?,
         )
     };
-    let tab = automation::active_tab(&session_id)?;
+    // The reader's tab, never the agent's: this is the still the pane covers itself with.
+    let tab = active_id(&session_id).ok_or("no tab is open")?;
     // `innerWidth`, not the layout viewport's `clientWidth`: that one stops
     // at the scrollbar, and a picture a scrollbar short of the view is
     // stretched across it. The clip is in page coordinates, hence the

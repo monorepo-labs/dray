@@ -3,6 +3,7 @@ import { Plus } from "lucide-react";
 import BranchSelector from "@/components/composer/BranchSelector";
 import BranchSwitchDialog from "@/components/composer/BranchSwitchDialog";
 import ContextMeter from "@/components/composer/ContextMeter";
+import MachineSelector from "@/components/composer/MachineSelector";
 import ModelSelector from "@/components/composer/ModelSelector";
 import PermissionSelector, {
   offersPermissionModes,
@@ -176,6 +177,7 @@ export default function ComposerToolbar({
             onSelect={onSelectProject}
             onAttached={onAttachProject}
           />
+          <MachineSelector projects={projects} value={projectPath} onSelect={onSelectProject} />
 
           {/* Both describe a repo, so neither means anything until one is
               picked — and a worktree has nothing to fork from. */}

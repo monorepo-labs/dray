@@ -8,7 +8,7 @@
 //! composer reaches, so a session created here is not a second kind of session.
 //!
 //! Newline-delimited JSON over a unix socket at `~/.dray/dray.sock` — or
-//! `dray-dev.sock` for a dev build, see [`socket_path`] — one
+//! the same name in this build's own home, see [`socket_path`] — one
 //! request per connection. Nothing on the network can reach it at all, and
 //! access control is the containing directory's `0700` — see
 //! [`serve`](serve) for why the socket's own mode cannot be the boundary.
@@ -75,13 +75,14 @@ pub struct IssuesChangedEvent {
 /// field free to disagree with the chain it describes.
 const MAX_DEPTH: usize = 2;
 
-/// The socket this build listens on: `dray-dev.sock` under `pnpm tauri dev`,
-/// `dray.sock` otherwise.
+/// The socket this build listens on: `dray.sock`, in its own home.
 ///
-/// Split by build because the release app is normally running while this one is
-/// being developed, and one path between them means whichever started last owns
-/// the channel — `bind` unlinks the other's socket, so the app left behind
-/// keeps a listener no `dray` will ever reach again.
+/// Split by home because the release app is normally running while a dev build
+/// is being worked on, and one path between them means whichever started last
+/// owns the channel — `bind` unlinks the other's socket, so the app left behind
+/// keeps a listener no `dray` will ever reach again. A dev build always has a
+/// home of its own (`store::home_override`), which the CLI's own resolver
+/// below knows nothing of.
 ///
 /// Under `DRAY_HOME` the socket moves with the data, so a second process on
 /// its own directory takes no channel from the app's.
@@ -89,7 +90,7 @@ pub fn socket_path() -> Option<std::path::PathBuf> {
     if let Some(home) = store::home_override() {
         return Some(home.join(dray_proto::SOCKET_NAME));
     }
-    dray_proto::socket_path(crate::is_dev())
+    dray_proto::socket_path()
 }
 
 /// What a spawned agent's `DRAY_ENDPOINT` is set to.
@@ -122,17 +123,204 @@ pub async fn serve(app: Sink) -> Result<()> {
     // socket exists at all. The chmod below stays as a second line rather than
     // the only one.
     let dir = store::get_home_app_dir().await?;
+    check_private(&dir).await?;
 
-    // That narrowing is best-effort — the app has to start whether or not it
-    // lands — so this checks rather than assumes. A directory that stayed
-    // group- or world-reachable leaves the racy chmod as the socket's only
-    // guard, and binding anyway would be serving session creation to every
-    // account on the machine.
-    //
-    // Refusing costs orchestration and nothing else, which is the bargain this
-    // whole module already makes: the caller logs and drops the error, and the
-    // app carries on without a side channel.
-    let mode = owner_bits(&dir).await?;
+    let mut socket = Socket::bind(&path)?;
+
+    let mut check = tokio::time::interval(SOCKET_CHECK);
+    check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            accepted = socket.listener.accept() => {
+                let stream = match accepted {
+                    Ok((stream, _)) => stream,
+                    Err(e) => {
+                        eprintln!("[orchestration accept err] {e}");
+                        continue;
+                    }
+                };
+
+                let app = app.clone();
+                // Per connection, so one slow create cannot hold the next caller off.
+                tokio::spawn(async move {
+                    if let Err(e) = handle(stream, &app).await {
+                        eprintln!("[orchestration conn err] {e:#}");
+                    }
+                });
+            }
+            _ = check.tick() => {
+                socket.heal(&path).await;
+            }
+        }
+    }
+}
+
+/// How often the socket path is checked against the file this process bound.
+/// One `stat` a tick; a longer gap is that much longer of every `dray` call
+/// failing.
+const SOCKET_CHECK: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// `(dev, ino)`: what tells the socket this process bound apart from another
+/// file later put at the same path.
+type FileId = (u64, u64);
+
+fn file_id(path: &Path) -> std::io::Result<FileId> {
+    use std::os::unix::fs::MetadataExt;
+
+    let meta = std::fs::symlink_metadata(path)?;
+    Ok((meta.dev(), meta.ino()))
+}
+
+/// What the socket path names on one check.
+#[derive(Debug, PartialEq, Eq)]
+enum PathState {
+    Ours,
+    Gone,
+    Other(FileId),
+}
+
+fn path_state(bound: FileId, seen: std::io::Result<FileId>) -> PathState {
+    match seen {
+        Ok(id) if id == bound => PathState::Ours,
+        Ok(id) => PathState::Other(id),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => PathState::Gone,
+        // Unreadable says nothing about whose socket it is, so it is left be.
+        Err(_) => PathState::Ours,
+    }
+}
+
+/// The listener, and what is known about the path it was bound at.
+///
+/// A listening socket is tied to its inode, not its name. Unlink the file or
+/// put another in its place and this listener keeps accepting on an inode no
+/// path reaches, while every `dray` call meets nothing or a dead file and reads
+/// it as Dray not running. Deleting `~/.dray` does it; so did a sandbox
+/// restored from a snapshot, whose disk was swapped under a running server and
+/// left a copied socket file behind (#801). [`Socket::heal`] binds again.
+struct Socket {
+    listener: UnixListener,
+    id: FileId,
+    /// A live socket found holding the path, left to its owner. Probing it
+    /// every tick would hand that process an empty connection each time.
+    yielded: Option<FileId>,
+    /// Whether the last rebind failed, so a lasting failure logs once.
+    failing: bool,
+}
+
+impl Socket {
+    /// Binds the path, unlinking whatever stale file holds it, and narrows the
+    /// socket to `0600`.
+    ///
+    /// A socket file outlives the process that made it — a crash or a SIGKILL
+    /// leaves one behind, and binding onto it fails with "address in use". The
+    /// file is not a lock and holds nothing, so removing it is safe *because
+    /// this path names one build*: unlinking can only ever take the channel
+    /// from another copy of the same build, never from the release app a dev
+    /// one is running beside.
+    fn bind(path: &Path) -> Result<Self> {
+        std::fs::remove_file(path).ok();
+
+        let listener = UnixListener::bind(path)
+            .with_context(|| format!("could not bind {}", path.display()))?;
+
+        restrict(path)?;
+
+        Ok(Self {
+            listener,
+            id: file_id(path).context("could not read the socket just bound")?,
+            yielded: None,
+            failing: false,
+        })
+    }
+
+    /// Binds again when the path no longer names this socket and nothing live
+    /// answers there. Returns whether it did.
+    ///
+    /// The connect is what keeps two processes from taking the path back and
+    /// forth: one that answers owns it, so this one leaves it be. Only a path
+    /// that is gone or refuses is ours to take.
+    async fn heal(&mut self, path: &Path) -> bool {
+        let seen = match path_state(self.id, file_id(path)) {
+            PathState::Ours => return false,
+            PathState::Gone => None,
+            PathState::Other(id) => Some(id),
+        };
+
+        if seen.is_some() && seen == self.yielded {
+            return false;
+        }
+
+        match UnixStream::connect(path).await {
+            Ok(_) => {
+                if let Some(id) = seen {
+                    self.yielded = Some(id);
+                    eprintln!(
+                        "[orchestration] socket at {} belongs to another live process; leaving it",
+                        path.display()
+                    );
+                }
+                return false;
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) => {}
+            Err(_) => return false,
+        }
+
+        match rebind(path).await {
+            Ok(socket) => {
+                *self = socket;
+                eprintln!("[orchestration] socket at {} was replaced; rebound", path.display());
+                true
+            }
+            Err(e) => {
+                if !self.failing {
+                    eprintln!(
+                        "[orchestration] socket at {} was replaced; could not rebind: {e:#}",
+                        path.display()
+                    );
+                }
+                self.failing = true;
+                false
+            }
+        }
+    }
+}
+
+/// Recreates the socket's directory if it went, narrows it to `0700` the way
+/// startup does, checks it, then binds.
+///
+/// Not through `store::get_home_app_dir`, which answers from a cache and would
+/// never notice the directory was deleted. The narrowing is not redundant with
+/// creating at `0700`: a session's log write can recreate the directory first,
+/// under the umask, and a check alone would then refuse it forever.
+async fn rebind(path: &Path) -> Result<Socket> {
+    let dir = path.parent().context("the socket path has no directory")?;
+    tokio::fs::create_dir_all(dir)
+        .await
+        .with_context(|| format!("could not create {}", dir.display()))?;
+    store::restrict_to_owner(dir).await;
+
+    check_private(dir).await?;
+    Socket::bind(path)
+}
+
+/// Refuses a directory any other account can reach.
+///
+/// `get_home_app_dir`'s narrowing is best-effort — the app has to start
+/// whether or not it lands — so this checks rather than assumes. A directory
+/// that stayed group- or world-reachable leaves the racy chmod as the socket's
+/// only guard, and binding anyway would be serving session creation to every
+/// account on the machine.
+///
+/// Refusing costs orchestration and nothing else, which is the bargain this
+/// whole module already makes: the caller logs and drops the error, and the
+/// app carries on without a side channel.
+async fn check_private(dir: &Path) -> Result<()> {
+    let mode = owner_bits(dir).await?;
     if mode & 0o077 != 0 {
         bail!(
             "{} is mode {mode:04o}; refusing to serve a socket that other accounts can reach. \
@@ -141,37 +329,7 @@ pub async fn serve(app: Sink) -> Result<()> {
             dir.display()
         );
     }
-
-    // A socket file outlives the process that made it — a crash or a SIGKILL
-    // leaves one behind, and binding onto it fails with "address in use". The
-    // file is not a lock and holds nothing, so removing it is safe *because
-    // this path names one build*: unlinking can only ever take the channel from
-    // another copy of the same build, never from the release app a dev one is
-    // running beside.
-    tokio::fs::remove_file(&path).await.ok();
-
-    let listener = UnixListener::bind(&path)
-        .with_context(|| format!("could not bind {}", path.display()))?;
-
-    restrict(&path)?;
-
-    loop {
-        let (stream, _) = match listener.accept().await {
-            Ok(accepted) => accepted,
-            Err(e) => {
-                eprintln!("[orchestration accept err] {e}");
-                continue;
-            }
-        };
-
-        let app = app.clone();
-        // Per connection, so one slow create cannot hold the next caller off.
-        tokio::spawn(async move {
-            if let Err(e) = handle(stream, &app).await {
-                eprintln!("[orchestration conn err] {e:#}");
-            }
-        });
-    }
+    Ok(())
 }
 
 /// The permission bits on a directory, for the check above.
@@ -238,7 +396,7 @@ async fn handle(stream: UnixStream, app: &Sink) -> Result<()> {
     let response = match refusal(&line) {
         Some(error) => Response::error(error),
         None => match serde_json::from_str::<Envelope>(&line) {
-            Ok(envelope) => match dispatch(envelope.request, app).await {
+            Ok(envelope) => match route(envelope.request, app).await {
             Ok(response) => response,
             // Reported rather than logged: the caller is an agent, and this
             // string is what it reads back as tool output.
@@ -256,16 +414,321 @@ async fn handle(stream: UnixStream, app: &Sink) -> Result<()> {
     Ok(())
 }
 
+/// What the socket answers: a request for another machine goes there, and one
+/// naming a session this index has never heard of goes to whichever connected
+/// machine holds it — asked only on that miss, so an ordinary call costs no
+/// round trip. A forwarded request never comes through here, so it cannot
+/// bounce on to a third machine.
+async fn route(request: Request, app: &Sink) -> Result<Response> {
+    if let Request::OnMachine(on) = request {
+        return on_machine(&on.machine, *on.request).await;
+    }
+    #[cfg(any(feature = "serve", feature = "desktop"))]
+    if let Some(id) = session_named(&request) {
+        if store::get_session_index_item(id).await?.is_none() {
+            if let Some(machine) = elsewhere::locate(id).await {
+                return on_machine(&machine, request).await;
+            }
+        }
+    }
+    dispatch(request, app).await
+}
+
+/// The session a verb acts on, for [`route`] to look for elsewhere.
+#[cfg(any(feature = "serve", feature = "desktop"))]
+fn session_named(request: &Request) -> Option<&str> {
+    match request {
+        Request::SendMessage(r) => Some(&r.session_id),
+        Request::LinkIssues(r) => Some(&r.session_id),
+        Request::RenameSession(r) => Some(&r.session_id),
+        Request::StopSession(r) => Some(&r.session_id),
+        Request::SettleSession(r) => Some(&r.session_id),
+        Request::SetAside(r) => Some(&r.session_id),
+        Request::Share(r) => Some(&r.session_id),
+        Request::Browser(r) => Some(&r.session_id),
+        // Never `AddVideo`: its path is this machine's, and forwarded it would
+        // name a file the other machine does not have, or a different one.
+        _ => None,
+    }
+}
+
+/// Requests about the machine they run on — its server list, its listener —
+/// which no other machine may make for it.
+fn this_machine_only(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::OnMachine(_)
+            | Request::AddServer(_)
+            | Request::ListServers
+            | Request::RemoveServer(_)
+            | Request::RenameServer(_)
+            | Request::SetServerOn(_)
+            | Request::SetRemoteAccess(_)
+    )
+}
+
+#[cfg(any(feature = "serve", feature = "desktop"))]
+async fn on_machine(machine: &str, request: Request) -> Result<Response> {
+    if this_machine_only(&request) {
+        bail!("`dray machine` and `dray server` act on this machine alone — drop --machine");
+    }
+    if machine == "all" {
+        let Request::ListSessions(list) = request else {
+            bail!("only `dray session ls` takes --machine all");
+        };
+        return elsewhere::list_everywhere(list).await;
+    }
+    elsewhere::forward(machine, &elsewhere::prepare(request).await?).await
+}
+
+/// A build with no serve wire has no client half to reach one with.
+#[cfg(not(any(feature = "serve", feature = "desktop")))]
+async fn on_machine(_machine: &str, _request: Request) -> Result<Response> {
+    bail!("this build reaches no other machines")
+}
+
+/// What a machine forwarding a request knows and the one it lands on cannot
+/// look up: the calling session, the sender, and which repository a path
+/// there names. The serve command `orchestrate` takes it as its arguments.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Forward {
+    /// The envelope, judged by version on the far side as the socket would.
+    pub line: String,
+    /// The project's `origin`, so the far side finds its own checkout.
+    #[serde(default)]
+    pub origin: Option<String>,
+    #[serde(default)]
+    pub caller: Option<Caller>,
+    #[serde(default)]
+    pub sender: Option<MessageSender>,
+}
+
+/// The calling session's row, carried whole with its depth, since the
+/// machine making its child has no index entry to walk.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Caller {
+    pub session: SessionIndexItem,
+    pub depth: usize,
+}
+
+/// The serve command `orchestrate`: a request a Mac forwarded, answered as the
+/// socket answers one, with what the Mac carried standing in for the lookups
+/// this index cannot make.
+pub async fn answer_forward(forward: Forward, app: Sink) -> Response {
+    let answered = async {
+        if let Some(error) = refusal(&forward.line) {
+            bail!(error);
+        }
+        let envelope: Envelope = serde_json::from_str(&forward.line).context("could not parse the request")?;
+        let mut request = envelope.request;
+        if this_machine_only(&request) {
+            bail!("that acts on the machine it runs on, so run it there");
+        }
+        localize(&mut request, forward.origin.as_deref()).await?;
+        // A session `--base` from the Mac arrives as its branch, which this
+        // checkout may hold only as the copy pushed to `origin`. A session id
+        // this index holds is left for `resolve_base`.
+        match &mut request {
+            Request::CreateSession(CreateSession { base: Some(base), project_path: Some(project), .. })
+            | Request::CreateDraft(CreateDraft { base: Some(base), project_path: Some(project), .. })
+                if store::get_session_index_item(base).await?.is_none() =>
+            {
+                *base = crate::git::pushed_branch(project, base).await?;
+            }
+            _ => {}
+        }
+        let caller = forward.caller.as_ref();
+        match request {
+            Request::CreateSession(create) => create_session(create, caller, &app).await,
+            Request::CreateDraft(create) => create_draft(create, caller, &app).await,
+            Request::StartDraft(start) => start_draft(start, caller, &app).await,
+            Request::SendMessage(send) => send_message(send, forward.sender, &app).await,
+            other => dispatch(other, &app).await,
+        }
+    };
+    answered.await.unwrap_or_else(|e| Response::error(format!("{e:#}")))
+}
+
+/// Points a project path from the forwarding Mac at this machine's checkout of
+/// the same repository, matched on `origin`. Failing that, a path this machine
+/// has is taken as named, which is how `--project` names one here.
+async fn localize(request: &mut Request, origin: Option<&str>) -> Result<()> {
+    let slot = match request {
+        Request::CreateSession(create) => &mut create.project_path,
+        Request::CreateDraft(create) => &mut create.project_path,
+        // `--all` names no project, whatever path rode along.
+        Request::ListSessions(list) | Request::ListDrafts(list) | Request::ListShares(list) if list.all => {
+            return Ok(());
+        }
+        Request::ListSessions(list) | Request::ListDrafts(list) | Request::ListShares(list) => &mut list.project_path,
+        _ => return Ok(()),
+    };
+    let Some(path) = slot.clone() else { return Ok(()) };
+    let projects = crate::projects::read_projects().await.map_err(anyhow::Error::from)?;
+    if let Some(origin) = origin {
+        for project in &projects {
+            if crate::git::origin(&project.path).await.as_deref() == Some(origin) {
+                *slot = Some(project.path.clone());
+                return Ok(());
+            }
+        }
+    }
+    if Path::new(&path).is_dir() {
+        return Ok(());
+    }
+    let attached: Vec<_> = projects.iter().map(|p| p.path.as_str()).collect();
+    bail!(
+        "this machine has no checkout of {} — attach one in Dray, or pass --project with a path here. Its projects: {}",
+        origin.unwrap_or(&path),
+        if attached.is_empty() { "none".to_string() } else { attached.join(", ") }
+    )
+}
+
+/// Reaching other machines, through this server's own links to them
+/// ([`crate::machines`]) — never the app's, so it works with the window closed
+/// and on a server that has no app at all.
+#[cfg(any(feature = "serve", feature = "desktop"))]
+mod elsewhere {
+    use super::*;
+    use crate::machines;
+    use anyhow::anyhow;
+    use serde_json::json;
+
+    /// The machine holding session `id`, where one does. Every machine is
+    /// asked at once, each given [`machines::SWEEP`].
+    pub async fn locate(id: &str) -> Option<String> {
+        let list: Vec<_> = machines::load().await.into_iter().filter(|m| !m.off).collect();
+        let asks = list.iter().map(|m| async move {
+            let row =
+                tokio::time::timeout(machines::SWEEP, machines::call(m, "session_index_item", json!({ "sessionId": id })))
+                    .await;
+            matches!(row, Ok(Ok(ref row)) if !row.is_null()).then(|| m.id.clone())
+        });
+        futures_util::future::join_all(asks).await.into_iter().flatten().next()
+    }
+
+    /// Runs a prepared request on `machine`, a name or an id, and marks every
+    /// session it answers with as that machine's.
+    pub async fn forward(machine: &str, forward: &Forward) -> Result<Response> {
+        let saved = machines::on(machine).await.map_err(anyhow::Error::msg)?;
+        let answer = machines::call(&saved, "orchestrate", serde_json::to_value(forward)?).await.map_err(|e| {
+            match e.starts_with("unknown command") {
+                true => anyhow!("{}'s Dray server is too old to take dray requests — update it", saved.name),
+                false => anyhow!(e),
+            }
+        })?;
+        let mut response: Response = serde_json::from_value(answer)?;
+        let rows: Vec<&mut SessionSummary> = match &mut response {
+            Response::Created { session, .. } | Response::Session { session } => vec![session],
+            Response::Listed { sessions } => sessions.iter_mut().collect(),
+            _ => vec![],
+        };
+        for row in rows {
+            row.machine = Some(saved.name.clone());
+        }
+        Ok(response)
+    }
+
+    /// Fills in what only this machine's index knows before a request leaves:
+    /// the caller and sender carried whole, a session `--base` turned into the
+    /// branch it names, and the project's `origin`.
+    pub async fn prepare(mut request: Request) -> Result<Forward> {
+        let mut forward = Forward::default();
+        let mut project = None;
+        match &mut request {
+            Request::CreateSession(create) => {
+                let parent = parent_of(create.parent_session_id.as_deref()).await?;
+                forward.caller = caller(parent.as_ref()).await?;
+                create.project_path = project_from(create.project_path.as_deref(), parent.as_ref());
+                project = create.project_path.clone();
+                create.base = branch_of(create.base.take(), project.as_deref()).await?;
+            }
+            Request::CreateDraft(create) => {
+                let parent = parent_of(create.parent_session_id.as_deref()).await?;
+                forward.caller = caller(parent.as_ref()).await?;
+                create.project_path = project_from(create.project_path.as_deref(), parent.as_ref());
+                project = create.project_path.clone();
+                create.base = branch_of(create.base.take(), project.as_deref()).await?;
+            }
+            Request::StartDraft(start) => {
+                forward.caller = caller(parent_of(start.parent_session_id.as_deref()).await?.as_ref()).await?;
+            }
+            Request::SendMessage(send) => {
+                if let Some(from) = sender(send).await {
+                    forward.sender = Some(MessageSender { machine: Some(this_machine().await), ..from });
+                }
+            }
+            Request::ListSessions(list) | Request::ListDrafts(list) | Request::ListShares(list) => {
+                list.project_path = match list.all {
+                    true => None,
+                    false => scope_of(list).await?,
+                };
+                project = list.project_path.clone();
+                list.parent_session_id = None;
+            }
+            _ => {}
+        }
+        if let Some(path) = project {
+            forward.origin = crate::git::origin(&path).await;
+        }
+        forward.line = encode_line(&Envelope::new(request))?.trim_end().to_string();
+        Ok(forward)
+    }
+
+    async fn caller(parent: Option<&SessionIndexItem>) -> Result<Option<Caller>> {
+        let Some(parent) = parent else { return Ok(None) };
+        Ok(Some(Caller { session: parent.clone(), depth: depth_of(parent).await? }))
+    }
+
+    /// A `--base` naming a session here means its branch there, which the far
+    /// side can only find if that branch was pushed. A ref passes as written.
+    async fn branch_of(base: Option<String>, project: Option<&str>) -> Result<Option<String>> {
+        match (base, project) {
+            (Some(base), Some(project)) if store::get_session_index_item(&base).await?.is_some() => {
+                Ok(Some(resolve_base(&base, project).await?))
+            }
+            (base, _) => Ok(base),
+        }
+    }
+
+    /// The name a relayed sender gives this machine, which the far side may
+    /// hold under a name of its own.
+    async fn this_machine() -> String {
+        tokio::task::spawn_blocking(dray_proto::machine_name).await.unwrap_or_else(|_| "another machine".into())
+    }
+
+    /// `session ls --machine all`: this machine's sessions, then each
+    /// connected one's, every row naming where it runs.
+    pub async fn list_everywhere(list: ListSessions) -> Result<Response> {
+        let forward = prepare(Request::ListSessions(list.clone())).await?;
+        let Response::Listed { mut sessions } = list_sessions(list).await? else {
+            bail!("listing this machine's sessions answered something else");
+        };
+        let list: Vec<_> = machines::load().await.into_iter().filter(|m| !m.off).collect();
+        let asks = list.iter().map(|m| tokio::time::timeout(machines::SWEEP, self::forward(&m.id, &forward)));
+        // ponytail: a machine that fails to answer is skipped unsaid; give
+        // `Listed` a warnings field if agents start missing rows.
+        for answer in futures_util::future::join_all(asks).await {
+            if let Ok(Ok(Response::Listed { sessions: theirs })) = answer {
+                sessions.extend(theirs);
+            }
+        }
+        Ok(Response::Listed { sessions })
+    }
+}
+
 async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
     match request {
-        Request::CreateSession(create) => create_session(create, app).await,
+        Request::CreateSession(create) => create_session(create, None, app).await,
         Request::ListSessions(list) => list_sessions(list).await,
-        Request::SendMessage(send) => send_message(send, app).await,
+        Request::SendMessage(send) => send_message(send, None, app).await,
         Request::LinkIssues(link) => link_issues(link, app).await,
-        Request::CreateDraft(create) => create_draft(create, app).await,
+        Request::CreateDraft(create) => create_draft(create, None, app).await,
         Request::ListDrafts(list) => list_drafts(list).await,
         Request::RemoveDraft(draft) => remove_draft(&draft.id, app).await,
-        Request::StartDraft(start) => start_draft(start, app).await,
+        Request::StartDraft(start) => start_draft(start, None, app).await,
+        Request::AddVideo(video) => add_video(video).await,
         Request::Share(share) => share_port(share).await,
         Request::ListShares(list) => list_shares(list).await,
         Request::RenameSession(rename) => {
@@ -283,8 +746,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             Ok(Response::RemoteAccess { on: now.on })
         }
         Request::SetAside(aside) => {
-            crate::set_session_flags(&aside.session_id, None, None, None, Some(aside.aside)).await?;
-            announce_change(&[aside.session_id.clone()], app).await;
+            crate::set_session_flags(&aside.session_id, None, None, None, Some(aside.aside), app.clone()).await?;
             answer_session(&aside.session_id).await
         }
         on_screen => {
@@ -298,7 +760,9 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
 }
 
 /// The Mac's server hands the app what lives in it: browser steps while the
-/// app runs Chromium, the server list always. See MAC-SERVER-PLAN.md.
+/// app runs Chromium, and the machine list while the app is open, since the
+/// app holds that list in memory and rewrites the file whole. See
+/// MAC-SERVER-PLAN.md.
 #[cfg(feature = "desktop")]
 async fn ask_app(request: Request) -> Result<Response> {
     let browser = match &request {
@@ -311,11 +775,9 @@ async fn ask_app(request: Request) -> Result<Response> {
     match crate::serve::host_call("request", serde_json::to_value(&request)?).await {
         Some(Ok(answer)) => Ok(serde_json::from_value(answer)?),
         Some(Err(err)) => Ok(Response::error(err.as_str().map(str::to_string).unwrap_or_else(|| err.to_string()))),
-        // No app, or it left between the two questions.
-        None => match browser {
-            Some(browser) => browse(browser).await,
-            None => bail!("The server list lives in the Dray app. Open it and run this again."),
-        },
+        // No app, or it left between the two questions: the file is this
+        // server's alone until the app opens again and reads it.
+        None => answer_on_screen(request).await,
     }
 }
 
@@ -330,6 +792,17 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
             let request: Request = serde_json::from_value(args).map_err(|e| e.to_string())?;
             let response = answer_on_screen(request).await.unwrap_or_else(|e| Response::error(format!("{e:#}")));
             serde_json::to_value(response).map_err(|e| e.to_string())
+        }
+        "reload_servers" => {
+            crate::servers::reload().await;
+            Ok(serde_json::Value::Null)
+        }
+        "island_links" => serde_json::to_value(crate::servers::island_links()).map_err(|e| e.to_string()),
+        // The island's Extend, on a timer only the app is reading.
+        "extend_boat" => {
+            let id = args["id"].as_str().ok_or("extend_boat wants an id")?.to_string();
+            let minutes = args["minutes"].as_u64().ok_or("extend_boat wants minutes")? as u32;
+            crate::servers::extend_boat(id, minutes).await.map(|()| serde_json::Value::Null)
         }
         "show_session" => {
             let id = args["sessionId"].as_str().ok_or("show_session wants a sessionId")?;
@@ -357,32 +830,43 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
     }
 }
 
-/// Requests answered where the screen is: the browser and the server list.
+/// Requests answered where the screen is: the browser, and the machine list —
+/// the app's own in the app, else this server's file.
 async fn answer_on_screen(request: Request) -> Result<Response> {
     match request {
         Request::Browser(browser) => browse(browser).await,
         #[cfg(feature = "desktop")]
-        Request::AddServer(add) => server_list::add(add).await,
-        #[cfg(feature = "desktop")]
-        Request::ListServers => Ok(Response::Servers {
-            servers: crate::servers::list_servers().into_iter().map(server_list::summarize).collect(),
-        }),
-        #[cfg(feature = "desktop")]
-        Request::RemoveServer(server) => server_list::remove(&server.name).await,
-        #[cfg(feature = "desktop")]
-        Request::RenameServer(rename) => server_list::rename(rename).await,
-        #[cfg(feature = "desktop")]
-        Request::SetServerOn(set) => server_list::set_on(set).await,
-        #[cfg(not(feature = "desktop"))]
-        Request::AddServer(_)
-        | Request::ListServers
-        | Request::RemoveServer(_)
-        | Request::RenameServer(_)
-        | Request::SetServerOn(_) => {
-            bail!("this Dray is a server, and the server list lives in the Mac app — run `dray machine` there")
-        }
+        list if !crate::is_server() => server_list::answer(list).await,
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        list => machine_list(list).await,
+        #[cfg(not(any(feature = "serve", feature = "desktop")))]
         other => bail!("{other:?} is not answered here"),
     }
+}
+
+/// `dray machine` on a server with no app to ask: a Linux `dray-serve`, a
+/// headless Mac, the Mac's own server while the window is closed.
+#[cfg(any(feature = "serve", feature = "desktop"))]
+async fn machine_list(request: Request) -> Result<Response> {
+    use crate::machines;
+    let summarize = |row: machines::Row| dray_proto::ServerSummary {
+        address: row.saved.address(),
+        id: row.saved.id,
+        name: row.saved.name,
+        status: row.status.into(),
+        error: row.error,
+    };
+    let row = match request {
+        Request::ListServers => {
+            return Ok(Response::Servers { servers: machines::list().await.into_iter().map(summarize).collect() });
+        }
+        Request::AddServer(add) => machines::add(add.name, add.address, add.token).await,
+        Request::RemoveServer(server) => machines::remove(&server.name).await,
+        Request::RenameServer(rename) => machines::rename(&rename.name, &rename.new_name).await,
+        Request::SetServerOn(set) => machines::set_on(&set.name, set.on).await,
+        other => bail!("{other:?} is not answered here"),
+    };
+    Ok(Response::Server { server: summarize(row.map_err(anyhow::Error::msg)?) })
 }
 
 /// `dray machine`, through Settings → Servers' own commands, so the CLI is
@@ -391,39 +875,34 @@ async fn answer_on_screen(request: Request) -> Result<Response> {
 #[cfg(feature = "desktop")]
 mod server_list {
     use crate::servers::{self, ServerInfo, ServerStatus};
-    use crate::ssh::{Failure, Fix};
     use anyhow::{bail, Context, Result};
-    use dray_proto::{AddServer, Response, ServerSummary};
+    use dray_proto::{AddServer, Request, Response, ServerSummary};
 
-    pub async fn add(add: AddServer) -> Result<Response> {
+    pub async fn answer(request: Request) -> Result<Response> {
+        match request {
+            Request::AddServer(add) => self::add(add).await,
+            Request::ListServers => Ok(Response::Servers { servers: servers::list_servers().into_iter().map(summarize).collect() }),
+            Request::RemoveServer(server) => remove(&server.name).await,
+            Request::RenameServer(rename) => self::rename(rename).await,
+            Request::SetServerOn(set) => set_on(set).await,
+            other => bail!("{other:?} is not answered here"),
+        }
+    }
+
+    async fn add(add: AddServer) -> Result<Response> {
         let name = Some(add.name);
         let added = match add.token {
-            Some(token) => servers::add_server(add.address, token, name).await.map_err(anyhow::Error::msg)?,
+            Some(token) => servers::add_server(add.address, token, name, None).await.map_err(anyhow::Error::msg)?,
             None => {
                 // The whole login, port and user included: `[box]:2222` is the
                 // key the add needs trusted, not `box`'s.
                 let login = crate::ssh::parse(&add.address).map(|t| t.line()).unwrap_or_else(|_| add.address.clone());
-                servers::add_ssh_server(add.address, name).await.map_err(|f| anyhow::anyhow!(ssh_failure(f, &login)))?
+                servers::add_ssh_server(add.address, name, None)
+                    .await
+                    .map_err(|f| anyhow::anyhow!(crate::machines::explain(f, &login)))?
             }
         };
         Ok(Response::Server { server: summarize(added) })
-    }
-
-    /// The Add dialog draws a failure's fix as a control; a terminal gets it as
-    /// words. Trusting a host key stays a person's decision, made in their own
-    /// `ssh`, never on an agent's say-so.
-    fn ssh_failure(failure: Failure, login: &str) -> String {
-        let message = failure.message;
-        match failure.fix {
-            Some(Fix::Copy { command }) => format!("{message}\n  {command}"),
-            Some(Fix::TrustHost { key_type, fingerprint, .. }) => format!(
-                "{message} Its {key_type} key is {fingerprint}. If that is right, run `{login}` once in a \
-                 terminal to trust it, then add it again."
-            ),
-            Some(Fix::Install) => format!("{message} Add it from the app's Settings → Servers, which can install it."),
-            // A reconnect's fix, never an add's; the sentence already says it.
-            Some(Fix::NewAddress) | None => message,
-        }
     }
 
     /// By name, or by id where two servers share one. An id wins outright, or
@@ -449,13 +928,13 @@ mod server_list {
     }
 
     /// Takes the token with it.
-    pub async fn remove(name: &str) -> Result<Response> {
+    async fn remove(name: &str) -> Result<Response> {
         let server = find(name)?;
         servers::remove_server(server.id.clone()).await.map_err(anyhow::Error::msg)?;
         Ok(Response::Server { server: summarize(server) })
     }
 
-    pub async fn rename(rename: dray_proto::RenameServer) -> Result<Response> {
+    async fn rename(rename: dray_proto::RenameServer) -> Result<Response> {
         let id = find(&rename.name)?.id;
         servers::rename_server(id.clone(), rename.new_name).await.map_err(anyhow::Error::msg)?;
         Ok(Response::Server { server: summarize(current(&id)?) })
@@ -464,7 +943,7 @@ mod server_list {
     /// On waits for the attempt to settle, so `dray machine connect` answers
     /// whether it connected rather than "connecting". A whole SSH connect is
     /// capped at 45s; past that the answer is the row as it stands.
-    pub async fn set_on(set: dray_proto::SetServerOn) -> Result<Response> {
+    async fn set_on(set: dray_proto::SetServerOn) -> Result<Response> {
         let id = find(&set.name)?.id;
         servers::set_server_on(id.clone(), set.on).await.map_err(anyhow::Error::msg)?;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(50);
@@ -474,19 +953,12 @@ mod server_list {
         Ok(Response::Server { server: summarize(current(&id)?) })
     }
 
-    pub fn summarize(server: ServerInfo) -> ServerSummary {
+    fn summarize(server: ServerInfo) -> ServerSummary {
         let status = match server.on {
             true => serde_json::to_value(server.status).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
             false => "off".to_string(),
         };
         ServerSummary { id: server.id, name: server.name, address: server.ssh.unwrap_or(server.url), status, error: server.error }
-    }
-
-    #[test]
-    fn trust_advice_names_the_whole_login() {
-        let fix = Fix::TrustHost { host: "box".into(), key_type: "ED25519".into(), fingerprint: "SHA256:x".into() };
-        let said = ssh_failure(Failure { message: "Never met box.".into(), fix: Some(fix), permanent: true }, "ssh -p 2222 me@box");
-        assert!(said.contains("run `ssh -p 2222 me@box` once"), "{said}");
     }
 }
 
@@ -532,23 +1004,22 @@ async fn settle_session(settle: dray_proto::SettleSession, app: &Sink) -> Result
     if settle.settled && settle.delete_worktree && item.worktree_name.is_none() {
         bail!("session {id} has no worktree of its own to delete");
     }
-    crate::set_session_flags(id, Some(settle.settled), None, None, None).await?;
-    let mut changed = vec![id.to_string()];
-    changed.extend(store::hidden_descendants(id).await?);
-    let removed = match settle.settled && settle.delete_worktree {
-        true => manager().remove_worktree(id).await.map(drop),
-        false => Ok(()),
-    };
-    // The settle has landed whatever the removal answered, so the sidebar
-    // hears of it before a failed removal is reported.
-    announce_change(&changed, app).await;
-    removed.context("settled, but the worktree was not deleted")?;
+    crate::set_session_flags(id, Some(settle.settled), None, None, None, app.clone()).await?;
+    if settle.settled && settle.delete_worktree {
+        let removed = manager().remove_worktree(id).await;
+        // Removal moves `cwd` out of each tree, hidden children's first, so even
+        // a refusal partway has entries past what the settle announced.
+        let mut moved = vec![id.to_string()];
+        moved.extend(store::hidden_descendants(id).await?);
+        announce_change(&moved, app).await;
+        removed.context("settled, but the worktree was not deleted")?;
+    }
     answer_session(id).await
 }
 
 /// Index entries changed from here, re-read and handed to the sidebar, which
 /// otherwise only learns of a change it made itself.
-async fn announce_change(ids: &[String], app: &Sink) {
+pub(crate) async fn announce_change(ids: &[String], app: &Sink) {
     for id in ids {
         if let Ok(Some(item)) = store::get_session_index_item(id).await {
             app.emit(SESSION_CHANGED, &item).ok();
@@ -573,6 +1044,22 @@ async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
         return Ok(answered(crate::cef::automation::run(&request.session_id, request.action).await));
     }
     Ok(answered(crate::headless::automation::run(&request.session_id, request.action).await))
+}
+
+/// Files a video for a session's chat. The folder is worked out here because
+/// only the server knows its home, and it is the one the session's delete sweeps.
+async fn add_video(request: dray_proto::AddVideo) -> Result<Response> {
+    let dray_proto::AddVideo { session_id, path, name } = request;
+    store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
+    let dir = store::get_home_app_dir().await?.join("browser/recordings").join(&session_id);
+    let filed = tokio::task::spawn_blocking(move || {
+        crate::recording::add(Path::new(&path), &dir, name.as_deref())
+    })
+    .await?;
+    Ok(match filed {
+        Ok(path) => Response::Video { path: path.to_string_lossy().into_owned() },
+        Err(message) => Response::error(message),
+    })
 }
 
 /// Tags a session that already exists, or untags it.
@@ -679,26 +1166,19 @@ async fn apply_issue(link: &LinkIssues, input: &IssueInput) -> Result<Vec<IssueR
     }
 }
 
-async fn create_session(create: CreateSession, app: &Sink) -> Result<Response> {
+async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Sink) -> Result<Response> {
     if create.prompt.trim().is_empty() {
         bail!("a session needs a prompt");
     }
 
-    let parent = match create.parent_session_id.as_deref() {
-        Some(id) => Some(
-            store::get_session_index_item(id)
-                .await?
-                .with_context(|| format!("no session {id}"))?,
-        ),
-        None => None,
-    };
+    let calling = calling(create.parent_session_id.as_deref(), caller).await?;
+    check_depth(calling.as_ref().map(|c| c.1))?;
+    let parent = calling.map(|c| c.0);
 
-    check_depth(parent.as_ref()).await?;
-
-    // A hidden session is drawn in its parent's crew and nowhere else, so one
+    // A hidden session surfaces only as cards beside its parent, so one
     // made from a terminal would be listed nowhere at all.
     if create.hidden && parent.is_none() {
-        bail!("--hidden needs a calling session: a hidden session shows only in its parent's crew");
+        bail!("--hidden needs a calling session: a hidden session shows only beside its parent");
     }
 
     let project_path = resolve_project(&create, parent.as_ref())?;
@@ -781,11 +1261,11 @@ async fn create_session(create: CreateSession, app: &Sink) -> Result<Response> {
 /// Saves a task for later with the picks `dray new` would have given it, and
 /// always with a worktree: an agent that leaves work for the reader has no
 /// standing to put it in the reader's own checkout.
-async fn create_draft(create: CreateDraft, app: &Sink) -> Result<Response> {
+async fn create_draft(create: CreateDraft, caller: Option<&Caller>, app: &Sink) -> Result<Response> {
     if create.prompt.trim().is_empty() {
         bail!("a draft needs a prompt");
     }
-    let parent = parent_of(create.parent_session_id.as_deref()).await?;
+    let parent = calling(create.parent_session_id.as_deref(), caller).await?.map(|c| c.0);
     let project_path = project_from(create.project_path.as_deref(), parent.as_ref())
         .context("no project — run this inside a git repo or pass --project")?;
     let harness = resolve_harness(create.harness.as_deref(), parent.as_ref())?;
@@ -856,10 +1336,9 @@ async fn find_draft(id: &str) -> Result<StoredDraft> {
 ///
 /// The worktree is the draft's own pick: off only where a person saved it so in
 /// the app, which is the one way an agent can start work in the main checkout.
-async fn start_draft(start: StartDraft, app: &Sink) -> Result<Response> {
+async fn start_draft(start: StartDraft, caller: Option<&Caller>, app: &Sink) -> Result<Response> {
     let draft = find_draft(&start.id).await?;
-    let parent = parent_of(start.parent_session_id.as_deref()).await?;
-    check_depth(parent.as_ref()).await?;
+    check_depth(calling(start.parent_session_id.as_deref(), caller).await?.map(|c| c.1))?;
     let held = drafts::take(&draft.id)
         .await?
         .with_context(|| format!("no draft {}", draft.id))?;
@@ -998,15 +1477,9 @@ async fn list_sessions(list: ListSessions) -> Result<Response> {
     Ok(Response::Listed { sessions })
 }
 
-/// How many creates deep this session already sits, up to [`MAX_DEPTH`]. A
-/// session with no parent is depth 0, one created by an agent is depth 1.
-///
-/// The walk stops at the cap rather than counting on: anything past it is
-/// refused whatever the number, and stopping is what keeps an index that
-/// somehow points at itself from hanging the caller's turn.
-async fn check_depth(parent: Option<&SessionIndexItem>) -> Result<()> {
-    let Some(parent) = parent else { return Ok(()) };
-    let depth = depth_of(parent).await?;
+/// Refuses a create from a caller already [`MAX_DEPTH`] deep.
+fn check_depth(depth: Option<usize>) -> Result<()> {
+    let Some(depth) = depth else { return Ok(()) };
     if depth >= MAX_DEPTH {
         bail!(
             "this session is {depth} levels deep already — a spawned session may create \
@@ -1017,6 +1490,12 @@ async fn check_depth(parent: Option<&SessionIndexItem>) -> Result<()> {
     Ok(())
 }
 
+/// How many creates deep this session already sits, up to [`MAX_DEPTH`]. A
+/// session with no parent is depth 0, one created by an agent is depth 1.
+///
+/// The walk stops at the cap rather than counting on: anything past it is
+/// refused whatever the number, and stopping is what keeps an index that
+/// somehow points at itself from hanging the caller's turn.
 async fn depth_of(item: &SessionIndexItem) -> Result<usize> {
     let mut depth = 0;
     let mut cursor = item.parent_session_id.clone();
@@ -1126,7 +1605,8 @@ fn resolve_fast(requested: Option<bool>, parent: Option<&SessionIndexItem>, harn
 /// review summary upward and a parent handing a child extra context are the
 /// same operation, and naming the relationship would only add a rule to get
 /// wrong — the id is the address.
-async fn send_message(send: SendMessage, app: &Sink) -> Result<Response> {
+/// `carried` is the sender a forwarding Mac looked up, which this index cannot.
+async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &Sink) -> Result<Response> {
     if send.prompt.trim().is_empty() {
         bail!("a message needs some text");
     }
@@ -1139,7 +1619,10 @@ async fn send_message(send: SendMessage, app: &Sink) -> Result<Response> {
         bail!("a session cannot send a message to itself");
     }
 
-    let from = sender(&send).await;
+    let from = match carried {
+        Some(from) => Some(from),
+        None => sender(&send).await,
+    };
     let prompt = attribute(&send.prompt, from.as_ref());
 
     let manager = manager();
@@ -1200,12 +1683,17 @@ async fn send_message(send: SendMessage, app: &Sink) -> Result<Response> {
 /// Both built from one [`MessageSender`], so the two cannot name different
 /// sessions. The id rides along because it is the address: the agent answers
 /// with `dray send <id>` rather than paying a `dray ls` to work out who asked.
+///
+/// A sender on another machine is named with it. `dray session send <id>`
+/// finds that machine where this one holds a token for it.
 fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
     match from {
-        Some(from) => format!(
-            "[message from the Dray session \"{}\" ({})]\n\n{prompt}",
-            from.title, from.session_id
-        ),
+        Some(MessageSender { session_id, title, machine: None }) => {
+            format!("[message from the Dray session \"{title}\" ({session_id})]\n\n{prompt}")
+        }
+        Some(MessageSender { session_id, title, machine: Some(machine) }) => {
+            format!("[message from the Dray session \"{title}\" ({session_id}) on {machine}]\n\n{prompt}")
+        }
         None => prompt.to_string(),
     }
 }
@@ -1226,6 +1714,7 @@ async fn sender(send: &SendMessage) -> Option<MessageSender> {
         .map(|item| MessageSender {
             session_id: item.session_id,
             title: item.title,
+            machine: None,
         })
 }
 
@@ -1268,6 +1757,19 @@ fn project_from(requested: Option<&str>, parent: Option<&SessionIndexItem>) -> O
 
 /// The calling session, or `None` for a call from a terminal. An id that names
 /// nothing is an error, since every caller then nests or scopes by it.
+/// The calling session and how many creates deep it sits: read from this
+/// index, or carried by the Mac that forwarded the call, whose index holds it.
+// ponytail: a child made on another machine walks only edges this index holds,
+// so its own children see depth 1 there; carry depth on the row if that matters.
+async fn calling(id: Option<&str>, caller: Option<&Caller>) -> Result<Option<(SessionIndexItem, usize)>> {
+    if let Some(caller) = caller {
+        return Ok(Some((caller.session.clone(), caller.depth)));
+    }
+    let Some(parent) = parent_of(id).await? else { return Ok(None) };
+    let depth = depth_of(&parent).await?;
+    Ok(Some((parent, depth)))
+}
+
 async fn parent_of(id: Option<&str>) -> Result<Option<SessionIndexItem>> {
     match id {
         Some(id) => Ok(Some(
@@ -1307,6 +1809,7 @@ fn summarize(item: SessionIndexItem) -> SessionSummary {
         modified: item.modified,
         parent_session_id: item.parent_session_id,
         hidden: item.hidden,
+        machine: None,
     }
 }
 
@@ -1398,6 +1901,7 @@ mod tests {
         let from = MessageSender {
             session_id: "abc-123".into(),
             title: "Fix the login redirect".into(),
+            machine: None,
         };
         let prompt = attribute("review is done", Some(&from));
 
@@ -1405,6 +1909,21 @@ mod tests {
             "[message from the Dray session \"Fix the login redirect\" (abc-123)]\n\n"
         ));
         assert!(prompt.ends_with("review is done"));
+    }
+
+    /// A sender on another machine is named with it, so the agent knows where
+    /// its answer goes.
+    #[test]
+    fn a_sender_on_another_machine_is_named() {
+        let from = MessageSender {
+            session_id: "abc-123".into(),
+            title: "Fan out".into(),
+            machine: Some("Yogesh's Mac".into()),
+        };
+        assert_eq!(
+            attribute("go", Some(&from)),
+            "[message from the Dray session \"Fan out\" (abc-123) on Yogesh's Mac]\n\ngo"
+        );
     }
 
     /// A prompt from the user's own terminal has no sender, and must reach the
@@ -1464,5 +1983,138 @@ mod tests {
         for harness in Harness::ALL {
             assert!(err.contains(&harness.wire_name()), "{err} omits a harness");
         }
+    }
+
+    /// A private dir of its own per test, short enough for a socket path's
+    /// 108-byte limit.
+    fn socket_dir(name: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::DirBuilderExt;
+
+        let dir = std::env::temp_dir().join(format!("dray-sock-{}-{name}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir).unwrap();
+        dir
+    }
+
+    /// A connection reaching the listener, proven by the accept landing.
+    async fn reaches(socket: &Socket, path: &Path) {
+        let client = UnixStream::connect(path).await.expect("connect");
+        socket.listener.accept().await.expect("accept");
+        drop(client);
+    }
+
+    #[test]
+    fn the_path_state_follows_the_inode() {
+        let missing = || Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+        let denied = || Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+
+        assert_eq!(path_state((1, 2), Ok((1, 2))), PathState::Ours);
+        assert_eq!(path_state((1, 2), Ok((1, 3))), PathState::Other((1, 3)));
+        assert_eq!(path_state((1, 2), Ok((9, 2))), PathState::Other((9, 2)));
+        assert_eq!(path_state((1, 2), missing()), PathState::Gone);
+        assert_eq!(path_state((1, 2), denied()), PathState::Ours);
+    }
+
+    #[tokio::test]
+    async fn a_socket_still_in_place_is_left_alone() {
+        let dir = socket_dir("kept");
+        let path = dir.join("dray.sock");
+        let mut socket = Socket::bind(&path).unwrap();
+
+        assert!(!socket.heal(&path).await);
+        reaches(&socket, &path).await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_deleted_socket_is_bound_again() {
+        let dir = socket_dir("deleted");
+        let path = dir.join("dray.sock");
+        let mut socket = Socket::bind(&path).unwrap();
+
+        std::fs::remove_file(&path).unwrap();
+        assert!(UnixStream::connect(&path).await.is_err());
+
+        assert!(socket.heal(&path).await);
+        reaches(&socket, &path).await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `rm -rf ~/.dray` takes the directory too, and the rebind brings it back
+    /// private.
+    #[tokio::test]
+    async fn a_deleted_directory_is_made_again_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = socket_dir("dir-gone");
+        let path = dir.join("dray.sock");
+        let mut socket = Socket::bind(&path).unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(socket.heal(&path).await);
+        reaches(&socket, &path).await;
+
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&path), 0o600);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A session's log write can recreate the directory before the check runs,
+    /// under a `022` umask. The rebind narrows it rather than refusing it.
+    #[tokio::test]
+    async fn a_directory_recreated_open_is_narrowed_and_bound() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = socket_dir("dir-open");
+        let path = dir.join("dray.sock");
+        let mut socket = Socket::bind(&path).unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("sessions")).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(socket.heal(&path).await);
+        reaches(&socket, &path).await;
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The case seen live (#801): a copied socket file with nothing behind it.
+    #[tokio::test]
+    async fn a_dead_socket_file_in_its_place_is_replaced() {
+        let dir = socket_dir("dead");
+        let path = dir.join("dray.sock");
+        let mut socket = Socket::bind(&path).unwrap();
+
+        let stale = dir.join("stale.sock");
+        drop(UnixListener::bind(&stale).unwrap());
+        std::fs::rename(&stale, &path).unwrap();
+        assert!(UnixStream::connect(&path).await.is_err());
+
+        assert!(socket.heal(&path).await);
+        reaches(&socket, &path).await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Two processes on one path must not take it from each other in turn.
+    #[tokio::test]
+    async fn a_live_socket_in_its_place_is_left_to_its_owner() {
+        let dir = socket_dir("live");
+        let path = dir.join("dray.sock");
+        let mut socket = Socket::bind(&path).unwrap();
+
+        let other = Socket::bind(&path).unwrap();
+
+        assert!(!socket.heal(&path).await);
+        assert_eq!(socket.yielded, Some(other.id));
+
+        // The probe above reached the owner; drain it so the next proof is clean.
+        other.listener.accept().await.unwrap();
+
+        assert!(!socket.heal(&path).await);
+        reaches(&other, &path).await;
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

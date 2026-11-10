@@ -81,7 +81,7 @@ Field = **opt-out**, and shape is rule: theme keep layering by saying nothing, s
 
 Black card was tried first, on reasoning that white veil over light page is invisible. True of dark's 5.5%, wrong conclusion: light page want not *different colour* of veil but far more of same one. At 4% black card came out darker than page it sit on, which read as well not card — and it disagree with app's own flat drawing of itself, since light always go flat in fullscreen and card there = `--surface-card`, pure white. Windowed and fullscreen looked like two product. 60% white = card white with backdrop faintly through it, same sentence dark's veil say.
 
-**Theme without light palette say so, and row stay drawn.** `darkOnly` = opt-out like `flatInFullscreen`, so ported theme arrive with both by saying nothing. **Nothing set it today** — Default was last, and its light side built. Machinery stay because case it cover real and silent: palette with no light block match nothing, so app fall through to light ramp's own neutrals — legible, not theme anyone picked, nothing on screen saying why. Settings row therefore **disabled with reason**, not hidden — vanishing row read as setting app forgot, and sentence under it = only place reason can be said.
+**Theme without light palette say so, and row stay drawn.** `darkOnly` = opt-out like `flatInFullscreen`, so ported theme arrive with both by saying nothing. **Cobalt2 and One Dark Pro set it today.** Machinery stay because case it cover real and silent: palette with no light block match nothing, so app fall through to light ramp's own neutrals — legible, not theme anyone picked, nothing on screen saying why. Settings row therefore **disabled with reason**, not hidden — vanishing row read as setting app forgot, and sentence under it = only place reason can be said.
 
 **Green = token, and it pair with `--destructive`.** `--accent-add` carry added line, open pull request, unread session; `--accent-merged` carry merged one. Both were Tailwind literal — `emerald-400` in transcript, `emerald-500` in panel and on sidebar rail, `purple-500` on merged glyph — and literal cannot flip with mode, so every green went from readable to invisible on light page (1.6:1 and 2.3:1 measured, against 4.5 coloured word want). Lightness matched to `--destructive` not to Tailwind step it replace: pair read side by side in diff, and one lighter than other read as emphasis nobody meant. Light green sit 0.02 *under* red, since WCAG weight green far above red and equal OKLCh lightness leave green the one falling short.
 
@@ -91,7 +91,7 @@ Black card was tried first, on reasoning that white veil over light page is invi
 
 **`--secondary` reorder in light, like `--surface-raised` do.** Dark build second action by adding light to page; light have none left to add, so fill go other way and become **card colour** — palette's lightest surface, `--shadow-surface` under it doing separating. Grey fill on near-white page = what `disabled` already look like, and two thing saying one thing = whole reason it moved. `var(--surface-card)` not literal white, so Latte get its `base` and Gruvbox its `bg0_h`.
 
-**Vibrancy alpha per mode, and macOS = why.** Material behind window follow **system** appearance, not `data-mode` — so light palette on Mac set to Dark composite over dark blur, and at dark's 80% the missing fifth dull whole page into grey no token name. Light take **92%**. Short of 100 deliberately: some desktop must survive or window stop being glass and veil have nothing to sit on.
+**Vibrancy alpha per mode: dark 80%, light 70%.** Light took 92% while the material followed the **system** appearance — light palette on a Mac set to Dark composited over dark blur, and letting almost no desktop through was the defence. `useGlass` now give the material the app's own appearance, so the number describe the look: light sit *below* dark, since a light blur under near-white page need more desktop through before window read as glass at all. Short of 100 deliberately: some desktop must survive or window stop being glass and veil have nothing to sit on.
 
 **No `bg-clip-padding` on filled button.** Every button carry transparent 1px border so focus can colour it without moving anything; clipping fill to padding box let **page** show through that border as 1px rim of backdrop. Dark = near-black on near-black, invisible. Light = white, and split merge button show it worst — two transparent border meet between halves, so seam read as 2px white gap cut through green. Stay on `outline` alone, one variant drawing translucent border over fill and needing two kept apart.
 
@@ -109,9 +109,9 @@ Black card was tried first, on reasoning that white veil over light page is invi
 
 **Right pane = one frame with tabs, not one panel per view.** [RightPanel](src/components/RightPanel.tsx) own `<aside>`, border, tab row; `ChangesPanel` and `SubagentPanel` = bodies rendering inside it, carry no chrome. `AppShell` have single `panel` slot, so two self-framing panels could only ever be mutually exclusive with two booleans deciding it. Tab row `h-(--titlebar-h)` and carry drag region itself. No close button: `PanelToggle` and ⌘E both close it, matching ⌘B for sidebar. Toggle exported from `RightPanel` but rendered by `App`, because pane not exist before session do and button have to outlive it.
 
-**Changes glyph = plain foreground, not command yellow.** Yellow = app's "this is for you", colour of session standing still behind question. Turn having touched file neither warning nor thing to answer. PR glyph keep its emerald: that one say state of work.
+**Changes glyph = plain foreground, not command yellow** — written for toggle's changes glyph, gone since #462. Yellow = app's "this is for you", colour of session standing still behind question. Turn having touched file neither warning nor thing to answer. PR glyph keep its emerald: that one say state of work.
 
-**Toggle double as changes indicator.** With pane closed and last turn having changed tree, it draw git glyph instead of panel one and its click open _changes_ tab not whichever tab last used — glyph opening something else = lie. ⌘E stay plain toggle: show nothing, so promise nothing. Signal = `turnChangedTree`, cost no git call — both sides of range content-addressed tree ids, so ids that differ _are_ changed tree. Reading panel's own file list instead not work: `useChanges` pause while hidden, exactly when indicator have to be right.
+**Toggle no longer double as changes indicator** (#462). `PanelToggle` draw panel glyph alone, and its click = ⌘E, plain toggle: show nothing, so promise nothing. Git glyph it swapped to after turn changed tree, and `turnChangedTree` behind it, gone.
 
 **No row in changes list open by default.** List = answer to "what did this turn touch", and auto-opening one file by position put arbitrary diff above that list and push rest off screen.
 
@@ -119,9 +119,9 @@ Black card was tried first, on reasoning that white veil over light page is invi
 
 **Tab called `PR`, and it lead when PR is open.** Short form what anyone working on one call it. `tabOrder` put it first when session have **open** PR (draft count, being `OPEN` with `isDraft` set) — at that point session's work about landing, not about this turn. Merged or closed PR don't promote: it record, not something to act on.
 
-Last turn changing tree **don't** enter into it. Changes describe one turn and superseded by next; PR = state of work. Toggle's own click still set tab to match glyph it drew, and that now only thing `handleTogglePanel` do.
+Last turn changing tree **don't** enter into it. Changes describe one turn and superseded by next; PR = state of work. Toggle's click set no tab: `togglePanel` only flip pane, which land on `defaultTab` where reader picked none.
 
-**⌘⇧[ / ⌘⇧] step tab, and legend drawn not hidden.** Step over `tabs` (what `tabOrder` return) not `PANEL_TABS`, so session with no PR tab cycle two and never land on undrawn one. Keycaps sit **right after tabs**, no label, and refresh button take `ml-auto`. Three cap not four — `[ ]` = one key with two end. Deliberate exception to app's tooltip rule: chord for row of two or three tab = one nobody go looking for.
+**⌘⌥[ / ⌘⌥] step tab, and legend drawn not hidden.** (⌘⇧[ / ⌘⇧] went to the titlebar's tabs.) Step over `tabs` (what `tabOrder` return) not `PANEL_TABS`, so session with no PR tab cycle two and never land on undrawn one. Keycaps sit **right after tabs**, no label, and refresh button take `ml-auto`. Three cap not four — `[ ]` = one key with two end. Deliberate exception to app's tooltip rule: chord for row of two or three tab = one nobody go looking for.
 
 **Panel own no header strip.** PR count ride tab's own badge — same place subagent count sit — and refresh button belong to frame.
 
@@ -157,9 +157,7 @@ Last turn changing tree **don't** enter into it. Changes describe one turn and s
 
 Glyph sit **beside rail, ahead of title**, and take **no room when absent** — unlike rail next to it, which hold its slot. Two differ because rail come and go on *same* row as agent work, where branch either have PR or don't: row that never get one would otherwise pay for mark forever. Rail keep outer edge, since it "over to you" and clear when reader deal with it, where this standing fact about branch. Emerald for open, muted `GitPullRequestDraft` for draft, since draft = work not asking to land yet. `title` attribute rather than tooltip: decoration on row that itself a control, and tooltip open every time cursor cross list.
 
-**Toggle's PR glyph count draft, and draw draft's own shape.** `hasOpenPr` = any `state === "OPEN"`, which draft satisfy. `draft` prop true only where **every** open PR is one — session carrying draft beside real PR have something asking to land. Glyph keep emerald either way: shape carry distinction, colour carry "there is something here".
-
-**Panel toggle draw PR over changes.** Two indicators = same promise, so only one can be drawn and PR win: it tab that open first, it state of *work* rather than of last turn, and it survive next prompt landing where changes mark don't. Glyph = **`text-emerald-500`, not `--accent-merge`**: that token is button *fill*, dark enough to carry white text, and at 1.5px stroke on dark background it all but disappeared.
+**Panel toggle draw no PR glyph any more** (#462) — one panel glyph, whatever branch hold. `hasOpenPr` = any `state === "OPEN"`, which draft satisfy, and it still pick pane's default tab.
 
 **Collapsed preview = plain text, so markup come off first.** `firstLine` strip heading marks, emphasis, and link syntax keeping only its text — `(https://…)` half usually longer than words around it and not clickable in truncating span anyway.
 
@@ -180,8 +178,6 @@ Glyph sit **beside rail, ahead of title**, and take **no room when absent** — 
 **Channel between split halves = reserved scrollbar gutter, not gap.** Each column own horizontally-scrolling box carrying `scrollbar-gutter: stable`, so WebKit reserve classic scrollbar's width at its **inline end** — even though library zero that scrollbar (`::-webkit-scrollbar { width: 0 }`) and only ever *measure* horizontal one. Leave strip of dead background down right of each column, and make two look lopsided: left inset = library's own spacing, right = this. No variable expose it, so `unsafeCSS` (library's own escape hatch, inject into `@layer unsafe` = last in its layer order, so no `!important` needed) carry `[data-code] { scrollbar-gutter: auto; }`. Nothing lost: gutter only ever reserve room for scrollbar drawn at zero width. **Don't reach for `--diffs-gap-inline` here** — that inset "N unmodified lines" bar only, so tightening it shrink bar and leave channel.
 
 **Library spacing dialled down from outside, through its shadow root.** `--diffs-gap-block` (8px padding above/below code) and `--diffs-gap-style` (2px rule between gutter and code, which in split view draw channel down middle wide enough to read as two halve drifting apart) both read *inside* shadow DOM with those name — and custom property cross that boundary, so setting them on any ancestor = whole override. `DIFF_SPACING` in [DiffPane](src/components/changes/DiffPane.tsx). Pane itself carry no padding either: its border = frame.
-
-**History drill in, not third column.** Window can't hold commit list, file list *and* split diff without diff becoming narrowest of three. Selecting commit replace list with its files under back-header; selection kept on step back, so long history don't lose reader's place.
 
 ## Handoff row
 
@@ -205,7 +201,7 @@ Read that as the row's standing budget: **three button**. Fourth want re-measuri
 
 Inline variant — same button along toolbar row, ghost and dimmed — built as mockup and **rejected**. Permanent-but-quiet still permanent: it spend width every turn on thing wanted at end of one.
 
-Icon for `pr` = same one sidebar row and panel toggle draw, so mark and thing it lead to match everywhere.
+Icon for `pr` = same one sidebar row draw, so mark and thing it lead to match everywhere.
 
 Hover delay symmetric (150ms): keep cursor merely passing through from popping row open, and let one overshooting on way out come back without it having closed.
 
@@ -261,7 +257,7 @@ Card name its subject — it and `worktree-failed` the only two that do — brea
 
 **Switch one rung up from composer's own toggle** — `h-4 w-7` against its `h-3 w-5`. There track sit inside toolbar button among other 12px chrome; here it thing being pressed and have to take click on own.
 
-**Copy say what it for and what it never touch, and stop.** Analytics row = two sentence, no itemised field list. Naming every field read as something to be wary of; "analytics" alone read as behavioural tracking. Second sentence — conversation and activity never collected — carry row.
+**Copy say what it for and what it never touch, and stop.** Written for Analytics row, which went with in-app opt-out (#658): two sentence, no itemised field list. Naming every field read as something to be wary of; "analytics" alone read as behavioural tracking. Second sentence — conversation and activity never collected — carried row.
 
 **Group heading arrive with second group, not before.** One heading over only group there was = label for dialog, which `DialogTitle` already is. Separated by **space, not rules**, for reason PR panel's own sections are.
 

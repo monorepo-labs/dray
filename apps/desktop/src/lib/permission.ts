@@ -41,7 +41,12 @@ const HONOURED: Partial<Record<Harness, ApprovalPolicy[]>> = {
 /// than anything fx has and falls the other way, to `manual` — fx.rs runs
 /// that as `ask`, and a spawned session inheriting `plan` must never come out
 /// freer than its parent.
+///
+/// Codex: the same two, for the same reason. codex.rs runs an inherited `plan`
+/// read-only and `dontAsk` inside the sandbox, so the default below — full
+/// access, nothing asked — widened both on the first send from the composer.
 const FALLBACK: Partial<Record<Harness, (mode: ApprovalPolicy) => ApprovalPolicy>> = {
+  codex: (mode) => (mode === "plan" ? "manual" : "auto"),
   fx: (mode) => (mode === "plan" ? "manual" : "auto"),
   // `plan` is the only stance grok does not honour, and it must fall to the
   // *narrowest* thing grok has rather than to the default below it: a spawned
@@ -65,10 +70,11 @@ export function honoursMode(harness: Harness, mode: ApprovalPolicy): boolean {
 /// for a pi session running ungated is a lie a later build could read back and
 /// believe.
 ///
-/// Falls to the harness's most permissive stance rather than its most
-/// restrictive, because that is the one describing what the CLI will do. A
-/// session recorded `plan` that is not passed `--tools` would be the same lie
-/// pointed the other way, and the more alarming direction to be wrong in.
+/// A harness with no entry in `FALLBACK` falls to the most permissive stance
+/// rather than the most restrictive, because for pi — the one left — that is
+/// what the CLI will do. A session recorded `plan` that is not passed `--tools`
+/// would be the same lie pointed the other way, and the more alarming direction
+/// to be wrong in.
 export function stanceFor(harness: Harness, mode: ApprovalPolicy): ApprovalPolicy {
   if (honoursMode(harness, mode)) return mode;
   return FALLBACK[harness]?.(mode) ?? "bypassPermissions";

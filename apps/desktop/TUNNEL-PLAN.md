@@ -178,8 +178,8 @@ answered, the Mac-only `open_in_app` refused as unknown, reconnect.
   login stays up leaves the recorded one stale until the next login, and a
   login landing mid-restart, when no address file exists, forgets it until
   the next. Both heal on their own; only the no-SSH fallback is affected.
-- `forward_port` and Sign in still need SSH: a server reached by tunnel alone
-  has neither, and says so as before.
+- Sign in still needs SSH: a server reached by tunnel alone has none, and says
+  so as before. `forward_port` no longer does (HEADLESS-PLAN.md, #775).
 
 ## Stage 8: OpenTunnel, a kept address (#518)
 

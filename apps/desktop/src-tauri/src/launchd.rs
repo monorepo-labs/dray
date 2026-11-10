@@ -8,10 +8,11 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use tokio::process::Command;
 
-/// A dev build gets its own agent, running the binary cargo just built on
-/// `~/.dray-dev`, so it never replaces the release app's server.
+/// The release app's job on a Mac. A dev build, or one off a Mac, names none:
+/// [`ensure`] and [`stop`] turn off to a child process before anything here is
+/// asked.
 fn label() -> &'static str {
-    if crate::is_dev() { "com.yogesh.dray.server.dev" } else { "com.yogesh.dray.server" }
+    "com.yogesh.dray.server"
 }
 
 /// Whether the server is this app's child rather than a launchd job: a dev
@@ -158,6 +159,10 @@ async fn bootstrap(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// Set by [`stop`], or the reconnect loop would start a dev server again in
+/// the moment between it stopping and the app exiting.
+static STOPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// A dev build starts its server as a child rather than through launchd. TCC
 /// judges a launchd job on its own code identity, and an unsigned binary cargo
 /// just rebuilt is a new identity every time, so each rebuild asked for
@@ -166,10 +171,6 @@ async fn bootstrap(path: &std::path::Path) -> Result<()> {
 /// Cost: nothing restarts a dev server that dies, until the app asks again.
 /// A second one exits on its own when the socket already answers, so asking
 /// while one runs costs a spawn.
-/// Set by [`stop`], or the reconnect loop would start a dev server again in
-/// the moment between it stopping and the app exiting.
-static STOPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 fn spawn_dev(exe: &std::path::Path, log: &std::path::Path) -> Result<()> {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};

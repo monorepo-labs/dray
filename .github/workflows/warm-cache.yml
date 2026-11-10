@@ -47,7 +47,7 @@ jobs:
   warm:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - id: setup
         uses: ./.github/actions/desktop-setup
@@ -69,7 +69,7 @@ jobs:
 
       # The setup action only restores; this is the one job that writes.
       - if: steps.setup.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ steps.setup.outputs.cache-path }}
           key: ${{ steps.setup.outputs.cache-key }}

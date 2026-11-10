@@ -1,6 +1,6 @@
 /// Carrying a markdown list marker onto the next line, the way every editor
 /// does it — the one piece of markdown the composer has to *know* about, since
-/// a textarea will happily let the reader retype `- ` on every line.
+/// a plain text box will happily let the reader retype `- ` on every line.
 ///
 /// Caret arithmetic and nothing else, so it sits beside `slash.ts` and
 /// `mention.ts` rather than in the composer: the rules are worth a test and the
@@ -43,7 +43,7 @@ function nextLine(text: string, at: number): number {
 }
 
 /// What the newline about to be inserted should produce, or `null` where the
-/// caret is not in a list and the textarea's own newline is right.
+/// caret is not in a list and a bare newline is right.
 ///
 /// Two answers, and the second is why this can't be a prefix-only insert: an
 /// item with nothing typed in it is the reader leaving the list, so the marker

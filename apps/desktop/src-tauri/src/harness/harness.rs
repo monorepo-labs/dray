@@ -639,9 +639,9 @@ impl FastMode {
 /// session would have bailed inside `Session::init` with its index row already
 /// written.
 ///
-/// **These describe what Dray does, not what the CLI can do.** pi answers
-/// `set_model` on a live connection and this build still respawns for one,
-/// because nothing here drives that connection yet. A `false` is safe in a way
+/// **These describe what Dray does, not what the CLI can do.** grok's stance
+/// moves on `/always-approve on` sent as prompt text and this build still
+/// respawns for one, because that costs a bubble. A `false` is safe in a way
 /// a `true` is not: replacing a child always applies the change, where applying
 /// it in place is only correct if the wire really carries it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -727,8 +727,9 @@ impl Harness {
                 forkable: true,
                 fork_needs_cli: true,
             },
-            // pi has no worktree flag, and the three settings are ones it takes
-            // at spawn and nowhere else, so changing any of them is a respawn.
+            // pi has no worktree flag. Model and effort go through `set_model`
+            // and `set_thinking_level`, mid-run included; the stance is
+            // `--tools`, fixed at spawn, so changing it is a respawn.
             //
             // Forkable, and by the cheapest route of the three. pi's own `fork`
             // is still the wrong tool — `clone` hijacks the running process,
@@ -737,8 +738,6 @@ impl Harness {
             // needed: pi's resume handle *is* a file, so copying it is the whole
             // fork. Verified live — a pi spawned on a copy reports the new path,
             // counts the parent's messages, and quotes its first prompt back.
-            // Model and effort through `set_model` and `set_thinking_level`, mid-run
-            // included. The stance is `--tools`, fixed at spawn.
             Harness::Pi => Capabilities {
                 creates_own_worktree: false,
                 applies_model_in_place: true,
@@ -754,11 +753,12 @@ impl Harness {
             // `session/set_mode` for the stance — each verified live to move
             // the session's own `currentValue`. Model, effort and fast write
             // nothing to fx's settings file; the stance does, by fx's design
-            // since 0.0.14. So fx is the one harness where an effort change is
-            // a request rather than a respawn.
+            // since 0.0.14.
             //
-            // Not forkable: fx has no fork and its resume handle is an id it
-            // minted, not a file to copy. No `-w` either; Dray makes the tree.
+            // Forkable by pi's route: `fx session recover` copies the
+            // conversation at the press with no child needed, so the first send
+            // is an ordinary `session/resume` of the copy. 0.0.15's `/fork` is
+            // TUI-only, with no ACP method. No `-w`; Dray makes the tree.
             Harness::Fx => Capabilities {
                 creates_own_worktree: false,
                 applies_model_in_place: true,
@@ -766,7 +766,7 @@ impl Harness {
                 applies_permission_in_place: true,
                 fast_mode: FastMode::InPlace,
                 expands_at_mentions: false,
-                forkable: false,
+                forkable: true,
                 fork_needs_cli: false,
             },
             // ACP again, and the split from fx one row up is the whole of what

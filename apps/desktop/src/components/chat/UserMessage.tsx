@@ -22,7 +22,6 @@ import { openIssue, parseIdentifier } from "@/lib/issue";
 import { openLink } from "@/lib/openLink";
 import { commandBrand } from "@/lib/pluginBrand";
 import { stripSenderPrefix } from "@/lib/relay";
-import { shortenPath } from "@/lib/tools";
 import { useSendProgress } from "@/lib/uploads";
 import { cn } from "@/lib/utils";
 import type { ImageRef, IssueRef, MessageSender } from "@/types/events";
@@ -33,7 +32,7 @@ import type { ImageRef, IssueRef, MessageSender } from "@/types/events";
 /// A slash command and a file mention are coloured and nothing more — same size,
 /// same weight, same line. Each stays part of the sentence it sits in, which a
 /// chip or a monospace run made them stop being. The segments come from the same
-/// function the composer's overlay uses, so a word coloured while typing is
+/// function the composer's editor uses, so a word coloured while typing is
 /// still coloured once sent.
 ///
 /// Images sit **outside the bubble**. The bubble is a container for speech, and
@@ -131,7 +130,10 @@ export default function UserMessage({
           className="flex max-w-[85%] cursor-pointer items-center gap-1 text-ui text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground"
         >
           <SessionAvatar sessionId={from.sessionId} name={from.title} />
-          <span className="truncate">{from.title}</span>
+          <span className="truncate">
+            {from.title}
+            {from.machine && ` on ${from.machine}`}
+          </span>
         </button>
       )}
 
@@ -326,10 +328,10 @@ export default function UserMessage({
 
       {/* An image whose file is gone. Named rather than drawn as a broken frame,
           which says nothing about what was sent. */}
-      {missing.map((image, i) => (
+      {missing.map((_, i) => (
         <span key={i} className="flex items-center gap-1.5 text-chat text-muted-foreground">
           <Image className="size-3.5 shrink-0" />
-          <span className="truncate">{image.path ? shortenPath(image.path) : "image"}</span>
+          <span className="truncate">image</span>
         </span>
       ))}
 

@@ -181,8 +181,16 @@ fetches it on first use.
 - **Lifecycle.** Held on the server's connection, keyed by remote port: reused
   by every session on that server, dropped when the connection drops, the
   server is turned off or removed. A dead forward is replaced on the next click.
-- **A server added by address** has no login to forward over; a click there
-  answers that in a sentence, in the pane's error slot.
+- **A server added by address** has no login to forward over, so its forward
+  runs over Dray's own connection (#775). The app listens on a free port, and
+  each connection there opens its own socket to the server, whose hello carries
+  `forward: <port>`. The token admits it, the server dials its own `localhost`,
+  and `serve::pipe` passes bytes both ways. Any port is allowed, since the token
+  already runs shells there. One socket per connection, so a page costs a TLS
+  handshake per browser connection and nothing new in the protocol. A probe
+  socket goes first, so a stopped port or a server too old to read `forward`
+  answers in a sentence: an old one reads that hello as a client's and sends a
+  welcome without `forwarding`.
 - A port that stopped listening between the list and the click still
   forwards — ssh connects per connection — so the page shows Chromium's own
   refusal. The list polls every 5s, so that window is short.

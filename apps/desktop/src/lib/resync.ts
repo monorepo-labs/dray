@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@/types/events";
+import type { AgentEvent, QueueChangedEvent } from "@/types/events";
 import { retireOldestProvisional } from "@/lib/provisional";
 
 /// What a `dray-serve` sends on every connect: what lives in its memory and in
@@ -10,6 +10,8 @@ export type LiveState = {
   asks: AgentEvent[];
   /// The newest `background_tasks_changed` per session, which replaces.
   tasks: AgentEvent[];
+  /// Every non-empty queue. Absent from a server that predates it.
+  queued?: QueueChangedEvent[];
 };
 
 /// The logged events a client missed: everything in `fetched` (a log tail, in
@@ -32,17 +34,33 @@ export function missedEvents(held: AgentEvent[], fetched: AgentEvent[]): AgentEv
 /// read did not return arrived after it, so it goes after every event the read
 /// did. Appended instead, older events sat behind newer ones and a backward
 /// walk read the wrong one as the newest.
+///
+/// Arrived means *after* the newest held event: one before it is an older page
+/// prepended during the read, and stays where it is.
 export function mergeMissed(current: AgentEvent[], held: AgentEvent[], fresh: AgentEvent[]): AgentEvent[] {
   const have = new Set(current.map((e) => e.id));
   if (fresh.every((e) => have.has(e.id))) return current;
   const heldIds = new Set(held.map((e) => e.id));
   const freshIds = new Set(fresh.map((e) => e.id));
-  let events = current.filter((e) => heldIds.has(e.id) && !freshIds.has(e.id));
-  const arrived = current.filter((e) => !heldIds.has(e.id) && !freshIds.has(e.id));
+  let lastHeld = -1;
+  current.forEach((e, i) => {
+    if (heldIds.has(e.id)) lastHeld = i;
+  });
+  let events = current.filter((e, i) => i <= lastHeld && !freshIds.has(e.id));
+  const arrived = current.filter((e, i) => i > lastHeld && !freshIds.has(e.id));
   for (const e of fresh) {
     // One that arrived live already retired its own provisional prompt.
     const retire = e.payload.type === "user_message" && !have.has(e.id);
     events = [...(retire ? retireOldestProvisional(events) : events), e];
   }
   return [...events, ...arrived];
+}
+
+/// A live event onto a session's events. The real prompt retires the provisional
+/// one drawn at send. One a log read already delivered is dropped: `serve.rs`'s
+/// writer picks between replies and events at random, so a read's reply can
+/// overtake an event emitted before it.
+export function appendLive(events: AgentEvent[], event: AgentEvent): AgentEvent[] {
+  if (events.some((e) => e.id === event.id)) return events;
+  return [...(event.payload.type === "user_message" ? retireOldestProvisional(events) : events), event];
 }

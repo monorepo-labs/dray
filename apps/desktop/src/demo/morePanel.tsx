@@ -73,7 +73,7 @@ function textEvent(text: string): AgentEvent {
     ts: null,
     sessionId: "demo",
     turnId: null,
-    payload: { type: "message", block: null, text },
+    payload: { type: "assistant_text", block: null, text },
   } as unknown as AgentEvent;
 }
 

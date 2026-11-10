@@ -1,4 +1,5 @@
-//! A browser recording on disk: the page's JPEG frames streamed into a
+//! A video on disk. [`add`] files one the agent made some other way; the rest
+//! is a browser recording: the page's JPEG frames streamed into a
 //! Photo-JPEG QuickTime file, then handed to macOS's own `avconvert` for an
 //! H.264 MP4 anything can play — or, on Linux, where no `avconvert` exists,
 //! to `ffmpeg`.
@@ -31,8 +32,8 @@ const HOLD_LAST: Duration = Duration::from_millis(1500);
 const MAX_BYTES: u64 = u32::MAX as u64 - (64 << 20);
 const TIMESCALE: u32 = 1000;
 /// Frames waiting for the writer. Each is ~100KB of base64, so this is a few
-/// megabytes at most; a frame arriving to a full queue is dropped, since the
-/// sender is CEF's UI thread and must never wait on a disk.
+/// megabytes at most; a frame arriving to a full queue is turned away, since
+/// the sender is the capture loop and must never wait on a disk.
 const QUEUE: usize = 64;
 
 struct Frame {
@@ -105,15 +106,54 @@ impl Recorder {
             let _ = tx.send(last);
         }
         drop(tx);
-        let truncated = thread.join().map_err(|_| "the recording thread panicked".to_string())??;
+        let written = thread.join().map_err(|_| "the recording thread panicked".to_string()).and_then(|w| w);
+        let truncated = match written {
+            Ok(truncated) => truncated,
+            // Nothing playable was written, so nothing is worth keeping.
+            Err(e) => {
+                let _ = std::fs::remove_file(&mov);
+                return Err(e);
+            }
+        };
         let mp4 = match name.map(slug).filter(|s| !s.is_empty()) {
             Some(stem) => unclaimed(mov.parent().unwrap_or(Path::new(".")), &stem),
             None => mov.with_extension("mp4"),
         };
-        convert(&mov, &mp4)?;
-        let _ = std::fs::remove_file(&mov);
+        convert_or_discard(&mov, &mp4, convert)?;
         Ok((mp4, truncated))
     }
+}
+
+/// How many times a conversion is tried before the recording is let go.
+const CONVERT_TRIES: u32 = 3;
+
+/// Converts, trying again on a failure, and deletes the `.mov` either way.
+///
+/// The `.mov` is uncompressed JPEG and runs to gigabytes, and nothing plays it
+/// in the chat, so one a conversion left behind was disk spent on a file
+/// nobody would open, until the session was deleted. A failure that holds over
+/// every try deletes it, and says so.
+fn convert_or_discard(
+    mov: &Path,
+    mp4: &Path,
+    convert: impl Fn(&Path, &Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut said = String::new();
+    for attempt in 1..=CONVERT_TRIES {
+        match convert(mov, mp4) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(mov);
+                return Ok(());
+            }
+            Err(e) => said = e,
+        }
+        if attempt < CONVERT_TRIES {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+    let _ = std::fs::remove_file(mov);
+    let _ = std::fs::remove_file(mp4);
+    Err(format!("{said} (tried {CONVERT_TRIES} times; the recording was deleted)"))
 }
 
 /// A name made safe to be a file's: lowercase letters and digits, every
@@ -145,12 +185,106 @@ fn unclaimed(dir: &Path, stem: &str) -> PathBuf {
     path
 }
 
+/// `<stem>.mp4` in `dir` or the first free `<stem>-n.mp4`, created empty so
+/// two `dray video add`s running at once, each on its own connection, can
+/// never pick the same name.
+fn claim(dir: &Path, stem: &str) -> Result<PathBuf, String> {
+    for n in 1.. {
+        let path = match n {
+            1 => dir.join(format!("{stem}.mp4")),
+            n => dir.join(format!("{stem}-{n}.mp4")),
+        };
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => return Ok(path),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("could not create {}: {e}", path.display())),
+        }
+    }
+    unreachable!()
+}
+
+/// Files a video the agent made some other way into `dir`, for `dray video
+/// add`, and answers the `.mp4` the chat plays. An MP4 is copied and anything
+/// else converted, built under a hidden name of its own so a failed run leaves
+/// no player on half a video. One already in `dir` under a name the players
+/// match is answered as it stands.
+pub fn add(source: &Path, dir: &Path, name: Option<&str>) -> Result<PathBuf, String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mp4 = holds_mp4(source);
+    std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    let lowercase = source.extension().is_some_and(|e| e == "mp4");
+    if mp4 && lowercase && name.is_none() && source.parent().is_some_and(|parent| same_dir(parent, dir)) {
+        return Ok(source.to_path_buf());
+    }
+    let stem = name
+        .map(slug)
+        .filter(|s| !s.is_empty())
+        .or_else(|| source.file_stem().map(|s| slug(&s.to_string_lossy())).filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| "video".into());
+    let dest = claim(dir, &stem)?;
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let part = dir.join(format!(".{stem}.{}-{n}.part.mp4", std::process::id()));
+    let built = if mp4 {
+        std::fs::copy(source, &part).map(drop).map_err(|e| format!("could not copy {}: {e}", source.display()))
+    } else {
+        to_mp4(source, &part)
+    };
+    let filed = built.and_then(|()| {
+        std::fs::rename(&part, &dest).map_err(|e| format!("could not file {}: {e}", dest.display()))
+    });
+    if let Err(e) = filed {
+        let _ = std::fs::remove_file(&part);
+        let _ = std::fs::remove_file(&dest);
+        return Err(e);
+    }
+    Ok(dest)
+}
+
+/// Named `.mp4` and carrying an MP4's `ftyp` box, so a text file called
+/// `x.mp4` goes to the converter and is refused rather than copied into a
+/// player that never plays.
+fn holds_mp4(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 8];
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4"))
+        && File::open(path).and_then(|mut f| f.read_exact(&mut head)).is_ok()
+        && &head[4..] == b"ftyp"
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+}
+
+/// macOS converts what AVFoundation reads and turns to ffmpeg, where there is
+/// one, for what it cannot (`.webm`, `.mkv`). Elsewhere ffmpeg is the only way.
+fn to_mp4(source: &Path, mp4: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let refused = match avconvert(source, mp4) {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
+    #[cfg(not(target_os = "macos"))]
+    let refused = format!("{} is not an MP4", source.display());
+    match ffmpeg() {
+        Some(ffmpeg) => ffmpeg_convert(&ffmpeg, source, mp4),
+        None => Err(format!(
+            "{refused}. Converting it needs ffmpeg on this machine and there is none: \
+             install ffmpeg (on a server, `dray setup` offers it), or send an H.264 MP4."
+        )),
+    }
+}
+
 /// `avconvert` picks the container off the extension and the codec off the
 /// preset: `.mp4` with `PresetHighestQuality` is H.264 at the source size.
 /// Apple's Photo-JPEG decoder takes 4:2:0 frames, which is what Chromium
 /// sends, and answers "Cannot Decode" for 4:4:4 — hence the fixtures' format.
 #[cfg(target_os = "macos")]
 fn convert(mov: &Path, mp4: &Path) -> Result<(), String> {
+    avconvert(mov, mp4)
+}
+
+#[cfg(target_os = "macos")]
+fn avconvert(mov: &Path, mp4: &Path) -> Result<(), String> {
     let mut command = std::process::Command::new("/usr/bin/avconvert");
     command
         .args(["--preset", "PresetHighestQuality", "--replace", "--source"])
@@ -160,15 +294,21 @@ fn convert(mov: &Path, mp4: &Path) -> Result<(), String> {
     run("avconvert", command)
 }
 
-/// ffmpeg reads the same `.mov`. `yuv420p` and `faststart`, or the file is
-/// one some players refuse and the webview cannot start until it is whole.
 #[cfg(not(target_os = "macos"))]
 fn convert(mov: &Path, mp4: &Path) -> Result<(), String> {
     let ffmpeg = ffmpeg().ok_or("ffmpeg is gone; run `dray setup` and pick it")?;
+    ffmpeg_convert(&ffmpeg, mov, mp4)
+}
+
+/// `yuv420p` and `faststart`, or the file is one some players refuse and the
+/// webview cannot start until it is whole. Even dimensions, since libx264
+/// refuses odd ones at 4:2:0 and a screen region can be any size.
+fn ffmpeg_convert(ffmpeg: &Path, source: &Path, mp4: &Path) -> Result<(), String> {
     let mut command = std::process::Command::new(ffmpeg);
     command
         .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
-        .arg(mov)
+        .arg(source)
+        .args(["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"])
         .args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart"])
         .arg(mp4);
     run("ffmpeg", command)
@@ -180,17 +320,17 @@ fn run(name: &str, mut command: std::process::Command) -> Result<(), String> {
         let said = String::from_utf8_lossy(&out.stderr);
         let said = said.trim();
         let said = if said.is_empty() { String::from_utf8_lossy(&out.stdout).trim().to_string() } else { said.into() };
-        return Err(format!("{name} could not encode the recording: {said}"));
+        return Err(format!("{name} could not encode the video: {said}"));
     }
     Ok(())
 }
 
 /// `ffmpeg` on `PATH`, or where a package manager puts it — a server started
-/// by systemd has a short `PATH`.
+/// by systemd or launchd has a short `PATH`.
 fn ffmpeg() -> Option<PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path)
-        .chain(["/usr/bin", "/usr/local/bin"].map(PathBuf::from))
+        .chain(["/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/snap/bin"].map(PathBuf::from))
         .map(|dir| dir.join("ffmpeg"))
         .find(|p| p.is_file())
 }
@@ -359,6 +499,106 @@ fn moov(samples: &[Sample], durations: &[u32], width: u16, height: u16) -> Vec<u
 mod tests {
     use super::*;
 
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("dray-add-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    const MP4_HEAD: &[u8] = b"\0\0\0\x18ftypmp42rest of a movie";
+
+    #[test]
+    fn an_mp4_is_copied_under_its_name_and_never_over_another() {
+        let dir = temp_dir("copy");
+        let filed = dir.join("recordings/s1");
+        let source = dir.join("Login Flow.MP4");
+        std::fs::write(&source, MP4_HEAD).unwrap();
+
+        let first = add(&source, &filed, None).unwrap();
+        assert_eq!(first, filed.join("login-flow.mp4"));
+        assert_eq!(std::fs::read(&first).unwrap(), MP4_HEAD);
+        assert_eq!(add(&source, &filed, None).unwrap(), filed.join("login-flow-2.mp4"));
+        assert_eq!(add(&source, &filed, Some("the checkout")).unwrap(), filed.join("the-checkout.mp4"));
+        assert!(source.exists(), "the source stays where the agent left it");
+    }
+
+    #[test]
+    fn an_uppercase_mp4_in_place_is_filed_under_a_name_the_players_match() {
+        let dir = temp_dir("upper");
+        let source = dir.join("FLOW.MP4");
+        std::fs::write(&source, MP4_HEAD).unwrap();
+        let filed = add(&source, &dir, None).unwrap();
+        // `flow-2.mp4` on a case-insensitive disk, where `FLOW.MP4` is `flow.mp4`.
+        let name = filed.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("flow") && name.ends_with(".mp4"), "{name}");
+        assert_eq!(std::fs::read(&filed).unwrap(), MP4_HEAD);
+    }
+
+    #[test]
+    fn adds_at_once_never_share_a_name() {
+        let dir = temp_dir("race");
+        let filed = dir.join("recordings");
+        let source = dir.join("clip.mp4");
+        std::fs::write(&source, MP4_HEAD).unwrap();
+        let runs: Vec<_> = (0..8)
+            .map(|_| {
+                let (source, filed) = (source.clone(), filed.clone());
+                std::thread::spawn(move || add(&source, &filed, None).unwrap())
+            })
+            .collect();
+        let mut paths: Vec<_> = runs.into_iter().map(|r| r.join().unwrap()).collect();
+        paths.sort();
+        paths.dedup();
+        assert_eq!(paths.len(), 8);
+        for path in &paths {
+            assert_eq!(std::fs::read(path).unwrap(), MP4_HEAD);
+        }
+        assert_eq!(std::fs::read_dir(&filed).unwrap().count(), 8, "no part file left behind");
+    }
+
+    #[test]
+    fn a_video_already_filed_answers_itself() {
+        let dir = temp_dir("filed");
+        let source = dir.join("flow.mp4");
+        std::fs::write(&source, MP4_HEAD).unwrap();
+        assert_eq!(add(&source, &dir, None).unwrap(), source);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    }
+
+    /// What the agent reads when nothing here can convert it, and nothing left
+    /// behind for the chat to draw a player on. On a Mac this also proves
+    /// `avconvert`'s refusal reaches the message.
+    #[test]
+    fn what_cannot_be_converted_is_refused_and_leaves_nothing() {
+        let dir = temp_dir("refuse");
+        let filed = dir.join("recordings");
+        for name in ["notes.mov", "notes.mp4"] {
+            let source = dir.join(name);
+            std::fs::write(&source, "not a video at all").unwrap();
+            let refused = add(&source, &filed, None).unwrap_err();
+            assert!(!refused.is_empty());
+            assert_eq!(std::fs::read_dir(&filed).unwrap().count(), 0, "{refused}");
+        }
+    }
+
+    /// One line each, and a harness missing it is an agent whose videos draw as
+    /// links on that harness alone.
+    #[test]
+    fn every_prompt_and_the_skill_name_the_command() {
+        for prompt in [
+            include_str!("harness/claude_code/system_prompt.md"),
+            include_str!("harness/codex/developer_instructions.md"),
+            include_str!("harness/fx/system_prompt.md"),
+            include_str!("harness/grok/system_prompt.md"),
+            include_str!("harness/pi/system_prompt.md"),
+            include_str!("../../../cli/skill/SKILL.md"),
+        ] {
+            assert!(prompt.contains("dray video add"));
+            assert!(prompt.contains("another machine"));
+        }
+    }
+
     const FRAME1: &[u8] = include_bytes!("fixtures/recording/frame1.jpg");
     const FRAME2: &[u8] = include_bytes!("fixtures/recording/frame2.jpg");
 
@@ -434,12 +674,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A conversion that fails once is tried again and keeps the video; one
+    /// that keeps failing takes the `.mov` and any half-written `.mp4` with it.
+    #[test]
+    fn a_conversion_is_retried_then_the_recording_is_deleted() {
+        let dir = temp_dir("convert-retry");
+        let (mov, mp4) = (dir.join("r.mov"), dir.join("r.mp4"));
+        let calls = std::cell::Cell::new(0);
+
+        std::fs::write(&mov, b"frames").unwrap();
+        let flaky = |_: &Path, to: &Path| {
+            calls.set(calls.get() + 1);
+            if calls.get() < 2 {
+                return Err("busy".to_string());
+            }
+            std::fs::write(to, b"video").map_err(|e| e.to_string())
+        };
+        convert_or_discard(&mov, &mp4, flaky).unwrap();
+        assert_eq!(calls.get(), 2);
+        assert!(mp4.exists() && !mov.exists());
+
+        calls.set(0);
+        std::fs::remove_file(&mp4).unwrap();
+        std::fs::write(&mov, b"frames").unwrap();
+        let broken = |_: &Path, to: &Path| {
+            calls.set(calls.get() + 1);
+            let _ = std::fs::write(to, b"half");
+            Err("Cannot Decode".to_string())
+        };
+        let err = convert_or_discard(&mov, &mp4, broken).unwrap_err();
+        assert_eq!(calls.get(), CONVERT_TRIES);
+        assert!(err.contains("Cannot Decode") && err.contains("deleted"), "{err}");
+        assert!(!mov.exists() && !mp4.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_recording_with_no_frames_says_so() {
         let dir = std::env::temp_dir().join(format!("dray-recording-empty-{}", std::process::id()));
         let Some(recorder) = started(&dir, "empty") else { return };
         let err = recorder.finish(None).unwrap_err();
         assert!(err.contains("no frames"), "{err}");
+        assert!(!dir.join("empty.mov").exists(), "an empty recording leaves nothing behind");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

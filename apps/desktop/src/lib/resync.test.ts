@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@/types/events";
-import { mergeMissed, missedEvents } from "./resync";
+import { appendLive, mergeMissed, missedEvents } from "./resync";
 
 const ev = (id: string, seq: number) => ({ id, seq, payload: { type: "x" } }) as unknown as AgentEvent;
 
@@ -31,9 +31,44 @@ describe("mergeMissed", () => {
     ]);
   });
 
+  it("fills a kept copy back in log order around what arrived while it was evicted", () => {
+    // Kept as [a, b]; `c` arrived live while evicted and was merged on return;
+    // `e` arrived during the catch-up read, which answered what follows `b`.
+    const kept = [ev("a", 1), ev("b", 2)];
+    const current = [...kept, ev("c", 3), ev("e", 5)];
+    const since = [ev("c", 3), ev("d", 4)];
+    expect(mergeMissed(current, kept, since).map((e) => e.id)).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  it("leaves an older page prepended during the read above what it held", () => {
+    const kept = [ev("c", 3), ev("d", 4)];
+    const current = [ev("a", 1), ev("b", 2), ...kept];
+    expect(mergeMissed(current, kept, [ev("e", 5)]).map((e) => e.id)).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
   it("answers the same array when nothing was missed", () => {
     const current = [ev("a", 1)];
     expect(mergeMissed(current, current, [ev("a", 1)])).toBe(current);
+  });
+});
+
+describe("catching up a session mid-turn", () => {
+  const card = (id: string) => ({ id, seq: 9, payload: { type: "permission_requested" } }) as unknown as AgentEvent;
+
+  it("keeps an open card, which no log read returns", () => {
+    const held = [ev("a", 1), card("card")];
+    expect(mergeMissed(held, held, [ev("b", 2)]).map((e) => e.id)).toEqual(["a", "card", "b"]);
+  });
+
+  it("keeps a card raised while the read was out, after what it returned", () => {
+    const current = [ev("a", 1), card("card")];
+    expect(mergeMissed(current, [ev("a", 1)], [ev("b", 2)]).map((e) => e.id)).toEqual(["a", "b", "card"]);
+  });
+
+  it("drops a live event the read's reply overtook", () => {
+    const merged = mergeMissed([ev("a", 1)], [ev("a", 1)], [ev("b", 2)]);
+    expect(appendLive(merged, ev("b", 2))).toBe(merged);
+    expect(appendLive(merged, ev("c", 3)).map((e) => e.id)).toEqual(["a", "b", "c"]);
   });
 });
 

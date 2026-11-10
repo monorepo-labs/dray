@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 /// The list that opens over the composer while `/` or `@` is being typed.
 ///
 /// Deliberately not a Radix menu, unlike every other picker in the toolbar:
-/// those take focus when they open, and this one must not — the textarea stays
+/// those take focus when they open, and this one must not — the editor stays
 /// focused so typing keeps filtering the list. Every key it responds to is
 /// handled by the composer's own `onKeyDown` and arrives here as `activeIndex`,
 /// which is the same bargain the questionnaire card makes for the same reason.
@@ -365,7 +365,7 @@ export default function PickerMenu<T>({
                     type="button"
                     role="option"
                     aria-selected={index === activeIndex}
-                    // The textarea must keep focus — losing it on mousedown would
+                    // The editor must keep focus — losing it on mousedown would
                     // close the menu before the click ever lands.
                     onMouseDown={(e) => e.preventDefault()}
                     onMouseMove={(e) => handleMove(e, index)}

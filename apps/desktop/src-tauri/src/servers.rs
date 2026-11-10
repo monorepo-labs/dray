@@ -1,34 +1,32 @@
-//! Remote Dray servers the desktop app is connected to, beside its own
-//! in-process core. Each is a `dray-serve` reached over its WebSocket; this
-//! module holds the connections so the token never leaves Rust, and the
-//! frontend reaches a server through `server_invoke` and hears it through
-//! `server_event`. See SERVERS-PLAN.md.
+//! The Dray servers the desktop app is connected to: this Mac's own background
+//! server ([`LOCAL`]) and every remote `dray-serve`, each reached over its
+//! WebSocket. This module holds the connections so the token never leaves
+//! Rust, and the frontend reaches a server through `server_invoke` and hears
+//! it through `server_event`. See SERVERS-PLAN.md.
 //!
-//! The list is device-local: `servers.json` holds id, name and address, and
-//! each token sits in `credentials.json` under `server:<id>`, never on a
+//! The remote list is device-local: `servers.json` holds id, name and address,
+//! and each token sits in `credentials.json` under `server:<id>`, never on a
 //! struct the frontend is handed.
 
-use crate::{sink::Sink, ssh, store};
+use crate::machines::{admit_with, credential_name, default_name, normalize, BoatLink, Saved, Socket, Welcome, ADMIT};
+use crate::{boat, sink::Sink, ssh, store};
+use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{
         atomic::{AtomicU64, Ordering},
-        LazyLock, Mutex, OnceLock,
+        Arc, LazyLock, Mutex, OnceLock,
     },
     time::Duration,
 };
 use tokio::sync::{mpsc, oneshot};
-use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+use tokio_tungstenite::tungstenite::Message;
 use ts_rs::TS;
 
-/// Stated again from serve.rs's `PROTOCOL`, which this build may not compile.
-const PROTOCOL: u32 = 1;
-
-/// How long a probe or a reconnect may take to be admitted.
-const ADMIT: Duration = Duration::from_secs(5);
+use crate::serve::PROTOCOL;
 
 /// Reconnect backoff ceiling. Agents keep running on a server the app cannot
 /// reach, so coming back soon matters more than sparing a refused connect.
@@ -42,35 +40,6 @@ const MAX_BACKOFF: Duration = Duration::from_secs(10);
 const PING: Duration = if cfg!(test) { Duration::from_millis(100) } else { Duration::from_secs(15) };
 const SILENCE: Duration = if cfg!(test) { Duration::from_millis(500) } else { Duration::from_secs(45) };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Saved {
-    id: String,
-    name: String,
-    /// Empty for an SSH server, whose address is a port forwarded per connect.
-    /// Always written: a build from before SSH requires it, and one entry it
-    /// cannot parse is the whole list gone.
-    #[serde(default)]
-    url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    ssh: Option<ssh::Target>,
-    /// The reader turned the connection off; the row stays.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    off: bool,
-    /// The server takes beta releases, which also means stable ones. Its own,
-    /// never the app's. A bool rather than a channel enum: a value an older
-    /// build cannot spell fails the line, and one line is the whole list.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    beta: bool,
-    /// A release the reader chose to ignore. Only that one: a newer release
-    /// is offered again.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    ignored: Option<String>,
-    /// Fields a newer build wrote, carried back untouched — the index's own
-    /// `unknown` bargain, since this file is rewritten whole too.
-    #[serde(flatten)]
-    unknown: serde_json::Map<String, Value>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "snake_case")]
@@ -78,6 +47,32 @@ pub enum ServerStatus {
     Connecting,
     Connected,
     Disconnected,
+}
+
+/// Where a boat sandbox is, as far as the reader is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "snake_case")]
+pub enum BoatPhase {
+    Running,
+    Stopped,
+    /// `boat resume` is running, or the server has yet to come up after it.
+    Resuming,
+}
+
+/// What boat says about a server. Absent from a machine that is no sandbox, and
+/// from one with no `boat` CLI or login here, which draws no boat UI at all.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct BoatStatus {
+    pub phase: BoatPhase,
+    /// When it auto-stops. `None` with auto-stop off.
+    pub stops_at: Option<String>,
+    /// It stops within [`WARN`]: raise the card, offer more time.
+    pub warning: bool,
+    /// Why the last resume didn't take, in boat's or Dray's words.
+    pub note: Option<String>,
 }
 
 /// A remote server as the frontend sees it. No token: that stays here.
@@ -108,11 +103,38 @@ pub struct ServerInfo {
     pub beta: bool,
     /// The newer release out on its channel, while the server is behind it.
     pub latest: Option<String>,
+    /// Dray.app's own server on another Mac, updated by that app, not from here.
+    pub app: bool,
     /// An update landed on the server and it restarts onto it once idle.
     pub restarting: bool,
+    pub boat: Option<BoatStatus>,
 }
 
 type Reply = Result<Value, Value>;
+
+/// What carries one forwarded dev-server port. Dropping it takes the port down.
+enum Forward {
+    Ssh(ssh::Forward),
+    /// A server with no login: see [`forward_over_dray`]. The set holds the
+    /// accepting task, and dropping a set aborts what it holds.
+    Dray { port: u16, _accepting: tokio::task::JoinSet<()> },
+}
+
+impl Forward {
+    fn port(&self) -> u16 {
+        match self {
+            Forward::Ssh(forward) => forward.port,
+            Forward::Dray { port, .. } => *port,
+        }
+    }
+
+    fn alive(&mut self) -> bool {
+        match self {
+            Forward::Ssh(forward) => forward.alive(),
+            Forward::Dray { .. } => true,
+        }
+    }
+}
 
 struct Conn {
     saved: Saved,
@@ -129,10 +151,41 @@ struct Conn {
     task: Option<tokio::task::JoinHandle<()>>,
     /// Dev-server ports forwarded for the Mac's browser, by remote port. They
     /// last as long as the connection does.
-    forwards: HashMap<u16, ssh::Forward>,
+    forwards: HashMap<u16, Forward>,
     /// What the server said when last admitted, kept across a drop so the row
     /// still says what it last knew. `None` until it first connects.
     met: Option<Welcome>,
+    boat: Option<BoatRow>,
+}
+
+/// What this run of the app last heard from boat about a server.
+struct BoatRow {
+    phase: BoatPhase,
+    stops_at: Option<DateTime<Utc>>,
+    note: Option<String>,
+    /// The connection up now reported this sandbox, so its timer is this
+    /// machine's. A server reporting another id never gets this set.
+    here: bool,
+    /// When the timer was last read, which paces the reads.
+    read: Option<std::time::Instant>,
+    /// boat did not answer last time: no CLI, logged out, offline. The row is
+    /// hidden but kept, so the timer is still read and the UI comes back, and
+    /// a resume in flight still has somewhere to report.
+    lost: bool,
+}
+
+impl BoatRow {
+    fn new(phase: BoatPhase) -> Self {
+        BoatRow { phase, stops_at: None, note: None, here: false, read: None, lost: false }
+    }
+
+    fn warning(&self, connected: bool) -> bool {
+        connected
+            && !self.lost
+            && self.here
+            && self.phase == BoatPhase::Running
+            && self.stops_at.is_some_and(|at| (at - Utc::now()).to_std().is_ok_and(|left| left <= WARN))
+    }
 }
 
 impl Conn {
@@ -151,6 +204,7 @@ impl Conn {
             task: None,
             forwards: HashMap::new(),
             met: None,
+            boat: None,
         };
         conn.restart();
         conn
@@ -182,22 +236,16 @@ impl Conn {
 static CONNS: LazyLock<Mutex<Vec<Conn>>> = LazyLock::new(Default::default);
 static SINK: OnceLock<Sink> = OnceLock::new();
 static NEXT_CALL: AtomicU64 = AtomicU64::new(1);
-/// Serializes `servers.json` rewrites, like every other whole-file write here.
-static SAVE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn conns() -> std::sync::MutexGuard<'static, Vec<Conn>> {
     CONNS.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-fn credential_name(id: &str) -> String {
-    format!("server:{id}")
 }
 
 fn info(conn: &Conn) -> ServerInfo {
     ServerInfo {
         id: conn.saved.id.clone(),
         name: conn.saved.name.clone(),
-        named: conn.saved.name != unnamed(&conn.saved),
+        named: conn.saved.name != conn.saved.unnamed(),
         url: conn.saved.url.clone(),
         ssh: conn.saved.ssh.as_ref().map(ssh::Target::line),
         on: !conn.saved.off,
@@ -208,7 +256,14 @@ fn info(conn: &Conn) -> ServerInfo {
         release: conn.met.as_ref().and_then(|w| w.release.clone()),
         beta: conn.saved.beta,
         latest: latest(conn),
+        app: conn.met.as_ref().is_some_and(Welcome::is_mac_app),
         restarting: conn.met.as_ref().is_some_and(|w| w.stale),
+        boat: conn.boat.as_ref().filter(|row| !row.lost).map(|row| BoatStatus {
+            phase: row.phase,
+            stops_at: row.stops_at.map(|at| at.to_rfc3339()),
+            warning: row.warning(conn.status == ServerStatus::Connected),
+            note: row.note.clone(),
+        }),
     }
 }
 
@@ -216,26 +271,43 @@ fn info(conn: &Conn) -> ServerInfo {
 /// reader ignored or the server is not behind it.
 fn latest(conn: &Conn) -> Option<String> {
     let releases = releases();
-    let newest = releases.newest(conn.saved.beta)?.to_string();
+    let app = conn.met.as_ref().is_some_and(Welcome::is_mac_app);
+    let newest = releases.newest(conn.saved.beta, app)?.to_string();
     let behind = conn.met.as_ref().is_some_and(|w| behind(w, conn.saved.beta, &releases));
     (behind && conn.saved.ignored.as_ref() != Some(&newest)).then_some(newest)
 }
 
-/// The newest CLI releases out, each channel's. A `dray-serve` ships in them.
+/// The newest releases out, each channel's: CLI ones, which a `dray-serve`
+/// ships in, and app ones, which another Mac's Dray.app serves from.
 #[derive(Debug, Clone, Default)]
 struct Releases {
     stable: Option<semver::Version>,
     beta: Option<semver::Version>,
+    app_stable: Option<semver::Version>,
+    app_beta: Option<semver::Version>,
 }
 
 impl Releases {
-    /// From GitHub's tags, the way install.sh reads them: `cli-v` and a
+    /// From GitHub's tags, the way install.sh reads them: `cli-v` or `v` and a
     /// version, a prerelease one being a beta. Newest by semver, so a beta
     /// sorts below its own release.
     fn from_tags<'a>(tags: impl Iterator<Item = &'a str>) -> Self {
         let mut out = Releases::default();
-        for v in tags.filter_map(|t| semver::Version::parse(t.strip_prefix("cli-v")?).ok()) {
-            let slot = if v.pre.is_empty() { &mut out.stable } else { &mut out.beta };
+        for tag in tags {
+            let (cli, rest) = match tag.strip_prefix("cli-v") {
+                Some(rest) => (true, rest),
+                None => match tag.strip_prefix('v') {
+                    Some(rest) => (false, rest),
+                    None => continue,
+                },
+            };
+            let Ok(v) = semver::Version::parse(rest) else { continue };
+            let slot = match (cli, v.pre.is_empty()) {
+                (true, true) => &mut out.stable,
+                (true, false) => &mut out.beta,
+                (false, true) => &mut out.app_stable,
+                (false, false) => &mut out.app_beta,
+            };
             if slot.as_ref().is_none_or(|have| v > *have) {
                 *slot = Some(v);
             }
@@ -245,8 +317,9 @@ impl Releases {
 
     /// The newest a server on this channel would install. Beta takes stable
     /// releases too, so whichever is newer.
-    fn newest(&self, beta: bool) -> Option<&semver::Version> {
-        if beta { self.stable.as_ref().max(self.beta.as_ref()) } else { self.stable.as_ref() }
+    fn newest(&self, beta: bool, app: bool) -> Option<&semver::Version> {
+        let (stable, pre) = if app { (&self.app_stable, &self.app_beta) } else { (&self.stable, &self.beta) };
+        if beta { stable.as_ref().max(pre.as_ref()) } else { stable.as_ref() }
     }
 }
 
@@ -254,13 +327,16 @@ impl Releases {
 /// One that says no version predates saying, so anything out is newer; one
 /// with a version and no release is a local build and is never offered one.
 /// A server ahead of its channel — beta left behind — is not behind, so
-/// leaving beta never downgrades.
+/// leaving beta never downgrades. Another Mac's app server has no release
+/// and is measured by its app version instead.
 fn behind(met: &Welcome, beta: bool, releases: &Releases) -> bool {
-    let Some(newest) = releases.newest(beta) else { return false };
+    let app = met.is_mac_app();
+    let Some(newest) = releases.newest(beta, app) else { return false };
     if met.version.is_none() {
         return true;
     }
-    met.release.as_deref().and_then(|r| semver::Version::parse(r).ok()).is_some_and(|r| r < *newest)
+    let running = if app { met.version.as_deref() } else { met.release.as_deref() };
+    running.and_then(|r| semver::Version::parse(r).ok()).is_some_and(|r| r < *newest)
 }
 
 /// How long one reading of GitHub's releases stands. Unauthenticated, the API
@@ -324,6 +400,47 @@ fn announce() {
         let _ = sink.emit("servers_changed", snapshot());
         let _ = sink.emit("local_server_changed", local_server());
     }
+    tell_island();
+}
+
+/// A machine this app is connected to, and how Dray Island opens a socket of its
+/// own over the same link. The island is the app's companion, so it follows this
+/// list rather than holding one (#784).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IslandLink {
+    id: String,
+    name: String,
+    url: String,
+    token: String,
+}
+
+/// The server's `island_links`, asked by the island over its local listener.
+pub fn island_links() -> Vec<IslandLink> {
+    conns()
+        .iter()
+        .filter(|c| c.saved.id != LOCAL && c.status == ServerStatus::Connected)
+        .filter_map(|c| {
+            let (url, token) = c.live.clone()?;
+            Some(IslandLink { id: c.saved.id.clone(), name: c.saved.name.clone(), url, token })
+        })
+        .collect()
+}
+
+/// Pings the island when the list moved, which most status changes do not: one
+/// server connecting is several of them.
+fn tell_island() {
+    static TOLD: Mutex<Vec<IslandLink>> = Mutex::new(Vec::new());
+    let links = island_links();
+    {
+        let mut told = TOLD.lock().unwrap_or_else(|e| e.into_inner());
+        if *told == links {
+            return;
+        }
+        *told = links;
+    }
+    tokio::spawn(async {
+        let _ = tokio::process::Command::new("notifyutil").args(["-p", "com.yogesh.dray.island.links"]).output().await;
+    });
 }
 
 /// This Mac's server, as the remote ones are drawn.
@@ -345,28 +462,47 @@ async fn local_address() -> Result<(String, String, bool), String> {
     Ok((format!("ws://127.0.0.1:{port}"), token.trim().to_string(), stale))
 }
 
-async fn servers_path() -> anyhow::Result<std::path::PathBuf> {
-    Ok(store::get_home_app_dir().await?.join("servers.json"))
+async fn save() -> Result<(), String> {
+    let list: Vec<Saved> = conns().iter().filter(|c| c.saved.id != LOCAL).map(|c| c.saved.clone()).collect();
+    crate::machines::save(&list).await
 }
 
-async fn save() -> Result<(), String> {
-    let _guard = SAVE.lock().await;
-    let list: Vec<Saved> = conns().iter().filter(|c| c.saved.id != LOCAL).map(|c| c.saved.clone()).collect();
-    let path = servers_path().await.map_err(|e| e.to_string())?;
-    let body = serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?;
-    store::write_atomic(&path, body).await.map_err(|e| format!("{e:#}"))
+/// Brings the connections in line with `servers.json`, which the Mac's server
+/// writes itself while this app is not connected to it (#760). Its server
+/// asks for this as the app connects, and after any write landing meanwhile.
+pub async fn reload() {
+    let saved = crate::machines::load().await;
+    {
+        let mut list = conns();
+        list.retain_mut(|conn| {
+            let kept = conn.saved.id == LOCAL || saved.iter().any(|s| s.id == conn.saved.id);
+            if !kept {
+                if let Some(task) = conn.task.take() {
+                    task.abort();
+                }
+            }
+            kept
+        });
+        for saved in saved {
+            match list.iter_mut().find(|c| c.saved.id == saved.id) {
+                Some(conn) => {
+                    let moved = conn.saved.url != saved.url || conn.saved.ssh != saved.ssh || conn.saved.off != saved.off;
+                    conn.saved = saved;
+                    if moved {
+                        conn.restart();
+                    }
+                }
+                None => list.push(Conn::new(saved)),
+            }
+        }
+    }
+    announce();
 }
 
 /// Reads `servers.json` and opens a connection to each. Called once, at setup.
 pub async fn start(sink: Sink) {
     let _ = SINK.set(sink);
-    let saved: Vec<Saved> = match servers_path().await {
-        Ok(path) => store::read_json(&path).await.unwrap_or_else(|e| {
-            eprintln!("[servers read err] {e:#}");
-            Vec::new()
-        }),
-        Err(_) => Vec::new(),
-    };
+    let saved = crate::machines::load().await;
     {
         let mut list = conns();
         let this_mac = Saved {
@@ -377,12 +513,14 @@ pub async fn start(sink: Sink) {
             off: false,
             beta: false,
             ignored: None,
+            boat: None,
             unknown: Default::default(),
         };
         list.push(Conn::new(this_mac));
         list.extend(saved.into_iter().map(Conn::new));
     }
     announce();
+    tokio::spawn(watch_boats());
     // Hourly, for an app left open for days on a connection that never drops.
     tokio::spawn(async {
         loop {
@@ -394,50 +532,14 @@ pub async fn start(sink: Sink) {
     });
 }
 
-/// Spelled the way a reader types it — `host:port`, `http://…`, `ws://…`, or
-/// a tunnel's `https://…`/`wss://…` — and answered as the URL the socket opens.
-fn normalize(url: &str) -> Result<String, String> {
-    let url = url.trim().trim_end_matches('/');
-    let url = if let Some(rest) = url.strip_prefix("http://") {
-        format!("ws://{rest}")
-    } else if let Some(rest) = url.strip_prefix("https://") {
-        format!("wss://{rest}")
-    } else if url.starts_with("ws://") || url.starts_with("wss://") {
-        url.to_string()
-    } else {
-        format!("ws://{url}")
-    };
-    let request = url.as_str().into_client_request().map_err(|e| format!("not an address: {e}"))?;
-    if request.uri().host().is_none() {
-        return Err("not an address: no host".into());
-    }
-    Ok(url)
-}
-
-type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
-/// The server's first frame once admitted: its core version, the CLI release
-/// it shipped in, and whether an update already landed on disk that it is not
-/// running yet. A server from before sends none of them.
-#[derive(Debug, Default, Deserialize)]
-struct Welcome {
-    #[serde(default)]
-    version: Option<String>,
-    #[serde(default)]
-    release: Option<String>,
-    #[serde(default)]
-    stale: bool,
-    /// `std::env::consts::OS` on the server.
-    #[serde(default)]
-    os: Option<String>,
-}
-
 /// Connects and says hello. Answers the admitted socket, or why not.
 async fn admit(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
     // `counts`: this app reports the sessions it starts there, so the server
     // must not. This Mac's own server is reached through `admit_as_host`
     // instead and counts its sessions itself.
-    admit_with(url, json!({ "v": PROTOCOL, "token": token, "counts": true })).await
+    // `deflate`: a remote link can be slow enough that a transcript's bytes
+    // are most of the wait. Loopback below leaves it off, as pure CPU.
+    admit_with(url, json!({ "v": PROTOCOL, "token": token, "counts": true, "deflate": true })).await
 }
 
 /// This Mac's own server, which may call back into the app: browser steps go
@@ -445,34 +547,6 @@ async fn admit(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
 async fn admit_as_host(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
     let browser = cfg!(all(feature = "cef", target_os = "macos"));
     admit_with(url, json!({ "v": PROTOCOL, "token": token, "host": { "browser": browser } })).await
-}
-
-async fn admit_with(url: &str, hello: Value) -> Result<(Socket, Welcome), String> {
-    let attempt = async {
-        let (mut ws, _) = tokio_tungstenite::connect_async(url)
-            .await
-            .map_err(|e| format!("could not reach {url}: {e}"))?;
-        ws.send(Message::text(hello.to_string()))
-            .await
-            .map_err(|e| e.to_string())?;
-        loop {
-            match ws.next().await {
-                Some(Ok(Message::Text(text))) => {
-                    let frame: Value = serde_json::from_str(&text).unwrap_or_default();
-                    return match frame.get("err").and_then(Value::as_str) {
-                        Some(err) => Err(format!("the server refused: {err}")),
-                        None => Ok((ws, serde_json::from_value(frame).unwrap_or_default())),
-                    };
-                }
-                Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
-                Some(Err(e)) => return Err(e.to_string()),
-                _ => return Err("the server closed the connection".to_string()),
-            }
-        }
-    };
-    tokio::time::timeout(ADMIT, attempt)
-        .await
-        .unwrap_or_else(|_| Err(format!("{url} did not answer in time")))
 }
 
 fn set_status(id: &str, status: ServerStatus, error: Option<String>) {
@@ -507,7 +581,8 @@ fn set(id: &str, status: ServerStatus, stage: Option<ssh::Stage>, error: Option<
 ///
 /// An SSH server opens a fresh login each time round, which also reads the
 /// token, so a cut pipe is this same loop plus one `ssh`. A failure retrying
-/// cannot fix — a refused key, an unknown host — parks the row instead.
+/// cannot fix — a refused key, an unknown host — parks the row instead, unless
+/// a tunnel address is saved: then only that is retried, [`wait_for_address`].
 async fn run(id: String) {
     let mut backoff = Duration::from_secs(1);
     loop {
@@ -551,15 +626,37 @@ async fn run(id: String) {
         let (url, token, tunnel, admitted) = match &saved.ssh {
             Some(target) => match ssh::open(target, |stage| set(&id, ServerStatus::Connecting, Some(stage), None, None)).await {
                 Ok(tunnel) => {
-                    remember_address(&id, tunnel.address.as_deref(), &tunnel.token).await;
+                    remember_boat(&id, tunnel.boat.as_deref(), target).await;
+                    remember_address(&id, tunnel.address.as_deref(), tunnel.address_coming, &tunnel.token).await;
                     (format!("ws://127.0.0.1:{}", tunnel.port), tunnel.token.clone(), Some(tunnel), None)
                 }
-                Err(failure) => {
+                Err(mut failure) => {
+                    match boat_step(&id, saved.boat.as_ref(), saved.ssh.as_ref(), failure.permanent).await {
+                        BoatStep::Asleep => {
+                            park_asleep(&id, saved.boat.as_ref()).await;
+                            continue;
+                        }
+                        BoatStep::Moved => continue,
+                        BoatStep::Stuck(why) => failure.message = why,
+                        BoatStep::Unknown => {}
+                    }
+                    // A sandbox coming back refuses in every way there is, for
+                    // a few seconds each, and none of them is settled yet.
+                    if boat_waking(&id) {
+                        failure.permanent = false;
+                    }
                     // No login, but the server's tunnel address from the last
                     // one that worked, with the token it read.
                     let fallback =
                         if saved.url.is_empty() { None } else { admit(&saved.url, &kept_token).await.ok() };
                     if let Some(ws) = fallback {
+                        (saved.url, kept_token, None, Some(ws))
+                    } else if failure.permanent && !saved.url.is_empty() {
+                        // The warning stays up throughout. The key is never
+                        // accepted here; only the reader can settle that.
+                        let waiting = format!("Waiting for its tunnel address to answer. {}", failure.message);
+                        set(&id, ServerStatus::Disconnected, None, Some(waiting), failure.fix);
+                        let ws = wait_for_address(&saved.url, &kept_token, &mut backoff).await;
                         (saved.url, kept_token, None, Some(ws))
                     } else {
                         set(&id, ServerStatus::Disconnected, None, Some(failure.message), failure.fix);
@@ -628,17 +725,389 @@ async fn run(id: String) {
     }
 }
 
+/// What boat's word on a row that cannot connect leaves `run` to do.
+enum BoatStep {
+    /// Not a sandbox, or boat cannot say. Carry on as for any other server.
+    Unknown,
+    /// Stopped. There is nothing to connect to until it resumes.
+    Asleep,
+    /// The login was pointed at where the sandbox now is, so try again now.
+    Moved,
+    /// Running, and the login could not be pointed at it. Says why.
+    Stuck(String),
+}
+
+/// Asks boat about a saved sandbox that did not connect. `refused` is SSH saying
+/// no in a way a new key could cure, which reaches for boat's API even with the
+/// address unchanged. A key already what boat says answers `Unknown`, so a
+/// refusal boat cannot explain still reaches the reader as a warning.
+async fn boat_step(id: &str, link: Option<&BoatLink>, target: Option<&ssh::Target>, refused: bool) -> BoatStep {
+    let Some(link) = link else { return BoatStep::Unknown };
+    let Some(sandbox) = boat::info(&link.id).await else {
+        lose_boat(id);
+        return BoatStep::Unknown;
+    };
+    update_boat(id, |row| {
+        let row = row.get_or_insert_with(|| BoatRow::new(BoatPhase::Running));
+        row.lost = false;
+        if row.phase != BoatPhase::Resuming {
+            row.phase = if sandbox.stopped { BoatPhase::Stopped } else { BoatPhase::Running };
+        }
+        row.stops_at = sandbox.stops_at;
+        row.here = false;
+    });
+    if sandbox.stopped {
+        return BoatStep::Asleep;
+    }
+    let Some(target) = target else { return BoatStep::Unknown };
+    if !refused && sandbox.endpoint == link.endpoint {
+        return BoatStep::Unknown;
+    }
+    match repoint_login(id, link, target).await {
+        Ok(true) => BoatStep::Moved,
+        Ok(false) => BoatStep::Unknown,
+        Err(why) => BoatStep::Stuck(why),
+    }
+}
+
+/// Points a sandbox's login at where boat says it is, and saves what moved.
+async fn repoint_login(id: &str, link: &BoatLink, target: &ssh::Target) -> Result<bool, String> {
+    let (link, next, moved) = boat::repoint(link, target).await.map_err(|why| why.sentence(target.host()))?;
+    {
+        let mut list = conns();
+        let Some(conn) = list.iter_mut().find(|c| c.saved.id == id) else { return Ok(false) };
+        conn.saved.boat = Some(link);
+        conn.saved.ssh = Some(next);
+    }
+    let _ = save().await;
+    Ok(moved)
+}
+
+/// A stopped sandbox's row, until it stops being stopped. boat is asked rather
+/// than `ssh` tried: there is no machine to answer, and it may yet be resumed
+/// from a terminal or the dashboard. Resume ends this by aborting the task.
+async fn park_asleep(id: &str, link: Option<&BoatLink>) {
+    let Some(link) = link else { return };
+    set(id, ServerStatus::Disconnected, None, Some("Stopped".into()), None);
+    loop {
+        tokio::time::sleep(BOAT_ASLEEP_READ).await;
+        if !boat::info(&link.id).await.is_some_and(|sandbox| sandbox.stopped) {
+            return;
+        }
+    }
+}
+
+/// Whether a resume is waiting on this row to come up.
+fn boat_waking(id: &str) -> bool {
+    conns().iter().any(|c| c.saved.id == id && c.boat.as_ref().is_some_and(|row| row.phase == BoatPhase::Resuming))
+}
+
+/// boat stopped answering for this row: hide its UI, keep what was learned.
+fn lose_boat(id: &str) {
+    update_boat(id, |row| {
+        if let Some(row) = row {
+            row.lost = true;
+        }
+    });
+}
+
+fn update_boat(id: &str, change: impl FnOnce(&mut Option<BoatRow>)) {
+    if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
+        change(&mut conn.boat);
+    }
+    announce();
+}
+
+/// Learns which sandbox a machine is from what it reported on connect. Its own
+/// say-so, so it only ever sets the link once, and only where boat agrees that
+/// sandbox is at the address the login just reached: a server cannot point Dray
+/// at another sandbox, whatever it reports later.
+async fn remember_boat(id: &str, reported: Option<&str>, target: &ssh::Target) {
+    let known = conns().iter().find(|c| c.saved.id == id).and_then(|c| c.saved.boat.clone());
+    let reported = reported.filter(|r| boat::valid_id(r));
+    if known.as_ref().is_some_and(|link| reported != Some(link.id.as_str())) {
+        if let (Some(link), Some(other)) = (&known, reported) {
+            eprintln!("[boat] {id} reports {other}, but it is {}. Ignoring it.", link.id);
+        }
+        update_boat(id, |row| *row = None);
+        return;
+    }
+    let Some(reported) = reported else { return };
+    let Some(sandbox) = boat::info(reported).await else {
+        lose_boat(id);
+        // Still this sandbox, so the timer is read again once boat answers.
+        if known.is_some() {
+            if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
+                let row = conn.boat.get_or_insert_with(|| BoatRow { lost: true, ..BoatRow::new(BoatPhase::Running) });
+                row.here = true;
+                // It just let a login in, so it is not stopped, whatever was last seen.
+                if row.phase == BoatPhase::Stopped {
+                    row.phase = BoatPhase::Running;
+                }
+            }
+        }
+        return;
+    };
+    let reached = ssh::resolve(target).await.ok().map(|r| format!("{}:{}", r.hostname, r.port));
+    let here = reached.is_some() && reached == sandbox.endpoint;
+    if known.is_none() && !here {
+        return;
+    }
+    let link = BoatLink {
+        id: reported.to_string(),
+        endpoint: if here { reached } else { known.as_ref().and_then(|l| l.endpoint.clone()) },
+    };
+    let changed = known.as_ref() != Some(&link);
+    if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
+        conn.saved.boat = Some(link);
+        // Up, so stopped no longer holds. A resume is `wake_boat`'s to close.
+        let (phase, note) = match conn.boat.take() {
+            Some(row) if row.phase == BoatPhase::Resuming => (BoatPhase::Resuming, row.note),
+            _ => (BoatPhase::Running, None),
+        };
+        conn.boat = Some(BoatRow { stops_at: sandbox.stops_at, note, here: true, read: Some(std::time::Instant::now()), ..BoatRow::new(phase) });
+    }
+    if changed {
+        let _ = save().await;
+    }
+    announce();
+}
+
+/// How long before auto-stop the reader hears about it.
+const WARN: Duration = Duration::from_secs(10 * 60);
+/// How often a running sandbox's timer is read. `archiveAfter` moves under a
+/// running boat prompt and under a `boat extend` from anywhere, so it is read
+/// again rather than counted down. Faster once the warning is close.
+const BOAT_READ: Duration = Duration::from_secs(5 * 60);
+const BOAT_READ_NEAR: Duration = Duration::from_secs(60);
+const BOAT_ASLEEP_READ: Duration = Duration::from_secs(30);
+/// The server and its tunnel take 1 to 3 minutes after `boat resume` returns.
+const BOAT_WAKE: Duration = Duration::from_secs(6 * 60);
+
+/// Reads the timer of every sandbox connected now, redraws what moved, and tells
+/// the island. A stop seen here beats waiting for the socket to go silent.
+async fn watch_boats() {
+    let mut told = Value::Null;
+    loop {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        let due: Vec<(String, String)> = conns()
+            .iter()
+            .filter(|c| c.status == ServerStatus::Connected)
+            .filter_map(|c| {
+                let (row, link) = (c.boat.as_ref()?, c.saved.boat.as_ref()?);
+                let near = row.stops_at.is_some_and(|at| (at - Utc::now()).to_std().map_or(true, |left| left <= WARN * 2));
+                let pace = if near { BOAT_READ_NEAR } else { BOAT_READ };
+                (row.here && row.read.is_none_or(|at| at.elapsed() >= pace)).then(|| (c.saved.id.clone(), link.id.clone()))
+            })
+            .collect();
+        for (id, sandbox) in due {
+            let Some(read) = boat::info(&sandbox).await else {
+                lose_boat(&id);
+                update_boat(&id, |row| {
+                    if let Some(row) = row {
+                        row.read = Some(std::time::Instant::now());
+                    }
+                });
+                continue;
+            };
+            if read.stopped {
+                if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
+                    conn.restart();
+                }
+            }
+            update_boat(&id, |row| {
+                if let Some(row) = row {
+                    row.stops_at = read.stops_at;
+                    row.read = Some(std::time::Instant::now());
+                    row.lost = false;
+                    if read.stopped {
+                        row.phase = BoatPhase::Stopped;
+                    } else if row.phase == BoatPhase::Stopped {
+                        row.phase = BoatPhase::Running;
+                    }
+                }
+            });
+        }
+        // A warning also starts by the clock alone, with nothing read.
+        announce();
+        let alerts = boat_alerts();
+        if alerts != told || !alerts.as_array().is_none_or(Vec::is_empty) {
+            let sent = server_invoke(LOCAL.into(), "boat_alerts".into(), json!({ "alerts": alerts })).await;
+            if sent.is_ok() {
+                told = alerts;
+            }
+        }
+    }
+}
+
+/// The sandboxes about to stop, in the shape the island reads off the server.
+fn boat_alerts() -> Value {
+    let alerts: Vec<Value> = conns()
+        .iter()
+        .filter_map(|c| {
+            let row = c.boat.as_ref()?;
+            row.warning(c.status == ServerStatus::Connected).then(|| {
+                json!({ "server": c.saved.id, "name": c.saved.name, "stopsAt": row.stops_at.map(|at| at.to_rfc3339()) })
+            })
+        })
+        .collect();
+    json!(alerts)
+}
+
+/// Resumes a stopped sandbox and returns once the server on it is connected, so
+/// a send can simply wait on this. Already connected answers at once. Several
+/// callers share one resume: pressing Resume and sending, or sending twice,
+/// must not run `boat resume` twice.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn resume_boat(id: String) -> Result<(), String> {
+    let (start, turned_on) = {
+        let mut list = conns();
+        let conn = list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?;
+        if conn.status == ServerStatus::Connected {
+            return Ok(());
+        }
+        let link = conn.saved.boat.clone().ok_or("This server is not a boat sandbox.")?;
+        // Asking for the sandbox back is asking to reach it: a connection left
+        // off would never come up, and a send waiting on it would time out.
+        let turned_on = std::mem::take(&mut conn.saved.off);
+        let row = conn.boat.get_or_insert_with(|| BoatRow::new(BoatPhase::Stopped));
+        row.note = None;
+        let start = match row.phase {
+            BoatPhase::Resuming => None,
+            _ => {
+                row.phase = BoatPhase::Resuming;
+                if let Some(task) = conn.task.take() {
+                    task.abort();
+                }
+                conn.status = ServerStatus::Connecting;
+                conn.error = None;
+                conn.fix = None;
+                Some(link)
+            }
+        };
+        (start, turned_on)
+    };
+    announce();
+    if let Some(link) = start {
+        crate::analytics::track("feature_used", json!({ "feature": "boat_resumed" }));
+        tokio::spawn(wake_boat(id.clone(), link));
+    }
+    // After the wake is under way: a file that won't write must not strand a
+    // row marked resuming with nothing behind it. The connection is on in
+    // memory either way; only the next launch would see it off.
+    if turned_on {
+        if let Err(e) = save().await {
+            eprintln!("[boat] could not save {id} turned back on: {e}");
+        }
+    }
+    // `boat resume`'s own cap and then the wake, so a waiter never outlives both.
+    let deadline = tokio::time::Instant::now() + boat::RESUMING + BOAT_WAKE;
+    loop {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        if tokio::time::Instant::now() > deadline {
+            return Err("The sandbox didn't come back in time.".into());
+        }
+        let list = conns();
+        let conn = list.iter().find(|c| c.saved.id == id).ok_or("The server was removed while it was resuming.")?;
+        if conn.status == ServerStatus::Connected {
+            return Ok(());
+        }
+        let Some(row) = conn.boat.as_ref().filter(|row| row.phase != BoatPhase::Resuming) else { continue };
+        return Err(row.note.clone().unwrap_or_else(|| format!("{} did not come back.", conn.saved.name)));
+    }
+}
+
+/// `boat resume`, then the login pointed at the new machine, then `run` again,
+/// which keeps retrying while [`boat_waking`] holds.
+async fn wake_boat(id: String, link: BoatLink) {
+    let settle = |phase: BoatPhase, note: Option<String>, restart: bool| {
+        if let Some(conn) = conns().iter_mut().find(|c| c.saved.id == id) {
+            let row = conn.boat.get_or_insert_with(|| BoatRow::new(phase));
+            row.phase = phase;
+            row.note = note;
+            if restart {
+                conn.restart();
+            }
+        }
+        announce();
+    };
+    if let Err(why) = boat::resume(&link.id).await {
+        settle(BoatPhase::Stopped, Some(why), true);
+        return;
+    }
+    let target = conns().iter().find(|c| c.saved.id == id).and_then(|c| c.saved.ssh.clone());
+    if let Some(target) = target {
+        if let Err(why) = repoint_login(&id, &link, &target).await {
+            settle(BoatPhase::Running, Some(why), true);
+            return;
+        }
+    }
+    settle(BoatPhase::Resuming, None, true);
+    let deadline = tokio::time::Instant::now() + BOAT_WAKE;
+    while tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let up = conns().iter().any(|c| c.saved.id == id && c.status == ServerStatus::Connected);
+        if up {
+            settle(BoatPhase::Running, None, false);
+            return;
+        }
+    }
+    let name = conns().iter().find(|c| c.saved.id == id).map(|c| c.saved.name.clone()).unwrap_or_default();
+    settle(BoatPhase::Running, Some(format!("{name} is running, but Dray hasn't answered on it yet.")), false);
+}
+
+/// More time on a sandbox's auto-stop: `minutes` from now, and on each later resume.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn extend_boat(id: String, minutes: u32) -> Result<(), String> {
+    let sandbox = {
+        let list = conns();
+        let conn = list.iter().find(|c| c.saved.id == id).ok_or("no such server")?;
+        conn.saved.boat.as_ref().ok_or("This server is not a boat sandbox.")?.id.clone()
+    };
+    boat::extend(&sandbox, minutes).await?;
+    crate::analytics::track("feature_used", json!({ "feature": "boat_extended", "minutes": minutes }));
+    let read = boat::info(&sandbox).await;
+    update_boat(&id, |row| {
+        if let (Some(row), Some(read)) = (row.as_mut(), read) {
+            row.stops_at = read.stops_at;
+            row.read = Some(std::time::Instant::now());
+            row.lost = false;
+        }
+    });
+    // Before answering, so the island's pill is gone by the time its Extend
+    // returns rather than on `watch_boats`' next tick, up to 30s later.
+    let _ = server_invoke(LOCAL.into(), "boat_alerts".into(), json!({ "alerts": boat_alerts() })).await;
+    Ok(())
+}
+
+/// Retries a saved tunnel address until it answers, with `ssh` left alone: a
+/// refused key tried every few seconds is what fail2ban bans. A server coming
+/// back attaches its tunnel well after it starts — measured at 7s from a clean
+/// stop, 66s to 183s where the old machine vanished with its session open —
+/// so one failed try says little.
+async fn wait_for_address(url: &str, token: &str, backoff: &mut Duration) -> (Socket, Welcome) {
+    loop {
+        tokio::time::sleep(*backoff).await;
+        *backoff = (*backoff * 2).min(MAX_BACKOFF);
+        if let Ok(admitted) = admit(url, token).await {
+            return admitted;
+        }
+    }
+}
+
 /// Keeps an SSH server's tunnel address beside its login, with the token the
 /// login read, so the next connect can go by tunnel where SSH cannot. No
-/// tunnel up there forgets both: a stale address would only ever fail.
-async fn remember_address(id: &str, address: Option<&str>, token: &str) {
-    let url = address.and_then(|a| normalize(a).ok()).unwrap_or_default();
-    let moved = {
+/// tunnel up there forgets both: a stale address would only ever fail. One
+/// still attaching forgets neither, or a login landing just after a restart
+/// leaves nothing to fall back on when the host key next changes (#781).
+async fn remember_address(id: &str, address: Option<&str>, coming: bool, token: &str) {
+    let (url, moved) = {
         let mut list = conns();
         let Some(conn) = list.iter_mut().find(|c| c.saved.id == id) else { return };
+        let url = address_to_keep(&conn.saved.url, address, coming);
         let moved = conn.saved.url != url;
         conn.saved.url = url.clone();
-        moved
+        (url, moved)
     };
     let stored = (!url.is_empty()).then_some(token);
     if crate::issues::credential(&credential_name(id)).await.as_deref() != stored {
@@ -646,6 +1115,15 @@ async fn remember_address(id: &str, address: Option<&str>, token: &str) {
     }
     if moved {
         let _ = save().await;
+    }
+}
+
+/// The address to save after a login: what it read, or `saved` while the
+/// tunnel it found no address for is still attaching.
+fn address_to_keep(saved: &str, address: Option<&str>, coming: bool) -> String {
+    match address {
+        None if coming => saved.to_string(),
+        _ => address.and_then(|a| normalize(a).ok()).unwrap_or_default(),
     }
 }
 
@@ -709,8 +1187,14 @@ async fn serve(id: &str, ws: Socket) {
     });
     let silence = if remote { SILENCE } else { Duration::MAX };
     while let Ok(Some(Ok(message))) = tokio::time::timeout(silence, read.next()).await {
-        let Message::Text(text) = message else {
-            if matches!(message, Message::Close(_)) {
+        if matches!(message, Message::Close(_)) {
+            break;
+        }
+        let binary = matches!(message, Message::Binary(_));
+        let Some(text) = crate::serve::frame_in(message) else {
+            // A frame that will not inflate within the cap is a broken or
+            // hostile server, not one to keep reading from.
+            if binary {
                 break;
             }
             continue;
@@ -756,24 +1240,85 @@ pub fn list_servers() -> Vec<ServerInfo> {
     snapshot()
 }
 
+/// The adds a Cancel can still reach, by the ticket their dialog minted.
+/// Keyed rather than one signal for them all: `dray machine add` runs these
+/// same functions, and a Cancel in Settings must not stop an add it never
+/// started. An add with no ticket is in here under no name and cannot be woken.
+static ADDING: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>> = LazyLock::new(Default::default);
+
+/// One add's place in [`ADDING`], held for as long as the add runs.
+struct Cancellable {
+    ticket: Option<String>,
+    woken: Arc<tokio::sync::Notify>,
+}
+
+impl Cancellable {
+    fn new(ticket: Option<String>) -> Self {
+        let woken = Arc::new(tokio::sync::Notify::new());
+        if let Some(ticket) = &ticket {
+            ADDING.lock().unwrap_or_else(|e| e.into_inner()).insert(ticket.clone(), woken.clone());
+        }
+        Self { ticket, woken }
+    }
+}
+
+impl Drop for Cancellable {
+    fn drop(&mut self) {
+        if let Some(ticket) = &self.ticket {
+            ADDING.lock().unwrap_or_else(|e| e.into_inner()).remove(ticket);
+        }
+    }
+}
+
+/// What a cancelled add answers. The dialog that asked is gone by then, so
+/// nobody reads it; it only has to be an error, so nothing is saved.
+const CANCELLED: &str = "cancelled";
+
+/// Stops an Add server that is still connecting: the login, the server start
+/// and the admit are dropped where they stand, which kills the `ssh` they ran
+/// over. Closing the dialog used to leave all of it running, so the server
+/// turned up in the list a minute later, or its failure opened the install
+/// dialog over whatever the reader had moved on to. Past the connect there is
+/// nothing left to wait on, so a cancel landing after it finds the server added.
+///
+/// `notify_one`, which keeps the wake for an add that has not started waiting
+/// yet: a Cancel pressed in the same moment as Add is still a Cancel.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn cancel_add_server(ticket: String) {
+    if let Some(woken) = ADDING.lock().unwrap_or_else(|e| e.into_inner()).get(&ticket) {
+        woken.notify_one();
+    }
+}
+
 /// Adds a server once it has admitted the token, so a typo is refused here
 /// rather than saved as a row that never connects. An address already on the
 /// list is updated in place, which is how a reader reconnects after rotating
 /// the server's token.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn add_server(url: String, token: String, name: Option<String>) -> Result<ServerInfo, String> {
+pub async fn add_server(url: String, token: String, name: Option<String>, ticket: Option<String>) -> Result<ServerInfo, String> {
+    let cancel = Cancellable::new(ticket);
     let url = normalize(&url)?;
     let token = token.trim().to_string();
     if token.is_empty() {
         return Err("a token is required — it is in the server's serve-token file".into());
     }
     let existing = conns().iter().find(|c| c.saved.url == url).map(|c| c.saved.id.clone());
+    // A re-add is how a token is rotated, and its name field is usually left
+    // blank: the row keeps the name it has rather than falling back to the
+    // host, which `dray --machine <name>` would then stop finding.
+    let kept = conns().iter().find(|c| c.saved.url == url).map(|c| c.saved.name.clone());
     let name = name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
+        .or(kept)
         .unwrap_or_else(|| default_name(&url));
     refuse_taken(&conns(), &name, existing.as_deref())?;
-    admit(&url, &token).await?.0.close(None).await.ok();
+    tokio::select! {
+        admitted = admit(&url, &token) => {
+            admitted?.0.close(None).await.ok();
+        }
+        _ = cancel.woken.notified() => return Err(CANCELLED.into()),
+    }
 
     let id = existing.clone().unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
     crate::issues::set_credential(&credential_name(&id), Some(&token)).await?;
@@ -792,7 +1337,7 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
                 conn.saved.name = name;
                 conn.restart();
             } else {
-                list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, beta: false, ignored: None, unknown: Default::default() }));
+                list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, beta: false, ignored: None, boat: None, unknown: Default::default() }));
             }
         })
     };
@@ -821,11 +1366,11 @@ pub async fn set_server_address(id: String, url: String) -> Result<(), String> {
     {
         let mut list = conns();
         let conn = list.iter_mut().find(|c| c.saved.id == id).ok_or("no such server")?;
-        let was_default = conn.saved.name == unnamed(&conn.saved);
+        let was_default = conn.saved.name == conn.saved.unnamed();
         conn.saved.url = url;
         // A name nobody picked was the old address's host; it follows.
         if was_default {
-            conn.saved.name = unnamed(&conn.saved);
+            conn.saved.name = conn.saved.unnamed();
         }
         conn.saved.off = false;
         conn.restart();
@@ -842,22 +1387,6 @@ fn refuse_taken(list: &[Conn], name: &str, except: Option<&str>) -> Result<(), S
         true => Err(format!("another server is already named {name} — pick another name")),
         false => Ok(()),
     }
-}
-
-/// The name a server gets when the reader gives none.
-fn unnamed(saved: &Saved) -> String {
-    match &saved.ssh {
-        Some(target) => target.host().to_string(),
-        None => default_name(&saved.url),
-    }
-}
-
-/// The host, which is what a reader would call it if asked.
-fn default_name(url: &str) -> String {
-    url.into_client_request()
-        .ok()
-        .and_then(|r| r.uri().host().map(str::to_string))
-        .unwrap_or_else(|| url.to_string())
 }
 
 /// Forgets a server and its token. Its agents keep running there; only this
@@ -886,27 +1415,37 @@ pub async fn remove_server(id: String) -> Result<(), String> {
 /// server that admitted us is saved, the token form's own rule. Each step goes
 /// out as `server_adding` so the dialog can say where it is.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<ServerInfo, ssh::Failure> {
+pub async fn add_ssh_server(line: String, name: Option<String>, ticket: Option<String>) -> Result<ServerInfo, ssh::Failure> {
+    let cancel = Cancellable::new(ticket);
     let failed = |message: String| ssh::Failure { message, fix: None, permanent: true };
     let target = ssh::parse(&line).map_err(failed)?;
+    // Kept on a re-add with the field blank, as the token form keeps it.
+    let kept = conns().iter().find(|c| c.saved.ssh.as_ref() == Some(&target)).map(|c| c.saved.name.clone());
     let name = name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
+        .or(kept)
         .unwrap_or_else(|| target.host().to_string());
     let existing = conns().iter().find(|c| c.saved.ssh.as_ref() == Some(&target)).map(|c| c.saved.id.clone());
     refuse_taken(&conns(), &name, existing.as_deref()).map_err(failed)?;
-    let tunnel = ssh::open(&target, |stage| {
-        if let Some(sink) = SINK.get() {
-            let _ = sink.emit("server_adding", stage);
+    let connect = async {
+        let tunnel = ssh::open(&target, |stage| {
+            if let Some(sink) = SINK.get() {
+                let _ = sink.emit("server_adding", stage);
+            }
+        })
+        .await?;
+        let url = format!("ws://127.0.0.1:{}", tunnel.port);
+        match admit(&url, &tunnel.token).await {
+            Ok((mut ws, _)) => drop(ws.close(None).await),
+            Err(e) => return Err(failed(tunnel.said().unwrap_or(e))),
         }
-    })
-    .await?;
-    let url = format!("ws://127.0.0.1:{}", tunnel.port);
-    match admit(&url, &tunnel.token).await {
-        Ok((mut ws, _)) => drop(ws.close(None).await),
-        Err(e) => return Err(failed(tunnel.said().unwrap_or(e))),
+        Ok(())
+    };
+    tokio::select! {
+        connected = connect => connected?,
+        _ = cancel.woken.notified() => return Err(failed(CANCELLED.into())),
     }
-    drop(tunnel);
 
     let id = {
         let mut list = conns();
@@ -920,7 +1459,7 @@ pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<Server
             conn.saved.id.clone()
         } else {
             let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
-            list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, beta: false, ignored: None, unknown: Default::default() }));
+            list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, beta: false, ignored: None, boat: None, unknown: Default::default() }));
             id
         }
     };
@@ -959,7 +1498,7 @@ pub async fn rename_server(id: String, name: String) -> Result<(), String> {
     {
         let mut list = conns();
         let saved = &list.iter().find(|c| c.saved.id == id).ok_or("no such server")?.saved;
-        let name = Some(name.trim()).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| unnamed(saved));
+        let name = Some(name.trim()).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| saved.unnamed());
         refuse_taken(&list, &name, Some(&id))?;
         list.iter_mut().find(|c| c.saved.id == id).expect("found above").saved.name = name;
     }
@@ -1173,7 +1712,7 @@ pub async fn servers_behind(beta: bool) -> Vec<String> {
     conns()
         .iter()
         .filter(|c| c.saved.id != LOCAL && c.status == ServerStatus::Connected && (c.saved.beta || !beta))
-        .filter(|c| c.met.as_ref().is_some_and(|w| w.version.is_some()) && latest(c).is_some())
+        .filter(|c| c.met.as_ref().is_some_and(|w| w.version.is_some() && !w.is_mac_app()) && latest(c).is_some())
         .map(|c| c.saved.id.clone())
         .collect()
 }
@@ -1225,7 +1764,7 @@ pub async fn set_server_beta(id: String, beta: bool) -> Result<(), String> {
 /// the row again reuses it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn forward_port(server: String, port: u16) -> Result<u16, String> {
-    let target = {
+    let (target, live, name) = {
         let mut list = conns();
         let conn = list.iter_mut().find(|c| c.saved.id == server).ok_or("that server is no longer on the list")?;
         if let Some(open) = live_forward(conn, port) {
@@ -1234,15 +1773,13 @@ pub async fn forward_port(server: String, port: u16) -> Result<u16, String> {
         if conn.status != ServerStatus::Connected {
             return Err(format!("{} is not connected", conn.saved.name));
         }
-        conn.saved.ssh.clone().ok_or_else(|| {
-            format!(
-                "{} was added by address, so there is no SSH login to forward port {port} over. \
-                 Add it again from its SSH line to open its dev servers here.",
-                conn.saved.name
-            )
-        })?
+        (conn.saved.ssh.clone(), conn.live.clone(), conn.saved.name.clone())
     };
-    let forward = ssh::forward(&target, port).await?;
+    let forward = match (target, live) {
+        (Some(target), _) => Forward::Ssh(ssh::forward(&target, port).await?),
+        (None, Some((url, token))) => forward_over_dray(url, token, &name, port).await?,
+        (None, None) => return Err(format!("{name} is not connected")),
+    };
     let mut list = conns();
     let conn = list
         .iter_mut()
@@ -1253,7 +1790,7 @@ pub async fn forward_port(server: String, port: u16) -> Result<u16, String> {
     if let Some(open) = live_forward(conn, port) {
         return Ok(open);
     }
-    let local = forward.port;
+    let local = forward.port();
     conn.forwards.insert(port, forward);
     Ok(local)
 }
@@ -1262,32 +1799,323 @@ pub async fn forward_port(server: String, port: u16) -> Result<u16, String> {
 /// replaced.
 fn live_forward(conn: &mut Conn, port: u16) -> Option<u16> {
     let forward = conn.forwards.get_mut(&port)?;
-    forward.alive().then_some(forward.port)
+    forward.alive().then(|| forward.port())
+}
+
+/// A free local port for a server with no SSH login, which a Mac never has.
+/// Each connection to it opens a socket of its own to the server, admitted by
+/// the token, and is piped to `remote` there.
+// ponytail: a full TLS handshake per browser connection, about a second through
+// the relay. Multiplex over one socket if pages feel slow to load.
+async fn forward_over_dray(url: String, token: String, name: &str, remote: u16) -> Result<Forward, String> {
+    // Once before the port opens, so a stopped dev server or an old Dray is a
+    // sentence rather than a blank page.
+    open_pipe(&url, &token, name, remote).await?.close(None).await.ok();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| format!("no free local port: {e}"))?;
+    let port = listener.local_addr().map_err(|e| format!("no free local port: {e}"))?.port();
+    let name = name.to_string();
+    let mut accepting = tokio::task::JoinSet::new();
+    accepting.spawn(async move {
+        let mut pipes = tokio::task::JoinSet::new();
+        loop {
+            let accepted = tokio::select! {
+                accepted = listener.accept() => accepted,
+                // Reaps finished pipes, so the set holds live ones alone.
+                Some(_) = pipes.join_next() => continue,
+            };
+            let Ok((tcp, _)) = accepted else { continue };
+            let (url, token, name) = (url.clone(), token.clone(), name.clone());
+            pipes.spawn(async move {
+                match open_pipe(&url, &token, &name, remote).await {
+                    Ok(ws) => {
+                        let (write, read) = ws.split();
+                        crate::serve::pipe(write, read, tcp).await;
+                    }
+                    Err(e) => eprintln!("[forward {remote}] {e}"),
+                }
+            });
+        }
+    });
+    Ok(Forward::Dray { port, _accepting: accepting })
+}
+
+/// A socket the server has joined to `remote` on its own machine.
+async fn open_pipe(url: &str, token: &str, name: &str, remote: u16) -> Result<Socket, String> {
+    let (ws, welcome) = admit_with(url, json!({ "v": PROTOCOL, "token": token, "forward": remote })).await?;
+    if !welcome.forwarding {
+        return Err(format!("Update Dray on {name} to open its dev servers here."));
+    }
+    Ok(ws)
 }
 
 /// A file on a remote server — an attachment, a recording — fetched through
 /// its `/file` route with the token in a header, for the webview's
 /// `drayserver://` scheme. The token stays out of every URL the page holds.
+/// Attachments are kept in [`FILES`], since a transcript drawn again asks
+/// for every picture in it again and the webview keeps none of a custom
+/// scheme's answers.
 pub async fn fetch_file(server: &str, path: &str) -> Result<(String, Vec<u8>), String> {
+    let key = (server.to_string(), path.to_string());
+    let keep = is_attachment(path);
+    if keep {
+        if let Some(hit) = FILES.lock().unwrap().get(&key) {
+            return Ok(hit);
+        }
+    }
+    let fetched = download_file(server, path, None).await?;
+    let (kind, body) = (fetched.kind, fetched.body);
+    if keep {
+        FILES.lock().unwrap().put(key, kind.clone(), body.clone());
+    }
+    Ok((kind, body))
+}
+
+/// One span of a remote file, for the webview's `<video>`, read through
+/// [`BLOCKS`]. WebKit walks a custom scheme's MP4 box by box — `bytes=0-7`,
+/// `bytes=28-35`, each waiting on the last — so passing each ask through cost
+/// a round trip per box header, ~0.5s through a tunnel, and a recording's
+/// metadata took minutes to arrive (#823). A miss fetches whole aligned
+/// blocks, and the rest of the walk answers from memory.
+pub async fn fetch_range(server: &str, path: &str, range: &str) -> Result<FetchedFile, String> {
+    let Some((first, last)) = open_span(range) else {
+        return download_file(server, path, Some(range)).await;
+    };
+    let file = (server.to_string(), path.to_string());
+    // The scheme cannot stream, so an open `bytes=0-` would wait on the whole
+    // file; a shorter 206 is legal and the player asks again where it ended.
+    let last = last.unwrap_or(u64::MAX).min(first.saturating_add(SPAN_LIMIT - 1));
+    let (from, to) = (first / BLOCK, last / BLOCK);
+    let missing = {
+        let mut blocks = BLOCKS.lock().unwrap();
+        blocks.first_missing(&file, from, to).map(|start| {
+            // Reading on from a held block is playback, which crosses a block
+            // a second at a recording's bitrate; one round trip a block only
+            // just kept up through a tunnel. A first read or a seek stays one
+            // block, so its frame comes sooner.
+            let playing = start > 0 && blocks.fresh(&file, start - 1).is_some();
+            (start, if playing { to.max(start + READ_AHEAD - 1) } else { to })
+        })
+    };
+    if let Some((start, to)) = missing {
+        let ask = format!("bytes={}-{}", start * BLOCK, to.saturating_add(1).saturating_mul(BLOCK) - 1);
+        let fetched = download_file(server, path, Some(&ask)).await?;
+        let (at, len) = match fetched.content_range.as_deref().and_then(content_range) {
+            Some((at, len)) => (at, len),
+            // A server answering the whole file: every block is in it.
+            None => (0, fetched.body.len() as u64),
+        };
+        BLOCKS.lock().unwrap().put(&file, at, len, &fetched.kind, &fetched.body);
+    }
+    let hit = BLOCKS.lock().unwrap().read(&file, first, last);
+    match hit {
+        Some(hit) => Ok(hit),
+        // `first`'s block went while the fetch waited — aged out, or pushed
+        // out by another file's reads — so the span is asked for itself.
+        None => download_file(server, path, Some(&format!("bytes={first}-{last}"))).await,
+    }
+}
+
+/// Bytes per cached block. A whole MP4 header fits in the first one.
+const BLOCK: u64 = 1 << 20;
+/// Most bytes one answer carries: a frame's worth sooner, rather than the
+/// whole file late.
+const SPAN_LIMIT: u64 = 4 * BLOCK;
+/// Blocks one miss fetches during playback.
+const READ_AHEAD: u64 = 4;
+/// Blocks held across every file, least recently used going first.
+const BLOCKS_HELD: usize = 64;
+/// How long a block is trusted. A recording is rewritten under the same name
+/// and nothing on the wire says it changed, so a block outliving its viewing
+/// would play the old take.
+const BLOCK_TTL: Duration = Duration::from_secs(120);
+
+static BLOCKS: LazyLock<Mutex<Blocks>> = LazyLock::new(Default::default);
+
+/// `(server, path)`.
+type FileKey = (String, String);
+
+struct Block {
+    file: FileKey,
+    index: u64,
+    fetched: std::time::Instant,
+    /// The whole file's length and type, carried on every block so any one
+    /// answers for them.
+    len: u64,
+    kind: String,
+    bytes: std::sync::Arc<[u8]>,
+}
+
+// ponytail: linear scan, fine at 64 entries.
+#[derive(Default)]
+struct Blocks {
+    held: VecDeque<Block>,
+}
+
+impl Blocks {
+    fn fresh(&mut self, file: &FileKey, index: u64) -> Option<&Block> {
+        self.held.retain(|b| b.fetched.elapsed() < BLOCK_TTL);
+        self.held.iter().find(|b| b.index == index && b.file == *file)
+    }
+
+    /// The first block in `from..=to` not held, stopping at the file's end
+    /// where a held block says where that is.
+    fn first_missing(&mut self, file: &FileKey, from: u64, to: u64) -> Option<u64> {
+        for index in from..=to {
+            match self.fresh(file, index) {
+                Some(b) if index.saturating_add(1).saturating_mul(BLOCK) >= b.len => return None,
+                Some(_) => {}
+                None => return Some(index),
+            }
+        }
+        None
+    }
+
+    /// Files `body`, which starts `at` bytes into a file `len` long. `at` is
+    /// block-aligned, since every ask this makes is.
+    fn put(&mut self, file: &FileKey, at: u64, len: u64, kind: &str, body: &[u8]) {
+        for (n, chunk) in body.chunks(BLOCK as usize).enumerate() {
+            let index = at / BLOCK + n as u64;
+            // A short block is only whole at the file's end.
+            if chunk.len() as u64 != BLOCK && index * BLOCK + chunk.len() as u64 != len {
+                break;
+            }
+            self.held.retain(|b| !(b.index == index && b.file == *file));
+            self.held.push_back(Block {
+                file: file.clone(),
+                index,
+                fetched: std::time::Instant::now(),
+                len,
+                kind: kind.to_string(),
+                bytes: chunk.into(),
+            });
+        }
+        while self.held.len() > BLOCKS_HELD {
+            self.held.pop_front();
+        }
+    }
+
+    /// Bytes `first..=last` as a 206, cut short where a block is missing or
+    /// the file ends; `None` where not even `first` is held.
+    fn read(&mut self, file: &FileKey, first: u64, last: u64) -> Option<FetchedFile> {
+        let (len, kind) = {
+            let b = self.fresh(file, first / BLOCK)?;
+            (b.len, b.kind.clone())
+        };
+        let last = last.min(len.checked_sub(1)?);
+        if first > last {
+            return None;
+        }
+        let mut body = Vec::with_capacity((last - first + 1) as usize);
+        for index in first / BLOCK..=last / BLOCK {
+            let Some(at) = self.held.iter().position(|b| b.index == index && b.file == *file) else { break };
+            // Touched, so the block being played is the last one dropped.
+            let block = self.held.remove(at)?;
+            let start = (first.max(index * BLOCK) - index * BLOCK) as usize;
+            let end = ((last + 1).min(index * BLOCK + block.bytes.len() as u64) - index * BLOCK) as usize;
+            body.extend_from_slice(&block.bytes[start..end]);
+            self.held.push_back(block);
+        }
+        let end = first + body.len() as u64 - 1;
+        Some(FetchedFile { status: 206, kind, content_range: Some(format!("bytes {first}-{end}/{len}")), body })
+    }
+}
+
+/// `bytes=a-` or `bytes=a-b`, the spans a player asks; `None` for a suffix
+/// or several ranges, which pass through uncached.
+fn open_span(range: &str) -> Option<(u64, Option<u64>)> {
+    let (first, last) = range.strip_prefix("bytes=")?.split_once('-')?;
+    let first = first.trim().parse().ok()?;
+    match last.trim() {
+        "" => Some((first, None)),
+        last => last.parse().ok().filter(|&l| l >= first).map(|l| (first, Some(l))),
+    }
+}
+
+/// `bytes a-b/len` → `(a, len)`.
+fn content_range(header: &str) -> Option<(u64, u64)> {
+    let (span, len) = header.strip_prefix("bytes ")?.split_once('/')?;
+    Some((span.split_once('-')?.0.parse().ok()?, len.parse().ok()?))
+}
+
+/// Written once under a fresh uuid (`attachments/<session>/<uuid>.<ext>`)
+/// and never rewritten, so a copy can't go stale. Recordings are kept by a
+/// name a re-recording overwrites, so they are always fetched. The uuid is
+/// what tells Dray's own from a project's `attachments` folder, which the
+/// Files view also reads through `/file` and whose files do change.
+fn is_attachment(path: &str) -> bool {
+    let path = std::path::Path::new(path);
+    let named_by_dray = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok());
+    named_by_dray
+        && path
+            .components()
+            .rev()
+            .nth(2)
+            .is_some_and(|c| c.as_os_str() == "attachments")
+}
+
+/// Most bytes [`FILES`] holds; a screenshot is 0.1–1.5MB.
+const FILES_BUDGET: usize = 64 << 20;
+
+static FILES: LazyLock<Mutex<FileCache>> = LazyLock::new(Default::default);
+
+/// Least recently used goes first. In memory only, so a relaunch fetches
+/// each picture once more.
+// ponytail: linear scan, fine at a few hundred entries.
+#[derive(Default)]
+struct FileCache {
+    entries: VecDeque<((String, String), String, Vec<u8>)>,
+    bytes: usize,
+}
+
+impl FileCache {
+    fn get(&mut self, key: &(String, String)) -> Option<(String, Vec<u8>)> {
+        let at = self.entries.iter().position(|(k, ..)| k == key)?;
+        let entry = self.entries.remove(at)?;
+        let hit = (entry.1.clone(), entry.2.clone());
+        self.entries.push_back(entry);
+        Some(hit)
+    }
+
+    fn put(&mut self, key: (String, String), kind: String, body: Vec<u8>) {
+        if body.len() > FILES_BUDGET / 4 || self.entries.iter().any(|(k, ..)| *k == key) {
+            return;
+        }
+        self.bytes += body.len();
+        self.entries.push_back((key, kind, body));
+        while self.bytes > FILES_BUDGET {
+            let Some((_, _, old)) = self.entries.pop_front() else { break };
+            self.bytes -= old.len();
+        }
+    }
+}
+
+/// What a remote server's `/file` answered.
+pub struct FetchedFile {
+    pub status: u16,
+    pub kind: String,
+    pub content_range: Option<String>,
+    pub body: Vec<u8>,
+}
+
+async fn download_file(server: &str, path: &str, range: Option<&str>) -> Result<FetchedFile, String> {
     let (base, token) = http_base(server)?;
-    let response = crate::http()
-        .get(format!("{base}/file"))
-        .query(&[("path", path)])
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut request = crate::http().get(format!("{base}/file")).query(&[("path", path)]).bearer_auth(token);
+    if let Some(range) = range {
+        request = request.header(reqwest::header::RANGE, range);
+    }
+    let response = request.send().await.map_err(|e| e.to_string())?;
     if !response.status().is_success() {
         return Err(response.status().to_string());
     }
-    let kind = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/octet-stream")
-        .to_string();
+    let status = response.status().as_u16();
+    let header = |name| response.headers().get(name).and_then(|v: &reqwest::header::HeaderValue| v.to_str().ok()).map(str::to_string);
+    let kind = header(reqwest::header::CONTENT_TYPE).unwrap_or_else(|| "application/octet-stream".to_string());
+    let content_range = header(reqwest::header::CONTENT_RANGE);
     let body = response.bytes().await.map_err(|e| e.to_string())?;
-    Ok((kind, body.to_vec()))
+    Ok(FetchedFile { status, kind, content_range, body: body.to_vec() })
 }
 
 /// The `http(s)://` address and token of a connected server, for the routes
@@ -1370,6 +2198,80 @@ pub async fn upload_attachment(server: String, path: String, id: String) -> Resu
 mod tests {
     use super::*;
 
+    /// WebKit's box walk: after one block lands, every small ask is answered
+    /// from it, and an answer never runs past the file's end.
+    #[test]
+    fn a_video_is_read_in_blocks() {
+        let file = ("s".to_string(), "/v.mp4".to_string());
+        let len = BLOCK * 2 + 10;
+        let body: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let mut blocks = Blocks::default();
+        assert_eq!(blocks.first_missing(&file, 0, 0), Some(0));
+
+        blocks.put(&file, 0, len, "video/mp4", &body[..(BLOCK * 2) as usize]);
+        assert_eq!(blocks.first_missing(&file, 0, 1), None);
+        let box_header = blocks.read(&file, 28, 35).unwrap();
+        assert_eq!(box_header.body, body[28..36]);
+        assert_eq!(box_header.content_range.as_deref(), Some(&*format!("bytes 28-35/{len}")));
+
+        // Across a block edge, and cut short where the next block is missing.
+        let across = blocks.read(&file, BLOCK - 4, BLOCK * 3).unwrap();
+        assert_eq!(across.body, body[(BLOCK - 4) as usize..(BLOCK * 2) as usize]);
+        assert_eq!(blocks.first_missing(&file, 2, 3), Some(2));
+
+        // The short last block is whole, and nothing is asked past it.
+        blocks.put(&file, BLOCK * 2, len, "video/mp4", &body[(BLOCK * 2) as usize..]);
+        assert_eq!(blocks.first_missing(&file, 2, 5), None);
+        let tail = blocks.read(&file, BLOCK * 2, u64::MAX).unwrap();
+        assert_eq!(tail.body, body[(BLOCK * 2) as usize..]);
+        assert!(blocks.read(&file, len, len + 5).is_none());
+    }
+
+    /// A body cut off mid-block files the whole blocks before it alone, or a
+    /// short block would answer as though the file ended there.
+    #[test]
+    fn a_short_block_mid_file_is_not_kept() {
+        let file = ("s".to_string(), "/v.mp4".to_string());
+        let mut blocks = Blocks::default();
+        blocks.put(&file, 0, BLOCK * 4, "video/mp4", &vec![0; (BLOCK + 5) as usize]);
+        assert_eq!(blocks.first_missing(&file, 0, 1), Some(1));
+    }
+
+    #[test]
+    fn reads_the_spans_a_player_asks() {
+        assert_eq!(open_span("bytes=0-"), Some((0, None)));
+        assert_eq!(open_span("bytes=28-35"), Some((28, Some(35))));
+        assert_eq!(open_span("bytes=-500"), None, "a suffix passes through");
+        assert_eq!(open_span("bytes=0-1,5-6"), None, "several pass through");
+        assert_eq!(open_span("bytes=9-3"), None);
+        assert_eq!(content_range("bytes 1048576-2097151/29806920"), Some((1048576, 29806920)));
+    }
+
+    #[test]
+    fn keeps_attachments_alone_within_budget() {
+        assert!(is_attachment(
+            "/home/u/.dray/attachments/s1/019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b.png"
+        ));
+        assert!(!is_attachment("/repo/attachments/demo/clip.mp4"));
+        assert!(!is_attachment("/home/u/.dray/browser/recordings/s1/flow.mp4"));
+        assert!(!is_attachment("/home/u/attachments/flow.mp4"));
+
+        let key = |n: usize| ("srv".to_string(), format!("/a/{n}"));
+        let mut cache = FileCache::default();
+        let chunk = FILES_BUDGET / 8;
+        for n in 0..8 {
+            cache.put(key(n), "image/png".into(), vec![0; chunk]);
+        }
+        assert!(cache.get(&key(0)).is_some(), "touched, so newest");
+        cache.put(key(8), "image/png".into(), vec![0; chunk]);
+        assert!(cache.get(&key(1)).is_none(), "oldest untouched goes");
+        assert!(cache.get(&key(0)).is_some());
+        assert!(cache.bytes <= FILES_BUDGET);
+
+        cache.put(key(9), "image/png".into(), vec![0; FILES_BUDGET]);
+        assert!(cache.get(&key(9)).is_none(), "one file can't empty it");
+    }
+
     #[test]
     fn tells_a_server_behind_its_channel() {
         let out = Releases::from_tags(
@@ -1378,7 +2280,7 @@ mod tests {
         assert_eq!(out.stable.as_ref().map(ToString::to_string).as_deref(), Some("0.11.1"));
         assert_eq!(out.beta.as_ref().map(ToString::to_string).as_deref(), Some("0.12.0-beta.10"), "numeric, not lexical");
 
-        let on = |release: &str| Welcome { version: Some("0.28.0".into()), release: Some(release.into()), stale: false, os: None };
+        let on = |release: &str| Welcome { version: Some("0.28.0".into()), release: Some(release.into()), stale: false, ..Default::default() };
         assert!(behind(&on("0.11.0"), false, &out));
         assert!(!behind(&on("0.11.1"), false, &out));
         assert!(!behind(&on("0.11.1"), false, &Releases::default()), "nothing out is nothing to update to");
@@ -1391,8 +2293,13 @@ mod tests {
 
         let old = Welcome::default();
         assert!(behind(&old, false, &out), "a server that says nothing predates saying");
-        let local = Welcome { version: Some("0.28.0".into()), release: None, stale: false, os: None };
+        let local = Welcome { version: Some("0.28.0".into()), release: None, stale: false, ..Default::default() };
         assert!(!behind(&local, true, &out), "a local build is never offered one");
+
+        let mac = |version: &str, dev: bool| Welcome { version: Some(version.into()), dictation: true, dev, ..Default::default() };
+        assert!(behind(&mac("0.28.9", false), false, &out), "another Mac's app is measured on app releases");
+        assert!(!behind(&mac("0.29.0", false), false, &out));
+        assert!(!behind(&mac("0.28.9", true), false, &out), "a dev build is never offered one");
     }
 
     /// Against GitHub itself, which refuses a request with no User-Agent.
@@ -1420,7 +2327,7 @@ mod tests {
     /// or a re-add after rotating a token. This Mac's row is no name to route to.
     #[test]
     fn a_name_belongs_to_one_server() {
-        let saved = |id: &str, name: &str| Saved { id: id.into(), name: name.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, unknown: Default::default() };
+        let saved = |id: &str, name: &str| Saved { id: id.into(), name: name.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
         let list = vec![Conn::new(saved("a", "vps")), Conn::new(saved(LOCAL, "This Mac"))];
         assert!(refuse_taken(&list, "vps", None).is_err());
         assert!(refuse_taken(&list, "vps", Some("b")).is_err());
@@ -1432,7 +2339,7 @@ mod tests {
     /// loop is left to drain them, so they would wait for ever.
     #[test]
     fn turning_off_answers_calls_in_flight() {
-        let saved = Saved { id: "s".into(), name: "box".into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, unknown: Default::default() };
+        let saved = Saved { id: "s".into(), name: "box".into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
         let mut conn = Conn::new(saved);
         let (reply, mut answer) = oneshot::channel();
         conn.pending.insert(1, reply);
@@ -1459,14 +2366,167 @@ mod tests {
         url
     }
 
+    #[test]
+    fn a_tunnel_still_attaching_keeps_the_address() {
+        let saved = "wss://kept.example";
+        assert_eq!(address_to_keep(saved, None, true), saved, "still attaching");
+        assert_eq!(address_to_keep(saved, None, false), "", "turned off");
+        assert_eq!(address_to_keep(saved, Some("https://new.example"), false), "wss://new.example", "moved");
+        assert_eq!(address_to_keep("", None, true), "", "none yet to keep");
+    }
+
+    #[tokio::test]
+    async fn waits_for_a_tunnel_address_to_come_back() {
+        let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = free.local_addr().unwrap();
+        drop(free);
+        let mut backoff = Duration::from_millis(5);
+        let waiting = tokio::spawn(async move {
+            let admitted = wait_for_address(&format!("ws://{addr}"), "t", &mut backoff).await;
+            (admitted.1.version, backoff)
+        });
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(!waiting.is_finished(), "nothing is listening yet");
+
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            ws.next().await;
+            ws.send(Message::text(json!({ "v": PROTOCOL, "version": "back" }).to_string())).await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let (version, backoff) = tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap();
+        assert_eq!(version.as_deref(), Some("back"));
+        assert!(backoff > Duration::from_millis(5), "the wait backs off");
+    }
+
+    /// A real server, token "t", and what it can reach: a TCP service that
+    /// answers each read with the same bytes, then ends on "bye".
+    async fn forwarding_server() -> (String, u16) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let file = std::env::temp_dir().join("dray-no-tunnel-url");
+        tokio::spawn(crate::serve::listen(
+            listener,
+            Default::default(),
+            Sink::new(|_, _| {}),
+            "t".into(),
+            file.into(),
+            false,
+        ));
+        let service = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = service.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut tcp, _)) = service.accept().await {
+                tokio::spawn(async move {
+                    let mut chunk = vec![0; 64 * 1024];
+                    while let Ok(n) = tcp.read(&mut chunk).await {
+                        if n == 0 || &chunk[..n] == b"bye" {
+                            break;
+                        }
+                        tcp.write_all(&chunk[..n]).await.unwrap();
+                    }
+                });
+            }
+        });
+        (url, port)
+    }
+
+    #[tokio::test]
+    async fn a_port_is_forwarded_without_ssh() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (url, remote) = forwarding_server().await;
+        // A row with no login, the way a Mac added by address is one.
+        let id = "forward-no-ssh";
+        let saved = Saved { id: id.into(), name: "box".into(), url: url.clone(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
+        let mut conn = Conn::new(saved);
+        conn.status = ServerStatus::Connected;
+        conn.live = Some((url, "t".into()));
+        conns().push(conn);
+        let local = forward_port(id.into(), remote).await.unwrap();
+        assert_eq!(forward_port(id.into(), remote).await.unwrap(), local, "a second click reuses the port");
+
+        // Far past one frame, and past what the socket buffers hold, so a pipe
+        // that stops reading while it writes would stall here.
+        let sent: Vec<u8> = (0..8 << 20).map(|i: u32| (i % 251) as u8).collect();
+        let tcp = tokio::net::TcpStream::connect(("127.0.0.1", local)).await.unwrap();
+        let (mut reader, mut writer) = tcp.into_split();
+        let writing = {
+            let sent = sent.clone();
+            tokio::spawn(async move {
+                writer.write_all(&sent).await.unwrap();
+                writer
+            })
+        };
+        let mut got = vec![0; sent.len()];
+        tokio::time::timeout(Duration::from_secs(30), reader.read_exact(&mut got)).await.unwrap().unwrap();
+        assert!(got == sent, "the bytes came back changed");
+
+        // The service hanging up reaches the local connection, and the port
+        // stays open for the next one.
+        let mut writer = writing.await.unwrap();
+        writer.write_all(b"bye").await.unwrap();
+        let ended = tokio::time::timeout(Duration::from_secs(5), reader.read(&mut got)).await.unwrap();
+        assert_eq!(ended.unwrap(), 0);
+        let mut again = tokio::net::TcpStream::connect(("127.0.0.1", local)).await.unwrap();
+        again.write_all(b"hi").await.unwrap();
+        let mut two = [0; 2];
+        tokio::time::timeout(Duration::from_secs(5), again.read_exact(&mut two)).await.unwrap().unwrap();
+        assert_eq!(&two, b"hi");
+        // `CONNS` is shared, and the live tests read it from row 0.
+        conns().retain(|c| c.saved.id != id);
+    }
+
+    #[tokio::test]
+    async fn a_forward_that_cannot_work_says_why() {
+        let (url, remote) = forwarding_server().await;
+        let refused = |f: Result<Forward, String>| f.err().expect("should have refused");
+        let wrong = refused(forward_over_dray(url.clone(), "nope".into(), "box", remote).await);
+        assert!(wrong.contains("wrong token"), "{wrong}");
+
+        let unused = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead = unused.local_addr().unwrap().port();
+        drop(unused);
+        let stopped = refused(forward_over_dray(url, "t".into(), "box", dead).await);
+        assert!(stopped.contains(&format!("nothing is listening on port {dead}")), "{stopped}");
+
+        // A server from before reads the hello as a client's and welcomes it.
+        let old = refused(forward_over_dray(fake_server(true).await, "t".into(), "box", remote).await);
+        assert!(old.contains("Update Dray on box"), "{old}");
+    }
+
     async fn served_for(id: &str, answers: bool) -> Option<()> {
-        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, unknown: Default::default() };
+        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, unknown: Default::default() };
         conns().push(Conn::new(saved));
         let (ws, _) = admit(&fake_server(answers).await, "t").await.unwrap();
         let served = tokio::time::timeout(SILENCE * 3, serve(id, ws)).await.ok();
         // `CONNS` is shared, and the live tests read it from row 0.
         conns().retain(|c| c.saved.id != id);
         served
+    }
+
+    /// A listener that takes the connection and never speaks is a connect
+    /// with nothing to end it but its own timeout — or the reader's Cancel.
+    #[tokio::test]
+    async fn cancel_stops_an_add_that_is_still_connecting() {
+        let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", silent.local_addr().unwrap());
+        let mut adding = tokio::spawn(add_server(url, "t".into(), Some("cancel-me".into()), Some("mine".into())));
+        let (_held, _) = silent.accept().await.unwrap();
+
+        // Another dialog's Cancel, or one from before this add: not this add's.
+        cancel_add_server("someone-elses".into());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut adding).await.is_err(),
+            "a cancel for another add stopped this one"
+        );
+
+        cancel_add_server("mine".into());
+        let said = tokio::time::timeout(Duration::from_secs(2), adding).await.expect("the cancel ended it").unwrap();
+        assert_eq!(said.err().as_deref(), Some(CANCELLED));
+        assert!(!conns().iter().any(|c| c.saved.name == "cancel-me"), "nothing was saved");
     }
 
     #[tokio::test]
@@ -1493,6 +2553,43 @@ mod tests {
         .expect("no such event in time")
     }
 
+    /// A real dev server behind a running `dray-serve`, usually through the
+    /// relay: its page, and the hot-reload socket a page keeps open.
+    ///
+    /// ```text
+    /// DRAY_TEST_SERVER=wss://… DRAY_TEST_TOKEN=$(cat …/serve-token) DRAY_TEST_PORT=5173 \
+    ///   cargo test servers::tests::forwards_a_real_vite_server -- --ignored --nocapture
+    /// ```
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn forwards_a_real_vite_server() {
+        let url = std::env::var("DRAY_TEST_SERVER").expect("DRAY_TEST_SERVER");
+        let token = std::env::var("DRAY_TEST_TOKEN").expect("DRAY_TEST_TOKEN");
+        let remote: u16 = std::env::var("DRAY_TEST_PORT").expect("DRAY_TEST_PORT").parse().unwrap();
+
+        let started = std::time::Instant::now();
+        let forward = forward_over_dray(url, token, "box", remote).await.unwrap();
+        println!("forward up in {:?}", started.elapsed());
+        let local = forward.port();
+
+        let started = std::time::Instant::now();
+        let page = crate::http().get(format!("http://localhost:{local}/")).send().await.unwrap();
+        assert!(page.status().is_success(), "{}", page.status());
+        let page = page.text().await.unwrap();
+        assert!(page.contains("/@vite/client"), "{page}");
+        println!("page in {:?}", started.elapsed());
+        let script = crate::http().get(format!("http://localhost:{local}/@vite/client")).send().await.unwrap();
+        println!("/@vite/client: {} bytes", script.text().await.unwrap().len());
+
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut hmr = format!("ws://localhost:{local}/").into_client_request().unwrap();
+        hmr.headers_mut().insert("sec-websocket-protocol", "vite-hmr".parse().unwrap());
+        let (mut hmr, _) = tokio_tungstenite::connect_async(hmr).await.unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(10), hmr.next()).await.unwrap().unwrap().unwrap();
+        assert!(first.to_text().unwrap().contains("connected"), "{first}");
+        println!("hot reload connected: {first}");
+    }
+
     /// Against a running `dray-serve`, in a throwaway `DRAY_HOME`:
     ///
     /// ```text
@@ -1514,11 +2611,11 @@ mod tests {
         }))
         .await;
 
-        let refused = add_server(url.clone(), "wrong".into(), None).await.unwrap_err();
+        let refused = add_server(url.clone(), "wrong".into(), None, None).await.unwrap_err();
         assert!(refused.contains("wrong token"), "{refused}");
         assert!(list_servers().is_empty(), "a refused token is not saved");
 
-        let added = add_server(url, token.clone(), Some("vps".into())).await.unwrap();
+        let added = add_server(url, token.clone(), Some("vps".into()), None).await.unwrap();
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
         // Every connect opens with `live_state`, and it arrives tagged.
         let live = next_event(&mut rx, |e, p| e == "server_event" && p["event"] == "live_state").await;
@@ -1581,7 +2678,7 @@ mod tests {
         assert!(first.ends_with(".opentunnel.xyz"), "is the tunnel on? {first}");
 
         // By address alone, as another Mac with no SSH would add it.
-        let added = add_server(first.clone(), token.clone(), Some("tunnel".into())).await.unwrap();
+        let added = add_server(first.clone(), token.clone(), Some("tunnel".into()), None).await.unwrap();
         connected("by address");
         assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_ok());
 
@@ -1606,7 +2703,7 @@ mod tests {
         remove_server(added.id).await.unwrap();
 
         // Over SSH: the address rides the login.
-        let added = add_ssh_server(line, Some("vps".into())).await.map_err(|f| f.message).unwrap();
+        let added = add_ssh_server(line, Some("vps".into()), None).await.map_err(|f| f.message).unwrap();
         connected("by SSH");
         assert_eq!(list_servers()[0].url, first.replacen("https://", "wss://", 1));
         assert!(!std::fs::read_to_string(home.join("servers.json")).unwrap().contains(&token));
@@ -1640,7 +2737,7 @@ mod tests {
         }))
         .await;
 
-        let added = add_ssh_server(line, Some("vps".into())).await.map_err(|f| f.message).unwrap();
+        let added = add_ssh_server(line, Some("vps".into()), None).await.map_err(|f| f.message).unwrap();
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
         let saved = std::fs::read_to_string(home.join("servers.json")).unwrap();
         assert!(saved.contains("\"dest\""), "{saved}");

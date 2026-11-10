@@ -43,13 +43,7 @@ The full changelog is in Settings → **Changelog**, newest first. Settings → 
 
 ## The `dray` CLI updates with the app
 
-If the [`dray` command line](/cli) is installed, Dray updates it for you. The first time a new version of the app starts, it runs `dray update`, on the same channel as the app. You can also run it yourself:
-
-```bash
-dray update
-```
-
-Dray never installs the CLI on its own. It only keeps an installed one current.
+The [`dray` command line](/cli) ships inside the app. Each time Dray starts, it puts its copy in `~/.local/bin` if the one there differs, so the CLI always matches the app. There is nothing to update by hand: `dray update` on a Mac with the app does nothing.
 
 ## Your agents
 

@@ -93,8 +93,11 @@ export default function DocsPanel({
     if (next) selectDoc(sessionId, next.path);
   };
   const stepping = active && current?.mode === "view";
-  useHotkey("subtab.prev", () => step(-1), { enabled: stepping });
-  useHotkey("subtab.next", () => step(1), { enabled: stepping });
+  // Given up in a text field too: the composer is on screen beside a doc in
+  // read mode, and ⌘⇧← selects to the start of a line there.
+  const chord = { enabled: stepping, skipInTextField: true };
+  useHotkey("subtab.prev", () => step(-1), chord);
+  useHotkey("subtab.next", () => step(1), chord);
 
   const close = (doc: Doc) => {
     // Stated here as well as on the button, which is disabled for it: the

@@ -96,8 +96,8 @@ pub struct PiClient {
     /// extension dialog raised in that gap is refused rather than drawn.
     ///
     /// It lives here because the client is already the one thing both halves
-    /// hold: [`Session::interrupt`](crate::session::Session::interrupt) sets it
-    /// and the read loop reads it, and neither has another handle on the other.
+    /// hold: [`Desk::stop`](super::desk::Desk::stop) sets it and the read loop
+    /// reads it, and neither has another handle on the other.
     /// A field on `Session` would put a pi-only flag on the struct every
     /// harness shares.
     stopping: Arc<AtomicBool>,
@@ -151,12 +151,12 @@ impl PiClient {
         self.stopping.store(true, Relaxed);
     }
 
-    /// Closes it again, at the next run's first line.
+    /// Closes it again, as the prompt that starts the next run goes out.
     ///
-    /// The next run is the earliest moment a dialog can honestly be drawn again,
-    /// and it is the only boundary safe to key on: an aborted run is not promised
-    /// to settle, so clearing on a turn ending could leave the window open for
-    /// the life of the session.
+    /// The only boundary safe to key on: an aborted run is not promised to
+    /// settle, so clearing on a turn ending could leave the window open for the
+    /// life of the session, and a new run's preflight can ask before its
+    /// `agent_start` arrives.
     pub fn end_stop(&self) {
         self.stopping.store(false, Relaxed);
     }
@@ -171,7 +171,7 @@ impl PiClient {
         self.request_within(command, extra, REQUEST_TIMEOUT).await
     }
 
-    /// [`Self::request`] with the bound named, so the handshake can be tighter
+    /// [`Self::request`] with the bound named, so the handshake can be wider
     /// and a test need not wait one out.
     ///
     /// `extra` is merged into the line rather than nested under a `params` key:
@@ -247,6 +247,12 @@ impl PiClient {
         let mut closed = self.closed.lock().expect("pi stdin flag poisoned");
         *closed = true;
         let _ = self.tx.send(Outbound::Close);
+    }
+
+    /// Answers every request still waiting as "pi exited". For the read loop to
+    /// call once the child's output has ended.
+    pub fn fail_pending(&self) {
+        self.pending.fail_all();
     }
 
     /// Routes one line off pi's stdout.
@@ -532,10 +538,10 @@ mod tests {
 
     /// The refusal window is shared, which is the whole reason it lives here.
     ///
-    /// `Session::interrupt` opens it and the read loop closes it, and they hold
-    /// nothing in common but a clone of this client — so a flag that did not
-    /// travel across the clone would leave Stop refusing dialogs in one half and
-    /// drawing them in the other.
+    /// Stop opens it, the next prompt closes it and the read loop reads it, and
+    /// they hold nothing in common but a clone of this client — so a flag that
+    /// did not travel across the clone would leave Stop refusing dialogs in one
+    /// half and drawing them in the other.
     #[tokio::test]
     async fn the_stop_window_is_shared_by_every_clone() {
         let (tx, _rx) = mpsc::unbounded_channel();

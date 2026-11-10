@@ -11,10 +11,10 @@
 /// not promise.
 ///
 /// One function rather than two, and one place rather than two, because it has
-/// two consumers that must not disagree: the overlay painted over the composer's
-/// textarea, and the same text echoed back into the transcript. Colouring a word
-/// while typing that goes plain once sent — or the reverse — reads as a bug in
-/// whichever surface the reader noticed second.
+/// two consumers that must not disagree: the composer's editor, and the same
+/// text echoed back into the transcript. Colouring a word while typing that goes
+/// plain once sent — or the reverse — reads as a bug in whichever surface the
+/// reader noticed second.
 import { findPromptPaths } from "@/lib/filePath";
 import { OPENERS, parseIdentifier } from "@/lib/issue";
 import { parseSessionTag } from "@/lib/sessionTag";
@@ -37,7 +37,7 @@ export type Segment = {
   text: string;
   /// What sits between an inline mark's delimiters, for the surface that draws
   /// the mark rather than the markup. `text` keeps the delimiters, which is what
-  /// preserves the round trip the composer's overlay is laid out by.
+  /// preserves the round trip the composer's editor is built and read back by.
   inner?: string;
   /// Where a markdown link or a URL points — a bare host's carries the scheme
   /// its text leaves out.
@@ -54,7 +54,7 @@ export type Segment = {
 /// What each run is painted, kept here with the rule that produces it so the
 /// composer and the transcript cannot colour the same word differently. Plain
 /// text takes no class at all — it inherits, which is what lets the composer's
-/// overlay and the message bubble sit on different backgrounds.
+/// box and the message bubble sit on different backgrounds.
 export const SEGMENT_COLOR: Record<Segment["kind"], string> = {
   text: "",
   command: "text-accent-command",
@@ -69,10 +69,10 @@ export const SEGMENT_COLOR: Record<Segment["kind"], string> = {
   // grey rule drawn under white text.
   url: "underline decoration-current/60 underline-offset-2",
   // An inline mark takes no class here, and that is the rule rather than an
-  // omission: the composer paints this over a textarea that still lays out the
-  // delimiters, so bolding or shrinking a run would slide every glyph after it
-  // out of register. The transcript draws the mark and drops the delimiters,
-  // the same divergence `splitMention` already makes and for the same reason.
+  // omission: the composer shows a mark as the text that was typed, delimiters
+  // and all, since it reads its value back off those characters. The transcript
+  // draws the mark and drops the delimiters, the same divergence `splitMention`
+  // already makes.
   strong: "",
   em: "",
   code: "",
@@ -92,14 +92,14 @@ const URL_TAIL = /[.,;:!?'"»›]+$/;
 ///
 /// The TLD list is the guess, and it is short on purpose: a file name is the
 /// false positive, so every TLD that is also a common extension is left out
-/// (`md`, `rs`, `py`, `sh`, `so`, `app`, `ts`, `js`). A miss costs one plain
+/// (`md`, `rs`, `py`, `sh`, `so`, `app`, `ts`, `js`, `in`). A miss costs one plain
 /// word; a hit on `README.md` costs a link to a stranger's site. Localhost and
 /// a bare IP need a port, or the word "localhost" in a sentence would link.
 /// Not after `/`, `@`, `.` or a word character, so a path segment or an email
 /// is never cut in half — and not before `.` and a word character either, or
 /// `config.dev.ts` links its first half.
 const BARE_URL =
-  /(?<![\w@./:-])(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|org|net|io|dev|ai|co|me|gg|xyz|info|edu|gov|uk|de|fr|jp|ca|au|in)(?::\d{2,5})?|(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):\d{2,5})(?![\w-]|\.\w)(?:[/?#][^\s<>]*)?/gi;
+  /(?<![\w@./:-])(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:com|org|net|io|dev|ai|co|me|gg|xyz|info|edu|gov|uk|de|fr|jp|ca|au)(?::\d{2,5})?|(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):\d{2,5})(?![\w-]|\.\w)(?:[/?#][^\s<>]*)?/gi;
 
 /// The same rule anchored at one index, for the scanner below.
 const BARE_URL_AT = new RegExp(BARE_URL.source, "iy");
@@ -107,10 +107,12 @@ const BARE_URL_AT = new RegExp(BARE_URL.source, "iy");
 type Url = { text: string; href: string };
 
 /// A bare host with the scheme it opens under: `http` for a local address,
-/// which serves none of them over TLS, `https` for the rest.
+/// which serves none of them over TLS, `https` for the rest. An address, not
+/// any host with a leading digit: `1password.com` is a site.
 function bareUrl(match: string): Url {
   const text = trimUrlTail(match);
-  return { text, href: `${/^(localhost|\d)/i.test(text) ? "http" : "https"}://${text}` };
+  const local = /^(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):/i.test(text);
+  return { text, href: `${local ? "http" : "https"}://${text}` };
 }
 
 export type BareUrl = { start: number; end: number; href: string };
@@ -140,26 +142,29 @@ function urlAt(text: string, i: number): Url | null {
 /// `url` without the sentence punctuation after it, and without a closing paren
 /// it never opened.
 function trimUrlTail(url: string): string {
-  let out = url.replace(URL_TAIL, "");
-  while (out.endsWith(")") && (out.match(/\(/g) ?? []).length < (out.match(/\)/g) ?? []).length) {
-    out = out.slice(0, -1);
+  let out = url;
+  // Both strips until neither bites: `docs.)` loses its paren and then has a
+  // dot to lose, which one pass in either order leaves behind.
+  for (;;) {
+    const before = out;
+    out = out.replace(URL_TAIL, "");
+    while (out.endsWith(")") && (out.match(/\(/g) ?? []).length < (out.match(/\)/g) ?? []).length) {
+      out = out.slice(0, -1);
+    }
+    if (out === before) return out;
   }
-  return out;
 }
 
 /// A mention split into the part worth reading and the part that is only there
 /// to disambiguate it.
 ///
-/// The two surfaces use this differently *because they have to*, and that is the
-/// one place they legitimately diverge. The transcript draws `name` alone — a
-/// deep path is most of a line and says little the filename doesn't. The
-/// composer can't: its overlay is painted over a textarea that still lays out
-/// the full string, so dropping characters would slide the caret, the selection
-/// band, and everything after the mention out of register. It dims `dir`
-/// instead, which reaches the same reading order without touching a glyph.
+/// The transcript draws `name` alone — a deep path is most of a line and says
+/// little the filename doesn't — and so does the composer's chip, which keeps
+/// the whole run in `data-tag`. A queued prompt dims `dir` instead and keeps
+/// every character.
 ///
 /// `dir` keeps the leading `@` and the trailing slash, so `dir + name` is the
-/// segment back exactly — the property the overlay depends on.
+/// segment back exactly.
 export function splitMention(text: string): { dir: string; name: string } {
   const cut = text.lastIndexOf("/");
   if (cut === -1) return { dir: "@", name: text.slice(1) };
@@ -170,9 +175,9 @@ export function splitMention(text: string): { dir: string; name: string } {
 /// A literal `\n` — the backslash and the letter, not a line break — turned
 /// into the break it was meant to be.
 ///
-/// A **render** concern, and the composer must never reach it: an overlay that
-/// dropped a character would slide every glyph after it out of register, and
-/// what the reader typed is what the textarea has to keep holding.
+/// A **render** concern, and the composer must never reach it: what the reader
+/// typed is what the box has to keep holding, and a break drawn there reads
+/// back as a newline nobody typed.
 ///
 /// The sender is why this exists. An agent relaying through `dray send` writes
 /// its message inside a shell string, where `\n` is left uninterpreted, so the
@@ -183,19 +188,6 @@ export function withLineBreaks(text: string): string {
   return text.replace(/\\n/g, "\n");
 }
 
-/// The same runs with every bare path in the plain text pulled out as its own.
-///
-/// A pass over the finished segments rather than another case in the scanner,
-/// for two reasons. A path has no opening character to key on — it is known by
-/// its shape, which `findPromptPaths` decides — and this must not reach the
-/// composer, where a path colouring itself mid-word while the reader is still
-/// typing it is noise rather than help.
-///
-/// Only `text` runs are searched, so a path already inside a mention, a URL or
-/// a code span is left exactly where it is. Slices come off the run itself
-/// rather than from the match's own `path`, which is what keeps the round trip
-/// exact even where the two differ — and they do wherever a locator is on: the
-/// run keeps `:12`, the path in `inner` does not.
 /// An issue tag and the title written after it, joined into one run.
 ///
 /// **Nothing closes an issue tag's title, so the scanner cannot find its end.**
@@ -263,6 +255,19 @@ export function issueFace(segment: Segment): string {
   return `#${segment.text.slice(segment.inner.length + 1)}`;
 }
 
+/// The same runs with every bare path in the plain text pulled out as its own.
+///
+/// A pass over the finished segments rather than another case in the scanner,
+/// for two reasons. A path has no opening character to key on — it is known by
+/// its shape, which `findPromptPaths` decides — and this must not reach the
+/// composer, where a path colouring itself mid-word while the reader is still
+/// typing it is noise rather than help.
+///
+/// Only `text` runs are searched, so a path already inside a mention, a URL or
+/// a code span is left exactly where it is. Slices come off the run itself
+/// rather than from the match's own `path`, which is what keeps the round trip
+/// exact even where the two differ — and they do wherever a locator is on: the
+/// run keeps `:12`, the path in `inner` does not.
 export function withPaths(segments: Segment[]): Segment[] {
   const out: Segment[] = [];
 
@@ -480,8 +485,8 @@ function hrefEnd(text: string, from: number): number {
 }
 
 /// The runs of `text` in order. Concatenating them returns `text` exactly —
-/// which is what lets the overlay use this without the glyphs drifting out of
-/// register with the textarea underneath.
+/// which is what lets the composer build its editor from them and read the same
+/// string back.
 export function highlightSegments(text: string): Segment[] {
   const segments: Segment[] = [];
   // Per call, not module-level: it describes this string and nothing else.
@@ -550,9 +555,14 @@ export function highlightSegments(text: string): Segment[] {
     // links by. A mention is left as strict as it was: the CLI parses `@path`
     // out of the prompt itself, so widening it here would paint mentions the
     // harness will not read.
+    //
+    // The brackets have to open the word themselves. Rust trims them off the
+    // front of a whitespace token and nowhere else, so `call(#DRA-53)` links
+    // nothing and must not be painted as if it did.
     const previous = i > 0 ? text[i - 1] : " ";
-    const opensWord =
-      SPACE.test(previous) || (opener === "#" && OPENERS.includes(previous));
+    let before = i - 1;
+    if (opener === "#") while (before >= 0 && OPENERS.includes(text[before])) before -= 1;
+    const opensWord = SPACE.test(previous) || before < 0 || SPACE.test(text[before]);
     if (!opensWord) continue;
 
     let end = i + 1;

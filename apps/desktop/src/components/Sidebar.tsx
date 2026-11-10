@@ -1,5 +1,5 @@
 import { Cog6ToothIcon } from "@heroicons/react/16/solid";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -56,6 +56,7 @@ import { startSessionDrag, type DropTarget } from "@/lib/dragSession";
 import { basename, isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
 import { sessionBranch } from "@/lib/pr";
+import { checkoutsOf, groupProjects, keyOfPath, leadPath, soleServer } from "@/lib/projectGroups";
 import { projectLabel, serverConnected, serverName, useServers } from "@/lib/servers";
 import { LOCAL, serverOfPath } from "@/lib/transport";
 import { useResizable } from "@/components/ResizeHandle";
@@ -595,7 +596,7 @@ export function sessionGroups(
 function projectRuns(nests: SessionListRow[][], projects: Project[]): SessionGroup[] {
   const byPath = new Map<string, SessionListRow[]>();
   for (const nest of nests) {
-    const path = nest[0].item.projectPath;
+    const path = leadPath(projects, nest[0].item.projectPath);
     byPath.set(path, [...(byPath.get(path) ?? []), ...nest]);
   }
   const seen = new Map([...byPath.keys()].map((path, i) => [path, i]));
@@ -646,7 +647,8 @@ export function placeDrafts(
 ): (SessionGroup | DraftRun)[] {
   const byPath = new Map<string, Draft[]>();
   for (const draft of [...drafts].sort((a, b) => b.created.localeCompare(a.created))) {
-    byPath.set(draft.projectPath, [...(byPath.get(draft.projectPath) ?? []), draft]);
+    const path = leadPath(projects, draft.projectPath);
+    byPath.set(path, [...(byPath.get(path) ?? []), draft]);
   }
   const rank = (path: string) => {
     const i = projects.findIndex((p) => p.path === path);
@@ -1050,6 +1052,14 @@ export default function Sidebar({
   // index is one file parsed whole however few entries are asked for.
   const [settledLimit, setSettledLimit] = useState(SETTLED_STEP);
   const listRef = useRef<HTMLDivElement>(null);
+  // Overlay scrollbars (macOS "Automatic") reserve no gutter, so the list
+  // needs right padding of its own. Measured when the list mounts, which a
+  // collapsed sidebar defers since it renders nothing.
+  const [noGutter, setNoGutter] = useState(false);
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (el) setNoGutter(el.offsetWidth === el.clientWidth);
+  }, [collapsed]);
   // Reset on the press, not on the rows landing: the request moves first, so
   // the window is already at its first step by the time the settled rows
   // arrive, and the read's commit draws one step rather than wherever the
@@ -1137,6 +1147,17 @@ export default function Sidebar({
   // dimming on its rows and headings.
   useServers();
   const offline = (path: string) => !serverConnected(serverOfPath(path));
+  // A heading stands for every checkout of its project. It names a machine only
+  // where there is just one to name, and dims only once all of them are gone.
+  const headingServer = (path: string) => {
+    const checkouts = checkoutsOf(projects, path);
+    const server = checkouts.length ? soleServer(checkouts) : serverOfPath(path);
+    return server && server !== LOCAL ? serverName(server) : null;
+  };
+  const headingOffline = (path: string) => {
+    const checkouts = checkoutsOf(projects, path);
+    return checkouts.length ? checkouts.every((p) => offline(p.path)) : offline(path);
+  };
 
   const projectName = useMemo(() => {
     const named = new Map(projects.map((p) => [p.path, p.name]));
@@ -1174,8 +1195,8 @@ export default function Sidebar({
   // The step ticks for itself, in `App`, where the chords land too.
   useSwipe(asideRef, onStepProjectFilter);
 
-  // Collapsed is nothing at all, not a rail. The toggle moves to the app header
-  // in that state, which is the one row present either way.
+  // Collapsed is nothing at all, not a rail. The toggle lives in the app header,
+  // which is the one row present either way.
   if (collapsed) return null;
 
   return (
@@ -1185,10 +1206,7 @@ export default function Sidebar({
       ref={asideRef}
     >
       {handle}
-      {/* `px-1.5` on the buttons rather than `size="sm"`'s `px-2.5`, so their
-          icons land on the same 12px inset as the toggle above.
-
-          All three are drawn as session rows: `/80` text and `--sidebar-accent`
+      {/* All three buttons are drawn as session rows: `/80` text and `--sidebar-accent`
           at half strength under the cursor, which is exactly what an unselected
           row in the list below carries. They were `/70` with `ghost`'s own
           `hover:bg-muted` and `hover:text-foreground`, which made them a second
@@ -1337,11 +1355,15 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* No right padding: the scrollbar gutter is the right-hand spacing. The
-          rows balance the track's extra width themselves with `pr-0.5`. */}
+      {/* With classic scrollbars the reserved gutter is the right-hand spacing,
+          and the rows balance the track's extra width with `pr-0.5`. Overlay
+          scrollbars reserve none, so the list takes `pr-2` to match above. */}
       <div
         ref={listRef}
-        className="scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2 pr-0"
+        className={cn(
+          "scrollbar-overlay flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pb-3 pl-2",
+          noGutter ? "pr-2" : "pr-0",
+        )}
         // Nearing the bottom opens the settled window further. Bound to the
         // container that already scrolls rather than to a sentinel row and an
         // observer, which is one more thing to mount per step.
@@ -1395,12 +1417,8 @@ export default function Sidebar({
                         : undefined
                     }
                     label={heading}
-                    server={
-                      underProject && serverOfPath(group.projectPath) !== LOCAL
-                        ? serverName(serverOfPath(group.projectPath))
-                        : null
-                    }
-                    offline={underProject && offline(group.projectPath)}
+                    server={underProject ? headingServer(group.projectPath) : null}
+                    offline={underProject && headingOffline(group.projectPath)}
                   />
                 ),
 
@@ -1578,9 +1596,9 @@ function HintRow({
 /// the eye is already on, but in a hint row it is the row, so the default fill
 /// makes a hint the loudest thing in the list.
 ///
-/// Exported because the crew's foot teaches its chord the same way, and two
-/// copies of one hint style is the pair that drifts on whichever list nobody
-/// is looking at.
+/// Exported because the composer's update line teaches its chord the same way,
+/// and two copies of one hint style is the pair that drifts on whichever one
+/// nobody is looking at.
 export const HINT_KEYS = "[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60";
 
 /// From this many projects a hover opens a menu beside the tap's step. Tapping
@@ -1739,18 +1757,23 @@ function ProjectFilter({
   const entries = useMemo(
     () => [
       { path: null as string | null, name: "All Projects" },
-      ...projects.map((p) => ({ path: p.path as string | null, name: projectLabel(p) })),
+      ...groupProjects(projects).map((g) => ({
+        path: g.checkouts[0].path as string | null,
+        name: projectLabel(g.name, soleServer(g.checkouts)),
+      })),
     ],
     [projects],
   );
 
   // A detached project leaves its path behind in the stored filter. Falling back
   // to All is the only honest answer, and the dot track needs a real index.
-  const found = entries.findIndex((e) => e.path === value);
+  const found = entries.findIndex(
+    (e) => e.path === value || (e.path && value && keyOfPath(projects, e.path) === keyOfPath(projects, value)),
+  );
   const activeIndex = found === -1 ? 0 : found;
   const active = entries[activeIndex];
 
-  const menuMode = projects.length >= PROJECT_MENU_FROM;
+  const menuMode = entries.length - 1 >= PROJECT_MENU_FROM;
 
   // Wraps, since a tap has no direction and no dot to slide — a dead end at the
   // last entry would just look broken. Counted from the last entry asked for,

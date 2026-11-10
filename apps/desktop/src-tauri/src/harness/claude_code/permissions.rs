@@ -159,11 +159,22 @@ fn build_options(request: &PermissionRequest) -> Vec<ResolvedOption> {
             PermissionUpdate::AddRules {
                 rules, behavior, ..
             } if !request.suppress_always_allow_rule => {
-                let Some(rule) = rules.first() else { continue };
-                let subject = rule
-                    .rule_content
-                    .clone()
-                    .unwrap_or_else(|| format!("all {} calls", rule.tool_name));
+                if rules.is_empty() {
+                    continue;
+                }
+                // Every rule, not the first. The button applies the whole
+                // suggestion, and a compound command carries one rule per
+                // part: `git add . && git commit` read "Always allow git
+                // add:*" and granted `git commit:*` with it.
+                let subject = rules
+                    .iter()
+                    .map(|rule| {
+                        rule.rule_content
+                            .clone()
+                            .unwrap_or_else(|| format!("all {} calls", rule.tool_name))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
 
                 let allow = behavior == "allow";
                 (
@@ -178,9 +189,11 @@ fn build_options(request: &PermissionRequest) -> Vec<ResolvedOption> {
             }
 
             PermissionUpdate::AddDirectories { directories, .. } => {
-                let Some(dir) = directories.first() else {
+                if directories.is_empty() {
                     continue;
-                };
+                }
+                // All of them, for the rules' reason above.
+                let dir = directories.join(", ");
                 (
                     format!("Always allow in {dir}"),
                     PermissionOptionKind::AlwaysDirectory,
@@ -328,10 +341,40 @@ pub fn auto_deny_response(request_id: &str, reason: &str) -> Value {
     })
 }
 
+/// The id of a control request this build could not parse, so it can still
+/// be refused.
+///
+/// The reply guarantee rests on the request parsing, and a `can_use_tool`
+/// carrying a suggestion type this build cannot spell fails the whole line —
+/// leaving the CLI blocked on an id nothing was going to answer. Read loosely
+/// here, off the one field a refusal needs.
+pub fn unparsed_request_id(line: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value.get("type")?.as_str()? != "control_request" {
+        return None;
+    }
+    value.get("request_id")?.as_str().map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::harness::claude_code::parser::PermissionRule;
+
+    /// A request that fails to parse is the hung turn the read loop exists to
+    /// prevent: its id must still come out, and nothing else may look like one.
+    #[test]
+    fn an_unparsed_control_request_still_gives_up_its_id() {
+        use crate::harness::claude_code::parser::parse_line;
+
+        let line = r#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{},"tool_use_id":"t","permission_suggestions":[{"type":"from_the_future"}]}}"#;
+        assert!(parse_line(line).is_err(), "the capture this pins now parses");
+        assert_eq!(unparsed_request_id(line).as_deref(), Some("r1"));
+
+        assert_eq!(unparsed_request_id(r#"{"type":"assistant","request_id":"r1"}"#), None);
+        assert_eq!(unparsed_request_id(r#"{"type":"control_request"}"#), None);
+        assert_eq!(unparsed_request_id("not json"), None);
+    }
 
     fn request_with(suggestions: Vec<PermissionUpdate>) -> PermissionRequest {
         PermissionRequest {
@@ -391,6 +434,39 @@ mod tests {
                 "Always allow touch ./marker.txt",
                 "Always allow in /tmp/proj",
                 "Accept all edits this session",
+                "Deny",
+            ]
+        );
+    }
+
+    /// One suggestion can carry several rules and the button applies them all,
+    /// so the label has to name them all: a grant the reader cannot read off
+    /// the button is one they never gave.
+    #[test]
+    fn a_standing_rule_names_everything_it_grants() {
+        let rule = |content: Option<&str>| PermissionRule {
+            tool_name: "Bash".to_string(),
+            rule_content: content.map(str::to_string),
+        };
+        let (_, options) = PendingRequest::new(&request_with(vec![
+            PermissionUpdate::AddRules {
+                rules: vec![rule(Some("git add:*")), rule(Some("git commit:*")), rule(None)],
+                behavior: "allow".to_string(),
+                destination: "localSettings".to_string(),
+            },
+            PermissionUpdate::AddDirectories {
+                directories: vec!["/tmp/a".to_string(), "/tmp/b".to_string()],
+                destination: "session".to_string(),
+            },
+        ]));
+
+        let labels: Vec<_> = options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Allow once",
+                "Always allow git add:*, git commit:*, all Bash calls",
+                "Always allow in /tmp/a, /tmp/b",
                 "Deny",
             ]
         );

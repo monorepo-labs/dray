@@ -42,7 +42,11 @@ const ROWS: Issue[] = [
 /// Stubbed outside the component, so nothing in `src/` carries a demo seam.
 (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
   transformCallback: () => 0,
-  invoke: async (cmd: string, args: Record<string, unknown>) => {
+  invoke: async (called: string, given: Record<string, unknown>) => {
+    // A core command arrives wrapped: the app sends it to its server.
+    const wrapped = called === "server_invoke";
+    const cmd = wrapped ? (given.cmd as string) : called;
+    const args = wrapped ? (given.args as Record<string, unknown>) : given;
     if (cmd === "list_issues") {
       const query = args.query as { text: string | null };
       const search = (query.text ?? "").toLowerCase();

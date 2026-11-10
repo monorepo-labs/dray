@@ -62,8 +62,8 @@ export function tabLabels(paths: readonly string[]): string[] {
     if ((counts.get(name) ?? 0) < 2) return name;
     const parent = basename(path.slice(0, path.lastIndexOf("/")));
     // Two files with the same name at the root of two different trees is the
-    // one case this cannot separate. The tab's `title` carries the full path,
-    // which is where that question gets answered.
+    // one case this cannot separate, and the tab says no more: it carries no
+    // `title`, on purpose — see `FileTabs`.
     return parent ? `${name} — ${parent}` : name;
   });
 }

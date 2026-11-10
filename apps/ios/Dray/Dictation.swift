@@ -24,30 +24,17 @@ enum TranscribeOutcome: Decodable {
     }
 }
 
-extension Connection {
-    /// `POST /upload`, the server's own route for a file from another machine.
-    /// Answers the path it landed at, on the server's disk.
-    func upload(_ file: URL, name: String) async throws -> String {
-        guard var parts = socketURL(url).flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) }) else {
-            throw DrayError("Not an address: \(url)")
-        }
-        parts.scheme = parts.scheme == "wss" ? "https" : "http"
-        parts.path = "/upload"
-        parts.queryItems = [URLQueryItem(name: "name", value: name)]
-        var request = URLRequest(url: parts.url!)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await URLSession.shared.upload(for: request, fromFile: file)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw DrayError("The upload was refused (\((response as? HTTPURLResponse)?.statusCode ?? 0))")
-        }
-        return String(decoding: data, as: UTF8.self)
-    }
-}
-
 extension Store {
     func canDictate(_ server: UUID) -> Bool {
         serverState[server] == .connected && connection(server)?.dictation == true
+    }
+
+    /// Where dictation is transcribed: `pick`, Settings' choice, while it can;
+    /// otherwise the first server that can. Words come back to the phone, so
+    /// any session's draft can take them.
+    func dictationServer(_ pick: String) -> UUID? {
+        if let id = UUID(uuidString: pick), canDictate(id) { return id }
+        return servers.first { canDictate($0.id) }?.id
     }
 
     /// Uploads a recording and has the server's model read it. A long
@@ -82,6 +69,11 @@ final class Dictations {
 
     func state(_ draft: SessionKey) -> Dictation { phase[draft] ?? .idle }
 
+    /// Settings, Dictation's "Start and stop sounds": the system's own record tones.
+    static let soundsKey = "dictation.sounds"
+    static let serverKey = "dictation.server"
+    private static var sounds: Bool { UserDefaults.standard.object(forKey: soundsKey) as? Bool ?? true }
+
     /// The microphone's loudest sample since last asked, linear, as the orb reads it.
     func level(_ draft: SessionKey) -> Float {
         guard let r = recorders[draft] else { return 0 }
@@ -100,6 +92,8 @@ final class Dictations {
         }
         // Cancelled while the prompt was up: no microphone nothing can stop.
         guard phase[draft] == .starting else { return }
+        // Before the record category, which mutes output.
+        if Self.sounds { AudioServicesPlaySystemSound(1113) }
         do {
             try AVAudioSession.sharedInstance().setCategory(.record)
             try AVAudioSession.sharedInstance().setActive(true)
@@ -134,6 +128,7 @@ final class Dictations {
         guard let r = recorders.removeValue(forKey: draft), let server = servers[draft] else { return }
         r.stop()
         release()
+        if Self.sounds { AudioServicesPlaySystemSound(1114) }
         since[draft] = nil
         Haptic.tap()
         await send(store, server, draft, r.url)
@@ -190,16 +185,16 @@ final class Dictations {
     }
 }
 
-/// The mic, where the server can transcribe. Pressing it opens the voice orb in
-/// its place; nothing else of dictation draws until then.
+/// The mic, where some server can transcribe. Pressing it opens the voice orb
+/// in its place; nothing else of dictation draws until then.
 struct DictateButton: View {
     @Environment(Store.self) private var store
-    let server: UUID
+    @AppStorage(Dictations.serverKey) private var pick = ""
     let draft: SessionKey
 
     var body: some View {
         // A kept recording is retried or let go first, or a new one would bury its Retry.
-        if store.canDictate(server) && Dictations.shared.state(draft) == .idle && Dictations.shared.kept[draft] == nil {
+        if let server = store.dictationServer(pick), Dictations.shared.state(draft) == .idle, Dictations.shared.kept[draft] == nil {
             Button {
                 Task { await Dictations.shared.start(store, server: server, draft: draft) }
             } label: {
@@ -230,7 +225,7 @@ struct DictationBar: View {
             .frame(width: 36, height: 36)
             .accessibilityHidden(true)
             if state == .transcribing {
-                Text("Transcribing…").font(Theme.Font.callout).foregroundStyle(Theme.secondary).shimmer()
+                Text("Transcribing…").font(Theme.Font.subhead).foregroundStyle(Theme.secondary).shimmer()
             } else {
                 RecordingTimer(since: shared.since[draft])
             }
@@ -263,14 +258,13 @@ struct DictationNote: View {
                 Spacer(minLength: 0)
                 if Dictations.shared.kept[draft] != nil {
                     Button("Retry") { Task { await Dictations.shared.retry(store, draft: draft) } }
-                        .fontWeight(.semibold)
                         .foregroundStyle(Theme.text)
                 }
                 Button { Dictations.shared.dismiss(draft) } label: { Image(systemName: "xmark") }
                     .foregroundStyle(Theme.tertiary)
                     .accessibilityLabel("Dismiss")
             }
-            .font(Theme.Font.meta)
+            .font(Theme.Font.footnote)
             .buttonStyle(.borderless)
         }
     }

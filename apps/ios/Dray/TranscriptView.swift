@@ -37,23 +37,16 @@ struct TranscriptView: View {
                             Text("Couldn't load new messages. \(sentence(error))").foregroundStyle(Theme.secondary)
                             Spacer(minLength: Theme.Space.s)
                             Button("Retry") { Task { await store.retryLoad(key) } }
-                                .fontWeight(.semibold)
                                 .foregroundStyle(Theme.text)
                         }
-                        .font(Theme.Font.meta)
+                        .font(Theme.Font.footnote)
                     }
                     if busy {
                         WorkingLine()
                     } else if let n = store.tasks[key], n > 0 {
                         OrbLine(activity: .background, label: n == 1 ? "1 background task running" : "\(n) background tasks running")
                     }
-                    ForEach(asks) { ask in
-                        switch ask.payload {
-                        case .permissionRequested(let r): PermissionCard(key: key, request: r)
-                        case .questionsAsked(let r): QuestionsCard(key: key, request: r)
-                        default: EmptyView()
-                        }
-                    }
+                    ForEach(asks) { AskCard(key: key, event: $0) }
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.horizontal, Theme.Space.l)
@@ -70,6 +63,7 @@ struct TranscriptView: View {
             }
         }
         .page()
+        .environment(\.imageServer, store.connection(key.server))
         // A card arriving is the agent stopping to ask: felt, once per card.
         .onChange(of: asks.count) { old, new in if new > old { Haptic.warning() } }
         .safeAreaInset(edge: .bottom) { Composer(key: key, busy: busy) { fixing = true } }
@@ -87,12 +81,12 @@ struct TranscriptView: View {
     private var title: some View {
         VStack(spacing: 1) {
             Text(item?.title.isEmpty == false ? item!.title : "Untitled")
-                .font(.headline)
+                .font(Theme.Font.headline)
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
             if let item {
                 Text([item.project, item.branch].compactMap { $0 }.joined(separator: " · "))
-                    .font(Theme.Font.micro)
+                    .font(Theme.Font.footnote)
                     .foregroundStyle(Theme.tertiary)
                     .lineLimit(1)
             }
@@ -122,11 +116,11 @@ struct TranscriptView: View {
         HStack {
             if let error = store.olderErrors[key] {
                 Text("Couldn't load earlier messages. \(sentence(error))")
-                    .font(Theme.Font.meta).foregroundStyle(Theme.secondary)
+                    .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
                 Spacer(minLength: Theme.Space.s)
             }
             Button(store.olderErrors[key] == nil ? "Load earlier" : "Retry") { Task { await store.loadOlder(key) } }
-                .font(Theme.Font.meta.weight(.semibold))
+                .font(Theme.Font.footnoteStrong)
                 .foregroundStyle(Theme.secondary)
                 .padding(.horizontal, Theme.Space.m)
                 .padding(.vertical, Theme.Space.s)
@@ -142,6 +136,7 @@ struct TurnView: View {
     let turn: Turn
     /// Per stretch between queued prompts, by index: a running turn only appends.
     @State private var open: Set<Int> = []
+    @State private var viewing: Gallery?
 
     /// Below this many rows a fold costs a tap to reveal less than the line it stands in for.
     private static let collapseMin = 3
@@ -155,7 +150,7 @@ struct TurnView: View {
             $0.items.contains { if case .text(_, let t) = $0 { t == turn.finalText } else { false } }
         }.map(open.contains) ?? false
         VStack(alignment: .leading, spacing: 14) {
-            if let prompt = turn.prompt { UserBubble(text: prompt.text, from: prompt.from) }
+            if let prompt = turn.prompt { UserBubble(text: prompt.text, from: prompt.from, images: prompt.images) }
             if collapsible || turn.running {
                 ForEach(Array(segments.enumerated()), id: \.offset) { i, segment in
                     let isOpen = open.contains(i)
@@ -165,6 +160,10 @@ struct TurnView: View {
                     } else {
                         if !segment.items.isEmpty {
                             SummaryToggle(label: summaryLabel(segment.items), open: isOpen) { toggle(i) }
+                        }
+                        // The fold hides the calls, not what they showed; open, each row draws its own.
+                        if !isOpen, case let shown = foldedImages(segment.items), !shown.isEmpty {
+                            Thumbnails(images: shown)
                         }
                         if isOpen { ForEach(segment.items) { ItemView(item: $0) } }
                         if let prompt = segment.prompt { ItemView(item: prompt) }
@@ -179,6 +178,12 @@ struct TurnView: View {
             }
             if let failure = turn.failure { FailureRow(text: failure) }
         }
+        .environment(\.openImage) { ref in
+            let shots = turn.gallery
+            guard let i = shots.firstIndex(where: { $0.ref == ref }) else { return }
+            instantly { viewing = Gallery(shots: shots, start: i) }
+        }
+        .imageViewer($viewing)
     }
 
     private func toggle(_ i: Int) {
@@ -204,39 +209,10 @@ struct OrbLine: View {
     var body: some View {
         HStack(spacing: Theme.Space.s) {
             Orb(activity)
-            Text(label).font(Theme.Font.callout).foregroundStyle(Theme.secondary).shimmer()
+            Text(label).font(Theme.Font.subhead).foregroundStyle(Theme.secondary).shimmer()
         }
         .accessibilityElement(children: .combine)
         .transition(.opacity)
-    }
-}
-
-extension View {
-    /// The desktop's `shimmer-text`: a highlight sweeping across, the mark a
-    /// live row wears. Holds still under Reduce Motion.
-    func shimmer(_ on: Bool = true) -> some View { modifier(Shimmer(on: on)) }
-}
-
-private struct Shimmer: ViewModifier {
-    let on: Bool
-    @Environment(\.accessibilityReduceMotion) private var still
-
-    func body(content: Content) -> some View {
-        if on && !still {
-            TimelineView(.animation) { timeline in
-                let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) / 2
-                content.mask {
-                    LinearGradient(
-                        stops: [.init(color: .black.opacity(0.5), location: 0.35),
-                                .init(color: .black, location: 0.5),
-                                .init(color: .black.opacity(0.5), location: 0.65)],
-                        startPoint: UnitPoint(x: phase * 2 - 1, y: 0),
-                        endPoint: UnitPoint(x: phase * 2, y: 0))
-                }
-            }
-        } else {
-            content
-        }
     }
 }
 
@@ -287,7 +263,7 @@ struct SummaryToggle: View {
                 Text(label).monospacedDigit()
                 Chevron(open: open)
             }
-            .font(Theme.Font.callout)
+            .font(Theme.Font.subhead)
             .foregroundStyle(Theme.tertiary)
         }
         .buttonStyle(RowButtonStyle())
@@ -300,7 +276,7 @@ struct Chevron: View {
 
     var body: some View {
         Image(systemName: "chevron.right")
-            .font(.caption2.weight(.bold))
+            .font(Theme.Font.footnoteStrong.font)
             .rotationEffect(.degrees(open ? 90 : 0))
             .foregroundStyle(open ? Theme.secondary : Theme.tertiary)
     }
@@ -317,8 +293,8 @@ struct ItemView: View {
             ToolRow(call: call)
         case .group(_, let name, let calls, let targets, let target):
             GroupRow(name: name, calls: calls, targets: targets, target: target)
-        case .prompt(_, let text, let from):
-            UserBubble(text: text, from: from)
+        case .prompt(_, let text, let from, let images):
+            UserBubble(text: text, from: from, images: images)
         case .failure(_, let text):
             FailureRow(text: text)
         }
@@ -334,7 +310,7 @@ struct FailureRow: View {
             Text(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .font(Theme.Font.callout)
+        .font(Theme.Font.subhead)
         .foregroundStyle(Theme.destructive)
         .padding(Theme.Space.m)
         .background(Theme.destructive.opacity(0.1), in: .rect(cornerRadius: Theme.Radius.md, style: .continuous))
@@ -351,7 +327,7 @@ struct ChangeCount: View {
             if added > 0 { Text("+\(added)").foregroundStyle(Theme.add) }
             if removed > 0 { Text("-\(removed)").foregroundStyle(Theme.destructive) }
         }
-        .font(Theme.Font.callout.monospacedDigit())
+        .font(Theme.Font.subhead.font.monospacedDigit())
     }
 }
 
@@ -359,6 +335,7 @@ struct ChangeCount: View {
 struct UserBubble: View {
     let text: String
     let from: String?
+    var images: [ImageRef] = []
     /// Typed into a running turn and not yet read by it: held back, dimmed.
     var queued = false
 
@@ -366,22 +343,76 @@ struct UserBubble: View {
         VStack(alignment: .trailing, spacing: Theme.Space.xs) {
             if let from {
                 Label("From \(from)", systemImage: "arrow.turn.down.right")
-                    .font(Theme.Font.micro).foregroundStyle(Theme.tertiary)
+                    .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
             }
-            Text(text)
-                .font(Theme.Font.body)
-                .foregroundStyle(Theme.text)
-                .textSelection(.enabled)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+            if !images.isEmpty { Thumbnails(images: images) }
+            if !text.isEmpty {
+                Text(text)
+                    .font(Theme.Font.body)
+                    .foregroundStyle(Theme.text)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.xl, style: .continuous))
+            }
             if queued {
-                Text("Queued").font(Theme.Font.micro).foregroundStyle(Theme.tertiary)
+                Text("Queued").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
             }
         }
         .opacity(queued ? 0.55 : 1)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 48)
+    }
+}
+
+/// Square thumbnails, each opening full screen on tap.
+struct Thumbnails: View {
+    let images: [ImageRef]
+
+    var body: some View {
+        ThumbnailRow(spacing: Theme.Space.xs) {
+            ForEach(Array(images.enumerated()), id: \.offset) { _, ref in
+                ImageButton(ref: ref) {
+                    RemoteImage(ref: ref, fill: true)
+                        .frame(width: 72, height: 72)
+                        .clipShape(.rect(cornerRadius: Theme.Radius.md, style: .continuous))
+                }
+            }
+        }
+    }
+}
+
+/// A picture in the reading column, at most a screen's width and a little less tall.
+struct InlineImage: View {
+    let ref: ImageRef
+
+    var body: some View {
+        // Clipped before the frame, so the corners are the picture's and not the column's.
+        RemoteImage(ref: ref)
+            .clipShape(.rect(cornerRadius: Theme.Radius.md, style: .continuous))
+            .frame(maxWidth: 320, maxHeight: 320, alignment: .leading)
+    }
+}
+
+/// A picture that opens its turn's viewer on tap; outside a turn (a PR comment),
+/// a viewer of its own.
+struct ImageButton<Content: View>: View {
+    @Environment(\.openImage) private var open
+    let ref: ImageRef
+    @ViewBuilder let content: Content
+    @State private var alone: Gallery?
+
+    var body: some View {
+        Button {
+            if let open {
+                open(ref)
+            } else {
+                instantly { alone = Gallery(shots: [Shot(ref: ref, verb: "Image", target: nil)], start: 0) }
+            }
+        } label: { content }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open image")
+            .imageViewer($alone)
     }
 }
 
@@ -408,27 +439,30 @@ struct ToolRow: View {
                     // Inside a group the label is the only thing that turns red, so a failure keeps it.
                     if showLabel || summary == nil || alarming {
                         Text(toolLabel(call.name, pending: pending))
-                            .fontWeight(.medium)
                             .foregroundStyle(alarming ? Theme.destructive : Theme.secondary)
                             .shimmer(pending)
                             .layoutPriority(1)
                     }
                     if let summary {
                         Text(summary.split(separator: "\n").first.map(String.init) ?? summary)
-                            .font(Theme.Font.mono)
+                            .font(Theme.Font.footnote)
                             .foregroundStyle(Theme.tertiary)
                             .lineLimit(1)
                     }
                     if let n = editCounts(call) { ChangeCount(added: n.added, removed: n.removed) }
                     if expandable { Chevron(open: open) }
                 }
-                .font(Theme.Font.callout)
+                .font(Theme.Font.subhead)
             }
             .buttonStyle(RowButtonStyle())
+            // A picture the tool handed back is the result itself, so it shows unasked.
+            ForEach(Array(call.images.enumerated()), id: \.offset) { _, ref in
+                ImageButton(ref: ref) { InlineImage(ref: ref) }
+            }
             if open, let output = call.output {
                 ScrollView(.horizontal) {
                     Text(output.count > 6000 ? String(output.prefix(6000)) + "\n…" : output)
-                        .font(Theme.Font.code)
+                        .font(Theme.Font.footnote)
                         .foregroundStyle(Theme.secondary)
                         .textSelection(.enabled)
                         .padding(Theme.Space.m)
@@ -462,16 +496,15 @@ struct GroupRow: View {
                 HStack(spacing: 6) {
                     // A failure inside does not colour the run; that row says so once opened.
                     Text(target == nil ? groupLabel(name, count: targets, pending: pending) : groupVerb(name, pending: pending))
-                        .fontWeight(.medium)
                         .foregroundStyle(Theme.secondary)
                         .shimmer(pending)
                         .layoutPriority(1)
-                    if let target { Text(target).font(Theme.Font.mono).foregroundStyle(Theme.tertiary).lineLimit(1) }
+                    if let target { Text(target).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary).lineLimit(1) }
                     if calls.count > targets { Text("\(calls.count) calls").foregroundStyle(Theme.tertiary).layoutPriority(1) }
                     if added + removed > 0 { ChangeCount(added: added, removed: removed) }
                     Chevron(open: open)
                 }
-                .font(Theme.Font.callout)
+                .font(Theme.Font.subhead)
             }
             .buttonStyle(RowButtonStyle())
             if open {
@@ -492,20 +525,15 @@ struct GroupRow: View {
 struct MarkdownText: View {
     let text: String
 
-    private enum Block {
-        case prose(String), code(String), heading(Int, String), quote(String), rule
-        case list([(marker: String, text: String, indent: Int)])
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+            ForEach(Array(markdownBlocks(text).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .prose(let s):
-                    Text(attributed(s)).font(Theme.Font.body).foregroundStyle(Theme.text)
+                    Text(inlineMarkdown(s)).font(Theme.Font.body).foregroundStyle(Theme.text)
                 case .heading(let level, let s):
-                    Text(attributed(s))
-                        .font(level <= 2 ? .title3.weight(.semibold) : .headline)
+                    Text(inlineMarkdown(s))
+                        .font(level <= 2 ? Theme.Font.title.font : Theme.Font.headline.font)
                         .foregroundStyle(Theme.text)
                         .padding(.top, 4)
                 case .list(let items):
@@ -513,92 +541,38 @@ struct MarkdownText: View {
                         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                                 Text(item.marker).monospacedDigit().foregroundStyle(Theme.tertiary)
-                                Text(attributed(item.text)).foregroundStyle(Theme.text)
+                                Text(inlineMarkdown(item.text)).foregroundStyle(Theme.text)
                             }
                             .padding(.leading, CGFloat(item.indent) * 18)
                         }
                     }
                     .font(Theme.Font.body)
                 case .quote(let s):
-                    Text(attributed(s))
+                    Text(inlineMarkdown(s))
                         .font(Theme.Font.body)
                         .foregroundStyle(Theme.secondary)
                         .padding(.leading, Theme.Space.m)
                         .overlay(alignment: .leading) { Rectangle().fill(Theme.border).frame(width: 3) }
                 case .code(let s):
                     ScrollView(.horizontal) {
-                        Text(s).font(Theme.Font.code).foregroundStyle(Theme.text).padding(Theme.Space.m)
+                        Text(s).font(Theme.Font.footnote).foregroundStyle(Theme.text).padding(Theme.Space.m)
                     }
                     .well()
                 case .rule:
                     Rectangle().fill(Theme.border).frame(height: 1).padding(.vertical, 4)
+                case .table(let rows):
+                    MarkdownTable(rows: rows)
+                        .font(Theme.Font.body)
+                        .foregroundStyle(Theme.text)
+                case .image(_, let url):
+                    let ref = ImageRef(path: nil, url: url, mimeType: nil)
+                    ImageButton(ref: ref) { InlineImage(ref: ref) }
                 }
             }
+            ForEach(recordingPaths(in: text), id: \.self) { RecordingPlayer(path: $0) }
         }
         .tint(Theme.link)
         .textSelection(.enabled)
-    }
-
-    private var blocks: [Block] {
-        var out: [Block] = []
-        var prose: [Substring] = [], code: [Substring] = [], quote: [String] = []
-        var list: [(marker: String, text: String, indent: Int)] = []
-        var fenced = false
-        func flush() {
-            let p = prose.joined(separator: "\n").trimmingCharacters(in: .newlines)
-            if !p.isEmpty { out.append(.prose(p)) }
-            if !list.isEmpty { out.append(.list(list)) }
-            if !quote.isEmpty { out.append(.quote(quote.joined(separator: "\n"))) }
-            prose = []; list = []; quote = []
-        }
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") {
-                if fenced {
-                    out.append(.code(code.joined(separator: "\n")))
-                    code = []
-                } else {
-                    flush()
-                }
-                fenced.toggle()
-                continue
-            }
-            if fenced { code.append(line); continue }
-            let indent = (line.prefix { $0 == " " }.count) / 2
-            if let m = trimmed.firstMatch(of: /^(#{1,6})\s+(.+)$/) {
-                flush()
-                out.append(.heading(m.1.count, String(m.2)))
-            } else if let m = trimmed.firstMatch(of: /^[-*+]\s+(.+)$/) {
-                if !prose.isEmpty || !quote.isEmpty { flush() }
-                list.append(("•", String(m.1), indent))
-            } else if let m = trimmed.firstMatch(of: /^(\d+)[.)]\s+(.+)$/) {
-                if !prose.isEmpty || !quote.isEmpty { flush() }
-                list.append(("\(m.1).", String(m.2), indent))
-            } else if let m = trimmed.firstMatch(of: /^>\s?(.*)$/) {
-                if !prose.isEmpty || !list.isEmpty { flush() }
-                quote.append(String(m.1))
-            } else if trimmed.wholeMatch(of: /(-{3,}|\*{3,}|_{3,})/) != nil {
-                flush()
-                out.append(.rule)
-            } else if trimmed.isEmpty {
-                flush()
-            } else if !list.isEmpty && indent > 0 {
-                // A wrapped list item's continuation.
-                list[list.count - 1].text += " " + trimmed
-            } else {
-                if !list.isEmpty || !quote.isEmpty { flush() }
-                prose.append(line)
-            }
-        }
-        // An unclosed fence still shows what it holds.
-        if fenced, !code.isEmpty { out.append(.code(code.joined(separator: "\n"))) }
-        flush()
-        return out
-    }
-
-    private func attributed(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(s)
     }
 }
 
@@ -629,11 +603,10 @@ struct Composer: View {
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                         Button("Retry") { send(text) }
-                            .fontWeight(.semibold)
                             .foregroundStyle(Theme.text)
                             .disabled(!connected || text.isEmpty)
                     }
-                    .font(Theme.Font.meta)
+                    .font(Theme.Font.footnote)
                     .buttonStyle(.borderless)
                     .padding(.horizontal, Theme.Space.l)
                     .padding(.top, Theme.Space.m)
@@ -656,7 +629,7 @@ struct Composer: View {
                         DictationBar(draft: key)
                     } else {
                         Spacer(minLength: 0)
-                        DictateButton(server: key.server, draft: key)
+                        DictateButton(draft: key)
                         if busy && text.isEmpty {
                             Button {
                                 Haptic.firm()
@@ -724,164 +697,5 @@ extension View {
                 .background(Theme.card.opacity(0.6), in: shape)
                 .overlay(shape.strokeBorder(Theme.border))
         }
-    }
-}
-
-/// A question the agent cannot go on without, in the one colour that means
-/// "this is for you".
-private struct CardHeader: View {
-    let symbol: String
-    let text: String
-
-    var body: some View {
-        Label(text, systemImage: symbol)
-            .font(Theme.Font.meta.weight(.semibold))
-            .foregroundStyle(Theme.accent)
-    }
-}
-
-struct PermissionCard: View {
-    @Environment(Store.self) private var store
-    let key: SessionKey
-    let request: PermissionRequest
-    @State private var busy = false
-
-    var body: some View {
-        // The first allow is the answer most often given, so it alone is filled.
-        let primary = request.options.firstIndex { $0.behavior != "deny" }
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
-            CardHeader(symbol: "hand.raised.fill", text: "Needs your permission")
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                Text(request.title ?? request.displayName ?? request.toolName)
-                    .font(Theme.Font.headline).foregroundStyle(Theme.text)
-                if let d = request.description {
-                    Text(d).font(Theme.Font.callout).foregroundStyle(Theme.secondary)
-                }
-            }
-            if let input = request.input, let line = toolArgument(input) {
-                Text(line)
-                    .font(Theme.Font.code)
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(6)
-                    .padding(Theme.Space.m)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .well()
-            }
-            VStack(spacing: Theme.Space.s) {
-                ForEach(Array(request.options.enumerated()), id: \.element.id) { i, option in
-                    let answer = Button {
-                        busy = true
-                        Task {
-                            await store.respond(key, requestId: request.requestId, optionId: option.id)
-                            option.behavior == "deny" ? Haptic.tap() : Haptic.success()
-                            busy = false
-                        }
-                    } label: {
-                        Text(option.label).frame(maxWidth: .infinity)
-                    }
-                    if i == primary {
-                        answer.buttonStyle(PrimaryButtonStyle())
-                    } else {
-                        answer.buttonStyle(SecondaryButtonStyle(ink: option.behavior == "deny" ? Theme.destructive : Theme.text))
-                    }
-                }
-            }
-        }
-        .disabled(busy)
-        .opacity(busy ? 0.6 : 1)
-        .card(edge: Theme.accent.opacity(0.35))
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-    }
-}
-
-/// Three answer shapes: an option's label, several labels comma-separated,
-/// or free text. A question left blank is skipped, which is a real answer.
-struct QuestionsCard: View {
-    @Environment(Store.self) private var store
-    let key: SessionKey
-    let request: QuestionsRequest
-    @State private var picks: [String: Set<String>] = [:]
-    @State private var typed: [String: String] = [:]
-    @State private var busy = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.l) {
-            CardHeader(symbol: "questionmark.bubble.fill",
-                       text: request.questions.count == 1 ? "Needs your answer" : "\(request.questions.count) questions for you")
-            ForEach(request.questions, id: \.question) { q in
-                VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    Text(q.question).font(Theme.Font.headline).foregroundStyle(Theme.text)
-                    ForEach(q.options, id: \.label) { option in
-                        let on = picks[q.question, default: []].contains(option.label)
-                        Button {
-                            Haptic.select()
-                            toggle(q, option.label)
-                        } label: {
-                            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
-                                Image(systemName: on ? (q.multiSelect ? "checkmark.square.fill" : "largecircle.fill.circle")
-                                                     : (q.multiSelect ? "square" : "circle"))
-                                    .foregroundStyle(on ? Theme.accent : Theme.tertiary)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(option.label).font(Theme.Font.body).foregroundStyle(Theme.text)
-                                    if let d = option.description {
-                                        Text(d).font(Theme.Font.meta).foregroundStyle(Theme.secondary)
-                                    }
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(Theme.Space.m)
-                            .background(on ? Theme.raised : Theme.well, in: .rect(cornerRadius: Theme.Radius.md, style: .continuous))
-                        }
-                        .buttonStyle(RowButtonStyle())
-                    }
-                    if q.freeText != false {
-                        TextField("Or type an answer", text: Binding(
-                            get: { typed[q.question] ?? "" },
-                            set: { typed[q.question] = $0 }
-                        ), axis: .vertical)
-                        .font(Theme.Font.body)
-                        .padding(Theme.Space.m)
-                        .well()
-                    }
-                }
-            }
-            Button {
-                busy = true
-                Task {
-                    await store.answer(key, requestId: request.requestId, answers: answers)
-                    Haptic.success()
-                    busy = false
-                }
-            } label: {
-                Text("Submit").frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PrimaryButtonStyle())
-        }
-        .disabled(busy)
-        .opacity(busy ? 0.6 : 1)
-        .card(edge: Theme.accent.opacity(0.35))
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-    }
-
-    private func toggle(_ q: Question, _ label: String) {
-        var set = picks[q.question, default: []]
-        if set.contains(label) { set.remove(label) }
-        else if q.multiSelect { set.insert(label) }
-        else { set = [label] }
-        picks[q.question] = set
-    }
-
-    private var answers: [String: String] {
-        var out: [String: String] = [:]
-        for q in request.questions {
-            let text = (typed[q.question] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty && q.freeText != false {
-                out[q.question] = text
-            } else if let set = picks[q.question], !set.isEmpty {
-                // In option order, so the answer reads the way the menu did.
-                out[q.question] = q.options.map(\.label).filter(set.contains).joined(separator: ", ")
-            }
-        }
-        return out
     }
 }
