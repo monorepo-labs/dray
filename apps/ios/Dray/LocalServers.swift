@@ -46,8 +46,10 @@ struct LocalServersView: View {
                 .navigationTitle("Local servers")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { Button("Done") { dismiss() } }
+                .background(Theme.card.ignoresSafeArea())
         }
         .presentationDetents([.medium, .large])
+        .presentationBackground(Theme.card)
         .task {
             while !Task.isCancelled {
                 await read()
@@ -60,41 +62,50 @@ struct LocalServersView: View {
         if let servers, !servers.isEmpty {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
-                    GroupLabel("Running on \(store.name(of: key.server))")
-                    ForEach(servers, id: \.port) { row($0).card() }
+                    ForEach(servers, id: \.port) { row($0) }
                     Text("A public link is one anyone can open, until you stop it.")
                         .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
-                        .padding(.horizontal, Theme.Space.xs)
+                        .padding(.horizontal, Theme.Space.l)
+                        .padding(.top, Theme.Space.xs)
                 }
-                .padding(Theme.Space.l)
+                .padding(.horizontal, Theme.Space.l)
+                .padding(.top, Theme.Space.xs)
             }
-            .page()
         } else if servers != nil {
-            EmptyState(title: "No servers running",
-                       message: "Dev servers this session starts, or ones started in its checkout, show here.") {
-                Image(systemName: "globe").font(.largeTitle).foregroundStyle(Theme.tertiary)
-            }
-            .page()
+            empty("globe", title: "No servers running",
+                  message: "Dev servers this task starts, or ones started in its checkout, show here.")
         } else if let readError {
-            EmptyState(title: "Couldn't list servers", message: readError) {
-                Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(Theme.tertiary)
-            } actions: {
-                Button { Task { await read() } } label: { Text("Try again").frame(maxWidth: .infinity) }
-                    .buttonStyle(SecondaryButtonStyle())
+            empty("exclamationmark.triangle", title: "Couldn't list servers", message: readError) {
+                Button("Try again") { Task { await read() } }
+                    .buttonStyle(PillButtonStyle())
+                    .padding(.top, 14)
             }
-            .page()
         } else {
-            Orb(.loading, size: 32, label: "Loading").frame(maxWidth: .infinity, maxHeight: .infinity).page()
+            Orb(.loading, size: 32, label: "Loading").frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// The sheet's own empty state: smaller than `EmptyState`, since the
+    /// sheet's title is already a Headline and a full-width button is heavy here.
+    private func empty(_ symbol: String, title: String, message: String,
+                       @ViewBuilder action: () -> some View = { EmptyView() }) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: symbol).font(.largeTitle).foregroundStyle(Theme.tertiary)
+            Text(title).font(Theme.Font.headline).foregroundStyle(Theme.text).padding(.top, Theme.Space.s)
+            Text(message).font(Theme.Font.subhead).foregroundStyle(Theme.secondary)
+                .multilineTextAlignment(.center).frame(maxWidth: 280)
+            action()
+        }
+        .padding(.bottom, 60)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func row(_ s: LocalServer) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.m) {
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: "localhost:\(s.port)").font(Theme.Font.body).foregroundStyle(Theme.text)
-                Text(s.process).font(Theme.Font.footnote).foregroundStyle(Theme.secondary).lineLimit(1)
-                Spacer()
-                if s.mine { Text("This session").font(Theme.Font.footnote).foregroundStyle(Theme.tertiary) }
+                Text(s.mine ? "\(s.process) · started by this task" : s.process)
+                    .font(Theme.Font.footnote).foregroundStyle(Theme.secondary).lineLimit(1)
             }
             if let link = s.share.flatMap(URL.init(string:)) {
                 shared(link, port: s.port)
@@ -102,24 +113,29 @@ struct LocalServersView: View {
                 waiting(since: sharing.since)
             } else {
                 Button { share(s.port) } label: {
-                    Label("Get public link", systemImage: "link").frame(maxWidth: .infinity)
+                    Label("Get public link", systemImage: "link").labelStyle(GapLabel())
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(SecondaryButtonStyle())
+                .buttonStyle(PillButtonStyle(fill: Theme.control, height: 40))
                 .disabled(sharing != nil)
             }
             if let failure = failures[s.port] {
                 Text(failure).font(Theme.Font.subhead).foregroundStyle(Theme.destructive).textSelection(.enabled)
             }
         }
+        .padding(.vertical, 14)
+        .padding(.horizontal, Theme.Space.l)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous))
     }
 
     /// The share's wait, and past half a minute what it is waiting on, so a
     /// stalled relay reads as one rather than as a spinner.
     private func waiting(since: Date) -> some View {
         TimelineView(.periodic(from: since, by: 5)) { context in
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: Theme.Space.s) {
-                    Orb(.working)
+                    Orb(.working, size: 18)
                     Text(settingUp ? "Setting up tunnel…" : "Creating link…")
                         .font(Theme.Font.subhead).foregroundStyle(Theme.secondary).shimmer()
                 }
@@ -134,14 +150,17 @@ struct LocalServersView: View {
     }
 
     private func shared(_ link: URL, port: Int) -> some View {
-        HStack(spacing: Theme.Space.xs) {
+        HStack(spacing: Theme.Space.s) {
             Link(destination: link) {
-                Label(link.host() ?? link.absoluteString, systemImage: "link")
-                    .font(Theme.Font.subhead)
-                    .foregroundStyle(Theme.link)
-                    .lineLimit(1).truncationMode(.middle)
+                HStack(spacing: Theme.Space.s) {
+                    Image(systemName: "link").font(Theme.Font.body.font).foregroundStyle(Theme.secondary)
+                    Text(link.host() ?? link.absoluteString)
+                        .font(Theme.Font.subhead).foregroundStyle(Theme.text)
+                        .lineLimit(1).truncationMode(.middle)
+                }
             }
-            Spacer(minLength: Theme.Space.s)
+            .buttonStyle(.plain)
+            Spacer(minLength: 0)
             Button {
                 UIPasteboard.general.url = link
                 Haptic.tap()
@@ -153,17 +172,14 @@ struct LocalServersView: View {
             } label: {
                 Image(systemName: copied == link ? "checkmark" : "doc.on.doc")
             }
-            .buttonStyle(IconButtonStyle())
             .accessibilityLabel(copied == link ? "Copied" : "Copy link")
             ShareLink(item: link) { Image(systemName: "square.and.arrow.up") }
-                .buttonStyle(IconButtonStyle())
                 .accessibilityLabel("Share link")
             Button { stop(port) } label: { Image(systemName: "xmark") }
-                .buttonStyle(IconButtonStyle())
                 .accessibilityLabel("Stop sharing")
         }
+        .buttonStyle(CircleButtonStyle())
     }
-
 
     private func read() async {
         do {
@@ -213,6 +229,13 @@ struct LocalServersView: View {
     private func call<T: Decodable>(_ cmd: String, _ args: [String: JSON] = [:], timeout: Duration = .seconds(60)) async throws -> T {
         guard let c = store.connection(key.server) else { throw DrayError("Not connected") }
         return try await c.call(cmd, args, timeout: timeout)
+    }
+}
+
+/// Icon and title 6pt apart, the share pill's spacing.
+private struct GapLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 6) { configuration.icon; configuration.title }
     }
 }
 
