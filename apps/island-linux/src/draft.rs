@@ -1,0 +1,194 @@
+//! The message being built and where it goes: a session to reply to or a
+//! new task, the rows typed so far, and the switcher over the sessions. The
+//! Mac island's `Composer` draft, its rules kept and its dictation, captures
+//! and drafts left for later stages.
+
+use crate::input::TextInput;
+use crate::newtask::Picks;
+use crate::server::Session;
+use gpui::{App, AppContext, Entity};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    Session(String),
+    New,
+}
+
+/// One line of the message, in the order it was typed. Editable in place.
+pub struct Row {
+    pub id: u64,
+    pub input: Entity<TextInput>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Menu {
+    Model,
+    Project,
+    Stance,
+}
+
+/// Which box the panel should put the keyboard in once it next draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    Typing,
+    Search,
+    /// The panel itself, where a card's keys are read.
+    Panel,
+}
+
+pub struct Draft {
+    pub target: Option<Target>,
+    pub rows: Vec<Row>,
+    next_row: u64,
+    pub typing: Entity<TextInput>,
+    pub search: Entity<TextInput>,
+    /// The switcher, hidden until asked for — the title, Ctrl+F or ↑/↓ — and
+    /// again once the reader picks.
+    pub list_shown: bool,
+    pub sending: bool,
+    pub menu: Option<Menu>,
+    /// The model row the pointer is on, whose effort levels fly out beside it.
+    pub hovered_model: Option<String>,
+    pub picks: Picks,
+    pub want_focus: Option<Field>,
+}
+
+impl Draft {
+    pub fn new(cx: &mut App) -> Self {
+        Self {
+            target: None,
+            rows: Vec::new(),
+            next_row: 0,
+            typing: cx.new(|cx| TextInput::new("Ctrl+⏎ Queue, ⏎ Send", cx)),
+            search: cx.new(|cx| TextInput::new("Search tasks  Ctrl+F", cx).max_lines(1)),
+            list_shown: false,
+            sending: false,
+            menu: None,
+            hovered_model: None,
+            picks: Picks::load(),
+            want_focus: None,
+        }
+    }
+
+    pub fn session(&self) -> Option<&str> {
+        match &self.target {
+            Some(Target::Session(id)) => Some(id),
+            _ => None,
+        }
+    }
+
+    pub fn add_row(&mut self, text: &str, cx: &mut App) {
+        let text = text.to_string();
+        let input = cx.new(|cx| {
+            let mut input = TextInput::new("", cx).max_lines(4);
+            input.set_text(&text, cx);
+            input
+        });
+        self.next_row += 1;
+        self.rows.push(Row { id: self.next_row, input });
+    }
+
+    /// Every row's text and then the box's, in order.
+    pub fn parts(&self, cx: &App) -> (Vec<String>, String) {
+        (self.rows.iter().map(|r| r.input.read(cx).text().to_string()).collect(), self.typing.read(cx).text().to_string())
+    }
+
+    /// Something under way that a new card must not push aside.
+    pub fn busy(&self, cx: &App) -> bool {
+        !self.rows.is_empty() || !self.typing.read(cx).text().is_empty() || self.list_shown || self.menu.is_some()
+    }
+}
+
+/// The message as sent: each row, then what is still in the box, trimmed and
+/// joined by spaces, empty ones left out.
+pub fn prompt(rows: &[String], typing: &str) -> String {
+    rows.iter()
+        .map(String::as_str)
+        .chain([typing])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The switcher's rows: newest first, narrowed by the search, set-aside
+/// sessions left out by the sidebar's rule — flagged, or untouched for three
+/// days. `modified` is RFC3339 UTC, so it orders as a string.
+pub fn listed<'a>(sessions: &'a [Session], search: &str, stale: &str) -> Vec<&'a Session> {
+    let q = search.trim().to_lowercase();
+    let mut list: Vec<&Session> = sessions
+        .iter()
+        .filter(|s| s.hidden != Some(true) && s.archived != Some(true) && s.aside != Some(true))
+        .filter(|s| s.modified.as_str() > stale)
+        .filter(|s| q.is_empty() || s.title.to_lowercase().contains(&q) || s.project().to_lowercase().contains(&q))
+        .collect();
+    list.sort_by(|a, b| b.modified.cmp(&a.modified));
+    list
+}
+
+/// Three days ago as RFC3339 UTC, the sidebar's line for a stale session.
+pub fn stale_line() -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    rfc3339(now.saturating_sub(3 * 24 * 3600))
+}
+
+/// Seconds since the epoch as `YYYY-MM-DDTHH:MM:SSZ`, by Howard Hinnant's
+/// civil-from-days, so no date crate rides along for one comparison.
+fn rfc3339(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+/// A fresh session id, as the frontend's `crypto.randomUUID()` mints one: the
+/// agent adopts the id the app picks.
+pub fn new_session_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(id: &str, title: &str, modified: &str) -> Session {
+        Session { session_id: id.into(), title: title.into(), modified: modified.into(), project_path: "/p/dray".into(), ..Default::default() }
+    }
+
+    #[test]
+    fn rows_and_the_box_join_into_one_prompt() {
+        assert_eq!(prompt(&["  first ".into(), "".into(), "second".into()], " third "), "first second third");
+        assert_eq!(prompt(&[], "  "), "");
+    }
+
+    #[test]
+    fn the_switcher_lists_newest_first_and_drops_the_set_aside() {
+        let mut aside = session("c", "Aside", "2026-11-10T09:00:00Z");
+        aside.aside = Some(true);
+        let sessions = vec![
+            session("a", "Older", "2026-11-09T09:00:00Z"),
+            session("b", "Newer", "2026-11-10T08:00:00Z"),
+            aside,
+            session("d", "Stale", "2026-11-01T09:00:00Z"),
+        ];
+        let ids = |l: Vec<&Session>| l.iter().map(|s| s.session_id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(listed(&sessions, "", "2026-11-07T00:00:00Z")), ["b", "a"]);
+        assert_eq!(ids(listed(&sessions, "old", "2026-11-07T00:00:00Z")), ["a"]);
+        assert_eq!(ids(listed(&sessions, "DRAY", "2026-11-07T00:00:00Z")), ["b", "a"]);
+    }
+
+    #[test]
+    fn rfc3339_reads_the_calendar() {
+        assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339(1_794_318_897), "2026-11-10T13:54:57Z");
+        assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
+    }
+}

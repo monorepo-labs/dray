@@ -2,12 +2,14 @@
 //! while none waits — and the pill that says cards are waiting.
 
 use crate::asks::{AskKind, Permission, Question, ToolLine};
+use crate::draft::{Field, Menu, Target};
+use crate::newtask::{self, STANCES};
 use crate::prefs::Placement;
 use crate::{Island, Link};
 use crate::{ROOM, WIDTH};
 use gpui::{
     AnyElement, App, BoxShadow, Context, Entity, FocusHandle, Focusable, Hsla, KeyDownEvent, MouseButton,
-    MouseDownEvent, PathBuilder, Pixels, Window, canvas, div, point, prelude::*, px, rgb,
+    MouseDownEvent, PathBuilder, Pixels, Window, canvas, deferred, div, point, prelude::*, px, rgb,
 };
 
 const YELLOW: u32 = 0xffd23f;
@@ -19,6 +21,12 @@ const DENIED: u32 = 0xc4392f;
 /// The most a card's question or the waiting list may take before it
 /// scrolls, as the Mac caps them; less on a short screen.
 const BODY_CAP: f32 = 420.;
+/// Room under (or over) the card for a dropdown, which hangs past it.
+const MENU_ROOM: f32 = 250.;
+/// The model menu: wide enough for every agent's name on its track.
+const MODEL_MENU: f32 = 300.;
+/// The draft's rows: three tall at most, then they scroll.
+const ROWS_CAP: f32 = 3. * 32. + 2. * 10.;
 /// The type: 13pt body, 12 for asides, 11 for the smallest.
 const BODY: f32 = 13.;
 const ASIDE: f32 = 12.;
@@ -38,11 +46,14 @@ fn later(island: &Entity<Island>, cx: &mut App, f: impl FnOnce(&Entity<Island>, 
 pub struct Panel {
     island: Entity<Island>,
     focus: FocusHandle,
+    /// What the panel drew last: a card, or the draft. The keyboard follows a
+    /// change between them, as the Mac's focus does.
+    showing_card: Option<bool>,
 }
 
 impl Panel {
     pub fn new(island: Entity<Island>, focus: FocusHandle) -> Self {
-        Self { island, focus }
+        Self { island, focus, showing_card: None }
     }
 
     /// Whether the open question's text box holds the keyboard, when digits
@@ -53,10 +64,13 @@ impl Panel {
     }
 
     fn key_down(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let island = self.island.clone();
+        let current = island.read(cx).card_up(cx);
+        if current.is_none() {
+            return self.draft_key(e, window, cx);
+        }
         let key = e.keystroke.key.as_str();
         let typing = self.typing(window, cx);
-        let island = self.island.clone();
-        let current = island.read(cx).current();
         match key {
             "escape" => later(&island, cx, |i, cx| crate::close(i, cx)),
             "enter" => {
@@ -87,26 +101,102 @@ impl Panel {
             _ => {}
         }
     }
+
+    /// The draft's keys: ⏎ sends, Ctrl+⏎ queues the box as a row, ↑/↓ walk
+    /// the switcher while the box is empty or the switcher is open, Ctrl+N is
+    /// a new task, Ctrl+F the switcher's search, Esc steps back out.
+    fn draft_key(&mut self, e: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let island = self.island.clone();
+        let m = &e.keystroke.modifiers;
+        let (list, menu, empty) = {
+            let d = island.read(cx).draft();
+            (d.list_shown, d.menu.is_some(), d.typing.read(cx).text().is_empty())
+        };
+        match (e.keystroke.key.as_str(), m.control, m.shift || m.alt || m.platform) {
+            ("escape", false, false) => {
+                if menu || list {
+                    island.update(cx, |island, cx| {
+                        let d = island.draft_mut();
+                        if menu {
+                            d.menu = None;
+                        } else {
+                            d.list_shown = false;
+                            d.want_focus = Some(Field::Typing);
+                        }
+                        cx.notify();
+                    });
+                } else {
+                    later(&island, cx, |i, cx| crate::close(i, cx));
+                }
+            }
+            ("enter", false, false) if list => later(&island, cx, |i, cx| crate::choose(i, None, cx)),
+            ("enter", false, false) => later(&island, cx, |i, cx| crate::send(i, cx)),
+            ("enter", true, false) => later(&island, cx, |i, cx| crate::add_typed(i, cx)),
+            ("up" | "down", false, false) if !menu && (list || empty) => {
+                let delta = if e.keystroke.key == "up" { -1 } else { 1 };
+                later(&island, cx, move |i, cx| crate::move_list(i, delta, cx));
+            }
+            ("n", true, false) => later(&island, cx, |i, cx| crate::pick_target(i, Target::New, cx)),
+            ("f", true, false) => {
+                island.update(cx, |island, cx| {
+                    let d = island.draft_mut();
+                    d.list_shown = true;
+                    d.want_focus = Some(Field::Search);
+                    cx.notify();
+                });
+            }
+            _ => {}
+        }
+    }
 }
 
 impl Render for Panel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.island.clone();
+        let card_up = self.island.read(cx).card_up(cx);
+        // The keyboard follows the panel: into the box for a draft, onto the
+        // panel for a card, and wherever a key asked for it.
+        let mut want = self.island.read(cx).draft().want_focus;
+        if self.showing_card != Some(card_up.is_some()) && self.island.read(cx).flash.is_none() {
+            if self.showing_card.is_some() {
+                want = Some(if card_up.is_some() { Field::Panel } else { Field::Typing });
+            }
+            self.showing_card = Some(card_up.is_some());
+        }
+        if let Some(field) = want {
+            let handle = {
+                let d = self.island.read(cx).draft();
+                match field {
+                    Field::Typing => d.typing.read(cx).focus().clone(),
+                    Field::Search => d.search.read(cx).focus().clone(),
+                    Field::Panel => self.focus.clone(),
+                }
+            };
+            window.focus(&handle, cx);
+            self.island.update(cx, |island, _| island.draft_mut().want_focus = None);
+        }
         let island = self.island.read(cx);
+        let draft_up = island.flash.is_none() && card_up.is_none();
         let content: AnyElement = if let Some(label) = island.flash {
             flash(label).into_any_element()
-        } else if let Some((key, _)) = island.current() {
-            card(&state, island, &key, &self.focus, cx).into_any_element()
-        } else {
+        } else if let Some((key, _)) = &card_up {
+            card(&state, island, key, &self.focus, cx).into_any_element()
+        } else if !matches!(island.link, Link::Up) {
             pinned(island).into_any_element()
+        } else {
+            draft_view(&state, island, cx).into_any_element()
         };
         let menu = island.menu.then(|| placement_menu(&state, island.placement));
         let glass = island.glass;
         let top = island.placement == Placement::Top;
         let fill = if island.flash == Some("Denied") { rgb(DENIED) } else { rgb(0x000000) };
         let waiting = island.asks.attention().len();
-        let peeks = (island.flash.is_none() && !island.listed && island.current().is_some() && waiting > 1)
+        let peeks = (island.flash.is_none() && !island.listed && card_up.is_some() && waiting > 1)
             .then(|| peeks(waiting - 1));
+        let switcher = (draft_up && island.draft().list_shown && matches!(island.link, Link::Up))
+            .then(|| switcher(&state, island, glass, cx).into_any_element());
+        // Room in the window for a bar dropdown, which hangs past the card.
+        let dropdown_room = (draft_up && island.draft().menu.is_some()).then(|| div().h(px(MENU_ROOM)).into_any_element());
         let body = div()
             .w_full()
             .bg(fill)
@@ -120,6 +210,8 @@ impl Render for Panel {
             })
             .when(glass, |d| d.shadow(vec![shadow(gpui::hsla(0., 0., 0., 0.35), 5., 2.)]))
             .child(content);
+        // The switcher is a card of its own on the far side from the edge the
+        // panel hangs from, as on the Mac.
         let frame = div()
             .flex_none()
             .relative()
@@ -127,9 +219,16 @@ impl Render for Panel {
             .flex()
             .flex_col()
             .items_center()
+            .gap(px(8.))
             .when(glass, |d| d.px(px(ROOM)).pb(px(ROOM)).when(!top, |d| d.pt(px(ROOM))))
-            .child(body)
-            .children(peeks)
+            .map(|d| {
+                let card = div().w_full().flex().flex_col().items_center().child(body).children(peeks);
+                if top {
+                    d.child(card).children(switcher).children(dropdown_room)
+                } else {
+                    d.children(dropdown_room).children(switcher).child(card)
+                }
+            })
             .when(glass && top, |d| d.child(ear(true, fill.into())).child(ear(false, fill.into())));
         let fit = state.clone();
         div()
@@ -230,15 +329,15 @@ fn shell() -> gpui::Div {
     div().flex_none().w_full().flex().flex_col().gap(px(10.)).p(px(12.))
 }
 
-/// The stage-1 panel: the pinned session and where its reply will go.
+/// The panel while there is no server to reach: what is wrong, and the box,
+/// whose draft waits for it.
 fn pinned(island: &Island) -> impl IntoElement {
     let key = crate::prefs::read().key.label();
-    let (title, detail, busy) = match (&island.link, island.pinned()) {
-        (Link::Up, Some(s)) => (s.title.clone(), s.project().to_string(), s.status == "in_progress"),
-        (Link::Up, None) => ("No tasks yet".into(), "Start one in Dray".into(), false),
-        (Link::Connecting, _) => ("Connecting to Dray…".into(), String::new(), false),
-        (Link::Unreachable, _) => ("Dray isn't running".into(), "Open Dray to reach your tasks".into(), false),
-        (Link::Refused(why), _) => ("Dray turned the island away".into(), why.clone(), false),
+    let busy = false;
+    let (title, detail): (String, String) = match &island.link {
+        Link::Up | Link::Connecting => ("Connecting to Dray…".into(), String::new()),
+        Link::Unreachable => ("Dray isn't running".into(), "Open Dray to reach your tasks".into()),
+        Link::Refused(why) => ("Dray turned the island away".into(), why.clone()),
     };
     shell()
         .child(
@@ -670,6 +769,499 @@ fn placement_menu(state: &Entity<Island>, placement: Placement) -> impl IntoElem
         .border_color(white(0.15))
         .child(item("Top of screen", Placement::Top))
         .child(item("Bottom of screen", Placement::Bottom))
+}
+
+/// The draft: who it goes to — the title, or a new task's bar — the rows
+/// typed so far, the box and Send.
+fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> impl IntoElement {
+    let d = island.draft();
+    let top = island.placement == Placement::Top;
+    let head: AnyElement = match &d.target {
+        Some(Target::Session(id)) => title_row(state, island, id).into_any_element(),
+        _ => new_task_bar(state, island, top).into_any_element(),
+    };
+    let rows = (!d.rows.is_empty()).then(|| {
+        div()
+            .id("rows")
+            .max_h(px(ROWS_CAP))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .children(d.rows.iter().map(|row| {
+                let (state, id) = (state.clone(), row.id);
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_start()
+                    .gap_2()
+                    .p(px(8.))
+                    .rounded(px(10.))
+                    .bg(white(0.06))
+                    .child(div().w(px(16.)).flex_none().text_color(white(0.4)).child("›"))
+                    .child(div().flex_1().min_w_0().child(row.input.clone()))
+                    .child(
+                        div()
+                            .id(("remove", id as usize))
+                            .flex_none()
+                            .text_color(white(0.4))
+                            .hover(|s| s.text_color(white(0.9)))
+                            .child("✕")
+                            .on_click(move |_, _, cx| later(&state, cx, move |i, cx| crate::remove_row(i, id, cx))),
+                    )
+            }))
+    });
+    let can_send = !d.sending && (!d.rows.is_empty() || !d.typing.read(cx).text().trim().is_empty());
+    let send = {
+        let state = state.clone();
+        div()
+            .id("send")
+            .flex_none()
+            .size(px(24.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .bg(white(if can_send { 1. } else { 0.25 }))
+            .text_color(rgb(0x000000))
+            .font_weight(gpui::FontWeight::BOLD)
+            .child("↑")
+            .when(can_send, |d| d.on_click(move |_, _, cx| later(&state, cx, |i, cx| crate::send(i, cx))))
+    };
+    shell()
+        .gap(px(8.))
+        .child(head)
+        .children(rows)
+        .child(div().flex().items_end().gap_2().child(div().flex_1().min_w_0().py(px(2.)).child(d.typing.clone())).child(send))
+        .children(island.notice.clone().map(|n| div().text_size(px(ASIDE)).text_color(white(0.5)).child(n)))
+}
+
+/// The sidebar's mark for a session: asking, running, or nothing.
+fn lead_color(island: &Island, id: &str) -> Option<Hsla> {
+    let asking = island.asks.attention().iter().any(|k| k == id);
+    let busy = island.session(id).is_some_and(|s| s.status == "in_progress");
+    if asking {
+        Some(rgb(WAITING).into())
+    } else if busy {
+        Some(rgb(YELLOW).into())
+    } else {
+        None
+    }
+}
+
+fn dot(color: Hsla) -> gpui::Div {
+    div().flex_none().size(px(6.)).rounded_full().bg(color)
+}
+
+fn lead_mark(island: &Island, id: &str) -> Option<gpui::Div> {
+    lead_color(island, id).map(dot)
+}
+
+/// The session the draft goes to. A click opens the switcher rather than
+/// Dray, since a title clicked without thinking must not switch apps;
+/// Ctrl-click is the deliberate way to Dray.
+fn title_row(state: &Entity<Island>, island: &Island, id: &str) -> impl IntoElement {
+    let key = crate::prefs::read().key.label();
+    let title = island.session(id).map(|s| s.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| "Task".into());
+    div()
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .child(
+            div()
+                .id("draft-title")
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(white(0.7))
+                .hover(|s| s.text_color(white(1.)))
+                .children(lead_mark(island, id))
+                .child(div().truncate().child(title))
+                .on_mouse_down(MouseButton::Left, title_click(state.clone(), id.to_string(), |i, cx| crate::toggle_list(i, cx))),
+        )
+        .child(hints(&format!("Ctrl+N New   ↑↓ Tasks   Tap {key} to close")))
+}
+
+fn hints(text: &str) -> impl IntoElement {
+    div().flex_none().text_size(px(ASIDE)).text_color(white(0.3)).child(text.to_string())
+}
+
+/// A bar control that opens a dropdown: the dropdown hangs from it, under the
+/// bar at the top of the screen and over it at the bottom, and draws over
+/// whatever it overhangs.
+fn bar_button(state: &Entity<Island>, id: &'static str, menu: Menu, open: bool, top: bool, label: impl IntoElement, dropdown: impl FnOnce() -> AnyElement) -> impl IntoElement {
+    let toggle = state.clone();
+    div()
+        .relative()
+        .flex_none()
+        .child(
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .text_color(white(if open { 1. } else { 0.85 }))
+                .hover(|s| s.text_color(white(1.)))
+                .child(label)
+                .on_click(move |_, _, cx| {
+                    toggle.update(cx, |island, cx| {
+                        let d = island.draft_mut();
+                        d.menu = if d.menu == Some(menu) { None } else { Some(menu) };
+                        d.hovered_model = None;
+                        d.want_focus = Some(Field::Typing);
+                        cx.notify();
+                    })
+                }),
+        )
+        .children(open.then(|| {
+            let shut = state.clone();
+            deferred(
+                div()
+                    .occlude()
+                    .absolute()
+                    .left(px(-6.))
+                    .map(|d| if top { d.top(px(24.)) } else { d.bottom(px(24.)) })
+                    .on_mouse_down_out(move |_, _, cx| {
+                        shut.update(cx, |island, cx| {
+                            let d = island.draft_mut();
+                            d.menu = None;
+                            d.want_focus = Some(Field::Typing);
+                            cx.notify();
+                        })
+                    })
+                    .child(dropdown()),
+            )
+            .with_priority(1)
+        }))
+}
+
+/// The dark card every dropdown is drawn on.
+fn menu_card(width: f32) -> gpui::Div {
+    div()
+        .w(px(width))
+        .flex()
+        .flex_col()
+        .p(px(4.))
+        .rounded(px(10.))
+        .bg(gpui::hsla(0., 0., 0.12, 1.))
+        .border_1()
+        .border_color(white(0.1))
+        .shadow(vec![shadow(gpui::hsla(0., 0., 0., 0.4), 6., 3.)])
+}
+
+fn menu_row(id: (&'static str, usize), title: String, on: bool) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap_2()
+        .px(px(8.))
+        .h(px(26.))
+        .rounded(px(6.))
+        .hover(|s| s.bg(white(0.1)))
+        .child(div().flex_1().truncate().child(title))
+        .child(div().w(px(12.)).text_color(rgb(YELLOW)).child(if on { "✓" } else { "" }))
+}
+
+/// A new task's bar: agent and model, project, worktree, stance — the
+/// desktop composer's, each control opening its dropdown.
+fn new_task_bar(state: &Entity<Island>, island: &Island, top: bool) -> impl IntoElement {
+    let d = island.draft();
+    let p = &d.picks;
+    let menu = d.menu;
+    let model_label = p.model().map(|m| m.label.clone()).unwrap_or_else(|| "Default".into());
+    let agent_label = p.agents.iter().find(|a| a.harness == p.harness).map(|a| a.label.clone()).unwrap_or_else(|| p.harness.clone());
+    let effort = p.effort().map(|e| newtask::effort_label(&e).to_string());
+    let stance = STANCES.iter().find(|(m, _)| *m == p.stance()).map_or("Auto", |(_, l)| *l);
+    let worktree = p.worktree();
+    let toggle = state.clone();
+    div()
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .child(bar_button(
+            state,
+            "bar-model",
+            Menu::Model,
+            menu == Some(Menu::Model),
+            top,
+            div()
+                .flex()
+                .gap(px(5.))
+                .child(div().text_color(white(0.5)).child(agent_label))
+                .child(model_label)
+                .children(effort.map(|e| div().text_color(white(0.45)).child(e))),
+            || model_menu(state, island).into_any_element(),
+        ))
+        .child(bar_button(
+            state,
+            "bar-project",
+            Menu::Project,
+            menu == Some(Menu::Project),
+            top,
+            div().flex().gap(px(5.)).child(div().text_color(white(0.45)).child("▤")).child(p.project_name().unwrap_or("Project").to_string()),
+            || {
+                menu_card(240.)
+                    .children(p.projects.iter().enumerate().map(|(n, project)| {
+                        let (state, path) = (state.clone(), project.path.clone());
+                        menu_row(("project", n), project.name.clone(), p.project.as_ref() == Some(&project.path))
+                            .on_click(move |_, _, cx| {
+                                let path = path.clone();
+                                later(&state, cx, move |i, cx| crate::pick_project(i, path, cx))
+                            })
+                    }))
+                    .when(p.projects.is_empty(), |d| d.child(div().p(px(8.)).text_color(white(0.4)).child("No projects")))
+                    .into_any_element()
+            },
+        ))
+        .child(
+            div()
+                .id("bar-worktree")
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .text_color(white(if worktree { 0.95 } else { 0.5 }))
+                .child(switch(worktree))
+                .child("Worktree")
+                .on_click(move |_, _, cx| {
+                    toggle.update(cx, |island, cx| {
+                        let d = island.draft_mut();
+                        d.picks.toggle_worktree();
+                        d.want_focus = Some(Field::Typing);
+                        cx.notify();
+                    })
+                }),
+        )
+        .children(newtask::offers_stances(&p.harness).then(|| {
+            bar_button(state, "bar-stance", Menu::Stance, menu == Some(Menu::Stance), top, stance.to_string(), || {
+                menu_card(200.)
+                    .children(STANCES.iter().filter(|(m, _)| newtask::honours(&p.harness, m)).enumerate().map(|(n, (mode, label))| {
+                        let (state, mode) = (state.clone(), mode.to_string());
+                        menu_row(("stance", n), label.to_string(), mode == p.stance()).on_click(move |_, _, cx| {
+                            state.update(cx, |island, cx| {
+                                let d = island.draft_mut();
+                                d.picks.pick_stance(&mode);
+                                d.menu = None;
+                                d.want_focus = Some(Field::Typing);
+                                cx.notify();
+                            })
+                        })
+                    }))
+                    .into_any_element()
+            })
+        }))
+}
+
+/// The worktree toggle's little switch.
+fn switch(on: bool) -> impl IntoElement {
+    div()
+        .w(px(22.))
+        .h(px(13.))
+        .p(px(2.))
+        .rounded_full()
+        .bg(if on { rgb(YELLOW).into() } else { white(0.2) })
+        .flex()
+        .when(on, |d| d.justify_end())
+        .child(div().size(px(9.)).rounded_full().bg(rgb(0x000000)))
+}
+
+/// The desktop's model menu: the agents on a track, the shortlist with each
+/// row's effort beside it, and the hovered row's effort levels flying out.
+fn model_menu(state: &Entity<Island>, island: &Island) -> impl IntoElement {
+    const ROW: f32 = 26.;
+    const TRACK: f32 = 30.;
+    let p = &island.draft().picks;
+    let list = p.shortlist();
+    let picked = p.model_id();
+    let hovered = island.draft().hovered_model.clone();
+    let flyout = hovered.as_ref().and_then(|id| list.iter().position(|m| &m.id == id)).and_then(|i| {
+        let m = list[i];
+        (!m.efforts.is_empty()).then(|| {
+            let current = p.effort_of(m);
+            let model = m.id.clone();
+            deferred(
+                menu_card(140.)
+                    .absolute()
+                    .left(px(MODEL_MENU + 4.))
+                    .top(px(4. + TRACK + i as f32 * ROW))
+                    .children(m.efforts.iter().enumerate().map(|(n, level)| {
+                        let (state, model, level) = (state.clone(), model.clone(), level.clone());
+                        menu_row(("effort", n), newtask::effort_label(&level).to_string(), current.as_deref() == Some(level.as_str()))
+                            .on_click(move |_, _, cx| {
+                                state.update(cx, |island, cx| {
+                                    let d = island.draft_mut();
+                                    d.picks.pick_model(&model);
+                                    d.picks.pick_effort(&model, &level);
+                                    d.menu = None;
+                                    d.want_focus = Some(Field::Typing);
+                                    cx.notify();
+                                })
+                            })
+                    })),
+            )
+            .with_priority(2)
+        })
+    });
+    let track = div().h(px(TRACK)).flex().items_center().gap(px(4.)).px(px(4.)).children(
+        p.agents.iter().filter(|a| a.available).enumerate().map(|(n, agent)| {
+            let (state, harness) = (state.clone(), agent.harness.clone());
+            let on = agent.harness == p.harness;
+            div()
+                .id(("agent", n))
+                .px(px(8.))
+                .h(px(22.))
+                .flex()
+                .items_center()
+                .rounded_full()
+                .text_size(px(ASIDE))
+                .bg(white(if on { 0.2 } else { 0.06 }))
+                .hover(|s| s.bg(white(0.14)))
+                .child(agent.label.clone())
+                .on_click(move |_, _, cx| {
+                    let harness = harness.clone();
+                    later(&state, cx, move |i, cx| {
+                        i.update(cx, |island, cx| {
+                            let d = island.draft_mut();
+                            d.picks.pick_harness(&harness);
+                            d.hovered_model = None;
+                            cx.notify();
+                        });
+                        crate::load_models(i, cx);
+                    })
+                })
+        }),
+    );
+    menu_card(MODEL_MENU)
+        .relative()
+        .child(track)
+        .children(list.iter().enumerate().map(|(n, m)| {
+            let (pick, hover) = (state.clone(), state.clone());
+            let (id, hover_id) = (m.id.clone(), m.id.clone());
+            let effort = p.effort_of(m).map(|e| newtask::effort_label(&e).to_string());
+            div()
+                .id(("model", n))
+                .flex()
+                .items_center()
+                .gap_2()
+                .px(px(8.))
+                .h(px(ROW))
+                .rounded(px(6.))
+                .hover(|s| s.bg(white(0.1)))
+                .child(div().flex_1().truncate().child(m.label.clone()))
+                .children(effort.map(|e| div().text_color(white(0.4)).child(e)))
+                .child(div().w(px(12.)).text_color(rgb(YELLOW)).child(if m.id == picked { "✓" } else { "" }))
+                .on_hover(move |on, _, cx| {
+                    if *on {
+                        let id = hover_id.clone();
+                        hover.update(cx, |island, cx| {
+                            island.draft_mut().hovered_model = Some(id);
+                            cx.notify();
+                        })
+                    }
+                })
+                .on_click(move |_, _, cx| {
+                    pick.update(cx, |island, cx| {
+                        let d = island.draft_mut();
+                        d.picks.pick_model(&id);
+                        d.menu = None;
+                        d.want_focus = Some(Field::Typing);
+                        cx.notify();
+                    })
+                })
+        }))
+        .when(list.is_empty(), |d| d.child(div().p(px(8.)).text_color(white(0.4)).child("No models")))
+        .children(flyout)
+}
+
+/// The switcher: a search over the sessions, newest first, five rows in view.
+fn switcher(state: &Entity<Island>, island: &Island, glass: bool, cx: &App) -> SwitcherCard {
+    let d = island.draft();
+    let current = d.session().map(str::to_string);
+    let rows: Vec<(String, String, String, Option<Hsla>)> = island
+        .listed(cx)
+        .iter()
+        .map(|s| (s.session_id.clone(), s.title.clone(), s.project().to_string(), lead_color(island, &s.session_id)))
+        .collect();
+    let empty = rows.is_empty();
+    let state = state.clone();
+    let search = d.search.clone();
+    SwitcherCard { state, search, current, rows, empty, glass }
+}
+
+/// Held as its parts so the frame can put it above or below the card.
+struct SwitcherCard {
+    state: Entity<Island>,
+    search: Entity<crate::input::TextInput>,
+    current: Option<String>,
+    rows: Vec<(String, String, String, Option<Hsla>)>,
+    empty: bool,
+    glass: bool,
+}
+
+impl IntoElement for SwitcherCard {
+    type Element = gpui::AnyElement;
+
+    fn into_element(self) -> Self::Element {
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(0x000000))
+            .border_1()
+            .border_color(white(0.12))
+            .when(self.glass, |d| d.rounded(px(16.)).shadow(vec![shadow(gpui::hsla(0., 0., 0., 0.35), 5., 2.)]))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px(px(12.))
+                    .py(px(10.))
+                    .child(div().text_color(white(0.4)).child("⌕"))
+                    .child(div().flex_1().min_w_0().child(self.search.clone()))
+                    .child(hints("↑↓ navigate   ⏎ select")),
+            )
+            .child(
+                div()
+                    .id("switcher")
+                    .max_h(px(5. * 32. + 14.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .px(px(6.))
+                    .pb(px(6.))
+                    .children(self.rows.into_iter().enumerate().map(|(n, (id, title, project, mark))| {
+                        let on = self.current.as_deref() == Some(id.as_str());
+                        let state = self.state.clone();
+                        div()
+                            .id(("task", n))
+                            .flex_none()
+                            .h(px(32.))
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .rounded(px(8.))
+                            .when(on, |d| d.bg(white(0.1)))
+                            .hover(|s| s.bg(white(0.08)))
+                            .children(mark.map(dot))
+                            .child(div().flex_1().truncate().text_color(white(if on { 0.95 } else { 0.8 })).child(if title.is_empty() { "Untitled".to_string() } else { title }))
+                            .child(div().flex_none().text_size(px(ASIDE)).text_color(white(0.35)).child(project))
+                            .on_click(move |_, _, cx| {
+                                let id = id.clone();
+                                later(&state, cx, move |i, cx| crate::choose(i, Some(id), cx))
+                            })
+                    }))
+                    .when(self.empty, |d| d.child(div().h(px(64.)).flex().items_center().justify_center().text_color(white(0.4)).child("No tasks"))),
+            )
+            .into_any_element()
+    }
 }
 
 /// How many tasks wait on the reader. Resting the pointer on it opens the

@@ -1,13 +1,16 @@
-//! A one-line text box. GPUI ships none; this is its own `examples/input.rs`
-//! (Zed, Apache-2.0) cut to what the island needs and drawn in its colours.
-//! Typing goes through GPUI's input handler, so XIM composition works as in
-//! any GPUI app.
+//! A text box that wraps, growing to `max_lines` and scrolling to the caret
+//! past that, as the Mac island's does. GPUI ships none; this is its own
+//! `examples/input.rs` (Zed, Apache-2.0), cut to what the island needs and
+//! taught to wrap. Typing goes through GPUI's input handler, so XIM
+//! composition works as in any GPUI app. One paragraph: a paste's newlines
+//! become spaces, and Enter is the panel's.
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler,
-    FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle,
-    Window, actions, div, fill, hsla, point, prelude::*, px, relative, size,
+    App, AvailableSpace, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, ElementId, ElementInputHandler,
+    Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style, TextRun,
+    UTF16Selection, UnderlineStyle, Window, WrappedLine, actions, div, fill, hsla, point, prelude::*, px, relative,
+    size,
 };
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
@@ -41,8 +44,12 @@ pub struct TextInput {
     selected: Range<usize>,
     reversed: bool,
     marked: Option<Range<usize>>,
-    last_layout: Option<ShapedLine>,
+    last_layout: Option<WrappedLine>,
     last_bounds: Option<Bounds<Pixels>>,
+    last_line_height: Pixels,
+    /// How far the text is scrolled up to keep the caret in the box.
+    scroll: Pixels,
+    max_lines: usize,
     selecting: bool,
 }
 
@@ -57,8 +64,29 @@ impl TextInput {
             marked: None,
             last_layout: None,
             last_bounds: None,
+            last_line_height: px(18.),
+            scroll: px(0.),
+            max_lines: 6,
             selecting: false,
         }
+    }
+
+    pub fn max_lines(mut self, lines: usize) -> Self {
+        self.max_lines = lines.max(1);
+        self
+    }
+
+    /// Replaces the text, caret at its end.
+    pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.content = text.replace('\n', " ").into();
+        self.selected = self.content.len()..self.content.len();
+        self.reversed = false;
+        self.marked = None;
+        cx.notify();
+    }
+
+    pub fn focus(&self) -> &FocusHandle {
+        &self.focus
     }
 
     pub fn text(&self) -> &str {
@@ -167,13 +195,11 @@ impl TextInput {
 
     fn index_for(&self, position: Point<Pixels>) -> usize {
         let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref()) else { return 0 };
-        if self.content.is_empty() || position.y < bounds.top() {
+        if self.content.is_empty() {
             return 0;
         }
-        if position.y > bounds.bottom() {
-            return self.content.len();
-        }
-        line.closest_index_for_x(position.x - bounds.left())
+        let local = point(position.x - bounds.left(), (position.y - bounds.top() + self.scroll).max(px(0.)));
+        line.closest_index_for_position(local, self.last_line_height).unwrap_or_else(|i| i).min(self.content.len())
     }
 
     fn select_to(&mut self, offset: usize, window: &Window, cx: &mut Context<Self>) {
@@ -292,17 +318,20 @@ impl EntityInputHandler for TextInput {
 
     fn bounds_for_range(&mut self, r: Range<usize>, bounds: Bounds<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<Bounds<Pixels>> {
         let line = self.last_layout.as_ref()?;
+        let lh = self.last_line_height;
         let range = self.range_from_utf16(&r);
+        let start = line.position_for_index(range.start, lh)?;
+        let end = line.position_for_index(range.end, lh).unwrap_or(start);
+        let top = bounds.top() - self.scroll;
         Some(Bounds::from_corners(
-            point(bounds.left() + line.x_for_index(range.start), bounds.top()),
-            point(bounds.left() + line.x_for_index(range.end), bounds.bottom()),
+            point(bounds.left() + start.x, top + start.y),
+            point(bounds.left() + end.x.max(start.x), top + end.y + lh),
         ))
     }
 
     fn character_index_for_point(&mut self, p: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
-        let local = self.last_bounds?.localize(&p)?;
-        let line = self.last_layout.as_ref()?;
-        Some(self.to_utf16(line.closest_index_for_x(local.x)))
+        self.last_bounds?.localize(&p)?;
+        Some(self.to_utf16(self.index_for(p)))
     }
 }
 
@@ -311,9 +340,38 @@ struct TextElement {
 }
 
 struct Prepaint {
-    line: Option<ShapedLine>,
+    line: Option<WrappedLine>,
     cursor: Option<PaintQuad>,
-    selection: Option<PaintQuad>,
+    selections: Vec<PaintQuad>,
+    scroll: Pixels,
+}
+
+/// The text, or the placeholder while there is none, shaped to wrap at `width`.
+fn shape(input: &TextInput, width: Pixels, window: &mut Window) -> Option<WrappedLine> {
+    let style = window.text_style();
+    let (text, color) = if input.content.is_empty() {
+        (input.placeholder.clone(), hsla(0., 0., 1., 0.3))
+    } else {
+        (input.content.clone(), style.color)
+    };
+    let run = TextRun { len: text.len(), font: style.font(), color, background_color: None, underline: None, strikethrough: None };
+    let runs = match input.marked.as_ref().filter(|_| !input.content.is_empty()) {
+        Some(m) => vec![
+            TextRun { len: m.start, ..run.clone() },
+            TextRun {
+                len: m.end - m.start,
+                underline: Some(UnderlineStyle { color: Some(run.color), thickness: px(1.), wavy: false }),
+                ..run.clone()
+            },
+            TextRun { len: text.len() - m.end, ..run },
+        ]
+        .into_iter()
+        .filter(|r| r.len > 0)
+        .collect(),
+        None => vec![run],
+    };
+    let font_size = style.font_size.to_pixels(window.rem_size());
+    window.text_system().shape_text(text, font_size, &runs, Some(width), None).ok()?.into_iter().next()
 }
 
 impl Element for TextElement {
@@ -328,11 +386,23 @@ impl Element for TextElement {
         None
     }
 
-    fn request_layout(&mut self, _: Option<&GlobalElementId>, _: Option<&gpui::InspectorElementId>, window: &mut Window, cx: &mut App) -> (LayoutId, ()) {
+    /// As tall as its wrapped lines, up to `max_lines`.
+    fn request_layout(&mut self, _: Option<&GlobalElementId>, _: Option<&gpui::InspectorElementId>, window: &mut Window, _: &mut App) -> (LayoutId, ()) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
-        (window.request_layout(style, [], cx), ())
+        let input = self.input.clone();
+        let id = window.request_measured_layout(style, move |known, available, window, cx| {
+            let width = known.width.or(match available.width {
+                AvailableSpace::Definite(w) => Some(w),
+                _ => None,
+            });
+            let lh = window.line_height();
+            let lines = width
+                .and_then(|w| shape(input.read(cx), w, window))
+                .map_or(1, |line| line.wrap_boundaries().len() + 1);
+            size(width.unwrap_or(px(0.)), lh * lines.min(input.read(cx).max_lines) as f32)
+        });
+        (id, ())
     }
 
     fn prepaint(
@@ -344,40 +414,39 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Prepaint {
+        let lh = window.line_height();
         let input = self.input.read(cx);
-        let style = window.text_style();
-        let (text, color) = if input.content.is_empty() {
-            (input.placeholder.clone(), hsla(0., 0., 1., 0.3))
+        let line = shape(input, bounds.size.width, window);
+        let at = |i: usize| line.as_ref().and_then(|l| l.position_for_index(i, lh)).unwrap_or_default();
+        let empty = input.content.is_empty();
+        let caret = if empty { Point::default() } else { at(input.cursor()) };
+        // Scrolled just enough that the caret's line is inside the box.
+        let scroll = (caret.y + lh - bounds.size.height).max(px(0.));
+        let origin = point(bounds.left(), bounds.top() - scroll);
+        let (cursor, selections) = if input.selected.is_empty() || empty {
+            let quad = fill(Bounds::new(point(origin.x + caret.x, origin.y + caret.y), size(px(2.), lh)), gpui::rgb(0xffd23f));
+            (Some(quad), Vec::new())
         } else {
-            (input.content.clone(), style.color)
+            let (a, b) = (at(input.selected.start), at(input.selected.end));
+            let tint = hsla(0.13, 1., 0.6, 0.3);
+            let band = |y: Pixels, from: Pixels, to: Pixels| {
+                fill(Bounds::from_corners(point(origin.x + from, origin.y + y), point(origin.x + to, origin.y + y + lh)), tint)
+            };
+            let mut quads = Vec::new();
+            if a.y == b.y {
+                quads.push(band(a.y, a.x, b.x));
+            } else {
+                quads.push(band(a.y, a.x, bounds.size.width));
+                let mut y = a.y + lh;
+                while y < b.y {
+                    quads.push(band(y, px(0.), bounds.size.width));
+                    y += lh;
+                }
+                quads.push(band(b.y, px(0.), b.x));
+            }
+            (None, quads)
         };
-        let run = TextRun { len: text.len(), font: style.font(), color, background_color: None, underline: None, strikethrough: None };
-        let runs = match input.marked.as_ref() {
-            Some(m) => vec![
-                TextRun { len: m.start, ..run.clone() },
-                TextRun {
-                    len: m.end - m.start,
-                    underline: Some(UnderlineStyle { color: Some(run.color), thickness: px(1.), wavy: false }),
-                    ..run.clone()
-                },
-                TextRun { len: text.len() - m.end, ..run },
-            ]
-            .into_iter()
-            .filter(|r| r.len > 0)
-            .collect(),
-            None => vec![run],
-        };
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        let line = window.text_system().shape_line(text, font_size, &runs, None);
-        let (selection, cursor) = if input.selected.is_empty() {
-            let x = line.x_for_index(input.cursor());
-            (None, Some(fill(Bounds::new(point(bounds.left() + x, bounds.top()), size(px(2.), bounds.size.height)), gpui::rgb(0xffd23f))))
-        } else {
-            let from = point(bounds.left() + line.x_for_index(input.selected.start), bounds.top());
-            let to = point(bounds.left() + line.x_for_index(input.selected.end), bounds.bottom());
-            (Some(fill(Bounds::from_corners(from, to), hsla(0.13, 1., 0.6, 0.3))), None)
-        };
-        Prepaint { line: Some(line), cursor, selection }
+        Prepaint { line, cursor, selections, scroll }
     }
 
     fn paint(
@@ -392,19 +461,29 @@ impl Element for TextElement {
     ) {
         let focus = self.input.read(cx).focus.clone();
         window.handle_input(&focus, ElementInputHandler::new(bounds, self.input.clone()), cx);
-        if let Some(selection) = prepaint.selection.take() {
-            window.paint_quad(selection);
-        }
-        let Some(line) = prepaint.line.take() else { return };
-        let _ = line.paint(bounds.origin, window.line_height(), gpui::TextAlign::Left, None, window, cx);
-        if focus.is_focused(window)
-            && let Some(cursor) = prepaint.cursor.take()
-        {
-            window.paint_quad(cursor);
-        }
+        let lh = window.line_height();
+        let scroll = prepaint.scroll;
+        let line = prepaint.line.take();
+        let selections = std::mem::take(&mut prepaint.selections);
+        let cursor = prepaint.cursor.take().filter(|_| focus.is_focused(window));
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            for quad in selections {
+                window.paint_quad(quad);
+            }
+            if let Some(line) = line.as_ref() {
+                let _ = line.paint(point(bounds.left(), bounds.top() - scroll), lh, gpui::TextAlign::Left, None, window, cx);
+            }
+            if let Some(cursor) = cursor {
+                window.paint_quad(cursor);
+            }
+        });
+        // The placeholder's shape must not answer for the text's positions.
+        let line = line.filter(|_| !self.input.read(cx).content.is_empty());
         self.input.update(cx, |input, _| {
-            input.last_layout = Some(line);
+            input.last_layout = line;
             input.last_bounds = Some(bounds);
+            input.last_line_height = lh;
+            input.scroll = scroll;
         });
     }
 }
