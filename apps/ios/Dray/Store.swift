@@ -304,9 +304,11 @@ final class Store {
     /// leaves them out, and its next pass clears them again.
     func loadSettled() async {
         for s in servers where serverState[s.id] == .connected {
+            // Rows held before the read; one the reply leaves out was deleted, unless an event moved it meanwhile.
+            let held = items.filter { $0.key.server == s.id && $0.value.archived == true }.mapValues(\.modified)
             guard let list: [SessionItem] = try? await call(s.id, "list_session_index_items", ["archived": true]) else { continue }
-            // Replaced whole, so one deleted meanwhile leaves the view.
-            for key in items.keys where key.server == s.id && items[key]?.archived == true { items[key] = nil }
+            let listed = Set(list.map(\.sessionId))
+            for (key, modified) in held where !listed.contains(key.id) && items[key]?.modified == modified { items[key] = nil }
             for item in list { store(SessionKey(server: s.id, id: item.sessionId), item) }
         }
     }
