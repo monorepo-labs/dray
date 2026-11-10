@@ -3013,7 +3013,10 @@ function App() {
         // the reader can't see. Safe to unmount: the draft and the attachment
         // tray are module-level stores precisely because the composer already
         // unmounts crossing the empty state.
-        issuesOpen || (selectedSession && viewTab !== "chat") ? null : (
+        // `shownSession`, like the rest of the layout: gated on the snapshot,
+        // the composer came up under Files or Diff for as long as a transcript
+        // took to load.
+        issuesOpen || (shownSession && viewTab !== "chat") ? null : (
         <ChatInput
           onSend={(message, attachments) => void sendFromComposer(message, attachments)}
           commands={slashCommands}

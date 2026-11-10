@@ -351,6 +351,24 @@ export default function Chat({
   const streamingTurn =
     streamingKind && lastTurn && !lastTurn.completed ? lastTurn : null;
 
+  // One element across renders. `TurnBlock`'s memo compares its footer by
+  // identity, so built inline the turn being streamed into re-rendered every
+  // time this component did, whatever had changed. Both hosts are the last
+  // turn or nothing, which is what lets one element serve.
+  const previewShown = !!streamingTurn;
+  const orbShown = !!waitingTurn;
+  const orbTokens = working?.tokens ?? 0;
+  const liveFooter = useMemo(
+    () =>
+      sessionId && (previewShown || orbShown) ? (
+        <>
+          {previewShown && <StreamingPreview sessionId={sessionId} />}
+          {orbShown && <WorkingIndicator tokens={orbTokens} />}
+        </>
+      ) : undefined,
+    [sessionId, previewShown, orbShown, orbTokens],
+  );
+
   // A new session resets the pin, or the previous session's scroll position
   // would decide whether this one follows. Must run before the pin effect below,
   // which is why it sits first.
@@ -693,18 +711,7 @@ export default function Chat({
                   // the preview belongs to this turn, not after it. Where both
                   // draw, the orb goes under the preview, which is where the
                   // reader is already looking and where it sits on its own.
-                  footer={
-                    turn !== streamingTurn && turn !== waitingTurn ? undefined : (
-                      <>
-                        {turn === streamingTurn && (
-                          <StreamingPreview sessionId={session.sessionId} />
-                        )}
-                        {turn === waitingTurn && (
-                          <WorkingIndicator tokens={working?.tokens ?? 0} />
-                        )}
-                      </>
-                    )
-                  }
+                  footer={turn === lastTurn ? liveFooter : undefined}
                 />
               </div>
             ))}

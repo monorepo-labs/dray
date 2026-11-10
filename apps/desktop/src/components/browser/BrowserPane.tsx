@@ -1113,7 +1113,9 @@ function EmptyState({ sessionId, active }: { sessionId: string; active: boolean 
   if (chromium && chromium.state !== "ready") {
     return <ChromiumState status={chromium} />;
   }
-  return <Servers sessionId={sessionId} active={active} />;
+  // Keyed, so one session's servers and its share in flight are never drawn
+  // under another: the list is read on a timer and a failed read keeps the old.
+  return <Servers key={sessionId} sessionId={sessionId} active={active} />;
 }
 
 /// Chromium is fetched after install (see chromium.rs), and this is where the
