@@ -70,8 +70,8 @@ struct ImageViewer: View {
         }
     }
 
-    /// Pages side by side, slid by offset rather than a paging ScrollView, which
-    /// ignores its starting page on first layout and opens on the wrong picture.
+    /// Pages side by side, slid by offset rather than a paging ScrollView, so one
+    /// drag owns both paging and the pull to close and the two never split a touch.
     private func pager(_ current: Int, dragging: Bool) -> some View {
         GeometryReader { geo in
             HStack(spacing: 0) {
