@@ -55,7 +55,7 @@ Linear puts uploads *in* the description's markdown, pointing at `uploads.linear
 **A sidebar row under New task, a main-column view — not a session.** Opening it **keeps selection** but drops the sidebar *highlight*, since a lit row would name a session nowhere on screen. The page hides rather than unmounts, so filters and scroll survive the trip. The row is drawn whether or not a tracker is connected: the page's empty state is where connecting is offered, and disconnect lives in settings, whose row only draws when something is connected.
 
 - **The right pane is hidden while the page is up, and the preference kept**: `panelShown = panelOpen && !issuesOpen`. Everything that draws or reads reads `panelShown`; `panelOpen` stays the standing preference.
-- **`SessionHeader` takes `standIn`** and `App` passes `"Issues"`, or the header sits at "New session" over a list of issues.
+- **The titlebar draws no tab row there**: `ViewTabs` is a session's, so `App` puts a spacer in its place.
 - **Clicking a row opens it in the pane beside the list**, off the same key the list was read with, in the same `RightPanel` frame. The picked issue is held as a whole row, not an identifier, so the pane is complete before its own detail read lands. `useSessionIssues` serves both, since a page pick is a one-element link list.
 - **Every route to a session goes through `goToSession`**, which closes the page then navigates. Two buttons closed the page and the chords beside them did not, which made ⌘N and ⌘⇧↑/↓ read as inert.
 - **⌘E only ever closes there**, and the guard lives on the chord, not only in `handleTogglePanel` — ⌘E binds **raw** `togglePanel`, so a guard in that function alone lets the chord sail past into a pane not on screen. Same for the view chords.

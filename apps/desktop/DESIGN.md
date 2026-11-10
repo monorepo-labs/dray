@@ -109,9 +109,9 @@ Black card was tried first, on reasoning that white veil over light page is invi
 
 **Right pane = one frame with tabs, not one panel per view.** [RightPanel](src/components/RightPanel.tsx) own `<aside>`, border, tab row; `ChangesPanel` and `SubagentPanel` = bodies rendering inside it, carry no chrome. `AppShell` have single `panel` slot, so two self-framing panels could only ever be mutually exclusive with two booleans deciding it. Tab row `h-(--titlebar-h)` and carry drag region itself. No close button: `PanelToggle` and ⌘E both close it, matching ⌘B for sidebar. Toggle exported from `RightPanel` but rendered by `App`, because pane not exist before session do and button have to outlive it.
 
-**Changes glyph = plain foreground, not command yellow.** Yellow = app's "this is for you", colour of session standing still behind question. Turn having touched file neither warning nor thing to answer. PR glyph keep its emerald: that one say state of work.
+**Changes glyph = plain foreground, not command yellow** — written for toggle's changes glyph, gone since #462. Yellow = app's "this is for you", colour of session standing still behind question. Turn having touched file neither warning nor thing to answer. PR glyph keep its emerald: that one say state of work.
 
-**Toggle double as changes indicator.** With pane closed and last turn having changed tree, it draw git glyph instead of panel one and its click open _changes_ tab not whichever tab last used — glyph opening something else = lie. ⌘E stay plain toggle: show nothing, so promise nothing. Signal = `turnChangedTree`, cost no git call — both sides of range content-addressed tree ids, so ids that differ _are_ changed tree. Reading panel's own file list instead not work: `useChanges` pause while hidden, exactly when indicator have to be right.
+**Toggle no longer double as changes indicator** (#462). `PanelToggle` draw panel glyph alone, and its click = ⌘E, plain toggle: show nothing, so promise nothing. Git glyph it swapped to after turn changed tree, and `turnChangedTree` behind it, gone.
 
 **No row in changes list open by default.** List = answer to "what did this turn touch", and auto-opening one file by position put arbitrary diff above that list and push rest off screen.
 
@@ -119,7 +119,7 @@ Black card was tried first, on reasoning that white veil over light page is invi
 
 **Tab called `PR`, and it lead when PR is open.** Short form what anyone working on one call it. `tabOrder` put it first when session have **open** PR (draft count, being `OPEN` with `isDraft` set) — at that point session's work about landing, not about this turn. Merged or closed PR don't promote: it record, not something to act on.
 
-Last turn changing tree **don't** enter into it. Changes describe one turn and superseded by next; PR = state of work. Toggle's own click still set tab to match glyph it drew, and that now only thing `handleTogglePanel` do.
+Last turn changing tree **don't** enter into it. Changes describe one turn and superseded by next; PR = state of work. Toggle's click set no tab: `togglePanel` only flip pane, which land on `defaultTab` where reader picked none.
 
 **⌘⌥[ / ⌘⌥] step tab, and legend drawn not hidden.** (⌘⇧[ / ⌘⇧] went to the titlebar's tabs.) Step over `tabs` (what `tabOrder` return) not `PANEL_TABS`, so session with no PR tab cycle two and never land on undrawn one. Keycaps sit **right after tabs**, no label, and refresh button take `ml-auto`. Three cap not four — `[ ]` = one key with two end. Deliberate exception to app's tooltip rule: chord for row of two or three tab = one nobody go looking for.
 
@@ -157,9 +157,7 @@ Last turn changing tree **don't** enter into it. Changes describe one turn and s
 
 Glyph sit **beside rail, ahead of title**, and take **no room when absent** — unlike rail next to it, which hold its slot. Two differ because rail come and go on *same* row as agent work, where branch either have PR or don't: row that never get one would otherwise pay for mark forever. Rail keep outer edge, since it "over to you" and clear when reader deal with it, where this standing fact about branch. Emerald for open, muted `GitPullRequestDraft` for draft, since draft = work not asking to land yet. `title` attribute rather than tooltip: decoration on row that itself a control, and tooltip open every time cursor cross list.
 
-**Toggle's PR glyph count draft, and draw draft's own shape.** `hasOpenPr` = any `state === "OPEN"`, which draft satisfy. `draft` prop true only where **every** open PR is one — session carrying draft beside real PR have something asking to land. Glyph keep emerald either way: shape carry distinction, colour carry "there is something here".
-
-**Panel toggle draw PR over changes.** Two indicators = same promise, so only one can be drawn and PR win: it tab that open first, it state of *work* rather than of last turn, and it survive next prompt landing where changes mark don't. Glyph = **`text-emerald-500`, not `--accent-merge`**: that token is button *fill*, dark enough to carry white text, and at 1.5px stroke on dark background it all but disappeared.
+**Panel toggle draw no PR glyph any more** (#462) — one panel glyph, whatever branch hold. `hasOpenPr` = any `state === "OPEN"`, which draft satisfy, and it still pick pane's default tab.
 
 **Collapsed preview = plain text, so markup come off first.** `firstLine` strip heading marks, emphasis, and link syntax keeping only its text — `(https://…)` half usually longer than words around it and not clickable in truncating span anyway.
 
@@ -203,7 +201,7 @@ Read that as the row's standing budget: **three button**. Fourth want re-measuri
 
 Inline variant — same button along toolbar row, ghost and dimmed — built as mockup and **rejected**. Permanent-but-quiet still permanent: it spend width every turn on thing wanted at end of one.
 
-Icon for `pr` = same one sidebar row and panel toggle draw, so mark and thing it lead to match everywhere.
+Icon for `pr` = same one sidebar row draw, so mark and thing it lead to match everywhere.
 
 Hover delay symmetric (150ms): keep cursor merely passing through from popping row open, and let one overshooting on way out come back without it having closed.
 
@@ -259,7 +257,7 @@ Card name its subject — it and `worktree-failed` the only two that do — brea
 
 **Switch one rung up from composer's own toggle** — `h-4 w-7` against its `h-3 w-5`. There track sit inside toolbar button among other 12px chrome; here it thing being pressed and have to take click on own.
 
-**Copy say what it for and what it never touch, and stop.** Analytics row = two sentence, no itemised field list. Naming every field read as something to be wary of; "analytics" alone read as behavioural tracking. Second sentence — conversation and activity never collected — carry row.
+**Copy say what it for and what it never touch, and stop.** Written for Analytics row, which went with in-app opt-out (#658): two sentence, no itemised field list. Naming every field read as something to be wary of; "analytics" alone read as behavioural tracking. Second sentence — conversation and activity never collected — carried row.
 
 **Group heading arrive with second group, not before.** One heading over only group there was = label for dialog, which `DialogTitle` already is. Separated by **space, not rules**, for reason PR panel's own sections are.
 
