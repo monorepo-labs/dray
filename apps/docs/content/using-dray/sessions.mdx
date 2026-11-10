@@ -95,15 +95,7 @@ A fork copies a whole conversation into a new session, so you can try a differen
 - **Fork in new worktree** (`1`): the copy runs in a new worktree. The worktree starts from your remote's default branch, so it does not have the original session's file changes, only its conversation.
 - **Fork here** (`2`): the copy runs in the same folder as the original.
 
-The fork opens selected. It shows the copied conversation at once and starts its agent at your first send. It sits beside the original in the sidebar.
-
-| Agent | Fork |
-|---|---|
-| Claude Code | Yes |
-| pi | Yes |
-| Grok | Yes |
-| Codex | No |
-| fx | No |
+The fork opens selected. It shows the copied conversation at once and starts its agent at your first send. It sits beside the original in the sidebar. Every agent can be forked.
 
 Fork is disabled while the session's turn is running. If the original takes another turn before you send to the fork, the fork carries that turn too, though its transcript does not show it.
 
@@ -125,7 +117,7 @@ Right-click and choose **Delete**, then **Delete** again at "Are you sure?". Thi
 |---|---|
 | `⌘N` | New task |
 | `⌘⇧↑` / `⌘⇧↓` | Previous / next session, in the order the sidebar draws |
-| `⌃1` … `⌃0` | Jump to a session; hold `⌃` to see each row's number |
+| `⌥1` … `⌥0` | Jump to a session; hold `⌥` to see each row's number |
 | `⌘⌥↑` / `⌘⌥↓` | Jump to the previous / next group |
 | `⌘⌥←` / `⌘⌥→` | Previous / next project filter |
 | `⌘F` | Search sessions |
@@ -140,5 +132,4 @@ The number on Dray's Dock icon counts sessions waiting on you plus sessions fini
 ## Limits
 
 - A fork copies the whole conversation; there is no fork from a chosen message.
-- Codex and fx sessions cannot be forked.
 - Unsettling does not bring back a deleted worktree or browser profile.
