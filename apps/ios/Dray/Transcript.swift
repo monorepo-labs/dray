@@ -222,7 +222,12 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
         case .turnCompleted(let failed, let finalText):
             if current == nil { current = Turn(id: "head-\(e.id)") }
             current?.completed = true
-            if failed { current?.failure = finalText ?? "Turn failed" }
+            if failed {
+                // Empty as well as absent, as the desktop reads it: a harness can
+                // send a failed turn's sentence as "".
+                let said = finalText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                current?.failure = said.isEmpty ? "Turn failed" : said
+            }
             close()
         default:
             break

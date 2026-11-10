@@ -351,10 +351,13 @@ enum Payload: Decodable {
                     failed: try c.decode(String.self, forKey: "status") == "error" && !stop.hasPrefix("aborted"),
                     finalText: try c.decodeIfPresent(String.self, forKey: "finalText"))
             case "user_message":
-                let from = try c.decodeIfPresent([String: String].self, forKey: "from")
+                // Optional values, and never a throw: a relay from this
+                // machine carries `"machine": null`, which `[String: String]`
+                // refuses — and a throw here costs the prompt, not its label.
+                let from = (try? c.decodeIfPresent([String: String?].self, forKey: "from")) ?? nil
                 self = .userMessage(
                     text: try c.decode(String.self, forKey: "text"),
-                    fromTitle: from?["title"], fromId: from?["sessionId"],
+                    fromTitle: from?["title"] ?? nil, fromId: from?["sessionId"] ?? nil,
                     queued: (try? c.decode(Bool.self, forKey: "queued")) ?? false,
                     images: decodeImages(c))
             case "assistant_text":

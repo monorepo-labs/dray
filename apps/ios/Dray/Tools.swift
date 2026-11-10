@@ -84,6 +84,7 @@ private let groupVerbs: [String: (String, String)] = [
     "BashOutput": ("Reading", "Read"), "KillShell": ("Killing", "Killed"),
     "WebSearch": ("Searching", "Searched"), "web_search": ("Searching", "Searched"),
     "Skill": ("Reading", "Read"), "skill": ("Reading", "Read"), "read_tool_result": ("Reading", "Read"),
+    "TodoWrite": ("Updating", "Updated"), "todo_write": ("Updating", "Updated"),
 ]
 
 /// "Reading" live, "Read" once settled. An MCP tool reads "MCP", as a shell reads "Bash".
