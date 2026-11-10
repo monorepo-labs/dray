@@ -15,11 +15,10 @@ enum Theme {
     static let card = Color(hex: 0x1A1A1A)
     /// `--muted`: one step above a card — the sent bubble, chips, second buttons.
     static let raised = Color(hex: 0x262626)
-    /// A control sitting on a raised surface: the round and pill buttons in a sheet's cards.
-    static let control = Color(hex: 0x333333)
     /// `--surface-selected`: the current row.
     static let selected = Color(hex: 0x2B2B2B)
-    /// An icon's tile on a raised card: a server, Add server, Scan QR code.
+    /// An icon's tile or a control on a raised card: a server, Add server,
+    /// Scan QR code, Local servers' round and pill buttons.
     static let tile = Color(hex: 0x333333)
     /// A switch's track when off.
     static let off = Color(hex: 0x3A3A3A)
@@ -311,7 +310,7 @@ struct CircleButtonStyle: ButtonStyle {
             .font(Theme.Font.pill.font)
             .foregroundStyle(Theme.text)
             .frame(width: 32, height: 32)
-            .background(Theme.control, in: Circle())
+            .background(Theme.tile, in: Circle())
             .contentShape(Circle())
             .pressed(configuration.isPressed)
     }

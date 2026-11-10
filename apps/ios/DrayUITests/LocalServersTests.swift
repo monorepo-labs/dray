@@ -97,14 +97,14 @@ final class LocalServersTests: XCTestCase {
         let server = app.staticTexts["localhost:\(port)"]
         XCTAssertTrue(server.waitForExistence(timeout: 15), "the dev server is not listed")
         snap(app, "1-list")
-        app.buttons["Get public link"].tap()
+        app.buttons["Get public link"].firstMatch.tap()
         snap(app, "2-creating")
 
         if expectFailure {
             let reason = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Could not set up the tunnel'")).firstMatch
             XCTAssertTrue(reason.waitForExistence(timeout: 30), "no failure sentence")
             snap(app, "3-failed")
-            XCTAssertTrue(app.buttons["Get public link"].isEnabled, "no retry after a failure")
+            XCTAssertTrue(app.buttons["Get public link"].firstMatch.isEnabled, "no retry after a failure")
             return
         }
 
@@ -118,7 +118,7 @@ final class LocalServersTests: XCTestCase {
         copy.tap()
         XCTAssertTrue(app.buttons["Copied"].waitForExistence(timeout: 3))
         app.buttons["Stop sharing"].tap()
-        XCTAssertTrue(app.buttons["Get public link"].waitForExistence(timeout: 15), "stop left the link up")
+        XCTAssertTrue(app.buttons["Stop sharing"].waitForNonExistence(timeout: 15), "stop left the link up")
         snap(app, "5-stopped")
     }
 

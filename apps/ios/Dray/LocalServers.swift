@@ -116,7 +116,7 @@ struct LocalServersView: View {
                     Label("Get public link", systemImage: "link").labelStyle(GapLabel())
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(PillButtonStyle(fill: Theme.control, height: 40))
+                .buttonStyle(PillButtonStyle(fill: Theme.tile, height: 40))
                 .disabled(sharing != nil)
             }
             if let failure = failures[s.port] {
