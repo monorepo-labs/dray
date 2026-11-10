@@ -39,15 +39,24 @@ private struct PermissionAsk: View {
     @State private var busy = false
 
     var body: some View {
-        let beside = request.description ?? request.input.flatMap(toolArgument)
+        let argument = request.input.flatMap(toolArgument)
+        let beside = request.description ?? argument
         VStack(alignment: .leading, spacing: 6) {
-            (Text(request.displayName ?? request.toolName).foregroundColor(Theme.text)
-                + Text(beside.map { " \($0)" } ?? "").foregroundColor(Theme.text.opacity(0.5)))
-                .font(Theme.Font.subhead)
-                .lineLimit(3)
-                .padding(.horizontal, 2)
-                .padding(.top, 2)
-                .padding(.bottom, Theme.Space.xs)
+            VStack(alignment: .leading, spacing: 2) {
+                (Text(request.displayName ?? request.toolName).foregroundColor(Theme.text)
+                    + Text(beside.map { " \($0)" } ?? "").foregroundColor(Theme.text.opacity(0.5)))
+                    .font(Theme.Font.subhead)
+                    .lineLimit(3)
+                // What Allow will run, whenever the description put something else in its place.
+                if let argument, argument != beside {
+                    Text(argument).font(Theme.Font.footnote).foregroundStyle(Theme.text.opacity(0.5))
+                        .lineLimit(4)
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(.horizontal, 2)
+            .padding(.top, 2)
+            .padding(.bottom, Theme.Space.xs)
             ForEach(request.options, id: \.id) { option in
                 Button {
                     busy = true
@@ -87,9 +96,24 @@ private struct QuestionsAsk: View {
     @State private var busy = false
 
     private var q: Question { request.questions[index] }
-    private var last: Bool { index == request.questions.count - 1 }
+    private var last: Bool { index >= request.questions.count - 1 }
 
     var body: some View {
+        // A request may carry no questions; the agent still waits on an answer, so Skip sends one.
+        if request.questions.isEmpty {
+            HStack {
+                Text("The agent asked nothing.").font(Theme.Font.subhead).foregroundStyle(Theme.secondary)
+                Spacer(minLength: 0)
+                Button("Skip") { send() }.font(Theme.Font.subhead).foregroundStyle(Color.white.opacity(0.5)).buttonStyle(.plain)
+            }
+            .padding(2)
+            .disabled(busy)
+        } else {
+            questions
+        }
+    }
+
+    private var questions: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                 Text(q.question).font(Theme.Font.subhead).foregroundStyle(Theme.text)

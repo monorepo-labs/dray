@@ -81,7 +81,8 @@ struct SessionList: View {
         .page()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { header }
-        .task(id: mode) {
+        // Again once a server comes up: a view opened before it connected read nothing from it.
+        .task(id: "\(mode) \(store.servers.filter { store.serverState[$0.id] == .connected }.count)") {
             if mode == .drafts { await loadDrafts() }
             if mode == .settled { await store.loadSettled() }
         }

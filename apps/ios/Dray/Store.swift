@@ -290,7 +290,8 @@ final class Store {
         guard let c = connections[server] else { return }
         do {
             let list: [SessionItem] = try await c.call("list_session_index_items", ["archived": false])
-            for key in items.keys where key.server == server { items[key] = nil }
+            // Settled rows are the settled view's to replace; this read never holds them.
+            for key in items.keys where key.server == server && items[key]?.archived != true { items[key] = nil }
             for item in list { store(SessionKey(server: server, id: item.sessionId), item) }
             loadErrors[server] = nil
         } catch {

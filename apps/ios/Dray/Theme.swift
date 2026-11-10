@@ -92,25 +92,48 @@ enum Theme {
 }
 
 /// One rung of the type scale: a size, the line it sits on, a weight, and the
-/// Dynamic Type style it scales with.
+/// Dynamic Type style it scales with. Sized when drawn, never cached, so a
+/// text-size change in Settings lands without a relaunch.
 struct TypeStyle {
-    let ui: UIFont
-    /// Added between lines so wrapped text sits on the scale's line height.
-    let spacing: CGFloat
+    let size: CGFloat
+    let leading: CGFloat
+    let weight: SwiftUI.Font.Weight
+    let style: UIFont.TextStyle
 
-    init(_ size: CGFloat, _ leading: CGFloat, _ weight: UIFont.Weight, _ style: UIFont.TextStyle) {
-        let metrics = UIFontMetrics(forTextStyle: style)
-        ui = metrics.scaledFont(for: .systemFont(ofSize: size, weight: weight))
-        spacing = max(0, metrics.scaledValue(for: leading) - ui.lineHeight)
+    init(_ size: CGFloat, _ leading: CGFloat, _ weight: SwiftUI.Font.Weight, _ style: UIFont.TextStyle) {
+        (self.size, self.leading, self.weight, self.style) = (size, leading, weight, style)
     }
 
-    var font: SwiftUI.Font { SwiftUI.Font(ui) }
+    /// The font at a text size; the app's current one where none is given.
+    func font(_ traits: UITraitCollection? = nil) -> SwiftUI.Font {
+        .system(size: UIFontMetrics(forTextStyle: style).scaledValue(for: size, compatibleWith: traits), weight: weight)
+    }
+
+    /// Added between lines so wrapped text sits on the scale's line height.
+    func spacing(_ traits: UITraitCollection? = nil) -> CGFloat {
+        let metrics = UIFontMetrics(forTextStyle: style)
+        let line = UIFont.systemFont(ofSize: metrics.scaledValue(for: size, compatibleWith: traits)).lineHeight
+        return max(0, metrics.scaledValue(for: leading, compatibleWith: traits) - line)
+    }
+
+    var font: SwiftUI.Font { font() }
+}
+
+/// Sets a rung at the text size in the environment, so it follows a change live.
+private struct TypeModifier: ViewModifier {
+    let style: TypeStyle
+    @Environment(\.dynamicTypeSize) private var dynamic
+
+    func body(content: Content) -> some View {
+        let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(dynamic))
+        content.font(style.font(traits)).lineSpacing(style.spacing(traits))
+    }
 }
 
 extension View {
     /// A rung of the type scale, line height included.
     func font(_ style: TypeStyle) -> some View {
-        font(style.font).lineSpacing(style.spacing)
+        modifier(TypeModifier(style: style))
     }
 }
 
