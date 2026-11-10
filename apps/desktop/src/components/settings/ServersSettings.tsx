@@ -26,7 +26,8 @@ import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { useCopied } from "@/hooks/useCopied";
 import { AUTO_EXTEND_MINUTES, boatAsleep, resumeBoat, setBoatPrefs, useBoatPrefs } from "@/lib/boat";
-import { useLocalServer, useServers } from "@/lib/servers";
+import { MACHINE } from "@/lib/platform";
+import { serverName, useLocalServer, useServers } from "@/lib/servers";
 import { invoke, listen, LOCAL } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { Failure, Fix, RemoteAccess, ServerInfo, ServerStatus, Stage } from "@/types/events";
@@ -374,7 +375,7 @@ function ThisMacRow() {
   const starting = remote.on && !remote.address && !remote.error;
   const down = server?.status === "disconnected";
   const detail = down ? (
-    (server.error ?? "The server on this Mac is not running.")
+    (server.error ?? `The server on this ${MACHINE} is not running.`)
   ) : !remote.on ? (
     "Runs your sessions, with Dray open or closed"
   ) : starting ? (
@@ -383,12 +384,12 @@ function ThisMacRow() {
       Starting remote access. The first time takes about 30 seconds.
     </span>
   ) : (
-    (remote.error ?? "Other Macs can reach it while this Mac is awake, with Dray open or closed.")
+    (remote.error ?? `Other ${MACHINE}s can reach it while this ${MACHINE} is awake, with Dray open or closed.`)
   );
 
   return (
     <Row
-      name="This Mac"
+      name={serverName(LOCAL)}
       detail={detail}
       status={server?.status ?? "connected"}
       action={
@@ -478,7 +479,7 @@ function PairButton() {
           <DialogHeader>
             <DialogTitle>Pair a phone</DialogTitle>
             <DialogDescription>
-              Point the iPhone's Camera at this, or scan it from Dray's Add server. Anyone holding it can use this Mac.
+              Point the iPhone's Camera at this, or scan it from Dray's Add server. Anyone holding it can use this {MACHINE}.
             </DialogDescription>
           </DialogHeader>
           {/* White under the code whatever the theme: a scanner reads dark on light. */}
@@ -926,7 +927,7 @@ function HostKeyDialog({
         <DialogHeader>
           <DialogTitle>Is this the right server?</DialogTitle>
           <DialogDescription>
-            This Mac has never connected to {fix.host}. Its {fix.keyType} key fingerprint is:
+            This {MACHINE} has never connected to {fix.host}. Its {fix.keyType} key fingerprint is:
           </DialogDescription>
         </DialogHeader>
         <code className="rounded-md border border-border px-2 py-1.5 font-mono text-code break-all dark:border-input">

@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 import { channel } from "@/lib/channel";
+import { MACHINE } from "@/lib/platform";
 import { invoke, listen, LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
 import type { ServerInfo } from "@/types/events";
 
@@ -74,9 +75,10 @@ export function useLocalServer(): ServerInfo | null {
   return useSyncExternalStore(subscribeServers, localServer, localServer);
 }
 
-/// What the reader calls a server: its name, or "This Mac" — the machine the app runs on.
+/// What the reader calls a server: its name, or "This Mac" ("This machine" off a
+/// Mac) — the machine the app runs on.
 export function serverName(id: ServerId): string {
-  if (id === LOCAL) return "This Mac";
+  if (id === LOCAL) return `This ${MACHINE}`;
   return servers.find((s) => s.id === id)?.name ?? id;
 }
 
