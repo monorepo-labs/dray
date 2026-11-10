@@ -155,7 +155,7 @@ import BoatNotice from "@/components/composer/BoatNotice";
 import CloudNotice from "@/components/composer/CloudNotice";
 import BoatWarnings from "@/components/BoatWarnings";
 import { boatAsleep, restoreHeld } from "@/lib/boat";
-import { usePlacing } from "@/lib/cloud";
+import { onCloud, useCloud, useCloudPicks, usePlacing } from "@/lib/cloud";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
 import { serverConnected, serverName, useServers } from "@/lib/servers";
@@ -459,6 +459,11 @@ function App() {
   // Stopped or waking, which a send can do something about, unlike offline.
   const sleepingBoat = allServers.find((s) => s.id === activeServer && boatAsleep(s));
   const placing = usePlacing();
+  useCloud();
+  useCloudPicks();
+  // A new task bound for Cloud runs wherever placement puts it, so an agent
+  // missing from the picked checkout's machine says nothing about it.
+  const cloudTask = !selectedSessionId && onCloud(projects, projectPath);
   useEffect(restoreHeld, []);
   // A turn or a background task on that server, which auto-extend keeps alive.
   // Read off the live maps, which hold every session whatever the sidebar
@@ -3088,7 +3093,7 @@ function App() {
           notice={
             sleepingBoat ? null : offlineServer ? (
               <ServerOfflineNotice server={offlineServer} />
-            ) : !selectedSessionId && missingAgent ? (
+            ) : !selectedSessionId && missingAgent && !cloudTask ? (
               <AgentMissingNotice agent={missingAgent} />
             ) : loggedOutAgent && authTurn && selectedSession ? (
               <LoginExpiredNotice

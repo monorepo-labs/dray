@@ -13,6 +13,7 @@ import WorktreeToggle from "@/components/composer/WorktreeToggle";
 import { Button } from "@/components/ui/button";
 import type { ServerId } from "@/lib/transport";
 import ShortcutKeys from "@/components/ShortcutKeys";
+import { onCloud, useCloud, useCloudPicks } from "@/lib/cloud";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type {
@@ -127,6 +128,11 @@ export default function ComposerToolbar({
   isNewSession,
   busy,
 }: ComposerToolbarProps) {
+  useCloud();
+  useCloudPicks();
+  // Placement picks the checkout, so a branch checked out here would be one
+  // the task never runs on.
+  const cloud = onCloud(projects, projectPath);
   return (
     <div className="flex min-w-0 items-center gap-0.5 px-1">
       {/* No radius override: `icon-sm` already carries the app's rounded-square,
@@ -194,7 +200,7 @@ export default function ComposerToolbar({
                     from {branches.defaultBase}
                   </span>
                 )
-              ) : (
+              ) : cloud ? null : (
                 // Relative, so the switch popover anchors to the picker rather
                 // than to the window.
                 <div className="relative flex min-w-0 items-center">

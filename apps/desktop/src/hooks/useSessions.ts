@@ -843,6 +843,11 @@ const handleSendMsg = async (
   // one and take minutes, so the prompt sits on disk meanwhile as it does
   // through a resume.
   let placed: string | null = null;
+  // A new task is a move like any other: the composer is about to belong to
+  // it, so an action still out from the new-task view must not report into
+  // it. Bumped before placement awaits, since the caller stamps the move it
+  // waits on the moment this returns its promise.
+  if (isNewSession) navGen.current++;
   const before = navGen.current;
   const remote = projects.find((p) => p.path === cwd)?.remote;
   if (isNewSession && remote && onCloud(projects, cwd)) {
@@ -871,9 +876,6 @@ const handleSendMsg = async (
       // out from an earlier click can land afterwards and roll this one away.
       selectionRequestRef.current = sessionId;
       setSelectedSessionId(sessionId);
-      // A move like any other: the composer now belongs to this session, so
-      // an action still out from the new-task view must not report into it.
-      navGen.current++;
     }
   }
   // Taken after the mint, so this send's own failure still reports.

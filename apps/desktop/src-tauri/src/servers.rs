@@ -1226,12 +1226,17 @@ fn valid_sandbox(id: &str) -> bool {
 /// Lists the machines and brings the cloud connections in line: a row per
 /// machine, parked while it is stopped, gone once the control plane drops it.
 async fn sync_cloud() -> Result<(), String> {
-    let _one = CLOUD_SYNC.lock().await;
     *CLOUD_LISTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
     let (Some(key), true) = (cloud_key().await, crate::settings::read().await.dray_cloud) else {
         return Ok(());
     };
     let listed = cloud::list(&key).await;
+    // Read again under the lock the switch takes: turned off while the list
+    // was out, the answer would add machines nothing turns off again.
+    let _one = CLOUD_SYNC.lock().await;
+    if !crate::settings::read().await.dray_cloud {
+        return Ok(());
+    }
     let error = listed.as_ref().err().cloned();
     let changed = std::mem::replace(&mut *CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()), error.clone()) != error;
     if changed {
@@ -1372,6 +1377,7 @@ pub async fn set_cloud_key(key: String) -> Result<(), String> {
 /// them, the way a server's own switch does; the machines stop on their timer.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_cloud_on(on: bool) -> Result<(), String> {
+    let one = CLOUD_SYNC.lock().await;
     crate::settings::update(|s| s.dray_cloud = on).await.map_err(|e| format!("{e:#}"))?;
     let touched = {
         let mut list = conns();
@@ -1386,6 +1392,7 @@ pub async fn set_cloud_on(on: bool) -> Result<(), String> {
     if touched {
         save().await?;
     }
+    drop(one);
     announce();
     announce_cloud().await;
     if on {
