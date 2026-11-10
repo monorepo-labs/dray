@@ -147,7 +147,9 @@ extension Turn {
             }
         }
         if finalLifted, let finalText { out += shown(finalText) }
-        return out
+        // One page per picture: a tap finds it by ref, so a repeat would open on the first.
+        var seen = Set<ImageRef>()
+        return out.filter { seen.insert($0.ref).inserted }
     }
 }
 

@@ -13,6 +13,37 @@ extension EnvironmentValues {
     withTransaction(t, change)
 }
 
+/// The pictures a viewer pages through, frozen at the tap: a live turn adding
+/// one never moves the pages under the reader.
+struct Gallery: Identifiable {
+    let id = UUID()
+    let shots: [Shot]
+    let start: Int
+}
+
+extension View {
+    /// The image viewer over everything while `gallery` is set.
+    func imageViewer(_ gallery: Binding<Gallery?>) -> some View {
+        modifier(ViewerCover(gallery: gallery))
+    }
+}
+
+private struct ViewerCover: ViewModifier {
+    @Environment(Store.self) private var store
+    @Environment(\.imageServer) private var server
+    @Binding var gallery: Gallery?
+
+    func body(content: Content) -> some View {
+        content.fullScreenCover(item: $gallery) { g in
+            ImageViewer(shots: g.shots, start: g.start, store: store, server: server) {
+                instantly { gallery = nil }
+            }
+            .presentationBackground(.clear)
+            .environment(\.imageServer, server)
+        }
+    }
+}
+
 /// A turn's pictures, full screen: swipe to page, pinch or double-tap to zoom,
 /// drag down to close. Bar and strip step aside while zoomed or dragged.
 struct ImageViewer: View {
@@ -63,9 +94,12 @@ struct ImageViewer: View {
         .statusBarHidden(!chrome)
         .animation(Theme.motion, value: chrome)
         .onAppear { withAnimation(Theme.motion) { shown = true } }
+        // Each page on its own, so a slow link never holds up the rest.
         .task {
-            for i in [current] + shots.indices.filter({ $0 != current }) where images[i] == nil {
-                await load(i)
+            await withTaskGroup(of: Void.self) { group in
+                for i in shots.indices where images[i] == nil {
+                    group.addTask { await load(i) }
+                }
             }
         }
     }
@@ -198,7 +232,7 @@ struct ImageViewer: View {
                 thumbs(current)
                 ScrollView(.horizontal) { thumbs(current) }.scrollIndicators(.never)
             }
-            .onChange(of: current) { withAnimation(Theme.motion) { proxy.scrollTo(current, anchor: .center) } }
+            .onChange(of: current, initial: true) { withAnimation(Theme.motion) { proxy.scrollTo(current, anchor: .center) } }
         }
     }
 

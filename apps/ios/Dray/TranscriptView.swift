@@ -133,13 +133,10 @@ struct TranscriptView: View {
 /// One turn: the prompt, its work folded behind a summary line once the
 /// turn has finished, and the final answer. The desktop's `TurnBlock`.
 struct TurnView: View {
-    @Environment(Store.self) private var store
-    @Environment(\.imageServer) private var server
     let turn: Turn
     /// Per stretch between queued prompts, by index: a running turn only appends.
     @State private var open: Set<Int> = []
-    /// The gallery index the image viewer is open on.
-    @State private var viewing: Int?
+    @State private var viewing: Gallery?
 
     /// Below this many rows a fold costs a tap to reveal less than the line it stands in for.
     private static let collapseMin = 3
@@ -182,16 +179,11 @@ struct TurnView: View {
             if let failure = turn.failure { FailureRow(text: failure) }
         }
         .environment(\.openImage) { ref in
-            guard let i = turn.gallery.firstIndex(where: { $0.ref == ref }) else { return }
-            instantly { viewing = i }
+            let shots = turn.gallery
+            guard let i = shots.firstIndex(where: { $0.ref == ref }) else { return }
+            instantly { viewing = Gallery(shots: shots, start: i) }
         }
-        .fullScreenCover(isPresented: Binding(get: { viewing != nil }, set: { if !$0 { viewing = nil } })) {
-            ImageViewer(shots: turn.gallery, start: viewing ?? 0, store: store, server: server) {
-                instantly { viewing = nil }
-            }
-            .presentationBackground(.clear)
-            .environment(\.imageServer, server)
-        }
+        .imageViewer($viewing)
     }
 
     private func toggle(_ i: Int) {
@@ -402,20 +394,25 @@ struct InlineImage: View {
     }
 }
 
-/// A picture that opens its turn's viewer on tap; outside a turn, just the picture.
+/// A picture that opens its turn's viewer on tap; outside a turn (a PR comment),
+/// a viewer of its own.
 struct ImageButton<Content: View>: View {
     @Environment(\.openImage) private var open
     let ref: ImageRef
     @ViewBuilder let content: Content
+    @State private var alone: Gallery?
 
     var body: some View {
-        if let open {
-            Button { open(ref) } label: { content }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open image")
-        } else {
-            content
-        }
+        Button {
+            if let open {
+                open(ref)
+            } else {
+                instantly { alone = Gallery(shots: [Shot(ref: ref, verb: "Image", target: nil)], start: 0) }
+            }
+        } label: { content }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open image")
+            .imageViewer($alone)
     }
 }
 
