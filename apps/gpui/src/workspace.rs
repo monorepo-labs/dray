@@ -46,6 +46,10 @@ pub struct Workspace {
     asks: HashMap<String, HashSet<String>>,
     /// Sessions holding background tasks, whose asks outlive the turn.
     tasked: HashSet<String>,
+    /// Index events seen while a list read is in flight, laid over its answer.
+    replay: Option<Vec<(String, Value)>>,
+    /// Counts list reads, so only the newest one's answer lands.
+    reads: u64,
     pub selected: Option<String>,
     pub connection: Connection,
     pub sidebar_open: bool,
@@ -84,6 +88,8 @@ impl Workspace {
             live: Live::default(),
             asks: HashMap::new(),
             tasked: HashSet::new(),
+            replay: None,
+            reads: 0,
             selected: None,
             connection: Connection::Connecting,
             sidebar_open: true,
@@ -93,15 +99,26 @@ impl Workspace {
     }
 
     fn on_signal(&mut self, signal: Signal, cx: &mut Context<Self>) {
-        match signal {
-            Signal::Up => self.connection = Connection::Up,
-            Signal::Down(why) => self.connection = Connection::Down(why),
+        let changed = match signal {
+            Signal::Up => {
+                self.connection = Connection::Up;
+                true
+            }
+            Signal::Down(why) => {
+                self.connection = Connection::Down(why);
+                true
+            }
             Signal::Event { name, payload } => self.on_event(&name, payload, cx),
+        };
+        // Deltas stream by the hundred and change nothing here; a redraw for
+        // each would regroup the whole list per token.
+        if changed {
+            cx.notify();
         }
-        cx.notify();
     }
 
-    fn on_event(&mut self, name: &str, payload: Value, cx: &mut Context<Self>) {
+    /// Applies one server event. Answers whether anything the view draws moved.
+    fn on_event(&mut self, name: &str, payload: Value, cx: &mut Context<Self>) -> bool {
         match name {
             // Opens every connect. Replaces what is held, and the index is
             // re-read, since status lives there rather than in this frame.
@@ -119,11 +136,13 @@ impl Workspace {
                 self.live.status.clear();
                 self.sync_asking();
                 self.reload(cx);
+                true
             }
             "agent_event" => match payload["payload"]["type"].as_str() {
                 Some("permission_requested" | "questions_asked") => {
                     self.note_ask(&payload);
                     self.sync_asking();
+                    true
                 }
                 Some("permission_decided") => {
                     let session = payload["sessionId"].as_str().unwrap_or_default();
@@ -132,6 +151,7 @@ impl Workspace {
                         open.remove(request);
                     }
                     self.sync_asking();
+                    true
                 }
                 // A turn that ended with a task open kept its asks, since the
                 // task's subagent could be the one asking; this is the other half.
@@ -142,14 +162,31 @@ impl Workspace {
                         self.tasked.insert(session);
                     } else {
                         self.tasked.remove(&session);
-                        if self.live.status.get(&session) != Some(&SessionStatus::InProgress) {
+                        if self.running(&session) == Some(false) {
                             self.asks.remove(&session);
                             self.sync_asking();
                         }
                     }
+                    true
                 }
-                _ => {}
+                _ => false,
             },
+            "session_status" | "session_created" | "session_changed" | "session_title" => {
+                // A list read in flight answers with the index as it was before
+                // this event, so the event is kept and laid over that answer.
+                if let Some(replay) = &mut self.replay {
+                    replay.push((name.to_string(), payload.clone()));
+                }
+                self.apply_index_event(name, payload);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The events that change the index, applied to the list held.
+    fn apply_index_event(&mut self, name: &str, payload: Value) {
+        match name {
             "session_status" => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
@@ -198,6 +235,19 @@ impl Workspace {
         }
     }
 
+    /// Whether a session's turn is running, or `None` while that is unknown:
+    /// between a reconnect and the list it re-reads, the list held is stale
+    /// and no live reading has arrived yet.
+    fn running(&self, session: &str) -> Option<bool> {
+        if let Some(status) = self.live.status.get(session) {
+            return Some(*status == SessionStatus::InProgress);
+        }
+        if self.replay.is_some() {
+            return None;
+        }
+        self.items.iter().find(|i| i.session_id == session).map(|i| i.status == SessionStatus::InProgress)
+    }
+
     fn note_ask(&mut self, frame: &Value) {
         let session = frame["sessionId"].as_str().unwrap_or_default().to_string();
         let request = frame["payload"]["requestId"].as_str().unwrap_or_default().to_string();
@@ -209,22 +259,44 @@ impl Workspace {
     }
 
     /// Re-reads the active list and the projects, as the React app does on
-    /// every `live_state`.
+    /// every `live_state`. The two land apart, since projects wait on git.
     fn reload(&mut self, cx: &mut Context<Self>) {
+        self.reads += 1;
+        let read = self.reads;
+        self.replay = Some(Vec::new());
         let items = self.wire.invoke("list_session_index_items", json!({ "archived": false }));
-        let projects = self.wire.invoke("list_projects", json!({}));
         cx.spawn(async move |this, cx| {
-            let (items, projects) = (items.await, projects.await);
+            let items = items.await;
             this.update(cx, |this, cx| {
+                // A later reconnect started a read of its own; this answer is older.
+                if read != this.reads {
+                    return;
+                }
+                let replay = this.replay.take().unwrap_or_default();
                 match items.map(serde_json::from_value::<Vec<SessionIndexItem>>) {
-                    Ok(Ok(items)) => this.items = items,
+                    Ok(Ok(items)) => {
+                        this.items = items;
+                        for (name, payload) in replay {
+                            this.apply_index_event(&name, payload);
+                        }
+                    }
                     Ok(Err(e)) => log::error!("session list in a shape this build cannot read: {e}"),
                     Err(e) => log::error!("list_session_index_items: {e}"),
                 }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+
+        let projects = self.wire.invoke("list_projects", json!({}));
+        cx.spawn(async move |this, cx| {
+            let projects = projects.await;
+            this.update(cx, |this, cx| {
                 if let Ok(Ok(projects)) = projects.map(serde_json::from_value::<Vec<Project>>) {
                     this.projects = projects;
+                    cx.notify();
                 }
-                cx.notify();
             })
             .ok();
         })
