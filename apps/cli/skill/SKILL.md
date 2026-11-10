@@ -463,12 +463,17 @@ dray server run          # in this terminal instead
 dray server status       # running or not, and its tunnel address
 dray server tunnel on    # a public address in front of it, the same across restarts; off takes it down
 dray server pair         # a QR code the Dray iPhone app scans to add this server
+dray server assistant add   # a URL and one-time code to connect Grok, Claude or ChatGPT over MCP; --read-only
+dray server assistant ls    # the assistants signed in; revoke <id> signs one out
 dray server stop         # stop it and remove it from the background
 ```
 
 What makes a machine with no Dray app — Linux, or a headless Mac — a Dray
 server. On a Mac with the app, the app runs the server and these are refused,
-apart from `tunnel`, which is the Remote access button in Settings → Servers.
+apart from `tunnel`, which is the Remote access button in Settings → Servers,
+and `assistant`, which is Connect an assistant there. The code `assistant add`
+prints is a sign-in for the user's own assistant: hand it to the user, never
+to a service yourself.
 
 ## Reporting back to the user
 

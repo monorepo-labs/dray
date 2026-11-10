@@ -465,6 +465,9 @@ fn this_machine_only(request: &Request) -> bool {
             | Request::SetServerOn(_)
             | Request::SetRemoteAccess(_)
             | Request::ShareMachines(_)
+            | Request::PairAssistant(_)
+            | Request::ListAssistants
+            | Request::RevokeAssistant(_)
     )
 }
 
@@ -719,6 +722,30 @@ mod elsewhere {
     }
 }
 
+/// Answers a request the way the socket does, for a caller already inside
+/// this process: an MCP assistant's start, send and stop take the same path as
+/// `dray session new`, `send` and `stop`.
+#[cfg(any(feature = "serve", feature = "desktop"))]
+pub async fn answer(request: Request, app: &Sink) -> Response {
+    route(request, app).await.unwrap_or_else(|e| Response::error(format!("{e:#}")))
+}
+
+#[cfg(any(feature = "serve", feature = "desktop"))]
+fn assistants(list: Result<Vec<crate::mcp::AssistantSummary>, String>) -> Result<Response> {
+    let assistants = list
+        .map_err(anyhow::Error::msg)?
+        .into_iter()
+        .map(|a| dray_proto::AssistantSummary {
+            id: a.id,
+            name: a.name,
+            access: serde_json::to_value(a.access).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
+            created: a.created,
+            last_used: a.last_used,
+        })
+        .collect();
+    Ok(Response::Assistants { assistants })
+}
+
 async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
     match request {
         Request::CreateSession(create) => create_session(create, None, app).await,
@@ -753,6 +780,20 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             let machines = names.filter_map(|m| m["name"].as_str().map(str::to_string)).collect();
             Ok(Response::MachinesShared { on: share.on, machines })
         }
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        Request::PairAssistant(pair) => {
+            let pairing = crate::mcp::pair(app.clone(), pair.read_only, None).await.map_err(anyhow::Error::msg)?;
+            Ok(Response::AssistantPairing {
+                url: pairing.url,
+                code: pairing.code,
+                expires_in_secs: pairing.expires_in_secs,
+                read_only: pair.read_only,
+            })
+        }
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        Request::ListAssistants => assistants(crate::mcp::assistants().await),
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        Request::RevokeAssistant(revoke) => assistants(crate::mcp::revoke(app.clone(), revoke.id).await),
         Request::SetAside(aside) => {
             crate::set_session_flags(&aside.session_id, None, None, None, Some(aside.aside), app.clone()).await?;
             answer_session(&aside.session_id).await

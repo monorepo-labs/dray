@@ -1424,6 +1424,7 @@ dependencies = [
  "futures-util",
  "gdkx11",
  "gtk",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "libc",

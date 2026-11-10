@@ -43,6 +43,25 @@ pub enum ServerCommand {
     },
     /// Show a QR code the Dray iPhone app scans to add this server.
     Pair,
+    /// Connect Grok, Claude or ChatGPT to this server over MCP, list the
+    /// ones connected, or sign one out.
+    #[command(subcommand)]
+    Assistant(AssistantCommand),
+}
+
+#[derive(Subcommand)]
+pub enum AssistantCommand {
+    /// Print the MCP URL to add as a custom connector, and a one-time code
+    /// its sign-in asks for. Turns on the public address if it is off.
+    Add {
+        /// Let it list and read sessions, never start, message or stop them.
+        #[arg(long)]
+        read_only: bool,
+    },
+    /// List the assistants signed in to this server.
+    Ls,
+    /// Sign an assistant out, by the id `ls` shows.
+    Revoke { id: String },
 }
 
 pub fn server(command: ServerCommand) -> Result<(), String> {
@@ -54,6 +73,54 @@ pub fn server(command: ServerCommand) -> Result<(), String> {
         ServerCommand::Status => service(ServiceCommand::Status),
         ServerCommand::Tunnel { state } => service(ServiceCommand::Tunnel { state }),
         ServerCommand::Pair => pair(),
+        ServerCommand::Assistant(command) => assistant(command),
+    }
+}
+
+/// Asks the server whose home this is, like [`set_remote_access`]: pairing
+/// lives in that server's memory.
+fn assistant(command: AssistantCommand) -> Result<(), String> {
+    use dray_proto::{AssistantRef, PairAssistant, Request, Response};
+    let endpoint = dray_proto::endpoint().ok_or("could not resolve your home directory")?;
+    let revoking = matches!(command, AssistantCommand::Revoke { .. });
+    let request = match command {
+        AssistantCommand::Add { read_only } => {
+            eprintln!("{DIM}Starting the public address if it is off. The first time takes about a minute.{RESET}");
+            Request::PairAssistant(PairAssistant { read_only })
+        }
+        AssistantCommand::Ls => Request::ListAssistants,
+        AssistantCommand::Revoke { id } => Request::RevokeAssistant(AssistantRef { id }),
+    };
+    match super::send_to(&endpoint, request)? {
+        Response::AssistantPairing { url, code, expires_in_secs, read_only } => {
+            let reach = if read_only {
+                "Read-only: it can list and read sessions."
+            } else {
+                "Full access: it can start, message and stop sessions, and answer their questions."
+            };
+            println!(
+                "In Grok, Claude or ChatGPT, add a custom connector with this URL:\n\n   {url}\n\n\
+                 When it asks you to sign in, enter this code:\n\n   {code}\n\n\
+                 {DIM}Good once, for {} minutes. {reach}{RESET}",
+                expires_in_secs / 60
+            );
+            Ok(())
+        }
+        Response::Assistants { assistants } => {
+            if revoking {
+                eprintln!("Signed out.");
+            }
+            if assistants.is_empty() {
+                println!("No assistants connected. Connect one: dray server assistant add");
+            }
+            for a in assistants {
+                let used = a.last_used.split('T').next().unwrap_or_default().to_string();
+                println!("{}  {}  {}  last used {used}", a.id, a.name, a.access);
+            }
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(format!("unexpected answer from the server: {other:?}")),
     }
 }
 
