@@ -1,21 +1,19 @@
-//! The window's one view: what the server has said about every session, and the
-//! frame and sheet it is drawn in (AppShell.tsx).
+//! The window's one view: the session state the server feeds it, and the frame
+//! and sheet it is drawn in (AppShell.tsx).
 
-use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use dray_core::projects::Project;
-use dray_core::store::{SessionIndexItem, SessionStatus};
+use dray_core::store::SessionIndexItem;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::{
     App, Context, IntoElement, MouseButton, ParentElement, PathBuilder, Pixels, Point, Render, ScrollHandle, Styled,
     Task, Window, canvas, div, point, prelude::*, px,
 };
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 
-use crate::sessions::Live;
+use crate::store::Store;
 use crate::theme::{Mode, Theme};
 use crate::wire::{Signal, Wire};
 
@@ -38,18 +36,7 @@ pub enum Connection {
 
 pub struct Workspace {
     pub wire: Wire,
-    pub items: Vec<SessionIndexItem>,
-    pub projects: Vec<Project>,
-    pub live: Live,
-    /// Open permission and question requests by session, so a decision retires
-    /// its own request and the row stops reading as asking only with the last.
-    asks: HashMap<String, HashSet<String>>,
-    /// Sessions holding background tasks, whose asks outlive the turn.
-    tasked: HashSet<String>,
-    /// Index events seen while a list read is in flight, laid over its answer.
-    replay: Option<Vec<(String, Value)>>,
-    /// Counts list reads, so only the newest one's answer lands.
-    reads: u64,
+    pub store: Store,
     pub selected: Option<String>,
     pub connection: Connection,
     pub sidebar_open: bool,
@@ -83,13 +70,7 @@ impl Workspace {
         .detach();
         Workspace {
             wire,
-            items: Vec::new(),
-            projects: Vec::new(),
-            live: Live::default(),
-            asks: HashMap::new(),
-            tasked: HashSet::new(),
-            replay: None,
-            reads: 0,
+            store: Store::default(),
             selected: None,
             connection: Connection::Connecting,
             sidebar_open: true,
@@ -99,7 +80,7 @@ impl Workspace {
     }
 
     fn on_signal(&mut self, signal: Signal, cx: &mut Context<Self>) {
-        let changed = match signal {
+        let redraw = match signal {
             Signal::Up => {
                 self.connection = Connection::Up;
                 true
@@ -108,182 +89,36 @@ impl Workspace {
                 self.connection = Connection::Down(why);
                 true
             }
-            Signal::Event { name, payload } => self.on_event(&name, payload, cx),
+            Signal::Event { name, payload } => {
+                let applied = self.store.apply(&name, payload);
+                if applied.reload {
+                    self.reload(cx);
+                }
+                applied.redraw
+            }
         };
         // Deltas stream by the hundred and change nothing here; a redraw for
         // each would regroup the whole list per token.
-        if changed {
+        if redraw {
             cx.notify();
         }
-    }
-
-    /// Applies one server event. Answers whether anything the view draws moved.
-    fn on_event(&mut self, name: &str, payload: Value, cx: &mut Context<Self>) -> bool {
-        match name {
-            // Opens every connect. Replaces what is held, and the index is
-            // re-read, since status lives there rather than in this frame.
-            "live_state" => {
-                self.asks.clear();
-                for ask in payload["asks"].as_array().into_iter().flatten() {
-                    self.note_ask(ask);
-                }
-                self.tasked = payload["tasks"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|t| t["sessionId"].as_str().map(str::to_string))
-                    .collect();
-                self.live.status.clear();
-                self.sync_asking();
-                self.reload(cx);
-                true
-            }
-            "agent_event" => match payload["payload"]["type"].as_str() {
-                Some("permission_requested" | "questions_asked") => {
-                    self.note_ask(&payload);
-                    self.sync_asking();
-                    true
-                }
-                Some("permission_decided") => {
-                    let session = payload["sessionId"].as_str().unwrap_or_default();
-                    let request = payload["payload"]["requestId"].as_str().unwrap_or_default();
-                    if let Some(open) = self.asks.get_mut(session) {
-                        open.remove(request);
-                    }
-                    self.sync_asking();
-                    true
-                }
-                // A turn that ended with a task open kept its asks, since the
-                // task's subagent could be the one asking; this is the other half.
-                Some("background_tasks_changed") => {
-                    let session = payload["sessionId"].as_str().unwrap_or_default().to_string();
-                    let empty = payload["payload"]["tasks"].as_array().is_none_or(|t| t.is_empty());
-                    if !empty {
-                        self.tasked.insert(session);
-                    } else {
-                        self.tasked.remove(&session);
-                        if self.running(&session) == Some(false) {
-                            self.asks.remove(&session);
-                            self.sync_asking();
-                        }
-                    }
-                    true
-                }
-                _ => false,
-            },
-            "session_status" | "session_created" | "session_changed" | "session_title" => {
-                // A list read in flight answers with the index as it was before
-                // this event, so the event is kept and laid over that answer.
-                if let Some(replay) = &mut self.replay {
-                    replay.push((name.to_string(), payload.clone()));
-                }
-                self.apply_index_event(name, payload);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// The events that change the index, applied to the list held.
-    fn apply_index_event(&mut self, name: &str, payload: Value) {
-        match name {
-            "session_status" => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct StatusEvent {
-                    session_id: String,
-                    status: SessionStatus,
-                    modified: Option<String>,
-                }
-                let Ok(e) = serde_json::from_value::<StatusEvent>(payload) else {
-                    return;
-                };
-                if let Some(modified) = e.modified
-                    && let Some(item) = self.items.iter_mut().find(|i| i.session_id == e.session_id)
-                {
-                    item.modified = modified;
-                }
-                // A turn over with no task left strands its asks, as the server does.
-                if e.status != SessionStatus::InProgress && !self.tasked.contains(&e.session_id) {
-                    self.asks.remove(&e.session_id);
-                    self.sync_asking();
-                }
-                self.live.status.insert(e.session_id, e.status);
-            }
-            "session_created" | "session_changed" => {
-                let Ok(item) = serde_json::from_value::<SessionIndexItem>(payload) else {
-                    return;
-                };
-                self.items.retain(|i| i.session_id != item.session_id);
-                // The live list holds active rows; one settled from anywhere leaves it.
-                if !item.archived {
-                    self.items.push(item);
-                }
-            }
-            "session_title" => {
-                let id = payload["sessionId"].as_str().unwrap_or_default();
-                let locked = payload["titleLocked"].as_bool().unwrap_or(false);
-                if let (Some(item), Some(title)) =
-                    (self.items.iter_mut().find(|i| i.session_id == id), payload["title"].as_str())
-                    && (locked || !item.title_locked)
-                {
-                    item.title = title.to_string();
-                    item.title_locked = locked;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Whether a session's turn is running, or `None` while that is unknown:
-    /// between a reconnect and the list it re-reads, the list held is stale
-    /// and no live reading has arrived yet.
-    fn running(&self, session: &str) -> Option<bool> {
-        if let Some(status) = self.live.status.get(session) {
-            return Some(*status == SessionStatus::InProgress);
-        }
-        if self.replay.is_some() {
-            return None;
-        }
-        self.items.iter().find(|i| i.session_id == session).map(|i| i.status == SessionStatus::InProgress)
-    }
-
-    fn note_ask(&mut self, frame: &Value) {
-        let session = frame["sessionId"].as_str().unwrap_or_default().to_string();
-        let request = frame["payload"]["requestId"].as_str().unwrap_or_default().to_string();
-        self.asks.entry(session).or_default().insert(request);
-    }
-
-    fn sync_asking(&mut self) {
-        self.live.asking = self.asks.iter().filter(|(_, open)| !open.is_empty()).map(|(s, _)| s.clone()).collect();
     }
 
     /// Re-reads the active list and the projects, as the React app does on
     /// every `live_state`. The two land apart, since projects wait on git.
     fn reload(&mut self, cx: &mut Context<Self>) {
-        self.reads += 1;
-        let read = self.reads;
-        self.replay = Some(Vec::new());
+        let read = self.store.begin_read();
         let items = self.wire.invoke("list_session_index_items", json!({ "archived": false }));
         cx.spawn(async move |this, cx| {
-            let items = items.await;
+            let list = match items.await {
+                Ok(v) => serde_json::from_value::<Vec<SessionIndexItem>>(v)
+                    .map_err(|e| format!("a session list this build cannot read: {e}")),
+                Err(e) => Err(e.to_string()),
+            };
             this.update(cx, |this, cx| {
-                // A later reconnect started a read of its own; this answer is older.
-                if read != this.reads {
-                    return;
+                if this.store.finish_read(read, list) {
+                    cx.notify();
                 }
-                let replay = this.replay.take().unwrap_or_default();
-                match items.map(serde_json::from_value::<Vec<SessionIndexItem>>) {
-                    Ok(Ok(items)) => {
-                        this.items = items;
-                        for (name, payload) in replay {
-                            this.apply_index_event(&name, payload);
-                        }
-                    }
-                    Ok(Err(e)) => log::error!("session list in a shape this build cannot read: {e}"),
-                    Err(e) => log::error!("list_session_index_items: {e}"),
-                }
-                cx.notify();
             })
             .ok();
         })
@@ -294,7 +129,7 @@ impl Workspace {
             let projects = projects.await;
             this.update(cx, |this, cx| {
                 if let Ok(Ok(projects)) = projects.map(serde_json::from_value::<Vec<Project>>) {
-                    this.projects = projects;
+                    this.store.projects = projects;
                     cx.notify();
                 }
             })

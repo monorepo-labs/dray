@@ -67,7 +67,8 @@ fn top_buttons(theme: &Theme) -> impl IntoElement {
 /// The project filter on the left, the drafts and settled toggles on the right.
 fn filter_row(ws: &Workspace, theme: &Theme) -> impl IntoElement {
     // One entry per repository, as `projectGroups` folds checkouts, plus All.
-    let entries = 1 + ws.projects.iter().map(|p| p.remote.as_deref().unwrap_or(&p.path)).collect::<BTreeSet<_>>().len();
+    let entries =
+        1 + ws.store.projects.iter().map(|p| p.remote.as_deref().unwrap_or(&p.path)).collect::<BTreeSet<_>>().len();
     let fg = theme.foreground;
     div()
         .mt_4()
@@ -142,9 +143,9 @@ fn dot_track(count: usize, active: usize, theme: &Theme) -> impl IntoElement {
 }
 
 fn list(ws: &Workspace, theme: &Theme, cx: &mut Context<Workspace>) -> impl IntoElement {
-    let refs: Vec<&SessionIndexItem> = ws.items.iter().filter(|i| !i.hidden).collect();
+    let refs: Vec<&SessionIndexItem> = ws.store.items.iter().filter(|i| !i.hidden).collect();
     let now = chrono::Utc::now().timestamp_millis();
-    let groups = session_groups(&refs, &ws.live, now);
+    let groups = session_groups(&refs, &ws.store.live, now);
 
     let mut children: Vec<AnyElement> = Vec::new();
     if groups.is_empty() {
@@ -214,8 +215,8 @@ fn session_row(
     let item = row.item;
     let id = item.session_id.clone();
     let active = ws.selected.as_deref() == Some(item.session_id.as_str());
-    let asking = ws.live.asking.contains(&item.session_id);
-    let status = ws.live.status.get(&item.session_id).copied().unwrap_or(item.status);
+    let asking = ws.store.live.asking.contains(&item.session_id);
+    let status = ws.store.live.status.get(&item.session_id).copied().unwrap_or(item.status);
     let hover = theme.sidebar_accent_hover;
 
     let depth = row.depth;

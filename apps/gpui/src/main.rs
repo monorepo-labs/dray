@@ -6,6 +6,7 @@ mod color;
 mod glass;
 mod sessions;
 mod sidebar;
+mod store;
 mod theme;
 mod ui;
 mod wire;
