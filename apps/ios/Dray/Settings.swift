@@ -30,7 +30,7 @@ struct SettingsView: View {
                     GroupLabel("Servers")
                 } footer: {
                     Text("On a Mac, turn on Remote access in Dray's settings and scan its code. On a server, run dray server pair.")
-                        .font(Theme.Font.meta).foregroundStyle(Theme.tertiary)
+                        .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                 }
                 .listRowBackground(Theme.card)
 
@@ -89,12 +89,12 @@ private struct ServerSummary: View {
         HStack(spacing: Theme.Space.m) {
             StatusDot(server: server.id)
             VStack(alignment: .leading, spacing: 2) {
-                Text(server.name).font(Theme.Font.row)
+                Text(server.name).font(Theme.Font.body)
                 HStack(spacing: Theme.Space.xs) {
                     Text(store.stateLabel(server.id))
                     if let host = socketURL(server.url)?.host() { Text("· \(host)").lineLimit(1) }
                 }
-                .font(Theme.Font.meta)
+                .font(Theme.Font.footnote)
                 .foregroundStyle(Theme.secondary)
             }
         }
@@ -122,11 +122,10 @@ struct ServerDetail: View {
                 Section {
                     HStack(spacing: Theme.Space.m) {
                         StatusDot(server: id)
-                        Text(store.stateLabel(id)).font(Theme.Font.row)
+                        Text(store.stateLabel(id)).font(Theme.Font.body)
                         Spacer()
                         if store.serverState[id] != .connected {
                             Button("Retry") { Haptic.tap(); Task { await store.retry(id) } }
-                                .fontWeight(.semibold)
                                 .buttonStyle(.borderless)
                         }
                     }
@@ -136,7 +135,7 @@ struct ServerDetail: View {
                             if let detail = health.detail { Text(detail).foregroundStyle(Theme.secondary) }
                             if let until = health.until { Countdown(until: until).foregroundStyle(Theme.secondary) }
                         }
-                        .font(Theme.Font.meta)
+                        .font(Theme.Font.footnote)
                     }
                 } header: { GroupLabel("Status") }
 
@@ -154,7 +153,7 @@ struct ServerDetail: View {
                         copied = true
                     } label: {
                         HStack {
-                            Text(server.url).font(Theme.Font.mono).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                            Text(server.url).font(Theme.Font.body).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
                             Spacer()
                             Image(systemName: copied ? "checkmark" : "doc.on.doc").foregroundStyle(Theme.tertiary)
                         }
@@ -163,7 +162,7 @@ struct ServerDetail: View {
 
                 Section {
                     TextField("Paste a new token", text: $token)
-                        .font(Theme.Font.mono)
+                        .font(Theme.Font.body)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     Button("Use this token") {
@@ -176,7 +175,7 @@ struct ServerDetail: View {
                     GroupLabel("Token")
                 } footer: {
                     Text("The token is the long code after the address in a connect line. Pasting the whole line works too.")
-                        .font(Theme.Font.meta).foregroundStyle(Theme.tertiary)
+                        .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                 }
 
                 Section {
@@ -240,11 +239,11 @@ struct AddServerView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Scan QR code").font(Theme.Font.headline).foregroundStyle(Theme.text)
                                 Text("From Remote access in Dray's settings, or dray server pair.")
-                                    .font(Theme.Font.meta).foregroundStyle(Theme.secondary)
+                                    .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
                                     .multilineTextAlignment(.leading)
                             }
                             Spacer(minLength: 0)
-                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Theme.tertiary)
+                            Image(systemName: "chevron.right").font(Theme.Font.footnoteStrong.font).foregroundStyle(Theme.tertiary)
                         }
                         .card()
                     }
@@ -272,7 +271,7 @@ struct AddServerView: View {
                         .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.lg, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous).strokeBorder(Theme.hairline))
                         Text("Pasting a whole connect line fills the address and the token at once.")
-                            .font(Theme.Font.meta).foregroundStyle(Theme.tertiary)
+                            .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                             .padding(.horizontal, Theme.Space.xs)
                     }
                 }
@@ -309,11 +308,11 @@ struct AddServerView: View {
     private func field(_ label: String, text: Binding<String>, prompt: String, mono: Bool) -> some View {
         HStack(spacing: Theme.Space.m) {
             Text(label)
-                .font(Theme.Font.callout)
+                .font(Theme.Font.subhead)
                 .foregroundStyle(Theme.secondary)
                 .frame(width: 64, alignment: .leading)
             TextField(label, text: text, prompt: Text(prompt).foregroundStyle(Theme.tertiary))
-                .font(mono ? Theme.Font.mono : Theme.Font.body)
+                .font(Theme.Font.body)
                 .foregroundStyle(Theme.text)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()

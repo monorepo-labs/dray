@@ -29,6 +29,8 @@ enum Theme {
     // Edges: seams, never drawn rules.
     static let hairline = Color.white.opacity(0.06)
     static let border = Color.white.opacity(0.1)
+    /// A child session's elbow back to its parent.
+    static let connector = Color(hex: 0x404040)
 
     // Meaning. Yellow is "this is for you", and spent on nothing else.
     /// `--accent-command`: a session waiting on the reader, a card asking.
@@ -44,8 +46,8 @@ enum Theme {
     /// `--accent-mention`: a link in prose, far from the yellow so it never reads as a mark.
     static let link = Color(hex: 0x5AD3FF)
 
-    /// `--radius` 10pt and its rungs. Everything is a rounded square: never a
-    /// sharp rectangle, never a pill.
+    /// `--radius` 10pt and its rungs: never a sharp rectangle. Pills are
+    /// capsules, not a rung.
     enum Radius {
         /// Menu items, small tiles, chips.
         static let sm: CGFloat = 8
@@ -66,27 +68,55 @@ enum Theme {
         static let xxl: CGFloat = 32
     }
 
-    /// SF Pro through Dynamic Type, so the reader's text size moves all of it.
+    /// The type scale, and every font the app draws: SF Pro, no monospace,
+    /// regular and semibold only. Sizes are Dynamic Type's default and scale with it.
     enum Font {
-        static let title = SwiftUI.Font.title2.weight(.semibold)
-        static let headline = SwiftUI.Font.headline
-        /// Prose: answers, prompts.
-        static let body = SwiftUI.Font.body
-        /// A list row's title.
-        static let row = SwiftUI.Font.body.weight(.medium)
-        /// Tool rows, labels beside a control.
-        static let callout = SwiftUI.Font.subheadline
-        /// What sits under a title: project, server, time.
-        static let meta = SwiftUI.Font.footnote
-        static let micro = SwiftUI.Font.caption
-        /// A path or a command inside a sentence.
-        static let mono = SwiftUI.Font.system(.subheadline, design: .monospaced)
-        /// A block of code or output.
-        static let code = SwiftUI.Font.system(.footnote, design: .monospaced)
+        /// Empty-state titles, the PR title.
+        static let title = TypeStyle(20, 26, .semibold, .title3)
+        /// Nav titles, primary buttons.
+        static let headline = TypeStyle(17, 22, .semibold, .headline)
+        /// List rows, settings rows, the transcript, fields, the project strip.
+        static let body = TypeStyle(16, 22, .regular, .body)
+        /// Supporting lines. Status words stay regular: colour alone marks them.
+        static let subhead = TypeStyle(15, 20, .regular, .subheadline)
+        /// Compact pill buttons (Next, Retry now). Full-width buttons take `headline`.
+        static let pill = TypeStyle(15, 20, .semibold, .subheadline)
+        /// Meta, times, section labels, the picks row.
+        static let footnote = TypeStyle(13, 18, .regular, .footnote)
+        /// The model's name in the picks row, and nothing else.
+        static let footnoteStrong = TypeStyle(13, 18, .semibold, .footnote)
     }
 
     /// Quick and settling, never bouncy: what moves is a row arriving, not a toy.
     static let motion = Animation.snappy(duration: 0.28)
+}
+
+/// One rung of the type scale: a size, the line it sits on, a weight, and the
+/// Dynamic Type style it scales with.
+struct TypeStyle {
+    let ui: UIFont
+    /// Added between lines so wrapped text sits on the scale's line height.
+    let spacing: CGFloat
+
+    init(_ size: CGFloat, _ leading: CGFloat, _ weight: UIFont.Weight, _ style: UIFont.TextStyle) {
+        let metrics = UIFontMetrics(forTextStyle: style)
+        ui = metrics.scaledFont(for: .systemFont(ofSize: size, weight: weight))
+        spacing = max(0, metrics.scaledValue(for: leading) - ui.lineHeight)
+    }
+
+    var font: SwiftUI.Font { SwiftUI.Font(ui) }
+}
+
+extension View {
+    /// A rung of the type scale, line height included.
+    func font(_ style: TypeStyle) -> some View {
+        font(style.font).lineSpacing(style.spacing)
+    }
+}
+
+extension Text {
+    /// The scale's font where a `Text` must stay one, to be joined with `+`.
+    func font(_ style: TypeStyle) -> Text { font(style.font) }
 }
 
 extension Color {
@@ -120,7 +150,7 @@ struct PrimaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.body.weight(.semibold))
+            .font(Theme.Font.headline)
             .foregroundStyle(enabled ? ink : Theme.tertiary)
             .padding(.horizontal, Theme.Space.l)
             .frame(minHeight: height)
@@ -137,7 +167,7 @@ struct SecondaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.body.weight(.medium))
+            .font(Theme.Font.headline)
             .foregroundStyle(enabled ? ink : Theme.tertiary)
             .padding(.horizontal, Theme.Space.l)
             .frame(minHeight: 44)
@@ -214,7 +244,7 @@ struct GroupLabel: View {
 
     var body: some View {
         Text(text)
-            .font(Theme.Font.meta.weight(.medium))
+            .font(Theme.Font.footnote)
             .foregroundStyle(Theme.tertiary)
             .padding(.horizontal, Theme.Space.xs)
     }
@@ -233,7 +263,7 @@ struct EmptyState<Mark: View, Actions: View>: View {
             mark.padding(.bottom, Theme.Space.xs)
             VStack(spacing: Theme.Space.s) {
                 Text(title).font(Theme.Font.title).foregroundStyle(Theme.text)
-                Text(message).font(Theme.Font.callout).foregroundStyle(Theme.secondary)
+                Text(message).font(Theme.Font.subhead).foregroundStyle(Theme.secondary)
                     .multilineTextAlignment(.center)
             }
             VStack(spacing: Theme.Space.s) { actions }

@@ -148,7 +148,7 @@ struct NewSessionView: View {
                         // A worktree forks from the remote's default branch whatever is
                         // checked out, so a branch picker here would promise nothing.
                         if let base = branches?.defaultBase {
-                            LabeledContent("From") { Text(base).font(Theme.Font.mono) }
+                            LabeledContent("From") { Text(base).font(Theme.Font.body) }
                         }
                     } else if let branches, !branches.branches.isEmpty {
                         Picker("Branch", selection: Binding(
@@ -193,7 +193,7 @@ struct NewSessionView: View {
                 GroupLabel("Agent")
             } footer: {
                 if let agent, !agent.available {
-                    Text(agent.reason).font(Theme.Font.meta).foregroundStyle(Theme.tertiary)
+                    Text(agent.reason).font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                 }
             }
             .listRowBackground(Theme.card)
@@ -221,12 +221,12 @@ struct NewSessionView: View {
                                 await loadModels()
                             }
                         }
-                        .font(Theme.Font.meta.weight(.semibold))
+                        .font(Theme.Font.footnoteStrong)
                         .foregroundStyle(Theme.text)
                         .buttonStyle(.borderless)
                     }
                 }
-                .font(Theme.Font.meta)
+                .font(Theme.Font.footnote)
                 .padding(.horizontal, Theme.Space.l)
                 .padding(.top, Theme.Space.m)
             }
@@ -456,7 +456,7 @@ struct AttachProjectView: View {
                     ForEach(shown, id: \.slug) { row($0) }
                 } footer: {
                     Text("Repositories not on \(place) yet clone into ~/dray there.")
-                        .font(Theme.Font.meta).foregroundStyle(Theme.tertiary)
+                        .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
                 }
             }
             if let failure {
@@ -503,13 +503,13 @@ struct AttachProjectView: View {
                     HStack {
                         Text(r.slug).foregroundStyle(.primary)
                         Spacer()
-                        if let mark { Text(mark).font(.caption).foregroundStyle(.secondary) }
+                        if let mark { Text(mark).font(Theme.Font.footnote).foregroundStyle(.secondary) }
                     }
                     if cloning == r.slug {
                         Text(store.cloneProgress[server]?[r.slug] ?? "Cloning…")
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            .font(Theme.Font.footnote).foregroundStyle(.secondary).lineLimit(1)
                     } else if let d = r.description {
-                        Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        Text(d).font(Theme.Font.footnote).foregroundStyle(.secondary).lineLimit(2)
                     }
                 }
                 if cloning == r.slug { ProgressView() }
@@ -529,7 +529,7 @@ struct AttachProjectView: View {
             Button {
                 UIPasteboard.general.string = command
             } label: {
-                Label(command, systemImage: "doc.on.doc").font(.body.monospaced())
+                Label(command, systemImage: "doc.on.doc").font(Theme.Font.body)
             }
             Button(loading ? "Looking…" : "Recheck") { Task { await recheck(kind) } }
                 .disabled(loading)

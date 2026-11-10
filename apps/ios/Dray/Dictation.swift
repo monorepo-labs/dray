@@ -209,7 +209,7 @@ struct DictationBar: View {
             .frame(width: 36, height: 36)
             .accessibilityHidden(true)
             if state == .transcribing {
-                Text("Transcribing…").font(Theme.Font.callout).foregroundStyle(Theme.secondary).shimmer()
+                Text("Transcribing…").font(Theme.Font.subhead).foregroundStyle(Theme.secondary).shimmer()
             } else {
                 RecordingTimer(since: shared.since[draft])
             }
@@ -242,14 +242,13 @@ struct DictationNote: View {
                 Spacer(minLength: 0)
                 if Dictations.shared.kept[draft] != nil {
                     Button("Retry") { Task { await Dictations.shared.retry(store, draft: draft) } }
-                        .fontWeight(.semibold)
                         .foregroundStyle(Theme.text)
                 }
                 Button { Dictations.shared.dismiss(draft) } label: { Image(systemName: "xmark") }
                     .foregroundStyle(Theme.tertiary)
                     .accessibilityLabel("Dismiss")
             }
-            .font(Theme.Font.meta)
+            .font(Theme.Font.footnote)
             .buttonStyle(.borderless)
         }
     }
