@@ -43,10 +43,7 @@ struct VoiceDock: View {
                 Spacer(minLength: 0)
             }
             if !open, let line = hint ?? note {
-                Text(line)
-                    .font(Theme.Font.footnote)
-                    .foregroundStyle(Theme.tertiary)
-                    .multilineTextAlignment(.center)
+                KeptNote(line: line, draft: draft)
                     .frame(minHeight: 22)
                     .padding(.bottom, 14)
                     .transition(.opacity)
@@ -132,6 +129,8 @@ struct VoiceDock: View {
     private func hold() {
         guard !busy else { return }
         guard let transcriber else { return flash("This server can't transcribe. Type instead.") }
+        // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new hold.
+        guard Dictations.shared.kept[draft] == nil else { return }
         Dictations.shared.dismiss(draft)
         task.failure = nil
         Task { await Dictations.shared.start(store, server: transcriber, draft: draft) }
@@ -211,6 +210,7 @@ struct VoiceDock: View {
                 Task { if await task.saveDraft() { confirming = false } }
             }
             .buttonStyle(DockButtonStyle())
+            .disabled(task.sending)
             Button("Keep") { confirming = false }.buttonStyle(DockButtonStyle())
             Button("Discard") {
                 task.discard()
@@ -297,8 +297,8 @@ struct VoiceDock: View {
     }
 
     @ViewBuilder private var projectMenu: some View {
-        Picker("Project", selection: Binding(get: { task.project }, set: { task.projectName = $0; task.pickedServer = nil })) {
-            ForEach(task.projectNames, id: \.self) { Text($0).tag(Optional($0)) }
+        Picker("Project", selection: Binding(get: { task.projectChoice }, set: task.pick)) {
+            ForEach(task.projectChoices, id: \.self) { Text($0.label).tag(Optional($0)) }
         }
         if task.server != nil {
             Button("Attach project…", systemImage: "plus") { attaching = true }
@@ -353,6 +353,27 @@ struct SpokenText: View {
         .accessibilityHint("Opens it to edit")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { edit() }
+    }
+}
+
+/// What dictation said instead of words, under the resting orb; Retry and
+/// Discard beside it while the server never answered and the audio is kept.
+struct KeptNote: View {
+    @Environment(Store.self) private var store
+    let line: String
+    let draft: SessionKey
+
+    var body: some View {
+        HStack(spacing: Theme.Space.m) {
+            Text(line).foregroundStyle(Theme.tertiary).multilineTextAlignment(.center)
+            if Dictations.shared.kept[draft] != nil {
+                Button("Retry") { Task { await Dictations.shared.retry(store, draft: draft) } }
+                    .foregroundStyle(Theme.text)
+                Button("Discard") { Dictations.shared.dismiss(draft) }
+                    .foregroundStyle(Theme.destructive)
+            }
+        }
+        .font(Theme.Font.footnote)
     }
 }
 

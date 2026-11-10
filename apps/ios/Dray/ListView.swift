@@ -10,6 +10,12 @@ struct DraftItem: Decodable, Identifiable {
     let prompt: String
     let projectPath: String?
     let created: String?
+    let harness: String?
+    let model: String?
+    let effort: String?
+    let permissionMode: String?
+    let fast: Bool?
+    let useWorktree: Bool?
 
     var title: String { prompt.split(whereSeparator: \.isNewline).first.map(String.init) ?? prompt }
     var project: String? { projectPath.map { ($0 as NSString).lastPathComponent } }
@@ -128,10 +134,7 @@ struct SessionList: View {
         }
         ForEach(shown, id: \.draft.id) { entry in
             Button {
-                task.text = entry.draft.prompt
-                task.draftId = (entry.server, entry.draft.id)
-                if let name = entry.draft.project { task.projectName = name }
-                task.pickedServer = entry.server
+                task.open(entry.draft, on: entry.server)
                 mode = .live
             } label: {
                 RowLine(title: entry.draft.title, time: entry.draft.created.flatMap(parseDate))

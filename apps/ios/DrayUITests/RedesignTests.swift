@@ -81,7 +81,7 @@ final class RedesignTests: XCTestCase {
         let heard = app.buttons.matching(NSPredicate(format: "label == 'Start task' AND isEnabled == true"))
         let silent = app.staticTexts["No words heard."]
         for _ in 0..<90 where heard.count == 0 && !silent.exists { sleep(1) }
-        let spoke = !silent.exists
+        let spoke = heard.count > 0
         XCTAssertTrue(spoke || silent.exists, "transcription never answered")
         sleep(1)
         snap(app, spoke ? "voice-ready" : "voice-no-words")
@@ -133,6 +133,10 @@ final class RedesignTests: XCTestCase {
         app.buttons["Drafts"].tap()
         sleep(2)
         snap(app, "type-drafts")
+        // Opening it brings its words back to the dock, ready to start.
+        labelled(app, "Add retry with backoff to the upload client").firstMatch.tap()
+        XCTAssertTrue(app.buttons["Start task"].waitForExistence(timeout: 10), "the draft opened nothing")
+        snap(app, "type-draft-opened")
     }
 
     /// Anything on screen by its label: a row's title is read off its button, not a static text.

@@ -21,6 +21,8 @@ final class NewTask {
     var projectName: String? = UserDefaults.standard.string(forKey: "new.project") {
         didSet { UserDefaults.standard.set(projectName, forKey: "new.project") }
     }
+    /// One of two same-named projects on a machine, by path; `nil` where the name is enough.
+    var projectPath: String?
     /// The machine picked for this project; `nil` takes the first that has it.
     var pickedServer: UUID?
     var harness = UserDefaults.standard.string(forKey: "new.harness") ?? "claude_code" {
@@ -71,7 +73,46 @@ final class NewTask {
     /// The machines holding the picked project.
     var machines: [Server] { connected.filter { s in (store.projects[s.id] ?? []).contains { $0.name == project } } }
     var server: UUID? { machines.first { $0.id == pickedServer }?.id ?? machines.first?.id ?? connected.first?.id }
-    var cwd: String? { server.flatMap { s in store.projects[s]?.first { $0.name == project }?.path } }
+    var cwd: String? {
+        guard let server, let held = store.projects[server]?.filter({ $0.name == project }) else { return nil }
+        return held.first { $0.path == projectPath }?.path ?? held.first?.path
+    }
+
+    /// The project menu: a name per repo, split by folder where one machine holds two of that name.
+    var projectChoices: [ProjectChoice] {
+        projectNames.flatMap { name -> [ProjectChoice] in
+            let held = connected.flatMap { s in (store.projects[s.id] ?? []).filter { $0.name == name }.map { (s.id, $0.path) } }
+            let clash = Dictionary(grouping: held, by: \.0).values.contains { $0.count > 1 }
+            return clash ? held.map { ProjectChoice(name: name, path: $0.1, server: $0.0) } : [ProjectChoice(name: name, path: nil, server: nil)]
+        }
+    }
+    var projectChoice: ProjectChoice? {
+        projectChoices.first { $0.name == project && $0.path == cwd } ?? projectChoices.first { $0.name == project && $0.path == nil }
+    }
+
+    func pick(_ choice: ProjectChoice?) {
+        guard let choice else { return }
+        projectName = choice.name
+        projectPath = choice.path
+        pickedServer = choice.server
+    }
+
+    /// Opens a saved draft with the picks it was saved on, so starting it or saving it again keeps them.
+    func open(_ draft: DraftItem, on server: UUID) {
+        text = draft.prompt
+        draftId = (server, draft.id)
+        if let name = draft.project { projectName = name }
+        projectPath = draft.projectPath
+        pickedServer = server
+        if let h = draft.harness { harness = h }
+        if let m = draft.model {
+            pickModel(m)
+            if let e = draft.effort { pickEffort(e) }
+        }
+        if let p = draft.permissionMode { stance = p }
+        if let f = draft.fast { fast = f }
+        if let w = draft.useWorktree { worktree = w }
+    }
 
     private var modelsKey: String { "\(server?.uuidString ?? "")|\(harness)" }
     var list: [Model] { models[modelsKey] ?? [] }
@@ -104,7 +145,14 @@ final class NewTask {
         if agents[server] == nil, let read: [AgentAvailability] = try? await store.call(server, "agent_availability") {
             agents[server] = read
         }
-        let key = modelsKey
+        // A machine without the remembered agent starts on one it has; with only one, no picker shows to fix it.
+        if let held = agents[server], !held.contains(where: { $0.harness == harness && $0.available }),
+           let first = held.first(where: \.available) {
+            harness = first.harness
+        }
+        // Taken before the read: the picks can move to another machine while it is out.
+        let harness = harness
+        let key = "\(server.uuidString)|\(harness)"
         if models[key] == nil {
             do {
                 models[key] = try await store.call(server, "list_models", ["harness": .string(harness)])
@@ -125,10 +173,11 @@ final class NewTask {
         failure = nil
         defer { sending = false }
         let id = UUID().uuidString.lowercased()
+        let sent = text
         do {
             let outcome: SendOutcome = try await store.call(server, "send_msg", [
                 "sessionId": .string(id),
-                "prompt": .string(text),
+                "prompt": .string(sent),
                 "attachmentPaths": [],
                 "harness": .string(harness),
                 "model": .string(modelId),
@@ -144,7 +193,8 @@ final class NewTask {
             ])
             if let item = outcome.snapshot { store.created(server, item) }
             await dropDraft()
-            text = ""
+            // Words added while the start was out were never sent, so they stay.
+            if text == sent { text = "" }
             Haptic.success()
             return SessionKey(server: server, id: id)
         } catch {
@@ -156,13 +206,17 @@ final class NewTask {
 
     /// Saves the text as a draft in Dray's sidebar, on these picks, and clears it.
     func saveDraft() async -> Bool {
+        guard !sending else { return false }
         guard let server, let cwd, hasText else {
             failure = "Pick a project first."
             return false
         }
+        sending = true
+        defer { sending = false }
+        let saved = text
         let draft: [String: JSON] = [
             "id": .string(UUID().uuidString.lowercased()),
-            "prompt": .string(text),
+            "prompt": .string(saved),
             "created": .string(Date().formatted(.iso8601)),
             "projectPath": .string(cwd),
             "harness": .string(harness),
@@ -179,7 +233,7 @@ final class NewTask {
             return false
         }
         await dropDraft()
-        text = ""
+        if text == saved { text = "" }
         return true
     }
 
@@ -196,6 +250,16 @@ final class NewTask {
         draftId = nil
         _ = try? await store.call(d.server, "delete_draft", ["id": .string(d.id)], as: JSON.self)
     }
+}
+
+/// One entry in the dock's project menu.
+struct ProjectChoice: Hashable {
+    let name: String
+    /// Set only where a machine holds two projects of this name.
+    let path: String?
+    let server: UUID?
+
+    var label: String { path.map { "\(name) — \((($0 as NSString).deletingLastPathComponent as NSString).lastPathComponent)" } ?? name }
 }
 
 // MARK: Attach

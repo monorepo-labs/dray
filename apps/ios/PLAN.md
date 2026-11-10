@@ -24,7 +24,8 @@ phone reads and drives it over the same WebSocket the desktop uses
   the task's text; holding again adds to them, the keyboard edits them in a
   sheet, and Cancel offers Save draft (`create_draft`), Keep or Discard.
   Picks under the orb: harness, model, effort, project, machine, and behind
-  "···" stance and worktree. A task always starts on the default branch.
+  "···" stance and worktree. No branch pick: a task with no worktree runs
+  on whatever branch the project has checked out.
 - **Pairing** by paste or by QR, and every server's name, token and removal
   in one Settings screen.
 - **Pull request** sheet from the session view: readiness in the desktop's
