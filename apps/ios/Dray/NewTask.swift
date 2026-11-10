@@ -265,6 +265,7 @@ final class NewTask {
         guard let d else { return }
         if draftId?.server == d.server && draftId?.id == d.id { draftId = nil }
         _ = try? await store.call(d.server, "delete_draft", ["id": .string(d.id)], as: JSON.self)
+        store.draftsRevision += 1
     }
 }
 

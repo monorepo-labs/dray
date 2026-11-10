@@ -347,29 +347,88 @@ final class RedesignTests: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch
     }
 
-    func testEmpty() throws {
+    /// The list with nothing in it, from no server to a quiet one. Wants a second server with no
+    /// sessions behind `/tmp/dray825-proxy.py`, and two projects on it, `thinking-orbs` one of them:
+    ///   TEST_RUNNER_DRAY_EMPTY_URL=ws://127.0.0.1:… TEST_RUNNER_DRAY_EMPTY_TOKEN=… TEST_RUNNER_DRAY_EMPTY_MODE=/tmp/…
+    func testEmptyStates() throws {
+        guard let url = env["DRAY_EMPTY_URL"], let token = env["DRAY_EMPTY_TOKEN"], let modeFile = env["DRAY_EMPTY_MODE"] else {
+            throw XCTSkip("set TEST_RUNNER_DRAY_EMPTY_URL, TEST_RUNNER_DRAY_EMPTY_TOKEN and TEST_RUNNER_DRAY_EMPTY_MODE")
+        }
+        let mode = { (m: String) in try? m.write(toFile: modeFile, atomically: true, encoding: .utf8) }
+        mode("hang")
+        defer { mode("forward") }
         let app = XCUIApplication()
         app.launchArguments = ["-servers", ""]
         app.launch()
-        sleep(2)
-        snap(app, "empty-connect")
+        XCTAssertTrue(app.staticTexts["Connect a server"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Scan QR code"].exists && app.buttons["Enter an address"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["orb"].exists, "a dock before any server")
+        // Nothing to show in either view, so neither button.
+        XCTAssertFalse(app.buttons["Drafts"].exists || app.buttons["Settled"].exists, "view buttons with no server")
+        sleep(1)
+        snap(app, "empty-01-connect")
+
+        connect(app, url: url, token: token)
+        XCTAssertTrue(app.staticTexts["Connecting"].waitForExistence(timeout: 15), "no connecting screen")
+        sleep(1)
+        snap(app, "empty-02-connecting")
+
+        mode("down")
+        XCTAssertTrue(app.staticTexts["Can't reach Studio Mac"].waitForExistence(timeout: 60), "no can't-reach screen")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Trying again'")).firstMatch.exists)
+        snap(app, "empty-03-unreachable")
+
+        // Gone while a try of its own is out, back once it fails.
+        let retry = app.buttons["Retry now"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 30), "no Retry now")
+        mode("forward")
+        retry.tap()
+        XCTAssertTrue(app.staticTexts["No tasks yet"].waitForExistence(timeout: 30), "no empty list once connected")
+        XCTAssertFalse(app.buttons["Drafts"].exists || app.buttons["Settled"].exists, "view buttons with nothing in them")
+        sleep(1)
+        snap(app, "empty-04-no-tasks")
+
+        // The strip's, not the dock's project pick of the same name.
+        app.descendants(matching: .any).matching(NSPredicate(format: "label == 'thinking-orbs'"))
+            .allElementsBoundByIndex.min { $0.frame.minY < $1.frame.minY }?.tap()
+        XCTAssertTrue(app.staticTexts["Nothing in thinking-orbs"].waitForExistence(timeout: 10), "no empty project")
+        sleep(1)
+        snap(app, "empty-05-project")
+    }
+
+    /// The same quiet server once a task was settled there today.
+    func testAllClear() throws {
+        guard let url = env["DRAY_EMPTY_URL"], let token = env["DRAY_EMPTY_TOKEN"] else {
+            throw XCTSkip("set TEST_RUNNER_DRAY_EMPTY_URL and TEST_RUNNER_DRAY_EMPTY_TOKEN")
+        }
+        let app = try pair(url: url, token: token)
+        XCTAssertTrue(app.staticTexts["All clear"].waitForExistence(timeout: 30), "no all-clear screen")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ENDSWITH 'settled today.'")).firstMatch.exists)
+        XCTAssertTrue(app.buttons["Settled"].exists && !app.buttons["Drafts"].exists, "Settled should show alone")
+        sleep(1)
+        snap(app, "empty-06-all-clear")
     }
 
     /// A fresh launch with no saved server, paired through the link a QR carries.
-    func pair(url: String? = nil, offline: Bool = false) throws -> XCUIApplication {
-        guard let url = url ?? env["DRAY_URL"], let token = env["DRAY_TOKEN"] else {
+    func pair(url: String? = nil, token: String? = nil, offline: Bool = false) throws -> XCUIApplication {
+        guard let url = url ?? env["DRAY_URL"], let token = token ?? env["DRAY_TOKEN"] else {
             throw XCTSkip("set TEST_RUNNER_DRAY_URL and TEST_RUNNER_DRAY_TOKEN")
         }
         let app = XCUIApplication()
         app.launchArguments = ["-servers", ""] + (offline ? ["-offline"] : [])
         app.launch()
+        connect(app, url: url, token: token)
+        return app
+    }
+
+    /// Adds a server through the link a QR carries.
+    func connect(_ app: XCUIApplication, url: String, token: String) {
         var link = URLComponents(string: "dray://connect")!
         link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "Studio Mac")]
         app.open(link.url!)
         let add = app.buttons["Add"]
         XCTAssertTrue(add.waitForExistence(timeout: 10), "the link opened no add sheet")
         add.tap()
-        return app
     }
 
     func snap(_ app: XCUIApplication, _ name: String) {

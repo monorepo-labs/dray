@@ -95,9 +95,15 @@ app to update — and nothing else, so the global tint is the page's ink.
 Rationale and the screens it was judged on are in #631.
 
 - **The list has no title.** Settings on the left, the drafts and settled
-  views in one glass pill on the right, the project strip under them once
-  there are two projects. Rows are one line; a child hangs off its parent on
-  a solid elbow, and a waiting card sits under its row, a fill and no border.
+  views in one glass pill on the right, each only while a server is connected
+  and it has something in it, the project strip under them once there are two
+  projects. Rows are one line; a child hangs off its parent on a solid elbow,
+  and a waiting card sits under its row, a fill and no border.
+- **An empty list is the whole screen** ([EmptyArt.swift](Dray/EmptyArt.swift)),
+  drawn in the middle: connect a server (no dock until one is paired),
+  connecting, can't reach with its countdown (the dock dims), no tasks yet or
+  nothing in this project with a line down to the orb, and all clear with
+  the last task settled today and how many were.
 - **One type scale** in `Theme.Font`, five rungs, SF Pro only, regular and
   semibold only. Buttons are semibold: Headline full-width, `pill` compact;
   a text-only action stays regular.

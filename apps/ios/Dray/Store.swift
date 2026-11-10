@@ -32,6 +32,8 @@ final class Store {
     var drafts: [SessionKey: String] = [:]
     /// gh's latest progress line per clone, by server and slug.
     var cloneProgress: [UUID: [String: String]] = [:]
+    /// Moves when any client saves a draft (`drafts_changed`) or this one removes one: the list re-reads.
+    var draftsRevision = 0
     var lastError: String?
     /// False while the device has no network at all, which every server shares.
     private(set) var online = true
@@ -561,6 +563,8 @@ final class Store {
             cloneProgress[server, default: [:]][p.slug] = p.line
         case "host_changed":
             linksMayHaveMoved()
+        case "drafts_changed":
+            draftsRevision += 1
         case "session_created", "session_changed":
             guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload else { return }
             items[SessionKey(server: server, id: item.sessionId)] = item

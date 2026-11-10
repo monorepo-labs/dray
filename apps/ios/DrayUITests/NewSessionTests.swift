@@ -86,7 +86,7 @@ final class NewSessionTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-servers", ""]
         app.launch()
-        app.buttons["Add server"].firstMatch.tap()
+        app.buttons["Enter an address"].tap()
         let address = app.textFields["Address"]
         address.tap()
         address.typeText(url)
