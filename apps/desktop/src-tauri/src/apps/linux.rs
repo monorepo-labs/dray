@@ -386,23 +386,15 @@ fn basename(path: &str) -> &str {
 /// file whose program is one of its binaries, then by a binary `lookup` finds
 /// on `PATH`.
 ///
-/// One of its ids marked `Hidden=true` is the spec's "deleted", and ends the
-/// search: the reader removed the app, and finding its binary anyway would
-/// list it again.
+/// One of its ids marked `Hidden=true` is the spec's "deleted", and rules out
+/// the `PATH` fallback: the reader removed that copy, and finding its binary
+/// anyway would list it again. Another copy's visible entry still counts.
 fn find(
     known: &Known,
     entries: &[(String, PathBuf, Entry)],
     used: &mut HashSet<PathBuf>,
     lookup: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> Option<(ExternalApp, Launch)> {
-    let hidden = known
-        .desktop
-        .iter()
-        .any(|id| entries.iter().any(|(eid, _, entry)| eid == id && entry.hidden));
-    if hidden {
-        return None;
-    }
-
     let make = |path: &Path, exec: Vec<String>, icon: Option<String>, desktop: Option<PathBuf>| {
         let own_binary = known.bins.contains(&basename(&exec[0]));
         let launch = Launch {
@@ -440,6 +432,13 @@ fn find(
         }
     }
 
+    let hidden = known
+        .desktop
+        .iter()
+        .any(|id| entries.iter().any(|(eid, _, entry)| eid == id && entry.hidden));
+    if hidden {
+        return None;
+    }
     let (bin, path) = known.bins.iter().find_map(|bin| Some((*bin, lookup(bin)?)))?;
     // Icon themes name most apps' icons after their binary.
     Some(make(&path, vec![path.to_string_lossy().into_owned()], Some(bin.to_string()), None))
@@ -934,6 +933,13 @@ mod tests {
 
         write(&user.join("applications/code.desktop"), "[Desktop Entry]\nType=Application\nHidden=true\n");
         assert!(!listed(&[user.clone(), system.clone()]));
+
+        // A second copy, here the Flatpak's, is not what the reader hid.
+        write(
+            &system.join("applications/com.visualstudio.code.desktop"),
+            &format!("[Desktop Entry]\nType=Application\nExec={} %F\n", sh.display()),
+        );
+        assert!(listed(&[user.clone(), system.clone()]));
 
         std::fs::remove_dir_all(&tmp).unwrap();
     }
