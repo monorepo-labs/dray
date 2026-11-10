@@ -536,11 +536,19 @@ async fn close_unanswered_stop(
 ///
 /// Emitted, never logged: a delete may have removed the file, where an append
 /// would quietly recreate it.
+///
+/// Prompts queued behind the dead turn are the exception, and only while the
+/// slot still holds this child: they are stranded first, each as a bubble with
+/// a failure beside it, the way fx and grok report theirs. Left alone they
+/// stayed drawn as pending and the next send dropped them with the `Session`,
+/// saying nothing. An emptied slot is a session being deleted or settled,
+/// whose log must not be written back.
 pub async fn settle_dead_child(
     session_id: &str,
     harness: Harness,
-    seq: &AtomicU64,
+    seq: &Arc<AtomicU64>,
     status: &Arc<Mutex<StatusTracker>>,
+    queued: &QueuedMessages,
     why: &str,
     app: &Sink,
 ) {
@@ -549,12 +557,12 @@ pub async fn settle_dead_child(
         Some(slot) => Some(slot.lock().await),
         None => None,
     };
-    let replaced = guard
-        .as_ref()
-        .and_then(|g| g.as_ref())
-        .is_some_and(|s| !Arc::ptr_eq(&s.status, status));
-    if replaced {
+    let held = guard.as_ref().and_then(|g| g.as_ref());
+    if held.is_some_and(|s| !Arc::ptr_eq(&s.status, status)) {
         return;
+    }
+    if held.is_some() {
+        strand_queue_on_exit(session_id, harness, queued, seq, app).await;
     }
 
     let mint = |payload| {

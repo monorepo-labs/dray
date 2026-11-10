@@ -874,6 +874,28 @@ async fn read_stdout(
                                         ..Default::default()
                                     }))
                                 }
+                                // An update kind this build has not met. It
+                                // maps to nothing either way; filed, so a kind
+                                // xAI adds shows up in the log.
+                                parser::GrokUpdate::Unknown => {
+                                    let kind = serde_json::from_str::<Value>(&line)
+                                        .ok()
+                                        .and_then(|v| {
+                                            v.pointer("/params/update/sessionUpdate")
+                                                .and_then(Value::as_str)
+                                                .map(str::to_string)
+                                        })
+                                        .unwrap_or_default();
+                                    record_failure(
+                                        Grok,
+                                        &handles.session_id,
+                                        "unknown_subtype",
+                                        &kind,
+                                        &line,
+                                    )
+                                    .await;
+                                    continue;
+                                }
                                 _ => parser::GrokEvent::Update(note.update),
                             }
                         }
@@ -958,6 +980,10 @@ async fn read_stdout(
         }
     }
 
+    // Whatever still waits on an answer learns the child exited, rather than
+    // waiting out its timeout.
+    handles.client.fail_pending();
+
     // The child's stdout has ended. If a prompt was still in flight its answer
     // will never arrive, so close the turn as a failure — without which the
     // session hangs `in_progress` forever, its queue with no boundary to drain
@@ -997,6 +1023,20 @@ async fn read_stdout(
             }
         }
     }
+
+    // What the block above cannot see: a turn grok opened itself, which holds
+    // no prompt id of Dray's, and the background tasks that died with the
+    // child. A no-op where the turn already closed and nothing was running.
+    crate::session::settle_dead_child(
+        &handles.session_id,
+        Grok,
+        &seq,
+        &status,
+        &queued,
+        "Grok stopped before the turn finished",
+        &handles.app,
+    )
+    .await;
 
     Ok(())
 }

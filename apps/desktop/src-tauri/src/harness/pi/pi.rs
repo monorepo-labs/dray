@@ -749,6 +749,10 @@ async fn read_stdout(
         }
     }
 
+    // Whatever still waits on an answer learns pi exited, rather than waiting
+    // out its timeout.
+    client.fail_pending();
+
     // The child is gone. `agent_settled` is the only line that closes a turn,
     // and a pi that dies mid-turn cannot send one — so without this the session
     // sits `in_progress` forever with a complete-looking transcript, every tool

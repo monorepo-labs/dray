@@ -121,7 +121,16 @@ impl Mapper {
                 // stream as chunks of their own ahead of the answer. Drop them,
                 // remembering the id so a diagnostic split across chunks goes
                 // whole rather than leaving its tail on screen.
-                if self.suppressed.contains(&id) || is_fx_diagnostic(text) {
+                //
+                // Judged on the chunk that *opens* a block and no later one. A
+                // reply is cut into chunks wherever fx likes, so one of them can
+                // start with a line reading `[context]` — a TOML table, say —
+                // and testing every chunk dropped it and the rest of the answer.
+                let opening = !self
+                    .open
+                    .as_ref()
+                    .is_some_and(|block| block.id == id && block.kind == BlockType::Text);
+                if self.suppressed.contains(&id) || (opening && is_fx_diagnostic(text)) {
                     self.suppressed.insert(id);
                     return Vec::new();
                 }
@@ -1082,5 +1091,17 @@ mod tests {
             Some(P::TurnStarted(_))
         ));
         assert!(out.iter().any(|e| matches!(&e.payload, P::Delta(_))));
+
+        // A later chunk of that same reply that happens to start the way a
+        // diagnostic does is part of the answer, and so is what follows it.
+        for text in ["\n", "[context]\nwindow = 200", " tokens"] {
+            assert!(
+                mapper
+                    .update(chunk("m3", text))
+                    .iter()
+                    .any(|e| matches!(&e.payload, P::Delta(_))),
+                "{text:?} was dropped"
+            );
+        }
     }
 }

@@ -575,7 +575,17 @@ async fn read_stdout(
     let mut ready = Some(ready);
     let mut transport: Option<Transport> = None;
 
-    while let Some(line) = lines.next_line().await? {
+    // A read error ends the loop like a closed pipe, never with `?`: either way
+    // no more of this turn is coming, and the cleanup below has to run.
+    loop {
+        let line = match lines.next_line().await {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(err) => {
+                eprintln!("[codex stdout err] {err}");
+                break;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -711,6 +721,25 @@ async fn read_stdout(
             crate::session::ingest(&ingest, agent_event, &handles.app).await;
         }
     }
+
+    // The app-server is gone. Nothing below used to run: a request in flight
+    // waited out its timeout under the session's lock, the turn it had open
+    // never closed, and prompts queued behind it were dropped by the next send.
+    handles.client.fail_pending();
+    if let Some(Transport::Rpc(thread)) = transport.as_ref() {
+        // A Stop pressed now names nothing.
+        *thread.turn_id.lock().await = None;
+    }
+    crate::session::settle_dead_child(
+        &handles.session_id,
+        Codex,
+        &seq,
+        &status,
+        &queued,
+        "Codex stopped before the turn finished",
+        &handles.app,
+    )
+    .await;
 
     Ok(())
 }

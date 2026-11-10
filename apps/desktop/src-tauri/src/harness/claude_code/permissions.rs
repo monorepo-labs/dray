@@ -328,10 +328,40 @@ pub fn auto_deny_response(request_id: &str, reason: &str) -> Value {
     })
 }
 
+/// The id of a control request this build could not parse, so it can still
+/// be refused.
+///
+/// The reply guarantee rests on the request parsing, and a `can_use_tool`
+/// carrying a suggestion type this build cannot spell fails the whole line —
+/// leaving the CLI blocked on an id nothing was going to answer. Read loosely
+/// here, off the one field a refusal needs.
+pub fn unparsed_request_id(line: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value.get("type")?.as_str()? != "control_request" {
+        return None;
+    }
+    value.get("request_id")?.as_str().map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::harness::claude_code::parser::PermissionRule;
+
+    /// A request that fails to parse is the hung turn the read loop exists to
+    /// prevent: its id must still come out, and nothing else may look like one.
+    #[test]
+    fn an_unparsed_control_request_still_gives_up_its_id() {
+        use crate::harness::claude_code::parser::parse_line;
+
+        let line = r#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{},"tool_use_id":"t","permission_suggestions":[{"type":"from_the_future"}]}}"#;
+        assert!(parse_line(line).is_err(), "the capture this pins now parses");
+        assert_eq!(unparsed_request_id(line).as_deref(), Some("r1"));
+
+        assert_eq!(unparsed_request_id(r#"{"type":"assistant","request_id":"r1"}"#), None);
+        assert_eq!(unparsed_request_id(r#"{"type":"control_request"}"#), None);
+        assert_eq!(unparsed_request_id("not json"), None);
+    }
 
     fn request_with(suggestions: Vec<PermissionUpdate>) -> PermissionRequest {
         PermissionRequest {

@@ -249,6 +249,12 @@ impl PiClient {
         let _ = self.tx.send(Outbound::Close);
     }
 
+    /// Answers every request still waiting as "pi exited". For the read loop to
+    /// call once the child's output has ended.
+    pub fn fail_pending(&self) {
+        self.pending.fail_all();
+    }
+
     /// Routes one line off pi's stdout.
     ///
     /// Answers are settled here and reported as [`Incoming::Response`] so a
