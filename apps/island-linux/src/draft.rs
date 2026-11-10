@@ -5,6 +5,7 @@
 
 use crate::input::TextInput;
 use crate::newtask::Picks;
+use crate::orb::Dictation;
 use crate::server::Session;
 use gpui::{App, AppContext, Entity, ScrollHandle};
 
@@ -14,10 +15,12 @@ pub enum Target {
     New,
 }
 
-/// One line of the message, in the order it was typed. Editable in place.
+/// One line of the message, in the order it was said or typed. Editable in place.
 pub struct Row {
     pub id: u64,
     pub input: Entity<TextInput>,
+    /// Dictated rather than typed, which its mark says.
+    pub said: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +56,30 @@ pub struct Draft {
     pub hovered_model: Option<String>,
     pub picks: Picks,
     pub want_focus: Option<Field>,
+    pub dictation: Dictation,
+    /// The microphone's latest peak, polled while recording.
+    pub peak: f32,
+    /// When the microphone opened, for the clock.
+    pub recording_since: Option<std::time::Instant>,
+    /// A failed transcription's recording, which Retry runs again.
+    pub retry_path: Option<String>,
+    /// Counts dictation runs; a reply for any run but the current one —
+    /// cancelled, or replaced — is ignored whole.
+    pub run: u64,
+    /// A start is still unanswered. The recorder is shared, so no second
+    /// start goes out until the first has been answered and, if cancelled,
+    /// closed again — or that close could stop the new recording.
+    pub start_pending: bool,
+}
+
+/// A send that waits on the words still being said: where it goes and the
+/// rows it holds, both as they stood at ⏎. The box's text became one of those
+/// rows at ⏎, so the box is left for whatever is written meanwhile, which
+/// the send never takes.
+#[derive(Clone, Debug)]
+pub struct Pinned {
+    pub target: Option<Target>,
+    pub rows: Vec<u64>,
 }
 
 impl Draft {
@@ -61,7 +88,7 @@ impl Draft {
             target: None,
             rows: Vec::new(),
             next_row: 0,
-            typing: cx.new(|cx| TextInput::new("Ctrl+⏎ Queue, ⏎ Send", cx)),
+            typing: cx.new(|cx| TextInput::new(placeholder(), cx)),
             search: cx.new(|cx| TextInput::new("Search tasks  Ctrl+F", cx).max_lines(1)),
             list_shown: false,
             list_scroll: ScrollHandle::new(),
@@ -70,6 +97,12 @@ impl Draft {
             hovered_model: None,
             picks: Picks::load(),
             want_focus: None,
+            dictation: Dictation::Idle,
+            peak: 0.0,
+            recording_since: None,
+            retry_path: None,
+            run: 0,
+            start_pending: false,
         }
     }
 
@@ -81,6 +114,15 @@ impl Draft {
     }
 
     pub fn add_row(&mut self, text: &str, cx: &mut App) {
+        self.push_row(text, false, cx);
+    }
+
+    /// Dictated words, as a row of their own; answers its id.
+    pub fn add_said(&mut self, text: &str, cx: &mut App) -> u64 {
+        self.push_row(text, true, cx)
+    }
+
+    fn push_row(&mut self, text: &str, said: bool, cx: &mut App) -> u64 {
         let text = text.to_string();
         let input = cx.new(|cx| {
             let mut input = TextInput::new("", cx).max_lines(4);
@@ -88,7 +130,8 @@ impl Draft {
             input
         });
         self.next_row += 1;
-        self.rows.push(Row { id: self.next_row, input });
+        self.rows.push(Row { id: self.next_row, input, said });
+        self.next_row
     }
 
     /// Every row's text and then the box's, in order.
@@ -98,8 +141,22 @@ impl Draft {
 
     /// Something under way that a new card must not push aside.
     pub fn busy(&self, cx: &App) -> bool {
-        !self.rows.is_empty() || !self.typing.read(cx).text().is_empty() || self.list_shown || self.menu.is_some()
+        !self.rows.is_empty()
+            || !self.typing.read(cx).text().is_empty()
+            || self.list_shown
+            || self.menu.is_some()
+            || self.dictation != Dictation::Idle
     }
+
+    /// The microphone is open or opening: what the orb and layout draw as recording.
+    pub fn listening(&self) -> bool {
+        matches!(self.dictation, Dictation::Starting | Dictation::Recording)
+    }
+}
+
+/// The box's prompt, naming the reader's key, which Dray's Settings can move.
+pub fn placeholder() -> String {
+    format!("{} to speak, Ctrl+⏎ Queue, ⏎ Send", crate::prefs::read().key.label())
 }
 
 /// The message as sent: each row, then what is still in the box, trimmed and

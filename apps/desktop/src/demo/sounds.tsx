@@ -93,13 +93,14 @@ const ISLAND: Sound[] = [
     where: [
       "The microphone opened, from the orb or a tap of the island's key. Full volume there.",
       "Heard with Mute while recording on, as in Dray.",
+      "On Linux too, once the microphone has opened.",
     ],
   },
   {
     name: "Dictation stop",
     file: "src/assets/dictate-stop.wav, bundled",
     play: () => playDictationSound("stop"),
-    where: ["Dictated words became a row in the draft."],
+    where: ["Dictated words became a row in the draft, on the Mac and on Linux."],
   },
   {
     name: "Send",

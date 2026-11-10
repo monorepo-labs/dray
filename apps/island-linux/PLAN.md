@@ -89,6 +89,27 @@ Swift island carries over.
   project pick is stamped on the server as Dray's own.
 - **The text box wraps**, growing to 6 lines and scrolling to the caret past
   that, as the Mac's field does. GPUI's wrapped layout does the shaping.
+- **Dictation is Dray's own**, through the server to the app (`host_call`),
+  as on the Mac: one place sets up model, microphone and mute. A tap on the
+  open panel starts or stops it, a double tap opens the panel listening, ⏎
+  while recording stops and sends once the words land, Esc mid-sentence does
+  nothing and Ctrl+Esc throws the recording away and closes, the Mac's ⌘Esc.
+  Words become a said row; a failed run keeps its recording for Retry. The
+  start and stop tones are Dray's.
+- **The orb is the Mac's `prism` shader, ported line for line** (`orb.rs`) and
+  run on the CPU a frame at a time into an image GPUI draws: the orb is at most
+  80pt and this machine class may have no GPU. `OrbDriver`'s easing and
+  `OrbClock` come with it. Checked against the Mac's own renders
+  (`orb-reference` branch): every still and all 748 frames of its speech run
+  within a tenth of an 8-bit step on average, and the motion follows its
+  per-frame inputs (`fixtures/orb-uniforms.csv`, a test). `--orb-png` and
+  `--orb-csv` write frames for that comparison.
+- **Both Mac layouts**, the reader's pick in the right-click menu: expanded
+  (the default) puts the orb in a 48pt slot above the box and grows it to
+  80pt alone over the screen while recording, the card gone bare; compact puts
+  a 24pt orb in the box's row and shrinks the card to orb and clock. Expanded's
+  80pt orb is the Mac's `LensOrb` without its screen capture, which is the
+  prism orb exactly; see Known limits.
 - **The app hands asks to the island and keeps finished-session banners**:
   `islandOn("asks")` is true on Linux while the island child lives
   (`island::running`), `islandOn("done")` stays Mac-only until there is a done
@@ -108,8 +129,8 @@ Each its own PR.
 1. **Spike** (#851): panel window, placement, modifier tap, connected to the
    server, pinned to the newest session.
 2. **Waiting-card pill and answering cards**, and the Mac look (#860).
-3. **Reply, new task, the session switcher, typed rows.**
-4. Dictation rows, over `host_call` to the app as on the Mac.
+3. **Reply, new task, the session switcher, typed rows** (#862).
+4. **Dictation rows, over `host_call` to the app as on the Mac**, and the orb.
 5. Screenshots and drawing on the live screen.
 
 ## Known limits
@@ -120,6 +141,12 @@ Each its own PR.
 - **No done pill.** A finished session is still Dray's banner on Linux.
 - **This computer's sessions alone.** Other machines' (`island_links`) are not
   read yet, so a new task's bar has no machine control.
+- **Expanded's orb refracts nothing.** The Mac's `LensOrb` bends a live
+  capture of the screen behind it, leaving out its own windows; X11 has no
+  such capture without walking the window stack through Composite, so it
+  draws as the Mac does without the Screen Recording grant.
+- **The microphone opens 1–2s after the press**, in the app's recorder, so
+  words said at once are lost; the clock stays at 0:00 until it is open.
 - **Not yet from the Mac's draft**: Ctrl+S saving it as a Dray draft,
   dragging rows to reorder, the last turns of the transcript above it, and
   the bar's step-through chords (⌘⇧A and the rest).
