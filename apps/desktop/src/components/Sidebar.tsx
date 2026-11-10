@@ -41,7 +41,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ShortcutKeys, { DigitKeys } from "@/components/ShortcutKeys";
-import { useSwipe } from "@/lib/swipe";
+import { HAS_SWIPE, useSwipe } from "@/lib/swipe";
 import { playSwipeTick } from "@/lib/tick";
 import { Kbd } from "@/components/ui/kbd";
 import {
@@ -1880,7 +1880,7 @@ function ProjectFilter({
         <TooltipTrigger asChild>{trigger}</TooltipTrigger>
         <TooltipContent side="bottom" align="start" className="flex items-center gap-1.5 px-1.5">
           <ShortcutKeys ids={["filter.prev", "filter.next"]} />
-          or swipe anywhere on the sidebar
+          {HAS_SWIPE && "or swipe anywhere on the sidebar"}
         </TooltipContent>
       </Tooltip>
     );
@@ -1976,7 +1976,7 @@ function ProjectFilter({
         <DropdownMenuSeparator />
         <div className="flex flex-col items-start gap-1 px-2 py-1 text-xs text-muted-foreground">
           <ShortcutKeys ids={["filter.prev", "filter.next"]} />
-          <span>or swipe the sidebar</span>
+          {HAS_SWIPE && <span>or swipe the sidebar</span>}
         </div>
       </DropdownMenuContent>
     </DropdownMenu>

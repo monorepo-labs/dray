@@ -55,6 +55,8 @@ pub mod git;
 pub mod github;
 #[path = "harness/harness.rs"]
 pub mod harness;
+#[cfg(target_os = "linux")]
+pub mod ibus;
 #[path = "issues/issues.rs"]
 pub mod issues;
 #[path = "models/models.rs"]
@@ -786,6 +788,9 @@ pub fn run() {
             // window already exists here for it to parent a view into.
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::init(app.handle());
+            // Mac only: X11 reports a two-finger scroll with no phases, so a
+            // swipe's start and lift could only be guessed from timing, the
+            // route #445 took out.
             #[cfg(target_os = "macos")]
             trackpad::watch(app.handle());
             // GTK draws the menu as a bar inside the window, over the app's own
@@ -801,7 +806,7 @@ pub fn run() {
             // reader who gives up after one failure writes no more.
             tauri::async_runtime::spawn(transcription::recordings::prune());
             transcription::serve_host(app.handle());
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             transcription::stop_on_sleep(app.handle());
 
             // Sessions live in the background server launchd runs from this
@@ -944,6 +949,7 @@ pub fn run() {
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             chromium::chromium_remove,
             notifications::notify_session,
+            notifications::set_window_urgent,
             updater::check_update,
             updater::install_update,
             quit::confirm_quit,

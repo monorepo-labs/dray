@@ -1,5 +1,11 @@
 import { useEffect, useRef } from "react";
+import { IS_MAC } from "@/lib/platform";
 import { listen } from "@/lib/transport";
+
+/// Whether `trackpad_swipe` ever arrives, so hints name the gesture only where
+/// it works. Mac only: X11 reports a two-finger scroll with no phases, so where
+/// a swipe starts and lifts could only be guessed from timing (#445).
+export const HAS_SWIPE = IS_MAC;
 
 /// Finger travel, in scroll pixels, before a swipe takes its one step. Short
 /// nudges measured at 17–29 and the shortest deliberate flick at about 40.

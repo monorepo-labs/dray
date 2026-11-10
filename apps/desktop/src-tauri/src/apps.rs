@@ -377,9 +377,10 @@ pub fn app_selection() -> Option<String> {
     APP_SELECTION.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// Seconds since the last key or pointer input anywhere on this Mac. The break
-/// clock reads it because the browser pane is a native view whose input never
-/// reaches the webview's document. `None` off macOS.
+/// Seconds since the last key or pointer input anywhere on this desktop. The
+/// break clock reads it because the browser pane is a native view whose input
+/// never reaches the webview's document. `None` where the OS cannot say:
+/// Windows, or Linux without an X display or libXss.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn idle_seconds() -> Option<f64> {
     #[cfg(target_os = "macos")]
@@ -391,8 +392,96 @@ pub fn idle_seconds() -> Option<f64> {
         // Combined session state, any input event type; needs no permission.
         return Some(unsafe { CGEventSourceSecondsSinceLastEventType(0, u32::MAX) });
     }
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
+    return x11_idle::seconds();
     #[allow(unreachable_code)]
     None
+}
+
+/// The XScreenSaver extension's idle time, on a display connection of its own.
+///
+/// Both libraries are opened at run time rather than linked: libXss is not a
+/// library every desktop has, and linked it would stop the app starting where
+/// it is missing. x11-dl would do the opening but asks for `libXss.so.2`, a
+/// soname no distribution ships, and `libXss.so` exists only with the dev
+/// package.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+mod x11_idle {
+    use std::ffi::{c_char, c_int, c_ulong, c_void, CStr};
+    use std::sync::{Mutex, OnceLock};
+
+    #[repr(C)]
+    struct Info {
+        window: c_ulong,
+        state: c_int,
+        kind: c_int,
+        til_or_since: c_ulong,
+        /// Milliseconds.
+        idle: c_ulong,
+        event_mask: c_ulong,
+    }
+
+    type Query = unsafe extern "C" fn(*mut c_void, c_ulong, *mut Info) -> c_int;
+
+    struct Xss {
+        display: *mut c_void,
+        root: c_ulong,
+        info: *mut Info,
+        query: Query,
+    }
+
+    // SAFETY: the display is this module's own connection, never handed to
+    // GDK, and only touched under the mutex.
+    unsafe impl Send for Xss {}
+
+    /// Opened once; a failure is remembered, since nothing makes it succeed later.
+    static XSS: OnceLock<Option<Mutex<Xss>>> = OnceLock::new();
+
+    pub fn seconds() -> Option<f64> {
+        let xss = XSS.get_or_init(|| unsafe { open() }.map(Mutex::new)).as_ref()?;
+        let xss = xss.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: all three came from `open`, which checked each.
+        let ok = unsafe { (xss.query)(xss.display, xss.root, xss.info) } != 0;
+        ok.then(|| unsafe { (*xss.info).idle } as f64 / 1000.0)
+    }
+
+    unsafe fn sym<T: Copy>(lib: *mut c_void, name: &CStr) -> Option<T> {
+        let p = unsafe { libc::dlsym(lib, name.as_ptr()) };
+        // SAFETY: `T` is the C signature the symbol is declared with.
+        (!p.is_null()).then(|| unsafe { std::mem::transmute_copy(&p) })
+    }
+
+    unsafe fn open() -> Option<Xss> {
+        let flags = libc::RTLD_NOW | libc::RTLD_LOCAL;
+        let x11 = unsafe { libc::dlopen(c"libX11.so.6".as_ptr(), flags) };
+        let xss = unsafe { libc::dlopen(c"libXss.so.1".as_ptr(), flags) };
+        if x11.is_null() || xss.is_null() {
+            return None;
+        }
+        unsafe {
+            let open_display: unsafe extern "C" fn(*const c_char) -> *mut c_void =
+                sym(x11, c"XOpenDisplay")?;
+            let root_of: unsafe extern "C" fn(*mut c_void) -> c_ulong = sym(x11, c"XDefaultRootWindow")?;
+            let has_ext: unsafe extern "C" fn(*mut c_void, *mut c_int, *mut c_int) -> c_int =
+                sym(xss, c"XScreenSaverQueryExtension")?;
+            let alloc: unsafe extern "C" fn() -> *mut Info = sym(xss, c"XScreenSaverAllocInfo")?;
+            let query: Query = sym(xss, c"XScreenSaverQueryInfo")?;
+
+            let display = open_display(std::ptr::null());
+            if display.is_null() {
+                return None;
+            }
+            let (mut event_base, mut error_base) = (0, 0);
+            if has_ext(display, &mut event_base, &mut error_base) == 0 {
+                return None;
+            }
+            let info = alloc();
+            if info.is_null() {
+                return None;
+            }
+            Some(Xss { display, root: root_of(display), info, query })
+        }
+    }
 }
 
 /// Whether Dray Island is running, asked at each permission or question so a
