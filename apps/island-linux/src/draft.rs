@@ -91,9 +91,12 @@ pub struct Draft {
     /// start goes out until the first has been answered and, if cancelled,
     /// closed again — or that close could stop the new recording.
     pub start_pending: bool,
-    /// A send asked for while a screenshot or a moment was still landing,
-    /// which goes once the last of them has.
-    pub send_after: Option<Pinned>,
+    /// The send the reader asked for that still waits: on the words being
+    /// transcribed, or on a screenshot or moment still landing.
+    pub pinned: Option<Pinned>,
+    /// Counts recordings thrown away, which void a cut still transcribing;
+    /// `run` would not do, as starting again moves it too.
+    pub thrown: u64,
 }
 
 /// A send that waits on the words still being said: where it goes and the
@@ -104,6 +107,8 @@ pub struct Draft {
 pub struct Pinned {
     pub target: Option<Target>,
     pub rows: Vec<u64>,
+    /// The stop's words are still being transcribed, and belong to it.
+    pub awaiting_words: bool,
 }
 
 impl Draft {
@@ -128,7 +133,8 @@ impl Draft {
             retry_path: None,
             run: 0,
             start_pending: false,
-            send_after: None,
+            pinned: None,
+            thrown: 0,
         }
     }
 
@@ -203,21 +209,19 @@ impl Draft {
         let row = self.rows.pop().expect("just pushed");
         let at = self.rows.iter().position(|r| r.id == before).unwrap_or(self.rows.len());
         self.rows.insert(at, row);
+        // Words cut ahead of a shot in a waiting send are that send's.
+        if let Some(p) = self.pinned.as_mut().filter(|p| p.rows.contains(&before)) {
+            p.rows.push(id);
+        }
         id
     }
 
-    /// Rows as they would be sent; held places are left out. Given `only`,
-    /// a pinned send's ids, it takes every row up to the last of them: words a
-    /// screenshot cut off land among its rows after ⏎, and are its, while
-    /// rows written since go at the end.
+    /// Rows as they would be sent, `only` those ids where given; held places
+    /// are left out.
     pub fn snapshot(&self, only: Option<&[u64]>, cx: &App) -> Vec<RowData> {
-        let end = match only {
-            Some(ids) => self.rows.iter().rposition(|r| ids.contains(&r.id)).map_or(0, |i| i + 1),
-            None => self.rows.len(),
-        };
-        self.rows[..end]
+        self.rows
             .iter()
-            .filter(|r| !r.pending)
+            .filter(|r| !r.pending && only.is_none_or(|ids| ids.contains(&r.id)))
             .map(|r| RowData { text: r.input.read(cx).text().to_string(), file: r.file.clone(), said: r.said })
             .collect()
     }

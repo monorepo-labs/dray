@@ -638,30 +638,43 @@ pub fn stop_dictation(island: &Entity<Island>, then_send: bool, cx: &mut App) {
     }
     // A send waiting on the words goes where the reader pressed ⏎ with what
     // was there then, whatever they pick or write while the model works.
-    let pinned = then_send.then(|| pin(island, cx));
-    transcribe(island, "stop_transcription", json!({}), pinned, cx);
+    if then_send {
+        pin(island, true, cx);
+    }
+    transcribe(island, "stop_transcription", json!({}), then_send, cx);
 }
 
-/// The send as it stands at ⏎. The box's text joins it as a row of its own,
-/// and the box empties: what is typed next is not this message's.
-fn pin(island: &Entity<Island>, cx: &mut App) -> Pinned {
+/// Holds the send as it stands at ⏎ in the draft until what it waits on has
+/// landed. The box's text joins it as a row of its own, and the box empties:
+/// what is typed next is not this message's. A send already waiting takes
+/// the new rows in, keeping where it goes.
+fn pin(island: &Entity<Island>, awaiting_words: bool, cx: &mut App) {
     let typing = island.read(cx).draft().typing.clone();
     let text = typing.read(cx).text().trim().to_string();
     if !text.is_empty() {
         island.update(cx, |island, cx| island.draft_mut().add_row(&text, cx));
         typing.update(cx, |t, cx| t.clear(cx));
     }
-    let d = island.read(cx).draft();
-    Pinned { target: d.target.clone(), rows: d.rows.iter().map(|r| r.id).collect() }
+    island.update(cx, |island, cx| {
+        let d = island.draft_mut();
+        let rows: Vec<u64> = d.rows.iter().map(|r| r.id).collect();
+        let target = d.target.clone();
+        let p = d.pinned.get_or_insert(Pinned { target, rows: Vec::new(), awaiting_words: false });
+        let fresh: Vec<u64> = rows.into_iter().filter(|id| !p.rows.contains(id)).collect();
+        p.rows.extend(fresh);
+        p.awaiting_words |= awaiting_words;
+        cx.notify();
+    });
 }
 
-/// A screenshot or moment has landed: a send waiting on it goes once none
-/// is left landing.
+/// Something a waiting send held for has landed: it goes once its words
+/// are in and no screenshot or moment is still landing.
 fn release_send(island: &Entity<Island>, cx: &mut App) {
-    if island.read(cx).draft().holding() {
+    let d = island.read(cx).draft();
+    if d.holding() || d.pinned.as_ref().is_none_or(|p| p.awaiting_words) {
         return;
     }
-    if let Some(pinned) = island.update(cx, |island, _| island.draft_mut().send_after.take()) {
+    if let Some(pinned) = island.update(cx, |island, _| island.draft_mut().pinned.take()) {
         send_to_target(island, Some(pinned), cx);
     }
 }
@@ -673,13 +686,13 @@ pub fn retry_dictation(island: &Entity<Island>, cx: &mut App) {
     if island.read(cx).draft().dictation != orb::Dictation::Idle {
         return;
     }
-    transcribe(island, "retry_transcription", json!({ "path": path }), None, cx);
+    transcribe(island, "retry_transcription", json!({ "path": path }), false, cx);
 }
 
 /// How long the model may take over a long recording.
 const TRANSCRIBE_WITHIN: Duration = Duration::from_secs(180);
 
-fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, send_to: Option<Pinned>, cx: &mut App) {
+fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, then_send: bool, cx: &mut App) {
     let Some(reply) = call(island, cmd, args, cx) else { return };
     // The microphone closes, and the screen with it: a moment still being
     // drawn is taken first.
@@ -716,9 +729,19 @@ fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, send_
                 cx.notify();
                 placed
             });
-            if placed && let Some(mut pinned) = send_to {
-                pinned.rows.extend(row);
-                send_to_target(&island, Some(pinned), cx);
+            if then_send {
+                // A failed run keeps the draft open, its notice and Retry
+                // with it, so the send waits for the reader again.
+                island.update(cx, |island, _| {
+                    let d = island.draft_mut();
+                    if !placed {
+                        d.pinned = None;
+                    } else if let Some(p) = d.pinned.as_mut() {
+                        p.rows.extend(row);
+                        p.awaiting_words = false;
+                    }
+                });
+                release_send(&island, cx);
             }
         });
     })
@@ -781,6 +804,9 @@ fn throw_away(island: &Entity<Island>, cx: &mut App) {
     island.update(cx, |island, cx| {
         let d = island.draft_mut();
         d.run += 1;
+        d.thrown += 1;
+        // A send waiting on these words is called off; its rows stay.
+        d.pinned = None;
         d.dictation = orb::Dictation::Idle;
         d.recording_since = None;
         d.peak = 0.0;
@@ -1373,19 +1399,22 @@ pub fn send(island: &Entity<Island>, cx: &mut App) {
 /// `send`, to `pinned` where a send waited on dictation, else to the task
 /// picked now.
 fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App) {
-    match island.read(cx).draft().dictation {
-        orb::Dictation::Recording => return stop_dictation(island, true, cx),
-        orb::Dictation::Idle => {}
-        _ => return,
+    // A pinned send's rows are fixed, so a recording started since is
+    // neither its business nor stopped by it.
+    if pinned.is_none() {
+        match island.read(cx).draft().dictation {
+            orb::Dictation::Recording => return stop_dictation(island, true, cx),
+            orb::Dictation::Idle => {}
+            _ => return,
+        }
     }
     // A screenshot or moment still landing is part of this message: the send
     // waits for it, holding the rows as they are now.
     if island.read(cx).draft().holding() {
-        let pinned = pinned.unwrap_or_else(|| pin(island, cx));
-        island.update(cx, |island, cx| {
-            island.draft_mut().send_after = Some(pinned);
-            cx.notify();
-        });
+        match pinned {
+            Some(p) => island.update(cx, |island, _| island.draft_mut().pinned = Some(p)),
+            None => pin(island, false, cx),
+        }
         return;
     }
     let (target, rows, typing, picks) = {
@@ -1594,7 +1623,7 @@ fn overlay_options(glass: bool, focus: bool, cx: &App) -> WindowOptions {
 /// was taken in the speech. Answers once the words are placed.
 fn cut_dictation(island: &Entity<Island>, before: u64, cx: &mut App) -> Option<futures::channel::oneshot::Receiver<()>> {
     let reply = call(island, "cut_transcription", json!({}), cx)?;
-    let run = island.read(cx).draft().run;
+    let thrown = island.read(cx).draft().thrown;
     let (done, placed) = futures::channel::oneshot::channel();
     let island = island.clone();
     cx.spawn(async move |cx| {
@@ -1606,7 +1635,7 @@ fn cut_dictation(island: &Entity<Island>, before: u64, cx: &mut App) -> Option<f
         cx.update(|cx| {
             island.update(cx, |island, cx| {
                 // Thrown away meanwhile: its words are void, as a stop's are.
-                if island.draft().run != run {
+                if island.draft().thrown != thrown {
                     return;
                 }
                 match answer {
