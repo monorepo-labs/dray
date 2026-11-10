@@ -638,19 +638,32 @@ pub fn stop_dictation(island: &Entity<Island>, then_send: bool, cx: &mut App) {
     }
     // A send waiting on the words goes where the reader pressed ⏎ with what
     // was there then, whatever they pick or write while the model works.
-    let pinned = then_send.then(|| {
-        // The box's text joins the send as a row of its own, and the box
-        // empties: what is typed next is not this message's.
-        let typing = island.read(cx).draft().typing.clone();
-        let text = typing.read(cx).text().trim().to_string();
-        if !text.is_empty() {
-            island.update(cx, |island, cx| island.draft_mut().add_row(&text, cx));
-            typing.update(cx, |t, cx| t.clear(cx));
-        }
-        let d = island.read(cx).draft();
-        Pinned { target: d.target.clone(), rows: d.rows.iter().map(|r| r.id).collect() }
-    });
+    let pinned = then_send.then(|| pin(island, cx));
     transcribe(island, "stop_transcription", json!({}), pinned, cx);
+}
+
+/// The send as it stands at ⏎. The box's text joins it as a row of its own,
+/// and the box empties: what is typed next is not this message's.
+fn pin(island: &Entity<Island>, cx: &mut App) -> Pinned {
+    let typing = island.read(cx).draft().typing.clone();
+    let text = typing.read(cx).text().trim().to_string();
+    if !text.is_empty() {
+        island.update(cx, |island, cx| island.draft_mut().add_row(&text, cx));
+        typing.update(cx, |t, cx| t.clear(cx));
+    }
+    let d = island.read(cx).draft();
+    Pinned { target: d.target.clone(), rows: d.rows.iter().map(|r| r.id).collect() }
+}
+
+/// A screenshot or moment has landed: a send waiting on it goes once none
+/// is left landing.
+fn release_send(island: &Entity<Island>, cx: &mut App) {
+    if island.read(cx).draft().holding() {
+        return;
+    }
+    if let Some(pinned) = island.update(cx, |island, _| island.draft_mut().send_after.take()) {
+        send_to_target(island, Some(pinned), cx);
+    }
 }
 
 /// Runs the model again over the recording a failed run kept, so the words
@@ -1365,6 +1378,16 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
         orb::Dictation::Idle => {}
         _ => return,
     }
+    // A screenshot or moment still landing is part of this message: the send
+    // waits for it, holding the rows as they are now.
+    if island.read(cx).draft().holding() {
+        let pinned = pinned.unwrap_or_else(|| pin(island, cx));
+        island.update(cx, |island, cx| {
+            island.draft_mut().send_after = Some(pinned);
+            cx.notify();
+        });
+        return;
+    }
     let (target, rows, typing, picks) = {
         let i = island.read(cx);
         let d = i.draft();
@@ -1393,7 +1416,7 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
     let Some(target) = target else { return };
     // An image alone is a message, as in Dray's own composer; a screenshot
     // still being taken is not yet one.
-    if (text.is_empty() && files.is_empty()) || island.read(cx).draft().sending || island.read(cx).draft().holding() {
+    if (text.is_empty() && files.is_empty()) || island.read(cx).draft().sending {
         return;
     }
     if target == Target::New && picks["cwd"].is_null() {
@@ -1571,6 +1594,7 @@ fn overlay_options(glass: bool, focus: bool, cx: &App) -> WindowOptions {
 /// was taken in the speech. Answers once the words are placed.
 fn cut_dictation(island: &Entity<Island>, before: u64, cx: &mut App) -> Option<futures::channel::oneshot::Receiver<()>> {
     let reply = call(island, "cut_transcription", json!({}), cx)?;
+    let run = island.read(cx).draft().run;
     let (done, placed) = futures::channel::oneshot::channel();
     let island = island.clone();
     cx.spawn(async move |cx| {
@@ -1581,6 +1605,10 @@ fn cut_dictation(island: &Entity<Island>, before: u64, cx: &mut App) -> Option<f
         };
         cx.update(|cx| {
             island.update(cx, |island, cx| {
+                // Thrown away meanwhile: its words are void, as a stop's are.
+                if island.draft().run != run {
+                    return;
+                }
                 match answer {
                     Ok(o) => match o.get("kind").and_then(|k| k.as_str()) {
                         Some("text") => {
@@ -1770,7 +1798,8 @@ fn end_capture(island: &Entity<Island>, shot: Option<(image::RgbaImage, capture:
             island.update(cx, |island, cx| {
                 island.draft_mut().fill_shot(run.slot, path.as_deref());
                 cx.notify();
-            })
+            });
+            release_send(&island, cx);
         });
     })
     .detach();
@@ -2058,7 +2087,8 @@ fn take_moment(island: &Entity<Island>, cx: &mut App) {
             island.update(cx, |island, cx| {
                 island.draft_mut().fill_shot(moment.slot, path.as_deref());
                 cx.notify();
-            })
+            });
+            release_send(&island, cx);
         });
     })
     .detach();

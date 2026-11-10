@@ -29,6 +29,9 @@ pub struct Row {
     /// An image file's size, read once from its header, so its thumbnail has
     /// its height before the picture loads and the rows scroll to the true end.
     pub size: Option<(u32, u32)>,
+    /// Travels as an image block, so it is numbered; decided once, as the
+    /// rule reads the file's size.
+    pub image: bool,
 }
 
 /// A row as it is sent or restored: its words, or its file.
@@ -88,6 +91,9 @@ pub struct Draft {
     /// start goes out until the first has been answered and, if cancelled,
     /// closed again — or that close could stop the new recording.
     pub start_pending: bool,
+    /// A send asked for while a screenshot or a moment was still landing,
+    /// which goes once the last of them has.
+    pub send_after: Option<Pinned>,
 }
 
 /// A send that waits on the words still being said: where it goes and the
@@ -122,6 +128,7 @@ impl Draft {
             retry_path: None,
             run: 0,
             start_pending: false,
+            send_after: None,
         }
     }
 
@@ -149,7 +156,7 @@ impl Draft {
             input
         });
         self.next_row += 1;
-        self.rows.push(Row { id: self.next_row, input, said, file: None, pending: false, size: None });
+        self.rows.push(Row { id: self.next_row, input, said, file: None, pending: false, size: None, image: false });
         self.rows_scroll.scroll_to_bottom();
         self.next_row
     }
@@ -159,6 +166,7 @@ impl Draft {
         let id = self.push_row("", false, cx);
         if let Some(row) = self.rows.last_mut() {
             row.file = Some(path.to_string());
+            row.image = crate::capture::is_image(path);
             row.size = image_size(path);
         }
         id
@@ -179,6 +187,7 @@ impl Draft {
             Some(path) => {
                 if let Some(row) = self.rows.iter_mut().find(|r| r.id == id) {
                     row.file = Some(path.to_string());
+                    row.image = crate::capture::is_image(path);
                     row.size = image_size(path);
                     row.pending = false;
                 }
@@ -197,12 +206,18 @@ impl Draft {
         id
     }
 
-    /// Rows as they would be sent, `only` those ids where given; held places
-    /// are left out.
+    /// Rows as they would be sent; held places are left out. Given `only`,
+    /// a pinned send's ids, it takes every row up to the last of them: words a
+    /// screenshot cut off land among its rows after ⏎, and are its, while
+    /// rows written since go at the end.
     pub fn snapshot(&self, only: Option<&[u64]>, cx: &App) -> Vec<RowData> {
-        self.rows
+        let end = match only {
+            Some(ids) => self.rows.iter().rposition(|r| ids.contains(&r.id)).map_or(0, |i| i + 1),
+            None => self.rows.len(),
+        };
+        self.rows[..end]
             .iter()
-            .filter(|r| !r.pending && only.is_none_or(|ids| ids.contains(&r.id)))
+            .filter(|r| !r.pending)
             .map(|r| RowData { text: r.input.read(cx).text().to_string(), file: r.file.clone(), said: r.said })
             .collect()
     }
@@ -231,10 +246,10 @@ impl Draft {
     pub fn label(&self, id: u64) -> String {
         let Some(row) = self.rows.iter().find(|r| r.id == id) else { return String::new() };
         let Some(path) = &row.file else { return String::new() };
-        if !crate::capture::is_image(path) {
+        if !row.image {
             return std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path).to_string();
         }
-        let before = self.rows.iter().take_while(|r| r.id != id).filter(|r| r.file.as_deref().is_some_and(crate::capture::is_image)).count();
+        let before = self.rows.iter().take_while(|r| r.id != id).filter(|r| r.image).count();
         format!("Image {}", before + 1)
     }
 
@@ -349,11 +364,22 @@ mod tests {
 
     #[test]
     fn files_stand_in_the_text_where_they_sit() {
+        // Real files, since what counts as an image reads the size.
+        let dir = std::env::temp_dir().join(format!("dray-island-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, len: usize| {
+            let path = dir.join(name);
+            std::fs::write(&path, vec![0u8; len]).unwrap();
+            path.to_string_lossy().to_string()
+        };
+        let (a, notes, big, b) = (file("a.png", 10), file("notes.txt", 10), file("big.png", 5 * 1024 * 1024 + 1), file("b.jpg", 10));
         let row = |text: &str, file: Option<&str>| RowData { text: text.into(), file: file.map(str::to_string), said: false };
-        let rows = [row("look at", None), row("", Some("/t/a.png")), row("and", None), row("", Some("/t/notes.txt")), row("", Some("/t/b.jpg"))];
+        let rows = [row("look at", None), row("", Some(&a)), row("and", None), row("", Some(&notes)), row("", Some(&big)), row("", Some(&b))];
         let (text, files) = compose(&rows, "thanks");
-        assert_eq!(text, "look at [Image 1] and [notes.txt] [Image 2] thanks");
-        assert_eq!(files, ["/t/a.png", "/t/notes.txt", "/t/b.jpg"]);
+        // Over 5MB the server sends a path, not a block, so it takes no number.
+        assert_eq!(text, "look at [Image 1] and [notes.txt] [big.png] [Image 2] thanks");
+        assert_eq!(files, [a, notes, big, b]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

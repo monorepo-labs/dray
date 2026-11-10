@@ -28,6 +28,8 @@ const MENU_ROOM: f32 = 250.;
 const MODEL_MENU: f32 = 300.;
 /// The draft's rows: three tall at most, then they scroll.
 const ROWS_CAP: f32 = 3. * 32. + 2. * 10.;
+/// A file tile in a strip: a thumbnail up to twice 56pt wide, and its ✕.
+const TILE: f32 = 132.;
 /// The type: 13pt body, 12 for asides, 11 for the smallest.
 const BODY: f32 = 13.;
 const ASIDE: f32 = 12.;
@@ -1055,18 +1057,22 @@ fn file_rows(state: &Entity<Island>, d: &crate::draft::Draft, ids: &[u64]) -> im
     div()
         .flex_none()
         .flex()
+        // Wrapped, and each tile capped, so a long run of files or a long
+        // name never pushes a tile and its ✕ out of the fixed-width panel.
+        .flex_wrap()
         .gap_2()
         .p(px(8.))
         .rounded(px(10.))
         .bg(white(0.06))
         .children(ids.iter().map(|id| {
             div()
+                .max_w(px(TILE))
                 .flex()
                 .flex_col()
                 .items_center()
                 .gap(px(4.))
                 .child(div().flex().gap(px(4.)).child(thumb(row(id), 56.)).child(remove(*id)))
-                .child(div().text_size(px(SMALL)).text_color(white(0.6)).child(d.label(*id)))
+                .child(div().max_w(px(TILE)).truncate().text_size(px(SMALL)).text_color(white(0.6)).child(d.label(*id)))
         }))
         .into_any_element()
 }

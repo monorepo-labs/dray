@@ -190,23 +190,43 @@ pub fn write(image: &RgbaImage) -> std::io::Result<PathBuf> {
             }
         }
     }
-    let dir = folder();
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let dir = private_folder()?;
     sweep(&dir);
-    std::fs::create_dir_all(&dir)?;
     let name = format!("Screenshot {}.{ext}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
     let path = dir.join(name);
-    std::fs::write(&path, data)?;
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+    file.write_all(&data)?;
     Ok(path)
 }
 
-fn folder() -> PathBuf {
-    std::env::temp_dir().join(format!("dray-island-{}", whoami()))
+/// The island's folder in the shared temp dir, owner-only: a screenshot is
+/// the reader's screen, sent or not. One already there must be a real
+/// directory of ours, or another account could have planted it to read them.
+fn private_folder() -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let uid = whoami()?;
+    let dir = std::env::temp_dir().join(format!("dray-island-{uid}"));
+    match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    let meta = std::fs::symlink_metadata(&dir)?;
+    if !meta.is_dir() || meta.uid() != uid {
+        return Err(std::io::Error::other(format!("{} isn't a folder of yours", dir.display())));
+    }
+    if meta.mode() & 0o077 != 0 {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(dir)
 }
 
-/// The user's id, so two accounts on one machine never share the folder.
-fn whoami() -> u32 {
+/// The process's own user id, read off `/proc/self`, which it owns.
+fn whoami() -> std::io::Result<u32> {
     use std::os::unix::fs::MetadataExt;
-    std::env::home_dir().and_then(|h| std::fs::metadata(h).ok()).map_or(0, |m| m.uid())
+    Ok(std::fs::metadata("/proc/self")?.uid())
 }
 
 fn sweep(dir: &Path) {
@@ -220,11 +240,19 @@ fn sweep(dir: &Path) {
     }
 }
 
-/// Whether a draft row's file is a picture, which the prompt names
-/// `[Image N]` and the model gets as an image block.
+/// Whether a draft row's file travels as an image block, which the prompt
+/// names `[Image N]`: the server's rule (`attachments.rs`), the API's four
+/// types at 5MB or under. Anything else goes as a path, and numbering it
+/// would point the words around it at the wrong picture.
 pub fn is_image(path: &str) -> bool {
+    image_type(path) && std::fs::metadata(path).is_ok_and(|m| m.len() <= MAX_IMAGE)
+}
+
+const MAX_IMAGE: u64 = 5 * 1024 * 1024;
+
+fn image_type(path: &str) -> bool {
     let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or_default().to_lowercase();
-    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "bmp" | "tiff")
+    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp")
 }
 
 /// The padding around a moment's marks when it is taken, so the image shows
@@ -305,7 +333,8 @@ mod tests {
 
     #[test]
     fn knows_a_picture_by_its_name() {
-        assert!(is_image("/tmp/a.PNG") && is_image("x.jpeg"));
-        assert!(!is_image("notes.txt"));
+        assert!(image_type("/tmp/a.PNG") && image_type("x.jpeg"));
+        assert!(!image_type("notes.txt") && !image_type("shot.heic") && !image_type("a.bmp"));
+        assert!(!is_image("/nonexistent/a.png"));
     }
 }
