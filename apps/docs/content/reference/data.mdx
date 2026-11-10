@@ -33,7 +33,6 @@ The folder is readable by your user alone, and Dray uploads none of it. For what
 | `serve-port`, `serve.lock`, `dray.sock` | The running server's port, its lock, and the socket the `dray` command talks to. |
 | `server.log` | The background server's log. See [Troubleshooting](/reference/troubleshooting). |
 | `parse_failures.jsonl` | Lines from an agent CLI that Dray could not read, with the raw line. Safe to delete. |
-| `cli-synced` | The app version that last updated your `dray` CLI. |
 
 Your composer picks, theme, shortcuts, spaces list and other app preferences are not in `~/.dray`. They live in the app's own storage on this Mac.
 
@@ -41,7 +40,7 @@ Outside `~/.dray`, Dray also writes:
 
 - **Worktrees**, inside the project: `<project>/.claude/worktrees/<name>`, on a branch `worktree-<name>`. See [Worktrees](/using-dray/worktrees).
 - **The login item** that starts the background server: `~/Library/LaunchAgents/com.yogesh.dray.server.plist`. The app writes it on every launch.
-- **The `dray` CLI**, if you installed it: `~/.local/bin/dray`, and its skill in `~/.claude/skills/dray/` and `~/.codex/skills/dray/`.
+- **The `dray` CLI**, if you installed it: `~/.local/bin/dray`, and its skill in `~/.claude/skills/dray/`, `~/.codex/skills/dray/` and `~/.agents/skills/dray/`.
 
 ## What goes when you delete a session
 
@@ -96,7 +95,7 @@ Dray runs each agent's own CLI and does not store agent logins. Each agent keeps
 Signing in from Settings → Accounts runs the agent's own login, so the credential lands in that agent's folder. Two exceptions write there on your behalf:
 
 - **pi:** an API key you add in Accounts is written to `~/.pi/agent/auth.json`, pi's own store.
-- **fx:** Dray sets `fast_mode` and `session_titles` in `~/.fx/settings.json` when it creates an fx session. That file is fx's global setting, so it also changes what your fx terminal uses.
+- **fx:** Dray sets `session_titles` in `~/.fx/settings.json` when it creates an fx session, and `provider` when you pick one. That file is fx's global setting, so it also changes what your fx terminal uses.
 
 See [Accounts](/settings/accounts).
 

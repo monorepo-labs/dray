@@ -53,18 +53,9 @@ pub const PROTOCOL_VERSION: u32 = 13;
 /// means what it says; 6 is simply the oldest still in the wild.
 pub const OLDEST_SPOKEN: u32 = 6;
 
-/// Where the app listens, unless [`endpoint`] is overridden.
+/// Where the app listens, unless [`endpoint`] is overridden. One name in
+/// every home: builds are kept apart by home, never by socket name.
 pub const SOCKET_NAME: &str = "dray.sock";
-
-/// Where a `pnpm tauri dev` build listens instead.
-///
-/// One name per build, because the socket is a single file: a dev app binding
-/// the release app's path unlinks it and takes the channel over, so from then
-/// on every `dray` call reaches the dev app and the release app's own agents
-/// write into a socket nothing is listening on. Restarting the release app
-/// takes it back the same way. Two names let the two run side by side, which
-/// is the ordinary state while developing this app.
-pub const SOCKET_NAME_DEV: &str = "dray-dev.sock";
 
 /// A line longer than this is refused unread. The socket is `0600`, so this is
 /// hygiene rather than a threat model — but a length-prefixed-by-newline
@@ -808,19 +799,28 @@ pub fn endpoint() -> Option<String> {
         }
     }
 
-    Some(socket_path(false)?.to_string_lossy().into_owned())
+    Some(socket_path()?.to_string_lossy().into_owned())
 }
 
-/// The socket one build of the app listens on, `~/.dray/dray.sock` by default.
-/// Resolved through `std::env::home_dir`, the same call the app's own
-/// `get_home_app_dir` makes when it creates the directory this sits in.
+/// The socket the app listens on: `dray.sock` in `DRAY_HOME` where that is
+/// set, `~/.dray` otherwise. Resolved through `std::env::home_dir`, the same
+/// call the app's own `get_home_app_dir` makes when it creates the directory.
 ///
-/// The CLI never asks for the dev one: `dray` typed in a terminal means the app
-/// the reader installed, and a dev app hands its own children `DRAY_ENDPOINT`
-/// rather than leaving them to guess which build spawned them.
-pub fn socket_path(dev: bool) -> Option<PathBuf> {
-    let name = if dev { SOCKET_NAME_DEV } else { SOCKET_NAME };
-    Some(std::env::home_dir()?.join(".dray").join(name))
+/// `DRAY_HOME` is read because the server moves its socket with its data: with
+/// it ignored, `dray session ls` beside a server on a home of its own asked
+/// whatever was listening in `~/.dray` instead, while `dray server tunnel`
+/// asked the right one.
+///
+/// A dev build's home is not guessed at: `dray` typed in a terminal means the
+/// app the reader installed, and a dev app hands its own children
+/// `DRAY_ENDPOINT` rather than leaving them to work out which build spawned
+/// them.
+pub fn socket_path() -> Option<PathBuf> {
+    let home = match std::env::var_os("DRAY_HOME").filter(|home| !home.is_empty()) {
+        Some(home) => PathBuf::from(home),
+        None => std::env::home_dir()?.join(".dray"),
+    };
+    Some(home.join(SOCKET_NAME))
 }
 
 /// One request or response as it goes on the wire. Newline-delimited JSON, the
@@ -1090,6 +1090,17 @@ mod tests {
         std::env::set_var("DRAY_ENDPOINT", "");
         assert!(endpoint().unwrap().ends_with("dray.sock"));
 
+        // The socket follows the data directory, and an endpoint named
+        // outright still wins over it.
+        std::env::set_var("DRAY_HOME", "/tmp/other-home");
+        assert_eq!(endpoint().as_deref(), Some("/tmp/other-home/dray.sock"));
+        std::env::set_var("DRAY_ENDPOINT", "/tmp/custom.sock");
+        assert_eq!(endpoint().as_deref(), Some("/tmp/custom.sock"));
+
+        std::env::set_var("DRAY_HOME", "");
         std::env::remove_var("DRAY_ENDPOINT");
+        assert!(endpoint().unwrap().ends_with(".dray/dray.sock"));
+
+        std::env::remove_var("DRAY_HOME");
     }
 }

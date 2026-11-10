@@ -124,8 +124,12 @@ const RAIL_MIN = 2;
 const AT_BOTTOM_PX = 40;
 
 /// The cards to draw: the live set, but one beat behind when it empties.
-function useLingeringCards(pending: PendingAsk[]): PendingAsk[] {
-  const [shown, setShown] = useState(pending);
+///
+/// Held with the session they belong to. The single view keeps one `Chat`
+/// across a switch, so cards held bare drew session A's card in B for the
+/// length of the exit, answered under B's id, and copied A's plan into B.
+function useLingeringCards(sessionId: string | null, pending: PendingAsk[]): PendingAsk[] {
+  const [shown, setShown] = useState({ sessionId, cards: pending });
 
   // Identity changes on every event, so the effect keys off the ids instead —
   // re-running it per event would set state in a loop.
@@ -136,18 +140,21 @@ function useLingeringCards(pending: PendingAsk[]): PendingAsk[] {
   useEffect(() => {
     // Arrivals are never delayed; the agent is blocked on them.
     if (latest.current.length > 0) {
-      setShown(latest.current);
+      setShown({ sessionId, cards: latest.current });
       return;
     }
 
     const timer = setTimeout(
-      () => setShown((prev) => (prev.length === 0 ? prev : [])),
+      () =>
+        setShown((prev) =>
+          prev.sessionId === sessionId && prev.cards.length === 0 ? prev : { sessionId, cards: [] },
+        ),
       CARD_EXIT_MS,
     );
     return () => clearTimeout(timer);
-  }, [key]);
+  }, [key, sessionId]);
 
-  return shown;
+  return shown.sessionId === sessionId ? shown.cards : pending;
 }
 
 /// Double-click on inline code selects the whole run, not the word under the
@@ -231,13 +238,13 @@ export default function Chat({
     [session?.events, busy, liveTaskIds],
   );
 
-  const cards = useLingeringCards(pendingAsks);
+  const sessionId = session?.sessionId ?? null;
+  const cards = useLingeringCards(sessionId, pendingAsks);
 
   // The plan is copied out of the ask because the ask is the only place it
   // exists: a permission request is never persisted, and the `exit_plan_mode`
   // call beside it carries an empty input. Safe in an effect that re-runs on
   // every session event, since `setPlan` ignores a text it already holds.
-  const sessionId = session?.sessionId ?? null;
   useEffect(() => {
     for (const ask of cards) {
       if (ask.type !== "permission_requested") continue;
@@ -343,6 +350,24 @@ export default function Chat({
   // delta arrives. So this is non-null whenever a text preview is.
   const streamingTurn =
     streamingKind && lastTurn && !lastTurn.completed ? lastTurn : null;
+
+  // One element across renders. `TurnBlock`'s memo compares its footer by
+  // identity, so built inline the turn being streamed into re-rendered every
+  // time this component did, whatever had changed. Both hosts are the last
+  // turn or nothing, which is what lets one element serve.
+  const previewShown = !!streamingTurn;
+  const orbShown = !!waitingTurn;
+  const orbTokens = working?.tokens ?? 0;
+  const liveFooter = useMemo(
+    () =>
+      sessionId && (previewShown || orbShown) ? (
+        <>
+          {previewShown && <StreamingPreview sessionId={sessionId} />}
+          {orbShown && <WorkingIndicator tokens={orbTokens} />}
+        </>
+      ) : undefined,
+    [sessionId, previewShown, orbShown, orbTokens],
+  );
 
   // A new session resets the pin, or the previous session's scroll position
   // would decide whether this one follows. Must run before the pin effect below,
@@ -616,9 +641,10 @@ export default function Chat({
   // Bound whether or not the button is drawn: the button is the affordance for
   // this, not its gate, and pressing it while already at the bottom re-arms the
   // pin — which is the useful half when a turn has scrolled you off it.
-  useHotkey("chat.bottom", () => {
-    if (active && session) scrollToBottom();
-  });
+  //
+  // Unregistered while hidden rather than made a no-op: the chord is claimed
+  // before the handler runs, and ⌘↓ belongs to whatever view is on screen.
+  useHotkey("chat.bottom", scrollToBottom, { enabled: active && !!session });
 
   // One object per session rather than per render: every file-path span in
   // every message reads this context, and a fresh value re-renders all of them
@@ -685,18 +711,7 @@ export default function Chat({
                   // the preview belongs to this turn, not after it. Where both
                   // draw, the orb goes under the preview, which is where the
                   // reader is already looking and where it sits on its own.
-                  footer={
-                    turn !== streamingTurn && turn !== waitingTurn ? undefined : (
-                      <>
-                        {turn === streamingTurn && (
-                          <StreamingPreview sessionId={session.sessionId} />
-                        )}
-                        {turn === waitingTurn && (
-                          <WorkingIndicator tokens={working?.tokens ?? 0} />
-                        )}
-                      </>
-                    )
-                  }
+                  footer={turn === lastTurn ? liveFooter : undefined}
                 />
               </div>
             ))}
@@ -754,6 +769,7 @@ export default function Chat({
             <QueuedMessages
               messages={queuedMessages}
               onSendNow={session.harness === "fx" && active ? onSendNow : undefined}
+              active={active}
             />
 
             {backgroundTaskCount > 0 && (

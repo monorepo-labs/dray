@@ -712,6 +712,12 @@ function AddServerDialog({
   const [trusting, setTrusting] = useState<TrustHost | null>(null);
   // Pressing Add starts the setup, and from then on only the buttons leave.
   const [started, setStarted] = useState(false);
+  // Which add the dialog is waiting on. Leaving bumps it, so an add that
+  // answers after Cancel writes nothing and opens nothing.
+  const run = useRef(0);
+  // That add's name on the Rust side, so Cancel stops it and no other: the
+  // `dray` CLI adds servers through the same commands.
+  const ticket = useRef<string | null>(null);
 
   useEffect(() => {
     if (!busy || !viaSsh) return;
@@ -726,7 +732,14 @@ function AddServerDialog({
     };
   }, [busy, viaSsh]);
 
-  const close = () => {
+  /// `leaving` is the reader walking away, by Cancel or a dismissal, rather
+  /// than the add finishing: an add still out is stopped, where it used to
+  /// run on and add the server after the dialog had gone.
+  const close = (leaving = false) => {
+    run.current += 1;
+    if (leaving && busy && ticket.current) {
+      void invoke("cancel_add_server", { ticket: ticket.current }, LOCAL).catch(() => undefined);
+    }
     setLine("");
     setUrl("");
     setToken("");
@@ -738,18 +751,22 @@ function AddServerDialog({
   };
 
   const add = async () => {
+    const mine = (run.current += 1);
+    const id = crypto.randomUUID();
+    ticket.current = id;
     setStarted(true);
     setBusy(true);
     setStage(null);
     setFailure(null);
     try {
       if (viaSsh) {
-        await invoke<ServerInfo>("add_ssh_server", { line, name: name.trim() || null }, LOCAL);
+        await invoke<ServerInfo>("add_ssh_server", { line, name: name.trim() || null, ticket: id }, LOCAL);
       } else {
-        await invoke<ServerInfo>("add_server", { url, token, name: name.trim() || null }, LOCAL);
+        await invoke<ServerInfo>("add_server", { url, token, name: name.trim() || null, ticket: id }, LOCAL);
       }
-      close();
+      if (run.current === mine) close();
     } catch (err) {
+      if (run.current !== mine) return;
       const failed = asFailure(err);
       if (failed.fix?.kind === "install") {
         const [l, n] = [line.trim(), name.trim()];
@@ -773,7 +790,7 @@ function AddServerDialog({
   const ready = viaSsh ? line.trim() : url.trim() && token.trim();
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && close()}>
+    <Dialog open={open} onOpenChange={(next) => !next && close(true)}>
       <DialogContent className="grid-cols-[minmax(0,1fr)]" showClose={false} dismissible={!started}>
         <DialogHeader>
           <DialogTitle>Add server</DialogTitle>
@@ -848,7 +865,7 @@ function AddServerDialog({
             {viaSsh ? "Use an address and token instead" : "Use an SSH login instead"}
           </Button>
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={close}>
+            <Button type="button" variant="ghost" onClick={() => close(true)}>
               Cancel
             </Button>
             <Button type="submit" disabled={busy || !ready}>

@@ -243,8 +243,8 @@ pub async fn repoint(link: &BoatLink, target: &ssh::Target) -> Result<(BoatLink,
     Ok((link, next, moved || was != endpoint))
 }
 
-/// The login's public half, which boat authorizes as it answers. Derived from
-/// the private file where no `.pub` sits beside it.
+/// The login's public half, which boat authorizes as it answers. Read off the
+/// `.pub` beside an identity file, and refused where none has one.
 async fn public_key(identities: &[PathBuf]) -> Result<String, String> {
     for file in identities {
         let public = PathBuf::from(format!("{}.pub", file.display()));

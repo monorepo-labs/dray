@@ -150,7 +150,9 @@ export function countChanges(sides: EditSides): { added: number; removed: number
 /// no size at all beside it, where the same edit from Claude drew `+22 -12`.
 ///
 /// `+++` and `---` are file headers, not content, and they are the one pair of
-/// prefixes that would otherwise be counted as a line each.
+/// prefixes that would otherwise be counted as a line each. Only ahead of the
+/// first hunk though: inside one, `--- x` is a removed `-- x` and `+++i;` an
+/// added `++i;`.
 export function countUnifiedChanges(diffs: (string | null)[]): {
   added: number;
   removed: number;
@@ -160,8 +162,11 @@ export function countUnifiedChanges(diffs: (string | null)[]): {
 
   for (const diff of diffs) {
     if (!diff) continue;
+    let inHunk = false;
     for (const line of diff.split("\n")) {
-      if (line.startsWith("+++") || line.startsWith("---")) continue;
+      if (line.startsWith("@@")) inHunk = true;
+      else if (line.startsWith("diff --git ")) inHunk = false;
+      if (!inHunk && (line.startsWith("+++") || line.startsWith("---"))) continue;
       if (line.startsWith("+")) added += 1;
       else if (line.startsWith("-")) removed += 1;
     }

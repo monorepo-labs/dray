@@ -33,9 +33,13 @@ export default function QueuedMessages({
   /// Stops the running turn so the flush that follows it happens now. Drawn
   /// only where waiting costs a whole turn, which is fx — see `Chat`.
   onSendNow,
+  /// False in a split's unfocused panes: Esc takes back the focused pane's
+  /// prompt alone, so the hint is drawn only where the key reaches.
+  active = true,
 }: {
   messages: QueuedPrompt[];
   onSendNow?: () => void;
+  active?: boolean;
 }) {
   // Above the early return, since a hook cannot be conditional — and bound to
   // the prop rather than to fx by name, so the chord exists exactly where the
@@ -117,7 +121,7 @@ export default function QueuedMessages({
                 on every row would promise each of them a key that reaches one.
                 Send now reaches the whole queue rather than this row, and sits
                 here for the same reason: one line under the last of them. */}
-            {i === messages.length - 1 && (
+            {active && i === messages.length - 1 && (
               <span className="flex items-center gap-1.5 pr-1 text-ui text-muted-foreground/60">
                 {onSendNow && (
                   <>

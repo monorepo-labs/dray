@@ -19,9 +19,9 @@ enum Target: Hashable {
     case new
 }
 
-/// The panel's layout, the reader's pick from its right-click menu and never
-/// switched for them: compact, one row with the orb beside the input, or voice,
-/// the orb alone in the middle.
+/// The panel's layout, the reader's pick and never switched for them: compact,
+/// one row with the orb beside the input, or expanded, the orb alone in the
+/// middle with input and send beneath it.
 enum InputMode: String, CaseIterable {
     case compact, expanded
 
@@ -255,6 +255,7 @@ final class Composer {
             dismissedBoats.formIntersection(self.store.boatAlerts)
             // A sandbox newly warning is news: the pill lights up once, as an ask's does, then rests.
             let warning = Set(self.store.boatAlerts.map(\.server))
+            if let refusal, !warning.contains(refusal.server) { self.refusal = nil }
             if !warning.subtracting(boatsWarned).isEmpty, !shown { announce() }
             boatsWarned = warning
             pillChanged()
@@ -434,19 +435,25 @@ final class Composer {
 
     func dismissBoat(_ alert: BoatAlert) {
         dismissedBoats.insert(alert)
+        if refusal?.server == alert.server { refusal = nil }
         pillChanged()
     }
-    /// Why the last Extend didn't take: a trial's cap, Dray being closed.
-    var boatRefused: String?
+    /// Why the last Extend didn't take: a trial's cap, Dray being closed. Kept with the sandbox it was said of, so it
+    /// is drawn under that one's warning alone and goes when the warning does.
+    private var refusal: (server: String, why: String)?
+    var boatRefused: String? {
+        guard let refusal, boatAlerts.first?.server == refusal.server else { return nil }
+        return refusal.why
+    }
 
     /// Sets the time left. It does not add, and it is every later resume's length too.
     func extendBoat(_ alert: BoatAlert, minutes: Int) async {
         let args: [String: JSON] = ["id": .string(alert.server), "minutes": .number(Double(minutes))]
         do {
             let _: JSON = try await store.call(server, "extend_boat", args, as: JSON.self)
-            boatRefused = nil
+            refusal = nil
         } catch {
-            boatRefused = error.localizedDescription
+            refusal = (alert.server, error.localizedDescription)
         }
     }
 
@@ -507,13 +514,14 @@ final class Composer {
         Task { await showInApp(key) }
     }
 
-    /// The pill drawn while the panel is shut is the done pill, which ⌘⏎ answers.
-    var donePillUp: Bool { !shown && attention.isEmpty && !done.isEmpty }
+    /// The pill drawn while the panel is shut is the done pill, which ⌘⏎ answers. A boat warning is drawn ahead of
+    /// it, and Esc and ⌘⏎ were held system-wide then for a pill that was not on screen.
+    var donePillUp: Bool { !shown && attention.isEmpty && boatAlerts.isEmpty && !done.isEmpty }
 
     /// A number key on a card: a permission's option outright, a question's toggled.
     func pickOption(_ i: Int) {
-        // The flash or the list covers the card, so a key now would answer one the reader cannot see.
-        guard !sent, !listing else { return }
+        // The flash, the list or a recording covers the card, so a key now would answer one the reader cannot see.
+        guard !sent, !listing, !listening else { return }
         switch ask?.event.payload {
         case .permissionRequested(let r)? where r.options.indices.contains(i):
             Task { await respond(r.options[i].id) }
@@ -575,7 +583,7 @@ final class Composer {
         answered += 1
         guard !busy, attention == [key], waiting(key).count == 1 else { return }
         leaving = (key, e)
-        Sound.send?.play()
+        Sound.send?.playInBackground()
         flash(answered > 1 ? "\(answered) answered" : label)
     }
 

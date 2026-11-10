@@ -163,7 +163,7 @@ export default function ToolCall({
 
   // Shown on the collapsed row, so the size of an edit is legible without
   // opening it. Memoized because it parses the diff to stay consistent with the
-  // viewer, and a streaming turn re-renders every row on each delta.
+  // viewer, and a running turn re-renders every row on each event.
   // Keyed on the strings, not on `sides` — `editSides` builds a fresh object
   // every render, so an identity dependency would never hit.
   const changes = useMemo(
@@ -219,7 +219,7 @@ export default function ToolCall({
   // A `Skill` call hands the skill a brief in the model's own words, so it reads
   // as prose and not as arguments. Null is the common case — a skill named with
   // nothing beside it — and then the row has nothing to open at all.
-  const skill = name === "Skill" && !rawInput ? skillBrief(input) : null;
+  const brief = name === "Skill" && !rawInput ? skillBrief(input) : null;
 
   // A delegated run's brief is the row's own text rather than a block under it.
   // The brief *is* the summary here, so drawing both put the task on screen
@@ -228,7 +228,6 @@ export default function ToolCall({
   // truncating for one of these. Null for every harness but fx, which is the
   // only one that nests a brief.
   const delegated = toolType === "subagent_spawn" && !rawInput ? subagentBrief(input) : null;
-  const brief = skill;
 
   // A shell row's command is its summary, and the body omits it for that
   // reason — so opening the row draws it whole in a box of its own, or a long

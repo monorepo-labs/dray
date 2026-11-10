@@ -97,8 +97,6 @@ function NoChanges({ onOpenRepo }: { onOpenRepo: () => void }) {
           <GitCompare className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
           No files changed this turn.
         </p>
-        {/* The chord sits beside the button, not inside it: in there it reads as
-            part of the label, and the button already says what it does. */}
         <div className="flex flex-wrap items-center justify-center gap-2">
           <Button variant="outline" size="sm" onClick={onOpenRepo}>
             Open Diff view

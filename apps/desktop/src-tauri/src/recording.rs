@@ -32,8 +32,8 @@ const HOLD_LAST: Duration = Duration::from_millis(1500);
 const MAX_BYTES: u64 = u32::MAX as u64 - (64 << 20);
 const TIMESCALE: u32 = 1000;
 /// Frames waiting for the writer. Each is ~100KB of base64, so this is a few
-/// megabytes at most; a frame arriving to a full queue is dropped, since the
-/// sender is CEF's UI thread and must never wait on a disk.
+/// megabytes at most; a frame arriving to a full queue is turned away, since
+/// the sender is the capture loop and must never wait on a disk.
 const QUEUE: usize = 64;
 
 struct Frame {
@@ -106,15 +106,54 @@ impl Recorder {
             let _ = tx.send(last);
         }
         drop(tx);
-        let truncated = thread.join().map_err(|_| "the recording thread panicked".to_string())??;
+        let written = thread.join().map_err(|_| "the recording thread panicked".to_string()).and_then(|w| w);
+        let truncated = match written {
+            Ok(truncated) => truncated,
+            // Nothing playable was written, so nothing is worth keeping.
+            Err(e) => {
+                let _ = std::fs::remove_file(&mov);
+                return Err(e);
+            }
+        };
         let mp4 = match name.map(slug).filter(|s| !s.is_empty()) {
             Some(stem) => unclaimed(mov.parent().unwrap_or(Path::new(".")), &stem),
             None => mov.with_extension("mp4"),
         };
-        convert(&mov, &mp4)?;
-        let _ = std::fs::remove_file(&mov);
+        convert_or_discard(&mov, &mp4, convert)?;
         Ok((mp4, truncated))
     }
+}
+
+/// How many times a conversion is tried before the recording is let go.
+const CONVERT_TRIES: u32 = 3;
+
+/// Converts, trying again on a failure, and deletes the `.mov` either way.
+///
+/// The `.mov` is uncompressed JPEG and runs to gigabytes, and nothing plays it
+/// in the chat, so one a conversion left behind was disk spent on a file
+/// nobody would open, until the session was deleted. A failure that holds over
+/// every try deletes it, and says so.
+fn convert_or_discard(
+    mov: &Path,
+    mp4: &Path,
+    convert: impl Fn(&Path, &Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut said = String::new();
+    for attempt in 1..=CONVERT_TRIES {
+        match convert(mov, mp4) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(mov);
+                return Ok(());
+            }
+            Err(e) => said = e,
+        }
+        if attempt < CONVERT_TRIES {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+    let _ = std::fs::remove_file(mov);
+    let _ = std::fs::remove_file(mp4);
+    Err(format!("{said} (tried {CONVERT_TRIES} times; the recording was deleted)"))
 }
 
 /// A name made safe to be a file's: lowercase letters and digits, every
@@ -635,12 +674,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A conversion that fails once is tried again and keeps the video; one
+    /// that keeps failing takes the `.mov` and any half-written `.mp4` with it.
+    #[test]
+    fn a_conversion_is_retried_then_the_recording_is_deleted() {
+        let dir = temp_dir("convert-retry");
+        let (mov, mp4) = (dir.join("r.mov"), dir.join("r.mp4"));
+        let calls = std::cell::Cell::new(0);
+
+        std::fs::write(&mov, b"frames").unwrap();
+        let flaky = |_: &Path, to: &Path| {
+            calls.set(calls.get() + 1);
+            if calls.get() < 2 {
+                return Err("busy".to_string());
+            }
+            std::fs::write(to, b"video").map_err(|e| e.to_string())
+        };
+        convert_or_discard(&mov, &mp4, flaky).unwrap();
+        assert_eq!(calls.get(), 2);
+        assert!(mp4.exists() && !mov.exists());
+
+        calls.set(0);
+        std::fs::remove_file(&mp4).unwrap();
+        std::fs::write(&mov, b"frames").unwrap();
+        let broken = |_: &Path, to: &Path| {
+            calls.set(calls.get() + 1);
+            let _ = std::fs::write(to, b"half");
+            Err("Cannot Decode".to_string())
+        };
+        let err = convert_or_discard(&mov, &mp4, broken).unwrap_err();
+        assert_eq!(calls.get(), CONVERT_TRIES);
+        assert!(err.contains("Cannot Decode") && err.contains("deleted"), "{err}");
+        assert!(!mov.exists() && !mp4.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_recording_with_no_frames_says_so() {
         let dir = std::env::temp_dir().join(format!("dray-recording-empty-{}", std::process::id()));
         let Some(recorder) = started(&dir, "empty") else { return };
         let err = recorder.finish(None).unwrap_err();
         assert!(err.contains("no frames"), "{err}");
+        assert!(!dir.join("empty.mov").exists(), "an empty recording leaves nothing behind");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

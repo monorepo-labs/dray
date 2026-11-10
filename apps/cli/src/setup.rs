@@ -613,10 +613,7 @@ fn tunnel_off() -> Result<(), String> {
 /// `tunnel-url` and `serve-token` are read from — unless `DRAY_ENDPOINT` names
 /// one outright.
 fn set_remote_access(on: bool) -> Result<(), String> {
-    let endpoint = match std::env::var("DRAY_ENDPOINT") {
-        Ok(set) if !set.is_empty() => set,
-        _ => dray_home()?.join(dray_proto::SOCKET_NAME).to_string_lossy().into_owned(),
-    };
+    let endpoint = dray_proto::endpoint().ok_or("could not resolve your home directory")?;
     let request = dray_proto::Request::SetRemoteAccess(dray_proto::SetRemoteAccess { on });
     match super::send_to(&endpoint, request)? {
         dray_proto::Response::RemoteAccess { .. } => Ok(()),

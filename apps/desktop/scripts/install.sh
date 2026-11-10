@@ -34,18 +34,28 @@ SRC="$(find "$ROOT/src-tauri/target" -maxdepth 4 -name "$NAME.app" -type d \
 [ -n "$SRC" ] && [ -d "$SRC" ] || die "no $NAME.app under src-tauri/target after build"
 say "Built $SRC"
 
+# The app's own processes, without its background server. `dray --serve`
+# runs from this same bundle and is meant to outlive the app: it holds every
+# session, keeps the inodes it started from when the bundle is moved aside, and
+# restarts itself once idle on seeing the newer binary. Matched here, it read as
+# the app still running and was killed with every turn it held.
+app_pids() {
+  pgrep -f "$DEST/Contents/MacOS/" 2>/dev/null | while read -r pid; do
+    ps -o args= -p "$pid" 2>/dev/null | grep -q -- ' --serve' || echo "$pid"
+  done
+}
+
 # Replacing the bundle under a running process leaves it half-swapped.
 WAS_RUNNING=0
-if pgrep -f "$DEST/Contents/MacOS/" >/dev/null 2>&1; then
+if [ -n "$(app_pids)" ]; then
   WAS_RUNNING=1
   say "Quitting running $NAME"
   osascript -e "tell application id \"$BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
   for _ in $(seq 20); do
-    pgrep -f "$DEST/Contents/MacOS/" >/dev/null 2>&1 || break
+    [ -n "$(app_pids)" ] || break
     sleep 0.25
   done
-  pgrep -f "$DEST/Contents/MacOS/" >/dev/null 2>&1 && \
-    pkill -f "$DEST/Contents/MacOS/" || true
+  app_pids | xargs kill 2>/dev/null || true
   sleep 0.5
 fi
 

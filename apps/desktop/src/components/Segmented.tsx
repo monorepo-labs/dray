@@ -4,19 +4,19 @@ import { cn } from "@/lib/utils";
 
 /// A two-way pick drawn as a track with a thumb that slides between its halves.
 ///
-/// The app's own segmented control, the shape [DiffPane]'s style toggle and the
-/// composer's use: `--surface-well` cuts a scrim into the row in both modes, so
+/// The app's own segmented control, the shape [IconToggle] and the composer's
+/// agent picker use: `--surface-well` cuts a scrim into the row in both modes, so
 /// the thumb reads as *raised out of it* rather than as the one segment that
-/// happens to be greyer. Round rather than `rounded-md`, since both callers
+/// happens to be greyer. Round rather than `rounded-md`, since its callers
 /// stand in rows of pills.
 ///
-/// **The thumb is one element that slides**, where `DiffPane`'s is a fill on
+/// **The thumb is one element that slides**, where `IconToggle`'s is a fill on
 /// whichever segment is pressed. A fill can only cut and appear, which at this
 /// size is the two labels blinking; a thumb that travels is what says the pair
 /// is one control with a position rather than two lamps. It has to be *one*
 /// node to do that, so it sits under the buttons rather than inside either.
 ///
-/// **Exactly two options, deliberately.** Both callers are two-valued, and it
+/// **Exactly two options, deliberately.** Every caller is two-valued, and it
 /// is two that makes the geometry a constant — half the track, one width of
 /// travel — where an `n` would put a computed width and a computed transform on
 /// every render for a case nothing here has.
@@ -29,7 +29,7 @@ import { cn } from "@/lib/utils";
 /// of two unequal labels in half and squeezed the longer one. The columns are
 /// `minmax(auto, 1fr)`, so the widest label sets both.
 ///
-/// [DiffPane]: ./changes/DiffPane.tsx
+/// [IconToggle]: ./IconToggle.tsx
 export default function Segmented<T extends string>({
   value,
   options,

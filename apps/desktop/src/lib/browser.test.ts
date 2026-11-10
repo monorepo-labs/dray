@@ -57,6 +57,8 @@ describe("browserTarget", () => {
 
   it("classifies URL-bar input once normalized", () => {
     expect(browserTarget(normalizeUrl("localhost:5173"))).toBe("localhost");
+    expect(normalizeUrl("192.168.1.20:5173/app")).toBe("http://192.168.1.20:5173/app");
+    expect(normalizeUrl("example.com")).toBe("https://example.com");
     expect(browserTarget(normalizeUrl("[::1]:3000"))).toBe("localhost");
     expect(browserTarget(normalizeUrl("example.com"))).toBe("site");
     expect(browserTarget(normalizeUrl("how to center a div"))).toBe("site");

@@ -1,6 +1,6 @@
 # Git and models
 
-**Git.** [git.rs](../src-tauri/src/git.rs) and [github.rs](../src-tauri/src/github.rs) are the only places the app shells out to anything but `claude`. `checkout_branch` validates the name against branches git just listed — injection is not the risk, but a name starting with `-` parses as a flag. It runs when the user picks a branch, not at send, and `dirty` is re-read at pick time.
+**Git.** [git.rs](../src-tauri/src/git.rs) and [github.rs](../src-tauri/src/github.rs) are where most of the app shells out to `git` and `gh`; the Files tree's ignore check ([files.rs](../src-tauri/src/files.rs)), `gh repo clone` ([projects.rs](../src-tauri/src/projects.rs)) and the GitHub issue reads ([issues/](../src-tauri/src/issues/)) spawn their own. `checkout_branch` validates the name against branches git just listed — injection is not the risk, but a name starting with `-` parses as a flag. It runs when the user picks a branch, not at send, and `dirty` is re-read at pick time.
 
 **`-w` worktrees do not fork from the checked-out branch.** The CLI resolves the repo's default branch, fetches `origin/<it>` and passes that to `git worktree add --no-track -B`, so the fork point is `origin/main` whatever is checked out, and a failed fetch falls back to local `HEAD`. The `-w` flag surface exposes no base ref, hence the composer hides the branch picker in worktree mode and shows the resolved base.
 

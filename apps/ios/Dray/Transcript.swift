@@ -110,6 +110,54 @@ func foldedImages(_ items: [Item]) -> [ImageRef] {
     }
 }
 
+/// One picture in a turn's gallery, and the line naming where it came from:
+/// "Read /tmp/hero.png", "Attached IMG_2041.jpg".
+struct Shot: Hashable {
+    let ref: ImageRef
+    let verb: String
+    let target: String?
+}
+
+extension Turn {
+    /// Every picture in the turn, in reading order: what the viewer pages through.
+    var gallery: [Shot] {
+        func attached(_ images: [ImageRef]) -> [Shot] {
+            images.map { Shot(ref: $0, verb: "Attached", target: fileName($0)) }
+        }
+        func calls(_ calls: [ToolCall]) -> [Shot] {
+            calls.flatMap { call in
+                call.images.map { Shot(ref: $0, verb: toolLabel(call.name, pending: false), target: call.summary) }
+            }
+        }
+        func shown(_ text: String) -> [Shot] {
+            markdownBlocks(text).compactMap {
+                guard case .image(let alt, let url) = $0 else { return nil }
+                let ref = ImageRef(path: nil, url: url, mimeType: nil)
+                return Shot(ref: ref, verb: "Image", target: alt.isEmpty ? fileName(ref) : alt)
+            }
+        }
+        var out = attached(prompt?.images ?? [])
+        for item in work {
+            switch item {
+            case .tool(let call): out += calls([call])
+            case .group(_, _, let c, _, _): out += calls(c)
+            case .prompt(_, _, _, let images): out += attached(images)
+            case .text(_, let text): out += shown(text)
+            case .failure: break
+            }
+        }
+        if finalLifted, let finalText { out += shown(finalText) }
+        // One page per picture: a tap finds it by ref, so a repeat would open on the first.
+        var seen = Set<ImageRef>()
+        return out.filter { seen.insert($0.ref).inserted }
+    }
+}
+
+private func fileName(_ ref: ImageRef) -> String? {
+    // A `data:` URL has no name, only bytes.
+    (ref.path ?? ref.url).flatMap { $0.hasPrefix("data:") ? nil : $0.split(separator: "/").last.map(String.init) }
+}
+
 /// "3 tool calls · 1 message", the desktop's summary line.
 func summaryLabel(_ items: [Item]) -> String {
     var calls = 0, messages = 0
@@ -222,7 +270,12 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
         case .turnCompleted(let failed, let finalText):
             if current == nil { current = Turn(id: "head-\(e.id)") }
             current?.completed = true
-            if failed { current?.failure = finalText ?? "Turn failed" }
+            if failed {
+                // Empty as well as absent, as the desktop reads it: a harness can
+                // send a failed turn's sentence as "".
+                let said = finalText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                current?.failure = said.isEmpty ? "Turn failed" : said
+            }
             close()
         default:
             break
@@ -233,9 +286,17 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
 }
 
 /// A relayed prompt opens with a line for the receiving agent; the bubble
-/// names the sender instead. Rebuilt exactly as `relay.ts` does, never parsed.
+/// names the sender instead. Rebuilt as `relay.ts` does up to the sender's id.
+///
+/// A sender on another machine is named with it, ` on <machine>`, which this
+/// client does not keep. That much is read to the line's end rather than
+/// rebuilt: everything before it matched whole, so it cannot take any of the
+/// message, and without it a remote sender's line stayed drawn in the bubble.
 func stripSender(_ text: String, title: String?, id: String?) -> String {
     guard let title, let id else { return text }
-    let prefix = "[message from the Dray session \"\(title)\" (\(id))]\n\n"
-    return text.hasPrefix(prefix) ? String(text.dropFirst(prefix.count)) : text
+    let opening = "[message from the Dray session \"\(title)\" (\(id))"
+    guard text.hasPrefix(opening) else { return text }
+    let rest = text.dropFirst(opening.count)
+    guard rest.hasPrefix("]\n\n") || rest.hasPrefix(" on "), let end = rest.range(of: "]\n\n") else { return text }
+    return String(rest[end.upperBound...])
 }

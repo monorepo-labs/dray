@@ -8,7 +8,7 @@
 //! composer reaches, so a session created here is not a second kind of session.
 //!
 //! Newline-delimited JSON over a unix socket at `~/.dray/dray.sock` — or
-//! `dray-dev.sock` for a dev build, see [`socket_path`] — one
+//! the same name in this build's own home, see [`socket_path`] — one
 //! request per connection. Nothing on the network can reach it at all, and
 //! access control is the containing directory's `0700` — see
 //! [`serve`](serve) for why the socket's own mode cannot be the boundary.
@@ -75,13 +75,14 @@ pub struct IssuesChangedEvent {
 /// field free to disagree with the chain it describes.
 const MAX_DEPTH: usize = 2;
 
-/// The socket this build listens on: `dray-dev.sock` under `pnpm tauri dev`,
-/// `dray.sock` otherwise.
+/// The socket this build listens on: `dray.sock`, in its own home.
 ///
-/// Split by build because the release app is normally running while this one is
-/// being developed, and one path between them means whichever started last owns
-/// the channel — `bind` unlinks the other's socket, so the app left behind
-/// keeps a listener no `dray` will ever reach again.
+/// Split by home because the release app is normally running while a dev build
+/// is being worked on, and one path between them means whichever started last
+/// owns the channel — `bind` unlinks the other's socket, so the app left behind
+/// keeps a listener no `dray` will ever reach again. A dev build always has a
+/// home of its own (`store::home_override`), which the CLI's own resolver
+/// below knows nothing of.
 ///
 /// Under `DRAY_HOME` the socket moves with the data, so a second process on
 /// its own directory takes no channel from the app's.
@@ -89,7 +90,7 @@ pub fn socket_path() -> Option<std::path::PathBuf> {
     if let Some(home) = store::home_override() {
         return Some(home.join(dray_proto::SOCKET_NAME));
     }
-    dray_proto::socket_path(crate::is_dev())
+    dray_proto::socket_path()
 }
 
 /// What a spawned agent's `DRAY_ENDPOINT` is set to.
@@ -891,12 +892,12 @@ mod server_list {
     async fn add(add: AddServer) -> Result<Response> {
         let name = Some(add.name);
         let added = match add.token {
-            Some(token) => servers::add_server(add.address, token, name).await.map_err(anyhow::Error::msg)?,
+            Some(token) => servers::add_server(add.address, token, name, None).await.map_err(anyhow::Error::msg)?,
             None => {
                 // The whole login, port and user included: `[box]:2222` is the
                 // key the add needs trusted, not `box`'s.
                 let login = crate::ssh::parse(&add.address).map(|t| t.line()).unwrap_or_else(|_| add.address.clone());
-                servers::add_ssh_server(add.address, name)
+                servers::add_ssh_server(add.address, name, None)
                     .await
                     .map_err(|f| anyhow::anyhow!(crate::machines::explain(f, &login)))?
             }
@@ -1476,12 +1477,6 @@ async fn list_sessions(list: ListSessions) -> Result<Response> {
     Ok(Response::Listed { sessions })
 }
 
-/// How many creates deep this session already sits, up to [`MAX_DEPTH`]. A
-/// session with no parent is depth 0, one created by an agent is depth 1.
-///
-/// The walk stops at the cap rather than counting on: anything past it is
-/// refused whatever the number, and stopping is what keeps an index that
-/// somehow points at itself from hanging the caller's turn.
 /// Refuses a create from a caller already [`MAX_DEPTH`] deep.
 fn check_depth(depth: Option<usize>) -> Result<()> {
     let Some(depth) = depth else { return Ok(()) };
@@ -1495,6 +1490,12 @@ fn check_depth(depth: Option<usize>) -> Result<()> {
     Ok(())
 }
 
+/// How many creates deep this session already sits, up to [`MAX_DEPTH`]. A
+/// session with no parent is depth 0, one created by an agent is depth 1.
+///
+/// The walk stops at the cap rather than counting on: anything past it is
+/// refused whatever the number, and stopping is what keeps an index that
+/// somehow points at itself from hanging the caller's turn.
 async fn depth_of(item: &SessionIndexItem) -> Result<usize> {
     let mut depth = 0;
     let mut cursor = item.parent_session_id.clone();

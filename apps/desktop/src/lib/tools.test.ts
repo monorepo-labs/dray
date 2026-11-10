@@ -25,6 +25,13 @@ describe("a Skill call", () => {
     expect(streamingLabel("Skill")).toBe("Reading a skill");
   });
 
+  // The row's "Todo" is a heading over its checklist, so it cannot conjugate.
+  it("gives a todo call a verb wherever it is counted or still streaming", () => {
+    expect(toolLabel("TodoWrite", false)).toBe("Todo");
+    expect(streamingLabel("TodoWrite")).toBe("Updating a todo list");
+    expect(groupLabel("todo_write", 2, false)).toBe("Updated 2 todo lists");
+  });
+
   it("takes the brief only where one was written", () => {
     expect(skillBrief({ args: "screenshot localhost:1420", skill: "agent-browser" })).toBe(
       "screenshot localhost:1420",

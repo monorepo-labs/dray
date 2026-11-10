@@ -56,8 +56,10 @@ final class Connection {
     /// Reads the address afresh before each connect, for a server whose port
     /// moves on every restart — the Island's This Mac. `nil` keeps the first.
     var refresh: (() -> (url: String, token: String)?)?
-    /// Whether the server can transcribe a phone's dictation; its welcome frame says.
-    private(set) var dictation = false
+    /// The last welcome frame: what the server can do and which build it runs.
+    private(set) var welcome: Welcome?
+    /// Whether the server can transcribe a phone's dictation.
+    var dictation: Bool { welcome?.dictation ?? false }
     /// Named in the hello; `"island"` is what the server counts the Island's use by.
     var client: String?
     /// Every event frame, whole, with its name. Decoded by the store, which knows the type.
@@ -143,7 +145,7 @@ final class Connection {
                 throw DrayError(err.message)
             }
             guard gen == generation else { return }
-            dictation = (try? JSONDecoder().decode(Welcome.self, from: welcome))?.dictation ?? false
+            self.welcome = try? JSONDecoder().decode(Welcome.self, from: welcome)
             connected = true
             retry = 1
             attempt = 0

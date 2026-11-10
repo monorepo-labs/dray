@@ -17,6 +17,12 @@ enum Theme {
     static let raised = Color(hex: 0x262626)
     /// `--surface-selected`: the current row.
     static let selected = Color(hex: 0x2B2B2B)
+    /// An icon's tile on a raised card: a server, Add server, Scan QR code.
+    static let tile = Color(hex: 0x333333)
+    /// A switch's track when off.
+    static let off = Color(hex: 0x3A3A3A)
+    /// A server's dot while it is on its way: quieter than any word beside it.
+    static let dim = Color(hex: 0x525252)
 
     // Ink.
     static let text = Color(hex: 0xFAFAFA)
@@ -57,6 +63,10 @@ enum Theme {
         static let md: CGFloat = 10
         /// Cards and sheets' groups.
         static let lg: CGFloat = 14
+        /// Icon tiles.
+        static let tile: CGFloat = 12
+        /// Settings' server cards and a server's own groups.
+        static let group: CGFloat = 18
         /// The composer and the sent bubble.
         static let xl: CGFloat = 20
     }
@@ -89,6 +99,38 @@ enum Theme {
         static let spoken = TypeStyle(20, 26, .regular, .title3)
         /// The model's name in the picks row, and nothing else.
         static let footnoteStrong = TypeStyle(13, 18, .semibold, .footnote)
+    }
+
+    /// The full-screen image viewer.
+    enum Viewer {
+        /// The strip's thumbnails, and the bar's round buttons.
+        static let thumb: CGFloat = 44
+        /// Around the current thumbnail: the page's colour, then a light ring.
+        static let ringGap: CGFloat = 2
+        static let ring: CGFloat = 1.5
+        /// The strip's other thumbnails, and what the page keeps behind a dragged image.
+        static let dim = 0.45
+        /// A disabled bar button.
+        static let off = 0.35
+        /// The bar holding Close, the count and Share.
+        static let bar: CGFloat = 56
+        /// The bar's glyphs.
+        static let glyph = SwiftUI.Font.system(size: 17, weight: .semibold)
+        /// "Couldn't load image"'s picture, and a failed thumbnail's.
+        static let mark = SwiftUI.Font.system(size: 32)
+        static let thumbMark = SwiftUI.Font.system(size: 18)
+        /// Try again's height.
+        static let button: CGFloat = 40
+        /// Strip to caption, and caption to the screen's foot past the home indicator.
+        static let stripGap: CGFloat = 18
+        static let foot: CGFloat = 10
+        /// A dragged image's lift.
+        static let shadow = Color.black.opacity(0.6)
+        static let shadowRadius: CGFloat = 25
+        static let shadowY: CGFloat = 20
+        /// How far down a drag goes before letting go dismisses.
+        static let dismissAt: CGFloat = 120
+        static let maxZoom: CGFloat = 4
     }
 
     /// Quick and settling, never bouncy: what moves is a row arriving, not a toy.
@@ -184,6 +226,45 @@ struct PrimaryButtonStyle: ButtonStyle {
             .background(enabled ? fill : Theme.raised, in: .rect(cornerRadius: Theme.Radius.md, style: .continuous))
             .shadow(color: .black.opacity(enabled ? 0.4 : 0), radius: 2, y: 1)
             .pressed(configuration.isPressed)
+    }
+}
+
+/// The full-width white capsule inside a server's status card: Update, Scan QR code.
+struct CapsuleButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(Theme.Font.headline)
+            .foregroundStyle(enabled ? Theme.page : Theme.tertiary)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(enabled ? Theme.text : Theme.raised, in: Capsule())
+            .pressed(configuration.isPressed)
+    }
+}
+
+/// The settings switch: the desktop's near-white track with a dark thumb when
+/// on, which the system `Toggle` cannot draw.
+struct SwitchStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            withAnimation(Theme.motion) { configuration.isOn.toggle() }
+        } label: {
+            HStack(spacing: Theme.Space.m) {
+                configuration.label.frame(maxWidth: .infinity, alignment: .leading)
+                Capsule()
+                    .fill(configuration.isOn ? Theme.primary : Theme.off)
+                    .frame(width: 51, height: 31)
+                    .overlay(alignment: configuration.isOn ? .trailing : .leading) {
+                        Circle().fill(configuration.isOn ? Theme.onPrimary : Theme.secondary)
+                            .frame(width: 27, height: 27).padding(2)
+                    }
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(configuration.isOn ? "On" : "Off")
+        .accessibilityAddTraits(.isToggle)
     }
 }
 

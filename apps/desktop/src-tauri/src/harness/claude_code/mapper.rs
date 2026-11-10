@@ -330,12 +330,6 @@ impl Mapper {
         seq
     }
 
-    /// A main-thread event the app mints itself, numbered through the same
-    /// counter as the mapped lines so `seq` stays gap-free.
-    pub fn synthesize(&mut self, session_id: &str, payload: AgentEventPayload) -> AgentEvent {
-        self.build(session_id.to_string(), None, None, payload)
-    }
-
     /// The only place `AgentEvent`s are built, so `seq` can't be skipped or
     /// double-assigned.
     fn build(
@@ -641,9 +635,10 @@ impl Mapper {
         // instead.
         //
         // Only main-thread content is streamed, so only it has a preview to
-        // supersede. Keyed on `parent_tool_use_id` rather than on whether this
-        // message id matches the open one: subagent events interleave *inside*
-        // a main message's start/stop window, sharing the same stdout.
+        // supersede — and only where the stream opened this very message: a
+        // synthetic one arrives with no frames at all, and subagent events
+        // interleave *inside* a main message's start/stop window, sharing the
+        // same stdout.
         let streamed = parent_tool_use_id.is_none()
             && self.current_msg_id.as_deref() == Some(message.id.as_str());
         // Consumed even when unused, so a later block of the same message still
@@ -1200,7 +1195,8 @@ fn system_event_session_id(e: &SystemEvent) -> &str {
         | SystemEvent::PermissionCheckStatus { session_id }
         | SystemEvent::CommandsChanged { session_id }
         | SystemEvent::DevIntent { session_id }
-        | SystemEvent::HookProgress { session_id } => session_id,
+        | SystemEvent::HookProgress { session_id }
+        | SystemEvent::TaskSummary { session_id } => session_id,
         // No fields survive the catch-all. Harmless: an unrecognized subtype
         // maps to `None`, so no envelope is ever built from this value.
         SystemEvent::Unrecognized => "",
@@ -2017,9 +2013,9 @@ mod tests {
             ] if trigger == "manual"
         ));
 
-        // The replayed summary and the `/compact` echo both arrive as `user`
-        // lines. Two prompts were typed in this capture; a third bubble would
-        // mean one leaked through.
+        // The replayed summary and the `/compact` echo are this capture's only
+        // `user` lines, since the CLI echoes no typed prompt; a bubble here
+        // would mean one of them leaked through.
         let prompts = events
             .iter()
             .filter(|event| matches!(event.payload, AgentEventPayload::UserMessage { .. }))
@@ -2139,9 +2135,9 @@ mod tests {
         assert!(summed > 9 * 41_102, "the overshoot is a multiple, not a drift");
     }
 
-    /// A window keyed by a model this session never ran is not this session's
-    /// window. Only reachable with a subagent on a second model, which no
-    /// capture has — so it is pinned by hand.
+    /// A second model's window is not the main thread's, so `init`'s model
+    /// picks between them. Every capture with two entries has an `init` in
+    /// front of it, so the unnamed case is pinned by hand.
     #[test]
     fn a_context_window_for_another_model_is_ignored() {
         let per_model = map_model_usage(&serde_json::json!({
@@ -2159,11 +2155,11 @@ mod tests {
         assert_eq!(context_window(&[], None), None);
     }
 
-    /// What a usage page will read back. `result.usage` describes a turn's *last
-    /// message* — 239 and 485 output tokens across this session's two turns —
-    /// while the model actually produced 4682, so this map is the only record of
-    /// real consumption and the only thing a per-turn figure can be differenced
-    /// out of.
+    /// What a usage page will read back. `result.usage` counts a turn's
+    /// main-thread messages alone — 239 and 485 output tokens across this
+    /// session's two turns — while the model actually produced 4682, so this map
+    /// is the only record of real consumption and the only thing a per-turn
+    /// figure can be differenced out of.
     #[test]
     fn per_model_usage_is_cumulative_and_survives_into_the_event() {
         let fixture = include_str!("fixtures/complex.jsonl");

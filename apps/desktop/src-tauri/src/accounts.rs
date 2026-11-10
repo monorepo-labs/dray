@@ -1,14 +1,16 @@
 //! Which accounts each agent CLI is signed in as, asked of the CLIs themselves.
 //!
-//! Every one of the four keeps its own credential store and answers a status
-//! question on the command line, so the Accounts tab is four probes and a row
-//! each — all of them under 250ms, which is why nothing here is cached: the
-//! reader is on that page because they are about to change a login.
+//! Every one of the five keeps its own credential store. Four answer a status
+//! question on the command line and grok's is read off its file, so the
+//! Accounts tab is five probes and a row each — all of them under 250ms, which
+//! is why nothing here is cached: the reader is on that page because they are
+//! about to change a login.
 //!
 //! **No CLI here exposes a headless OAuth flow.** `claude auth login`,
-//! `codex login`, `fx login` and pi's `/login` are all interactive, so an OAuth
-//! choice opens a terminal and the page re-reads afterwards. What can be done
-//! without one is an **API key**, and only where the CLI has a way to take it:
+//! `codex login`, `fx login`, `grok login` and pi's `/login` are all
+//! interactive, so an OAuth choice opens a terminal and the page re-reads
+//! afterwards. What can be done without one is an **API key**, and only where
+//! the CLI has a way to take it:
 //! `codex login --with-api-key` reads one off stdin, and pi's own store is a
 //! JSON file this module writes. Everything else is a terminal.
 //!
@@ -30,8 +32,8 @@ use ts_rs::TS;
 
 /// How long any one probe may take before its row reads as unknown.
 ///
-/// Generous against the ~250ms all four measure at, because the cost of being
-/// wrong is asymmetric: a slow machine drawing "couldn't ask" about a perfectly
+/// Generous against the ~250ms the four spawned ones measure at, because the
+/// cost of being wrong is asymmetric: a slow machine drawing "couldn't ask" about a perfectly
 /// good login is worse than a tab that takes a moment. A hung CLI still cannot
 /// hold the tab, since every probe runs under this.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -143,9 +145,10 @@ fn pi_known(provider: &str) -> Option<&'static PiProvider> {
 /// A way of signing in, as an offer the reader picks between.
 ///
 /// The axis every one of these CLIs has and none of them calls the same thing:
-/// Codex is ChatGPT-or-API-key, Claude is subscription-or-Console, pi and fx
-/// are OAuth-or-key per provider. Modelled once here so the tab asks one
-/// question rather than four differently-shaped ones.
+/// Codex is ChatGPT-or-API-key, Claude is subscription-or-Console, grok is
+/// browser-or-device-code, pi and fx are OAuth-or-key per provider. Modelled
+/// once here so the tab asks one question rather than five differently-shaped
+/// ones.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
@@ -339,8 +342,8 @@ pub fn providers_of(harness: Harness) -> Vec<ProviderChoice> {
 /// The list is the whole of what `add_agent_account` will accept, so a frontend
 /// cannot ask for a flow this build did not offer. It is also **per provider**
 /// wherever the harness is, which is the correction that matters most here: pi
-/// offers OAuth on six of its providers and a key on all but one, and drawing
-/// the same pair on every row promised a sign-in thirty of them do not have.
+/// offers OAuth on eight of its providers and a key on all but five, and
+/// drawing the same pair on every row promised a sign-in most do not have.
 pub fn auth_options(harness: Harness, provider: Option<&str>) -> Vec<AuthOption> {
     let option = |id: &str, label: &str, command: Option<&str>, hint: Option<&str>| AuthOption {
         id: id.to_string(),
@@ -369,7 +372,7 @@ pub fn auth_options(harness: Harness, provider: Option<&str>) -> Vec<AuthOption>
                 Some("Billed per token against your Console account."),
             ),
         ],
-        // The one CLI of the four with a real non-interactive key path, which
+        // The one CLI of the five with a real non-interactive key path, which
         // is why its second option takes a field where every other terminal
         // route here takes a command.
         Harness::Codex => vec![
@@ -943,14 +946,12 @@ fn pi_forget_provider(provider: &str) -> Result<(), String> {
 
 // -------------------------------------------------------------------- writes
 
-/// Whether this harness's login command takes `provider` as an argument.
+/// Whether `provider` is one `fx logout` takes as an argument.
 ///
-/// The one place a provider name is judged for the *terminal* path, shared with
-/// [`crate::apps::open_login_terminal`] — which composes a shell script, so the
-/// answer being a closed set rather than an escaping rule is what makes it
-/// safe. pi's providers are deliberately **not** here: its login is a slash
-/// command inside a TUI, so there is no word to append.
-pub fn login_provider(harness: Harness, provider: &str) -> bool {
+/// A closed set rather than an escaping rule, which is what makes handing the
+/// name to a command line safe. pi's providers are deliberately **not** here:
+/// its sign-out is a write to its own store, so there is no word to append.
+fn login_provider(harness: Harness, provider: &str) -> bool {
     harness == Harness::Fx && FX_PROVIDERS.iter().any(|(arg, _, _)| *arg == provider)
 }
 
@@ -1176,11 +1177,11 @@ async fn grok() -> anyhow::Result<Vec<Account>> {
 
 /// Signs one credential out, where the CLI can do it without a terminal.
 ///
-/// Three of the four can: `claude auth logout` and `codex logout` drop the one
-/// credential each holds, `fx logout <provider>` drops one of three. pi has no
-/// such subcommand, so its half is removing the record from the store this
-/// module writes the other half of — which is why it is offered on a pi row
-/// only where that store actually holds the provider.
+/// Four of the five can: `claude auth logout`, `codex logout` and `grok logout`
+/// drop the one credential each holds, `fx logout <provider>` drops one of
+/// three. pi has no such subcommand, so its half is removing the record from
+/// the store this module writes the other half of — which is why it is offered
+/// on a pi row only where that store actually holds the provider.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sign_out_agent(harness: Harness, provider: Option<String>) -> Result<(), String> {
     let provider = provider.filter(|p| !p.is_empty());
@@ -1447,10 +1448,10 @@ mod tests {
         assert!(!changeable(Harness::Pi, Some("deepseek")));
     }
 
-    /// Every option that is not a key field carries the command the reader is
-    /// meant to run. Dray runs none of them — macOS lets no app type into
-    /// another's prompt — so an option with neither a field nor a command is a
-    /// step that asks for something and says nothing.
+    /// Every option that is not a key field carries the command it stands
+    /// for, which the reader is shown and `run_agent_login` runs — so an option
+    /// with neither a field nor a command is a step that asks for something and
+    /// says nothing.
     #[test]
     fn every_option_is_a_field_or_a_command() {
         for harness in Harness::ALL {
@@ -1517,7 +1518,7 @@ mod tests {
                 }
                 // A key-taking option must be one of the two that can take one,
                 // or the field is drawn over a route that ends in a refusal.
-                for option in options.iter().filter(|o| o.needs_key) {
+                if options.iter().any(|o| o.needs_key) {
                     assert!(
                         matches!(harness, Harness::Codex | Harness::Pi),
                         "{} offers a key field it cannot honour",

@@ -184,7 +184,7 @@ remote client.
 path. The index is rewritten whole under a *per-process* lock, so two processes
 on one data dir lose each other's writes — which is exactly a `dray-serve`
 started on a Mac whose app is running. Unset on a VPS. So `run` refuses to
-start where `dray.sock` or `dray-dev.sock` in its home answers a connect, and
+start where `dray.sock` in its home answers a connect, and
 names `DRAY_HOME` as the cure.
 
 The server also serves the orchestration socket, so `dray new`/`send`/`ls`

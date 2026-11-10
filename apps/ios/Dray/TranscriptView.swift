@@ -136,6 +136,7 @@ struct TurnView: View {
     let turn: Turn
     /// Per stretch between queued prompts, by index: a running turn only appends.
     @State private var open: Set<Int> = []
+    @State private var viewing: Gallery?
 
     /// Below this many rows a fold costs a tap to reveal less than the line it stands in for.
     private static let collapseMin = 3
@@ -177,6 +178,12 @@ struct TurnView: View {
             }
             if let failure = turn.failure { FailureRow(text: failure) }
         }
+        .environment(\.openImage) { ref in
+            let shots = turn.gallery
+            guard let i = shots.firstIndex(where: { $0.ref == ref }) else { return }
+            instantly { viewing = Gallery(shots: shots, start: i) }
+        }
+        .imageViewer($viewing)
     }
 
     private func toggle(_ i: Int) {
@@ -365,7 +372,7 @@ struct Thumbnails: View {
     var body: some View {
         ThumbnailRow(spacing: Theme.Space.xs) {
             ForEach(Array(images.enumerated()), id: \.offset) { _, ref in
-                ZoomableImage(ref: ref) {
+                ImageButton(ref: ref) {
                     RemoteImage(ref: ref, fill: true)
                         .frame(width: 72, height: 72)
                         .clipShape(.rect(cornerRadius: Theme.Radius.md, style: .continuous))
@@ -387,26 +394,25 @@ struct InlineImage: View {
     }
 }
 
-/// A picture that opens full screen on tap, and closes on the next.
-struct ZoomableImage<Content: View>: View {
-    @Environment(\.imageServer) private var server
+/// A picture that opens its turn's viewer on tap; outside a turn (a PR comment),
+/// a viewer of its own.
+struct ImageButton<Content: View>: View {
+    @Environment(\.openImage) private var open
     let ref: ImageRef
     @ViewBuilder let content: Content
-    @State private var open = false
+    @State private var alone: Gallery?
 
     var body: some View {
-        Button { open = true } label: { content }
-            .buttonStyle(.plain)
-            .fullScreenCover(isPresented: $open) {
-                RemoteImage(ref: ref)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.black)
-                    .contentShape(Rectangle())
-                    .onTapGesture { open = false }
-                    .environment(\.imageServer, server)
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityLabel("Close image")
+        Button {
+            if let open {
+                open(ref)
+            } else {
+                instantly { alone = Gallery(shots: [Shot(ref: ref, verb: "Image", target: nil)], start: 0) }
             }
+        } label: { content }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open image")
+            .imageViewer($alone)
     }
 }
 
@@ -451,7 +457,7 @@ struct ToolRow: View {
             .buttonStyle(RowButtonStyle())
             // A picture the tool handed back is the result itself, so it shows unasked.
             ForEach(Array(call.images.enumerated()), id: \.offset) { _, ref in
-                ZoomableImage(ref: ref) { InlineImage(ref: ref) }
+                ImageButton(ref: ref) { InlineImage(ref: ref) }
             }
             if open, let output = call.output {
                 ScrollView(.horizontal) {
@@ -560,7 +566,7 @@ struct MarkdownText: View {
                         .foregroundStyle(Theme.text)
                 case .image(_, let url):
                     let ref = ImageRef(path: nil, url: url, mimeType: nil)
-                    ZoomableImage(ref: ref) { InlineImage(ref: ref) }
+                    ImageButton(ref: ref) { InlineImage(ref: ref) }
                 }
             }
             ForEach(recordingPaths(in: text), id: \.self) { RecordingPlayer(path: $0) }
@@ -623,7 +629,7 @@ struct Composer: View {
                         DictationBar(draft: key)
                     } else {
                         Spacer(minLength: 0)
-                        DictateButton(server: key.server, draft: key)
+                        DictateButton(draft: key)
                         if busy && text.isEmpty {
                             Button {
                                 Haptic.firm()

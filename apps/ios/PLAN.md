@@ -16,7 +16,8 @@ phone reads and drives it over the same WebSocket the desktop uses
 - **Transcript**, live, shaped like the desktop's: finished turns fold to
   prompt, summary line and answer; runs of one tool group into a row; a
   running turn keeps its newest five rows on screen. No diffs, no
-  highlighting, no images.
+  highlighting. A tapped picture opens full screen among the rest of its
+  turn's: swipe or the strip to page, pinch to zoom, drag down to close.
 - **Reply** to a session, **Stop** a turn.
 - **Permission and question cards**, answered in place.
 - **New task by voice**, from a dock under the list: hold the orb to talk,

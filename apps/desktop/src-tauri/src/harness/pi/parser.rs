@@ -47,8 +47,8 @@ pub enum PiEvent {
     /// session finishing and then starting again on its own.
     AgentEnd,
     /// Dray's turn closes. Landed in pi 0.80.6; on an older CLI it does not
-    /// exist at all and a turn never ends, which is what the version gate in
-    /// [`super::pi`] exists to catch.
+    /// exist at all and a turn never ends. Nothing gates on that yet —
+    /// `binpath::pi` says what will.
     AgentSettled,
 
     /// One model call opens. Several per `agent_start` on any turn that calls a
@@ -64,7 +64,7 @@ pub enum PiEvent {
     MessageEnd { message: PiMessage },
     /// One streaming frame. `usage` rides every one and is all zeros on a real
     /// provider until the message completes, so nothing reads it here — the
-    /// context ring pulls `get_session_stats` instead.
+    /// context ring reads the committed message's instead.
     MessageUpdate {
         assistant_message_event: AssistantEvent,
     },
@@ -120,22 +120,24 @@ pub enum PiEvent {
         options: Option<Vec<Value>>,
     },
 
-    /// pi confirming a setting moved, whether Dray asked or the reader typed a
-    /// command into pi itself.
+    /// pi reporting a setting moved: its thinking level on Dray's own commands,
+    /// its model where an extension called `setModel` — Dray's own `set_model`
+    /// announces nothing.
     ///
     /// Not read back into `Session`'s copy, deliberately, and that is the same
     /// call Claude Code's `system/init` documents: reconciling app state *from*
     /// a report quietly fails, because the app's own record is what the picker
-    /// draws and what a resume replays. Modelled so the failure log stays a
-    /// list of real gaps.
+    /// draws and what a resume replays. The read loop re-reads the context
+    /// window on a model change; past that, modelled so the failure log stays
+    /// a list of real gaps.
     ModelChanged,
     ThinkingLevelChanged,
 
     /// pi's own view of what is queued behind the running turn.
     ///
-    /// Dray keeps its own queue in `Session` and draws from that, so this is
-    /// pi's copy of a fact the app already owns. Modelled to keep the failure
-    /// log honest; whether the two should be reconciled is PI-PLAN.md §12.
+    /// The queue is pi's alone: Dray steers a mid-turn prompt straight onto it
+    /// and draws no pending row, so nothing here has anywhere to go. Modelled
+    /// to keep the failure log honest.
     QueueUpdate,
 
     CompactionStart,
