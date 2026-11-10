@@ -301,7 +301,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 if composer.listShown { composer.choose() } else { Task { await composer.send() } }
             // Unless the caret is in a card's text box, where a digit is typed.
             case (let code, []) where composer.ask != nil && Self.digits[code] != nil && !(panel?.firstResponder is NSText):
-                composer.pickOption(Self.digits[code]!)
+                // One press, one answer: a key held past the first card went on to answer the next one unread.
+                if !e.isARepeat { composer.pickOption(Self.digits[code]!) }
             case (45, .command): composer.pick(.new)
             case (3, .command): composer.searches += 1
             case (36, .command): composer.addTyped()

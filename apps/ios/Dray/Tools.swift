@@ -72,6 +72,9 @@ private let verbs: [String: (String, String, String)] = {
     set(["search_tool"], "Finding tool", "Found tool", "tool")
     set(["use_tool"], "Running", "Ran", "tool")
     set(["workflow"], "Running workflow", "Ran workflow", "workflow")
+    set(["scheduler_create"], "Scheduling", "Scheduled", "task")
+    set(["scheduler_list"], "Reading schedule", "Read schedule", "schedule")
+    set(["scheduler_delete"], "Unscheduling", "Unscheduled", "task")
     set(["enter_plan_mode"], "Entering plan mode", "Entered plan mode", "plan")
     set(["exit_plan_mode"], "Presenting plan", "Presented plan", "plan")
     return v

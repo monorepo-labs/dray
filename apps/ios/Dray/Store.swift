@@ -376,7 +376,12 @@ final class Store {
         do {
             let snap: Snapshot? = try await c.call("get_session_by_id", ["sessionId": .string(key.id), "turns": 8])
             // Dropped while the read was out: writing it back would hold it, growing, until the next drop.
-            guard let snap, drop == drops || key == kept else { return }
+            guard drop == drops || key == kept else { return }
+            // Deleted from another client. Said, or the transcript waits on a read that already answered.
+            guard let snap else {
+                transcriptErrors[key] = "Session not found."
+                return
+            }
             let read = Set(snap.events.map(\.id))
             let held = transcripts[key]?.events ?? []
             let live = held.filter { !before.contains($0.id) && !read.contains($0.id) }
