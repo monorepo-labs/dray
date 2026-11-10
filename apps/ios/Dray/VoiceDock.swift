@@ -50,7 +50,7 @@ struct VoiceDock: View {
                     .padding(.bottom, 14)
                     .transition(.opacity)
             }
-            orb
+            DockOrb(draft: draft, size: open ? 120 : 76, hold: hold, tap: tapped)
             if open {
                 actions
                     .padding(.top, Theme.Space.xl)
@@ -101,26 +101,6 @@ struct VoiceDock: View {
 
     /// What dictation or the last start said instead of words.
     private var note: String? { Dictations.shared.notes[draft] ?? task.failure }
-
-    private var orb: some View {
-        let size: CGFloat = open ? 120 : 76
-        return TimelineView(.animation(minimumInterval: 1 / 20, paused: dictation != .recording)) { _ in
-            VoiceOrb(size: size, level: dictation == .recording ? Dictations.shared.level(draft) : 0, state: dictation)
-        }
-        .frame(width: size, height: size)
-        .clipShape(Circle())
-        .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1).padding(-0.5))
-        .shadow(color: .black.opacity(0.6), radius: open ? 20 : 15, y: open ? 16 : 10)
-        .contentShape(Circle())
-        .gesture(LongPressGesture(minimumDuration: 0.25).onEnded { _ in hold() }
-            .exclusively(before: TapGesture().onEnded { tapped() }))
-        .accessibilityElement()
-        .accessibilityLabel("Voice")
-        .accessibilityHint("Hold to talk")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction(named: "Talk") { hold() }
-        .accessibilityIdentifier("orb")
-    }
 
     /// A tap is not a hold: say how, once, then let it go.
     private func tapped() {
@@ -382,11 +362,40 @@ struct KeptNote: View {
     }
 }
 
+/// The voice orb both docks hold: held to talk, tapped for a hint.
+struct DockOrb: View {
+    let draft: SessionKey
+    let size: CGFloat
+    let hold: () -> Void
+    let tap: () -> Void
+
+    var body: some View {
+        let dictation = Dictations.shared.state(draft)
+        TimelineView(.animation(minimumInterval: 1 / 20, paused: dictation != .recording)) { _ in
+            VoiceOrb(size: size, level: dictation == .recording ? Dictations.shared.level(draft) : 0, state: dictation)
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1).padding(-0.5))
+        .shadow(color: .black.opacity(0.6), radius: size > 76 ? 20 : 15, y: size > 76 ? 16 : 10)
+        .contentShape(Circle())
+        .gesture(LongPressGesture(minimumDuration: 0.25).onEnded { _ in hold() }
+            .exclusively(before: TapGesture().onEnded { tap() }))
+        .accessibilityElement()
+        .accessibilityLabel("Voice")
+        .accessibilityHint("Hold to talk")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: "Talk") { hold() }
+        .accessibilityIdentifier("orb")
+    }
+}
+
 /// The text of a task or a reply in a near-full sheet: grabber, title, Done.
-/// Only the words change here; the picks and the send stay on the dock.
+/// A task's picks and start stay on the dock; a reply can also send from here.
 struct TextSheet: View {
     let title: String
     @Binding var text: String
+    var send: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
 
@@ -395,10 +404,19 @@ struct TextSheet: View {
             ZStack {
                 Text(title).font(Theme.Font.headline).foregroundStyle(Theme.text)
                 HStack {
+                    if send != nil { done }
                     Spacer()
-                    Button("Done") { dismiss() }
-                        .font(Theme.Font.headline)
-                        .foregroundStyle(Theme.text)
+                    if let send {
+                        Button(action: send) {
+                            Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.page)
+                                .frame(width: 32, height: 32)
+                                .background(Theme.text, in: Circle())
+                        }
+                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityLabel("Send")
+                    } else {
+                        done
+                    }
                 }
             }
             .frame(height: 52)
@@ -418,6 +436,12 @@ struct TextSheet: View {
         .presentationDragIndicator(.visible)
         .presentationBackground(Theme.card)
         .onAppear { focused = true }
+    }
+
+    private var done: some View {
+        Button("Done") { dismiss() }
+            .font(Theme.Font.headline)
+            .foregroundStyle(Theme.text)
     }
 }
 
@@ -448,7 +472,7 @@ struct DockButtonStyle: ButtonStyle {
 }
 
 /// The elapsed time inside Done, dim against its label.
-private struct StopTimer: View {
+struct StopTimer: View {
     let since: Date?
 
     var body: some View {

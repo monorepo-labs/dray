@@ -34,12 +34,12 @@ final class DictationTests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 15), "no session listed")
         row.tap()
 
-        let mic = app.buttons["dictate"]
-        XCTAssertTrue(mic.waitForExistence(timeout: 15), "no mic on a server that offers dictation")
-        snap(app, "1-mic")
-        mic.tap()
+        let orb = app.descendants(matching: .any)["orb"]
+        XCTAssertTrue(orb.waitForExistence(timeout: 15), "no dock in the session")
+        snap(app, "1-orb")
+        orb.press(forDuration: 0.6)
 
-        let stop = app.buttons["Stop dictation"]
+        let stop = app.buttons["Done"]
         XCTAssertTrue(stop.waitForExistence(timeout: 10), "recording never started")
         snap(app, "2-recording")
         sleep(3)
@@ -47,10 +47,10 @@ final class DictationTests: XCTestCase {
 
         // A real answer from the model: words in the draft, or the sentence
         // for silence. A failed upload or an unreadable reply shows neither.
-        XCTAssertTrue(mic.waitForExistence(timeout: 90), "no answer from the server")
-        let draft = app.textFields["Message"].value as? String ?? ""
-        let heard = !draft.isEmpty && draft != "Message"
-        XCTAssertTrue(heard || app.staticTexts["No words heard."].exists, "the server's answer never landed")
+        let heard = app.buttons.matching(NSPredicate(format: "label == 'Send' AND isEnabled == true"))
+        let silent = app.staticTexts["No words heard."]
+        for _ in 0..<90 where heard.count == 0 && !silent.exists { sleep(1) }
+        XCTAssertTrue(heard.count > 0 || silent.exists, "the server's answer never landed")
         snap(app, "3-answered")
     }
 

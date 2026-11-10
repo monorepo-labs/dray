@@ -18,7 +18,13 @@ phone reads and drives it over the same WebSocket the desktop uses
   running turn keeps its newest five rows on screen. No diffs, no
   highlighting. A tapped picture opens full screen among the rest of its
   turn's: swipe or the strip to page, pinch to zoom, drag down to close.
-- **Reply** to a session, **Stop** a turn.
+- **Reply** from a dock at the session's foot, the list's orb held to talk:
+  the words show as the bubble they will send as, the keyboard edits them
+  in a sheet that can also send, and Cancel asks first. Its picks are the
+  session's model, effort and stance, each locked mid-turn where the harness
+  can't carry it onto a queued prompt (`liveControls.ts`, restated in
+  `Picks.lockedMidTurn`). **Stop** sits at the end of the picks while a turn
+  runs. The top bar names the project and machine, never the branch.
 - **Permission and question cards**, answered in place.
 - **New task by voice**, from a dock under the list: hold the orb to talk,
   and the recording runs hands-free until Done or Cancel. The words land as

@@ -115,6 +115,68 @@ final class RedesignTests: XCTestCase {
     }
 
     /// Typing a task from scratch, then saving it as a draft from Cancel.
+    /// A session's foot: hold to reply, the reply as a bubble, the sheet, Send, and Stop while it runs.
+    func testReplyDock() throws {
+        let app = try pair()
+        // Below the two cards, so off screen at first: the list is lazy and only draws what scrolls in.
+        XCTAssertTrue(app.descendants(matching: .any)["orb"].waitForExistence(timeout: 20))
+        let row = labelled(app, "Tighten session row spacing")
+        for _ in 0..<8 where !(row.exists && row.isHittable) { app.swipeUp() }
+        XCTAssertTrue(row.isHittable, "no row to open")
+        row.tap()
+        let orb = app.descendants(matching: .any)["orb"]
+        XCTAssertTrue(orb.waitForExistence(timeout: 20), "no dock in the session")
+        sleep(3)
+        snap(app, "reply-rest")
+
+        orb.press(forDuration: 0.6)
+        let done = app.buttons["Done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 10), "holding the orb started no recording")
+        sleep(2)
+        snap(app, "reply-recording")
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.staticTexts["Discard this recording?"].waitForExistence(timeout: 3))
+        app.buttons["Keep recording"].tap()
+        done.tap()
+        snap(app, "reply-transcribing")
+        let heard = app.buttons.matching(NSPredicate(format: "label == 'Send' AND isEnabled == true"))
+        let silent = app.staticTexts["No words heard."]
+        for _ in 0..<90 where heard.count == 0 && !silent.exists { sleep(1) }
+        let spoke = heard.count > 0
+        XCTAssertTrue(spoke || silent.exists, "transcription never answered")
+
+        app.buttons["Keyboard"].tap()
+        let editor = app.textViews[spoke ? "Edit message" : "Reply"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5), "the keyboard opened no sheet")
+        editor.typeText("Run `sleep 20` in the shell, then reply with the single word SLEPT.")
+        snap(app, "reply-sheet")
+        app.buttons["Done"].tap()
+        sleep(1)
+        snap(app, "reply-ready")
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.staticTexts["Discard this reply?"].waitForExistence(timeout: 3))
+        snap(app, "reply-confirm")
+        app.buttons["Keep"].tap()
+        app.buttons["Keyboard"].tap()
+        XCTAssertTrue(app.textViews["Edit message"].waitForExistence(timeout: 5), "the sheet lost its title")
+        snap(app, "reply-edit")
+        app.buttons["Done"].tap()
+        sleep(1)
+        app.buttons["Send"].tap()
+
+        let stop = app.buttons["Stop"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 60), "no Stop while the turn runs")
+        sleep(2)
+        snap(app, "reply-running")
+        app.buttons["Model"].tap()
+        sleep(1)
+        snap(app, "reply-model-menu")
+        app.tap()
+        XCTAssertTrue(stop.waitForNonExistence(timeout: 180), "the turn never ended")
+        sleep(2)
+        snap(app, "reply-answered")
+    }
+
     func testTypeAndSaveDraft() throws {
         let app = try pair()
         let keyboard = app.buttons["Keyboard"]
