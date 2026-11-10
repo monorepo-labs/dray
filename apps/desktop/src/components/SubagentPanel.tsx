@@ -24,8 +24,9 @@ type SubagentPanelProps = {
   onStopTask: (taskId: string) => void;
 };
 
-/// Every subagent in the session, one row each, expanding in place. A tab of
-/// [RightPanel](./RightPanel.tsx), which owns the frame — this is the body only.
+/// Every subagent in the session, one row each, expanding in place. A section
+/// of [MorePanel](./MorePanel.tsx), which draws it only where there are runs —
+/// so there is no empty state here.
 ///
 /// Shaped like [ChangesPanel](./ChangesPanel.tsx) rather than as a list above a
 /// detail pane: a fixed-height list gave the runs a few rows to live in however
@@ -42,12 +43,6 @@ export default function SubagentPanel({
   onSelect,
   onStopTask,
 }: SubagentPanelProps) {
-  if (runs.length === 0) {
-    return (
-      <p className="px-3 py-6 text-ui text-muted-foreground">No subagents in this session.</p>
-    );
-  }
-
   // Same reading as each row's own button, so the count and the rows agree.
   const stoppable = runs.filter((run) => live && !run.done && run.taskId !== null);
 

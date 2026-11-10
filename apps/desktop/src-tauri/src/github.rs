@@ -3,8 +3,9 @@
 //! `gh` rather than the REST API on purpose: it already holds the user's auth,
 //! their enterprise host config, and the token refresh we would otherwise have
 //! to own. The cost is that the feature is absent where `gh` isn't installed or
-//! isn't logged in — both surface as a readable line in the panel rather than
-//! an error, since this is a side view and never the reason the app is open.
+//! isn't logged in — both surface in the panel as the command that cures them
+//! rather than an error, since this is a side view and never the reason the
+//! app is open.
 
 use anyhow::Result;
 use serde::de::{DeserializeOwned, IgnoredAny};
@@ -200,7 +201,7 @@ fragment pr on PullRequest{
  commits(last:1){nodes{commit{statusCheckRollup{contexts(first:50){nodes{
    __typename
    ... on StatusContext{context state targetUrl avatarUrl}
-   ... on CheckRun{name status conclusion detailsUrl checkSuite{workflowRun{workflow{name}} app{name logoUrl}}}
+   ... on CheckRun{name status conclusion detailsUrl checkSuite{workflowRun{workflow{name}} app{logoUrl}}}
  }}}}}}
 }
 "#;
@@ -717,10 +718,9 @@ impl RawPr {
 /// Why there is nothing to show, when the reason is not "this branch has no PR".
 ///
 /// Typed rather than a string because the frontend acts differently on each:
-/// a missing `gh` hides the tab outright — the app has no business claiming a
-/// GitHub feature on a machine with no GitHub CLI — while a `gh` that is merely
-/// logged out keeps the tab and says so, since someone who installed it clearly
-/// works with GitHub and the fix is one command.
+/// no GitHub remote hides the tab outright, while a `gh` that is missing or
+/// logged out keeps it and names the command that cures it — the reader is in
+/// a GitHub repo, and the tab is the only place the app can say so.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "snake_case", tag = "kind", content = "detail")]
@@ -1503,10 +1503,6 @@ mod tests {
         assert_eq!((pr.additions, pr.deletions, pr.changed_files), (2155, 66, 22));
     }
 
-    /// `headRefName` outlives the branch — a merged PR goes on naming the one
-    /// it came from — so only `headRef` going null says the ref is gone.
-    /// Verified against the live API: deleting the branch flipped `headRef` to
-    /// null and left `headRefName` exactly as it was.
     /// The connections are read together, and the open one is not a filter
     /// on the other: a merged PR and an open one on the same branch both
     /// come back, open first, whichever alias each arrived under.
@@ -1519,6 +1515,10 @@ mod tests {
         assert_eq!(numbers, vec![9, 7]);
     }
 
+    /// `headRefName` outlives the branch — a merged PR goes on naming the one
+    /// it came from — so only `headRef` going null says the ref is gone.
+    /// Verified against the live API: deleting the branch flipped `headRef` to
+    /// null and left `headRefName` exactly as it was.
     #[test]
     fn head_ref_says_whether_the_branch_is_still_there() {
         let out = |head_ref: &str| {

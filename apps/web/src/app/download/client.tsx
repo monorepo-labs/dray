@@ -34,7 +34,6 @@ export function SupportLink({
   return (
     <a
       href={href}
-      {...(to === "dmg" ? {} : { target: "_blank", rel: "noopener noreferrer" })}
       onClick={() => posthog.capture("support_click", { to }, { transport: "sendBeacon" })}
       className={className}
     >

@@ -35,7 +35,6 @@
         "scope": [
           "$HOME/.dray/attachments/**",
           "$HOME/.dray/browser/recordings/**",
-          "$HOME/.dray/browser-dev/recordings/**",
           "$HOME/.dray-dev/attachments/**",
           "$HOME/.dray-dev/browser/recordings/**",
           "$HOME/.dray-worktrees/*/attachments/**",
