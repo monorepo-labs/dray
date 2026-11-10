@@ -16,7 +16,7 @@ struct VoiceDock: View {
     @State private var confirming = false
     @State private var editing = false
     @State private var sheetTitle = "New task"
-    @State private var attaching = false
+    @State private var picking = false
 
     private let draft = SessionKey.newSession
     private var dictation: Dictation { Dictations.shared.state(draft) }
@@ -50,7 +50,7 @@ struct VoiceDock: View {
                     .padding(.bottom, 14)
                     .transition(.opacity)
             }
-            orb
+            DockOrb(draft: draft, size: open ? 120 : 76, hold: hold, tap: tapped)
             if open {
                 actions
                     .padding(.top, Theme.Space.xl)
@@ -71,16 +71,7 @@ struct VoiceDock: View {
         .sheet(isPresented: $editing) {
             TextSheet(title: sheetTitle, text: $task.text)
         }
-        .sheet(isPresented: $attaching) {
-            if let server = task.server {
-                NavigationStack {
-                    AttachProjectView(server: server, projects: store.projects[server] ?? []) { list in
-                        store.attached(server, list)
-                        task.projectName = list.max { $0.lastSelected < $1.lastSelected }?.name
-                    }
-                }
-            }
-        }
+        .sheet(isPresented: $picking) { RunWithSheet(task: task) }
         // A new phase asks its own question; one left up would answer the wrong one.
         .onChange(of: phase) { confirming = false }
     }
@@ -101,26 +92,6 @@ struct VoiceDock: View {
 
     /// What dictation or the last start said instead of words.
     private var note: String? { Dictations.shared.notes[draft] ?? task.failure }
-
-    private var orb: some View {
-        let size: CGFloat = open ? 120 : 76
-        return TimelineView(.animation(minimumInterval: 1 / 20, paused: dictation != .recording)) { _ in
-            VoiceOrb(size: size, level: dictation == .recording ? Dictations.shared.level(draft) : 0, state: dictation)
-        }
-        .frame(width: size, height: size)
-        .clipShape(Circle())
-        .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1).padding(-0.5))
-        .shadow(color: .black.opacity(0.6), radius: open ? 20 : 15, y: open ? 16 : 10)
-        .contentShape(Circle())
-        .gesture(LongPressGesture(minimumDuration: 0.25).onEnded { _ in hold() }
-            .exclusively(before: TapGesture().onEnded { tapped() }))
-        .accessibilityElement()
-        .accessibilityLabel("Voice")
-        .accessibilityHint("Hold to talk")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction(named: "Talk") { hold() }
-        .accessibilityIdentifier("orb")
-    }
 
     /// A tap is not a hold: say how, once, then let it go.
     private func tapped() {
@@ -233,10 +204,10 @@ struct VoiceDock: View {
         }
     }
 
-    /// Model and effort, project, machine, the rest behind "···", and the keyboard.
+    /// Model and effort, project, machine and "···", each opening Run with, and the keyboard.
     private var picks: some View {
         HStack(spacing: Theme.Space.l) {
-            Menu { modelMenu } label: {
+            Button { picking = true } label: {
                 HStack(spacing: 5) {
                     AgentMark(harness: task.harness).frame(width: 13, height: 13)
                     Text(task.model?.label ?? "Default").font(Theme.Font.footnoteStrong).foregroundStyle(Theme.text)
@@ -248,21 +219,21 @@ struct VoiceDock: View {
                 .fixedSize()
             }
             .accessibilityLabel("Model")
-            Menu { projectMenu } label: {
+            Button { picking = true } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "folder.fill").font(.system(size: 11))
                     Text(task.project ?? "Project").font(Theme.Font.footnote)
                 }
             }
             .accessibilityLabel("Project")
-            Menu { machineMenu } label: {
+            Button { picking = true } label: {
                 HStack(spacing: 5) {
                     ServerIcon().frame(width: 13, height: 13)
                     Text(task.server.map(store.name(of:)) ?? "Machine").font(Theme.Font.footnote)
                 }
             }
             .accessibilityLabel("Machine")
-            Menu { moreMenu } label: {
+            Button { picking = true } label: {
                 Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).frame(width: 24, height: 20)
             }
             .accessibilityLabel("More picks")
@@ -276,54 +247,6 @@ struct VoiceDock: View {
         .foregroundStyle(Theme.secondary)
         .lineLimit(1)
         .frame(height: 20)
-    }
-
-    @ViewBuilder private var modelMenu: some View {
-        let agents = task.available.filter(\.available)
-        if agents.count > 1 {
-            Picker("Agent", selection: $task.harness) {
-                ForEach(agents, id: \.harness) { Text($0.label).tag($0.harness) }
-            }
-            .pickerStyle(.menu)
-        }
-        Picker("Model", selection: Binding(get: { task.modelId }, set: task.pickModel)) {
-            if Picks.defaultModel[task.harness]?.isEmpty ?? false { Text("Default").tag("") }
-            ForEach(task.list, id: \.id) { Text($0.label).tag($0.id) }
-        }
-        if let model = task.model, !model.efforts.isEmpty {
-            Picker("Effort", selection: Binding(get: { task.effort ?? "" }, set: task.pickEffort)) {
-                ForEach(model.efforts, id: \.self) { Text(Picks.effortLabels[$0] ?? $0).tag($0) }
-            }
-            .pickerStyle(.menu)
-        }
-        if Picks.offersFast(task.harness, task.model) {
-            Toggle("Fast mode", isOn: $task.fast)
-        }
-    }
-
-    @ViewBuilder private var projectMenu: some View {
-        Picker("Project", selection: Binding(get: { task.projectChoice }, set: task.pick)) {
-            ForEach(task.projectChoices, id: \.self) { Text($0.label).tag(Optional($0)) }
-        }
-        if task.server != nil {
-            Button("Attach project…", systemImage: "plus") { attaching = true }
-        }
-    }
-
-    @ViewBuilder private var machineMenu: some View {
-        Picker("Machine", selection: Binding(get: { task.server }, set: { task.pickedServer = $0 })) {
-            ForEach(task.machines) { Text($0.name).tag(Optional($0.id)) }
-        }
-    }
-
-    @ViewBuilder private var moreMenu: some View {
-        Toggle("Worktree", isOn: $task.worktree)
-        if Picks.offersStances(task.harness) {
-            Picker("Permissions", selection: Binding(get: { Picks.stanceFor(task.harness, task.stance) }, set: { task.stance = $0 })) {
-                ForEach(Picks.stances.filter { Picks.honours(task.harness, $0.0) }, id: \.0) { Text($0.1).tag($0.0) }
-            }
-            .pickerStyle(.menu)
-        }
     }
 }
 
@@ -382,11 +305,42 @@ struct KeptNote: View {
     }
 }
 
+/// The voice orb both docks hold: held to talk, tapped for a hint.
+struct DockOrb: View {
+    let draft: SessionKey
+    let size: CGFloat
+    let hold: () -> Void
+    let tap: () -> Void
+
+    var body: some View {
+        let dictation = Dictations.shared.state(draft)
+        TimelineView(.animation(minimumInterval: 1 / 20, paused: dictation != .recording)) { _ in
+            VoiceOrb(size: size, level: dictation == .recording ? Dictations.shared.level(draft) : 0, state: dictation)
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1).padding(-0.5))
+        .shadow(color: .black.opacity(0.6), radius: size > 76 ? 20 : 15, y: size > 76 ? 16 : 10)
+        .contentShape(Circle())
+        .gesture(LongPressGesture(minimumDuration: 0.25).onEnded { _ in hold() }
+            .exclusively(before: TapGesture().onEnded { tap() }))
+        .accessibilityElement()
+        .accessibilityLabel("Voice")
+        .accessibilityHint("Hold to talk")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: "Talk") { hold() }
+        .accessibilityIdentifier("orb")
+    }
+}
+
 /// The text of a task or a reply in a near-full sheet: grabber, title, Done.
-/// Only the words change here; the picks and the send stay on the dock.
+/// A task's picks and start stay on the dock; a reply can also send from here.
 struct TextSheet: View {
     let title: String
     @Binding var text: String
+    var send: (() -> Void)?
+    /// False while dictation is still adding words: sending then would leave them behind.
+    var sendable = true
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
 
@@ -395,10 +349,19 @@ struct TextSheet: View {
             ZStack {
                 Text(title).font(Theme.Font.headline).foregroundStyle(Theme.text)
                 HStack {
+                    if send != nil { done }
                     Spacer()
-                    Button("Done") { dismiss() }
-                        .font(Theme.Font.headline)
-                        .foregroundStyle(Theme.text)
+                    if let send {
+                        Button(action: send) {
+                            Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.page)
+                                .frame(width: 32, height: 32)
+                                .background(Theme.text, in: Circle())
+                        }
+                        .disabled(!sendable || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityLabel("Send")
+                    } else {
+                        done
+                    }
                 }
             }
             .frame(height: 52)
@@ -418,6 +381,12 @@ struct TextSheet: View {
         .presentationDragIndicator(.visible)
         .presentationBackground(Theme.card)
         .onAppear { focused = true }
+    }
+
+    private var done: some View {
+        Button("Done") { dismiss() }
+            .font(Theme.Font.headline)
+            .foregroundStyle(Theme.text)
     }
 }
 
@@ -448,7 +417,7 @@ struct DockButtonStyle: ButtonStyle {
 }
 
 /// The elapsed time inside Done, dim against its label.
-private struct StopTimer: View {
+struct StopTimer: View {
     let since: Date?
 
     var body: some View {
@@ -461,24 +430,16 @@ private struct StopTimer: View {
     }
 }
 
-/// The agent's mark in the picks: Claude's rust starburst, else a neutral sparkle.
+/// The agent's mark: the desktop's `AgentIcon`, Claude in its rust and the rest in the text's colour.
 struct AgentMark: View {
     let harness: String
 
     var body: some View {
-        if harness == "claude_code" {
-            Canvas { ctx, size in
-                ctx.scaleBy(x: size.width / 24, y: size.height / 24)
-                let points: [(Double, Double)] = [(12, 1.5), (13.6, 8.8), (19.8, 4.6), (15.6, 10.8), (22.9, 12.4), (15.6, 14),
-                                                  (19.8, 20.2), (13.6, 16), (12, 22.5), (10.4, 15.2), (4.2, 19.4), (8.4, 13.2),
-                                                  (1.1, 12), (8.4, 10.4), (4.2, 4.2), (10.4, 8.4)]
-                var p = Path()
-                p.addLines(points.map { CGPoint(x: $0.0, y: $0.1) })
-                p.closeSubpath()
-                ctx.fill(p, with: .color(Theme.claude))
-            }
+        if UIImage(named: "agent-" + harness) != nil {
+            Image("agent-" + harness).resizable().scaledToFit()
+                .foregroundStyle(harness == "claude_code" ? AnyShapeStyle(Theme.claude) : AnyShapeStyle(.foreground))
         } else {
-            Image(systemName: "sparkle").resizable().scaledToFit().foregroundStyle(Theme.secondary)
+            Image(systemName: "sparkle").resizable().scaledToFit()
         }
     }
 }

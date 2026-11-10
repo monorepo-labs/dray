@@ -20,7 +20,7 @@ final class DesignTests: XCTestCase {
         let app = launch()
         snap(app, "01-onboarding")
 
-        app.buttons["Add server"].firstMatch.tap()
+        app.buttons["Enter an address"].tap()
         fill(app, url: url, token: token, name: "Studio Mac")
         snap(app, "02-add-server")
         app.buttons["Add"].tap()
@@ -40,8 +40,7 @@ final class DesignTests: XCTestCase {
         app.buttons["All projects"].tap()
 
         row.tap()
-        let message = app.textFields["Message"]
-        XCTAssertTrue(message.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.dock.waitForExistence(timeout: 15))
         sleep(2)
         snap(app, "06-transcript")
         let fold = app.buttons.matching(NSPredicate(format: "label CONTAINS 'tool call'")).firstMatch
@@ -53,9 +52,10 @@ final class DesignTests: XCTestCase {
         app.swipeDown()
         app.swipeDown()
         snap(app, "08-transcript-top")
-        message.tap()
-        message.typeText("Tighten the spacing on the session rows")
-        snap(app, "09-composer-typed")
+        app.buttons["Keyboard"].tap()
+        app.textViews.firstMatch.typeText("Tighten the spacing on the session rows")
+        app.buttons["Done"].tap()
+        snap(app, "09-reply-typed")
         app.buttons["Local servers"].tap()
         sleep(3)
         snap(app, "10-local-servers")
@@ -92,7 +92,8 @@ final class DesignTests: XCTestCase {
         sleep(1)
         snap(app, "17-new-task-ready")
         app.buttons["Model"].firstMatch.tap()
-        snap(app, "18-model-menu")
+        sleep(1)
+        snap(app, "18-run-with")
     }
 
     func testFailureStates() throws {
@@ -127,16 +128,16 @@ final class DesignTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Couldn't load this session"].waitForExistence(timeout: 15))
         snap(app, "30-failed-load")
 
-        let message = app.textFields["Message"]
-        message.tap()
-        message.typeText("Run the tests again")
-        app.buttons["Send"].tap()
-        XCTAssertTrue(app.buttons["Retry"].waitForExistence(timeout: 15), "no failed-send retry")
+        app.reply("Run the tests again")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH \"Couldn't send\"")).firstMatch
+            .waitForExistence(timeout: 15), "no failed-send note")
         snap(app, "31-failed-send")
+        app.buttons["Cancel"].tap()
+        app.buttons["Discard"].tap()
 
-        app.buttons["dictate"].tap()
+        app.descendants(matching: .any)["orb"].press(forDuration: 0.6)
         app.tap()  // lets the interruption monitor answer the microphone prompt
-        let stop = app.buttons["Stop dictation"]
+        let stop = app.buttons["Done"]
         if stop.waitForExistence(timeout: 10) {
             sleep(2)
             snap(app, "32-recording")
@@ -182,7 +183,7 @@ final class DesignTests: XCTestCase {
         let row = app.staticTexts["Phone smoke"]
         XCTAssertTrue(row.waitForExistence(timeout: 15))
         row.tap()
-        XCTAssertTrue(app.textFields["Message"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.dock.waitForExistence(timeout: 15))
         // The harness watches for this file and stops the server.
         FileManager.default.createFile(atPath: stopAt, contents: nil)
         XCTAssertTrue(app.staticTexts["Can't reach Studio Mac"].waitForExistence(timeout: 60), "never noticed the server go")
@@ -201,9 +202,10 @@ final class DesignTests: XCTestCase {
         return app
     }
 
-    /// Taps whichever Add server is on screen: the empty list's, or Settings' once one is saved.
+    /// Taps whichever add is on screen: the empty list's Enter an address, or Settings' Add server once one is saved.
     private func addServer(_ app: XCUIApplication, url: String, token: String, name: String) {
-        app.buttons["Add server"].firstMatch.tap()
+        let empty = app.buttons["Enter an address"]
+        (empty.waitForExistence(timeout: 2) ? empty : app.buttons["Add server"].firstMatch).tap()
         fill(app, url: url, token: token, name: name)
         app.buttons["Add"].tap()
     }

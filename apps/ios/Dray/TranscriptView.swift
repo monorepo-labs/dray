@@ -5,6 +5,8 @@ struct TranscriptView: View {
     @Environment(Store.self) private var store
     let key: SessionKey
     @State private var fixing = false
+    /// The floating banner's height, kept clear above the first row so it never sits on "Load earlier".
+    @State private var bannerHeight: CGFloat = 0
 
     private var item: SessionItem? { store.items[key] }
     private var busy: Bool { item?.busy ?? false }
@@ -55,6 +57,7 @@ struct TranscriptView: View {
                 .frame(maxWidth: .infinity)
             }
             .scrollDismissesKeyboard(.interactively)
+            .contentMargins(.top, bannerHeight, for: .scrollContent)
             // Opens on the newest turn: a scrollTo on appear lands in a lazy stack's estimate and draws blank.
             .defaultScrollAnchor(.bottom)
             // The newest row, not the count, or loading earlier turns would jump to the end.
@@ -66,7 +69,11 @@ struct TranscriptView: View {
         .environment(\.imageServer, store.connection(key.server))
         // A card arriving is the agent stopping to ask: felt, once per card.
         .onChange(of: asks.count) { old, new in if new > old { Haptic.warning() } }
-        .safeAreaInset(edge: .bottom) { Composer(key: key, busy: busy) { fixing = true } }
+        .safeAreaInset(edge: .bottom, spacing: 0) { ReplyDock(key: key) }
+        .overlay(alignment: .top) {
+            SessionBanner(server: key.server) { fixing = true }
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { bannerHeight = $0 }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) { title }
@@ -77,7 +84,7 @@ struct TranscriptView: View {
         .sheet(isPresented: $fixing) { SettingsView(focus: key.server) }
     }
 
-    /// The session's title over where it runs, in place of a bare title.
+    /// The session's title over where it runs: its project and its machine, never the branch.
     private var title: some View {
         VStack(spacing: 1) {
             Text(item?.title.isEmpty == false ? item!.title : "Untitled")
@@ -85,10 +92,19 @@ struct TranscriptView: View {
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
             if let item {
-                Text([item.project, item.branch].compactMap { $0 }.joined(separator: " · "))
-                    .font(Theme.Font.footnote)
-                    .foregroundStyle(Theme.tertiary)
-                    .lineLimit(1)
+                HStack(spacing: 10) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "folder.fill").font(.system(size: 11))
+                        Text(item.project)
+                    }
+                    HStack(spacing: 4) {
+                        ServerIcon().frame(width: 11, height: 11)
+                        Text(store.name(of: key.server))
+                    }
+                }
+                .font(Theme.Font.footnote)
+                .foregroundStyle(Theme.tertiary)
+                .lineLimit(1)
             }
         }
         .frame(maxWidth: 240)
@@ -573,129 +589,5 @@ struct MarkdownText: View {
         }
         .tint(Theme.link)
         .textSelection(.enabled)
-    }
-}
-
-/// The reply box, floating over the transcript's foot: the draft, and under it
-/// the mic and Send — or Stop, while a turn runs and nothing is typed. A
-/// dictation takes the row over with its orb.
-struct Composer: View {
-    @Environment(Store.self) private var store
-    let key: SessionKey
-    let busy: Bool
-    let openSettings: () -> Void
-    @State private var sending = false
-    /// Why the last send failed; the draft is still there to send again.
-    @State private var failed: String?
-
-    var body: some View {
-        let draft = Binding(get: { store.drafts[key] ?? "" }, set: { store.drafts[key] = $0 })
-        let text = draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let dictating = Dictations.shared.state(key) != .idle
-        let connected = store.serverState[key.server] == .connected
-        VStack(spacing: Theme.Space.s) {
-            ConnectionStrip(server: key.server, openSettings: openSettings)
-            VStack(alignment: .leading, spacing: 0) {
-                if let failed {
-                    HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                        Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Theme.destructive)
-                        Text("Couldn't send. \(sentence(failed))").foregroundStyle(Theme.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 0)
-                        Button("Retry") { send(text) }
-                            .foregroundStyle(Theme.text)
-                            .disabled(!connected || text.isEmpty)
-                    }
-                    .font(Theme.Font.footnote)
-                    .buttonStyle(.borderless)
-                    .padding(.horizontal, Theme.Space.l)
-                    .padding(.top, Theme.Space.m)
-                }
-                if Dictations.shared.notes[key] != nil {
-                    DictationNote(draft: key)
-                        .padding(.horizontal, Theme.Space.l)
-                        .padding(.top, Theme.Space.m)
-                }
-                TextField("Message", text: draft, axis: .vertical)
-                    .lineLimit(1...8)
-                    .font(Theme.Font.body)
-                    .foregroundStyle(Theme.text)
-                    .padding(.horizontal, Theme.Space.l)
-                    .padding(.top, 14)
-                    .padding(.bottom, Theme.Space.xs)
-                    .accessibilityLabel("Message")
-                HStack(spacing: Theme.Space.xs) {
-                    if dictating {
-                        DictationBar(draft: key)
-                    } else {
-                        Spacer(minLength: 0)
-                        DictateButton(draft: key)
-                        if busy && text.isEmpty {
-                            Button {
-                                Haptic.firm()
-                                Task { await store.interrupt(key) }
-                            } label: { Image(systemName: "stop.fill") }
-                                .buttonStyle(IconButtonStyle(filled: true))
-                                .accessibilityLabel("Stop")
-                        } else {
-                            Button { send(text) } label: { Image(systemName: "arrow.up") }
-                                .buttonStyle(IconButtonStyle(filled: true))
-                                .disabled(sending || text.isEmpty || !connected)
-                                .accessibilityLabel("Send")
-                        }
-                    }
-                }
-                .padding(.horizontal, Theme.Space.s)
-                .padding(.bottom, Theme.Space.s)
-                .frame(minHeight: 44)
-            }
-            .composerSurface()
-            .padding(.horizontal, Theme.Space.m)
-        }
-        .padding(.bottom, Theme.Space.s)
-        .frame(maxWidth: 760)
-        .animation(Theme.motion, value: dictating)
-        .animation(Theme.motion, value: failed)
-        .animation(Theme.motion, value: connected)
-        // Leaving the session mid-recording sends what was said, which lands in
-        // the draft it was spoken into, the desktop's rule.
-        .onDisappear {
-            if Dictations.shared.state(key) == .recording { Task { await Dictations.shared.stop(store, draft: key) } }
-        }
-    }
-
-    private func send(_ text: String) {
-        guard !text.isEmpty else { return }
-        sending = true
-        failed = nil
-        Haptic.tap()
-        Task {
-            if await store.send(key, text) {
-                // Only if untouched meanwhile: text typed while the send was out was never sent.
-                if store.drafts[key]?.trimmingCharacters(in: .whitespacesAndNewlines) == text { store.drafts[key] = nil }
-            } else {
-                // Said here, beside the draft it failed to send, rather than in the toast.
-                failed = store.lastError ?? "The server didn't answer."
-                store.lastError = nil
-                Haptic.error()
-            }
-            sending = false
-        }
-    }
-}
-
-extension View {
-    /// The composer's surface: glass where the system has it, a material
-    /// washed in the card's colour before that, so the transcript reads as
-    /// passing under it rather than through it.
-    @ViewBuilder func composerSurface() -> some View {
-        let shape = RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous)
-        if #available(iOS 26, *) {
-            glassEffect(.regular.tint(Theme.card.opacity(0.55)), in: shape)
-        } else {
-            background(.ultraThinMaterial, in: shape)
-                .background(Theme.card.opacity(0.6), in: shape)
-                .overlay(shape.strokeBorder(Theme.border))
-        }
     }
 }
