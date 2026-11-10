@@ -263,6 +263,10 @@ impl Render for Panel {
             .text_size(px(BODY))
             .text_color(white(0.92))
             .on_key_down(cx.listener(Self::key_down))
+            .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
+                let paths = paths.paths().to_vec();
+                later(&this.island, cx, move |i, cx| crate::drop_files(i, &paths, cx));
+            }))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, _, _, cx| {
@@ -780,15 +784,35 @@ fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> AnyElement {
         Some(Target::Session(id)) => title_row(state, island, id).into_any_element(),
         _ => new_task_bar(state, island, top).into_any_element(),
     };
-    let rows = (!d.rows.is_empty()).then(|| {
-        div()
+    let groups = row_groups(d);
+    // Rows above the cap fade out under the card's black.
+    let overflows = d.rows_scroll.max_offset().y > px(0.);
+    let rows = (!groups.is_empty()).then(|| {
+        let fade = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(px(28.))
+            .bg(gpui::linear_gradient(
+                180.,
+                gpui::linear_color_stop(gpui::black(), 0.),
+                gpui::linear_color_stop(gpui::black().opacity(0.), 1.),
+            ));
+        let list = div()
             .id("rows")
             .max_h(px(ROWS_CAP))
             .overflow_y_scroll()
+            .track_scroll(&d.rows_scroll)
             .flex()
             .flex_col()
             .gap(px(10.))
-            .children(d.rows.iter().map(|row| {
+            .children(groups.into_iter().map(|ids| {
+                let first = d.rows.iter().find(|r| r.id == ids[0]).expect("a row in its group");
+                if first.file.is_some() {
+                    return file_rows(state, d, &ids).into_any_element();
+                }
+                let row = first;
                 let (state, id) = (state.clone(), row.id);
                 div()
                     .flex_none()
@@ -809,7 +833,9 @@ fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> AnyElement {
                             .child("✕")
                             .on_click(move |_, _, cx| later(&state, cx, move |i, cx| crate::remove_row(i, id, cx))),
                     )
-            }))
+                    .into_any_element()
+            }));
+        div().relative().child(list).when(overflows, |d| d.child(fade))
     });
     let can_send = !d.sending && (!d.rows.is_empty() || !d.typing.read(cx).text().trim().is_empty());
     let send = {
@@ -837,6 +863,7 @@ fn draft_view(state: &Entity<Island>, island: &Island, cx: &App) -> AnyElement {
         .gap_2()
         .when(!expanded, |d| d.child(mic(state, island, 24., 24.)))
         .child(div().flex_1().min_w_0().py(px(2.)).child(d.typing.clone()))
+        .child(camera(state, island))
         .child(send);
     let notice = island.notice.clone().map(|n| {
         let retry = d.retry_path.is_some().then(|| {
@@ -871,15 +898,19 @@ fn orb_slot(state: &Entity<Island>, island: &Island) -> impl IntoElement {
     let recording = island.draft().listening();
     let shown = if recording { FULL } else { SLOT };
     let lift = (shown - SLOT) / 2.;
-    let clock = (recording && island.orb_hovered).then(|| {
+    let clock = (recording && (island.orb_hovered || island.camera_hovered || island.draw_hint)).then(|| {
         div()
             .absolute()
             .top(px(SLOT + 16. - 2. + 8.))
+            .flex()
+            .items_center()
+            .gap_2()
             .px(px(8.))
             .py(px(3.))
             .rounded_full()
             .bg(rgb(0x000000))
-            .child(clock(island))
+            .when(island.orb_hovered || island.camera_hovered, |d| d.child(clock(island)))
+            .children(tools(state, island))
     });
     div()
         .w_full()
@@ -902,7 +933,142 @@ fn orb_slot(state: &Entity<Island>, island: &Island) -> impl IntoElement {
 
 /// Compact's recording: the orb, which stops it, and the clock.
 fn recording_bar(state: &Entity<Island>, island: &Island) -> impl IntoElement {
-    div().flex().items_center().gap_2().px(px(16.)).py(px(12.)).child(mic(state, island, 24., 24.)).child(clock(island))
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px(px(16.))
+        .py(px(12.))
+        .child(mic(state, island, 24., 24.))
+        .child(clock(island))
+        .child(div().pl(px(4.)).flex().items_center().gap_2().children(tools(state, island)))
+}
+
+/// What sits beside the recording's clock: how to draw on the screen, until
+/// the reader has, and the camera.
+fn tools(state: &Entity<Island>, island: &Island) -> Vec<gpui::AnyElement> {
+    let mut out = Vec::new();
+    if island.draw_hint {
+        out.push(div().text_size(px(ASIDE)).text_color(white(0.5)).child("Hold Shift to draw").into_any_element());
+    }
+    out.push(camera(state, island).into_any_element());
+    out
+}
+
+/// The camera: a screenshot into the draft, its key shown on hover.
+fn camera(state: &Entity<Island>, island: &Island) -> impl IntoElement {
+    let (click, hover) = (state.clone(), state.clone());
+    let hovered = island.camera_hovered;
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .children(hovered.then(|| div().text_size(px(ASIDE)).text_color(white(0.5)).child("Super Shift 2")))
+        .child(
+            div()
+                .id("camera")
+                .size(px(22.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_click(move |_, _, cx| later(&click, cx, crate::start_capture))
+                .on_hover(move |on, _, cx| {
+                    let on = *on;
+                    hover.update(cx, |island, cx| {
+                        island.camera_hovered = on;
+                        cx.notify();
+                    })
+                })
+                // A viewfinder: corners of a frame round a dot, drawn, since
+                // there is no symbol font to lean on.
+                .child(
+                    div()
+                        .size(px(16.))
+                        .relative()
+                        .rounded(px(3.))
+                        .border_1()
+                        .border_color(white(if hovered { 0.8 } else { 0.55 }))
+                        .child(div().absolute().left(px(5.)).top(px(5.)).size(px(4.)).rounded_full().bg(white(if hovered { 0.8 } else { 0.55 }))),
+                ),
+        )
+}
+
+/// Rows in order, files back to back sharing one line, each text row alone;
+/// a screenshot's held place draws as nothing.
+fn row_groups(d: &crate::draft::Draft) -> Vec<Vec<u64>> {
+    let mut out: Vec<Vec<u64>> = Vec::new();
+    let mut last_file = false;
+    for row in d.rows.iter().filter(|r| !r.pending) {
+        let file = row.file.is_some();
+        match out.last_mut() {
+            Some(group) if file && last_file => group.push(row.id),
+            _ => out.push(vec![row.id]),
+        }
+        last_file = file;
+    }
+    out
+}
+
+/// A file alone between text rows: its thumbnail and label; several
+/// together: tiles in one strip.
+fn file_rows(state: &Entity<Island>, d: &crate::draft::Draft, ids: &[u64]) -> impl IntoElement {
+    let remove = |id: u64| {
+        let state = state.clone();
+        div()
+            .id(("remove-file", id as usize))
+            .flex_none()
+            .text_color(white(0.4))
+            .hover(|s| s.text_color(white(0.9)))
+            .child("✕")
+            .on_click(move |_, _, cx| later(&state, cx, move |i, cx| crate::remove_row(i, id, cx)))
+    };
+    let thumb = |row: &crate::draft::Row, h: f32| -> gpui::AnyElement {
+        let path = row.file.clone().unwrap_or_default();
+        if let Some((w, ih)) = row.size {
+            // Fitted inside h tall and twice that wide, as the Mac's is.
+            let k = (h / ih.max(1) as f32).min(2. * h / w.max(1) as f32);
+            gpui::img(std::path::PathBuf::from(path))
+                .w(px(w as f32 * k))
+                .h(px(ih as f32 * k))
+                .rounded(px(6.))
+                .into_any_element()
+        } else {
+            div().w(px(16.)).text_color(white(0.4)).child("▤").into_any_element()
+        }
+    };
+    let row = |id: &u64| d.rows.iter().find(|r| r.id == *id).expect("a row in its group");
+    if let [id] = ids {
+        return div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .p(px(8.))
+            .rounded(px(10.))
+            .bg(white(0.06))
+            .child(thumb(row(id), 72.))
+            .child(div().flex_1().min_w_0().truncate().child(d.label(*id)))
+            .child(remove(*id))
+            .into_any_element();
+    }
+    div()
+        .flex_none()
+        .flex()
+        .gap_2()
+        .p(px(8.))
+        .rounded(px(10.))
+        .bg(white(0.06))
+        .children(ids.iter().map(|id| {
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(4.))
+                .child(div().flex().gap(px(4.)).child(thumb(row(id), 56.)).child(remove(*id)))
+                .child(div().text_size(px(SMALL)).text_color(white(0.6)).child(d.label(*id)))
+        }))
+        .into_any_element()
 }
 
 /// How long the microphone has been open, m:ss; dim at 0:00 while it is still

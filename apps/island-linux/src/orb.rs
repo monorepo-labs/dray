@@ -396,6 +396,23 @@ impl EaseInOut {
     }
 }
 
+/// y at x on a cubic Bézier timing curve from (0,0) to (1,1) through
+/// (x1, y1) and (x2, y2): CSS's and Core Animation's `cubic-bezier`.
+pub fn bezier_curve(x: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    let curve = |t: f32, a: f32, b: f32| 3.0 * a * t * (1.0 - t).powi(2) + 3.0 * b * t * t * (1.0 - t) + t.powi(3);
+    let slope = |t: f32, a: f32, b: f32| 3.0 * a * (1.0 - t).powi(2) + 6.0 * (b - a) * t * (1.0 - t) + 3.0 * (1.0 - b) * t * t;
+    let mut t = x;
+    for _ in 0..8 {
+        let dx = curve(t, x1, x2) - x;
+        let s = slope(t, x1, x2);
+        if s.abs() < 1e-6 {
+            break;
+        }
+        t = (t - dx / s).clamp(0.0, 1.0);
+    }
+    curve(t, y1, y2)
+}
+
 /// y at x on the cubic Bézier from (0,0) to (1,1) with control x1, x2 and
 /// y 0, 1 — the ease-in-out curve — by Newton's method on x.
 fn bezier(x: f32, x1: f32, x2: f32) -> f32 {
