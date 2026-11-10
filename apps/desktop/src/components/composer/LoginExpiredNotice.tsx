@@ -5,10 +5,14 @@ import { invoke, LOCAL, type ServerId } from "@/lib/transport";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopied } from "@/hooks/useCopied";
+import { IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import type { AgentAvailability } from "@/types/events";
 
 const FAILED_MS = 4000;
+
+/// Terminal.app on a Mac; on Linux the reader's own, which has no one name.
+const TERMINAL = IS_MAC ? "Terminal" : "a terminal";
 
 /// Why the composer will not send when the agent's login has run out, and the
 /// two ways through it.
@@ -67,7 +71,7 @@ export default function LoginExpiredNotice({
     } catch (err) {
       // A failed launch must not clear the block: nothing was opened, so the
       // reader has not been handed the cure yet.
-      setError(typeof err === "string" ? err : "Could not open Terminal.");
+      setError(typeof err === "string" ? err : `Could not open ${TERMINAL}.`);
       if (errorTimer.current) clearTimeout(errorTimer.current);
       errorTimer.current = setTimeout(() => setError(null), FAILED_MS);
       return;
@@ -141,7 +145,7 @@ export default function LoginExpiredNotice({
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom" className={cn(error && "max-w-xs text-wrap")}>
-            {error ?? `Runs ${agent.loginCommand} in Terminal`}
+            {error ?? `Runs ${agent.loginCommand} in ${TERMINAL}`}
           </TooltipContent>
         </Tooltip>
       </div>
