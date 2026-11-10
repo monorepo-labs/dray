@@ -11,24 +11,41 @@ use std::sync::OnceLock;
 static NOTIFICATION: &[u8] = include_bytes!("../../desktop/public/notification.wav");
 static SEND: &[u8] = include_bytes!("../../island/Island/send.wav");
 
-/// Written once per run where only this user can reach it.
+/// Written once per run, under a name of this process's own and only ever
+/// created fresh: `create_new` refuses a path that exists, a planted symlink
+/// included, which matters where there is no `XDG_RUNTIME_DIR` and the file
+/// lands in the shared temp dir.
 fn file(cell: &'static OnceLock<Option<PathBuf>>, name: &str, bytes: &[u8]) -> Option<&'static PathBuf> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     cell.get_or_init(|| {
         let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-        let path = dir.join(format!("dray-island-{name}.wav"));
-        std::fs::write(&path, bytes).ok().map(|()| path)
+        let path = dir.join(format!("dray-island-{}-{name}.wav", std::process::id()));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).ok()?;
+        file.write_all(bytes).ok()?;
+        Some(path)
     })
     .as_ref()
 }
 
+static CHIME: OnceLock<Option<PathBuf>> = OnceLock::new();
+static SENT: OnceLock<Option<PathBuf>> = OnceLock::new();
+
 pub fn chime() {
-    static FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
-    play(file(&FILE, "notification", NOTIFICATION));
+    play(file(&CHIME, "notification", NOTIFICATION));
 }
 
 pub fn send() {
-    static FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
-    play(file(&FILE, "send", SEND));
+    play(file(&SENT, "send", SEND));
+}
+
+/// Removes this run's files on the way out, since each run names its own.
+pub fn forget() {
+    for cell in [&CHIME, &SENT] {
+        if let Some(Some(path)) = cell.get() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// Plays without waiting; silence where no player is found.
@@ -41,8 +58,11 @@ fn play(path: Option<&'static PathBuf>) {
                 command.arg("-q");
             }
             let spawned = command.arg(path).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
-            if let Ok(mut child) = spawned {
-                let _ = child.wait();
+            // One that runs but fails — `pw-play` with only PulseAudio up —
+            // gives way to the next.
+            if let Ok(mut child) = spawned
+                && child.wait().is_ok_and(|status| status.success())
+            {
                 return;
             }
         }

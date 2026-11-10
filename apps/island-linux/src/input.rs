@@ -138,6 +138,7 @@ impl TextInput {
     }
 
     fn mouse_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
         self.selecting = true;
         let at = self.index_for(e.position);
         if e.modifiers.shift { self.select_to(at, window, cx) } else { self.move_to(at, window, cx) }

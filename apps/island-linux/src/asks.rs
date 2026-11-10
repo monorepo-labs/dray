@@ -155,8 +155,9 @@ impl Asks {
         if list.iter().any(|a| a.request_id == ask.request_id) {
             return false;
         }
+        let id = ask.request_id.clone();
         list.push(ask);
-        self.settle()
+        self.settle(&[id])
     }
 
     /// Answered, here or in Dray, or taken back by the CLI.
@@ -164,7 +165,7 @@ impl Asks {
         if let Some(list) = self.by_session.get_mut(session_id) {
             list.retain(|a| a.request_id != request_id);
         }
-        self.settle();
+        self.settle(&[]);
     }
 
     /// The server's own account on every connect, replacing what was held:
@@ -172,6 +173,7 @@ impl Asks {
     /// new to the island.
     pub fn replace(&mut self, asks: Vec<Ask>, tasks: HashMap<String, usize>) -> bool {
         self.by_session.clear();
+        let arrived: Vec<String> = asks.iter().map(|a| a.request_id.clone()).collect();
         for ask in asks {
             let list = self.by_session.entry(ask.session_id.clone()).or_default();
             if !list.iter().any(|a| a.request_id == ask.request_id) {
@@ -179,7 +181,7 @@ impl Asks {
             }
         }
         self.tasks = tasks;
-        self.settle()
+        self.settle(&arrived)
     }
 
     pub fn set_tasks(&mut self, session_id: &str, count: usize, busy: bool) {
@@ -194,17 +196,19 @@ impl Asks {
     pub fn strand(&mut self, session_id: &str) {
         if self.tasks.get(session_id).copied().unwrap_or(0) == 0 {
             self.by_session.remove(session_id);
-            self.settle();
+            self.settle(&[]);
         }
     }
 
-    /// Brings `order` and `dismissed` in line with what is held. A new ask
+    /// Brings `order` and `dismissed` in line with what is held, new asks
+    /// taking their place in `arrived`, the order the server sent them in —
+    /// never the map's, which would pick the oldest card at random. A new ask
     /// brings back every one put away: dismissing quiets the pill, it answers
     /// nothing.
-    fn settle(&mut self) -> bool {
+    fn settle(&mut self, arrived: &[String]) -> bool {
         self.by_session.retain(|_, list| !list.is_empty());
         let ids: Vec<String> = self.by_session.values().flatten().map(|a| a.request_id.clone()).collect();
-        let fresh: Vec<String> = ids.iter().filter(|id| !self.order.contains(id)).cloned().collect();
+        let fresh: Vec<String> = arrived.iter().filter(|id| ids.contains(id) && !self.order.contains(id)).cloned().collect();
         self.order.retain(|id| ids.contains(id));
         self.order.extend(fresh.iter().cloned());
         if fresh.is_empty() {
@@ -363,6 +367,16 @@ mod tests {
         assert_eq!(asks.attention(), ["a", "b"]);
         assert!(asks.replace(vec![permission("c", "3")], HashMap::new()));
         assert_eq!(asks.attention(), ["c"]);
+    }
+
+    #[test]
+    fn a_reconnect_takes_the_server_s_order() {
+        for _ in 0..20 {
+            let mut asks = Asks::default();
+            let list = ["s1", "s2", "s3", "s4", "s5"].iter().enumerate().map(|(n, s)| permission(s, &n.to_string())).collect();
+            asks.replace(list, HashMap::new());
+            assert_eq!(asks.attention(), ["s1", "s2", "s3", "s4", "s5"]);
+        }
     }
 
     #[test]

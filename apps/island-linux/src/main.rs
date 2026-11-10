@@ -103,6 +103,8 @@ pub struct Island {
     pub card: Card,
     /// The last answer's word, drawn while the panel closes on it.
     pub flash: Option<&'static str>,
+    /// Counts flashes, so a timer closes only on the one it was started for.
+    flash_clock: u64,
     /// Why the last answer did not land.
     pub notice: Option<String>,
     pub glowing: bool,
@@ -221,7 +223,10 @@ fn main() {
                         let fresh = island.update(cx, |island, _| island.apply(update));
                         asks_changed(&island, fresh, had_cards, cx);
                     }
-                    Msg::Quit => cx.quit(),
+                    Msg::Quit => {
+                        sound::forget();
+                        cx.quit();
+                    }
                 });
             }
         })
@@ -433,6 +438,9 @@ fn open(island: &Entity<Island>, cx: &mut App) {
 
 pub fn close(island: &Entity<Island>, cx: &mut App) {
     let (window, focus) = island.update(cx, |island, cx| {
+        // The text box's focus goes with the window, so it reopens as the
+        // button showing what was typed; a click takes the keyboard back.
+        island.card.editing = false;
         island.listed = false;
         island.flash = None;
         island.notice = None;
@@ -510,10 +518,17 @@ pub fn fit(island: &Entity<Island>, pill: bool, width: f32, height: f32, cx: &mu
         (if pill { i.pill_x_window } else { i.x_window }, i.placement, i.glass)
     };
     let Some(xid) = xid else { return };
+    let height = height.min(work_height(cx));
     let bounds = place(placement, width, height, glass, cx);
     let s = scale(cx);
     let at = |p: Pixels| (p.as_f32() * s).round() as i32;
     x11::configure(xid, at(bounds.origin.x), at(bounds.origin.y), at(bounds.size.width), at(bounds.size.height));
+}
+
+/// The work area's height in GPUI pixels, which a window never outgrows.
+pub fn work_height(cx: &App) -> f32 {
+    let screen = cx.primary_display().map(|d| d.bounds().size.height.as_f32()).unwrap_or(f32::MAX);
+    x11::work_area().map_or(screen, |(_, _, _, h)| (h as f32 / scale(cx)).min(screen))
 }
 
 /// Moves an open panel to the reader's pick, and keeps the pick.
@@ -609,20 +624,22 @@ fn send_answer(
     cx: &mut App,
 ) {
     let reply = island.update(cx, |island, cx| {
-        if island.card.busy {
+        if island.card.busy || island.server.is_none() {
             return None;
         }
         let last = island.asks.attention() == [key.clone()] && island.asks.waiting(&key).len() == 1;
         island.card.busy = true;
         island.notice = None;
-        if last {
+        let flash = last.then(|| {
             island.flash = Some(label);
+            island.flash_clock += 1;
             sound::send();
-        }
+            island.flash_clock
+        });
         cx.notify();
-        island.server.as_ref().map(|s| s.call(cmd, args))
+        Some((island.server.as_ref()?.call(cmd, args), flash))
     });
-    let Some(reply) = reply else { return };
+    let Some((reply, flash)) = reply else { return };
     let island = island.clone();
     cx.spawn(async move |cx| {
         let answer = reply.await.unwrap_or_else(|_| Err("No answer from Dray.".into()));
@@ -644,14 +661,13 @@ fn send_answer(
             });
             asks_changed(&island, false, had_cards, cx);
         });
-        if !landed {
-            return;
-        }
+        // Only an answer that drew the flash closes on it.
+        let Some(clock) = flash.filter(|_| landed) else { return };
         cx.background_executor().timer(FLASH).await;
         cx.update(|cx| {
             let (flashing, empty) = {
                 let i = island.read(cx);
-                (i.flash.is_some(), i.asks.attention().is_empty())
+                (i.flash.is_some() && i.flash_clock == clock, i.asks.attention().is_empty())
             };
             if flashing && empty {
                 close(&island, cx);

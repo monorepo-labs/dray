@@ -16,7 +16,10 @@ const WAITING: u32 = 0xe5c057;
 const RED: u32 = 0xff6b5e;
 /// The card's fill on a denial's flash, as the Mac turns its card red.
 const DENIED: u32 = 0xc4392f;
-/// The Mac island's type: 13pt body, 12 for asides, 11 for the smallest.
+/// The most a card's question or the waiting list may take before it
+/// scrolls, as the Mac caps them; less on a short screen.
+const BODY_CAP: f32 = 420.;
+/// The type: 13pt body, 12 for asides, 11 for the smallest.
 const BODY: f32 = 13.;
 const ASIDE: f32 = 12.;
 const SMALL: f32 = 11.;
@@ -217,6 +220,12 @@ fn peeks(count: usize) -> impl IntoElement {
     }))
 }
 
+/// What a card's body may take: the Mac's cap, less on a screen too short
+/// for it once the header, padding and room are counted.
+fn cap(cx: &App) -> f32 {
+    BODY_CAP.min(crate::work_height(cx) - 120.).max(120.)
+}
+
 fn shell() -> gpui::Div {
     div().flex_none().w_full().flex().flex_col().gap(px(10.)).p(px(12.))
 }
@@ -268,14 +277,17 @@ fn card(state: &Entity<Island>, island: &Island, key: &str, focus: &FocusHandle,
     let listed = island.listed && keys.len() > 1;
     let mut el = shell();
     if listed {
-        el = el.child(waiting_list(state, island, &keys, key));
+        el = el.child(waiting_list(state, island, &keys, key).id("waiting-scroll").max_h(px(cap(cx))).overflow_y_scroll());
     } else {
         el = el.child(header(state, island, &keys, key));
         if let Some((_, ask)) = island.current() {
-            el = el.child(match &ask.kind {
-                AskKind::Permission(p) => permission(state, island, p).into_any_element(),
-                AskKind::Questions(qs) => questions(state, island, qs, focus, cx).into_any_element(),
-            });
+            // A long option list scrolls rather than pushing the buttons off screen.
+            el = el.child(
+                div().id(("ask-scroll", island.card.index)).max_h(px(cap(cx))).overflow_y_scroll().child(match &ask.kind {
+                    AskKind::Permission(p) => permission(state, island, p).into_any_element(),
+                    AskKind::Questions(qs) => questions(state, island, qs, focus, cx).into_any_element(),
+                }),
+            );
         }
     }
     el.children(island.notice.clone().map(|n| div().text_size(px(ASIDE)).text_color(rgb(RED)).child(n)))
@@ -357,7 +369,7 @@ fn header(state: &Entity<Island>, island: &Island, keys: &[String], key: &str) -
 }
 
 /// Every waiting session by title; a click opens its card.
-fn waiting_list(state: &Entity<Island>, island: &Island, keys: &[String], current: &str) -> impl IntoElement {
+fn waiting_list(state: &Entity<Island>, island: &Island, keys: &[String], current: &str) -> gpui::Div {
     div().flex().flex_col().gap(px(2.)).children(keys.iter().enumerate().map(|(n, k)| {
         let on = k == current;
         let pick_key = k.clone();

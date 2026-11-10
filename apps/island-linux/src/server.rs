@@ -167,6 +167,12 @@ fn connect(on_update: &impl Fn(Update), asks: &Receiver<Outbound>) -> Result<(),
         return Ok(());
     }
     let result = loop {
+        // Every pass, not only after a quiet read: a session streaming
+        // deltas never lets the socket go quiet, and an answer held back
+        // would leave its agent blocked.
+        if !send_waiting(&mut socket, &mut calls, asks) {
+            break Ok(());
+        }
         match socket.read() {
             Ok(Message::Text(text)) => {
                 let Ok(frame) = serde_json::from_str::<Value>(&text) else { continue };
@@ -181,24 +187,8 @@ fn connect(on_update: &impl Fn(Update), asks: &Receiver<Outbound>) -> Result<(),
             Ok(Message::Close(_)) => break Ok(()),
             Ok(_) => {}
             // tungstenite keeps a half-read frame buffered, so a timeout
-            // mid-frame resumes where it left off.
-            Err(tungstenite::Error::Io(e)) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                let mut listed = false;
-                let mut gone = false;
-                while let Ok(ask) = asks.try_recv() {
-                    // A burst of relists is one list.
-                    if matches!(ask, Outbound::List) && std::mem::replace(&mut listed, true) {
-                        continue;
-                    }
-                    if !calls.send(&mut socket, ask) {
-                        gone = true;
-                        break;
-                    }
-                }
-                if gone {
-                    break Ok(());
-                }
-            }
+            // mid-frame resumes where it left off; the next pass sends.
+            Err(tungstenite::Error::Io(e)) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
             Err(_) => break Ok(()),
         }
     };
@@ -207,6 +197,22 @@ fn connect(on_update: &impl Fn(Update), asks: &Receiver<Outbound>) -> Result<(),
         let _ = reply.send(Err("The connection to Dray's server dropped.".into()));
     }
     result
+}
+
+/// Sends whatever the island has asked for since the last pass; `false`
+/// once the socket has gone.
+fn send_waiting(socket: &mut WebSocket<TcpStream>, calls: &mut Calls, asks: &Receiver<Outbound>) -> bool {
+    let mut listed = false;
+    while let Ok(ask) = asks.try_recv() {
+        // A burst of relists is one list.
+        if matches!(ask, Outbound::List) && std::mem::replace(&mut listed, true) {
+            continue;
+        }
+        if !calls.send(socket, ask) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Calls sent on one connection and not yet answered.
