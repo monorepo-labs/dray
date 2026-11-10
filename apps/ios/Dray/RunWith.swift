@@ -155,10 +155,17 @@ struct RunWithSheet: View {
     private func readBranches() async -> BranchList? {
         let at = place
         guard let server = task.server, let cwd = task.cwd else { return nil }
-        let read: BranchList? = try? await store.call(server, "list_branches", ["cwd": .string(cwd)])
-        guard at == place else { return nil }
-        branches = read
-        return read
+        do {
+            let read: BranchList = try await store.call(server, "list_branches", ["cwd": .string(cwd)])
+            guard at == place else { return nil }
+            branches = read
+            branchError = nil
+            return read
+        } catch {
+            // The last list stays, so the row is still there to try again from.
+            if at == place { branchError = error.localizedDescription }
+            return nil
+        }
     }
 
     /// A clean checkout switches at once; uncommitted files ask first, as the desktop's picker does.
