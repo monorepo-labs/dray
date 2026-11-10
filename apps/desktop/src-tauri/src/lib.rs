@@ -34,7 +34,7 @@ pub mod cef;
 pub mod chromium;
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 mod trackpad;
-#[cfg(all(feature = "desktop", target_os = "macos"))]
+#[cfg(all(feature = "desktop", any(target_os = "macos", target_os = "linux")))]
 mod cli;
 // `dray browser` on a server: a headless Chromium under the same verbs the
 // Mac's CEF answers. In the desktop build too, since that binary is also the
@@ -794,7 +794,7 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.remove_menu();
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             cli::install();
             // Dictations kept past a failure. Pruning on write alone left the
             // last one on disk forever, since nothing else sweeps them and a

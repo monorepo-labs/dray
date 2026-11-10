@@ -124,9 +124,38 @@ fn may_serve() -> Result<(), String> {
 /// Whether the Dray app owns this Mac's server and CLI for the home this runs
 /// on. A server on a `DRAY_HOME` of its own is set up and updated apart from it.
 pub(crate) fn app_runs_this_home() -> bool {
-    let own_home = std::env::var_os("DRAY_HOME").is_some_and(|v| !v.is_empty());
-    !own_home && app_on_this_mac()
+    !own_home() && app_on_this_mac()
 }
+
+/// Whether the Dray app keeps this machine's `dray` for the home this runs on,
+/// rewriting it on every launch.
+pub(crate) fn app_updates_this_cli() -> bool {
+    !own_home() && app_ships_this_cli()
+}
+
+fn own_home() -> bool {
+    std::env::var_os("DRAY_HOME").is_some_and(|v| !v.is_empty())
+}
+
+/// Whether a Dray app here copies its own `dray` to ~/.local/bin: any Mac app,
+/// and on Linux the AppImage the app records on launch (cli.rs), while that
+/// file is still there. Its server is the app's child on Linux, so this says
+/// nothing about who serves. install.sh asks the same.
+pub(crate) fn app_ships_this_cli() -> bool {
+    if MAC {
+        return app_on_this_mac();
+    }
+    let Some(home) = std::env::home_dir() else {
+        return false;
+    };
+    std::fs::read(home.join(APPIMAGE_RECORD)).is_ok_and(|image| {
+        use std::os::unix::ffi::OsStrExt;
+        !image.is_empty() && Path::new(std::ffi::OsStr::from_bytes(&image)).is_file()
+    })
+}
+
+/// Written by the Linux app on launch, naming the AppImage it runs from.
+const APPIMAGE_RECORD: &str = ".local/share/dray/appimage";
 
 /// The app's login agent, which every launch installs, or its bundle, for one
 /// installed and never opened. install.sh asks the same three paths.

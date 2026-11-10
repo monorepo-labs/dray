@@ -280,13 +280,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
       - run: pnpm install --frozen-lockfile
 
+      # The Mac's step: the CLI the cli overlay hands the bundler, which puts
+      # it at usr/bin/dray-cli.
+      - name: Build the dray CLI
+        run: apps/desktop/scripts/cli-sidecar.sh apps/desktop/src-tauri/target/cli
+
       # `createUpdaterArtifacts` signs the AppImage itself into a `.sig`
       # beside it, with the same minisign key as the Mac's — the one public
       # key in tauri.conf.json verifies both. `cef` as on the Mac: the
       # bindings compile against the CEF SDK, which `cef-dll-sys` downloads
       # into CEF_PATH and builds with CMake and Ninja; libcef itself is never
       # bundled, the app downloads its own (chromium.rs).
-      - run: pnpm tauri build --bundles appimage --features cef
+      - run: pnpm tauri build --bundles appimage --features cef --config src-tauri/tauri.cli.conf.json
         working-directory: apps/desktop
         env:
           CEF_PATH: ${{ runner.temp }}/cef
@@ -306,6 +311,17 @@ jobs:
           IMAGE="$(realpath apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage)"
           cd "$RUNNER_TEMP" && "$IMAGE" --appimage-extract >/dev/null
           if find squashfs-root -name 'libcef*' | grep .; then exit 1; fi
+
+      # What the app reads out of its own mount: the CLI it copies to
+      # ~/.local/bin (cli.rs), and dictation's backend modules, loaded from
+      # usr/lib/Dray/transcribe by name (engine.rs) since linuxdeploy puts a
+      # second libtranscribe in usr/lib with no module beside it.
+      - name: Verify the AppImage
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/squashfs-root"
+          usr/bin/dray-cli --version
+          ls usr/lib/Dray/transcribe/libggml-cpu-*.so usr/lib/Dray/transcribe/libggml-vulkan.so
 
       # The same mirror as the Mac's. The signature rides out as an output
       # for the manifest; the file goes to the release from there, since the

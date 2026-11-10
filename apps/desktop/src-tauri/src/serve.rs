@@ -309,7 +309,7 @@ pub fn appimage_safe_cwd() -> Option<PathBuf> {
 }
 
 #[cfg(all(target_os = "linux", feature = "desktop"))]
-fn appimage() -> Option<PathBuf> {
+pub(crate) fn appimage() -> Option<PathBuf> {
     let image = std::env::var_os("APPIMAGE").filter(|v| !v.is_empty())?;
     let mount = std::env::temp_dir().join(".mount_");
     let exe = std::env::current_exe().ok()?;
