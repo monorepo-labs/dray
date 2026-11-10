@@ -1,11 +1,13 @@
 import { type ElementType, type ReactNode, useEffect, useRef, useState } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import {
   type BreakClock,
   IDLE_MS,
   TICK_MS,
   advance,
+  isBreakDue,
   setBreakDue,
   useBreakDue,
   useBreakSettings,
@@ -18,8 +20,9 @@ import { invoke } from "@/lib/transport";
 let clock: BreakClock = { used: 0, away: 0 };
 
 /// Counts active use and raises the overlay once the reader's interval is up.
-/// Active means the window is focused and something was pressed or moved in
-/// the last few minutes, so a frontmost window left alone does not count.
+/// Active means something was pressed or moved anywhere on the Mac in the last
+/// few minutes: the reader working in the island or another app is still at
+/// the screen, and counting focused time alone reset the clock all day.
 function useBreakClock() {
   const { on, minutes } = useBreakSettings();
 
@@ -36,20 +39,37 @@ function useBreakClock() {
     const events = ["keydown", "pointerdown", "pointermove", "wheel"] as const;
     for (const e of events) document.addEventListener(e, touch, { passive: true, capture: true });
     const id = setInterval(async () => {
-      // The browser pane's input never reaches the document, so the OS's idle
-      // time decides where it answers; the listeners cover where it can't.
+      // The OS's idle time sees input everywhere; the listeners, which see this
+      // window alone, are the fallback off macOS, where focus has to gate them.
       const idle = await invoke<number | null>("idle_seconds").catch(() => null);
       const now = Date.now();
-      const recent = idle === null ? now - lastInput < IDLE_MS : idle * 1000 < IDLE_MS;
-      clock = advance(clock, now - last, isWindowFocused() && recent);
+      const active =
+        idle === null ? isWindowFocused() && now - lastInput < IDLE_MS : idle * 1000 < IDLE_MS;
+      clock = advance(clock, now - last, active);
       last = now;
-      if (clock.used >= minutes * 60_000) setBreakDue(true);
+      if (clock.used >= minutes * 60_000 && !isBreakDue()) {
+        setBreakDue(true);
+        void raiseWindow();
+      }
     }, TICK_MS);
     return () => {
       clearInterval(id);
       for (const e of events) document.removeEventListener(e, touch, { capture: true });
     };
   }, [on, minutes]);
+}
+
+/// Brings the window forward so a break due while the reader is in another app
+/// is seen, not drawn behind it.
+async function raiseWindow() {
+  try {
+    const win = getCurrentWindow();
+    await win.unminimize();
+    await win.show();
+    await win.setFocus();
+  } catch {
+    // Outside Tauri (`pnpm dev`, demos) there is no window to raise.
+  }
 }
 
 /// The hourly break reminder: the whole window, a one-minute countdown, and one way
