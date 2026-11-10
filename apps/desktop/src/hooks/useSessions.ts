@@ -858,7 +858,7 @@ const handleSendMsg = async (
   // Read before the optimistic write below overwrites it. A send onto a running
   // turn must not release that turn's status if it fails — the turn is still
   // running, and the failure was this prompt's alone.
-  const wasBusy = statusBySession[sessionId] === "in_progress";
+  const wasBusy = statusOf(sessionId) === "in_progress";
   // Optimistic: the backend publishes the same transition once the prompt
   // reaches the child, but the composer must read busy the moment Enter lands.
   setStatusBySession((prev) => ({ ...prev, [sessionId]: "in_progress" }));
@@ -1361,8 +1361,7 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   // every selection rather than only its own: the mark survives being looked
   // away from, and the next visit is what answers it.
   keptUnreadRef.current = null;
-  const clicked = sessionIndexItems.find((i) => i.sessionId === sessionId);
-  if ((statusBySession[sessionId] ?? clicked?.status) === "completed") {
+  if (statusOf(sessionId) === "completed") {
     markSessionRead(sessionId);
   }
 
@@ -1770,9 +1769,15 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
 // is the one path that also restores the user's own defaults.
 const deleteSession = async (sessionId: string) => {
   const fail = failUnlessLeft();
+  // Marked before the call, not after it. Deleting a session mid-turn kills
+  // its child, and the status that publishes lands while this is still
+  // awaiting its answer — where it announced "Done" for a session on its way
+  // out and left its status behind for good.
+  deletedRef.current.add(sessionId);
   try {
     await invoke<boolean>("delete_session", { sessionId });
   } catch (e) {
+    deletedRef.current.delete(sessionId);
     fail(e);
     return;
   }
@@ -1787,7 +1792,8 @@ const deleteSession = async (sessionId: string) => {
   setWorkingBySession(({ [sessionId]: _, ...rest }) => rest);
   setTasksBySession(({ [sessionId]: _, ...rest }) => rest);
   setQueuedBySession(({ [sessionId]: _, ...rest }) => rest);
-  deletedRef.current.add(sessionId);
+  // Every kind: a card about a session that is gone opens nothing.
+  dismissNotice(sessionId);
   forgetTranscript(sessionId);
   forgetDocs(sessionId);
   forgetOpenFiles(sessionId);
@@ -2052,7 +2058,10 @@ useEffect(() => {
                 commit();
                 retireStreamingBlock(agentEvent.sessionId);
               });
-            } else {
+            } else if (agentEvent.payload.type !== "usage_update") {
+              // A running counter the indicator reads below and no row draws.
+              // Several land a second while the model thinks, and each one in
+              // the events was a new array and a transcript rebuilt for nothing.
               commit();
             }
 
@@ -2160,10 +2169,7 @@ useEffect(() => {
               // ended with a task still open kept its asks, since the task's
               // subagent could be the one asking. With the set drained and no
               // turn running, nothing is left that could answer them.
-              if (
-                tasks.length === 0 &&
-                statusBySessionRef.current[agentEvent.sessionId] !== "in_progress"
-              ) {
+              if (tasks.length === 0 && statusOf(agentEvent.sessionId) !== "in_progress") {
                 setAsksBySession((prev) =>
                   prev[agentEvent.sessionId]?.length
                     ? { ...prev, [agentEvent.sessionId]: [] }
@@ -2330,6 +2336,13 @@ const projectsRef = useRef(orderedProjects);
 projectsRef.current = orderedProjects;
 const statusBySessionRef = useRef(statusBySession);
 statusBySessionRef.current = statusBySession;
+/// A session's status: the live reading where one has arrived, the index's
+/// otherwise. The live map starts empty and every `live_state` empties it
+/// again, so read alone it calls a session idle that is mid-turn on its server
+/// — which evicted its transcript and released its status on a failed send.
+const statusOf = (sessionId: string): SessionStatus | undefined =>
+  statusBySessionRef.current[sessionId]
+  ?? sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId)?.status;
 const tasksBySessionRef = useRef(tasksBySession);
 tasksBySessionRef.current = tasksBySession;
 
@@ -2559,10 +2572,7 @@ const setOnScreen = (ids: string[]) => {
   for (const id of next) {
     if (prev.has(id)) continue;
     lastViewedRef.current.set(id, now);
-    const status =
-      statusBySessionRef.current[id]
-      ?? sessionIndexItemsRef.current.find((i) => i.sessionId === id)?.status;
-    if (isWindowFocused() && status === "completed") markSessionRead(id);
+    if (isWindowFocused() && statusOf(id) === "completed") markSessionRead(id);
     // Selecting a session already asked for it, and a group opens that way.
     if (id !== selectionRequestRef.current) refreshHeld(id);
   }
@@ -2652,7 +2662,7 @@ const neighboursRef = useRef<ReadonlySet<string>>(new Set());
 const setNeighbours = (ids: string[]) => {
   neighboursRef.current = new Set(ids);
   for (const id of ids) {
-    if (statusBySessionRef.current[id] !== "in_progress") void ensureLoaded(id, false);
+    if (statusOf(id) !== "in_progress") void ensureLoaded(id, false);
   }
 };
 /// Lets the warmed neighbours go now rather than at the next sweep. One the
@@ -2748,8 +2758,7 @@ const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) =>
   // the early-event hold), or one holding a card only its child can redraw.
   const held = (s: SessionSnapshot) => {
     const forced = s.sessionId === force?.sessionId;
-    const status =
-      forced && force.status ? force.status : statusBySessionRef.current[s.sessionId];
+    const status = forced && force.status ? force.status : statusOf(s.sessionId);
     return (
       onScreen(s.sessionId)
       || s.sessionId === selectionRequestRef.current
@@ -2937,7 +2946,7 @@ useEffect(
       const shown = [selectedSessionIdRef.current, ...onScreenRef.current];
       for (const sessionId of shown) {
         if (sessionId === keptUnreadRef.current) continue;
-        if (sessionId && statusBySessionRef.current[sessionId] === "completed") {
+        if (sessionId && statusOf(sessionId) === "completed") {
           markSessionRead(sessionId);
         }
       }
@@ -2995,6 +3004,8 @@ useEffect(() => {
 useEffect(() => {
   const listenerPromise = listen<SessionStatusEvent>("session_status", (event) => {
     const { sessionId, status, modified } = event.payload;
+    // Its child dying is the last thing a deleted session says.
+    if (deletedRef.current.has(sessionId)) return;
 
     // Only completion moves this, and the sidebar sorts by it — so a session
     // finishing in the background rises to the top the moment it does, rather
