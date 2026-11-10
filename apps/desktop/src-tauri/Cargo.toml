@@ -180,6 +180,8 @@ desktop = [
   # with `desktop` alone. See chromium.rs.
   "dep:bzip2",
   "dep:tar",
+  # The composer's paste reads GTK's clipboard on Linux (attachments.rs).
+  "dep:gtk",
   # Linux's sleep and banner click. See transcription.rs and notifications.rs.
   "dep:zbus",
 ]

@@ -408,7 +408,13 @@ transcription: TranscriptionSettings,
  * Whether this Mac serves itself through a quick tunnel. Here because
  * Rust starts it at launch, before any webview exists to ask.
  */
-remoteAccess: boolean, };
+remoteAccess: boolean, 
+/**
+ * Whether a client holding this server's token reaches the machines it
+ * lists through it (#847). Off by default: it hands that token every
+ * machine's reach, SSH logins included.
+ */
+shareMachines: boolean, };
 
 /**
  * Permission stance a session *runs under*, in roughly increasing order of
@@ -704,7 +710,13 @@ path: string, name: string, kind: ExternalAppKind,
  * no `.icns` beside it — so the button falls back to a glyph rather than
  * treating this as a failure.
  */
-icon: string | null, };
+icon: string | null, 
+/**
+ * Takes a directory as well as a file. False for the editors that open
+ * files alone — GNOME Text Editor and gedit answer a folder with "Could
+ * not open file" — so the directory button leaves them out.
+ */
+folders: boolean, };
 
 /**
  * Which run of the menu an app belongs to. Not cosmetic: "open in Cursor" and

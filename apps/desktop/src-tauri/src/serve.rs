@@ -595,6 +595,7 @@ pub async fn listen(
             // its task and its socket until the peer went away.
             let first = tokio::time::timeout(ADMIT, request_line(&stream)).await.ok().flatten();
             let served = match first {
+                Some(line) if relayed(&line) => relay_http(stream, &token).await,
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
                 Some(line) if line.starts_with("POST /upload?") => upload(stream, &token).await,
                 Some(_) => connection(stream, sink, hub, &token, &tunnel_file, hosts).await,
@@ -698,6 +699,10 @@ struct Hello {
     /// than being a client: see [`pipe`].
     #[serde(default)]
     forward: Option<u16>,
+    /// A machine this server shares, by id: the socket is that machine's,
+    /// relayed through here. See [`relay`].
+    #[serde(default)]
+    via: Option<String>,
 }
 
 /// What the app can answer when it connects as the host.
@@ -923,6 +928,156 @@ where
         _ = outbound => {}
         _ = inbound => {}
     }
+}
+
+/// Passes one client's socket to a machine this server shares (#847), frames
+/// untouched both ways, so the machine's welcome, events and replies reach the
+/// client as if it had connected there. Admitted by this server's token; the
+/// machine is told its own. Only what a plain client says is passed on — never
+/// `host` or `client`, which a machine honours on its local listener, where
+/// an SSH forward lands — and no `via`, so a relay is one hop.
+async fn relay<W, R>(mut write: W, mut read: R, hello: Hello) -> Result<()>
+where
+    W: futures_util::Sink<Message> + Unpin,
+    R: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    let theirs = json!({ "v": hello.v, "deflate": hello.deflate, "counts": hello.counts });
+    let upstream = match crate::machines::relay(hello.via.as_deref().unwrap_or_default(), theirs).await {
+        Ok(upstream) => upstream,
+        Err(refusal) => {
+            write.send(Message::text(json!({ "err": refusal }).to_string())).await.ok();
+            write.close().await.ok();
+            return Ok(());
+        }
+    };
+    let via = hello.via.unwrap_or_default();
+    let (mut up_write, mut up_read) = upstream.split();
+    // The client's pings are answered here, so they say nothing of the machine;
+    // it is pinged from here and dropped once silent, which ends the client's
+    // socket and has it reconnect.
+    let mut ping = tokio::time::interval(PIPE_PING);
+    let mut heard = tokio::time::Instant::now();
+    loop {
+        tokio::select! {
+            frame = read.next() => match frame {
+                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(frame)) => if up_write.send(frame).await.is_err() { break },
+            },
+            frame = up_read.next() => {
+                heard = tokio::time::Instant::now();
+                match frame {
+                    Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(frame)) => if write.send(frame).await.is_err() { break },
+                }
+            }
+            // Sharing switched off, or the machine left the list, ends the relay
+            // too. The tick catches the Mac app's own list edits, which no
+            // notify in this process sees.
+            _ = crate::machines::SHARING_MOVED.notified() => {
+                if !crate::machines::still_shared(&via).await {
+                    break;
+                }
+            }
+            _ = ping.tick() => {
+                if heard.elapsed() > PIPE_SILENCE
+                    || !crate::machines::still_shared(&via).await
+                    || up_write.send(Message::Ping(Default::default())).await.is_err()
+                {
+                    break;
+                }
+            }
+        }
+    }
+    up_write.close().await.ok();
+    write.close().await.ok();
+    Ok(())
+}
+
+/// Whether an HTTP request line names a shared machine with `via=`.
+fn relayed(line: &str) -> bool {
+    let target = line.split(' ').nth(1).unwrap_or_default();
+    let routed = line.starts_with("GET /file?") || line.starts_with("POST /upload?");
+    routed && target.split_once('?').is_some_and(|(_, q)| form_urlencoded::parse(q.as_bytes()).any(|(k, _)| k == "via"))
+}
+
+/// `/file` or `/upload` with `via=<machine id>`: answered by that machine under
+/// its own token, the HTTP half of [`relay`]. This server's token admits it,
+/// as a header or `token=` in the query the way `/file` takes it.
+async fn relay_http(stream: TcpStream, token: &str) -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (head, reader) = read_head(stream).await?;
+    let early = reader.buffer().to_vec();
+    let mut stream = reader.into_inner().into_inner();
+    let (route, query) = head.target.split_once('?').unwrap_or((&head.target, ""));
+    let (mut given, mut via, mut rest) = (head.bearer.clone().unwrap_or_default(), String::new(), String::new());
+    for (key, value) in form_urlencoded::parse(query.as_bytes()) {
+        match &*key {
+            "token" => {
+                if given.is_empty() {
+                    given = value.into_owned();
+                }
+            }
+            "via" => via = value.into_owned(),
+            _ => {
+                form_urlencoded::Serializer::for_suffix(&mut rest, 0).append_pair(&key, &value);
+            }
+        }
+    }
+    let refuse = |status: &str| format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    if !same_token(&given, token) {
+        stream.write_all(refuse("401 Unauthorized").as_bytes()).await?;
+        return Ok(());
+    }
+    let Ok((base, theirs)) = crate::machines::relay_http(&via).await else {
+        stream.write_all(refuse("502 Bad Gateway").as_bytes()).await?;
+        return Ok(());
+    };
+    let url = format!("{base}{route}?{rest}");
+    // An upload's body goes out inside `send`, so its wait grows with the
+    // body: 64 KiB/s at worst.
+    let mut wait = PIPE_SILENCE;
+    let mut request = match route {
+        "/upload" => {
+            let Some(length) = head.length.filter(|&l| l <= crate::attachments::MAX_UPLOAD_BYTES) else {
+                stream.write_all(refuse("413 Content Too Large").as_bytes()).await?;
+                return Ok(());
+            };
+            // ponytail: held whole, which a phone's dictation fits; stream it
+            // if a client starts relaying attachments.
+            let mut body = Vec::with_capacity(length as usize);
+            (&early[..]).chain(&mut stream).take(length).read_to_end(&mut body).await?;
+            wait += std::time::Duration::from_secs(length / (64 * 1024));
+            crate::http().post(url).body(body)
+        }
+        _ => crate::http().get(url),
+    }
+    .bearer_auth(theirs);
+    if let Some(range) = &head.range {
+        request = request.header(reqwest::header::RANGE, range);
+    }
+    // `http()` has no timeout of its own, and a body may stream for minutes,
+    // so the wait is bounded per step: the answer's head, then each chunk.
+    let Ok(Ok(mut response)) = tokio::time::timeout(wait, request.send()).await else {
+        stream.write_all(refuse("502 Bad Gateway").as_bytes()).await?;
+        return Ok(());
+    };
+    let status = response.status();
+    let mut reply = format!("HTTP/1.1 {} {}\r\n", status.as_u16(), status.canonical_reason().unwrap_or_default());
+    for name in ["content-type", "content-length", "content-range", "accept-ranges"] {
+        if let Some(value) = response.headers().get(name).and_then(|v| v.to_str().ok()) {
+            reply.push_str(&format!("{name}: {value}\r\n"));
+        }
+    }
+    reply.push_str("Connection: close\r\n\r\n");
+    stream.write_all(reply.as_bytes()).await?;
+    while let Some(chunk) = tokio::time::timeout(PIPE_SILENCE, response.chunk()).await.context("the machine stopped sending")?? {
+        stream.write_all(&chunk).await?;
+    }
+    stream.shutdown().await.ok();
+    Ok(())
 }
 
 /// An HTTP request head: its target, the bearer token if one was sent, the
@@ -1242,6 +1397,9 @@ async fn connection(
             .ok();
         write.close().await.ok();
         return Ok(());
+    }
+    if let Some(relayed) = serde_json::from_str::<Hello>(&hello).ok().filter(|h| h.via.is_some()) {
+        return relay(write, read, relayed).await;
     }
     if let Some(port) = serde_json::from_str::<Hello>(&hello).ok().and_then(|h| h.forward) {
         // `localhost` rather than 127.0.0.1: every address it resolves to is
@@ -1605,6 +1763,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         set_auto_continue(session_id: String, on: bool) => crate::auto_continue::set_auto_continue(session_id, on, sink).await;
         list_session_index_items(archived: bool) => store::list_session_index_items(archived).await;
         reachable_sessions() => ok(crate::machines::reachable_sessions().await);
+        share_machines() => ok(crate::machines::sharing().await);
+        set_share_machines(on: bool) => crate::machines::set_sharing(on).await;
         get_session_by_id(session_id: String, turns: Option<u32>) => store::get_session_by_id(&session_id, turns).await;
         get_session_page(session_id: String, before: u64, turns: u32) => store::get_session_page(&session_id, before, turns).await;
         get_session_since(session_id: String, after: Vec<String>) => store::get_session_since(&session_id, after).await;
@@ -1726,6 +1886,16 @@ mod tests {
         assert_eq!(byte_span(Some("bytes=0-1,5-6"), 100), Whole, "many ranges answer whole");
         assert_eq!(byte_span(Some("items=0-1"), 100), Whole);
         assert_eq!(byte_span(Some("bytes=0-"), 0), Unsatisfiable);
+    }
+
+    #[test]
+    fn only_a_file_or_upload_naming_via_is_relayed() {
+        use super::relayed;
+        assert!(relayed("GET /file?path=%2Fa&via=69b4 HTTP/1.1"));
+        assert!(relayed("POST /upload?via=69b4&name=a.wav HTTP/1.1"));
+        assert!(!relayed("GET /file?path=%2Fvia%3Dx HTTP/1.1"), "a path holding via= is not a via");
+        assert!(!relayed("GET /file?path=%2Fa HTTP/1.1"));
+        assert!(!relayed("GET /?via=69b4 HTTP/1.1"), "the socket's upgrade carries via in its hello");
     }
 
     use super::*;

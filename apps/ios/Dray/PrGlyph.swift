@@ -58,6 +58,7 @@ struct PrGlyph: View {
 /// Checks still running: the desktop's dashed circle in command yellow,
 /// one turn every 3s.
 struct ChecksSpinner: View {
+    var size: CGFloat = 14
     @Environment(\.accessibilityReduceMotion) private var still
     @Environment(\.motionPaused) private var hidden
 
@@ -68,7 +69,7 @@ struct ChecksSpinner: View {
                 .stroke(.yellow, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [2.4, 3]))
                 .rotationEffect(.degrees(timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) * 120))
         }
-        .frame(width: 14, height: 14)
+        .frame(width: size, height: size)
         .accessibilityElement()
         .accessibilityLabel("Checks running")
     }

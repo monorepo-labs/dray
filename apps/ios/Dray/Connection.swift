@@ -62,6 +62,9 @@ final class Connection {
     var dictation: Bool { welcome?.dictation ?? false }
     /// Named in the hello; `"island"` is what the server counts the Island's use by.
     var client: String?
+    /// A machine the server at `url` shares, by its id there: the socket and
+    /// `/file` reach that machine through it, under the server's own token.
+    var via: String?
     /// Every event frame, whole, with its name. Decoded by the store, which knows the type.
     var onEvent: (String, Data) -> Void = { _, _ in }
     var onState: (State) -> Void = { _ in }
@@ -138,6 +141,7 @@ final class Connection {
         do {
             var fields: [String: JSON] = ["v": JSON(serveProtocol), "token": .string(token)]
             if let client { fields["client"] = .string(client) }
+            if let via { fields["via"] = .string(via) }
             let hello = try JSONEncoder().encode(fields)
             try await t.send(.string(String(decoding: hello, as: UTF8.self)))
             let welcome = try await receive(t)
@@ -241,7 +245,7 @@ extension Connection {
         }
         parts.scheme = parts.scheme == "wss" ? "https" : "http"
         parts.path = "/upload"
-        parts.queryItems = [URLQueryItem(name: "name", value: name)]
+        parts.queryItems = [URLQueryItem(name: "name", value: name)] + viaQuery
         var request = URLRequest(url: parts.url!)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -251,6 +255,9 @@ extension Connection {
         }
         return String(decoding: data, as: UTF8.self)
     }
+
+    /// `via=` for a relayed server's `/file` and `/upload`, nothing for any other.
+    var viaQuery: [URLQueryItem] { via.map { [URLQueryItem(name: "via", value: $0)] } ?? [] }
 }
 
 /// An address as a reader types it — `host:port`, `http(s)://`, `ws(s)://` —

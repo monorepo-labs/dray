@@ -41,9 +41,19 @@ phone reads and drives it over the same WebSocket the desktop uses
   Bring or Stash first where files are uncommitted, as the desktop does.
 - **Pairing** by paste or by QR, and every server's name, token and removal
   in one Settings screen.
+- **Shared machines** (#847): a paired server that shares its list
+  (`share_machines`, `machines_shared`) adds each machine as a server of its
+  own, never saved, with a hello naming `via` its id and `/file`/`/upload`
+  carrying `via=`, under the paired server's token. Its id is hashed from the
+  pair, so transcripts survive a reconnect. The Island skips this: it follows
+  the app's links, which already name those machines.
 - **Pull request** sheet from the session view: readiness in the desktop's
-  order, checks, comments; merge, mark ready, reopen. Hidden when the branch
-  has none.
+  order with checks speaking first, checks failing-first, comments; every
+  check and comment opens on GitHub. Merge is the desktop's split button —
+  the chevron picks the method, kept on the phone, and a confirm runs before
+  it lands; it stays shut while checks run or fail. Mark ready, reopen.
+  Hidden when the branch has none. Reads and merges only: no comment, reply
+  or close.
 - **Dictation**, transcribed on the Mac: the phone records a 16kHz mono WAV,
   uploads it through `POST /upload` and calls `transcribe_upload`. Only the
   Mac's server has that command, and its welcome frame says `dictation: true`,
