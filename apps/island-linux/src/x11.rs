@@ -193,6 +193,61 @@ pub fn screen_width() -> Option<i32> {
     Some(conn.setup().roots[*screen].width_in_pixels as i32)
 }
 
+/// Whether a compositor runs, which is what makes a window's clear pixels
+/// clear: EWMH has it own the `_NET_WM_CM_S<screen>` selection. Without one
+/// they draw black, so the island draws square and opaque instead.
+pub fn compositing() -> bool {
+    let Some((conn, screen)) = conn() else { return false };
+    let name = format!("_NET_WM_CM_S{screen}");
+    let Some(atom) = conn.intern_atom(false, name.as_bytes()).ok().and_then(|c| c.reply().ok()).map(|r| r.atom) else {
+        return false;
+    };
+    conn.get_selection_owner(atom).ok().and_then(|c| c.reply().ok()).is_some_and(|r| r.owner != x11rb::NONE)
+}
+
+/// Moves and sizes a window of ours in X pixels. GPUI has no move for a
+/// window it made, and reads the `ConfigureNotify` this causes as its new
+/// bounds; the panel is override-redirect, so nothing second-guesses it.
+pub fn configure(window: u32, x: i32, y: i32, width: i32, height: i32) {
+    use x11rb::protocol::xproto::ConfigureWindowAux;
+    let Some((conn, _)) = conn() else { return };
+    let aux = ConfigureWindowAux::new().x(x).y(y).width(width.max(1) as u32).height(height.max(1) as u32);
+    let _ = conn.configure_window(window, &aux);
+    let _ = conn.flush();
+}
+
+/// Whether Dray's own window is the one in front, which sounds its own
+/// notice, so the island's chime would double it. Read off the window
+/// manager's `_NET_ACTIVE_WINDOW` and that window's `WM_CLASS`.
+pub fn dray_in_front() -> bool {
+    let Some((conn, screen)) = conn() else { return false };
+    let root = conn.setup().roots[*screen].root;
+    let atom = |name: &[u8]| conn.intern_atom(true, name).ok()?.reply().ok().map(|r| r.atom).filter(|a| *a != 0);
+    let Some(active) = atom(b"_NET_ACTIVE_WINDOW") else { return false };
+    let Some(window) = conn
+        .get_property(false, root, active, AtomEnum::WINDOW, 0, 1)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .and_then(|r| r.value32()?.next())
+        .filter(|w| *w != 0)
+    else {
+        return false;
+    };
+    let class = conn
+        .get_property(false, window, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 64)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .map(|r| String::from_utf8_lossy(&r.value).to_lowercase())
+        .unwrap_or_default();
+    is_dray_class(&class)
+}
+
+/// `WM_CLASS` is instance and class, NUL-separated; Tauri names both after
+/// the binary, `dray`.
+fn is_dray_class(class: &str) -> bool {
+    class.split('\0').any(|part| part == "dray" || part == "dray dev")
+}
+
 /// Gives `window` the keyboard and answers whoever had it. The panel is
 /// override-redirect, so no window manager will ever focus it, and
 /// `_NET_ACTIVE_WINDOW` (what GPUI's `activate` sends) is ignored for it.

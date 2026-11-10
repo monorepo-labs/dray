@@ -621,6 +621,9 @@ mod x11_idle {
 /// island the reader quit never swallows the banner that would have replaced it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn island_running() -> bool {
+    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    return crate::island::running();
+    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
     tokio::process::Command::new("pgrep")
         .args(["-x", "Dray Island"])
         .output()
