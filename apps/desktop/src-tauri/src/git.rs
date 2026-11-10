@@ -1473,17 +1473,21 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
         None => 0,
     };
 
-    let locked_by = git(project_path, &["worktree", "list", "--porcelain"])
-        .await
-        .and_then(|raw| parse_lock_reason(&raw, Path::new(worktree_path)))
-        .filter(|reason| lock_owner_pid(reason).is_some_and(pid_is_alive));
-
     WorktreeDisposition {
         exists: true,
         changed_files,
         unpushed_commits,
-        locked_by,
+        locked_by: live_lock(worktree_path, project_path).await,
     }
+}
+
+/// The reason on a worktree's lock, where the process that took it is still
+/// alive. A lock a dead session left behind is no reason to keep the tree.
+async fn live_lock(worktree_path: &str, project_path: &str) -> Option<String> {
+    git(project_path, &["worktree", "list", "--porcelain"])
+        .await
+        .and_then(|raw| parse_lock_reason(&raw, Path::new(worktree_path)))
+        .filter(|reason| lock_owner_pid(reason).is_some_and(pid_is_alive))
 }
 
 /// The branch `cwd` has checked out, or `None` for a detached HEAD, a
@@ -1650,8 +1654,12 @@ pub async fn remove_worktree(project_path: &str, worktree_path: &str, branch: Op
         bail!("{worktree_path} is not a worktree Dray created, so it will not be removed");
     }
 
-    if let Some(reason) = worktree_disposition(worktree_path, project_path).await.locked_by {
-        bail!("that worktree is in use by another session ({reason})");
+    // The lock alone, not the whole disposition: that also counts dirty files
+    // and unpushed commits, two walks of a tree about to be deleted.
+    if tree.is_dir() {
+        if let Some(reason) = live_lock(worktree_path, project_path).await {
+            bail!("that worktree is in use by another session ({reason})");
+        }
     }
 
     // Failure is the ordinary case — most trees are not locked at all — so the
