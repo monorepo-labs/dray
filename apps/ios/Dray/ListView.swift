@@ -33,11 +33,11 @@ struct SessionList: View {
     var body: some View {
         // One entry per name: the same repo on two machines is one project here.
         var seen = Set<String>()
-        let names = store.servers.flatMap { store.projects[$0.id] ?? [] }.map(\.name).filter { seen.insert($0).inserted }
+        let names = store.live.flatMap { store.projects[$0.id] ?? [] }.map(\.name).filter { seen.insert($0).inserted }
         // A picked project that left the list narrows nothing.
         let filter = names.contains { $0 == project } ? project : nil
         let runs = mode == .drafts ? [] : store.runs(project: filter, settled: mode == .settled)
-        let problems = store.servers.compactMap { s in store.health(s.id).map { (server: s, health: $0) } }
+        let problems = store.live.compactMap { s in store.health(s.id).map { (server: s, health: $0) } }
         let blank = mode == .live && runs.isEmpty
         // With nothing listed, a server's trouble is the whole screen, not a banner over it.
         let whole = blank && !anyConnected
@@ -85,7 +85,7 @@ struct SessionList: View {
             .listStyle(.plain)
             .contentMargins(.top, Theme.Space.m, for: .scrollContent)
             // The resting dock's height, so the last row scrolls clear of the orb.
-            .contentMargins(.bottom, store.servers.isEmpty ? 0 : 160, for: .scrollContent)
+            .contentMargins(.bottom, store.live.isEmpty ? 0 : 160, for: .scrollContent)
             // The breaks between runs are 16pt, under the 44pt a list row otherwise takes.
             .environment(\.defaultMinListRowHeight, 1)
             .themedList()
@@ -99,7 +99,7 @@ struct SessionList: View {
             .overlay { if blank { empty(filter) } }
         }
         .overlay(alignment: .bottom) {
-            if !store.servers.isEmpty {
+            if !store.live.isEmpty {
                 // Dim while nothing is connected: the screen above says why.
                 VoiceDock(task: task) { selection = $0 }.opacity(blank && !anyConnected ? 0.3 : 1)
             }
@@ -110,7 +110,7 @@ struct SessionList: View {
         // Again once a server comes up: a view opened before it connected read nothing from it.
         // Drafts and settled are read whatever the view: their buttons show only when there are some,
         // and an empty live list counts what was settled today.
-        .task(id: "\(mode) \(store.servers.filter { store.serverState[$0.id] == .connected }.count) \(store.draftsRevision)") {
+        .task(id: "\(mode) \(store.live.filter { store.serverState[$0.id] == .connected }.count) \(store.draftsRevision)") {
             await loadDrafts()
             await store.loadSettled()
         }
@@ -167,7 +167,7 @@ struct SessionList: View {
     /// said, so a dropped reply never reads as no drafts.
     private func loadDrafts() async {
         var all: [(server: UUID, draft: DraftItem)] = []
-        for s in store.servers where store.serverState[s.id] == .connected {
+        for s in store.live where store.serverState[s.id] == .connected {
             if let list: [DraftItem] = try? await store.call(s.id, "list_drafts") {
                 all += list.map { (s.id, $0) }
             } else {
@@ -180,12 +180,22 @@ struct SessionList: View {
     }
 
     /// What the list says with no rows: no server yet, one coming up, or nothing started.
-    private var anyConnected: Bool { store.servers.contains { store.serverState[$0.id] == .connected } }
+    private var anyConnected: Bool { store.live.contains { store.serverState[$0.id] == .connected } }
 
     /// The whole screen when the live list has nothing: pair, connecting, can't reach,
     /// or nothing to do yet — the last pointing at the orb, or at today's settled work.
     @ViewBuilder private func empty(_ filter: String?) -> some View {
-        if store.servers.isEmpty {
+        if store.live.isEmpty && !store.servers.isEmpty {
+            // Not in the frames: every server switched off on this phone.
+            EmptyScreen(art: EmptyArt(kind: .connect), title: "Every server is off",
+                        message: "Turn one back on in Settings to see its tasks.") {
+                Button("Open Settings") { sheet = .settings(server: nil) }
+                    .buttonStyle(EmptyCapsuleStyle(kind: .dark))
+                    .padding(.top, Theme.Space.xs)
+            }
+            .padding(.horizontal, Theme.Space.xxl)
+            .padding(.bottom, 80)
+        } else if store.live.isEmpty {
             EmptyScreen(art: EmptyArt(kind: .connect), title: "Connect a server", message: "Pair with a machine running Dray.") {
                 VStack(spacing: 10) {
                     Button { sheet = .add(nil, scan: true) } label: {
@@ -201,18 +211,18 @@ struct SessionList: View {
             .padding(.bottom, 80)
         } else if !anyConnected {
             Group {
-                if store.servers.allSatisfy({ if case .connecting(0)? = store.serverState[$0.id] { true } else { false } }) {
+                if store.live.allSatisfy({ if case .connecting(0)? = store.serverState[$0.id] { true } else { false } }) {
                     EmptyScreen(art: EmptyArt(kind: .connecting), title: "Connecting",
-                                message: store.servers.map(\.name).joined(separator: ", "))
+                                message: store.live.map(\.name).joined(separator: ", "))
                 } else if !store.online {
                     EmptyScreen(art: EmptyArt(kind: .unreachable), title: "You're offline",
                                 message: "Tasks keep running on their servers.")
-                } else if let p = store.servers.lazy.compactMap({ s in self.store.health(s.id).map { (s, $0) } })
+                } else if let p = store.live.lazy.compactMap({ s in self.store.health(s.id).map { (s, $0) } })
                             .first(where: { !$0.1.working }) {
                     unreachable(p.0, p.1)
                 } else {
                     EmptyScreen(art: EmptyArt(kind: .connecting), title: "Connecting",
-                                message: store.servers.map(\.name).joined(separator: ", "))
+                                message: store.live.map(\.name).joined(separator: ", "))
                 }
             }
             .padding(.horizontal, 40)

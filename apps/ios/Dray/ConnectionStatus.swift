@@ -69,7 +69,8 @@ extension Store {
 
     /// One server's state in a word or two, for its row in Settings.
     func stateLabel(_ id: UUID) -> String {
-        switch serverState[id] {
+        if servers.first(where: { $0.id == id })?.on == false { return "Off" }
+        return switch serverState[id] {
         case .connected?: "Connected"
         case .connecting(0)?, nil: "Connecting…"
         case .connecting?: "Reconnecting…"

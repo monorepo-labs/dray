@@ -170,6 +170,13 @@ A session is `(serverId, sessionId)`. The server id is a UUID the phone mints
 when a server is added. Nothing on the wire carries it; the connection a frame
 arrived on is the answer.
 
+**A server can be switched off on the phone alone** (`Server.on`, saved with
+the list and read as on where absent). Off drops its connection and everything
+held of it, so its tasks, cards, banners and Run with rows go; nothing is sent,
+and its tasks keep running there. Everything the list reasons about reads
+`store.live`, never `store.servers`, or an off server comes back as a stuck
+"Connecting".
+
 ## Transcript
 
 Built from the events, the desktop's rules cut down:

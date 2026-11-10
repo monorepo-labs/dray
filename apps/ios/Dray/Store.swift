@@ -7,6 +7,19 @@ struct Server: Codable, Identifiable, Hashable {
     let id: UUID
     var name: String
     var url: String
+    /// The phone's own switch: off, it neither connects nor shows the server's tasks. Never sent.
+    var on = true
+}
+
+extension Server {
+    /// Lenient on `on`, since every server saved before it existed has none.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        url = try c.decode(String.self, forKey: .url)
+        on = try c.decodeIfPresent(Bool.self, forKey: .on) ?? true
+    }
 }
 
 /// A session is named by its server and its id; nothing on the wire carries
@@ -68,7 +81,7 @@ final class Store {
            let saved = try? JSONDecoder().decode([Server].self, from: data) {
             servers = saved
         }
-        for s in servers { start(s) }
+        for s in servers where s.on { start(s) }
         watchNetwork()
     }
 
@@ -115,14 +128,34 @@ final class Store {
         save()
     }
 
+    /// The servers that are on, which is every one the list, Run with and banners reason about.
+    var live: [Server] { servers.filter(\.on) }
+
+    /// Off drops the connection and all held of it, so its tasks, cards and banners go;
+    /// on connects afresh and reads everything again.
+    func setServerOn(_ id: UUID, _ on: Bool) {
+        guard let i = servers.firstIndex(where: { $0.id == id }), servers[i].on != on else { return }
+        servers[i].on = on
+        save()
+        if on { start(servers[i]) } else { drop(id) }
+    }
+
     private func forget(_ id: UUID) {
-        connections.removeValue(forKey: id)?.stop()
+        drop(id)
+        for key in transcripts.keys where key.server == id { transcripts[key] = nil }
         servers.removeAll { $0.id == id }
+    }
+
+    /// Transcripts stay: a session left open across off and on is reloaded by `connected`,
+    /// which finds it only through them, and its view never asks again.
+    private func drop(_ id: UUID) {
+        connections.removeValue(forKey: id)?.stop()
         serverState[id] = nil
         for key in items.keys where key.server == id { items[key] = nil }
-        for key in transcripts.keys where key.server == id { transcripts[key] = nil }
         for key in asks.keys where key.server == id { asks[key] = nil }
         for key in marks.keys where key.server == id { marks[key] = nil }
+        // Or a reconnect inside the poll's gap skips the read that would bring them back.
+        for key in marksAt.keys where key.server == id { marksAt[key] = nil }
         for key in tasks.keys where key.server == id { tasks[key] = nil }
         for key in queued.keys where key.server == id { queued[key] = nil }
         projects[id] = nil

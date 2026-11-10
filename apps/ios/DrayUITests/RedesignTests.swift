@@ -409,6 +409,58 @@ final class RedesignTests: XCTestCase {
         snap(app, "empty-06-all-clear")
     }
 
+    /// Switching a server off on the phone: its tasks leave the list, Settings reads Off, and on brings them back.
+    func testServerOff() throws {
+        guard let url2 = env["DRAY_EMPTY_URL"], let token2 = env["DRAY_EMPTY_TOKEN"] else {
+            throw XCTSkip("set TEST_RUNNER_DRAY_EMPTY_URL and TEST_RUNNER_DRAY_EMPTY_TOKEN")
+        }
+        let app = try pair()
+        let row = app.staticTexts["Tighten session row spacing"]
+        XCTAssertTrue(row.waitForExistence(timeout: 30), "no task from Studio Mac")
+        // Through Settings, not a second link: opening one relaunches the app, and its launch
+        // arguments clear the server just paired.
+        app.buttons["Settings"].tap()
+        app.staticTexts["Add server"].tap()
+        let address = app.textFields["Address"]
+        XCTAssertTrue(address.waitForExistence(timeout: 5))
+        address.tap()
+        address.typeText("\(url2) \(token2)")
+        app.textFields["Name"].tap()
+        app.textFields["Name"].typeText("Build Box")
+        app.buttons["Add"].tap()
+        XCTAssertTrue(app.staticTexts["Build Box"].waitForExistence(timeout: 10), "Build Box wasn't added")
+
+        app.staticTexts["Studio Mac"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 10), "no live state in the switch row")
+        sleep(1)
+        snap(app, "server-08-on")
+
+        app.switches.firstMatch.tap()
+        XCTAssertTrue(app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Off'")).firstMatch.waitForExistence(timeout: 5), "the switch row never read Off")
+        XCTAssertTrue(app.staticTexts["Its tasks are hidden until you turn it back on. They keep running on Studio Mac."].exists)
+        sleep(1)
+        snap(app, "server-09-off")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Off · '")).firstMatch
+            .waitForExistence(timeout: 5), "Settings doesn't say the server is off")
+        sleep(1)
+        snap(app, "settings-01d-off")
+
+        app.buttons["Done"].tap()
+        XCTAssertTrue(row.waitForNonExistence(timeout: 10), "the off server's task stayed in the list")
+        sleep(1)
+        snap(app, "server-list-off")
+
+        app.buttons["Settings"].tap()
+        app.staticTexts["Studio Mac"].firstMatch.tap()
+        app.switches.firstMatch.tap()
+        XCTAssertTrue(app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Connected'")).firstMatch.waitForExistence(timeout: 30), "turning it on never reconnected")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["Done"].tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 30), "the task didn't come back")
+    }
+
     /// A fresh launch with no saved server, paired through the link a QR carries.
     func pair(url: String? = nil, token: String? = nil, offline: Bool = false) throws -> XCUIApplication {
         guard let url = url ?? env["DRAY_URL"], let token = token ?? env["DRAY_TOKEN"] else {
@@ -422,9 +474,9 @@ final class RedesignTests: XCTestCase {
     }
 
     /// Adds a server through the link a QR carries.
-    func connect(_ app: XCUIApplication, url: String, token: String) {
+    func connect(_ app: XCUIApplication, url: String, token: String, name: String = "Studio Mac") {
         var link = URLComponents(string: "dray://connect")!
-        link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "Studio Mac")]
+        link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: name)]
         app.open(link.url!)
         let add = app.buttons["Add"]
         XCTAssertTrue(add.waitForExistence(timeout: 10), "the link opened no add sheet")
