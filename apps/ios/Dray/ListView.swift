@@ -33,18 +33,21 @@ struct SessionList: View {
     var body: some View {
         // One entry per name: the same repo on two machines is one project here.
         var seen = Set<String>()
-        let names = store.servers.flatMap { store.projects[$0.id] ?? [] }.map(\.name).filter { seen.insert($0).inserted }
+        let names = store.live.flatMap { store.projects[$0.id] ?? [] }.map(\.name).filter { seen.insert($0).inserted }
         // A picked project that left the list narrows nothing.
         let filter = names.contains { $0 == project } ? project : nil
         let runs = mode == .drafts ? [] : store.runs(project: filter, settled: mode == .settled)
-        let problems = store.servers.compactMap { s in store.health(s.id).map { (server: s, health: $0) } }
+        let problems = store.live.compactMap { s in store.health(s.id).map { (server: s, health: $0) } }
+        let blank = mode == .live && runs.isEmpty
+        // With nothing listed, a server's trouble is the whole screen, not a banner over it.
+        let whole = blank && !anyConnected
         VStack(spacing: 0) {
             if names.count > 1 {
                 ProjectStrip(names: names, picked: filter) { project = $0 }
             }
             List(selection: $selection) {
-                if !store.online { HealthBanner(health: .offline("Tasks keep running on their servers.")).bannerRow() }
-                ForEach(problems, id: \.server.id) { p in
+                if !store.online && !whole { HealthBanner(health: .offline("Tasks keep running on their servers.")).bannerRow() }
+                ForEach(whole ? [] : problems, id: \.server.id) { p in
                     HealthBanner(health: p.health,
                                  retry: { Task { await store.retry(p.server.id) } },
                                  fix: { sheet = .settings(server: p.server.id) })
@@ -52,8 +55,10 @@ struct SessionList: View {
                 }
                 if mode == .drafts {
                     draftRows(filter)
-                } else if runs.isEmpty {
-                    empty.plainRow().frame(minHeight: 460)
+                } else if runs.isEmpty && mode == .settled {
+                    Text("Nothing settled.").font(Theme.Font.subhead).foregroundStyle(Theme.tertiary)
+                        .padding(.leading, 14).frame(height: 44, alignment: .leading)
+                        .plainRow()
                 }
                 // One block per run: the gap between them is the whole signal, never a heading.
                 ForEach(Array(runs.enumerated()), id: \.element.stage) { i, run in
@@ -80,29 +85,34 @@ struct SessionList: View {
             .listStyle(.plain)
             .contentMargins(.top, Theme.Space.m, for: .scrollContent)
             // The resting dock's height, so the last row scrolls clear of the orb.
-            .contentMargins(.bottom, store.servers.isEmpty ? 0 : 160, for: .scrollContent)
+            .contentMargins(.bottom, store.live.isEmpty ? 0 : 160, for: .scrollContent)
             // The breaks between runs are 16pt, under the 44pt a list row otherwise takes.
             .environment(\.defaultMinListRowHeight, 1)
             .themedList()
             .animation(Theme.motion, value: runs.map { $0.rows.map(\.id) })
             .refreshable {
                 await store.refresh()
-                if mode == .drafts { await loadDrafts() }
-                if mode == .settled { await store.loadSettled() }
+                // Both, whatever the view: a failed read hides a button, and this is the way to retry it.
+                await loadDrafts()
+                await store.loadSettled()
             }
+            .overlay { if blank { empty(filter) } }
         }
         .overlay(alignment: .bottom) {
-            if !store.servers.isEmpty {
-                VoiceDock(task: task) { selection = $0 }
+            if !store.live.isEmpty {
+                // Dim while nothing is connected: the screen above says why.
+                VoiceDock(task: task) { selection = $0 }.opacity(blank && !anyConnected ? 0.3 : 1)
             }
         }
         .page()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { header }
         // Again once a server comes up: a view opened before it connected read nothing from it.
-        .task(id: "\(mode) \(store.servers.filter { store.serverState[$0.id] == .connected }.count)") {
-            if mode == .drafts { await loadDrafts() }
-            if mode == .settled { await store.loadSettled() }
+        // Drafts and settled are read whatever the view: their buttons show only when there are some,
+        // and an empty live list counts what was settled today.
+        .task(id: "\(mode) \(store.live.filter { store.serverState[$0.id] == .connected }.count) \(store.draftsRevision)") {
+            await loadDrafts()
+            await store.loadSettled()
         }
     }
 
@@ -113,9 +123,14 @@ struct SessionList: View {
             Button { sheet = .settings(server: nil) } label: { Image(systemName: "gearshape") }
                 .accessibilityLabel("Settings")
         }
+        // Each only where it has something to show, or is the view up now so there is a way back.
         ToolbarItemGroup(placement: .topBarTrailing) {
-            viewToggle(.drafts, label: "Drafts") { Image(systemName: "circle.dashed") }
-            viewToggle(.settled, label: "Settled") { CheckCheck().frame(width: 20, height: 20) }
+            if mode == .drafts || (anyConnected && !drafts.isEmpty) {
+                viewToggle(.drafts, label: "Drafts") { Image(systemName: "circle.dashed") }
+            }
+            if mode == .settled || (anyConnected && !store.runs(project: nil, settled: true).isEmpty) {
+                viewToggle(.settled, label: "Settled") { CheckCheck().frame(width: 20, height: 20) }
+            }
         }
     }
 
@@ -148,48 +163,111 @@ struct SessionList: View {
         }
     }
 
-    /// Every connected server's drafts, newest first. A server that cannot say is left out.
+    /// Every connected server's drafts, newest first. A server whose read fails keeps what it last
+    /// said, so a dropped reply never reads as no drafts.
     private func loadDrafts() async {
         var all: [(server: UUID, draft: DraftItem)] = []
-        for s in store.servers where store.serverState[s.id] == .connected {
-            let list: [DraftItem] = (try? await store.call(s.id, "list_drafts")) ?? []
-            all += list.map { (s.id, $0) }
+        for s in store.live where store.serverState[s.id] == .connected {
+            if let list: [DraftItem] = try? await store.call(s.id, "list_drafts") {
+                all += list.map { (s.id, $0) }
+            } else {
+                all += drafts.filter { $0.server == s.id }
+            }
         }
+        // A newer read replaced this task, and its reply may land before this one.
+        if Task.isCancelled { return }
         drafts = all.sorted { ($0.draft.created ?? "") > ($1.draft.created ?? "") }
     }
 
     /// What the list says with no rows: no server yet, one coming up, or nothing started.
-    @ViewBuilder private var empty: some View {
-        if mode == .settled {
-            Text("Nothing settled.").font(Theme.Font.subhead).foregroundStyle(Theme.tertiary)
-                .padding(.leading, 14).frame(height: 44, alignment: .leading)
-        } else if store.servers.isEmpty {
-            EmptyState(title: "Connect a server",
-                       message: "Pair this phone with Dray on your Mac, or with a server running dray-serve, to see and steer its sessions.") {
-                Orb(state: .idle, size: 56)
-            } actions: {
-                Button { sheet = .add(nil, scan: true) } label: {
-                    Label("Scan QR code", systemImage: "qrcode.viewfinder").frame(maxWidth: .infinity)
+    private var anyConnected: Bool { store.live.contains { store.serverState[$0.id] == .connected } }
+
+    /// The whole screen when the live list has nothing: pair, connecting, can't reach,
+    /// or nothing to do yet — the last pointing at the orb, or at today's settled work.
+    @ViewBuilder private func empty(_ filter: String?) -> some View {
+        if store.live.isEmpty && !store.servers.isEmpty {
+            // Not in the frames: every server switched off on this phone.
+            EmptyScreen(art: EmptyArt(kind: .connect), title: "Every server is off",
+                        message: "Turn one back on in Settings to see its tasks.") {
+                Button("Open Settings") { sheet = .settings(server: nil) }
+                    .buttonStyle(EmptyCapsuleStyle(kind: .dark))
+                    .padding(.top, Theme.Space.xs)
+            }
+            .padding(.horizontal, Theme.Space.xxl)
+            .padding(.bottom, 80)
+        } else if store.live.isEmpty {
+            EmptyScreen(art: EmptyArt(kind: .connect), title: "Connect a server", message: "Pair with a machine running Dray.") {
+                VStack(spacing: 10) {
+                    Button { sheet = .add(nil, scan: true) } label: {
+                        HStack(spacing: Theme.Space.s) { QRCodeIcon(); Text("Scan QR code") }
+                    }
+                    .buttonStyle(EmptyCapsuleStyle(kind: .light))
+                    Button("Enter an address") { sheet = .add(nil, scan: false) }
+                        .buttonStyle(EmptyCapsuleStyle(kind: .dark))
                 }
-                .buttonStyle(PrimaryButtonStyle())
-                Button { sheet = .add(nil, scan: false) } label: {
-                    Text("Add server").frame(maxWidth: .infinity)
+                .padding(.top, Theme.Space.xs)
+            }
+            .padding(.horizontal, Theme.Space.xxl)
+            .padding(.bottom, 80)
+        } else if !anyConnected {
+            Group {
+                if store.live.allSatisfy({ if case .connecting(0)? = store.serverState[$0.id] { true } else { false } }) {
+                    EmptyScreen(art: EmptyArt(kind: .connecting), title: "Connecting",
+                                message: store.live.map(\.name).joined(separator: ", "))
+                } else if !store.online {
+                    EmptyScreen(art: EmptyArt(kind: .unreachable), title: "You're offline",
+                                message: "Tasks keep running on their servers.")
+                } else if let p = store.live.lazy.compactMap({ s in self.store.health(s.id).map { (s, $0) } })
+                            .first(where: { !$0.1.working }) {
+                    unreachable(p.0, p.1)
+                } else {
+                    EmptyScreen(art: EmptyArt(kind: .connecting), title: "Connecting",
+                                message: store.live.map(\.name).joined(separator: ", "))
                 }
-                .buttonStyle(SecondaryButtonStyle())
             }
-        } else if store.servers.allSatisfy({ if case .connecting(0)? = store.serverState[$0.id] { true } else { false } }) {
-            EmptyState(title: "Connecting", message: store.servers.map(\.name).joined(separator: ", ")) {
-                Orb(.reconnecting, size: 40)
-            }
-        } else if store.servers.contains(where: { store.serverState[$0.id] == .connected }) {
-            EmptyState(title: "No tasks yet", message: "Hold the orb to start one.") {
-                Orb(state: .idle, size: 40)
-            }
+            .padding(.horizontal, 40)
+            .padding(.bottom, 184)
         } else {
-            EmptyState(title: "Nothing to show yet", message: "Sessions show up here once a server connects.") {
-                Orb(state: .idle, size: 40)
+            let today = store.runs(project: filter, settled: true).flatMap(\.rows)
+                .compactMap { r in parseDate(r.item.modified).map { (row: r, at: $0) } }
+                .filter { Calendar.current.isDateInToday($0.at) }
+            Group {
+                if let last = today.max(by: { $0.at < $1.at }) {
+                    EmptyScreen(art: SettledStack(title: last.row.item.title, time: shortAge(last.at)),
+                                title: "All clear", message: today.count == 1 ? "1 settled today." : "\(today.count) settled today.")
+                } else if let filter {
+                    EmptyScreen(art: EmptyArt(kind: .project), title: "Nothing in \(filter)",
+                                message: "Hold the orb to start one.", pointsAtOrb: true)
+                } else {
+                    EmptyScreen(art: EmptyArt(kind: .tasks), title: "No tasks yet",
+                                message: "Hold the orb to start one.", pointsAtOrb: true)
+                }
+            }
+            .padding(.horizontal, 40)
+            .padding(.bottom, 140)
+        }
+    }
+
+    /// One server's trouble as the screen: frame 03's countdown for a server it can't reach,
+    /// else that trouble's own words and action.
+    private func unreachable(_ server: Server, _ health: Health) -> some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            EmptyScreen(art: EmptyArt(kind: .unreachable), title: health.title, message: message(health, at: context.date)) {
+                if let action = health.action {
+                    Button(action == .fix ? "Fix" : "Retry now") {
+                        Haptic.tap()
+                        if action == .fix { sheet = .settings(server: server.id) } else { Task { await store.retry(server.id) } }
+                    }
+                    .buttonStyle(EmptyCapsuleStyle(kind: .retry))
+                }
             }
         }
+    }
+
+    private func message(_ health: Health, at now: Date) -> String {
+        guard let until = health.until else { return health.detail ?? "Check that it's awake and online." }
+        let left = Int(until.timeIntervalSince(now).rounded(.up))
+        return (left > 0 ? "Trying again in \(left)s." : "Trying again…") + " Check that it's awake and online."
     }
 }
 

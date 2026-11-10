@@ -20,7 +20,7 @@ final class DictationTests: XCTestCase {
         app.launchArguments = ["-servers", ""]
         app.launch()
 
-        app.buttons["Add server"].firstMatch.tap()
+        app.buttons["Enter an address"].tap()
         let address = app.textFields["Address"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
         address.tap()
