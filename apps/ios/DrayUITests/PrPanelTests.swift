@@ -30,7 +30,7 @@ final class PrPanelTests: XCTestCase {
     /// The method menu, the pick sticking, the confirm, and the merge landing — on the fixture.
     func testMergeFlow() throws {
         let app = try pair()
-        openSheet(app, "PR ready")
+        openSheet(app, "PR merge")
         let method = app.buttons["Merge method"]
         XCTAssertTrue(method.waitForExistence(timeout: 20), "no merge button")
         // A menu item's label is its title and subtitle joined.

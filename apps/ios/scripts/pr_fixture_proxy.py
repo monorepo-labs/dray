@@ -8,7 +8,8 @@ Setup, from apps/ios:
   1. A server of its own, never the app's:
        DRAY_HOME=/tmp/pr-home DRAY_NO_ANALYTICS=1 dray --serve &
   2. One session per state, each in a throwaway repo named for it
-     (pr-running, pr-failing, pr-ready, pr-draft, pr-loggedout), titled "PR <state>":
+     (pr-running, pr-failing, pr-ready, pr-draft, pr-loggedout, pr-merge), titled "PR <state>".
+     `merge` is the merge test's own copy of `ready`, so its merge never reaches the states test:
        DRAY_ENDPOINT=/tmp/pr-home/dray.sock dray session new --project /tmp/pr-ready \\
          --model haiku --effort low --title "PR ready" "Reply with the single word ok."
   3. pip install websockets, then
@@ -57,6 +58,7 @@ FIXTURES = {
     "failing": [pr(mergeStateStatus="UNSTABLE", checks=[check("build-macos", "success"), check("cargo test", "failure"),
                check("Greptile Review", "success"), check("Vercel — dray-site", "success")], comments=[REVIEWED] + COMMENTS[1:])],
     "ready": [pr()],
+    "merge": [pr()],
     "draft": [pr(isDraft=True, mergeStateStatus="DRAFT", comments=COMMENTS[1:])],
     "merged": [pr(state="MERGED")],
     "none": [],
