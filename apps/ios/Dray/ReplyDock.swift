@@ -7,7 +7,6 @@ import SwiftUI
 struct ReplyDock: View {
     @Environment(Store.self) private var store
     let key: SessionKey
-    let openSettings: () -> Void
     @AppStorage(Dictations.serverKey) private var dictationPick = ""
     @State private var models: [Model] = []
     /// Picks for the next reply; nil is the session's own.
@@ -37,6 +36,7 @@ struct ReplyDock: View {
     }
     private var open: Bool { phase != .rest }
     private var connected: Bool { store.serverState[key.server] == .connected }
+    private var away: Bool { !connected || !store.online }
     /// Settings' pick, else any machine that can: the words come back to this draft whoever reads them.
     private var transcriber: UUID? { store.dictationServer(dictationPick) }
     private var harness: String { item?.harness ?? "" }
@@ -49,18 +49,18 @@ struct ReplyDock: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            ConnectionStrip(server: key.server, openSettings: openSettings)
             if phase == .ready { bubble.transition(.opacity) }
             if !open, let line = hint ?? note {
                 KeptNote(line: line, draft: key).transition(.opacity)
             }
-            DockOrb(draft: key, size: 76, hold: hold, tap: tapped)
+            // Dim while the server or the network is away; the banner up top says why, and typing still works.
+            DockOrb(draft: key, size: 76, hold: hold, tap: tapped).opacity(away ? 0.4 : 1)
             if open {
                 actions
                     .padding(.top, 6)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            picks
+            picks.opacity(away ? 0.4 : 1)
         }
         .padding(.horizontal, 20)
         .padding(.top, 40)

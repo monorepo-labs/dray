@@ -61,7 +61,7 @@ final class NewTask {
     }
     var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
-    var connected: [Server] { store.servers.filter { store.serverState[$0.id] == .connected } }
+    var connected: [Server] { store.live.filter { store.serverState[$0.id] == .connected } }
 
     /// Every project name a connected machine holds, newest pick first.
     var projectNames: [String] {
@@ -265,6 +265,7 @@ final class NewTask {
         guard let d else { return }
         if draftId?.server == d.server && draftId?.id == d.id { draftId = nil }
         _ = try? await store.call(d.server, "delete_draft", ["id": .string(d.id)], as: JSON.self)
+        store.draftsRevision += 1
     }
 }
 

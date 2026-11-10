@@ -95,18 +95,25 @@ app to update — and nothing else, so the global tint is the page's ink.
 Rationale and the screens it was judged on are in #631.
 
 - **The list has no title.** Settings on the left, the drafts and settled
-  views in one glass pill on the right, the project strip under them once
-  there are two projects. Rows are one line; a child hangs off its parent on
-  a solid elbow, and a waiting card sits under its row, a fill and no border.
+  views in one glass pill on the right, each only while a server is connected
+  and it has something in it, the project strip under them once there are two
+  projects. Rows are one line; a child hangs off its parent on a solid elbow,
+  and a waiting card sits under its row, a fill and no border.
+- **An empty list is the whole screen** ([EmptyArt.swift](Dray/EmptyArt.swift)),
+  drawn in the middle: connect a server (no dock until one is paired),
+  connecting, can't reach with its countdown (the dock dims), no tasks yet or
+  nothing in this project with a line down to the orb, and all clear with
+  the last task settled today and how many were.
 - **One type scale** in `Theme.Font`, five rungs, SF Pro only, regular and
   semibold only. Buttons are semibold: Headline full-width, `pill` compact;
   a text-only action stays regular.
-- **Each server reports its own trouble** in a banner at the top of the list
-  and a strip above the composer, written by `Store.health`
-  ([ConnectionStatus.swift](Dray/ConnectionStatus.swift)): reconnecting with a
-  visible countdown, can't reach, token refused, protocol behind in either
-  direction, a list that failed to load. Each carries Retry or Fix, and none
-  holds up another server. Offline is one banner, not one per server.
+- **Each server reports its own trouble**, written by `Store.health`
+  ([ConnectionStatus.swift](Dray/ConnectionStatus.swift)): reconnecting,
+  can't reach with a visible countdown, token refused, protocol behind in
+  either direction, a list that failed to load. Each carries Retry or Fix, and
+  none holds up another server. In the list it is a card at the top and that
+  server's tasks dim; in a session it floats under the title bar and the dock
+  dims, still usable. Offline is one banner, not one per server.
 - **A failure stays where it happened.** A failed send keeps the draft and
   offers Retry under it; a failed transcript read is the screen's own empty
   state with Try again; an action with nowhere of its own is a toast, never an
@@ -162,6 +169,13 @@ never take the list down.
 A session is `(serverId, sessionId)`. The server id is a UUID the phone mints
 when a server is added. Nothing on the wire carries it; the connection a frame
 arrived on is the answer.
+
+**A server can be switched off on the phone alone** (`Server.on`, saved with
+the list and read as on where absent). Off drops its connection and everything
+held of it, so its tasks, cards, banners and Run with rows go; nothing is sent,
+and its tasks keep running there. Everything the list reasons about reads
+`store.live`, never `store.servers`, or an off server comes back as a stuck
+"Connecting".
 
 ## Transcript
 
