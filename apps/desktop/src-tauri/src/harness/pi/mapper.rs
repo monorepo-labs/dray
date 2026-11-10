@@ -1112,8 +1112,9 @@ mod tests {
     }
 
     /// An abort is a user's own Stop, and pi reports it as `stopReason: "error"`
-    /// — the docs say `"aborted"` and it does not. Mapping it as a failure is
-    /// honest here: the sentence pi gives is the one to draw.
+    /// — the docs say `"aborted"` and it does not. Mapped as the failure the
+    /// wire says it is; the read loop, which knows Stop was pressed, is what
+    /// turns it into an abort that draws nothing (`as_stopped` in `pi.rs`).
     #[test]
     fn an_abort_closes_the_turn_rather_than_leaving_it_open() {
         let events = mapped(ABORT);

@@ -369,6 +369,29 @@ fn register_dialog(
     true
 }
 
+/// A failed turn closing on a run the reader stopped, rewritten as the abort
+/// it was.
+///
+/// pi reports its own abort as `stopReason: "error"` carrying "This operation
+/// was aborted", which drew the reader's Stop as a red failed turn. Told by the
+/// stop window rather than by that sentence: Dray knows it asked, and a
+/// sentence is pi's to reword. `aborted` is the stop reason every harness's
+/// Stop closes on, and what the transcript draws no failure for.
+fn as_stopped(payload: &mut AgentEventPayload) {
+    if let AgentEventPayload::TurnCompleted {
+        status: TurnStatus::Error,
+        stop_reason,
+        final_text,
+        auth_failed,
+        ..
+    } = payload
+    {
+        *stop_reason = Some("aborted".to_string());
+        *final_text = None;
+        *auth_failed = false;
+    }
+}
+
 /// Writes one prompt.
 ///
 /// pi answers `success: true` the moment it *accepts* one, and its docs say
@@ -742,7 +765,12 @@ async fn read_stdout(
             flush_transport: &transport,
         };
 
-        for agent_event in mapper.map(event) {
+        for mut agent_event in mapper.map(event) {
+            // The stop window stays open until the next prompt goes out, so
+            // the turn end the abort produces always lands inside it.
+            if client.stopping() {
+                as_stopped(&mut agent_event.payload);
+            }
             crate::session::ingest(&ingest, agent_event, &app).await;
         }
     }
@@ -794,6 +822,39 @@ async fn read_stdout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// pi closes the reader's own Stop as `error` with a sentence. Inside the
+    /// stop window that is an abort, which the transcript draws nothing for;
+    /// a turn that ended well in that window is left exactly as it was.
+    #[test]
+    fn a_stopped_turn_closes_as_an_abort_not_a_failure() {
+        let closed = |status, stop_reason: &str, final_text: Option<&str>| AgentEventPayload::TurnCompleted {
+            status,
+            stop_reason: Some(stop_reason.to_string()),
+            final_text: final_text.map(str::to_string),
+            auth_failed: false,
+            usage: None,
+            duration_ms: None,
+            head: None,
+        };
+
+        let mut stopped = closed(TurnStatus::Error, "error", Some("This operation was aborted"));
+        as_stopped(&mut stopped);
+        let AgentEventPayload::TurnCompleted { status, stop_reason, final_text, .. } = &stopped else {
+            unreachable!()
+        };
+        assert_eq!(*status, TurnStatus::Error);
+        assert_eq!(stop_reason.as_deref(), Some("aborted"));
+        assert_eq!(*final_text, None);
+
+        let mut finished = closed(TurnStatus::Success, "stop", None);
+        as_stopped(&mut finished);
+        assert!(matches!(
+            &finished,
+            AgentEventPayload::TurnCompleted { status: TurnStatus::Success, stop_reason: Some(reason), .. }
+                if reason == "stop"
+        ));
+    }
 
     /// `Plan` is the one stance pi can enforce, and it enforces it with a flag.
     #[test]
