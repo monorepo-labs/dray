@@ -220,7 +220,8 @@ struct SwitchStyle: ToggleStyle {
                     .fill(configuration.isOn ? Theme.primary : Theme.off)
                     .frame(width: 51, height: 31)
                     .overlay(alignment: configuration.isOn ? .trailing : .leading) {
-                        Circle().fill(configuration.isOn ? Theme.onPrimary : Theme.secondary).padding(2)
+                        Circle().fill(configuration.isOn ? Theme.onPrimary : Theme.secondary)
+                            .frame(width: 27, height: 27).padding(2)
                     }
             }
             .contentShape(.rect)

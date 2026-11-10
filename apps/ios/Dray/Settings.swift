@@ -281,6 +281,8 @@ struct ServerDetail: View {
     @State private var copied = false
     @State private var scanning = false
     @State private var updating = false
+    /// Why the last Update failed, said in the card: the app's toast sits behind this sheet.
+    @State private var updateError: String?
 
     private var server: Server? { store.servers.first { $0.id == id } }
 
@@ -384,6 +386,7 @@ struct ServerDetail: View {
                     Text("\(newer) is out. Update Dray on that Mac.")
                 } else {
                     Text(updating ? "Updating. It restarts once no turn is running." : "\(newer) is out. It restarts once no turn is running.")
+                    if let updateError { Text(sentence(updateError)).foregroundStyle(Theme.destructive) }
                 }
             } button: {
                 if !w.macApp { Button("Update", action: update).disabled(updating) }
@@ -434,6 +437,7 @@ struct ServerDetail: View {
     /// binary is in, and restarts onto it when idle.
     private func update() {
         updating = true
+        updateError = nil
         let beta = welcome?.release?.contains("-") == true
         Task {
             do {
@@ -442,7 +446,7 @@ struct ServerDetail: View {
                 if said == "current" { updating = false }
             } catch {
                 updating = false
-                store.lastError = error.localizedDescription
+                updateError = error.localizedDescription
             }
         }
     }
@@ -490,10 +494,18 @@ final class Releases {
     func newer(_ w: Welcome?) -> String? {
         guard let w else { return nil }
         let (running, newest) = w.macApp ? (w.version, app) : (w.release, cli)
-        guard let running, let newest else { return nil }
-        // A beta is measured by the release it leads up to.
+        guard let running, let newest, Self.behind(running, newest) else { return nil }
+        return newest
+    }
+
+    /// Whether `running` is older than the stable `newest`. A beta sorts below its own release.
+    nonisolated static func behind(_ running: String, _ newest: String) -> Bool {
         let base = running.split(separator: "-").first.map(String.init) ?? running
-        return newest.compare(base, options: .numeric) == .orderedDescending ? newest : nil
+        switch newest.compare(base, options: .numeric) {
+        case .orderedDescending: return true
+        case .orderedSame: return base != running
+        default: return false
+        }
     }
 }
 
