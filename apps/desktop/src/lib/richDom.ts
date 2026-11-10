@@ -5,8 +5,7 @@
 /// node environment with no DOM, so everything below that touches one is
 /// exercised on the demo page instead — in the WebKit the app actually ships on
 /// rather than in a simulation of it. That is the same bargain dictation makes.
-/// [`diffRange`] is the exception and is pinned by test: it is pure, and it is
-/// the piece whose being wrong would send words nobody typed.
+/// [`diffRange`] is the exception and is pinned by test, being pure.
 ///
 /// The property everything here rests on: **[`readValue`] of a tree built by
 /// [`renderInto`] is the string it was built from, exactly.** A chip shortens
@@ -38,9 +37,9 @@ function isBlock(el: HTMLElement): boolean {
 /// it, since that is the whole of what a block means in a text box. Everything
 /// else is descended through.
 ///
-/// The block rule is not defensive: `insertText` with a newline in it makes
-/// blocks in WebKit, so the composer's own ⇧⏎ and its paste handler both produce
-/// them. Without it those newlines are simply absent from the value — the text
+/// The block rule stays though the composer's own ⇧⏎ and paste now arrive as
+/// strings: any line the browser is left to break itself comes back as a block,
+/// and without the rule that newline is simply absent from the value — the text
 /// draws on two lines and sends as one.
 function* pieces(root: Node): Generator<{ node: Node; text: string }> {
   let first = true;
@@ -269,11 +268,11 @@ export function revealCaret(root: HTMLElement): void {
 
 /// Rebuilds the tree from the placed runs.
 ///
-/// Called only when the chips move, never on ordinary typing — see
+/// Called where the chips moved, a value arrived from outside or the tree
+/// drifted from its string or paint, never on ordinary typing — see
 /// `chipSignature`. That restraint is the whole design: between rebuilds the
 /// browser owns this subtree outright, so typing keeps the browser's own caret
-/// handling and its own undo, neither of which is something this file would want
-/// to reimplement.
+/// handling, which is nothing this file would want to reimplement.
 export function renderInto(
   root: HTMLElement,
   placed: Placed[],
@@ -368,10 +367,9 @@ export function selectionRange(root: HTMLElement): { start: number; end: number 
 /// away.
 ///
 /// Every programmatic change to the composer arrives as a whole new string: a
-/// pick, a newline, a dictated sentence. Applied by rebuilding the tree it would
-/// take the browser's undo stack with it, so it goes in as a range and a
-/// replacement through [`insertText`], which the browser records as an undoable
-/// edit. Reduced this way a pick is the tag alone rather than the prompt.
+/// pick, a newline, a dictated sentence. The tree is rebuilt from it whole, and
+/// the range says where the inserted text ends — where the caret goes when the
+/// change came with no caret of its own.
 export function diffRange(
   prev: string,
   next: string,

@@ -76,11 +76,6 @@ export const SHORTCUTS = [
   { id: "sidebar.toggle", label: "Toggle sidebar", group: "Panels and views", chord: k("b") },
   { id: "panel.toggle", label: "Toggle right panel", group: "Panels and views", chord: k("e") },
   { id: "panel.side", label: "Move panel to the other side", group: "Panels and views", chord: k("e", { alt: true }) },
-  // The only way to the crew. It has no button anywhere, deliberately — the
-  // column is a fixed 320px and a permanent control for it would be chrome in
-  // the titlebar for a thing most conversations never have. ⌘⇧C is free of ⌘C,
-  // which `sameChord` compares Shift for, so copy is untouched.
-  { id: "crew.toggle", label: "Toggle crew", group: "Panels and views", chord: k("c", { shift: true }) },
   // ⌥, not ⇧: ⌘⇧[ and ⌘⇧] step the titlebar's tabs, every browser's chord.
   { id: "panel.tab.prev", label: "Previous panel tab", group: "Panels and views", chord: k("[", { alt: true, code: "BracketLeft" }) },
   { id: "panel.tab.next", label: "Next panel tab", group: "Panels and views", chord: k("]", { alt: true, code: "BracketRight" }) },
@@ -104,8 +99,10 @@ export const SHORTCUTS = [
   { id: "harness.next", label: "Next agent", group: "Composer", chord: k("a", { shift: true }) },
   { id: "worktree.toggle", label: "Toggle worktree", group: "Composer", chord: k("t", { shift: true }) },
   { id: "project.next", label: "Next project in picker", group: "Composer", chord: k("p", { shift: true }) },
+  { id: "server.next", label: "Next server in picker", group: "Composer", chord: k("s", { shift: true }) },
   { id: "queue.send", label: "Send queued prompts now", group: "Composer", chord: k("Enter") },
   { id: "composer.draft", label: "Save as draft", group: "Composer", chord: k("s") },
+  { id: "agent.update", label: "Update the agent's CLI", group: "Composer", chord: k("u") },
 
   { id: "notice.take", label: "Open the notification", group: "Notifications", chord: k("g") },
   { id: "notice.delete", label: "Delete worktree from notification", group: "Notifications", chord: k("d", { shift: true }) },
@@ -129,9 +126,8 @@ export type ShortcutId = (typeof SHORTCUTS)[number]["id"];
 /// back to the chord it had before the update, since the reader chose theirs
 /// and only this build chose the other. See `yieldMovedDefaults`.
 ///
-/// The views and the panes traded places: ⌘ digits were the panes' and ⌘⌥
-/// digits the views'. `null` is a row an older build did not have, whose new
-/// default a reader may already hold elsewhere — it yields to unbound.
+/// `null` is a row an older build did not have, whose new default a reader may
+/// already hold elsewhere — it yields to unbound.
 export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord | null>> = {
   // The panel's tabs gave ⌘⇧[ ] to the titlebar's.
   "panel.tab.prev": k("{", { shift: true, code: "BracketLeft" }),
@@ -141,6 +137,8 @@ export const PREVIOUS_DEFAULTS: Partial<Record<ShortcutId, Chord | null>> = {
   "tab.next": null,
   "tab.reopen": null,
   "mode.toggle": null,
+  "agent.update": null,
+  "server.next": null,
 };
 
 export const SHORTCUT_GROUPS: ShortcutGroup[] = [

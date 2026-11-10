@@ -1,6 +1,4 @@
-/// Apple's mark, from Simple Icons (CC0). Inlined rather than imported so it
-/// takes `currentColor` and needs no icon dependency for the one glyph the site
-/// uses.
+/// Apple's mark, from Simple Icons (CC0), inlined so it takes `currentColor`.
 export function AppleGlyph({ className }: { className?: string }) {
   return (
     <svg

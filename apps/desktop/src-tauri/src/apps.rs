@@ -377,6 +377,24 @@ pub fn app_selection() -> Option<String> {
     APP_SELECTION.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+/// Seconds since the last key or pointer input anywhere on this Mac. The break
+/// clock reads it because the browser pane is a native view whose input never
+/// reaches the webview's document. `None` off macOS.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn idle_seconds() -> Option<f64> {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGEventSourceSecondsSinceLastEventType(state: i32, event_type: u32) -> f64;
+        }
+        // Combined session state, any input event type; needs no permission.
+        return Some(unsafe { CGEventSourceSecondsSinceLastEventType(0, u32::MAX) });
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
 /// Whether Dray Island is running, asked at each permission or question so a
 /// island the reader quit never swallows the banner that would have replaced it.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -412,14 +430,17 @@ fn island_done_dir() -> Option<std::path::PathBuf> {
 }
 
 /// The island preferences Settings draws. The island's own right-click menu
-/// writes the first two as well, so they are read back rather than kept here,
-/// and `captureTaken` is the island's alone: the chord it could not register.
-const ISLAND_PREFS: [&str; 5] = ["island.placement", "island.mode", "island.tap", "island.captureKey", "island.captureTaken"];
+/// writes the first three as well (a pinch writes the transcript too), so they
+/// are read back rather than kept here, and `captureTaken` is the island's
+/// alone: the chord it could not register.
+const ISLAND_PREFS: [&str; 6] =
+    ["island.placement", "island.mode", "island.transcript", "island.tap", "island.captureKey", "island.captureTaken"];
 
 fn island_pref_valid(name: &str, value: &str) -> bool {
     match name {
         "island.placement" => matches!(value, "notch" | "bottom"),
         "island.mode" => matches!(value, "compact" | "expanded"),
+        "island.transcript" => matches!(value, "shown" | "hidden"),
         "island.tap" => matches!(value, "single" | "double"),
         // A Carbon key code and modifier mask, or none.
         "island.captureKey" => {
@@ -461,9 +482,9 @@ pub async fn set_island_pref(name: String, value: String) -> Result<(), String> 
         return Err(crate::git::stderr_or(&out, || "could not save the island setting".into()));
     }
     // An island that is not running reads the file when it starts. Position and
-    // layout are only judged on screen, so those open the panel to show them.
+    // layout, and the transcript, are only judged on screen, so those open the panel to show them.
     let ping = match name.as_str() {
-        "island.placement" | "island.mode" => "com.yogesh.dray.island.show",
+        "island.placement" | "island.mode" | "island.transcript" => "com.yogesh.dray.island.show",
         _ => "com.yogesh.dray.island.prefs",
     };
     Command::new("notifyutil").args(["-p", ping]).output().await.ok();

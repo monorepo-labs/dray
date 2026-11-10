@@ -39,8 +39,12 @@ use std::path::PathBuf;
 /// draft naming one goes out as v10, since an older app ignores the field and
 /// starts the worktree at `origin/<default>` as if it had been honoured.
 /// v11 added `set_remote_access`, which `dray server tunnel` sends now that
-/// the server runs the tunnel itself.
-pub const PROTOCOL_VERSION: u32 = 11;
+/// the server runs the tunnel itself. v12 added `on_machine`: an older app
+/// cannot parse it, and one that could ignore the machine would run the
+/// request here, a create meant for a VPS starting on the Mac as if it had
+/// gone where it was sent. v13 added `add_video`, which an older app reads as a
+/// broken CLI rather than as an app to update.
+pub const PROTOCOL_VERSION: u32 = 13;
 
 /// The oldest envelope the app still answers. Rises only when a shape is
 /// *renamed*, never for an addition: v4 renamed `LinkIssues.identifiers` to
@@ -49,18 +53,9 @@ pub const PROTOCOL_VERSION: u32 = 11;
 /// means what it says; 6 is simply the oldest still in the wild.
 pub const OLDEST_SPOKEN: u32 = 6;
 
-/// Where the app listens, unless [`endpoint`] is overridden.
+/// Where the app listens, unless [`endpoint`] is overridden. One name in
+/// every home: builds are kept apart by home, never by socket name.
 pub const SOCKET_NAME: &str = "dray.sock";
-
-/// Where a `pnpm tauri dev` build listens instead.
-///
-/// One name per build, because the socket is a single file: a dev app binding
-/// the release app's path unlinks it and takes the channel over, so from then
-/// on every `dray` call reaches the dev app and the release app's own agents
-/// write into a socket nothing is listening on. Restarting the release app
-/// takes it back the same way. Two names let the two run side by side, which
-/// is the ordinary state while developing this app.
-pub const SOCKET_NAME_DEV: &str = "dray-dev.sock";
 
 /// A line longer than this is refused unread. The socket is `0600`, so this is
 /// hygiene rather than a threat model — but a length-prefixed-by-newline
@@ -116,6 +111,8 @@ impl Request {
             | Request::SetAside(_)
             | Request::ListShares(_) => 10,
             Request::SetRemoteAccess(_) => 11,
+            Request::OnMachine(_) => 12,
+            Request::AddVideo(_) => 13,
         }
     }
 }
@@ -128,6 +125,7 @@ pub enum Request {
     SendMessage(SendMessage),
     LinkIssues(LinkIssues),
     Browser(BrowserRequest),
+    AddVideo(AddVideo),
     CreateDraft(CreateDraft),
     ListDrafts(ListSessions),
     RemoveDraft(DraftId),
@@ -144,6 +142,19 @@ pub enum Request {
     SetAside(SetAside),
     ListShares(ListSessions),
     SetRemoteAccess(SetRemoteAccess),
+    OnMachine(OnMachine),
+}
+
+/// Any other request, run on a machine the app connects to rather than here.
+/// The app forwards it over its own connection to that server, so the CLI
+/// never learns an address or a token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnMachine {
+    /// As `dray machine ls` names it, or `all` for a listing across every
+    /// connected machine and this one.
+    pub machine: String,
+    pub request: Box<Request>,
 }
 
 /// Remote access on or off: the server's own listener behind a public
@@ -240,6 +251,18 @@ pub struct ServerSummary {
     /// Why the last connect failed.
     #[serde(default)]
     pub error: Option<String>,
+}
+
+/// A video on the machine serving the session, to be filed where that
+/// session's chat can play it. `path` is absolute: the CLI resolves it, since
+/// the server stands in another directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddVideo {
+    pub session_id: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// A public link to one of a session's dev servers, made where the server
@@ -693,6 +716,8 @@ pub enum Response {
     /// What a browser action answers: `output` as text for the agent to
     /// read, `data` the same answer for `--json`.
     Browser { output: String, data: serde_json::Value },
+    /// Where a video landed, the path the chat plays.
+    Video { path: String },
     /// The session's live links after the change, whichever verb asked.
     Shared { shares: Vec<SharedPort> },
     /// The session a verb acted on, as it stands after.
@@ -743,6 +768,9 @@ pub struct SessionSummary {
     /// predates the flag, which reads as `false` — the truth there.
     #[serde(default)]
     pub hidden: bool,
+    /// The machine the session runs on, where that is not the one answering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 
 /// One issue a session is tagged with, as the CLI prints it.
@@ -771,19 +799,28 @@ pub fn endpoint() -> Option<String> {
         }
     }
 
-    Some(socket_path(false)?.to_string_lossy().into_owned())
+    Some(socket_path()?.to_string_lossy().into_owned())
 }
 
-/// The socket one build of the app listens on, `~/.dray/dray.sock` by default.
-/// Resolved through `std::env::home_dir`, the same call the app's own
-/// `get_home_app_dir` makes when it creates the directory this sits in.
+/// The socket the app listens on: `dray.sock` in `DRAY_HOME` where that is
+/// set, `~/.dray` otherwise. Resolved through `std::env::home_dir`, the same
+/// call the app's own `get_home_app_dir` makes when it creates the directory.
 ///
-/// The CLI never asks for the dev one: `dray` typed in a terminal means the app
-/// the reader installed, and a dev app hands its own children `DRAY_ENDPOINT`
-/// rather than leaving them to guess which build spawned them.
-pub fn socket_path(dev: bool) -> Option<PathBuf> {
-    let name = if dev { SOCKET_NAME_DEV } else { SOCKET_NAME };
-    Some(std::env::home_dir()?.join(".dray").join(name))
+/// `DRAY_HOME` is read because the server moves its socket with its data: with
+/// it ignored, `dray session ls` beside a server on a home of its own asked
+/// whatever was listening in `~/.dray` instead, while `dray server tunnel`
+/// asked the right one.
+///
+/// A dev build's home is not guessed at: `dray` typed in a terminal means the
+/// app the reader installed, and a dev app hands its own children
+/// `DRAY_ENDPOINT` rather than leaving them to work out which build spawned
+/// them.
+pub fn socket_path() -> Option<PathBuf> {
+    let home = match std::env::var_os("DRAY_HOME").filter(|home| !home.is_empty()) {
+        Some(home) => PathBuf::from(home),
+        None => std::env::home_dir()?.join(".dray"),
+    };
+    Some(home.join(SOCKET_NAME))
 }
 
 /// One request or response as it goes on the wire. Newline-delimited JSON, the
@@ -1000,8 +1037,22 @@ mod tests {
         }
         let remote = Request::SetRemoteAccess(Default::default());
         assert_eq!(Envelope::new(remote.clone()).v, 11);
-        let newest =
-            old.iter().chain(&drafts).chain([&share]).chain(&servers).chain(&sessions).chain([&remote]).map(Request::version).max();
+        let elsewhere = Request::OnMachine(OnMachine {
+            machine: "vps".into(),
+            request: Box::new(Request::ListSessions(Default::default())),
+        });
+        assert_eq!(Envelope::new(elsewhere.clone()).v, 12);
+        let video = Request::AddVideo(AddVideo { session_id: "s".into(), path: "/v.mov".into(), name: None });
+        assert_eq!(Envelope::new(video.clone()).v, 13);
+        let newest = old
+            .iter()
+            .chain(&drafts)
+            .chain([&share])
+            .chain(&servers)
+            .chain(&sessions)
+            .chain([&remote, &elsewhere, &video])
+            .map(Request::version)
+            .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));
         assert!(OLDEST_SPOKEN <= PROTOCOL_VERSION);
     }
@@ -1016,6 +1067,17 @@ mod tests {
         assert!(matches!(back.request, Request::ListServers));
     }
 
+    /// The wrapped request nests whole, its own tag and all.
+    #[test]
+    fn a_request_on_another_machine_round_trips() {
+        let send = Request::SendMessage(SendMessage { session_id: "s".into(), prompt: "hi".into(), from_session_id: None });
+        let line = encode_line(&Envelope::new(Request::OnMachine(OnMachine { machine: "vps".into(), request: Box::new(send) }))).unwrap();
+        let back: Envelope = serde_json::from_str(&line).unwrap();
+        let Request::OnMachine(on) = back.request else { panic!("wrong variant") };
+        assert_eq!(on.machine, "vps");
+        assert!(matches!(*on.request, Request::SendMessage(ref s) if s.prompt == "hi"));
+    }
+
     #[test]
     fn endpoint_prefers_the_environment() {
         // Serialized against the other env-reading test by running in one
@@ -1028,6 +1090,17 @@ mod tests {
         std::env::set_var("DRAY_ENDPOINT", "");
         assert!(endpoint().unwrap().ends_with("dray.sock"));
 
+        // The socket follows the data directory, and an endpoint named
+        // outright still wins over it.
+        std::env::set_var("DRAY_HOME", "/tmp/other-home");
+        assert_eq!(endpoint().as_deref(), Some("/tmp/other-home/dray.sock"));
+        std::env::set_var("DRAY_ENDPOINT", "/tmp/custom.sock");
+        assert_eq!(endpoint().as_deref(), Some("/tmp/custom.sock"));
+
+        std::env::set_var("DRAY_HOME", "");
         std::env::remove_var("DRAY_ENDPOINT");
+        assert!(endpoint().unwrap().ends_with(".dray/dray.sock"));
+
+        std::env::remove_var("DRAY_HOME");
     }
 }

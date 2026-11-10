@@ -284,7 +284,7 @@ overageDisabledReason: string | null, } | { "type": "permission_requested",
 /**
  * Correlates the reply. Also what
  * [`PermissionDecided`](Self::PermissionDecided) joins on, which is how
- * a reloaded transcript knows an answered request from a live one.
+ * the transcript knows an answered request from a live one.
  */
 requestId: string, 
 /**
@@ -448,9 +448,10 @@ preview: string | null, };
  * A way of signing in, as an offer the reader picks between.
  *
  * The axis every one of these CLIs has and none of them calls the same thing:
- * Codex is ChatGPT-or-API-key, Claude is subscription-or-Console, pi and fx
- * are OAuth-or-key per provider. Modelled once here so the tab asks one
- * question rather than four differently-shaped ones.
+ * Codex is ChatGPT-or-API-key, Claude is subscription-or-Console, grok is
+ * browser-or-device-code, pi and fx are OAuth-or-key per provider. Modelled
+ * once here so the tab asks one question rather than five differently-shaped
+ * ones.
  */
 export type AuthOption = { 
 /**
@@ -506,6 +507,29 @@ export type BlockRef = { messageId: string, index: number, };
  * label the call while [`DeltaEvent::InputDelta`] fragments are still landing.
  */
 export type BlockType = { "type": "text" } | { "type": "thinking" } | { "type": "tool_use", id: string, name: string, };
+
+/**
+ * Where a boat sandbox is, as far as the reader is concerned.
+ */
+export type BoatPhase = "running" | "stopped" | "resuming";
+
+/**
+ * What boat says about a server. Absent from a machine that is no sandbox, and
+ * from one with no `boat` CLI or login here, which draws no boat UI at all.
+ */
+export type BoatStatus = { phase: BoatPhase, 
+/**
+ * When it auto-stops. `None` with auto-stop off.
+ */
+stopsAt: string | null, 
+/**
+ * It stops within [`WARN`]: raise the card, offer more time.
+ */
+warning: boolean, 
+/**
+ * Why the last resume didn't take, in boat's or Dray's words.
+ */
+note: string | null, };
 
 /**
  * What the composer's branch picker needs to render and guard itself.
@@ -1005,8 +1029,9 @@ export type IssueQuery = {
  */
 tracker: IssueTracker, 
 /**
- * Free text. Matched against title and identifier; an empty query is the
- * resting state and lists rather than searches.
+ * Free text. Linear matches it against title, description and a whole
+ * identifier, and GitHub reads it as its own search syntax; an empty query
+ * is the resting state and lists rather than searches.
  */
 text: string | null, scope: IssueScope, 
 /**
@@ -1143,7 +1168,12 @@ export type MergeMethod = "merge" | "squash" | "rebase";
  * replayed from the log, so attribution that lived only in memory would be
  * gone on the next open.
  */
-export type MessageSender = { sessionId: string, title: string, };
+export type MessageSender = { sessionId: string, title: string, 
+/**
+ * The machine the sender runs on, where that is not this one. Stamped by
+ * the forwarding app, so it names the machine it came from.
+ */
+machine: string | null, };
 
 export type Model = { 
 /**
@@ -1376,10 +1406,9 @@ export type PrMarkState = "OPEN" | "MERGED";
  * Why there is nothing to show, when the reason is not "this branch has no PR".
  *
  * Typed rather than a string because the frontend acts differently on each:
- * a missing `gh` hides the tab outright — the app has no business claiming a
- * GitHub feature on a machine with no GitHub CLI — while a `gh` that is merely
- * logged out keeps the tab and says so, since someone who installed it clearly
- * works with GitHub and the fix is one command.
+ * no GitHub remote hides the tab outright, while a `gh` that is missing or
+ * logged out keeps it and names the command that cures it — the reader is in
+ * a GitHub repo, and the tab is the only place the app can say so.
  */
 export type PrUnavailable = { "kind": "no_cli" } | { "kind": "not_authenticated" } | { "kind": "no_remote" } | { "kind": "other", "detail": string };
 
@@ -1406,6 +1435,13 @@ name: string,
  * leaving takes it with them.
  */
 space: string | null, 
+/**
+ * The repository this checkout is of, so one repo on several machines reads
+ * as one project. Read from git on every list and never saved, since a
+ * remote can change under us. Absent from a server older than this field
+ * and from a repo with no shared remote, both of which group on `path`.
+ */
+remote?: string, 
 /**
  * Which project launch reopens, and nothing else. It was the sort key too,
  * which moved every picker's rows on each pick; order is now the file's
@@ -1515,6 +1551,13 @@ label: string, description: string | null,
  * questions only.
  */
 preview: string | null, };
+
+/**
+ * Emitted as `queue_changed` with a session's whole queue each time it moves.
+ * Never logged, like the queue itself; `serve.rs`'s `Live` holds the latest so
+ * a reconnect sees it too.
+ */
+export type QueueChangedEvent = { sessionId: string, queued: Array<QueuedMessage>, };
 
 /**
  * A prompt typed while a turn was running, held here until the turn reaches a
@@ -1637,9 +1680,13 @@ beta: boolean,
  */
 latest: string | null, 
 /**
+ * Dray.app's own server on another Mac, updated by that app, not from here.
+ */
+app: boolean, 
+/**
  * An update landed on the server and it restarts onto it once idle.
  */
-restarting: boolean, };
+restarting: boolean, boat: BoatStatus | null, };
 
 export type ServerStatus = "connecting" | "connected" | "disconnected";
 
@@ -1753,10 +1800,10 @@ issues: Array<IssueRef>,
  */
 parentSessionId: string | null, created: string, modified: string, archived: boolean, pinned: boolean, 
 /**
- * Left out of the sidebar and drawn only in its parent's crew — a review
- * session nobody means to read on its own. `dray new --hidden` sets it,
- * the crew row's menu clears it, and detaching clears it too, since a
- * session with no parent has no crew to be drawn in.
+ * Left out of the sidebar, surfacing only as cards beside its parent — a
+ * review session nobody means to read on its own. `dray new --hidden` sets
+ * it, and detaching clears it, since a session with no parent would
+ * surface nowhere.
  *
  * `#[serde(default)]`: an entry written before the field reads as shown.
  */
@@ -1910,10 +1957,10 @@ issues: Array<IssueRef>,
  */
 parentSessionId: string | null, created: string, modified: string, archived: boolean, pinned: boolean, 
 /**
- * Left out of the sidebar and drawn only in its parent's crew — a review
- * session nobody means to read on its own. `dray new --hidden` sets it,
- * the crew row's menu clears it, and detaching clears it too, since a
- * session with no parent has no crew to be drawn in.
+ * Left out of the sidebar, surfacing only as cards beside its parent — a
+ * review session nobody means to read on its own. `dray new --hidden` sets
+ * it, and detaching clears it, since a session with no parent would
+ * surface nowhere.
  *
  * `#[serde(default)]`: an entry written before the field reads as shown.
  */

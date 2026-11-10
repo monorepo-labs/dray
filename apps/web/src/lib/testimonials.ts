@@ -28,6 +28,8 @@
 ///
 /// `avatar` is a path under `public/avatars/`. Absent is an ordinary state and
 /// draws the initial instead, so a quote can go up before its picture does.
+/// Save it as an 84px WebP (3× its 28px slot); a full-size profile picture
+/// is 25–50KB each, and nine of them slowed the hero on a phone.
 export type Testimonial = {
   name: string;
   handle: string;
@@ -48,7 +50,7 @@ export const TESTIMONIALS: Testimonial[] = [
     name: "Sourabh",
     handle: "Sousinr",
     url: "https://x.com/Sousinr/status/2090658610401710260",
-    avatar: "/avatars/sousinr.jpg",
+    avatar: "/avatars/sousinr.webp",
     verified: true,
     text: "that switching speed is butter",
   },
@@ -56,7 +58,7 @@ export const TESTIMONIALS: Testimonial[] = [
     name: "Terry Carson",
     handle: "mrterrycarson",
     url: "https://x.com/mrterrycarson/status/2094523965515428018",
-    avatar: "/avatars/mrterrycarson.jpg",
+    avatar: "/avatars/mrterrycarson.webp",
     verified: true,
     text: "That's awesome! Looks like a huge upgrade to the workflow. Love seeing these improvements.",
   },
@@ -64,7 +66,7 @@ export const TESTIMONIALS: Testimonial[] = [
     name: "Felix",
     handle: "vcfgdev",
     url: "https://x.com/vcfgdev/status/2095046763929555405",
-    avatar: "/avatars/vcfgdev.jpg",
+    avatar: "/avatars/vcfgdev.webp",
     verified: true,
     text: "the startup is blazing fast.",
   },
@@ -72,14 +74,14 @@ export const TESTIMONIALS: Testimonial[] = [
     name: "Aguiar Filho",
     handle: "aguiarfilho_",
     url: "https://x.com/aguiarfilho_/status/2092582930287657447",
-    avatar: "/avatars/aguiarfilho_.jpg",
+    avatar: "/avatars/aguiarfilho_.webp",
     text: "Congrats on the app, man, it’s really great!",
   },
   {
     name: "Felipe Orlando",
     handle: "felipe__orlando",
     url: "https://x.com/felipe__orlando/status/2092750144680702236",
-    avatar: "/avatars/felipe__orlando.jpg",
+    avatar: "/avatars/felipe__orlando.webp",
     verified: true,
     text: "YEEEEEAAAAHHHHHHH",
   },
@@ -87,7 +89,7 @@ export const TESTIMONIALS: Testimonial[] = [
     name: "Jongmin Park",
     handle: "paakjong",
     url: "https://x.com/paakjong/status/2098289537768390971",
-    avatar: "/avatars/paakjong.jpg",
+    avatar: "/avatars/paakjong.webp",
     verified: true,
     text: "this is weirdly satisfying",
   },
@@ -95,14 +97,14 @@ export const TESTIMONIALS: Testimonial[] = [
     name: "KKY",
     handle: "evilpsycho42",
     url: "https://x.com/evilpsycho42/status/2098313001644507519",
-    avatar: "/avatars/evilpsycho42.jpg",
+    avatar: "/avatars/evilpsycho42.webp",
     text: "polished ui and stared.",
   },
   {
     name: "sree.world",
     handle: "sreedotworld",
     url: "https://x.com/sreedotworld/status/2098140473458122755",
-    avatar: "/avatars/sreedotworld.jpg",
+    avatar: "/avatars/sreedotworld.webp",
     verified: true,
     text: "@jullerino feel like this should be a feature on t3code too no?",
   },

@@ -13,9 +13,9 @@ export function commitBase(commit: Commit): string {
 
 /// Folds a freshly read first page into the list already on screen.
 ///
-/// The tip is the whole test. While a turn runs this refetches on every event,
-/// and replacing the array each time would throw away however far the reader
-/// had paged — so an unchanged tip keeps what is there, and a moved one starts
+/// The tip is the whole test. This refetches at every turn's end, and
+/// replacing the array each time would throw away however far the reader had
+/// paged — so an unchanged tip keeps what is there, and a moved one starts
 /// again, because everything below it may have moved with a rebase or an amend.
 export function reconcileLog(
   prev: readonly Commit[],

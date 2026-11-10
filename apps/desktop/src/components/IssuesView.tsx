@@ -159,7 +159,7 @@ export default function IssuesView({
   /// the right panel's own `active` exists.
   active: boolean;
   /// Which trackers have something behind them — not whether *a* tracker does.
-  /// The chips are drawn only where both do, and the pick resolves against it.
+  /// The picked one's answer decides between its list and its connect pane.
   connected: Connected;
   /// Answers whether the key was accepted, so the field can clear itself only
   /// on success.

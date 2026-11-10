@@ -9,13 +9,15 @@ phone reads and drives it over the same WebSocket the desktop uses
 
 - **Every saved server at once, one merged list**, the desktop sidebar's live
   list: stages workspace-wide with a gap between runs and no headings, PR marks
-  read through `pr_marks` once per repo, and a project menu in the title to
-  narrow it.
+  read through `pr_marks` once per repo, and a strip of project names under
+  the bar to narrow it. Drafts (`list_drafts`) and settled sessions are two
+  more views of the same list. A session's card is answered under its row.
   Pins are not drawn apart.
 - **Transcript**, live, shaped like the desktop's: finished turns fold to
   prompt, summary line and answer; runs of one tool group into a row; a
   running turn keeps its newest five rows on screen. No diffs, no
-  highlighting, no images.
+  highlighting. A tapped picture opens full screen among the rest of its
+  turn's: swipe or the strip to page, pinch to zoom, drag down to close.
 - **Reply** to a session, **Stop** a turn.
 - **Permission and question cards**, answered in place.
 - **New session** with the desktop composer's picks: project, harness, model,
@@ -75,8 +77,13 @@ point size is a bug. Yellow means *needs you* — a card, a refused token, an
 app to update — and nothing else, so the global tint is the page's ink.
 Rationale and the screens it was judged on are in #631.
 
-- **The list has no title.** Settings on the left, New session on the right,
-  the project menu between them once there are two projects.
+- **The list has no title.** Settings on the left, the drafts and settled
+  views in one glass pill on the right, the project strip under them once
+  there are two projects. Rows are one line; a child hangs off its parent on
+  a solid elbow, and a waiting card sits under its row, a fill and no border.
+- **One type scale** in `Theme.Font`, five rungs, SF Pro only, regular and
+  semibold only. Buttons are semibold: Headline full-width, `pill` compact;
+  a text-only action stays regular.
 - **Each server reports its own trouble** in a banner at the top of the list
   and a strip above the composer, written by `Store.health`
   ([ConnectionStatus.swift](Dray/ConnectionStatus.swift)): reconnecting with a

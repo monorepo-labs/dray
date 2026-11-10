@@ -38,13 +38,13 @@ pub const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
 /// because the reader can switch models in settings while one is loaded, and
 /// the *only* way to notice is to compare against what was asked for.
 ///
-/// Cloneable, so [`Engine::warm`] can be spawned off a command that only
-/// borrows the managed state.
+/// Cloneable, so a press can spawn its load off a command that only borrows
+/// the managed state.
 #[derive(Clone)]
 pub struct Engine {
     loaded: Arc<Mutex<Option<Loaded>>>,
     /// Bumped by every [`Engine::unload`], so a warm that started before one
-    /// can tell its answer is stale. Without it a load begun at launch lands
+    /// can tell its answer is stale. Without it a load begun at a press lands
     /// after a switch or a delete and installs a model the reader is done
     /// with — for a delete, one whose weights are no longer on disk.
     generation: Arc<AtomicU64>,
@@ -267,8 +267,9 @@ impl Engine {
     /// has made it unwanted since `token` was taken.
     ///
     /// One loader for both entry points, since the expensive part must happen
-    /// once however many callers ask for it at the same moment — a warm at
-    /// launch and a mic press a second later are the ordinary case.
+    /// once however many callers ask for it at the same moment — a press's
+    /// warm still loading when a quick stop asks to transcribe is the ordinary
+    /// case.
     async fn ensure_loaded(&self, token: u64, model_id: &str, path: &Path) -> Result<()> {
         loop {
             // Created before the check, so a return landing between the two
@@ -359,6 +360,8 @@ async fn load(path: &Path) -> Result<Session> {
     let path = path.to_path_buf();
 
     tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "linux")]
+        init_backends()?;
         let model = Model::load_with(&path, &ModelOptions::default())
             .context("could not load the transcription model")?;
 
@@ -366,6 +369,30 @@ async fn load(path: &Path) -> Result<Session> {
     })
     .await
     .context("the model loader panicked")?
+}
+
+/// Registers Linux's backend modules, which sit beside libtranscribe (build.rs
+/// puts them there). Once per process, since the native call cannot be retried,
+/// and before any load, which is why it rides the load itself.
+///
+/// A missing Vulkan loader or driver is not an error here: that module fails to
+/// register and the CPU module answers. Only a directory holding no usable
+/// module at all is, and every dictation then says so.
+#[cfg(target_os = "linux")]
+fn init_backends() -> Result<()> {
+    static INIT: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    INIT.get_or_init(|| {
+        transcribe_cpp::init_backends_default().map_err(|e| e.to_string())?;
+        let devices: Vec<String> = transcribe_cpp::devices()
+            .iter()
+            .map(|d| format!("{} ({})", d.name, d.description))
+            .collect();
+        let devices = devices.join(", ");
+        eprintln!("[transcription] compute devices: {devices}");
+        Ok(())
+    })
+    .clone()
+    .map_err(|e| anyhow::anyhow!("could not load the transcription backends: {e}"))
 }
 
 #[cfg(test)]

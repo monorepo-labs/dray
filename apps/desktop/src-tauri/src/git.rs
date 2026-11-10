@@ -45,6 +45,51 @@ async fn git_line(cwd: &str, args: &[&str]) -> Option<String> {
     (!out.is_empty()).then(|| out.to_string())
 }
 
+/// The repo's `origin` as host and path, so an SSH remote on one machine and
+/// an HTTPS one on another name the same repository.
+pub async fn origin(cwd: &str) -> Option<String> {
+    git_line(cwd, &["remote", "get-url", "origin"]).await.map(|url| repo_key(&url))
+}
+
+/// [`origin`], where it names a repository another machine could also have. A
+/// remote that is a path here says nothing about a path there, and two machines
+/// merged on `/srv/x.git` would hide a checkout.
+pub async fn shared_remote(cwd: &str) -> Option<String> {
+    // Killed when a caller's timeout drops it, or a stalled checkout gathers one
+    // git per list. Only here: other reads and writes must not die half way.
+    let out = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(cwd)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .kill_on_drop(true)
+        .output()
+        .await
+        .ok()?;
+    let url = String::from_utf8_lossy(&out.stdout);
+    let url = url.trim();
+    (out.status.success() && is_network_url(url)).then(|| repo_key(url))
+}
+
+/// Git's own rule: a scheme, or scp form's colon ahead of any slash. A lone
+/// letter before that colon is a Windows drive.
+fn is_network_url(url: &str) -> bool {
+    if let Some((scheme, _)) = url.split_once("://") {
+        return !scheme.eq_ignore_ascii_case("file");
+    }
+    match url.split_once(':') {
+        Some((host, _)) => !host.contains(['/', '\\']) && host.len() > 1,
+        None => false,
+    }
+}
+
+fn repo_key(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let rest = rest.split_once('@').map_or(rest, |(_, rest)| rest);
+    // scp form, `host:owner/repo`.
+    let rest = rest.replacen(':', "/", 1);
+    rest.trim_end_matches('/').trim_end_matches(".git").to_lowercase()
+}
+
 /// A `rev-list --count` answer, or `None` where git gave none.
 async fn git_count(cwd: &str, args: &[&str]) -> Option<u32> {
     git(cwd, args).await?.trim().parse().ok()
@@ -170,16 +215,17 @@ pub async fn github_slug(cwd: &str) -> Option<String> {
 /// Answers `None` for anything that is not two segments — a remote pointing at
 /// the host's root names no repository, and half a slug reaches the wrong one.
 fn remote_path(url: &str) -> Option<&str> {
-    let after_scheme = match url.split_once("://") {
-        Some((_, rest)) => rest,
+    let path = match url.split_once("://") {
+        // A URL's authority ends at the first slash, and a colon inside it is
+        // a password's or a port's: split there, a clone made with a token —
+        // `https://x-access-token:…@github.com/owner/repo`, what a sandbox or
+        // CI leaves behind — read as no repository at all.
+        Some((_, rest)) => rest.split_once('/'),
         // scp syntax's own separator, and it is a `:` rather than a `/`.
-        None => url,
-    };
-
-    let path = after_scheme
-        .split_once(['/', ':'])
-        .map(|(_, rest)| rest)?
-        .trim_start_matches('/');
+        None => url.split_once(['/', ':']),
+    }
+    .map(|(_, rest)| rest)?
+    .trim_start_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
     // A trailing slash is legal and names the same repo; without this it makes
     // a third segment out of nothing.
@@ -288,7 +334,8 @@ async fn run(cwd: &str, args: &[&str]) -> Result<()> {
 }
 
 /// One git invocation: stdout on success, git's own stderr as the error.
-/// Every spawn but `cat-file`'s streamed one goes through here.
+/// Every spawn goes through here but `cat-file`'s streamed one and
+/// [`shared_remote`]'s, which has to die with its caller's timeout.
 async fn exec(cwd: &str, envs: &[(&str, &str)], args: &[&str]) -> Result<String> {
     let mut cmd = Command::new("git");
     cmd.args(args).current_dir(cwd);
@@ -1033,7 +1080,7 @@ pub async fn log_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<Commit>
     // closes the same rev-or-path ambiguity every diff here closes.
     let Some(raw) = git(
         cwd,
-        &["log", "-z", LOG_FORMAT, "-n", &limit, &skip, "HEAD", "--"],
+        &["log", "--no-show-signature", "-z", LOG_FORMAT, "-n", &limit, &skip, "HEAD", "--"],
     )
     .await
     else {
@@ -1129,6 +1176,7 @@ pub async fn log_branch_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<
         cwd,
         &[
             "log",
+            "--no-show-signature",
             "-z",
             LOG_FORMAT,
             "--first-parent",
@@ -1414,6 +1462,9 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
                 "--branches",
                 "--remotes",
                 "--tags",
+                // Or a file named `HEAD` in the tree makes the rev ambiguous,
+                // git dies, and the count reads zero: nothing at risk.
+                "--",
             ],
         )
         .await
@@ -1423,17 +1474,21 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
         None => 0,
     };
 
-    let locked_by = git(project_path, &["worktree", "list", "--porcelain"])
-        .await
-        .and_then(|raw| parse_lock_reason(&raw, Path::new(worktree_path)))
-        .filter(|reason| lock_owner_pid(reason).is_some_and(pid_is_alive));
-
     WorktreeDisposition {
         exists: true,
         changed_files,
         unpushed_commits,
-        locked_by,
+        locked_by: live_lock(worktree_path, project_path).await,
     }
+}
+
+/// The reason on a worktree's lock, where the process that took it is still
+/// alive. A lock a dead session left behind is no reason to keep the tree.
+async fn live_lock(worktree_path: &str, project_path: &str) -> Option<String> {
+    git(project_path, &["worktree", "list", "--porcelain"])
+        .await
+        .and_then(|raw| parse_lock_reason(&raw, Path::new(worktree_path)))
+        .filter(|reason| lock_owner_pid(reason).is_some_and(pid_is_alive))
 }
 
 /// The branch `cwd` has checked out, or `None` for a detached HEAD, a
@@ -1464,6 +1519,25 @@ async fn upstream_branch(cwd: &str) -> Option<String> {
 /// Where a project's managed worktrees live — the CLI's own `-w` layout.
 pub fn worktrees_dir(project_path: &Path) -> PathBuf {
     project_path.join(".claude").join("worktrees")
+}
+
+/// `branch` as this checkout can start from it: the local branch, else the
+/// one pushed to `origin`, fetched first so a push made moments ago is there.
+/// A failed fetch is an error rather than the cached copy: a session started
+/// on yesterday's commit reviews work that is not the work asked about.
+pub async fn pushed_branch(cwd: &str, branch: &str) -> Result<String> {
+    if resolve_commit(cwd, branch).await.is_some() {
+        return Ok(branch.to_string());
+    }
+    exec(cwd, &[], &["fetch", "-q", "origin", "--end-of-options", branch])
+        .await
+        .with_context(|| format!("could not fetch {branch} from origin — push it, then try again"))?;
+    let remote = format!("origin/{branch}");
+    match resolve_commit(cwd, &remote).await {
+        Some(_) => Ok(remote),
+        // A tag, which a fetch brings in under its own name.
+        None => Ok(branch.to_string()),
+    }
 }
 
 /// The commit `base` names, or `None` when it names nothing in this repo.
@@ -1581,8 +1655,12 @@ pub async fn remove_worktree(project_path: &str, worktree_path: &str, branch: Op
         bail!("{worktree_path} is not a worktree Dray created, so it will not be removed");
     }
 
-    if let Some(reason) = worktree_disposition(worktree_path, project_path).await.locked_by {
-        bail!("that worktree is in use by another session ({reason})");
+    // The lock alone, not the whole disposition: that also counts dirty files
+    // and unpushed commits, two walks of a tree about to be deleted.
+    if tree.is_dir() {
+        if let Some(reason) = live_lock(worktree_path, project_path).await {
+            bail!("that worktree is in use by another session ({reason})");
+        }
     }
 
     // Failure is the ordinary case — most trees are not locked at all — so the
@@ -1631,6 +1709,44 @@ fn is_stale_worktree_error(stderr: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The match a remote create finds its checkout by: one repository, every
+    /// spelling a clone might have.
+    #[test]
+    fn one_repository_has_one_key_however_it_was_cloned() {
+        for url in [
+            "git@github.com:monorepo-labs/dray.git",
+            "https://github.com/monorepo-labs/dray",
+            "https://user@github.com/Monorepo-Labs/dray.git/",
+            "ssh://git@github.com/monorepo-labs/dray.git",
+        ] {
+            assert_eq!(repo_key(url), "github.com/monorepo-labs/dray", "{url}");
+        }
+    }
+
+    #[test]
+    fn only_a_network_remote_names_a_shared_repository() {
+        for url in [
+            "git@github.com:a/b.git",
+            "github.com:a/b",
+            "https://github.com/a/b",
+            "ssh://git@github.com/a/b.git",
+        ] {
+            assert!(is_network_url(url), "{url}");
+        }
+        for url in [
+            "/srv/x.git",
+            "../x.git",
+            "./x",
+            "repos/x.git",
+            "repos/a:b",
+            "file:///srv/x.git",
+            "file://localhost/srv/x.git",
+            "C:\\repos\\x.git",
+        ] {
+            assert!(!is_network_url(url), "{url}");
+        }
+    }
 
     /// Local and remote-tracking `worktree-*` branches both claim their name;
     /// every other ref is ignored, nested ones included, and the remote need
@@ -1913,6 +2029,8 @@ mod tests {
             "git@github.com:monorepo-labs/dray.git",
             "ssh://git@github.com/monorepo-labs/dray.git",
             "https://token@github.com/monorepo-labs/dray.git",
+            "https://x-access-token:ghs_abc@github.com/monorepo-labs/dray.git",
+            "ssh://git@github.com:22/monorepo-labs/dray.git",
             "https://github.com/monorepo-labs/dray/",
         ] {
             assert_eq!(remote_path(url), Some("monorepo-labs/dray"), "{url}");
@@ -2856,10 +2974,10 @@ mod tests {
         fs::remove_dir_all(&dir).await.ok();
     }
 
-    /// The `-w` shape, forked from `origin/<default>`, and the reason the
-    /// default base is excluded as well as the fork point: a session that
-    /// merges upstream in mid-flight pulls commits into HEAD that the fork
-    /// point predates. Drop the `default_base` exclusion and this one fails.
+    /// The `-w` shape, forked from `origin/<default>`, and the reason the log
+    /// walks `--first-parent`: a session that merges upstream in mid-flight
+    /// pulls commits into HEAD that the fork point predates. Drop the flag and
+    /// this one fails.
     #[tokio::test]
     async fn upstream_merged_in_after_the_fork_is_not_this_branch_s_work() {
         let dir = scratch_repo().await;
@@ -2912,6 +3030,31 @@ mod tests {
             !subjects.iter().any(|s| s == "upstream work"),
             "an upstream commit the fork point predates: {subjects:?}"
         );
+
+        fs::remove_dir_all(&dir).await.ok();
+        fs::remove_dir_all(&bare).await.ok();
+    }
+
+    /// A branch pushed from another machine and never fetched here resolves
+    /// to its `origin/` copy; one that cannot be fetched is an error.
+    #[tokio::test]
+    async fn a_branch_pushed_elsewhere_resolves_to_its_origin_copy() {
+        let dir = scratch_repo().await;
+        let at = dir.to_str().unwrap();
+        let bare = std::env::temp_dir().join(format!("dray-origin-{}", Uuid::now_v7()));
+        fs::create_dir_all(&bare).await.unwrap();
+        run(bare.to_str().unwrap(), &["init", "-q", "--bare", "."]).await.unwrap();
+        run(at, &["remote", "add", "origin", bare.to_str().unwrap()]).await.unwrap();
+        run(at, &["push", "-q", "origin", "HEAD:refs/heads/worktree-elsewhere"]).await.unwrap();
+
+        assert_eq!(pushed_branch(at, "worktree-elsewhere").await.unwrap(), "origin/worktree-elsewhere");
+        assert!(pushed_branch(at, "worktree-nowhere").await.is_err());
+        run(at, &["tag", "v-elsewhere"]).await.unwrap();
+        run(at, &["push", "-q", "origin", "v-elsewhere"]).await.unwrap();
+        run(at, &["tag", "-d", "v-elsewhere"]).await.unwrap();
+        assert_eq!(pushed_branch(at, "v-elsewhere").await.unwrap(), "v-elsewhere");
+        let here = current_branch(at).await.unwrap();
+        assert_eq!(pushed_branch(at, &here).await.unwrap(), here);
 
         fs::remove_dir_all(&dir).await.ok();
         fs::remove_dir_all(&bare).await.ok();
@@ -3071,7 +3214,7 @@ mod tests {
         fs::remove_dir_all(&remote).await.ok();
     }
 
-    /// What a pull request would contain, which is not what [`SyncStatus::ahead`]
+    /// What a pull request would contain, which is not what [`WorkStatus::ahead`]
     /// counts. A branch pushed in full is level with its upstream and still ahead
     /// of the base — the case where the button is most wanted, and the one
     /// reading `ahead` would hide.

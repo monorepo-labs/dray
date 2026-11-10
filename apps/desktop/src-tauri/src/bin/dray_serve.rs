@@ -1,9 +1,16 @@
-//! `dray-serve [--port N]`: Dray's core with no window. See SERVE-PLAN.md.
+//! `dray-serve [--port N | --version]`: Dray's core with no window. See
+//! SERVE-PLAN.md.
 
 const DEFAULT_PORT: u16 = dray_proto::SERVE_PORT;
 
 #[tokio::main]
 async fn main() {
+    // What `dray update` compares the installer's pick against, since beside
+    // the Mac app the `dray` next to this one no longer says what it is.
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("dray-serve {}", option_env!("DRAY_CLI_VERSION").unwrap_or("dev"));
+        return;
+    }
     let mut args = std::env::args().skip(1);
     let mut port = DEFAULT_PORT;
     while let Some(arg) = args.next() {

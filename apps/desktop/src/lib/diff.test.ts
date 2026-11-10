@@ -84,6 +84,12 @@ describe("countUnifiedChanges", () => {
     expect(countUnifiedChanges([diff])).toEqual({ added: 1, removed: 0 });
   });
 
+  // A removed SQL comment and an added pre-increment look like headers.
+  it("counts a content line that only looks like a header", () => {
+    const diff = "--- a/x.sql\n+++ b/x.sql\n@@ -1,2 +1,2 @@\n--- gone\n+++i;\n";
+    expect(countUnifiedChanges([diff])).toEqual({ added: 1, removed: 1 });
+  });
+
   it("sums across files and skips a side with no diff", () => {
     expect(countUnifiedChanges(["@@\n+a\n+b\n", null, "@@\n-c\n"])).toEqual({
       added: 2,

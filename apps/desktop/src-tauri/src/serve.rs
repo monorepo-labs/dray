@@ -10,6 +10,10 @@
 //! ← {"event":"agent_event","payload":{…}}       every event, to every client
 //! ```
 //!
+//! A hello carrying `"deflate":true` gets every frame from [`DEFLATE_FLOOR`]
+//! up as a binary frame of raw-deflated JSON — see [`frame_out`]. A server
+//! that never heard of the field ignores it, so no version moves.
+//!
 //! The Mac app connects to its own server with `"host":{"browser":…}` in the
 //! hello, which lets the server call back into it — see [`host_call`]:
 //!
@@ -29,6 +33,7 @@ use crate::{
     store,
 };
 use anyhow::{Context, Result};
+use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -54,6 +59,51 @@ use tokio_tungstenite::tungstenite::{
 /// The frontend states it again in `transport.ts`.
 pub const PROTOCOL: u32 = 1;
 
+/// Frames shorter than this go out as text even to a client that asked for
+/// deflate: an event or a short reply saves too little to be worth the CPU.
+const DEFLATE_FLOOR: usize = 16 * 1024;
+
+/// One outgoing frame. A transcript page is 0.6–1.3MB of JSON and deflates
+/// about 4.7×, which on a slow link is most of the wait — and tungstenite
+/// has no permessage-deflate to do it for us.
+pub fn frame_out(text: String, deflate: bool) -> Message {
+    // Scoped here: `std::io::Read` at module level collides with tokio's
+    // `AsyncReadExt::chain` in the upload path.
+    use std::io::Write;
+    if !deflate || text.len() < DEFLATE_FLOOR {
+        return Message::text(text);
+    }
+    let mut encoder = DeflateEncoder::new(Vec::with_capacity(text.len() / 4), Compression::default());
+    match encoder.write_all(text.as_bytes()).and_then(|()| encoder.finish()) {
+        Ok(bytes) => Message::binary(bytes),
+        Err(_) => Message::text(text),
+    }
+}
+
+/// The most a binary frame may inflate to: tungstenite's own default cap on a
+/// message, so a deflated frame can carry nothing a text one could not.
+const INFLATED_CAP: u64 = 64 << 20;
+
+/// The JSON text an incoming frame carries, inflating a binary one. `None`
+/// for a binary frame that is not deflate or would inflate past
+/// [`INFLATED_CAP`] — a few KB can expand to gigabytes, and the app reads
+/// these from servers it does not control.
+pub fn frame_in(message: Message) -> Option<String> {
+    use std::io::Read;
+    match message {
+        Message::Text(text) => Some(text.to_string()),
+        Message::Binary(bytes) => {
+            let mut text = String::new();
+            DeflateDecoder::new(&bytes[..])
+                .take(INFLATED_CAP + 1)
+                .read_to_string(&mut text)
+                .ok()?;
+            (text.len() as u64 <= INFLATED_CAP).then_some(text)
+        }
+        _ => None,
+    }
+}
+
 /// How far one client may fall behind the event stream before it is dropped.
 /// A dropped client reconnects and re-reads; a silently skipped `agent_event`
 /// would leave a transcript wrong with nothing to say so.
@@ -67,6 +117,14 @@ const ADMIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// The most a `/file` request head may hold. Its URL carries a token and a
 /// path; nothing a real client sends comes near this.
 const FILE_HEAD_LIMIT: u64 = 16 * 1024;
+
+/// A piped port's socket can die without closing, as any remote socket can, and
+/// nothing else would ever end a page's idle hot-reload connection. Both ends
+/// ping, so each hears the other however one-way the traffic is.
+const PIPE_PING: std::time::Duration =
+    if cfg!(test) { std::time::Duration::from_millis(100) } else { std::time::Duration::from_secs(15) };
+const PIPE_SILENCE: std::time::Duration =
+    if cfg!(test) { std::time::Duration::from_secs(3) } else { std::time::Duration::from_secs(45) };
 
 /// Where a server writes the port it listens on for the app, then its
 /// [`exe_stamp`], then its pid. The Mac's background server lets the OS pick
@@ -342,16 +400,14 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
         anyhow::bail!("a Dray server is already running on {}", home.display());
     }
     std::mem::forget(held);
-    for name in [dray_proto::SOCKET_NAME, dray_proto::SOCKET_NAME_DEV] {
-        let socket = home.join(name);
-        if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
-            anyhow::bail!(
-                "a Dray is already running on {} ({} answers). Quit it, or start \
-                 dray-serve with DRAY_HOME set to a directory of its own.",
-                home.display(),
-                socket.display()
-            );
-        }
+    let socket = home.join(dray_proto::SOCKET_NAME);
+    if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+        anyhow::bail!(
+            "a Dray is already running on {} ({} answers). Quit it, or start \
+             dray-serve with DRAY_HOME set to a directory of its own.",
+            home.display(),
+            socket.display()
+        );
     }
 
     if let Err(e) = store::reset_in_progress_sessions().await {
@@ -374,9 +430,8 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
 }
 
 /// What every client of this process hears: each event the core emits, and
-/// [`Live`] beside it for a client that connects later. `dray-serve` builds
-/// its `Sink` on one; the desktop app's `Sink` publishes into [`HUB`] as well
-/// as its webview, so the app can serve the same stream.
+/// [`Live`] beside it for a client that connects later. Both servers,
+/// `dray-serve` and the Mac's `dray --serve`, build their `Sink` on [`HUB`].
 #[derive(Clone)]
 pub struct Hub {
     events: broadcast::Sender<Arc<str>>,
@@ -438,7 +493,11 @@ pub async fn listen(
         };
         let (sink, hub, token, tunnel_file) = (sink.clone(), hub.clone(), token.clone(), tunnel_file.clone());
         connections.spawn(async move {
-            let served = match request_line(&stream).await {
+            // Bounded like the rest of what comes before the token: `peek`
+            // waits for a first byte, so a connect that sends nothing held
+            // its task and its socket until the peer went away.
+            let first = tokio::time::timeout(ADMIT, request_line(&stream)).await.ok().flatten();
+            let served = match first {
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
                 Some(line) if line.starts_with("POST /upload?") => upload(stream, &token).await,
                 Some(_) => connection(stream, sink, hub, &token, &tunnel_file, hosts).await,
@@ -535,6 +594,13 @@ struct Hello {
     /// app on another machine — so this server must not count them too.
     #[serde(default)]
     counts: bool,
+    /// The client inflates binary frames: see [`frame_out`].
+    #[serde(default)]
+    deflate: bool,
+    /// This socket carries one connection to a port on this machine, rather
+    /// than being a client: see [`pipe`].
+    #[serde(default)]
+    forward: Option<u16>,
 }
 
 /// What the app can answer when it connects as the host.
@@ -626,6 +692,9 @@ struct Live {
     asks: Vec<Value>,
     tasks: HashMap<String, Value>,
     running: std::collections::HashSet<String>,
+    queued: HashMap<String, Value>,
+    /// The boat sandboxes about to stop, which only the app reads timers for.
+    boat: Value,
 }
 
 impl Live {
@@ -648,6 +717,14 @@ impl Live {
                     self.tasks.insert(session, payload.clone());
                 }
             }
+            ("queue_changed", _) => {
+                if payload["queued"].as_array().is_some_and(|q| q.is_empty()) {
+                    self.queued.remove(&session);
+                } else {
+                    self.queued.insert(session, payload.clone());
+                }
+            }
+            ("boat_alerts", _) => self.boat = payload["alerts"].clone(),
             ("session_status", _) => {
                 if payload["status"] == "in_progress" {
                     self.running.insert(session);
@@ -674,7 +751,8 @@ impl Live {
 
     fn payload(&self) -> Value {
         let tasks: Vec<&Value> = self.tasks.values().collect();
-        json!({ "asks": self.asks, "tasks": tasks })
+        let queued: Vec<&Value> = self.queued.values().collect();
+        json!({ "asks": self.asks, "tasks": tasks, "queued": queued, "boat": self.boat })
     }
 }
 
@@ -699,12 +777,64 @@ async fn request_line(stream: &TcpStream) -> Option<String> {
     None
 }
 
-/// An HTTP request head: its target, the bearer token if one was sent, and
-/// the body length it declared.
+/// Passes bytes between an admitted socket and a TCP connection until either
+/// ends. The two directions run side by side, or a peer sending a large body
+/// before it reads could stall against one sending a large answer.
+// ponytail: either side's EOF ends both directions, where a half-closed TCP
+// connection could still be answered. Browsers don't half-close.
+pub async fn pipe<W, R, E>(mut write: W, mut read: R, tcp: TcpStream)
+where
+    W: futures_util::Sink<Message> + Unpin,
+    R: futures_util::Stream<Item = Result<Message, E>> + Unpin,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (mut from_tcp, mut to_tcp) = tcp.into_split();
+    let outbound = async {
+        let mut chunk = vec![0; 64 * 1024];
+        let mut ping = tokio::time::interval(PIPE_PING);
+        loop {
+            let frame = tokio::select! {
+                read = from_tcp.read(&mut chunk) => match read {
+                    Ok(n) if n > 0 => Message::binary(chunk[..n].to_vec()),
+                    _ => break,
+                },
+                _ = ping.tick() => Message::Ping(Default::default()),
+            };
+            // Bounded, since nothing else ends a pipe stuck writing both ways: a
+            // reader blocked on TCP is not listening for the silence. A page that
+            // pauses a large answer this long loses the connection and asks again.
+            if !matches!(tokio::time::timeout(PIPE_SILENCE, write.send(frame)).await, Ok(Ok(()))) {
+                return;
+            }
+        }
+        write.close().await.ok();
+    };
+    let inbound = async {
+        while let Ok(Some(Ok(frame))) = tokio::time::timeout(PIPE_SILENCE, read.next()).await {
+            match frame {
+                Message::Binary(bytes) => {
+                    if to_tcp.write_all(&bytes).await.is_err() {
+                        break;
+                    }
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+    };
+    tokio::select! {
+        _ = outbound => {}
+        _ = inbound => {}
+    }
+}
+
+/// An HTTP request head: its target, the bearer token if one was sent, the
+/// body length it declared, and the byte range it asked for.
 struct Head {
     target: String,
     bearer: Option<String>,
     length: Option<u64>,
+    range: Option<String>,
 }
 
 /// Reads a request head off `stream`, bounded in size and time. The reader
@@ -716,7 +846,7 @@ async fn read_head(
 
     let mut reader = BufReader::new(stream.take(FILE_HEAD_LIMIT));
     let mut line = String::new();
-    let (mut bearer, mut length) = (None, None);
+    let (mut bearer, mut length, mut range) = (None, None, None);
     // The rest of the head is read too, so closing does not reset the
     // connection under a response the client has not finished reading.
     let head = async {
@@ -731,6 +861,8 @@ async fn read_head(
                     bearer = value.trim().strip_prefix("Bearer ").map(str::to_string);
                 } else if name.eq_ignore_ascii_case("content-length") {
                     length = value.trim().parse().ok();
+                } else if name.eq_ignore_ascii_case("range") {
+                    range = Some(value.trim().to_string());
                 }
             }
         }
@@ -740,7 +872,7 @@ async fn read_head(
         anyhow::bail!("request head over {FILE_HEAD_LIMIT} bytes");
     }
     let target = line.split(' ').nth(1).unwrap_or_default().to_string();
-    Ok((Head { target, bearer, length }, reader))
+    Ok((Head { target, bearer, length, range }, reader))
 }
 
 /// `POST /upload?name=…`: a file attached on another machine, written under
@@ -807,12 +939,14 @@ async fn upload(stream: TcpStream, token: &str) -> Result<()> {
 /// Confined to those three directories, plus videos `read_file` handed out, by
 /// **canonical** path, so neither `..` nor a symlink inside one reaches
 /// anything else.
-// ponytail: no Range support, so a long video plays but cannot seek; add it
-// when recordings are viewed remotely.
+///
+/// Answers a `Range`, without which a video cannot seek and iOS's AVPlayer will
+/// not play at all.
 async fn file(stream: TcpStream, token: &str) -> Result<()> {
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
     let (head, reader) = read_head(stream).await?;
+    let range = head.range.clone();
     let mut stream = reader.into_inner().into_inner();
     let query = head.target.split_once('?').map(|(_, q)| q).unwrap_or_default();
     // A header where the client can set one — the desktop app's proxy — so the
@@ -838,14 +972,74 @@ async fn file(stream: TcpStream, token: &str) -> Result<()> {
 
     let mut body = tokio::fs::File::open(&path).await?;
     let len = body.metadata().await?.len();
-    let head = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n",
-        content_type(&path)
-    );
+    let kind = content_type(&path);
+    let (head, sending) = match byte_span(range.as_deref(), len) {
+        ByteSpan::Whole => (
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {len}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
+            ),
+            len,
+        ),
+        ByteSpan::Part(start, end) => {
+            body.seek(std::io::SeekFrom::Start(start)).await?;
+            let sending = end - start + 1;
+            (
+                format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Type: {kind}\r\nContent-Length: {sending}\r\nContent-Range: bytes {start}-{end}/{len}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n"
+                ),
+                sending,
+            )
+        }
+        ByteSpan::Unsatisfiable => {
+            let refusal = format!(
+                "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{len}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(refusal.as_bytes()).await?;
+            return Ok(());
+        }
+    };
     stream.write_all(head.as_bytes()).await?;
-    tokio::io::copy(&mut body, &mut stream).await?;
+    tokio::io::copy(&mut body.take(sending), &mut stream).await?;
     stream.shutdown().await.ok();
     Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+enum ByteSpan {
+    Whole,
+    /// First and last byte, both inclusive, as the header writes them.
+    Part(u64, u64),
+    Unsatisfiable,
+}
+
+/// What a `Range` header asks of a file `len` bytes long. Anything but a single
+/// `bytes` range answers the whole file, which HTTP allows and every client
+/// here takes.
+fn byte_span(range: Option<&str>, len: u64) -> ByteSpan {
+    let Some((first, last)) = range.and_then(|r| r.strip_prefix("bytes=")).and_then(|r| r.split_once('-')) else {
+        return ByteSpan::Whole;
+    };
+    let (first, last) = (first.trim(), last.trim());
+    if first.is_empty() {
+        return match last.parse::<u64>() {
+            Ok(0) => ByteSpan::Unsatisfiable,
+            Ok(_) if len == 0 => ByteSpan::Unsatisfiable,
+            Ok(tail) => ByteSpan::Part(len.saturating_sub(tail), len - 1),
+            Err(_) => ByteSpan::Whole,
+        };
+    }
+    let Ok(first) = first.parse::<u64>() else { return ByteSpan::Whole };
+    let last = match last {
+        "" => len.saturating_sub(1),
+        last => match last.parse::<u64>() {
+            Ok(last) => last.min(len.saturating_sub(1)),
+            Err(_) => return ByteSpan::Whole,
+        },
+    };
+    if first >= len || first > last {
+        return ByteSpan::Unsatisfiable;
+    }
+    ByteSpan::Part(first, last)
 }
 
 /// The canonical path where it sits inside a servable directory, else `None`
@@ -952,6 +1146,23 @@ async fn connection(
         write.close().await.ok();
         return Ok(());
     }
+    if let Some(port) = serde_json::from_str::<Hello>(&hello).ok().and_then(|h| h.forward) {
+        // `localhost` rather than 127.0.0.1: every address it resolves to is
+        // tried, and Vite binds `::1` alone on some machines. Any port is
+        // allowed, since this token already runs shells here.
+        match TcpStream::connect(("localhost", port)).await {
+            Ok(tcp) => {
+                write.send(Message::text(json!({ "v": PROTOCOL, "forwarding": true }).to_string())).await?;
+                pipe(write, read, tcp).await;
+            }
+            Err(_) => {
+                let refusal = format!("nothing is listening on port {port}");
+                write.send(Message::text(json!({ "err": refusal }).to_string())).await.ok();
+                write.close().await.ok();
+            }
+        }
+        return Ok(());
+    }
     // Subscribed only once admitted, so nothing reaches a client the token
     // has not let in — and under the lock the sink notes events with, so the
     // snapshot and the stream meet exactly.
@@ -969,11 +1180,17 @@ async fn connection(
         "release": option_env!("DRAY_CLI_VERSION"),
         "stale": stale(),
         "dictation": cfg!(feature = "desktop"),
+        // A dev build's version is whatever its checkout says, never a release.
+        "dev": cfg!(debug_assertions),
         // Read by the app to tag a session it starts here, as a closed value.
         "os": std::env::consts::OS,
     });
+    // The welcome stays text whatever was asked: a client reads it before it
+    // knows whether this server understood `deflate` at all.
+    let hello = serde_json::from_str::<Hello>(&hello).ok();
+    let deflate = hello.as_ref().is_some_and(|h| h.deflate);
     write.send(Message::text(welcome.to_string())).await?;
-    write.send(Message::text(snapshot)).await?;
+    write.send(frame_out(snapshot, deflate)).await?;
 
     // Replies come back from concurrent tasks, so one writer owns the socket.
     let (replies, mut outgoing) = mpsc::unbounded_channel::<String>();
@@ -993,7 +1210,7 @@ async fn connection(
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
             };
-            if write.send(Message::text(frame)).await.is_err() {
+            if write.send(frame_out(frame, deflate)).await.is_err() {
                 break;
             }
         }
@@ -1001,7 +1218,6 @@ async fn connection(
     });
 
     let connection = NEXT_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let hello = serde_json::from_str::<Hello>(&hello).ok();
     // Read before the filter: a remote reader's app reaches this server
     // through the tunnel or a `dray-serve` listener too, neither of them hosts.
     let counts = hello.as_ref().is_some_and(|h| h.counts);
@@ -1011,6 +1227,10 @@ async fn connection(
     let offer = hello.and_then(|h| h.host);
     if let Some(offer) = offer {
         *host() = Some(Host { connection, browser: offer.browser, frames: replies.clone(), waiting: HashMap::new() });
+        let _ = sink.emit("host_changed", Value::Null);
+        // This server writes the machine list itself while no app is
+        // connected, so the copy the app read at launch may be stale (#760).
+        tokio::spawn(host_call("reload_servers", Value::Null));
     }
 
     // Not `?`: a reset must still reach the cleanup below, or a call
@@ -1043,7 +1263,11 @@ async fn connection(
         let (sink, replies) = (sink.clone(), replies.clone());
         tokio::spawn(crate::analytics::CLIENT_COUNTS.scope(counts, async move {
             let args = tag_dictation(&call.cmd, call.args, island);
-            let reply = match dispatch(&call.cmd, args, sink).await {
+            let answer = match call.cmd.as_str() {
+                "island_links" => island_links(island).await,
+                _ => dispatch(&call.cmd, args, sink).await,
+            };
+            let reply = match answer {
                 Ok(ok) => {
                     if island {
                         island_used(&call.cmd);
@@ -1058,13 +1282,33 @@ async fn connection(
 
     // Dropping its waiters answers every call still out on it.
     let mut host = host();
-    if host.as_ref().is_some_and(|h| h.connection == connection) {
+    let left = host.as_ref().is_some_and(|h| h.connection == connection);
+    if left {
         *host = None;
     }
     drop(host);
+    if left {
+        // The island follows the app's links, so it drops them with the app.
+        let _ = sink.emit("host_changed", Value::Null);
+        // Only the app reads boat timers, so its warnings go with it rather than
+        // counting down on the island past a stop nobody is watching for.
+        #[cfg(feature = "desktop")]
+        let _ = sink.emit("boat_alerts", json!({ "alerts": [] }));
+    }
     drop(replies);
     writer.abort();
     failed.map_or(Ok(()), |e| Err(e.into()))
+}
+
+/// The app's links to other machines, tokens included, for the island alone.
+/// Decided off the connection rather than in [`dispatch`]: `island` is only ever
+/// set on the local listener, so nothing reaching this server from another
+/// machine can be handed a way into a third. No app connected is no links.
+async fn island_links(island: bool) -> Result<Value, Value> {
+    if !island {
+        return Err(json!("unknown command island_links"));
+    }
+    host_call("island_links", Value::Null).await.unwrap_or_else(|| Ok(json!([])))
 }
 
 /// Dictation forwarded to the app carries `via`, set here off the hello and
@@ -1201,8 +1445,14 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
     // The Island's title opens its session in the app's window, which only the
     // app can raise, and the island opens on the session that window shows.
     #[cfg(feature = "desktop")]
-    if matches!(cmd, "show_session" | "selected_session") {
+    if matches!(cmd, "show_session" | "selected_session" | "extend_boat") {
         return host_call(cmd, args).await.unwrap_or_else(|| Err(json!("Dray's window is closed.")));
+    }
+    // The app's word to the island, which only this server reaches.
+    #[cfg(feature = "desktop")]
+    if cmd == "boat_alerts" {
+        let _ = sink.emit("boat_alerts", &args);
+        return Ok(Value::Null);
     }
     // A `dray-serve` updates itself; the Mac's server follows the app instead.
     #[cfg(not(feature = "desktop"))]
@@ -1232,26 +1482,35 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         ).await;
         interrupt_session(session_id: String) => crate::interrupt_session(&session_id, sink).await;
         stop_task(session_id: String, task_id: String) => crate::stop_task(&session_id, &task_id).await;
-        cancel_queued(session_id: String) => crate::cancel_queued(&session_id).await;
+        cancel_queued(session_id: String) => crate::cancel_queued(&session_id, sink).await;
         respond_permission(session_id: String, request_id: String, option_id: String) =>
             crate::respond_permission(&session_id, &request_id, &option_id, sink).await;
         answer_questions(session_id: String, request_id: String, answers: HashMap<String, String>) =>
             crate::answer_questions(&session_id, &request_id, answers, sink).await;
         mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read, sink).await;
         set_session_flags(session_id: String, archived: Option<bool>, pinned: Option<bool>, hidden: Option<bool>, aside: Option<bool>) =>
-            crate::set_session_flags(&session_id, archived, pinned, hidden, aside).await;
+            crate::set_session_flags(&session_id, archived, pinned, hidden, aside, sink).await;
         rename_session(session_id: String, title: String) => crate::rename_session(session_id, title, sink).await;
         delete_session(session_id: String) => crate::delete_session(&session_id).await;
         fork_session(session_id: String, fork_id: String, worktree: bool) =>
             crate::fork_session(&session_id, &fork_id, worktree).await;
         session_index_item(session_id: String) => crate::session_index_item(&session_id).await;
+        // `dray --machine` from an agent on the Mac that added this machine.
+        orchestrate(
+            line: String, origin: Option<String>, caller: Option<crate::orchestration::Caller>,
+            sender: Option<crate::events::MessageSender>,
+        ) => ok(crate::orchestration::answer_forward(
+            crate::orchestration::Forward { line, origin, caller, sender }, sink,
+        ).await);
         worktree_disposition(session_id: String) => crate::worktree_disposition(&session_id).await;
         remove_session_worktree(session_id: String) => crate::remove_session_worktree(&session_id).await;
         detach_session(session_id: String) => store::detach_session(&session_id).await;
         set_auto_continue(session_id: String, on: bool) => crate::auto_continue::set_auto_continue(session_id, on, sink).await;
         list_session_index_items(archived: bool) => store::list_session_index_items(archived).await;
+        reachable_sessions() => ok(crate::machines::reachable_sessions().await);
         get_session_by_id(session_id: String, turns: Option<u32>) => store::get_session_by_id(&session_id, turns).await;
         get_session_page(session_id: String, before: u64, turns: u32) => store::get_session_page(&session_id, before, turns).await;
+        get_session_since(session_id: String, after: Vec<String>) => store::get_session_since(&session_id, after).await;
 
         // Agents and models.
         agent_availability() => ok(crate::agent_availability().await);
@@ -1356,7 +1615,41 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_range_is_read_as_http_writes_it() {
+        use super::{byte_span, ByteSpan::*};
+        assert_eq!(byte_span(None, 100), Whole);
+        assert_eq!(byte_span(Some("bytes=0-1"), 100), Part(0, 1));
+        assert_eq!(byte_span(Some("bytes=10-"), 100), Part(10, 99));
+        assert_eq!(byte_span(Some("bytes=90-500"), 100), Part(90, 99), "the end is clamped");
+        assert_eq!(byte_span(Some("bytes=-10"), 100), Part(90, 99));
+        assert_eq!(byte_span(Some("bytes=-500"), 100), Part(0, 99));
+        assert_eq!(byte_span(Some("bytes=100-"), 100), Unsatisfiable);
+        assert_eq!(byte_span(Some("bytes=5-2"), 100), Unsatisfiable);
+        assert_eq!(byte_span(Some("bytes=0-1,5-6"), 100), Whole, "many ranges answer whole");
+        assert_eq!(byte_span(Some("items=0-1"), 100), Whole);
+        assert_eq!(byte_span(Some("bytes=0-"), 0), Unsatisfiable);
+    }
+
     use super::*;
+
+    /// The local peer reads nothing and the socket takes nothing, so both
+    /// directions sit in a write.
+    #[tokio::test]
+    async fn a_pipe_stuck_writing_both_ways_ends() {
+        use tokio::io::AsyncWriteExt;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut peer = TcpStream::connect(addr).await.unwrap();
+        let (tcp, _) = listener.accept().await.unwrap();
+        tokio::spawn(async move { while peer.write_all(&[0; 1024]).await.is_ok() {} });
+
+        let stuck = Box::pin(futures_util::sink::unfold((), |_, _: Message| {
+            std::future::pending::<Result<(), std::io::Error>>()
+        }));
+        let flood = futures_util::stream::repeat_with(|| Ok::<_, std::io::Error>(Message::binary(vec![0; 1 << 20])));
+        tokio::time::timeout(PIPE_SILENCE * 3, pipe(stuck, flood, tcp)).await.expect("the pipe never ended");
+    }
 
     #[test]
     fn a_second_start_keeps_the_token() {
@@ -1414,6 +1707,12 @@ mod tests {
         std::fs::write(&file, "").unwrap();
         assert!(!tunnel_origin("", &file), "an empty file names nothing");
         std::fs::remove_file(&file).ok();
+    }
+
+    #[tokio::test]
+    async fn only_the_island_is_handed_the_apps_links() {
+        assert!(island_links(false).await.is_err());
+        assert_eq!(island_links(true).await, Ok(json!([])), "no app connected is no links");
     }
 
     #[cfg(feature = "desktop")]
@@ -1483,6 +1782,16 @@ mod tests {
         assert!(live.snapshot().contains("\"live_state\""));
     }
 
+    #[test]
+    fn live_state_holds_the_latest_queue() {
+        let mut live = Live::default();
+        live.note("queue_changed", &json!({ "sessionId": "s", "queued": [{ "id": "a" }] }));
+        live.note("queue_changed", &json!({ "sessionId": "s", "queued": [{ "id": "a" }, { "id": "b" }] }));
+        assert_eq!(live.payload()["queued"][0]["queued"].as_array().unwrap().len(), 2);
+        live.note("queue_changed", &json!({ "sessionId": "s", "queued": [] }));
+        assert!(live.queued.is_empty());
+    }
+
     #[tokio::test]
     async fn files_are_served_from_the_two_directories_alone() {
         let home = std::env::temp_dir().join(format!("dray-serve-test-{}", uuid::Uuid::new_v4()));
@@ -1544,6 +1853,52 @@ mod tests {
 
         assert_eq!(post("nope", "data.csv").await.status(), 401);
         assert_eq!(post("tok", "..").await.status(), 400);
+    }
+
+    #[test]
+    fn a_frame_deflates_only_when_asked_and_large() {
+        let big = json!({ "id": 1, "ok": "tool output ".repeat(4000) }).to_string();
+        let Message::Binary(bytes) = frame_out(big.clone(), true) else { panic!("a large frame stayed text") };
+        assert!(bytes.len() * 10 < big.len(), "{} of {}", bytes.len(), big.len());
+        assert_eq!(frame_in(Message::binary(bytes)).as_deref(), Some(big.as_str()));
+        assert!(matches!(frame_out(big, false), Message::Text(_)));
+        assert!(matches!(frame_out(r#"{"id":1,"ok":null}"#.into(), true), Message::Text(_)));
+        assert_eq!(frame_in(Message::binary(b"not deflate".to_vec())), None);
+
+        // A bomb: ~65KB that inflates past the cap is refused, not expanded.
+        let Message::Binary(bomb) = frame_out("0".repeat(INFLATED_CAP as usize + 1), true) else { panic!() };
+        assert!(bomb.len() < 1 << 20, "{}", bomb.len());
+        assert_eq!(frame_in(Message::binary(bomb)), None);
+    }
+
+    /// The whole path: a client's hello asks, the writer compresses an event
+    /// past the floor, and only that one; one that never asked reads text.
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn a_client_that_asks_gets_large_events_deflated() {
+        for deflate in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("ws://{}", listener.local_addr().unwrap());
+            let hub = Hub::default();
+            let served = hub.clone();
+            tokio::spawn(async move {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let sink = Sink::new(|_, _| {});
+                connection(tcp, sink, served, "tok", Path::new("/nonexistent"), false).await.ok();
+            });
+            let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+            ws.send(Message::text(json!({ "v": PROTOCOL, "token": "tok", "deflate": deflate }).to_string()))
+                .await
+                .unwrap();
+            assert!(matches!(ws.next().await, Some(Ok(Message::Text(_)))), "welcome");
+            assert!(matches!(ws.next().await, Some(Ok(Message::Text(_)))), "a small snapshot");
+
+            let big = json!({ "event": "agent_event", "payload": "x".repeat(DEFLATE_FLOOR * 2) }).to_string();
+            hub.events.send(big.as_str().into()).unwrap();
+            let frame = ws.next().await.unwrap().unwrap();
+            assert_eq!(matches!(frame, Message::Binary(_)), deflate);
+            assert_eq!(frame_in(frame).as_deref(), Some(big.as_str()));
+        }
     }
 
     #[tokio::test]

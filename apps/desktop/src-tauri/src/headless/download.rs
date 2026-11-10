@@ -106,11 +106,14 @@ pub async fn binary() -> Result<PathBuf, String> {
     if binary.is_file() {
         return Ok(binary);
     }
+    // Read before the retry below resets it, or a failure is never reported:
+    // every call answered "still downloading (0%)" and the agent polled forever.
+    let reason = not_ready_reason();
     if !matches!(*STATUS.lock().unwrap(), Status::Downloading { .. } | Status::Extracting) {
         set(Status::Downloading { received: 0, total: zip.size });
         crate::spawn(run(dir, zip));
     }
-    Err(not_ready_reason())
+    Err(reason)
 }
 
 /// Why a tab cannot open yet, in the Mac's words where they apply.

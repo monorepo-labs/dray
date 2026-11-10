@@ -22,6 +22,9 @@ const SSH: &str = "/usr/bin/ssh";
 const KEYSCAN: &str = "/usr/bin/ssh-keyscan";
 const KEYGEN: &str = "/usr/bin/ssh-keygen";
 
+/// The machine logging in, in a failure's words: a Linux server runs this too.
+const HERE: &str = if cfg!(target_os = "macos") { "This Mac" } else { "This machine" };
+
 /// Where `dray-serve` listens on the server, as `dray setup` leaves it.
 const REMOTE_PORT: u16 = dray_proto::SERVE_PORT;
 
@@ -168,7 +171,7 @@ impl Failure {
 /// A live login carrying the forward. Dropping it kills `ssh`, which closes the
 /// forwarded socket, which is how the connection on top of it learns.
 pub struct Tunnel {
-    _child: Child,
+    child: Child,
     // Held open: the remote script ends in `exec cat`, which exits on EOF.
     _stdin: ChildStdin,
     _stdout: BufReader<ChildStdout>,
@@ -176,10 +179,20 @@ pub struct Tunnel {
     pub token: String,
     /// The server's Remote access address, where it is on there.
     pub address: Option<String>,
+    /// Remote access is on there but its tunnel has not attached yet, so no
+    /// `address` says nothing about the one last read.
+    pub address_coming: bool,
+    /// The sandbox id this machine reports. Its own say-so: see `servers.rs`.
+    pub boat: Option<String>,
     stderr: Arc<Mutex<String>>,
 }
 
 impl Tunnel {
+    /// Whether `ssh` is still up, and with it the forward.
+    pub fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
     /// ssh's last word, for a connection that dropped while this was up — a
     /// refused forward, a dead link.
     pub fn said(&self) -> Option<String> {
@@ -196,7 +209,12 @@ const SCRIPT: &str = concat!(
     "if ! systemctl --user is-active --quiet dray 2>/dev/null && systemctl --user show-environment >/dev/null 2>&1; then ",
     "echo DRAY-SSH starting; if ! out=$(dray service start 2>&1); then echo DRAY-SSH failed; echo \"$out\"; exit 0; fi; fi; ",
     "[ -r \"$HOME/.dray/serve-token\" ] || { echo DRAY-SSH notoken; exit 0; }; ",
-    "[ -r \"$HOME/.dray/tunnel-url\" ] && echo \"DRAY-SSH tunnel $(cat \"$HOME/.dray/tunnel-url\")\"; ",
+    "if [ -r \"$HOME/.dray/tunnel-url\" ]; then echo \"DRAY-SSH tunnel $(cat \"$HOME/.dray/tunnel-url\")\"; ",
+    // The dot stands for a double quote.
+    "elif grep -q \"remoteAccess.: *true\" \"$HOME/.dray/settings.json\" 2>/dev/null; then echo DRAY-SSH tunnel-coming; fi; ",
+    // A boat sandbox says which one it is. Read off the login, not the server, so
+    // a server too old to know about boat is recognised all the same.
+    "[ -z \"$BOAT_ID\" ] || echo \"DRAY-SSH boat $BOAT_ID\"; ",
     "echo \"DRAY-SSH token $(cat \"$HOME/.dray/serve-token\")\"; exec cat",
 );
 
@@ -223,18 +241,23 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
     let mut stdout = BufReader::new(child.stdout.take().expect("piped"));
 
     let mut address = None;
+    let mut address_coming = false;
+    let mut boat = None;
     let script = async {
-        let mut line = String::new();
+        let mut bytes = Vec::new();
         let mut failed: Option<String> = None;
         loop {
-            line.clear();
-            let read = (&mut stdout).take(MAX_READ as u64).read_line(&mut line).await.unwrap_or(0);
+            bytes.clear();
+            // Bytes, not `read_line`, as in `run` below: a dotfile echoing one
+            // byte that is not UTF-8 is an error there, and read as ssh exiting.
+            let read = (&mut stdout).take(MAX_READ as u64).read_until(b'\n', &mut bytes).await.unwrap_or(0);
             if read == 0 {
                 return Err(failed);
             }
-            if read == MAX_READ && !line.ends_with('\n') {
+            if read == MAX_READ && !bytes.ends_with(b"\n") {
                 return Ok(Err("oversize"));
             }
+            let line = String::from_utf8_lossy(&bytes);
             let said = line.trim_end();
             if let Some(out) = failed.as_mut() {
                 if out.len() < MAX_READ {
@@ -249,9 +272,20 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
                 Some("missing") => return Ok(Err("missing")),
                 Some("notoken") => return Ok(Err("notoken")),
                 Some("failed") => failed = Some(String::new()),
+                Some("tunnel-coming") => address_coming = true,
                 Some(rest) => {
+                    // An empty token file says `token ` and nothing after,
+                    // and the trim above has taken that space: answered here
+                    // as an empty token, which is "never run there" below,
+                    // rather than waited on until the timeout.
+                    if rest == "token" {
+                        return Ok(Ok(String::new()));
+                    }
                     if let Some(token) = rest.strip_prefix("token ") {
                         return Ok(Ok(token.trim().to_string()));
+                    }
+                    if let Some(id) = rest.strip_prefix("boat ") {
+                        boat = Some(id.trim().to_string());
                     }
                     if let Some(url) = rest.strip_prefix("tunnel ") {
                         let url = url.trim();
@@ -267,7 +301,7 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
     let host = target.host();
     match outcome {
         Ok(Ok(Ok(token))) if !token.is_empty() => {
-            Ok(Tunnel { _child: child, _stdin: stdin, _stdout: stdout, port, token, address, stderr })
+            Ok(Tunnel { child, _stdin: stdin, _stdout: stdout, port, token, address, address_coming, boat, stderr })
         }
         Ok(Ok(Ok(_) | Err("notoken"))) => Err(Failure::new(
             format!("Dray is on {host} but its server has never run there."),
@@ -305,24 +339,28 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
 async fn classify(stderr: &str, target: &Target) -> Failure {
     let host = target.host();
     if stderr.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
-        let name = resolve(target).await.map(|r| r.known_as()).unwrap_or_else(|_| host.to_string());
+        let command = match resolve(target).await {
+            Ok(resolved) => forget_key_line(&resolved).await,
+            Err(_) => format!("ssh-keygen -R {}", crate::apps::sh_quote(host)),
+        };
         return Failure::new(
             format!(
                 "{host} is answering with a different host key than last time. That can mean \
-                 someone is in the middle. If you know why it changed, remove the old key and try again:"
+                 someone is in the middle, or that its address now belongs to another machine. \
+                 If you know why it changed, remove the old key and try again:"
             ),
-            Some(Fix::Copy { command: format!("ssh-keygen -R {}", crate::apps::sh_quote(&name)) }),
+            Some(Fix::Copy { command }),
             true,
         );
     }
     if stderr.contains("Host key verification failed") {
         return match scan(target).await {
             Ok(key) => Failure::new(
-                format!("This Mac has never connected to {host}."),
+                format!("{HERE} has never connected to {host}."),
                 Some(Fix::TrustHost { host: key.host, key_type: key.key_type, fingerprint: key.fingerprint }),
                 true,
             ),
-            Err(e) => Failure::new(format!("This Mac has never connected to {host}, and {e}"), None, true),
+            Err(e) => Failure::new(format!("{HERE} has never connected to {host}, and {e}"), None, true),
         };
     }
     if stderr.contains("Permission denied") {
@@ -334,6 +372,35 @@ async fn classify(stderr: &str, target: &Target) -> Failure {
     }
     let said = last_line(stderr).unwrap_or_else(|| "ssh exited".into());
     Failure::new(format!("Could not reach {host}: {said}"), None, false)
+}
+
+/// The line that removes a server's key from the file ssh actually keeps it
+/// in. Without `-f`, `ssh-keygen -R` edits only the default `known_hosts`, so
+/// it changes nothing for a key pinned by `UserKnownHostsFile`.
+async fn forget_key_line(resolved: &Resolved) -> String {
+    let name = resolved.known_as();
+    let mut file = &resolved.known_hosts[0];
+    for candidate in &resolved.known_hosts {
+        if lists_key(candidate, &name).await {
+            file = candidate;
+            break;
+        }
+    }
+    let (name, file) = (crate::apps::sh_quote(&name), crate::apps::sh_quote(&file.to_string_lossy()));
+    format!("ssh-keygen -R {name} -f {file}")
+}
+
+/// Whether a known-hosts file holds a key under `name`, hashed entries included.
+async fn lists_key(file: &std::path::Path, name: &str) -> bool {
+    Command::new(KEYGEN)
+        .args(["-F", name, "-f"])
+        .arg(file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .is_ok_and(|status| status.success())
 }
 
 /// A local port carrying a dev server on the far side, for the Mac's browser.
@@ -420,27 +487,44 @@ fn free_port() -> std::io::Result<u16> {
 }
 
 /// The bits of `ssh -G` that decide how `known_hosts` names a server.
-struct Resolved {
-    hostname: String,
-    port: u16,
+pub(crate) struct Resolved {
+    pub(crate) hostname: String,
+    pub(crate) port: u16,
+    /// `IdentityFile`, in ssh's order.
+    #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+    pub(crate) identity: Vec<PathBuf>,
     alias: Option<String>,
-    known_hosts: PathBuf,
+    /// `UserKnownHostsFile`, never empty. ssh reads them all and writes to the
+    /// first.
+    known_hosts: Vec<PathBuf>,
     /// `HostKeyAlgorithms`, in ssh's order of preference.
     algorithms: Vec<String>,
     proxied: bool,
 }
 
 impl Resolved {
-    /// The name ssh files a key under: the alias if one is set, `[host]:port`
-    /// off 22.
+    /// The name ssh files a key under: the alias if one is set, verbatim on any
+    /// port, else the host, as `[host]:port` off 22.
     fn known_as(&self) -> String {
-        let name = self.alias.clone().unwrap_or_else(|| self.hostname.clone());
-        if self.port == 22 { name } else { format!("[{name}]:{}", self.port) }
+        match &self.alias {
+            Some(alias) => alias.clone(),
+            None if self.port == 22 => self.hostname.clone(),
+            None => format!("[{}]:{}", self.hostname, self.port),
+        }
     }
 }
 
-async fn resolve(target: &Target) -> Result<Resolved, String> {
-    let out = Command::new(SSH)
+pub(crate) async fn resolve(target: &Target) -> Result<Resolved, String> {
+    resolve_with(target, None).await
+}
+
+/// [`resolve`] against a config file other than the reader's.
+pub(crate) async fn resolve_with(target: &Target, config: Option<&std::path::Path>) -> Result<Resolved, String> {
+    let mut ssh = Command::new(SSH);
+    if let Some(config) = config {
+        ssh.arg("-F").arg(config);
+    }
+    let out = ssh
         .arg("-G")
         .args(target.args())
         .stdin(Stdio::null())
@@ -456,16 +540,19 @@ async fn resolve(target: &Target) -> Result<Resolved, String> {
             .map(str::to_string)
     };
     let home = std::env::home_dir().ok_or("no home directory")?;
-    let known_hosts = field("userknownhostsfile")
-        .and_then(|v| v.split_whitespace().next().map(str::to_string))
-        .map(|p| match p.strip_prefix("~/") {
-            Some(rest) => home.join(rest),
-            None => PathBuf::from(p),
-        })
-        .unwrap_or_else(|| home.join(".ssh/known_hosts"));
+    let expand = |p: &str| match p.strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None => PathBuf::from(p),
+    };
+    let mut known_hosts: Vec<PathBuf> =
+        field("userknownhostsfile").unwrap_or_default().split_whitespace().map(expand).collect();
+    if known_hosts.is_empty() {
+        known_hosts.push(home.join(".ssh/known_hosts"));
+    }
     Ok(Resolved {
         hostname: field("hostname").ok_or("ssh could not resolve that name")?,
         port: field("port").and_then(|p| p.parse().ok()).unwrap_or(22),
+        identity: text.lines().filter_map(|l| l.strip_prefix("identityfile ")).map(|p| expand(p.trim())).collect(),
         alias: field("hostkeyalias"),
         known_hosts,
         algorithms: field("hostkeyalgorithms").map(|v| v.split(',').map(str::to_string).collect()).unwrap_or_default(),
@@ -527,7 +614,7 @@ fn pick_key<'a>(algorithms: &[String], keys: &[(&'a str, &'a str)]) -> Option<(&
 
 /// `ssh-keygen -lf -` reads one public key and answers
 /// `256 SHA256:… comment (ED25519)`.
-async fn fingerprint(key: &str) -> Result<(String, String), String> {
+pub(crate) async fn fingerprint(key: &str) -> Result<(String, String), String> {
     let printed = pipe(KEYGEN, &["-lf", "-"], &format!("{key}\n")).await?;
     let mut parts = printed.split_whitespace();
     let fingerprint = parts.nth(1).ok_or("ssh-keygen printed no fingerprint")?.to_string();
@@ -569,8 +656,32 @@ pub async fn trust(target: &Target, fingerprint: &str) -> Result<(), String> {
     // Unhashed even where `HashKnownHosts` is on: that option decides what ssh
     // writes, and ssh reads both forms.
     let line = format!("{} {}\n", key.resolved.known_as(), key.key);
-    append(&key.resolved.known_hosts, &line)
-        .map_err(|e| format!("could not write {}: {e}", key.resolved.known_hosts.display()))
+    let file = &key.resolved.known_hosts[0];
+    append(file, &line).map_err(|e| format!("could not write {}: {e}", file.display()))
+}
+
+/// Replaces what `before` pinned with `key`, filed the way `after` will look it
+/// up. `key` comes from boat's API, never from the connection it will check. No
+/// file changes when it is already what ssh holds; answers whether one did.
+#[cfg(feature = "desktop")]
+pub(crate) async fn pin_key(before: &Resolved, after: &Resolved, key: &str) -> Result<bool, String> {
+    let name = after.known_as();
+    let file = &after.known_hosts[0];
+    let held = std::fs::read_to_string(file).unwrap_or_default();
+    if before.known_as() == name && held.lines().any(|l| l == format!("{name} {key}")) {
+        return Ok(false);
+    }
+    // ssh-keygen -R rewrites by rename and handles hashed entries, which reading
+    // the lines here would not. Its `.old` copy is the reader's way back.
+    for known in &before.known_hosts {
+        for stale in [before.known_as(), name.clone()] {
+            if lists_key(known, &stale).await {
+                let _ = Command::new(KEYGEN).args(["-R", &stale, "-f"]).arg(known).stdin(Stdio::null()).output().await;
+            }
+        }
+    }
+    append(file, &format!("{name} {key}\n")).map_err(|e| format!("could not write {}: {e}", file.display()))?;
+    Ok(true)
 }
 
 fn append(path: &std::path::Path, line: &str) -> std::io::Result<()> {
@@ -853,15 +964,93 @@ mod tests {
     fn files_keys_the_way_ssh_does() {
         let r = |port, alias: Option<&str>| Resolved {
             hostname: "1.2.3.4".into(),
+            identity: Vec::new(),
             port,
             alias: alias.map(str::to_string),
-            known_hosts: PathBuf::new(),
+            known_hosts: vec![PathBuf::new()],
             algorithms: Vec::new(),
             proxied: false,
         };
         assert_eq!(r(22, None).known_as(), "1.2.3.4");
         assert_eq!(r(2222, None).known_as(), "[1.2.3.4]:2222");
         assert_eq!(r(22, Some("vps")).known_as(), "vps");
+        assert_eq!(r(19042, Some("vps")).known_as(), "vps", "ssh looks an alias up with no port");
+    }
+
+    /// A key pinned in the second `UserKnownHostsFile` is removed from there,
+    /// and the line really removes it: the real `ssh-keygen`, both ways.
+    #[tokio::test]
+    async fn the_copied_line_clears_the_file_holding_the_key() {
+        let dir = std::env::temp_dir().join(format!("dray-known-hosts-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (first, second) = (dir.join("first"), dir.join("second"));
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN8uxMEcMxyW4rkJ9cFz2rAwpnbcUmqJMiJpWh2eYq5u";
+        std::fs::write(&first, format!("other.example {key}\n")).unwrap();
+        std::fs::write(&second, format!("[1.2.3.4]:2222 {key}\n")).unwrap();
+        let resolved = Resolved {
+            hostname: "1.2.3.4".into(),
+            identity: Vec::new(),
+            port: 2222,
+            alias: None,
+            known_hosts: vec![first.clone(), second.clone()],
+            algorithms: Vec::new(),
+            proxied: false,
+        };
+
+        let line = forget_key_line(&resolved).await;
+        assert!(line.starts_with("ssh-keygen -R '[1.2.3.4]:2222' -f "), "{line}");
+        assert!(line.ends_with(&crate::apps::sh_quote(&second.to_string_lossy())), "{line}");
+
+        let ran = std::process::Command::new("sh").args(["-c", &line]).output().unwrap();
+        assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+        assert!(!lists_key(&second, "[1.2.3.4]:2222").await, "the old key is gone");
+        assert!(lists_key(&first, "other.example").await, "the other file is untouched");
+
+        // Listed nowhere, as a key in the global file is: the file ssh writes to.
+        let line = forget_key_line(&resolved).await;
+        assert!(line.ends_with(&crate::apps::sh_quote(&first.to_string_lossy())), "{line}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// What the login says about the address, from the real script. The stub
+    /// `dray` stands in for `command -v` and for a `dray service start` a
+    /// Linux machine with a user systemd would run.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_script_tells_an_attaching_tunnel_from_none() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = std::env::temp_dir().join(format!("dray-script-{}", uuid::Uuid::new_v4().simple()));
+        let (bin, dray) = (home.join(".local/bin"), home.join(".dray"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&dray).unwrap();
+        std::fs::write(bin.join("dray"), "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(bin.join("dray"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dray.join("serve-token"), "t\n").unwrap();
+        let says = || {
+            let out = std::process::Command::new("/bin/sh")
+                .args(["-c", SCRIPT])
+                .env("HOME", &home)
+                .stdin(Stdio::null())
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+
+        let off = says();
+        assert!(off.contains("DRAY-SSH token t") && !off.contains("tunnel"), "{off}");
+
+        // As the server writes it: pretty-printed.
+        std::fs::write(dray.join("settings.json"), "{\n  \"remoteAccess\": true\n}\n").unwrap();
+        assert!(says().contains("DRAY-SSH tunnel-coming\n"), "attaching");
+
+        std::fs::write(dray.join("tunnel-url"), "https://a.example\n").unwrap();
+        let attached = says();
+        assert!(attached.contains("DRAY-SSH tunnel https://a.example\n") && !attached.contains("tunnel-coming"), "{attached}");
+
+        std::fs::remove_file(dray.join("tunnel-url")).unwrap();
+        std::fs::write(dray.join("settings.json"), "{\n  \"remoteAccess\": false\n}\n").unwrap();
+        assert!(!says().contains("tunnel"), "turned off");
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     /// `DRAY_TEST_SSH="ssh root@host" cargo test ssh::tests::opens_a_live_tunnel -- --ignored`

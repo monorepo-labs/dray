@@ -9,3 +9,7 @@
 # ts-rs default output, created when cargo runs outside src-tauri/ so
 # .cargo/config.toml (which redirects to src/types) does not apply.
 /bindings/
+
+# Linux's shared libtranscribe and its backend modules, copied here by build.rs
+# so the bundler can name them (tauri.linux.conf.json).
+/transcribe-libs/

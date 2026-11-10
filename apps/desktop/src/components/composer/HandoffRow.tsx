@@ -66,13 +66,13 @@ export default function HandoffRow({
 }: {
   actions: HandoffAction[];
   onSend: (prompt: string) => void;
-  /// No session to send into. Nothing fires, but the reserve still stands — its
-  /// absence would move the composer.
+  /// Nothing can be sent: no session, or Send held while the agent's CLI
+  /// updates. The buttons stay drawn and fire nothing.
   disabled?: boolean;
 }) {
-  // Near-dead now Run server is unconditional — only the new-task composer,
-  // with no session to send into, reaches it. Kept because the reserve has to
-  // go with the row: a sliver standing over nothing would open onto nothing.
+  // Empty on the new-task composer, and where the reader has switched off every
+  // button this checkout earns. The reserve has to go with the row: a sliver
+  // standing over nothing would open onto nothing.
   if (actions.length === 0) return null;
 
   return (

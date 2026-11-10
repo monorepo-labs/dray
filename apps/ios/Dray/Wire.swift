@@ -104,8 +104,6 @@ struct EventFrame<T: Decodable>: Decodable {
 
 // MARK: Sessions
 
-/// One index entry. Fields the phone does not read are left undecoded, so a
-/// newer server adding some costs nothing.
 func parseDate(_ s: String) -> Date? {
     let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -114,11 +112,21 @@ func parseDate(_ s: String) -> Date? {
     return f.date(from: s)
 }
 
-/// The server's first frame, for the one field the phone reads off it.
+/// The server's first frame: what it can do and what it runs.
 struct Welcome: Decodable {
     let dictation: Bool?
+    /// The crate version: the app's own on a Mac.
+    let version: String?
+    /// The CLI release a `dray-serve` shipped in; none on a local build or a Mac.
+    let release: String?
+    let dev: Bool?
+
+    /// Dray on a Mac, whose server follows the app's own updates.
+    var macApp: Bool { dictation == true && release == nil && dev != true }
 }
 
+/// One index entry. Fields the phone does not read are left undecoded, so a
+/// newer server adding some costs nothing.
 struct SessionItem: Decodable, Hashable {
     let sessionId: String
     let harness: String
@@ -162,6 +170,54 @@ struct Snapshot: Decodable {
 struct LiveState: Decodable {
     let asks: [AgentEvent]
     let tasks: [AgentEvent]
+    /// Every non-empty queue; absent from a server that predates `queue_changed`.
+    let queued: [QueueChanged]?
+    /// Null until the app first reads a sandbox's timer.
+    let boat: [BoatAlert]?
+}
+
+/// A boat sandbox about to auto-stop. The Mac app reads the timers and tells
+/// its own server, so only the island ever hears one.
+struct BoatAlert: Decodable, Hashable {
+    /// The app's id for the machine, which `extend_boat` takes.
+    let server: String
+    let name: String
+    let stopsAt: String?
+
+    /// "boat-dray stops in 03:12", for the panel's one line.
+    var sentence: String { "\(name) stops in \(countdown)" }
+
+    /// "03:12" left.
+    var countdown: String {
+        let seconds = max(0, Int(secondsLeft ?? 0))
+        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
+    /// The last two minutes, which the pill draws red as the app's card does.
+    var urgent: Bool { (secondsLeft ?? .infinity) <= 120 }
+
+    private var secondsLeft: Double? {
+        guard let stopsAt, let at = Self.parse(stopsAt) else { return nil }
+        return at.timeIntervalSinceNow
+    }
+
+    private static func parse(_ text: String) -> Date? {
+        let plain = ISO8601DateFormatter()
+        if let at = plain.date(from: text) { return at }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: text)
+    }
+}
+
+struct BoatAlerts: Decodable {
+    let alerts: [BoatAlert]
+}
+
+/// A session's whole queue, sent each time it moves.
+struct QueueChanged: Decodable {
+    let sessionId: String
+    let queued: [Queued]
 }
 
 struct StatusEvent: Decodable {
@@ -184,6 +240,16 @@ struct SendOutcome: Decodable {
 struct Queued: Decodable, Hashable {
     let id: String
     let text: String
+    let attachmentPaths: [String]
+
+    enum CodingKeys: String, CodingKey { case id, text, attachmentPaths }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        text = try c.decode(String.self, forKey: .text)
+        attachmentPaths = (try? c.decode([String].self, forKey: .attachmentPaths)) ?? []
+    }
 }
 
 // MARK: Events
@@ -233,15 +299,42 @@ struct QuestionsRequest: Decodable, Hashable {
     let questions: [Question]
 }
 
+/// A picture on a prompt or a tool result. `path` is the archived copy under
+/// `~/.dray/attachments`, read through the server's `/file`.
+struct ImageRef: Decodable, Hashable {
+    let path: String?
+    let url: String?
+    let mimeType: String?
+}
+
+/// One entry that may fail alone, so a bad image costs that image.
+private struct LenientImage: Decodable {
+    let ref: ImageRef?
+    init(from decoder: Decoder) { ref = try? ImageRef(from: decoder) }
+}
+
+/// A list of images that never fails its event: absent or malformed reads as none.
+func decodeImages(_ c: KeyedDecodingContainer<Key>) -> [ImageRef] {
+    ((try? c.decode([LenientImage].self, forKey: "images")) ?? []).compactMap(\.ref)
+}
+
 struct ToolResult: Decodable {
     let text: String
     let isError: Bool
+    let images: [ImageRef]
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Key.self)
+        text = try c.decode(String.self, forKey: "text")
+        isError = try c.decodeIfPresent(Bool.self, forKey: "isError") ?? false
+        images = decodeImages(c)
+    }
 }
 
 enum Payload: Decodable {
     case turnCompleted(failed: Bool, finalText: String?)
     /// `queued` is a prompt typed into a running turn, which answers it inside that turn.
-    case userMessage(text: String, fromTitle: String?, fromId: String?, queued: Bool)
+    case userMessage(text: String, fromTitle: String?, fromId: String?, queued: Bool, images: [ImageRef])
     case assistantText(String)
     case toolStarted(callId: String, name: String, toolType: String, input: JSON, title: String?)
     case toolCompleted(callId: String, result: ToolResult)
@@ -266,11 +359,15 @@ enum Payload: Decodable {
                     failed: try c.decode(String.self, forKey: "status") == "error" && !stop.hasPrefix("aborted"),
                     finalText: try c.decodeIfPresent(String.self, forKey: "finalText"))
             case "user_message":
-                let from = try c.decodeIfPresent([String: String].self, forKey: "from")
+                // Optional values, and never a throw: a relay from this
+                // machine carries `"machine": null`, which `[String: String]`
+                // refuses — and a throw here costs the prompt, not its label.
+                let from = (try? c.decodeIfPresent([String: String?].self, forKey: "from")) ?? nil
                 self = .userMessage(
                     text: try c.decode(String.self, forKey: "text"),
-                    fromTitle: from?["title"], fromId: from?["sessionId"],
-                    queued: (try? c.decode(Bool.self, forKey: "queued")) ?? false)
+                    fromTitle: from?["title"] ?? nil, fromId: from?["sessionId"] ?? nil,
+                    queued: (try? c.decode(Bool.self, forKey: "queued")) ?? false,
+                    images: decodeImages(c))
             case "assistant_text":
                 self = .assistantText(try c.decode(String.self, forKey: "text"))
             case "tool_call_started":

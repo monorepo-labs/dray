@@ -5,12 +5,14 @@
 //! while transcribing — the only network call in this module is downloading a
 //! model, which is an explicit press in settings.
 //!
-//! Split four ways: [`catalog`] is what is on offer, [`download`] gets it onto
-//! disk, [`audio`] captures and resamples, [`engine`] runs it. The whole of
-//! what the frontend can do is the commands at the bottom.
+//! Split six ways: [`catalog`] is what is on offer, [`download`] gets it onto
+//! disk, [`audio`] captures and resamples, [`engine`] runs it, [`live`] runs it
+//! while the reader is still talking, and [`recordings`] holds the audio until
+//! words come back. The whole of what the frontend can do is the commands at
+//! the bottom.
 //!
 //! **No model ships with the app.** A recording pressed with nothing installed
-//! answers [`TranscribeOutcome::NeedsModel`], which is what opens settings on
+//! answers [`StartRefusal::NeedsModel`], which is what opens settings on
 //! the transcription tab. Downloading hundreds of megabytes on a first press is
 //! not a thing to do to somebody who has not asked for it.
 

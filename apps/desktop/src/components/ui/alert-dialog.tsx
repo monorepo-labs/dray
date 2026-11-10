@@ -45,8 +45,9 @@ function AlertDialogHeader({
   )
 }
 
-/// Buttons run right-to-left in DOM order so the rightmost is the last child,
-/// which is also where focus lands — the safest action, not the destructive one.
+/// The last child is the rightmost button, so the action goes last. Focus does
+/// not follow it: Radix opens on `AlertDialogCancel` wherever it sits — the
+/// safest action, not the destructive one.
 function AlertDialogFooter({
   className,
   ...props
@@ -94,9 +95,8 @@ function AlertDialogDescription({
 /// The same solid red the worktree notice's button uses, so the two ways to
 /// reach a deletion look like the same action.
 ///
-/// It is the caller's to set. Both of this app's dialogs happen to be
-/// destructive, but a default of red would quietly colour the first one that
-/// isn't.
+/// It is the caller's to set: a default of red would quietly colour a confirm
+/// that destroys nothing, as Quit's is.
 function AlertDialogAction({
   className,
   destructive = false,

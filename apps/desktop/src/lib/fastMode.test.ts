@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { fastFor, fastNotice, offersFast } from "./fastMode";
+import { fastFor, fastNotice, fastRetired, offersFast } from "./fastMode";
 import type { AgentEvent, Harness, Model, ModelId } from "@/types/events";
 
 function model(id: string, supportsFast: boolean): Model {
@@ -55,6 +55,15 @@ describe("fastFor", () => {
   /// the clamp exists to prevent.
   it("answers no while the model list is empty", () => {
     expect(fastFor(true, "claude_code", [], OPUS.id)).toBe(false);
+  });
+});
+
+describe("fastRetired", () => {
+  it("names Opus 4.8 on Claude Code alone", () => {
+    expect(fastRetired("claude_code", model("claude-opus-4-8", false))).toBe(true);
+    expect(fastRetired("claude_code", OPUS)).toBe(false);
+    expect(fastRetired("claude_code", null)).toBe(false);
+    expect(fastRetired("fx", model("anthropic/claude-opus-4-8", false))).toBe(false);
   });
 });
 

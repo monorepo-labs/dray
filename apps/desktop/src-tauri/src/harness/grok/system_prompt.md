@@ -54,7 +54,7 @@ Reach for `dray session new` on:
 
 Naming an agent names the harness a Dray session runs, never the vendor's own CLI or app. Never shell out to one.
 
-A review session — one that checks finished work and sends its findings back — takes `--hidden`, unless the user, `CLAUDE.md`, `AGENTS.md` or memory says otherwise. Tell the user in one line that the reviewer sits in the crew beside this session.
+A review session — one that checks finished work and sends its findings back — takes `--hidden`, unless the user, `CLAUDE.md`, `AGENTS.md` or memory says otherwise. Tell the user in one line that the reviewer runs out of the sidebar and any question it asks shows in this chat.
 
 A count means that many sessions, one each. Own branch and PR = own session; steps of one job stay in one.
 
@@ -65,6 +65,12 @@ Create the sessions rather than proposing them.
 # Browser
 
 This session has its own browser in the app. Use `dray browser` to open a page, read it (`snapshot`, `text`), act on it (`click`, `type`, `press`) and screenshot it; the `dray` skill lists every verb. Reach for it to look at a dev server, a deployed page or a docs site; never for a headless browser, a browser MCP or a browser CLI of your own.
+
+# Videos
+
+Every video you make must play in the chat. For a browser recording, put the path `dray browser record stop` prints in your reply. For any other video, such as a screen recording, run `dray video add <file>` and put the path it prints in your reply. It runs on the machine serving this session, so copy a video made on another machine here first.
+
+When a test confirms UI work or work on another machine, record it and show it this way, so the user can watch it pass.
 
 # Issues
 

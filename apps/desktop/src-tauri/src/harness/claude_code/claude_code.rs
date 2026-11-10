@@ -281,7 +281,28 @@ async fn read_stdout(
         let claude_event = match parser::parse_line(&line) {
             Ok(ev) => ev,
             Err(err) => {
-                record_failure(ClaudeCode, session_id, "parse", &err.to_string(), &line).await;
+                // The serde message, not the error's own text: that is the
+                // context `parse_line` adds, which is the whole line again and
+                // says nothing about why — and the log is triaged by grouping
+                // on this field.
+                let why = err.root_cause().to_string();
+
+                // A control request among them is still a question the CLI is
+                // blocked on. Refused by its id alone, the same answer an
+                // unmodelled subtype gets below, or the turn hangs.
+                if let Some(request_id) = permissions::unparsed_request_id(&line) {
+                    record_failure(ClaudeCode, session_id, "unsupported_request", &why, &line).await;
+                    let denial = permissions::auto_deny_response(
+                        &request_id,
+                        "This client could not read that request.",
+                    );
+                    if let Err(err) = crate::session::write_line(&stdin, &denial).await {
+                        eprintln!("[claude auto-deny err] {err}");
+                    }
+                    continue;
+                }
+
+                record_failure(ClaudeCode, session_id, "parse", &why, &line).await;
                 continue;
             }
         };
@@ -342,6 +363,7 @@ async fn read_stdout(
         ClaudeCode,
         &seq,
         &status,
+        &queued,
         "Claude Code stopped before the turn finished",
         app,
     )

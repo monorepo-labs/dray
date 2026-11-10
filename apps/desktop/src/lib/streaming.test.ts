@@ -101,6 +101,12 @@ describe("streamingCall", () => {
     );
   });
 
+  /// What the committed row shows: a search's path is its scope.
+  it("names a search by its pattern, not the directory it looks in", () => {
+    expect(streamingCall("Grep", '{"pattern":"fn main","path":"/a/b/src"}').target).toBe("fn main");
+    expect(streamingCall("Grep", '{"path":"/a/b/src","pattern":"fn main"}').target).toBe("fn main");
+  });
+
   it("prefers the command over the description when both have landed", () => {
     expect(
       streamingCall("Bash", '{"command":"ls -la","description":"list the files"}').target,

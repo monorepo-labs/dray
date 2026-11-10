@@ -1,5 +1,7 @@
-import { invoke, listen, LOCAL, noteSession, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
+import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
+import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
+import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
 import { restoreAttachments } from "@/hooks/useAttachments";
@@ -27,16 +29,18 @@ import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedMo
 import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
 import { setOlderLoader } from "@/lib/olderPages";
+import { EMPTY_TASKS } from "@/lib/transcript";
 import { stanceFor } from "@/lib/permission";
-import { isProvisional, nextMainSeq, provisionalId, retireOldestProvisional } from "@/lib/provisional";
+import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
-import { mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
+import { appendLive, mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
+import { forgetTranscript, keepTranscript, takeTranscript } from "@/lib/keptTranscripts";
 import { playNotification } from "@/lib/sound";
 import { activeSpace, allowedInSpace, moveSpace, orderProjects, PROJECT_ORDER_KEY, SPACE_KEY, SPACE_LIST_KEY } from "@/lib/space";
 import { FIRST_MOUNT } from "@/lib/turnWindow";
 import { forget, stopWaiting, upload, waitFor } from "@/lib/uploads";
 import type { Draft } from "./useDrafts";
-import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
+import { AgentEvent, ApprovalPolicy, Attachment, BackgroundTask, BranchList, Effort, Harness, ImageRef, IssueRef, IssuesChangedEvent, Model, ModelId, Project, QueueChangedEvent, QueuedMessage, SendOutcome, SessionIndexItem, SessionPage, SessionSnapshot, SessionStatus, SessionStatusEvent, SessionTitleEvent } from "../types/events";
 
 const DEFAULT_EFFORT: Effort = "high";
 
@@ -149,6 +153,11 @@ const pathOfProject = (p: Project) => p.path;
 /// server that cannot be asked still draws the side the reader picks.
 const lastIndex = new Map<string, SessionIndexItem[]>();
 
+/// Per session, how many index entries have landed. A server's replies and
+/// events leave on separate queues, so a read can answer after a newer change
+/// and has to be able to tell.
+const indexWrites = new Map<string, number>();
+
 /// Per session, a send still waiting on its uploads. A later send there waits
 /// behind it, or a prompt typed after one carrying a screenshot would arrive
 /// first.
@@ -162,8 +171,9 @@ const removed = (server: ServerId): boolean =>
 const connectedRemotes = (): ServerId[] =>
   remoteServers().flatMap((s) => (s.status === "connected" ? [s.id] : []));
 
-/// One shared empty set, so a session with no tasks keeps its transcript memo.
-const NO_TASKS: ReadonlySet<string> = new Set();
+/// The transcript's own empty set, so a session with no tasks shares one memo
+/// entry with every reader that passes none.
+const NO_TASKS = EMPTY_TASKS;
 
 /// What a transcript pane draws for one session. The selected session's fields
 /// on the hook's return are this, spread.
@@ -304,7 +314,7 @@ export function useSessions() {
     const [fastState, setFastState] = useState(() => prefs.fast);
     const [projects, setProjects] = useState<Project[]>([]);
     const [projectOrder, setProjectOrder] = useLocalStorage<string[]>(PROJECT_ORDER_KEY, []);
-    const orderedProjects = useMemo(() => orderProjects(projects, projectOrder), [projects, projectOrder]);
+    const orderedProjects = useMemo(() => inheritSpaces(orderProjects(projects, projectOrder)), [projects, projectOrder]);
     const [projectPath, setProjectPath] = useState<string | null>(null);
     // Derived from the selected project, not a preference — refetched on switch
     // and never persisted.
@@ -344,8 +354,8 @@ export function useSessions() {
     const [tasksBySession, setTasksBySession] = useState<Record<string, BackgroundTask[]>>({});
     // sessionId → prompts typed during a running turn, oldest first, still
     // waiting for the backend to hand them to the CLI. Mirrors the queue in
-    // `Session`, which is the authority; this copy exists so the composer can
-    // draw them. Nothing is persisted on either side, so both die with the
+    // `Session`, which is the authority and says so on every `queue_changed`,
+    // since a prompt queued from the island or the CLI reaches no send here. Nothing is persisted on either side, so both die with the
     // process and neither can come back stale.
     const [queuedBySession, setQueuedBySession] = useState<Record<string, QueuedPrompt[]>>({});
 
@@ -354,6 +364,9 @@ export function useSessions() {
     // and not in an effect, which would leave it a render behind.
     const queuedRef = useRef(queuedBySession);
     queuedRef.current = queuedBySession;
+    // sessionId → the newest `queue_changed` taken, so an attachment read
+    // still in flight cannot land over a later change.
+    const queueReadRef = useRef<Record<string, number>>({});
 
     // sessionId → the request ids of the consent cards and questionnaires the
     // agent is standing still behind. Ids rather than a count, so the
@@ -535,12 +548,22 @@ const handleRemoveProject = async (path: string) => {
 // Files a project under a space, or clears it with `null`. Settings is the only
 // caller: the sidebar's switcher moves the reader between spaces, never a
 // project between them.
+//
+// A project on several machines is filed on all of them. One written after
+// another, since each answer is its server's whole list and two clones on one
+// server would otherwise race. A dropped machine is skipped and inherits it.
 const setProjectSpace = async (path: string, space: string | null) => {
-  try {
-    const list = await invoke<Project[]>("set_project_space", { path, space });
-    setProjects((prev) => mergeFrom(prev, serverOfPath(path), list, pathOfProject));
-  } catch (e) {
-    setError(String(e));
+  const key = keyOfPath(projects, path);
+  const targets = projects.filter(
+    (p) => p.path === path || (projectKey(p) === key && serverConnected(serverOfPath(p.path))),
+  );
+  for (const target of targets) {
+    try {
+      const list = await invoke<Project[]>("set_project_space", { path: target.path, space });
+      setProjects((prev) => mergeFrom(prev, serverOfPath(target.path), list, pathOfProject));
+    } catch (e) {
+      setError(String(e));
+    }
   }
 };
 
@@ -609,6 +632,10 @@ const retagSpace = async (from: string, to: string | null) => {
 const handleSelectProject = (path: string | null) => {
   setProjectPath(path);
   if (path === null) return;
+  // Held here too, since this stamp is what picks a project's machine next time
+  // and the list is only read again on connect.
+  const stamp = new Date().toISOString();
+  setProjects((prev) => prev.map((p) => (p.path === path ? { ...p, lastSelected: stamp } : p)));
   // Fire and forget: losing the remembered pick costs one dropdown next launch.
   void invoke("set_last_selected_project", { path }).catch(() => {});
 };
@@ -831,7 +858,7 @@ const handleSendMsg = async (
   // Read before the optimistic write below overwrites it. A send onto a running
   // turn must not release that turn's status if it fails — the turn is still
   // running, and the failure was this prompt's alone.
-  const wasBusy = statusBySession[sessionId] === "in_progress";
+  const wasBusy = statusOf(sessionId) === "in_progress";
   // Optimistic: the backend publishes the same transition once the prompt
   // reaches the child, but the composer must read busy the moment Enter lands.
   setStatusBySession((prev) => ({ ...prev, [sessionId]: "in_progress" }));
@@ -854,6 +881,9 @@ const handleSendMsg = async (
   // The three the backend alone resolves — the worktree name, the truncated
   // title, the recorded branch — arrive with the snapshot and replace these.
   const provisional = provisionalId();
+  // A stopped sandbox is woken by this send, and it goes once that's done.
+  const asleep = boatAsleepById(serverOfPath(cwd));
+  const letGo = asleep ? holdThroughResume(isNewSession ? null : sessionId, message) : null;
 
   if (isNewSession) {
     const shell: SessionSnapshot = {
@@ -922,10 +952,11 @@ const handleSendMsg = async (
     const remote = attachments.length > 0 && server !== LOCAL;
     const ahead = uploadsAhead.get(sessionId);
     let sentPaths = attachmentPaths;
-    if (remote || ahead) {
+    if (remote || ahead || asleep) {
       if (remote) waitFor(provisional, server, attachmentPaths);
       const gate = (async () => {
         await ahead;
+        if (asleep) await resumeBoat(server);
         return remote ? Promise.all(attachments.map((a) => upload(server, a.path, a.size))) : attachmentPaths;
       })();
       const settled = gate.then(
@@ -1016,7 +1047,11 @@ const handleSendMsg = async (
       dropProvisional(sessionId, provisional);
       setQueuedBySession((prev) => ({
         ...prev,
-        [sessionId]: [...(prev[sessionId] ?? []), { message: queued, attachments }],
+        // By id: the server's `queue_changed` usually lands before this reply.
+        [sessionId]: [
+          ...(prev[sessionId] ?? []).filter((q) => q.message.id !== queued.id),
+          { message: queued, attachments },
+        ],
       }));
       applySentIssues();
       return true;
@@ -1031,8 +1066,9 @@ const handleSendMsg = async (
       // A new session is never archived, so it belongs to the active list only —
       // pushed unconditionally it would show up under the archived filter too.
       // Deduped: the server announces every new session on `session_created`,
-      // and that can land before this reply does.
-      if (!showArchived) {
+      // and that can land before this reply does. The ref, not the closure:
+      // the reader can toggle the split while the send is in flight.
+      if (!showArchivedRef.current) {
         setSessionIndexItems((prev) =>
           prev.some((i) => i.sessionId === snapshot.sessionId)
             ? prev.map((i) => (i.sessionId === snapshot.sessionId ? snapshot : i))
@@ -1071,6 +1107,8 @@ const handleSendMsg = async (
     }
     fail(e);
     return false;
+  } finally {
+    letGo?.();
   }
 };
 
@@ -1084,6 +1122,9 @@ const handleCancelQueued = async (): Promise<QueuedMessage | null> => {
   const fail = failUnlessLeft();
   if (!selectedSessionId) return null;
   const sessionId = selectedSessionId;
+  // Read before the await: the cancel's own `queue_changed` drops the row,
+  // and its attachments with it, before this reply arrives.
+  const before = queuedRef.current[sessionId] ?? [];
   try {
     const cancelled = await invoke<QueuedMessage | null>("cancel_queued", { sessionId });
     // Nothing to take back, so what is drawn is a row the backend no longer
@@ -1098,9 +1139,7 @@ const handleCancelQueued = async (): Promise<QueuedMessage | null> => {
     // cancel keeps the files silently — the tray was cleared on send and
     // nothing else holds them. Synchronous, so an Enter pressed straight after
     // Esc cannot send that sentence without them.
-    const held = (queuedRef.current[sessionId] ?? []).find(
-      (q) => q.message.id === cancelled.id,
-    );
+    const held = before.find((q) => q.message.id === cancelled.id);
     if (held) restoreAttachments(sessionId, held.attachments);
 
     setQueuedBySession((prev) => ({
@@ -1322,8 +1361,7 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   // every selection rather than only its own: the mark survives being looked
   // away from, and the next visit is what answers it.
   keptUnreadRef.current = null;
-  const clicked = sessionIndexItems.find((i) => i.sessionId === sessionId);
-  if ((statusBySession[sessionId] ?? clicked?.status) === "completed") {
+  if (statusOf(sessionId) === "completed") {
     markSessionRead(sessionId);
   }
 
@@ -1333,6 +1371,7 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   }
 
   if (sessions.some((s) => s.sessionId === sessionId)) {
+    refreshHeld(sessionId);
     return true;
   }
 
@@ -1392,12 +1431,6 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   return false;
 }
 
-
-
-// One call for both flags, so a click writes only the one it owns. The row is
-// replaced from what the store returned rather than from the value we sent —
-// the index is authoritative, and a failed write must not leave the sidebar
-// showing a state the disk doesn't have.
 /// Cuts a spawned session loose from its parent, so the sidebar stops nesting
 /// it under a row it no longer belongs to.
 ///
@@ -1425,6 +1458,7 @@ const detachSession = async (sessionId: string) => {
 /// the ones `dray session settle` and friends make.
 const applyIndexItem = (updated: SessionIndexItem) => {
   const { sessionId } = updated;
+  indexWrites.set(sessionId, (indexWrites.get(sessionId) ?? 0) + 1);
   setSessionIndexItems((prev) => {
     // The ref, not the closure: this runs after the write, and the reader can
     // toggle the split while one is in flight. Judged against the captured
@@ -1474,7 +1508,13 @@ const applyIndexItem = (updated: SessionIndexItem) => {
   if (updated.archived) evictSessions({ sessionId });
 };
 
-/// Writes a session's settled or pinned flag, and answers whether it landed.
+/// Writes a session's flags — settled, pinned, hidden, set aside — and answers
+/// whether it landed.
+///
+/// One call for all of them, so a click writes only the one it owns. The row is
+/// replaced from what the store returned rather than from the value sent — the
+/// index is authoritative, and a failed write must not leave the sidebar
+/// showing a state the disk doesn't have.
 ///
 /// The answer is what callers navigate on. A failed write leaves the row where
 /// it was, so acting anyway — following it to the other view, celebrating a
@@ -1704,8 +1744,9 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
   setError(null);
   upsertSession(snapshot);
   // A fork is never archived, so it belongs to the active list alone — pushed
-  // unconditionally it would show up under the archived filter too.
-  if (!showArchived) {
+  // unconditionally it would show up under the archived filter too. The ref,
+  // since this runs after the fork's round trip.
+  if (!showArchivedRef.current) {
     setSessionIndexItems((prev) => [...prev, snapshot]);
   }
   // Claimed like every other selection path, or an eviction tick landing
@@ -1728,9 +1769,23 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
 // is the one path that also restores the user's own defaults.
 const deleteSession = async (sessionId: string) => {
   const fail = failUnlessLeft();
+  // Marked before the call, not after it. Deleting a session mid-turn kills
+  // its child, and the status that publishes lands while this is still
+  // awaiting its answer — where it announced "Done" for a session on its way
+  // out and left its status behind for good.
+  deletedRef.current.add(sessionId);
   try {
     await invoke<boolean>("delete_session", { sessionId });
   } catch (e) {
+    deletedRef.current.delete(sessionId);
+    // A delete can stop the child and then fail, and the status that said so
+    // was dropped above. The index has it: the live reading goes, so the row
+    // falls back on the entry read here.
+    setStatusBySession(({ [sessionId]: _, ...rest }) => rest);
+    setWorkingBySession(({ [sessionId]: _, ...rest }) => rest);
+    invoke<SessionIndexItem | null>("session_index_item", { sessionId })
+      .then((item) => item && applyIndexItem(item))
+      .catch((err) => console.error("could not reread", sessionId, err));
     fail(e);
     return;
   }
@@ -1745,7 +1800,9 @@ const deleteSession = async (sessionId: string) => {
   setWorkingBySession(({ [sessionId]: _, ...rest }) => rest);
   setTasksBySession(({ [sessionId]: _, ...rest }) => rest);
   setQueuedBySession(({ [sessionId]: _, ...rest }) => rest);
-  deletedRef.current.add(sessionId);
+  // Every kind: a card about a session that is gone opens nothing.
+  dismissNotice(sessionId);
+  forgetTranscript(sessionId);
   forgetDocs(sessionId);
   forgetOpenFiles(sessionId);
   forgetClosedTabs(sessionId);
@@ -1956,8 +2013,6 @@ useEffect(() => {
 useEffect(() => {
   const setupListener = async () => {
     const unlisten = await listen<AgentEvent>("agent_event", (event) => {
-      // console.log(event);
-
       const agentEvent = event.payload;
 
         // A signal to re-read git and GitHub, never a row: kept out of the
@@ -2000,11 +2055,9 @@ useEffect(() => {
                 return prev;
             }
 
-            // The real prompt retires the provisional one drawn at send.
-            const settled = agentEvent.payload.type === "user_message";
             return prev.map((s) =>
                 s.sessionId === agentEvent.sessionId
-                ? { ...s, events: [...(settled ? retireOldestProvisional(s.events) : s.events), agentEvent] }
+                ? { ...s, events: appendLive(s.events, agentEvent) }
                 : s,
             );
             });
@@ -2013,7 +2066,10 @@ useEffect(() => {
                 commit();
                 retireStreamingBlock(agentEvent.sessionId);
               });
-            } else {
+            } else if (agentEvent.payload.type !== "usage_update") {
+              // A running counter the indicator reads below and no row draws.
+              // Several land a second while the model thinks, and each one in
+              // the events was a new array and a transcript rebuilt for nothing.
               commit();
             }
 
@@ -2121,10 +2177,7 @@ useEffect(() => {
               // ended with a task still open kept its asks, since the task's
               // subagent could be the one asking. With the set drained and no
               // turn running, nothing is left that could answer them.
-              if (
-                tasks.length === 0 &&
-                statusBySessionRef.current[agentEvent.sessionId] !== "in_progress"
-              ) {
+              if (tasks.length === 0 && statusOf(agentEvent.sessionId) !== "in_progress") {
                 setAsksBySession((prev) =>
                   prev[agentEvent.sessionId]?.length
                     ? { ...prev, [agentEvent.sessionId]: [] }
@@ -2286,10 +2339,18 @@ const sessionIndexItemsRef = useRef(sessionIndexItems);
 sessionIndexItemsRef.current = sessionIndexItems;
 // A space is a tag on the project, so `announce` needs the live project list to
 // answer whether the session that just spoke is one the reader has put away.
-const projectsRef = useRef(projects);
-projectsRef.current = projects;
+// The inherited tags, or a copy drawn in a space would be refused its notices.
+const projectsRef = useRef(orderedProjects);
+projectsRef.current = orderedProjects;
 const statusBySessionRef = useRef(statusBySession);
 statusBySessionRef.current = statusBySession;
+/// A session's status: the live reading where one has arrived, the index's
+/// otherwise. The live map starts empty and every `live_state` empties it
+/// again, so read alone it calls a session idle that is mid-turn on its server
+/// — which evicted its transcript and released its status on a failed send.
+const statusOf = (sessionId: string): SessionStatus | undefined =>
+  statusBySessionRef.current[sessionId]
+  ?? sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId)?.status;
 const tasksBySessionRef = useRef(tasksBySession);
 tasksBySessionRef.current = tasksBySession;
 
@@ -2309,13 +2370,87 @@ sessionsRef.current = sessions;
 const asksBySessionRef = useRef(asksBySession);
 asksBySessionRef.current = asksBySession;
 
-/// Appends what a session's log gained while the socket to a `dray-serve` was
-/// down. Paged back until the log meets an event already held; deltas are not
-/// logged and need nothing, being previews of what this delivers.
-const catchUp = async (sessionId: string) => {
-  const held = sessionsRef.current.find((s) => s.sessionId === sessionId)?.events ?? [];
+/// Appends what a session's log gained since `held` — what the socket to a
+/// `dray-serve` missed while down, or what a kept transcript missed while
+/// evicted. Deltas are not logged and need nothing, being previews of what
+/// this delivers. Answers false where the server no longer has the session.
+const catchUp = async (
+  sessionId: string,
+  held = sessionsRef.current.find((s) => s.sessionId === sessionId)?.events ?? [],
+  // The server already said what is still queued, so a missed delivery must
+  // not retire a row by position: that row is one still waiting.
+  queueKnown = false,
+) => {
+  const fresh = (await newSince(sessionId, held)) ?? (await missedFromTail(sessionId, held));
+  if (!fresh) return false;
+  if (!fresh.length) return true;
+
+  setSessions((prev) =>
+    prev.map((s) => {
+      if (s.sessionId !== sessionId) return s;
+      const events = mergeMissed(s.events, held, fresh);
+      return events === s.events ? s : { ...s, events };
+    }),
+  );
+  const flushed = fresh.filter((e) => e.payload.type === "user_message" && e.payload.queued).length;
+  if (flushed && !queueKnown) {
+    setQueuedBySession((prev) =>
+      prev[sessionId]?.length ? { ...prev, [sessionId]: prev[sessionId].slice(flushed) } : prev,
+    );
+  }
+  return true;
+};
+
+/// `catchUp` for a transcript already drawn, where nobody waits on the answer.
+const catchUpOrDrop = (sessionId: string, held?: AgentEvent[], queueKnown?: boolean) => {
+  catchUp(sessionId, held, queueKnown)
+    .then((found) => {
+      if (found) return;
+      // Deleted on the server while held: the copy is all that is left of it,
+      // and drawing it would resume a session that is gone.
+      setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+      if (selectionRequestRef.current !== sessionId) return;
+      selectionRequestRef.current = null;
+      setSelectedSessionId(null);
+      setError("Session not found.");
+    })
+    .catch((e) => console.error("could not catch up", sessionId, e));
+};
+
+/// A held remote transcript coming on screen asks for what it lacks, since
+/// nothing else repairs one that missed events on a socket that stayed up (#780).
+/// Never from a hover, which stays free.
+///
+/// The queue counts as known: `queue_changed` keeps it current over the live
+/// socket, so a flush that also arrived live must not retire a second row. A
+/// session with no index row is mid-send, its log not written yet, and would
+/// read as deleted. A server that is down catches up when it reconnects.
+const refreshHeld = (sessionId: string) => {
+  const server = serverOfSession(sessionId);
+  if (server === LOCAL || !serverConnected(server)) return;
+  if (!sessionsRef.current.some((s) => s.sessionId === sessionId)) return;
+  if (!sessionIndexItemsRef.current.some((i) => i.sessionId === sessionId)) return;
+  catchUpOrDrop(sessionId, undefined, true);
+};
+
+/// The events logged after the newest one `held` names, asked of the server
+/// directly. The ids sent are the newest few, since the last held events may
+/// be unlogged ones — a card, a provisional prompt. `null` where none of them
+/// were logged, or the server predates the command, and `missedFromTail`
+/// answers instead.
+const newSince = (sessionId: string, held: AgentEvent[]): Promise<AgentEvent[] | null> =>
+  held.length
+    ? invoke<AgentEvent[] | null>("get_session_since", {
+        sessionId,
+        after: held.slice(-64).map((e) => e.id),
+      }).catch(() => null)
+    : Promise.resolve(null);
+
+/// The same answer from the tail, paged back until the log meets an event
+/// already held: what an older server is asked.
+const missedFromTail = async (sessionId: string, held: AgentEvent[]) => {
   const tail = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId, turns: FIRST_MOUNT });
-  if (!tail) return;
+  if (!tail) return null;
   let fetched = tail.events;
   let before = tail.olderBefore;
   let missed = missedEvents(held, fetched);
@@ -2327,22 +2462,7 @@ const catchUp = async (sessionId: string) => {
   }
   // Nothing held was ever logged — a session whose only event is the
   // provisional prompt — so the whole log is news.
-  const fresh = missed ?? fetched;
-  if (!fresh.length) return;
-
-  setSessions((prev) =>
-    prev.map((s) => {
-      if (s.sessionId !== sessionId) return s;
-      const events = mergeMissed(s.events, held, fresh);
-      return events === s.events ? s : { ...s, events };
-    }),
-  );
-  const flushed = fresh.filter((e) => e.payload.type === "user_message" && e.payload.queued).length;
-  if (flushed) {
-    setQueuedBySession((prev) =>
-      prev[sessionId]?.length ? { ...prev, [sessionId]: prev[sessionId].slice(flushed) } : prev,
-    );
-  }
+  return missed ?? fetched;
 };
 
 /// A `dray-serve` sends this on every connect, the first included, and it
@@ -2392,12 +2512,31 @@ useEffect(() => {
     // the server's answer; a live reading held from before the drop would
     // outrank it.
     setStatusBySession(without);
+    // Absent from a server older than `queue_changed`, which says nothing.
+    if (payload.queued) {
+      const held = Object.fromEntries(payload.queued.map((q) => [q.sessionId, q.queued]));
+      for (const id of Object.keys(queuedRef.current)) {
+        if (ours(id) && !held[id]) void applyQueue(id, []);
+      }
+      for (const [id, queued] of Object.entries(held)) {
+        noteSession(id, server);
+        void applyQueue(id, queued);
+      }
+    }
     readServer(server);
 
     for (const s of sessionsRef.current) {
       if (!ours(s.sessionId)) continue;
       retireStreamingBlock(s.sessionId);
-      catchUp(s.sessionId).catch((e) => console.error("could not catch up", s.sessionId, e));
+      catchUp(s.sessionId, undefined, !!payload.queued).catch((e) => console.error("could not catch up", s.sessionId, e));
+      // The list read covers the sidebar alone. An open transcript holds its
+      // own flags, and a settle made while the socket was down reached nobody.
+      const writes = indexWrites.get(s.sessionId);
+      invoke<SessionIndexItem | null>("session_index_item", { sessionId: s.sessionId }, server)
+        .then((item) => {
+          if (item && indexWrites.get(s.sessionId) === writes) applyIndexItemRef.current(item);
+        })
+        .catch((e) => console.error("could not reread", s.sessionId, e));
     }
     // A transcript opened while this server was down never loaded, so there is
     // nothing above to catch up — it is read now rather than left blank.
@@ -2441,10 +2580,9 @@ const setOnScreen = (ids: string[]) => {
   for (const id of next) {
     if (prev.has(id)) continue;
     lastViewedRef.current.set(id, now);
-    const status =
-      statusBySessionRef.current[id]
-      ?? sessionIndexItemsRef.current.find((i) => i.sessionId === id)?.status;
-    if (isWindowFocused() && status === "completed") markSessionRead(id);
+    if (isWindowFocused() && statusOf(id) === "completed") markSessionRead(id);
+    // Selecting a session already asked for it, and a group opens that way.
+    if (id !== selectionRequestRef.current) refreshHeld(id);
   }
   onScreenRef.current = next;
 };
@@ -2479,6 +2617,17 @@ const deletedRef = useRef(new Set<string>());
 const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
   const running = tailReads.current.get(sessionId);
   if (running) return running;
+  // An evicted remote transcript draws now and asks only for what is new. Its
+  // index fields are taken from the live index, which may have moved since.
+  const copy = takeTranscript(sessionId);
+  if (copy) {
+    if (touch) lastViewedRef.current.set(sessionId, Date.now());
+    const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
+    upsertSession(item ? { ...copy, ...item } : copy);
+    catchUpOrDrop(sessionId, copy.events);
+    evictSessionsRef.current();
+    return Promise.resolve(true);
+  }
   const read = invoke<SessionSnapshot | null>("get_session_by_id", {
     sessionId,
     turns: FIRST_MOUNT,
@@ -2521,7 +2670,7 @@ const neighboursRef = useRef<ReadonlySet<string>>(new Set());
 const setNeighbours = (ids: string[]) => {
   neighboursRef.current = new Set(ids);
   for (const id of ids) {
-    if (statusBySessionRef.current[id] !== "in_progress") void ensureLoaded(id, false);
+    if (statusOf(id) !== "in_progress") void ensureLoaded(id, false);
   }
 };
 /// Lets the warmed neighbours go now rather than at the next sweep. One the
@@ -2609,14 +2758,15 @@ const LOADED_CAP = 8;
 /// would drop the one just picked, leaving a selection with no snapshot and
 /// nothing to reload it.
 const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) => {
+  // Settled or archived: nothing comes back for it soon, so no copy is kept.
+  if (force) forgetTranscript(force.sessionId);
   const now = Date.now();
   const viewed = (id: string) => lastViewedRef.current.get(id) ?? 0;
   // Never the session on screen, one mid-turn (its live events would land in
   // the early-event hold), or one holding a card only its child can redraw.
   const held = (s: SessionSnapshot) => {
     const forced = s.sessionId === force?.sessionId;
-    const status =
-      forced && force.status ? force.status : statusBySessionRef.current[s.sessionId];
+    const status = forced && force.status ? force.status : statusOf(s.sessionId);
     return (
       onScreen(s.sessionId)
       || s.sessionId === selectionRequestRef.current
@@ -2645,7 +2795,15 @@ const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) =>
       );
       kept = kept.filter((s) => !drop.has(s.sessionId));
     }
-    return kept.length === prev.length ? prev : kept;
+    if (kept.length === prev.length) return prev;
+    // Inside the updater, and idempotent by id, so a second invocation keeps
+    // the same copy again.
+    for (const s of prev) {
+      if (!kept.includes(s) && s.sessionId !== force?.sessionId && serverOfSession(s.sessionId) !== LOCAL) {
+        keepTranscript(s);
+      }
+    }
+    return kept;
   });
 };
 const evictSessionsRef = useRef(evictSessions);
@@ -2682,19 +2840,6 @@ const markSessionUnread = (sessionId: string) => {
   void invoke("mark_session_read", { sessionId, read: false }).catch(() => {});
 };
 
-/// Tell the reader about something that happened in a session, on exactly one
-/// channel, chosen by where they are. Returns whether they were already looking
-/// at it — the one case nothing is raised, since the transcript itself is the
-/// notification.
-///
-/// Shared by every announcement rather than repeated per event: a desktop banner
-/// in front of someone looking at the window is an interruption, and an in-app
-/// card is invisible from another app, so the split has to be made the same way
-/// everywhere or one event ends up on two channels.
-/// The two channels are told apart on purpose. A desktop banner lands in a
-/// stack beside every other app's, so it has to name the session and the
-/// project or it says nothing; the in-app card is the only card on screen next
-/// to a sidebar already marking the row, so it needs the verb and nothing else.
 /// Whether a session may say anything at all right now — the space rule, asked
 /// once for every channel.
 ///
@@ -2722,6 +2867,22 @@ const canAnnounce = (sessionId: string): boolean => {
   return allowedInSpace(projectsRef.current, space, projectPath);
 };
 
+/// Tell the reader about something that happened in a session, on exactly one
+/// channel, chosen by where they are. Returns whether they were already looking
+/// at it — the one case nothing is raised, since the transcript itself is the
+/// notification.
+///
+/// Shared by every announcement rather than repeated per event: a desktop banner
+/// in front of someone looking at the window is an interruption, and an in-app
+/// card is invisible from another app, so the split has to be made the same way
+/// everywhere or one event ends up on two channels. Away from the window, Dray
+/// Island takes an ask or a finished turn while it runs and the banner stays
+/// down.
+///
+/// Banner and card are worded apart on purpose. A desktop banner lands in a
+/// stack beside every other app's, so it has to name the session or it says
+/// nothing; the in-app card is the only card on screen next to a sidebar
+/// already marking the row, so it needs the verb and nothing else.
 const announce = (sessionId: string, kind: NoticeKind, label: string): boolean => {
   const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
 
@@ -2733,15 +2894,15 @@ const announce = (sessionId: string, kind: NoticeKind, label: string): boolean =
   if (!isWindowFocused()) {
     // A card is the island's to raise while it runs: its pill counts what waits
     // and answers it in place, so a banner beside it says the same thing twice.
-    // The island watches This Mac alone, so a remote session keeps its banner.
-    if (kind === "asking" && serverOfSession(sessionId) === LOCAL) {
+    // Every machine: the island follows this app's connections.
+    if (kind === "asking") {
       void islandOn().then((on) => on || notifyOS(sessionId, kind, label, item?.title ?? ""));
       return false;
     }
     // A finished turn is the island's done pill, which names the session and
     // offers Open in app, so the banner would say it twice. A failed hand-off
     // falls back to the banner rather than saying nothing.
-    if (kind === "completed" && serverOfSession(sessionId) === LOCAL) {
+    if (kind === "completed") {
       void islandOn().then((on) =>
         on
           ? invoke("island_done", { sessionId }).catch(() => notifyOS(sessionId, kind, label, item?.title ?? ""))
@@ -2796,7 +2957,7 @@ useEffect(
       const shown = [selectedSessionIdRef.current, ...onScreenRef.current];
       for (const sessionId of shown) {
         if (sessionId === keptUnreadRef.current) continue;
-        if (sessionId && statusBySessionRef.current[sessionId] === "completed") {
+        if (sessionId && statusOf(sessionId) === "completed") {
           markSessionRead(sessionId);
         }
       }
@@ -2804,9 +2965,58 @@ useEffect(
   [],
 );
 
+/// Takes a session's queue whole, as the server holds it. A row already drawn
+/// keeps its attachments; one queued elsewhere has its own read here.
+const applyQueue = async (sessionId: string, queued: QueuedMessage[]) => {
+  const n = (queueReadRef.current[sessionId] ?? 0) + 1;
+  queueReadRef.current[sessionId] = n;
+  const held = queuedRef.current[sessionId] ?? [];
+  const paths = queued
+    .filter((m) => !held.some((q) => q.message.id === m.id))
+    .flatMap((m) => m.attachmentPaths);
+  const server = serverOfSession(sessionId);
+  const read = paths.length
+    ? await invoke<Attachment[]>("read_attachments", { paths }, server).catch(() => [])
+    : [];
+  if (queueReadRef.current[sessionId] !== n) return;
+  setQueuedBySession((prev) => {
+    const cur = prev[sessionId] ?? [];
+    if (!queued.length) {
+      if (!cur.length) return prev;
+      const { [sessionId]: _, ...rest } = prev;
+      return rest;
+    }
+    const next = queued.map(
+      (m) =>
+        cur.find((q) => q.message.id === m.id) ?? {
+          message: m,
+          // Qualified: these are the server's own copies, so a cancel that puts
+          // them back in the tray resends them as they are — `upload` passes a
+          // path already on its server through rather than reading this Mac.
+          attachments: read
+            .filter((a) => m.attachmentPaths.includes(a.path))
+            .map((a) => ({ ...a, path: qualify(a.path, server) })),
+        },
+    );
+    return { ...prev, [sessionId]: next };
+  });
+};
+
+useEffect(() => {
+  const listenerPromise = listen<QueueChangedEvent>("queue_changed", ({ payload, server }) => {
+    noteSession(payload.sessionId, server);
+    void applyQueue(payload.sessionId, payload.queued);
+  });
+  return () => {
+    listenerPromise.then((unlisten) => unlisten());
+  };
+}, []);
+
 useEffect(() => {
   const listenerPromise = listen<SessionStatusEvent>("session_status", (event) => {
     const { sessionId, status, modified } = event.payload;
+    // Its child dying is the last thing a deleted session says.
+    if (deletedRef.current.has(sessionId)) return;
 
     // Only completion moves this, and the sidebar sorts by it — so a session
     // finishing in the background rises to the top the moment it does, rather
@@ -2851,10 +3061,6 @@ useEffect(() => {
   };
 }, []);
 
-// The backend generates a title a few seconds after a session starts and writes
-// it to the index itself, so this only mirrors what's already on disk. Its own
-// listener rather than a branch in `agent_event`: nothing here came from the
-// agent, and it must not land in the session's event list.
 // A session created by something other than the composer — an agent calling the
 // `dray` CLI, which reaches the backend over its own socket. The row has to
 // appear without a refetch, the way a composer-created one does.
@@ -2916,6 +3122,10 @@ useEffect(() => {
   };
 }, []);
 
+// The backend generates a title a few seconds after a session starts and writes
+// it to the index itself, so this only mirrors what's already on disk. Its own
+// listener rather than a branch in `agent_event`: nothing here came from the
+// agent, and it must not land in the session's event list.
 useEffect(() => {
   const listenerPromise = listen<SessionTitleEvent>("session_title", (event) => {
     const { sessionId, title, titleLocked } = event.payload;
@@ -2984,13 +3194,6 @@ useDockBadge(statusBySession, asksBySession, sessionIndexItems);
 // and the flush that empties it is the thing that clears these.
 const queuedMessages = selectedSessionId ? queuedBySession[selectedSessionId] ?? [] : [];
 
-// Gated on `busy` for the same reason the background-task set is: this is live
-// state, and a session that ended while it was unmounted has no event left to
-// arrive and clear it.
-const working: Working | null = busy && selectedSessionId
-  ? workingBySession[selectedSessionId] ?? null
-  : null;
-
 // Not gated on `busy`, unlike the two around it: a task outlives the turn that
 // spawned it, and that is the whole point of the set having its own indicator.
 const backgroundTasks: BackgroundTask[] = useMemo(
@@ -3011,9 +3214,6 @@ const liveTaskIdsBySession = useMemo(
   [tasksBySession],
 );
 const liveTaskIds = liveTaskIdsBySession[selectedSessionId ?? ""] ?? NO_TASKS;
-
-const compacting = compactingOf(selectedSession, busy);
-const apiRetry = apiRetryOf(selectedSession, busy);
 
 /// The live state one split pane draws — what the selected session's own
 /// fields above answer, for any loaded session.
@@ -3083,6 +3283,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
 
 }

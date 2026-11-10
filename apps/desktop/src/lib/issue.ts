@@ -103,8 +103,7 @@ export function openIssue(
 ///
 /// The title is *in the text* rather than drawn beside it, and that is what
 /// makes the whole feature cheap: the model reads it, the transcript reads it,
-/// and the composer's overlay stays in register with the textarea underneath
-/// because there is nothing painted that isn't really there.
+/// and the composer's chip takes its face from it.
 export function issueTag(identifier: string, title: string): string {
   return title ? `#${identifier} ${title}` : `#${identifier}`;
 }

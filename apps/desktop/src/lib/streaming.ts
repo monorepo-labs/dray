@@ -103,13 +103,17 @@ function readString(
 /// cut it at the slashes and print a fragment of the command as if it were the
 /// whole thing.
 ///
+/// `pattern` leads for the reason it does in [`toolSummary`]: a search's
+/// `path` is its scope and the pattern its subject. Behind the paths, the
+/// preview named the directory and the committed row then renamed itself.
+///
 /// [`toolSummary`]: ./tools.ts
 const TARGET_KEYS: [key: string, path: boolean][] = [
+  ["pattern", false],
   ["file_path", true],
   ["path", true],
   ["notebook_path", true],
   ["command", false],
-  ["pattern", false],
   ["query", false],
   ["url", false],
   ["description", false],

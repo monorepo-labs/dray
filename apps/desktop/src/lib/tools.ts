@@ -77,7 +77,8 @@ export function toolSummary(
     case "shell":
       return field(input, "command");
     case "search":
-      return field(input, "pattern") ?? field(input, "query");
+      // A pattern already returned above.
+      return field(input, "query");
     case "web":
       return field(input, "url") ?? field(input, "query");
     case "subagent_spawn":
@@ -92,8 +93,7 @@ export function toolSummary(
     field(input, "description") ??
     field(input, "command") ??
     field(input, "query") ??
-    field(input, "prompt") ??
-    (name ? null : null)
+    field(input, "prompt")
   );
 }
 
@@ -259,6 +259,10 @@ export function toolLabel(name: string, pending: boolean): string {
 /// otherwise say it twice — "Searching web 4 queries".
 const GROUP_VERBS: Record<string, [running: string, done: string]> = {
   Bash: ["Running", "Ran"],
+  // "Todo" is a heading, not a verb: counted or streaming it read "Todo a todo
+  // list".
+  TodoWrite: ["Updating", "Updated"],
+  todo_write: ["Updating", "Updated"],
   BashOutput: ["Reading", "Read"],
   KillShell: ["Killing", "Killed"],
   WebSearch: ["Searching", "Searched"],
@@ -312,8 +316,6 @@ export function streamingLabel(name: string): string {
   return `${groupVerb(name, true)} ${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun}`;
 }
 
-/// Absolute paths dominate the row otherwise; the last two segments are enough
-/// to recognize a file and still fit beside the tool name.
 /// An MCP call, split into the server and the method a reader would name it by.
 ///
 /// The two harnesses spell the same call differently and both spell it for a
@@ -405,6 +407,8 @@ export function fileTarget(toolType: ToolType, input: JsonValue): string | null 
   return path?.startsWith("/") ? path : null;
 }
 
+/// Absolute paths dominate the row otherwise; the last two segments are enough
+/// to recognize a file and still fit beside the tool name.
 export function shortenPath(path: string): string {
   const parts = path.split("/").filter(Boolean);
   if (parts.length <= 2) return path;
@@ -429,12 +433,14 @@ export function formatToolInput(input: JsonValue, omit: string[]): string | null
 /// permission card sees raw wire input and no `ToolType`. Same field precedence
 /// as `toolSummary`, minus the per-type branch it can't make.
 export function toolArgument(input: JsonValue): string | null {
+  const pattern = field(input, "pattern");
+  if (pattern) return pattern;
+
   const path = pathField(input);
   if (path) return shortenPath(path);
 
   return (
     field(input, "command") ??
-    field(input, "pattern") ??
     field(input, "query") ??
     field(input, "url") ??
     // Field-keyed where `toolSummary` keys on the tool: the card sees raw wire

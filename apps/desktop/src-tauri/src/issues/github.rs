@@ -174,7 +174,7 @@ async fn read_account() -> Result<TrackerAccount, IssueUnavailable> {
 /// they have never opened, where a project attached in Dray is one they are
 /// working in.
 pub async fn repos_of_projects() -> Vec<String> {
-    let Ok(projects) = projects::list_projects().await else {
+    let Ok(projects) = projects::read_projects().await else {
         return Vec::new();
     };
 
@@ -744,9 +744,9 @@ mod tests {
         assert_eq!(open.priority, IssuePriority::None);
     }
 
-    /// The two ways a GitHub issue is closed, and they mean opposite things:
-    /// one is work that landed, the other work nobody is going to do. Collapsed
-    /// into "closed" the page would file a rejected issue under Done.
+    /// The two ways a GitHub issue is closed — work that landed, and work
+    /// nobody is going to do — both read as Closed: see [`states`] for why the
+    /// reason is not a third state.
     #[test]
     fn closing_is_two_states_and_the_reason_is_what_splits_them() {
         let issues = rows();
@@ -830,8 +830,8 @@ mod tests {
         }
     }
 
-    /// The three ids a status menu writes are the arguments to three `gh`
-    /// subcommands, so they are pinned rather than left to a refactor.
+    /// The two ids a status menu writes are what `update_issue` picks its
+    /// `gh` subcommand by, so they are pinned rather than left to a refactor.
     #[test]
     fn every_status_names_a_command_update_can_run() {
         let ids: Vec<String> = states().into_iter().map(|state| state.id).collect();

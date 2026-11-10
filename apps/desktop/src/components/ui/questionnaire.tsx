@@ -12,7 +12,7 @@ function Questionnaire({
   return (
     <QuestionnairePrimitive.Root
       data-slot="questionnaire"
-      className={cn("flex w-full min-w-0 flex-col gap-4", className)}
+      className={cn("group/questionnaire flex w-full min-w-0 flex-col gap-4", className)}
       {...props}
     />
   )
@@ -118,10 +118,19 @@ function QuestionnaireChoice({
       >
         {children}
       </QuestionnairePrimitive.ChoiceLabel>
-      <QuestionnairePrimitive.ChoiceShortcut
-        data-slot="questionnaire-choice-shortcut"
-        className="pointer-events-none ms-auto hidden size-5 shrink-0 translate-y-[--spacing(0.45)] items-center justify-center rounded-md border border-input bg-background font-mono text-[0.625rem] leading-none font-medium text-muted-foreground group-has-data-[slot=questionnaire-choice-description]/questionnaire-choice:translate-y-0.5 group-data-[shortcut]/questionnaire-choice:inline-flex"
-      />
+      {/* The primitive assigns shortcuts in a layout effect, so the badge shows
+          a frame after mount. Its space is held from the first frame: arriving
+          late it narrowed the label, a description rewrapped to a second line,
+          and WebKit left the box at its old height with the text spilling out. */}
+      <span
+        aria-hidden="true"
+        className="ms-auto hidden size-5 shrink-0 group-data-[shortcuts]/questionnaire:block"
+      >
+        <QuestionnairePrimitive.ChoiceShortcut
+          data-slot="questionnaire-choice-shortcut"
+          className="pointer-events-none hidden size-5 translate-y-[--spacing(0.45)] items-center justify-center rounded-md border border-input bg-background font-mono text-[0.625rem] leading-none font-medium text-muted-foreground group-has-data-[slot=questionnaire-choice-description]/questionnaire-choice:translate-y-0.5 group-data-[shortcut]/questionnaire-choice:inline-flex"
+        />
+      </span>
     </QuestionnairePrimitive.Choice>
   )
 }

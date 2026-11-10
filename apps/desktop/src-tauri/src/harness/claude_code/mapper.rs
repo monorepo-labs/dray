@@ -330,12 +330,6 @@ impl Mapper {
         seq
     }
 
-    /// A main-thread event the app mints itself, numbered through the same
-    /// counter as the mapped lines so `seq` stays gap-free.
-    pub fn synthesize(&mut self, session_id: &str, payload: AgentEventPayload) -> AgentEvent {
-        self.build(session_id.to_string(), None, None, payload)
-    }
-
     /// The only place `AgentEvent`s are built, so `seq` can't be skipped or
     /// double-assigned.
     fn build(
@@ -641,9 +635,10 @@ impl Mapper {
         // instead.
         //
         // Only main-thread content is streamed, so only it has a preview to
-        // supersede. Keyed on `parent_tool_use_id` rather than on whether this
-        // message id matches the open one: subagent events interleave *inside*
-        // a main message's start/stop window, sharing the same stdout.
+        // supersede — and only where the stream opened this very message: a
+        // synthetic one arrives with no frames at all, and subagent events
+        // interleave *inside* a main message's start/stop window, sharing the
+        // same stdout.
         let streamed = parent_tool_use_id.is_none()
             && self.current_msg_id.as_deref() == Some(message.id.as_str());
         // Consumed even when unused, so a later block of the same message still
@@ -934,15 +929,32 @@ fn strip_tool_use_error(text: String) -> String {
 /// log, read whole every time the session is opened. The picture survives as an
 /// archived file on [`ToolResult::images`]; what is left here is the shape
 /// around it (dimensions, original size), which is small and describes it.
+///
+/// An MCP tool's sidecar carries its content blocks, so an image there sits at
+/// `source.data` wherever the tool nested it — a bare array from Paper, under
+/// `content` from computer use. Paper's screenshots put 27.5MB into one log
+/// that way, all of it sent again on every remote load. Hence a walk over the
+/// whole value rather than one shape per tool.
 fn strip_image_bytes(mut structured: Value) -> Value {
-    if structured.get("type").and_then(Value::as_str) != Some("image") {
-        return structured;
+    fn strip(value: &mut Value) {
+        match value {
+            Value::Array(items) => items.iter_mut().for_each(strip),
+            Value::Object(map) => {
+                if map.get("type").and_then(Value::as_str) == Some("image") {
+                    if let Some(file) = map.get_mut("file").and_then(Value::as_object_mut) {
+                        file.remove("base64");
+                    }
+                    if let Some(source) = map.get_mut("source").and_then(Value::as_object_mut) {
+                        source.remove("data");
+                    }
+                }
+                map.values_mut().for_each(strip);
+            }
+            _ => {}
+        }
     }
 
-    if let Some(file) = structured.get_mut("file").and_then(Value::as_object_mut) {
-        file.remove("base64");
-    }
-
+    strip(&mut structured);
     structured
 }
 
@@ -1183,7 +1195,8 @@ fn system_event_session_id(e: &SystemEvent) -> &str {
         | SystemEvent::PermissionCheckStatus { session_id }
         | SystemEvent::CommandsChanged { session_id }
         | SystemEvent::DevIntent { session_id }
-        | SystemEvent::HookProgress { session_id } => session_id,
+        | SystemEvent::HookProgress { session_id }
+        | SystemEvent::TaskSummary { session_id } => session_id,
         // No fields survive the catch-all. Harmless: an unrecognized subtype
         // maps to `None`, so no envelope is ever built from this value.
         SystemEvent::Unrecognized => "",
@@ -1461,6 +1474,22 @@ mod tests {
         let file = result.structured.as_ref().unwrap().get("file").unwrap();
         assert!(file.get("base64").is_none(), "the second copy survived");
         assert!(file.get("dimensions").is_some(), "the shape came off with it");
+    }
+
+    /// MCP sidecars carry their content blocks, nested however the tool likes.
+    /// Both shapes read off real session logs: Paper's `get_screenshot` is a
+    /// bare array, computer use's `get_window_state` puts it under `content`.
+    #[test]
+    fn strips_image_bytes_from_mcp_sidecars() {
+        let image = serde_json::json!({ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo" } });
+        let paper = strip_image_bytes(serde_json::json!([{ "type": "text", "text": "node 1-0" }, image]));
+        assert_eq!(paper[0]["text"], "node 1-0");
+        assert!(paper[1]["source"].get("data").is_none(), "Paper's copy survived");
+        assert_eq!(paper[1]["source"]["media_type"], "image/png");
+
+        let computer = strip_image_bytes(serde_json::json!({ "content": [image], "isError": false }));
+        assert!(computer["content"][0]["source"].get("data").is_none(), "computer use's copy survived");
+        assert_eq!(computer["isError"], false);
     }
 
     /// A prompt reaches the mapper two ways — bare string, or wrapped in a lone
@@ -1984,9 +2013,9 @@ mod tests {
             ] if trigger == "manual"
         ));
 
-        // The replayed summary and the `/compact` echo both arrive as `user`
-        // lines. Two prompts were typed in this capture; a third bubble would
-        // mean one leaked through.
+        // The replayed summary and the `/compact` echo are this capture's only
+        // `user` lines, since the CLI echoes no typed prompt; a bubble here
+        // would mean one of them leaked through.
         let prompts = events
             .iter()
             .filter(|event| matches!(event.payload, AgentEventPayload::UserMessage { .. }))
@@ -2106,9 +2135,9 @@ mod tests {
         assert!(summed > 9 * 41_102, "the overshoot is a multiple, not a drift");
     }
 
-    /// A window keyed by a model this session never ran is not this session's
-    /// window. Only reachable with a subagent on a second model, which no
-    /// capture has — so it is pinned by hand.
+    /// A second model's window is not the main thread's, so `init`'s model
+    /// picks between them. Every capture with two entries has an `init` in
+    /// front of it, so the unnamed case is pinned by hand.
     #[test]
     fn a_context_window_for_another_model_is_ignored() {
         let per_model = map_model_usage(&serde_json::json!({
@@ -2126,11 +2155,11 @@ mod tests {
         assert_eq!(context_window(&[], None), None);
     }
 
-    /// What a usage page will read back. `result.usage` describes a turn's *last
-    /// message* — 239 and 485 output tokens across this session's two turns —
-    /// while the model actually produced 4682, so this map is the only record of
-    /// real consumption and the only thing a per-turn figure can be differenced
-    /// out of.
+    /// What a usage page will read back. `result.usage` counts a turn's
+    /// main-thread messages alone — 239 and 485 output tokens across this
+    /// session's two turns — while the model actually produced 4682, so this map
+    /// is the only record of real consumption and the only thing a per-turn
+    /// figure can be differenced out of.
     #[test]
     fn per_model_usage_is_cumulative_and_survives_into_the_event() {
         let fixture = include_str!("fixtures/complex.jsonl");

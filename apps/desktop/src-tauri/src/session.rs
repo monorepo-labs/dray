@@ -97,6 +97,32 @@ pub struct QueuedMessage {
 /// boundary that flushes them is seen.
 pub type QueuedMessages = Arc<Mutex<Vec<QueuedMessage>>>;
 
+/// Emitted as `queue_changed` with a session's whole queue each time it moves.
+/// Never logged, like the queue itself; `serve.rs`'s `Live` holds the latest so
+/// a reconnect sees it too.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct QueueChangedEvent {
+    pub session_id: String,
+    pub queued: Vec<QueuedMessage>,
+}
+
+/// Tells every client what a session still holds. `send_msg` answers only the
+/// sender, so without this a prompt queued from the island or `dray session
+/// send` showed nowhere until its flush. Emitted under the lock, so two
+/// changes racing each other can never arrive in the wrong order.
+pub async fn publish_queue(session_id: &str, queued: &QueuedMessages, app: &Sink) {
+    let held = queued.lock().await;
+    let event = QueueChangedEvent {
+        session_id: session_id.to_string(),
+        queued: held.clone(),
+    };
+    if let Err(e) = app.emit("queue_changed", &event) {
+        eprintln!("[queue emit err] {e}");
+    }
+}
+
 /// What a send did. The two fields are mutually exclusive in practice — a
 /// session being created cannot already be running a turn — but they answer
 /// different questions and the frontend acts on each separately.
@@ -510,11 +536,19 @@ async fn close_unanswered_stop(
 ///
 /// Emitted, never logged: a delete may have removed the file, where an append
 /// would quietly recreate it.
+///
+/// Prompts queued behind the dead turn are the exception, and only while the
+/// slot still holds this child: they are stranded first, each as a bubble with
+/// a failure beside it, the way fx and grok report theirs. Left alone they
+/// stayed drawn as pending and the next send dropped them with the `Session`,
+/// saying nothing. An emptied slot is a session being deleted or settled,
+/// whose log must not be written back.
 pub async fn settle_dead_child(
     session_id: &str,
     harness: Harness,
-    seq: &AtomicU64,
+    seq: &Arc<AtomicU64>,
     status: &Arc<Mutex<StatusTracker>>,
+    queued: &QueuedMessages,
     why: &str,
     app: &Sink,
 ) {
@@ -523,12 +557,12 @@ pub async fn settle_dead_child(
         Some(slot) => Some(slot.lock().await),
         None => None,
     };
-    let replaced = guard
-        .as_ref()
-        .and_then(|g| g.as_ref())
-        .is_some_and(|s| !Arc::ptr_eq(&s.status, status));
-    if replaced {
+    let held = guard.as_ref().and_then(|g| g.as_ref());
+    if held.is_some_and(|s| !Arc::ptr_eq(&s.status, status)) {
         return;
+    }
+    if held.is_some() {
+        strand_queue_on_exit(session_id, harness, queued, seq, app).await;
     }
 
     let mint = |payload| {
@@ -722,7 +756,7 @@ impl SessionManager {
         // composer never has one, and it is recorded rather than acted on —
         // the depth cap reads it back off the index on the *next* create.
         parent_session_id: Option<&str>,
-        // Kept out of the sidebar, drawn in the parent's crew alone. Only the
+        // Kept out of the sidebar, surfacing only as cards beside the parent. Only the
         // orchestration socket sets it, and only with a parent.
         hidden: bool,
         // A title the caller already knows, set and locked now so none is
@@ -1270,7 +1304,7 @@ impl SessionManager {
                         });
                     }
                     if let Some(queued) = s
-                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone())
+                        .queue_if_in_flight(prompt, attachment_paths, issues, from.clone(), app)
                         .await
                     {
                         return Ok(SendOutcome {
@@ -1298,7 +1332,7 @@ impl SessionManager {
                         });
                     }
 
-                    let queued = s.queue_msg(prompt, attachment_paths, issues, from).await;
+                    let queued = s.queue_msg(prompt, attachment_paths, issues, from, app).await;
                     return Ok(SendOutcome {
                         snapshot: None,
                         queued: Some(queued),
@@ -1520,10 +1554,11 @@ impl SessionManager {
             );
         }
 
-        // `thread/fork` names the parent's thread, so a Codex parent that never
-        // got one has nothing to fork — refused before a row exists.
-        if parent.harness == Harness::Codex && parent.thread_id.is_none() {
-            bail!("this Codex session has no conversation to fork yet");
+        // `thread/fork` and `session recover` both name the parent's own id, so
+        // a Codex or fx parent that never got one has nothing to fork — refused
+        // before a row exists.
+        if matches!(parent.harness, Harness::Codex | Harness::Fx) && parent.thread_id.is_none() {
+            bail!("this {} session has no conversation to fork yet", parent.harness.label());
         }
 
         // Resolved against the project rather than the parent's own name, so a
@@ -1563,7 +1598,17 @@ impl SessionManager {
             crate::store::copy_pi_session_file(session_id, fork_id).await?;
         }
 
+        // fx's copy is made here, like pi's, since `session recover` needs no
+        // child: the first send then resumes the copy in the fork's directory.
+        let fx_copy = match (&parent.harness, &parent.thread_id) {
+            (Harness::Fx, Some(thread)) => Some(crate::harness::fx::fork_conversation(thread).await?),
+            _ => None,
+        };
+
         let mut item = parent.fork(fork_id, worktree_name.as_deref());
+        if fx_copy.is_some() {
+            item.thread_id = fx_copy;
+        }
         // The parent's Codex thread, taken now rather than looked up at the
         // first send: a parent deleted in between would otherwise leave a fork
         // that fails every send. Safe while `fork_from` stands, since that is
@@ -1636,10 +1681,10 @@ impl SessionManager {
     /// A session with no live child answers `None` rather than erroring: the
     /// queue died with the process, which is the same "nothing to take back"
     /// the frontend already handles.
-    pub async fn cancel_queued(&self, session_id: &str) -> Option<QueuedMessage> {
+    pub async fn cancel_queued(&self, session_id: &str, app: &Sink) -> Option<QueuedMessage> {
         let slot = self.existing(session_id).await?;
         let guard = slot.lock().await;
-        guard.as_ref()?.cancel_queued().await
+        guard.as_ref()?.cancel_queued(app).await
     }
 
     /// Answers a permission request. Errors when the session has no live child:
@@ -1723,7 +1768,7 @@ impl SessionManager {
             bail!("that session is not running in a worktree");
         }
 
-        // A hidden child is drawn in this session's crew alone, so nothing on
+        // A hidden child is listed nowhere on screen, so nothing there
         // screen offers to remove its tree: it goes with this one. First, and a
         // refusal stops here — this session's own button is then still there to
         // retry with, where a child failing after it had nowhere to be retried.
@@ -1756,12 +1801,6 @@ impl SessionManager {
         guard.as_ref()?.child.id()
     }
 
-    /// Stops what a session has running and nothing else: the child with
-    /// everything it started, and its browser tabs. Log and index entry stay,
-    /// so an unsettle resumes as any idle session does. Settle and delete both
-    /// come through here — settling is the reader saying the work is done,
-    /// and a child left running behind a settled row was a dev server and a
-    /// page nobody could see.
     /// Whether a turn is running in this session now. Fork and the CLI's
     /// settle refuse on it, the same question the sidebar asks of `in_progress`.
     pub async fn turn_in_flight(&self, session_id: &str) -> bool {
@@ -1773,6 +1812,12 @@ impl SessionManager {
         }
     }
 
+    /// Stops what a session has running and nothing else: the child with
+    /// everything it started, and its browser tabs. Log and index entry stay,
+    /// so an unsettle resumes as any idle session does. Settle and delete both
+    /// come through here — settling is the reader saying the work is done,
+    /// and a child left running behind a settled row was a dev server and a
+    /// page nobody could see.
     pub async fn settle(&self, session_id: &str) -> Result<()> {
         let running = self.take(session_id).await;
         // The tabs close whatever the kill answered: the session is already
@@ -1809,7 +1854,7 @@ impl SessionManager {
     /// The child goes first and its lock is released before the disk work, so a
     /// dying process can't append one last event to a file we just removed.
     pub async fn delete(&self, session_id: &str) -> Result<bool> {
-        // A hidden child is drawn in this session's crew alone, so it goes with
+        // A hidden child is listed nowhere on screen, so it goes with
         // it. Here rather than in the frontend, which holds one side of the
         // settled split and can miss a child sitting on the other.
         for child in crate::store::hidden_children(session_id).await? {
@@ -1993,10 +2038,9 @@ pub struct Session {
     pub model: ModelId,
     pub effort: Option<Effort>,
     pub permission_mode: ApprovalPolicy,
-    /// What the child was last told about fast mode — the spawn's flag for
-    /// Claude Code and Codex, and for fx the value stamped onto its session,
-    /// which nothing can move after. Compared against the composer's pick to
-    /// decide whether anything has to happen at all.
+    /// What the child was last told about fast mode: the pick it was spawned
+    /// on, then whatever [`Session::set_fast`] last landed. Compared against
+    /// the composer's pick to decide whether anything has to happen at all.
     pub fast: bool,
     pub seq: Arc<AtomicU64>,
     /// Shared with the stdout task: sends flip it here, `result` and
@@ -2111,12 +2155,13 @@ impl Session {
             }
             Harness::Fx => {
                 // Same two refusals as pi's, for the same reasons: fx has no
-                // `-w`, so the tree is made before this; and it has no fork.
+                // `-w`, so the tree is made before this; and its fork was made
+                // at the press, so the first send is an ordinary resume.
                 if worktree_name.is_some() {
                     bail!("fx cannot create a worktree — it has to be made first");
                 }
                 if fork_from.is_some() {
-                    bail!("fx sessions cannot be forked");
+                    bail!("an fx fork is the copy made when it was forked — there is nothing to fork on spawn");
                 }
 
                 crate::harness::fx::init(
@@ -2254,6 +2299,7 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
+        app: &Sink,
     ) -> QueuedMessage {
         let message = QueuedMessage {
             id: Uuid::now_v7().to_string(),
@@ -2264,6 +2310,7 @@ impl Session {
             issues: issues.to_vec(),
         };
         self.queued.lock().await.push(message.clone());
+        publish_queue(&self.id, &self.queued, app).await;
         message
     }
 
@@ -2289,12 +2336,13 @@ impl Session {
         attachment_paths: &[String],
         issues: &[IssueRef],
         from: Option<MessageSender>,
+        app: &Sink,
     ) -> Option<QueuedMessage> {
         let _turn = self.status.lock().await;
         if !_turn.turn_in_flight() {
             return None;
         }
-        Some(self.queue_msg(prompt, attachment_paths, issues, from).await)
+        Some(self.queue_msg(prompt, attachment_paths, issues, from, app).await)
     }
 
     /// Takes back the newest held prompt, newest-first because that is the one
@@ -2303,8 +2351,12 @@ impl Session {
     /// `None` means the flush won the race, which needs no handling beyond
     /// leaving the composer alone: the prompt is on its way and the frontend
     /// learns so from the `user_message` that follows.
-    pub async fn cancel_queued(&self) -> Option<QueuedMessage> {
-        self.queued.lock().await.pop()
+    pub async fn cancel_queued(&self, app: &Sink) -> Option<QueuedMessage> {
+        let cancelled = self.queued.lock().await.pop();
+        if cancelled.is_some() {
+            publish_queue(&self.id, &self.queued, app).await;
+        }
+        cancelled
     }
 
     /// Sends a prompt *into* the turn already running, for a harness that takes
@@ -2383,7 +2435,7 @@ impl Session {
         from: Option<MessageSender>,
         app: &Sink,
     ) {
-        self.queue_msg(prompt, attachment_paths, issues, from).await;
+        self.queue_msg(prompt, attachment_paths, issues, from, app).await;
         flush_queued(
             &self.id,
             self.harness,
@@ -2458,12 +2510,11 @@ impl Session {
 
     /// Moves a running child on or off its harness's faster tier — Claude
     /// Code's `apply_flag_settings`, grok's model twin, fx's `fast` config
-    /// option.
+    /// option, Codex's `serviceTier` on the next `turn/start`.
     ///
-    /// `Capabilities::fast_mode` is what keeps the others off this path:
-    /// Codex's rides its spawn and pi has none. The recorded value moves only
-    /// once the write has, so a failed control leaves the session describing
-    /// what the child is still on.
+    /// `Capabilities::fast_mode` is what keeps pi, which has none, off this
+    /// path. The recorded value moves only once the write has, so a failed
+    /// control leaves the session describing what the child is still on.
     pub async fn set_fast(&mut self, fast: bool) -> Result<()> {
         // grok's fast tier is a model id, so its switch is a model switch and
         // there is no flag to send. `fast_arg` is what pairs the two, and the
@@ -2505,12 +2556,13 @@ impl Session {
         Ok(())
     }
 
-    /// Switches the effort of a running child — fx alone, whose ACP session
-    /// takes it as a config option. Every other harness respawns for one, and
-    /// `caps().applies_effort_in_place` is what keeps them off this path.
+    /// Switches the effort of a running child wherever the wire carries one:
+    /// a config option on fx and grok, `set_thinking_level` on pi, the next
+    /// `turn/start` on Codex. Claude Code respawns for one, and
+    /// `caps().applies_effort_in_place` is what keeps it off this path.
     ///
-    /// `None` is fx's own `auto`, which nothing here can spell back onto the
-    /// wire, so it is recorded and left to the next respawn.
+    /// `None` is the harness's own default, which nothing here can spell back
+    /// onto the wire, so it is recorded and left to the next respawn.
     pub async fn set_effort(&mut self, effort: Option<Effort>, app: &Sink) -> Result<()> {
         // grok takes the same config option and needs no `Sink`: its
         // ladder rides the handshake, per model, so the picker learns nothing
@@ -2978,9 +3030,9 @@ async fn deliver_prompt(
     // running. Ignored by every other transport, which has one way in.
     delivery: crate::harness::pi::Delivery,
     // `false` logs the prompt and hands its prepared text back without sending
-    // it — [`flush_fx`] alone, which logs every held message as its own bubble
-    // and then opens **one** turn with the lot, fx taking one prompt per turn.
-    // No other transport is written to answer it, and none passes it.
+    // it — [`flush_one_per_turn`] alone, which logs every held message as its
+    // own bubble and then opens **one** turn with the lot, fx taking one prompt
+    // per turn. No other transport is written to answer it, and none passes it.
     send: bool,
     from: Option<MessageSender>,
     seq: &Arc<AtomicU64>,
@@ -3217,7 +3269,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
     // sit two awaits (publish, append). A send racing that gap would read no
     // turn in flight and start a second fx prompt over the one id.
     //
-    // A send decides queue-vs-deliver in `fx_queue_if_in_flight`, which takes
+    // A send decides queue-vs-deliver in `queue_if_in_flight`, which takes
     // this same status lock across its `turn_in_flight` read *and* its enqueue.
     // So this section and that one cannot interleave: whichever holds the lock
     // runs whole. Either the send queues first and this sees the message and
@@ -3573,6 +3625,8 @@ pub async fn flush_queued(
         batch, session_id, harness, seq, transport, app, &mut delivered,
     )
     .await;
+    // After delivery, so the pending row goes as its bubble lands.
+    publish_queue(session_id, queued, app).await;
 
     // A delivered batch at `turn_completed` opens a turn the CLI has not
     // announced yet, so without this the composer reads idle for the second or
@@ -3601,8 +3655,8 @@ pub async fn flush_queued(
 /// and its own line in the log; what they share is the turn they open.
 ///
 /// The empty-check and the release of the reservation are done **while holding
-/// both status and queued** — the crux, symmetric to `fx_queue_if_in_flight`
-/// on the send side. Release the queue lock before marking the turn Completed
+/// both status and queued** — the crux, symmetric to `queue_if_in_flight` on
+/// the send side. Release the queue lock before marking the turn Completed
 /// and a send can enqueue in the gap, leaving a prompt with no turn to flush
 /// it. Holding both, a send either lands its message before the take (drained
 /// here, or reserved for the next turn) or reads the released Completed after
@@ -3691,6 +3745,7 @@ async fn flush_one_per_turn(
                 }
             }
         }
+        publish_queue(session_id, queued, app).await;
 
         // One prompt, blank-line separated, because one is all fx takes. On
         // success the reservation stands as `InProgress` and the turn is this
@@ -3898,6 +3953,7 @@ pub async fn strand_queue_on_exit(
         )
         .await;
     }
+    publish_queue(session_id, queued, app).await;
 }
 
 #[cfg(test)]

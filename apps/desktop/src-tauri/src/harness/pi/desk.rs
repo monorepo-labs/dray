@@ -65,10 +65,10 @@ pub struct Desk {
     closed: Arc<AtomicBool>,
 }
 
-/// Module-level for [`crate::hooks`]-shaped reasons: the two halves sit far
-/// apart — registered inside `pi::init`, read from a Tauri command — and
-/// threading a handle between them would put pi's own concern through every
-/// signature in between.
+/// Module-level because the two halves sit far apart — registered inside
+/// `pi::init`, read from `SessionManager`'s answer and Stop — and threading a
+/// handle between them would put pi's own concern through every signature in
+/// between.
 static DESKS: LazyLock<Mutex<HashMap<String, Desk>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 

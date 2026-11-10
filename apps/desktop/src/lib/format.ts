@@ -97,7 +97,12 @@ export function formatBytes(n: number): string {
 
 /// Cuts `s` to `max` chars with an ellipsis, or returns it whole.
 export function truncate(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max)}…` : s;
+  if (s.length <= max) return s;
+  // Never through the middle of a surrogate pair, which leaves half an emoji
+  // drawn as a replacement box before the ellipsis.
+  const code = s.charCodeAt(max - 1);
+  const cut = code >= 0xd800 && code <= 0xdbff ? max - 1 : max;
+  return `${s.slice(0, cut)}…`;
 }
 
 /// Trailing path segment, for showing a project as its folder name.

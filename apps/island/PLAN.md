@@ -29,8 +29,14 @@ the sessions live in `dray --serve` now, not in the window.
   or the one wanting the reader; tapped open over Dray's window, the session
   that window has open (`selected_session`, asked of the app through the
   server). "New session" is an entry in the switcher.
-- **What it draws: the input** (and, from v2, the open card). No transcript — the main
-  window is one click away.
+- **What it draws: the input** (and, from v2, the open card), with the last
+  three turns above it (#721), three more each time the reader scrolls to the
+  top. A settled turn is its last message under a "3 tool calls" line that
+  opens the turn in Dray and closes the island; a running one is its newest
+  message over the latest call, shimmering. Right-click's Show Transcript or a
+  trackpad pinch (in hides, out shows) switches it, the card pulsing as it
+  grows or shrinks. The pinch is read off a listen-only event tap: AppKit hands
+  a pinch to the active app alone, which the island never is.
 - **Everything said and done builds one message.** Each dictated line, typed
   line, screenshot, annotation or picked element is a row in a draft, in order,
   reorderable and deletable. Send turns the list into one prompt with its
@@ -52,7 +58,13 @@ Everything else below waits.
 v2 (#565): status, across every live session.
 - A permission or question card never opens the panel: a pill hangs from the
   notch saying how many tasks need attention, until they are answered. Opening
-  draws the cards as tabs, oldest first; the last answer closes the panel.
+  draws the oldest card with the rest stacked under it; its title, with +N,
+  opens every waiting session as a list to pick from. The last answer closes
+  the panel. Dismiss and Dismiss all sit in the card's header and put one
+  session's card or every one away unanswered. They still wait in Dray, and
+  the next new ask brings the pill back with every one of them.
+- A permission reads as one line, the tool's short name and its file or
+  purpose; a command waits behind a click on that line.
 - A finished session is Dray's own banner and not the island's: where the reader
   works decides which one they see, and only the banner opens the session.
 - The task list carries the sidebar's marks; the title opens the task list, since a
@@ -88,6 +100,20 @@ until #580, renamed since it sits above the Dock as often as at the notch.
   build's island talks to the dev server. Shares `Wire.swift` and
   `Connection.swift` with `apps/ios` by path, not by package, and lends it
   `VoiceOrb` the same way — so neither side may import the other's UI kit.
+- **Other machines: whatever Dray's window is connected to** (#784). The island
+  is the app's companion, so it keeps no machine list and opens no login. It
+  asks This Mac's server for `island_links`, answered by the app over
+  `host_call` with each connected machine's address and token, and opens a
+  socket of its own over that link (an SSH machine's being the app's
+  tunnel). The server answers only the island's own connection, since the
+  answer holds tokens. It asks again when the app pings
+  `com.yogesh.dray.island.links` (the list moved) and when the server sends
+  `host_changed` (the app came or went). With Dray quit, remote machines leave;
+  This Mac's sessions stay. Sessions, cards and done pills come from every
+  machine alike. The title row and a card name a remote machine beside the
+  title, never This Mac. A new task's project menu is one row per repository,
+  as in the app (#782), and the bar's machine control follows `MachineSelector`'s
+  rule. A file sent to a remote is uploaded through its `/upload` first.
 - **Dictation: Dray's own Parakeet, through the server to the app.** The
   transcription commands are the app's (`APP_COMMANDS`), so the island sends
   them to the server and the server forwards them over `host_call` — the
@@ -99,5 +125,5 @@ until #580, renamed since it sits above the Dock as often as at the notch.
 ## Stack
 
 SwiftUI in an `NSPanel` (`.nonactivatingPanel`, `.statusBar` level, joins all
-spaces), macOS 26. No dependencies. XcodeGen `project.yml`, like `apps/ios`.
+spaces), macOS 15 or later (`project.yml`). No dependencies. XcodeGen `project.yml`, like `apps/ios`.
 Bundle id `com.yogesh.dray.island`, `LSUIElement`.

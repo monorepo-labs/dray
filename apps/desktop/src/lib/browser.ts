@@ -2,7 +2,7 @@ import { invoke, listen, LOCAL, serverOfSession } from "@/lib/transport";
 import { IS_MAC } from "@/lib/platform";
 import { useSyncExternalStore } from "react";
 
-import { readLocalStorage } from "@/hooks/useLocalStorage";
+import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
 import { pushClosedTab } from "@/lib/tabOrder";
 import type { BrowserVisit } from "@/lib/history";
@@ -666,7 +666,7 @@ let customDevices: Device[] = readLocalStorage<Device[]>(DEVICES_KEY, []);
 
 function storeDevices(next: Device[]) {
   customDevices = next;
-  localStorage.setItem(DEVICES_KEY, JSON.stringify(next));
+  writeLocalStorage(DEVICES_KEY, next);
   notify();
 }
 
@@ -756,11 +756,6 @@ const shooting = new Set<string>();
 /// The newest shot, as `browser_shooting` numbered it.
 let shot = 0;
 
-/// Whether the native view is off screen: a modal landed on it, or a shot
-/// is under way on the session presenting it. One predicate, because the
-/// still, the paint callback and the layout call must all agree about it —
-/// they each asked `occluded` separately before, which left a shot drawing
-/// a still nothing would hide behind.
 /// The URL bar's suggestion list is open. It drops over the page, and no
 /// Radix modal lock is behind it to judge by — the field has to keep taking
 /// keys — so it hides the view outright, behind the same picture a menu gets.
@@ -778,6 +773,11 @@ export function browserHistory(sessionId: string): Promise<BrowserVisit[]> {
   return invoke<BrowserVisit[]>("browser_history", { sessionId }).catch(() => []);
 }
 
+/// Whether the native view is off screen: a modal or the URL bar's list
+/// landed on it, or a shot is under way on the session presenting it. One
+/// predicate, because the still, the paint callback and the layout call must
+/// all agree about it — they each asked `occluded` separately before, which
+/// left a shot drawing a still nothing would hide behind.
 function hiding(): boolean {
   if (occluded || suggesting) return true;
   const winner = presenter();
@@ -930,15 +930,16 @@ function shutterReady(of: number) {
 }
 
 /// What the URL bar opens. A scheme is taken as written; `host:port` looks
-/// like a scheme, so a scheme wants its `//`. Loopback hosts read as `http`,
-/// since that is what a dev server speaks. Anything that is not a host —
-/// a space in it, or no dot — is a search.
+/// like a scheme, so a scheme wants its `//`. Loopback hosts and bare
+/// addresses read as `http`, since that is what a dev server speaks — on this
+/// Mac or on the LAN, where `https` to an address has no certificate to offer.
+/// Anything that is not a host — a space in it, or no dot — is a search.
 export function normalizeUrl(input: string): string {
   const s = input.trim();
   if (!s) return s;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s) || /^(about|data|mailto|blob|chrome):/i.test(s)) return s;
   const host = s.split(/[/?#]/)[0] ?? "";
-  const loopback = /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?$/i.test(host);
+  const loopback = /^(localhost|\d{1,3}(\.\d{1,3}){3}|\[::1\])(:\d+)?$/i.test(host);
   if (loopback) return `http://${s}`;
   if (/\s/.test(s) || !host.includes(".")) {
     return `https://www.google.com/search?q=${encodeURIComponent(s)}`;

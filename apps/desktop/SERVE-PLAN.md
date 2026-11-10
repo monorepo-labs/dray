@@ -92,6 +92,14 @@ frontend wrapper is a few lines:
 ← {"event":"agent_event","payload":{…}}       every event, to every client
 ```
 
+**A hello carrying `"deflate":true` gets large frames compressed** (#712): every
+frame from 16KB up arrives as a binary frame of raw-deflated JSON, everything
+smaller stays text. A transcript page is 0.6–4MB of JSON and deflates about 5×,
+which on a slow link is most of the wait; tungstenite has no permessage-deflate
+to do it. The app offers it to remote servers only, never to loopback. A server
+that never heard of the field ignores it, so no version moved, and the iOS app
+and the browser transport simply never ask.
+
 **The version is checked before anything else in the first frame**, and the
 refusal names which side is behind — `update the Dray app` or
 `update dray-serve` — the rule `dray_proto::PROTOCOL_VERSION` already follows.
@@ -135,8 +143,8 @@ socket retries every second while anything listens.
 in the app — attachments and browser recordings — confined to those two
 directories by canonical path, so `..` and symlinks reach nothing else. The
 token rides the query because an `<img>` cannot set a header. Absent and
-forbidden both answer 404. `fileSrc` in `transport.ts` builds the URL. No Range
-support yet, so a long video plays but cannot seek. A video the Files view
+forbidden both answer 404. `fileSrc` in `transport.ts` builds the URL. It answers `Range`,
+so a video seeks and AVPlayer can read it. A video the Files view
 opened is let through too: `read_file` records its canonical path, the remote
 copy of the app's `allow_file` grant.
 
@@ -176,7 +184,7 @@ remote client.
 path. The index is rewritten whole under a *per-process* lock, so two processes
 on one data dir lose each other's writes — which is exactly a `dray-serve`
 started on a Mac whose app is running. Unset on a VPS. So `run` refuses to
-start where `dray.sock` or `dray-dev.sock` in its home answers a connect, and
+start where `dray.sock` in its home answers a connect, and
 names `DRAY_HOME` as the cure.
 
 The server also serves the orchestration socket, so `dray new`/`send`/`ls`

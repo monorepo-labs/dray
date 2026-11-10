@@ -19,9 +19,9 @@ enum Target: Hashable {
     case new
 }
 
-/// The panel's layout, the reader's pick from its right-click menu and never
-/// switched for them: compact, one row with the orb beside the input, or voice,
-/// the orb alone in the middle.
+/// The panel's layout, the reader's pick and never switched for them: compact,
+/// one row with the orb beside the input, or expanded, the orb alone in the
+/// middle with input and send beneath it.
 enum InputMode: String, CaseIterable {
     case compact, expanded
 
@@ -29,7 +29,25 @@ enum InputMode: String, CaseIterable {
 }
 
 /// The new-session bar's dropdowns.
-enum MenuID: Hashable { case model, project, stance }
+enum MenuID: Hashable { case model, project, machine, stance }
+
+/// One attached project on one machine. A project as the reader thinks of it is
+/// every checkout of one repository, as `projectGroups.ts` reads it.
+struct Checkout: Identifiable, Hashable {
+    let server: UUID
+    var project: Project
+
+    var id: String { "\(server) \(project.path)" }
+    var group: String { project.remote ?? id }
+}
+
+/// A machine Dray's window is connected to, as the server's `island_links` answers.
+struct IslandLink: Decodable {
+    let id: String
+    let name: String
+    let url: String
+    let token: String
+}
 
 /// The draft and everything the panel does with it.
 @MainActor @Observable
@@ -44,7 +62,22 @@ final class Composer {
     // A notice is about the last thing tried, so whatever the reader does next retires it.
     var rows: [Row] = [] { didSet { notice = nil } }
     var typing = "" { didSet { if typing != oldValue { notice = nil } } }
-    var target: Target?
+    var target: Target? { didSet { viewing = nil } }
+    /// A transcript image drawn over the whole card, among the others it arrived with; X or Esc puts it away.
+    var viewing: Viewing?
+
+    struct Viewing: Equatable {
+        var images: [ImageRef]
+        var index: Int
+        var current: ImageRef { images[index] }
+    }
+
+    /// ← and → through the images the open one arrived with, round the ends.
+    func step(_ by: Int) {
+        guard var v = viewing, v.images.count > 1 else { return }
+        v.index = (v.index + by + v.images.count) % v.images.count
+        viewing = v
+    }
     var dictation = Dictation.idle {
         didSet {
             // Decided as the pill appears, so the hint arrives with it rather than a beat later.
@@ -70,8 +103,22 @@ final class Composer {
     @ObservationIgnored var recordingChanged: (Bool) -> Void = { _ in }
     /// When the microphone opened, for the timer; `nil` unless recording.
     var recordingSince: Date?
-    var mode = InputMode(rawValue: UserDefaults.standard.string(forKey: "island.mode") ?? "") ?? .compact {
+    var mode = InputMode(rawValue: UserDefaults.standard.string(forKey: "island.mode") ?? "") ?? .expanded {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: "island.mode") }
+    }
+    /// The session's newest turn over the input, or the input alone.
+    /// A string, as Dray's Settings writes every island pick.
+    var transcript = UserDefaults.standard.string(forKey: "island.transcript") != "hidden" {
+        didSet { UserDefaults.standard.set(transcript ? "shown" : "hidden", forKey: "island.transcript") }
+    }
+    /// The pinch is taught in the title row until the reader has pinched this many times.
+    static let pinchHints = 3
+    var pinchHint = UserDefaults.standard.integer(forKey: "island.pinches") < Composer.pinchHints
+
+    func pinched() {
+        let n = UserDefaults.standard.integer(forKey: "island.pinches") + 1
+        UserDefaults.standard.set(n, forKey: "island.pinches")
+        pinchHint = n < Self.pinchHints
     }
     var level: Float = 0
     var notice: String? { didSet { retryPath = nil } }
@@ -100,6 +147,8 @@ final class Composer {
             if shown != oldValue { Sound.keepAwake(shown) }
         }
     }
+    /// The panel can be seen: open on a Space the reader left, or covered, it is not, and nothing on it animates.
+    var onScreen = true
     /// Whether the panel has held the keys since it opened, which is when a bare Esc reaches it.
     var keyed = false
     var closeHint: String { keyed ? "Esc" : "⌘Esc" }
@@ -113,13 +162,23 @@ final class Composer {
         let d = UserDefaults.standard
         if let p = Placement(rawValue: d.string(forKey: "island.placement") ?? ""), p != placement { placement = p }
         if let m = InputMode(rawValue: d.string(forKey: "island.mode") ?? ""), m != mode { mode = m }
+        let t = d.string(forKey: "island.transcript") != "hidden"
+        if t != transcript { transcript = t }
     }
 
     // A new session's picks.
-    var projects: [Project] = []
-    var projectPath: String?
-    var agents: [AgentAvailability] = []
-    var models: [String: [Model]] = [:]
+    var checkouts: [Checkout] = []
+    /// Where a new task runs. A different machine answers a different agent and model list.
+    var checkout: Checkout? {
+        didSet { if checkout?.server != oldValue?.server { Task { await settlePicks() } } }
+    }
+    var projectPath: String? { checkout?.project.path }
+    /// The machine a new task's agent and model lists are read from.
+    var pickedServer: UUID { checkout?.server ?? server }
+    private var agentsOn: [UUID: [AgentAvailability]] = [:]
+    private var modelsOn: [UUID: [String: [Model]]] = [:]
+    var agents: [AgentAvailability] { agentsOn[pickedServer] ?? [] }
+    var models: [String: [Model]] { modelsOn[pickedServer] ?? [:] }
     var harness = UserDefaults.standard.string(forKey: "island.harness") ?? "claude_code" {
         didSet { UserDefaults.standard.set(harness, forKey: "island.harness") }
     }
@@ -163,10 +222,16 @@ final class Composer {
     var submits = 0
     var digits = 0
     private(set) var digit = 0
-    /// The session whose card is up, picked from the tabs; the oldest when unpicked.
+    /// The session whose card is up, picked from the list; the oldest when unpicked.
     var askTab: SessionKey?
+    /// The waiting sessions drawn as a list in place of the card, opened from its title.
+    var asksListed = false
+    /// The list is on screen, covering the card: a list of one is never drawn.
+    var listing: Bool { asksListed && attention.count > 1 }
     /// Every ask's id in the order it arrived, which is the order the tabs are in.
     private var askOrder: [String] = []
+    /// Asks the reader put away: still waiting in Dray, out of the pill and the cards until a new ask comes.
+    private var dismissed: Set<String> = []
 
     @ObservationIgnored var hide: () -> Void = {}
     @ObservationIgnored var present: () -> Void = {}
@@ -176,14 +241,33 @@ final class Composer {
     /// Hides the panel, runs the screenshot overlay, and opens it again.
     @ObservationIgnored var capture: () -> Void = {}
     @ObservationIgnored private var lastUsed = UserDefaults.standard.string(forKey: "island.lastSession")
+    /// `servers.json` ids here, since the store names a server by UUID.
+    @ObservationIgnored private var machineIds: [String: UUID] = [:]
 
     init(store: Store, server: UUID) {
         self.store = store
         self.server = server
         store.asksChanged = { [weak self] in self?.asksChanged() }
+        store.linksMayHaveMoved = { [weak self] in Task { await self?.followApp() } }
+        store.boatChanged = { [weak self] in
+            guard let self else { return }
+            // `self.store`, not the init's argument: the store owns this closure, so capturing it is a cycle.
+            dismissedBoats.formIntersection(self.store.boatAlerts)
+            // A sandbox newly warning is news: the pill lights up once, as an ask's does, then rests.
+            let warning = Set(self.store.boatAlerts.map(\.server))
+            if let refusal, !warning.contains(refusal.server) { self.refusal = nil }
+            if !warning.subtracting(boatsWarned).isEmpty, !shown { announce() }
+            boatsWarned = warning
+            pillChanged()
+        }
     }
 
     // MARK: Cards and alerts
+
+    /// A session's asks the island still offers, oldest first.
+    private func waiting(_ key: SessionKey) -> [AgentEvent] {
+        (store.asks[key] ?? []).filter { $0.payload.askId.map { !dismissed.contains($0) } ?? true }
+    }
 
     /// The sessions waiting on the reader, oldest ask first: the tabs over the card.
     var attention: [SessionKey] {
@@ -191,7 +275,7 @@ final class Composer {
             asks.compactMap { $0.payload.askId.flatMap(askOrder.firstIndex) }.min() ?? .max
         }
         // The answered card is gone to the reader already, so no pill waits on it.
-        return store.asks.filter { $0.value.contains { $0.id != leaving?.event.id } }
+        return store.asks.filter { waiting($0.key).contains { $0.id != leaving?.event.id } }
             .sorted { (first($0.value), $0.key.id) < (first($1.value), $1.key.id) }
             .map(\.key)
     }
@@ -204,7 +288,7 @@ final class Composer {
         guard cardsFirst || !busy else { return nil }
         let keys = attention
         guard let key = askTab.flatMap({ keys.contains($0) ? $0 : nil }) ?? keys.first,
-              let event = store.asks[key]?.first else { return nil }
+              let event = waiting(key).first else { return nil }
         return (key, event)
     }
 
@@ -231,8 +315,14 @@ final class Composer {
             asksPending = false
             let ids = store.asks.values.flatMap { $0.compactMap(\.payload.askId) }
             let fresh = ids.filter { !askOrder.contains($0) }
-            let hadCards = !askOrder.isEmpty
+            let hadCards = askOrder.contains { !dismissed.contains($0) }
             askOrder = askOrder.filter(ids.contains) + fresh
+            // Answered elsewhere down to one: the list is gone, so it must not reopen when another lands.
+            if attention.count < 2 { asksListed = false }
+            // A new ask brings back every one put away: dismissing quiets the pill, it answers nothing.
+            if fresh.isEmpty { dismissed.formIntersection(ids) } else { dismissed = [] }
+            // A dismissed ask answered in Dray is no card leaving, so it closes nothing here.
+            let live = ids.filter { !dismissed.contains($0) }
             if !fresh.isEmpty {
                 // An idle open panel draws the card at once, which says enough.
                 if !shown { announce() } else if busy || sent { heldAsk = true }
@@ -244,9 +334,9 @@ final class Composer {
             // Not while the reader is busy: a card answered elsewhere leaves them their draft.
             // Nor under a card's flash, which closes the panel itself once read,
             // nor on a new session, which the reader asked for with ⌘N.
-            if ids.isEmpty, hadCards, shown, !busy, !sent, target != .new { hide() }
+            if live.isEmpty, hadCards, shown, !busy, !sent, target != .new { hide() }
             // Answered elsewhere with the panel shut: the done pill is back in view, its clock with it.
-            if ids.isEmpty, hadCards, !shown {
+            if live.isEmpty, hadCards, !shown {
                 unseenDone = []
                 if !done.isEmpty { startDoneClock() }
             }
@@ -279,7 +369,9 @@ final class Composer {
 
     /// The panel shut: what was held is shown now, as the pill, with its one sound.
     private func released() {
+        viewing = nil
         cardsFirst = false
+        asksListed = false
         let ask = heldAsk && !attention.isEmpty, finished = heldDone && !done.isEmpty
         heldAsk = false
         heldDone = false
@@ -294,6 +386,18 @@ final class Composer {
         guard heldAsk, shown else { return }
         heldAsk = false
         chime()
+    }
+
+    /// One session's asks put away, or every session's with none named; the
+    /// pill goes once nothing is left. Nothing is answered, and the next new
+    /// ask brings every one back with it.
+    func dismissAsks(_ key: SessionKey? = nil) {
+        let asks = key.map { [store.asks[$0] ?? []] } ?? Array(store.asks.values)
+        dismissed.formUnion(asks.flatMap { $0.compactMap(\.payload.askId) })
+        if askTab == key || key == nil { askTab = nil }
+        asksListed = false
+        if attention.isEmpty, !busy { hide() }
+        pillChanged()
     }
 
     /// The attention pill: the panel, on the cards, whatever the draft holds.
@@ -319,11 +423,54 @@ final class Composer {
     static let doneFor: Duration = .seconds(6)
 
     /// Something to draw while the panel is shut: a card waiting outranks news.
-    var hasPill: Bool { !attention.isEmpty || !done.isEmpty }
+    var hasPill: Bool { !attention.isEmpty || !done.isEmpty || !boatAlerts.isEmpty }
+
+    /// Standing until extended, stopped or dismissed.
+    var boatAlerts: [BoatAlert] { store.boatAlerts.filter { !dismissedBoats.contains($0) } }
+    /// Keyed on the whole alert, `stopsAt` included, so a later warning about
+    /// the same sandbox is news again.
+    private var dismissedBoats: Set<BoatAlert> = []
+    /// Sandboxes already warning, so an alert redrawn with a new stop time is not announced again.
+    @ObservationIgnored private var boatsWarned: Set<String> = []
+
+    func dismissBoat(_ alert: BoatAlert) {
+        dismissedBoats.insert(alert)
+        if refusal?.server == alert.server { refusal = nil }
+        pillChanged()
+    }
+    /// Why the last Extend didn't take: a trial's cap, Dray being closed. Kept with the sandbox it was said of, so it
+    /// is drawn under that one's warning alone and goes when the warning does.
+    private var refusal: (server: String, why: String)?
+    var boatRefused: String? {
+        guard let refusal, boatAlerts.first?.server == refusal.server else { return nil }
+        return refusal.why
+    }
+
+    /// Sets the time left. It does not add, and it is every later resume's length too.
+    func extendBoat(_ alert: BoatAlert, minutes: Int) async {
+        let args: [String: JSON] = ["id": .string(alert.server), "minutes": .number(Double(minutes))]
+        do {
+            let _: JSON = try await store.call(server, "extend_boat", args, as: JSON.self)
+            refusal = nil
+        } catch {
+            refusal = (alert.server, error.localizedDescription)
+        }
+    }
 
     /// Dray says a session finished where its banner would have.
     func finished(_ id: String) {
-        let key = SessionKey(server: server, id: id)
+        guard let key = store.items.keys.first(where: { $0.id == id }) else {
+            // Dray reports a remote session over its own socket, which can be ahead
+            // of this island's read of that machine. A pill keyed to a guess opens
+            // nothing, so it waits for the index a while and is dropped after.
+            Task {
+                for _ in 0..<20 {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    if store.items.keys.contains(where: { $0.id == id }) { return finished(id) }
+                }
+            }
+            return
+        }
         done.removeAll { $0 == key }
         done.append(key)
         if shown || !attention.isEmpty { unseenDone.insert(key) } else { unseenDone.remove(key) }
@@ -367,13 +514,14 @@ final class Composer {
         Task { await showInApp(key) }
     }
 
-    /// The pill drawn while the panel is shut is the done pill, which ⌘⏎ answers.
-    var donePillUp: Bool { !shown && attention.isEmpty && !done.isEmpty }
+    /// The pill drawn while the panel is shut is the done pill, which ⌘⏎ answers. A boat warning is drawn ahead of
+    /// it, and Esc and ⌘⏎ were held system-wide then for a pill that was not on screen.
+    var donePillUp: Bool { !shown && attention.isEmpty && boatAlerts.isEmpty && !done.isEmpty }
 
     /// A number key on a card: a permission's option outright, a question's toggled.
     func pickOption(_ i: Int) {
-        // The flash covers the card, so a key now would answer one the reader cannot see.
-        guard !sent else { return }
+        // The flash, the list or a recording covers the card, so a key now would answer one the reader cannot see.
+        guard !sent, !listing, !listening else { return }
         switch ask?.event.payload {
         case .permissionRequested(let r)? where r.options.indices.contains(i):
             Task { await respond(r.options[i].id) }
@@ -433,9 +581,9 @@ final class Composer {
     /// Several answered in one visit are told as a group.
     private func closeOnLastCard(_ key: SessionKey, _ e: AgentEvent, _ label: String) {
         answered += 1
-        guard !busy, attention == [key], store.asks[key]?.count == 1 else { return }
+        guard !busy, attention == [key], waiting(key).count == 1 else { return }
         leaving = (key, e)
-        Sound.send?.play()
+        Sound.send?.playInBackground()
         flash(answered > 1 ? "\(answered) answered" : label)
     }
 
@@ -533,12 +681,34 @@ final class Composer {
     // MARK: Opening
 
     /// The session Dray's window has open, taken as the pick. Silent on any
-    /// failure — no app, the new-task page, a remote session — which leaves the pick as it was.
+    /// failure — no app, the new-task page, a machine not loaded yet — which leaves the pick as it was.
     func adoptAppSelection() async {
         guard case .string(let id)? = try? await store.call(server, "selected_session", as: JSON.self, timeout: .milliseconds(500))
         else { return }
-        let k = SessionKey(server: server, id: id)
-        if store.items[k] != nil { pick(.session(k)) }
+        // By id alone, which is unique across machines.
+        if let k = store.items.keys.first(where: { $0.id == id }) { pick(.session(k)) }
+    }
+
+    /// A project path as Dray keys it: as is on This Mac, `dray://<machine>/…`
+    /// on another. Drafts are Dray's own list on This Mac, so a remote one is
+    /// saved there under this spelling, as the app saves its own.
+    private func qualified(_ path: String, on: UUID) -> String {
+        guard on != server, let machine = machineIds.first(where: { $0.value == on })?.key else { return path }
+        return "dray://\(machine)\(path)"
+    }
+
+    /// Takes the machines Dray's window is connected to as this island's own. The
+    /// island is its companion, so it holds no list and opens no login of its own.
+    /// Left as it is when This Mac's server cannot answer, since that says nothing about them.
+    func followApp() async {
+        guard store.serverState[server] == .connected,
+              let links: [IslandLink] = try? await store.call(server, "island_links") else { return }
+        store.follow(links.map { link in
+            let id = machineIds[link.id] ?? UUID()
+            machineIds[link.id] = id
+            return (Server(id: id, name: link.name, url: link.url), link.url, link.token)
+        })
+        if target == .new { await loadPicks() }
     }
 
     /// With nothing picked, the last session picked, else the newest.
@@ -602,6 +772,10 @@ final class Composer {
     }
 
     func escape() {
+        if viewing != nil {
+            viewing = nil
+            return
+        }
         if openMenu != nil {
             openMenu = nil
             return
@@ -624,32 +798,111 @@ final class Composer {
 
     // MARK: New session
 
-    /// Read on every new task: the island outlives Dray, where projects get attached.
+    /// Read on every new task: projects get attached in Dray. One row per
+    /// repository across every connected machine, This Mac's first. A machine
+    /// that fails to answer just has no rows; only This Mac failing is worth saying.
     func loadPicks() async {
-        do {
-            async let p: [Project] = store.call(server, "list_projects")
-            async let a: [AgentAvailability] = store.call(server, "agent_availability")
-            (projects, agents) = try await (p, a)
-            if !projects.contains(where: { $0.path == projectPath }) {
-                projectPath = projects.max { $0.lastSelected < $1.lastSelected }?.path
+        let up = store.servers.filter { store.serverState[$0.id] == .connected }.map(\.id)
+        var read: [UUID: [Project]] = [:]
+        var failure: Error?
+        let home = server
+        await withTaskGroup(of: (UUID, Result<([Project], [AgentAvailability]), Error>).self) { group in
+            for id in up {
+                group.addTask { @MainActor [store] in
+                    do {
+                        // A stalled remote must not hold This Mac's projects for the default minute.
+                        let wait: Duration = id == home ? .seconds(60) : .seconds(5)
+                        async let p: [Project] = store.call(id, "list_projects", timeout: wait)
+                        async let a: [AgentAvailability] = store.call(id, "agent_availability", timeout: wait)
+                        return (id, .success(try await (p, a)))
+                    } catch {
+                        return (id, .failure(error))
+                    }
+                }
             }
-            // The track draws the first installed agent for a missing pick, so send that one too.
-            if let first = agents.first(where: \.available), !agents.contains(where: { $0.harness == harness && $0.available }) {
-                harness = first.harness
+            for await (id, answer) in group {
+                switch answer {
+                case .success(let (projects, agents)):
+                    read[id] = projects
+                    agentsOn[id] = agents
+                case .failure(let error):
+                    if id == server { failure = error }
+                }
             }
-            await loadModels()
-        } catch {
-            notice = error.localizedDescription
         }
+        if let failure { notice = failure.localizedDescription }
+        checkouts = up.flatMap { id in (read[id] ?? []).map { Checkout(server: id, project: $0) } }
+        if let held = checkouts.first(where: { $0.id == checkout?.id }) {
+            checkout = held
+        } else {
+            checkout = lastUsedCheckout(checkouts)
+        }
+        await settlePicks()
     }
 
+    /// The bar's picks made good on the picked machine, whose agents and models are its own.
+    private func settlePicks() async {
+        // The track draws the first installed agent for a missing pick, so send that one too.
+        if let first = agents.first(where: \.available), !agents.contains(where: { $0.harness == harness && $0.available }) {
+            harness = first.harness
+        }
+        await loadModels()
+    }
+
+    private func lastUsedCheckout(_ list: [Checkout]) -> Checkout? {
+        list.max { $0.project.lastSelected < $1.project.lastSelected }
+    }
+
+    /// One row per project, each where its first checkout sits, so the reader's order holds.
+    var projectGroups: [[Checkout]] {
+        var order: [String] = []
+        var groups: [String: [Checkout]] = [:]
+        for c in checkouts {
+            if groups[c.group] == nil { order.append(c.group) }
+            groups[c.group, default: []].append(c)
+        }
+        return order.compactMap { groups[$0] }
+    }
+
+    /// Every checkout of the picked project: what the machine control chooses between.
+    var siblings: [Checkout] { checkouts.filter { $0.group == checkout?.group } }
+
+    /// Picking a project lands on the machine it last ran on.
+    func pickProject(_ group: [Checkout]) {
+        if let c = lastUsedCheckout(group) { pickCheckout(c) }
+    }
+
+    /// Stamped on the server as Dray's own pick is, or the next read would land back
+    /// on the machine this moved away from.
+    func pickCheckout(_ c: Checkout) {
+        let now = Self.stamp.string(from: Date())
+        if let i = checkouts.firstIndex(where: { $0.id == c.id }) { checkouts[i].project.lastSelected = now }
+        checkout = checkouts.first { $0.id == c.id } ?? c
+        Task { _ = try? await store.call(c.server, "set_last_selected_project", ["path": .string(c.project.path)], as: JSON.self) }
+    }
+
+    /// A checkout as the machine control names it: `MachineSelector`'s reading.
+    /// Its machine, its folder where that machine holds two, and the folder alone
+    /// where every one is on This Mac, which is otherwise never named.
+    func checkoutLabel(_ c: Checkout, fullPath: Bool) -> String {
+        let path = c.project.path
+        let folder = fullPath ? path : (path as NSString).lastPathComponent
+        let on = siblings.filter { $0.server == c.server }
+        if on.count == siblings.count, c.server == server { return folder }
+        return on.count > 1 ? "\(store.name(of: c.server)) · \(folder)" : store.name(of: c.server)
+    }
+
+    /// Whether the bar draws the machine control: a project only on This Mac says nothing.
+    var showsMachine: Bool { siblings.count > 1 || checkout.map { $0.server != server } == true }
+
     func loadModels() async {
-        let h = harness
-        guard models[h] == nil else { return }
+        let h = harness, on = pickedServer
+        guard modelsOn[on]?[h] == nil else { return }
         // A failure caches nothing, or a read made before the socket was up
         // would leave the picker empty for the life of the process.
         do {
-            models[h] = try await store.call(server, "list_models", ["harness": .string(h)])
+            let list: [Model] = try await store.call(on, "list_models", ["harness": .string(h)])
+            modelsOn[on, default: [:]][h] = list
         } catch {
             notice = error.localizedDescription
         }
@@ -673,7 +926,12 @@ final class Composer {
     func nextEffort() {
         if let m = model, let level = after(m.efforts, effort) { pickEffort(level, for: m.id) }
     }
-    func nextProject() { projectPath = after(projects.map(\.path), projectPath) ?? projectPath }
+    func nextProject() {
+        let groups = projectGroups
+        guard let at = after(groups.map { $0[0].group }, checkout?.group),
+              let next = groups.first(where: { $0[0].group == at }) else { return }
+        pickProject(next)
+    }
 
     private func after<T: Equatable>(_ list: [T], _ current: T?) -> T? {
         guard !list.isEmpty else { return nil }
@@ -726,8 +984,14 @@ final class Composer {
         var failure: String?
         switch target {
         case .session(let k):
-            sent = await store.send(k, text, attachments: files) ? k : nil
-            if sent == nil { failure = store.lastError }
+            do {
+                let landed = try await landed(files, on: k.server)
+                sent = await store.send(k, text, attachments: landed) ? k : nil
+                if sent == nil { failure = store.lastError }
+            } catch {
+                sent = nil
+                failure = error.localizedDescription
+            }
         case .new:
             sent = await create(text, files)
             if sent == nil { failure = notice }
@@ -741,6 +1005,19 @@ final class Composer {
         // A pick made while the request ran is the reader's, and outranks this one.
         if self.target == target { self.target = .session(sent) }
         return true
+    }
+
+    /// Where `files` are once `on` can read them. A remote machine cannot read a
+    /// path on this Mac, so each is copied there first.
+    private func landed(_ files: [String], on: UUID) async throws -> [String] {
+        guard on != server, !files.isEmpty else { return files }
+        guard let c = store.connection(on) else { throw DrayError("Not connected") }
+        var paths: [String] = []
+        for file in files {
+            let url = URL(fileURLWithPath: file)
+            paths.append(try await c.upload(url, name: url.lastPathComponent))
+        }
+        return paths
     }
 
     /// A send that failed behind its Sent comes back as the draft, on the
@@ -811,7 +1088,7 @@ final class Composer {
         switch target {
         case .session(let k):
             guard let item = store.items[k] else { return }
-            draft["projectPath"] = .string(item.projectPath)
+            draft["projectPath"] = .string(qualified(item.projectPath, on: k.server))
             draft["harness"] = .string(item.harness)
             draft["model"] = .string(item.model)
             draft["effort"] = JSON(item.effort)
@@ -823,7 +1100,7 @@ final class Composer {
                 notice = "Pick a project first."
                 return
             }
-            draft["projectPath"] = .string(projectPath)
+            draft["projectPath"] = .string(qualified(projectPath, on: pickedServer))
             draft["harness"] = .string(harness)
             draft["model"] = .string(modelId)
             draft["effort"] = JSON(effort)
@@ -845,31 +1122,34 @@ final class Composer {
 
     /// `useSessions.ts`'s argument set for a new session, from the bar's picks.
     private func create(_ text: String, _ files: [String]) async -> SessionKey? {
-        guard let cwd = projectPath else {
+        guard let checkout else {
             notice = "Pick a project first."
             return nil
         }
         let id = UUID().uuidString.lowercased()
-        do {
-            let outcome: SendOutcome = try await store.call(server, "send_msg", [
+        let on = checkout.server
+        // Read before the upload's await: the reader may change a pick meanwhile.
+        var args: [String: JSON] = [
                 "sessionId": .string(id),
                 "prompt": .string(text),
-                "attachmentPaths": .array(files.map { .string($0) }),
                 "harness": .string(harness),
                 "model": .string(modelId),
                 "effort": JSON(effort),
                 "permissionMode": .string(Picks.stanceFor(harness, stance)),
                 "fast": .bool(false),
-                "cwd": .string(cwd),
+                "cwd": .string(checkout.project.path),
                 // No branch picker here, so the server reads the checkout's own at creation.
                 "branch": nil,
                 "useWorktree": .bool(worktree),
                 "worktreeName": nil,
                 "baseRef": nil,
                 "isNewSession": true,
-            ])
-            if let item = outcome.snapshot { store.created(server, item) }
-            return SessionKey(server: server, id: id)
+        ]
+        do {
+            args["attachmentPaths"] = .array(try await landed(files, on: on).map { .string($0) })
+            let outcome: SendOutcome = try await store.call(on, "send_msg", args)
+            if let item = outcome.snapshot { store.created(on, item) }
+            return SessionKey(server: on, id: id)
         } catch {
             notice = error.localizedDescription
             return nil

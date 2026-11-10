@@ -22,6 +22,7 @@ struct ToolCall: Identifiable {
     let title: String?
     let output: String?
     let state: ToolState
+    var images: [ImageRef] = []
 
     /// What the row names beside its verb — the desktop's `toolSummary`.
     var summary: String? { title ?? toolSummary(name, toolType, input) }
@@ -35,12 +36,12 @@ enum Item: Identifiable {
     case group(id: String, name: String, calls: [ToolCall], targets: Int, target: String?)
     /// A prompt typed into the running turn: the reader's own words, kept on
     /// screen through a collapse.
-    case prompt(id: String, text: String, from: String?)
+    case prompt(id: String, text: String, from: String?, images: [ImageRef])
     case failure(id: String, text: String)
 
     var id: String {
         switch self {
-        case .text(let id, _), .group(let id, _, _, _, _), .prompt(let id, _, _), .failure(let id, _): id
+        case .text(let id, _), .group(let id, _, _, _, _), .prompt(let id, _, _, _), .failure(let id, _): id
         case .tool(let call): call.id
         }
     }
@@ -57,7 +58,7 @@ enum Item: Identifiable {
 /// A user prompt to the `turn_completed` that closes it.
 struct Turn: Identifiable {
     let id: String
-    var prompt: (text: String, from: String?)?
+    var prompt: (text: String, from: String?, images: [ImageRef])?
     var work: [Item] = []
     var completed = false
     /// The red row a failed turn closes on.
@@ -97,6 +98,66 @@ extension Turn {
     }
 }
 
+/// The pictures tools handed back in a folded stretch, drawn under its summary
+/// line so a fold never hides them: the desktop's `segmentMedia`.
+func foldedImages(_ items: [Item]) -> [ImageRef] {
+    items.flatMap { item -> [ImageRef] in
+        switch item {
+        case .tool(let call): call.images
+        case .group(_, _, let calls, _, _): calls.flatMap(\.images)
+        default: []
+        }
+    }
+}
+
+/// One picture in a turn's gallery, and the line naming where it came from:
+/// "Read /tmp/hero.png", "Attached IMG_2041.jpg".
+struct Shot: Hashable {
+    let ref: ImageRef
+    let verb: String
+    let target: String?
+}
+
+extension Turn {
+    /// Every picture in the turn, in reading order: what the viewer pages through.
+    var gallery: [Shot] {
+        func attached(_ images: [ImageRef]) -> [Shot] {
+            images.map { Shot(ref: $0, verb: "Attached", target: fileName($0)) }
+        }
+        func calls(_ calls: [ToolCall]) -> [Shot] {
+            calls.flatMap { call in
+                call.images.map { Shot(ref: $0, verb: toolLabel(call.name, pending: false), target: call.summary) }
+            }
+        }
+        func shown(_ text: String) -> [Shot] {
+            markdownBlocks(text).compactMap {
+                guard case .image(let alt, let url) = $0 else { return nil }
+                let ref = ImageRef(path: nil, url: url, mimeType: nil)
+                return Shot(ref: ref, verb: "Image", target: alt.isEmpty ? fileName(ref) : alt)
+            }
+        }
+        var out = attached(prompt?.images ?? [])
+        for item in work {
+            switch item {
+            case .tool(let call): out += calls([call])
+            case .group(_, _, let c, _, _): out += calls(c)
+            case .prompt(_, _, _, let images): out += attached(images)
+            case .text(_, let text): out += shown(text)
+            case .failure: break
+            }
+        }
+        if finalLifted, let finalText { out += shown(finalText) }
+        // One page per picture: a tap finds it by ref, so a repeat would open on the first.
+        var seen = Set<ImageRef>()
+        return out.filter { seen.insert($0.ref).inserted }
+    }
+}
+
+private func fileName(_ ref: ImageRef) -> String? {
+    // A `data:` URL has no name, only bytes.
+    (ref.path ?? ref.url).flatMap { $0.hasPrefix("data:") ? nil : $0.split(separator: "/").last.map(String.init) }
+}
+
 /// "3 tool calls · 1 message", the desktop's summary line.
 func summaryLabel(_ items: [Item]) -> String {
     var calls = 0, messages = 0
@@ -131,7 +192,7 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
     for e in main {
         switch e.payload {
         case .toolStarted(let callId, _, _, _, _) where results[callId] == nil: open.append(callId)
-        case .userMessage(_, _, _, false): abandoned.formUnion(open); open = []
+        case .userMessage(_, _, _, false, _): abandoned.formUnion(open); open = []
         default: break
         }
     }
@@ -176,14 +237,14 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
 
     for e in main {
         switch e.payload {
-        case .userMessage(let text, let fromTitle, let fromId, let queued):
+        case .userMessage(let text, let fromTitle, let fromId, let queued, let images):
             let shown = stripSender(text, title: fromTitle, id: fromId)
             if queued, current != nil {
                 flushCalls()
-                current?.work.append(.prompt(id: e.id, text: shown, from: fromTitle))
+                current?.work.append(.prompt(id: e.id, text: shown, from: fromTitle, images: images))
             } else {
                 close()
-                current = Turn(id: e.id, prompt: (shown, fromTitle))
+                current = Turn(id: e.id, prompt: (shown, fromTitle, images))
             }
         case .assistantText(let text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
             if current == nil { current = Turn(id: "head-\(e.id)") }
@@ -195,11 +256,13 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
             let state: ToolState = r.map { $0.isError ? .failed : .done }
                 ?? (busy && !abandoned.contains(callId) ? .pending : .done)
             let call = ToolCall(id: e.id, name: name, toolType: toolType, input: input,
-                                title: title, output: r?.text, state: state)
-            // A delegated run keeps its own row, as the desktop's panel link does.
-            if let last = calls.last, last.name != name || toolType == "subagent_spawn" { flushCalls() }
+                                title: title, output: r?.text, state: state, images: r?.images ?? [])
+            // A delegated run keeps its own row, as the desktop's panel link does, and so
+            // does a call carrying a picture: a closed group would hide it.
+            let alone = toolType == "subagent_spawn" || !call.images.isEmpty
+            if let last = calls.last, last.name != name || alone { flushCalls() }
             calls.append(call)
-            if toolType == "subagent_spawn" { flushCalls() }
+            if alone { flushCalls() }
         case .error(let message):
             if current == nil { current = Turn(id: "head-\(e.id)") }
             flushCalls()
@@ -207,7 +270,12 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
         case .turnCompleted(let failed, let finalText):
             if current == nil { current = Turn(id: "head-\(e.id)") }
             current?.completed = true
-            if failed { current?.failure = finalText ?? "Turn failed" }
+            if failed {
+                // Empty as well as absent, as the desktop reads it: a harness can
+                // send a failed turn's sentence as "".
+                let said = finalText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                current?.failure = said.isEmpty ? "Turn failed" : said
+            }
             close()
         default:
             break
@@ -218,9 +286,17 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
 }
 
 /// A relayed prompt opens with a line for the receiving agent; the bubble
-/// names the sender instead. Rebuilt exactly as `relay.ts` does, never parsed.
+/// names the sender instead. Rebuilt as `relay.ts` does up to the sender's id.
+///
+/// A sender on another machine is named with it, ` on <machine>`, which this
+/// client does not keep. That much is read to the line's end rather than
+/// rebuilt: everything before it matched whole, so it cannot take any of the
+/// message, and without it a remote sender's line stayed drawn in the bubble.
 func stripSender(_ text: String, title: String?, id: String?) -> String {
     guard let title, let id else { return text }
-    let prefix = "[message from the Dray session \"\(title)\" (\(id))]\n\n"
-    return text.hasPrefix(prefix) ? String(text.dropFirst(prefix.count)) : text
+    let opening = "[message from the Dray session \"\(title)\" (\(id))"
+    guard text.hasPrefix(opening) else { return text }
+    let rest = text.dropFirst(opening.count)
+    guard rest.hasPrefix("]\n\n") || rest.hasPrefix(" on "), let end = rest.range(of: "]\n\n") else { return text }
+    return String(rest[end.upperBound...])
 }

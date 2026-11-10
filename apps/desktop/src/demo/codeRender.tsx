@@ -21,7 +21,7 @@ import "../App.css";
 /// token. The question is whether code comes out highlighted — not blank, not
 /// grey — and how fast, across every palette and both modes. Open it in Safari
 /// or the app, never the session browser: JavaScriptCore is what the app runs
-/// and V8 hides the engine gap (see "Rendering code" in CLAUDE.md).
+/// and V8 hides the engine gap (see docs/rendering-code.md).
 
 const PATH = "/Users/me/dray/apps/desktop/src/App.tsx";
 const lines = big.split("\n");

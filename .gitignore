@@ -27,9 +27,11 @@ dist-ssr
 # Staged from vscode-material-icons on every Vite start — see vite.config.ts
 apps/desktop/public/file-icons
 
-# Browser-only harness for looking at panel states without a session or gh.
-# Local tooling, not part of any build — see the PR panel notes in CLAUDE.md.
-apps/desktop/demo
+# Local copies of sounds the demo pages audition and may not ship: Apple's
+# system sounds and three open-source ones. The demo pages themselves are
+# tracked — see "Demo pages" in CLAUDE.md.
+apps/desktop/demo/system-sounds/
+apps/desktop/demo/oss-sounds/
 
 # Next.js
 .next

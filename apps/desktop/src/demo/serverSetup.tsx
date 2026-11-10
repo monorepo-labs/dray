@@ -79,8 +79,8 @@ const FAIL = {
     fix: { kind: "trust_host", host, keyType: "ED25519", fingerprint: "SHA256:Jq3kYw7c2X0d9p5mO1nqVf8vR4bL6tZ0yHs2eWuA9gk" },
   }),
   changedKey: (host: string): Failure => ({
-    message: `${host} is answering with a different host key than last time. That can mean someone is in the middle. If you know why it changed, remove the old key and try again:`,
-    fix: { kind: "copy", command: `ssh-keygen -R ${host}` },
+    message: `${host} is answering with a different host key than last time. That can mean someone is in the middle, or that its address now belongs to another machine. If you know why it changed, remove the old key and try again:`,
+    fix: { kind: "copy", command: `ssh-keygen -R ${host} -f /Users/you/.ssh/known_hosts` },
   }),
   password: (host: string, line: string): Failure => ({
     message: `${host} wants a password. Set up a key first, then try again:`,
@@ -149,7 +149,7 @@ const serverInfo = (over: Partial<ServerInfo> & Pick<ServerInfo, "id" | "name">)
   release: null,
   beta: false,
   latest: null,
-  restarting: false,
+  app: false, restarting: false, boat: null,
   ...over,
 });
 
@@ -673,7 +673,7 @@ const GROUPS: { title: string; scenarios: Scenario[] }[] = [
         drive: async (d) => {
           await d.click("Add server");
           await d.click("Use an address and token instead");
-          await d.type('input[placeholder="127.0.0.1:7317"]', "100.64.0.12:7317");
+          await d.type('input[placeholder="wss://…opentunnel.xyz"]', "100.64.0.12:7317");
           await d.type('input[type="password"]', "4f1c9a7e2b6d0c3f8a5e1d7b9c2a4f6e");
           await d.type('input[placeholder="vps"]', "studio");
         },

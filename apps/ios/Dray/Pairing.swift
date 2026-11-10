@@ -37,7 +37,19 @@ struct PairScanner: View {
                 case nil:
                     Orb(.loading, size: 32)
                 case true?:
-                    Scanner(onScan: onScan) { allowed = false }.ignoresSafeArea()
+                    ZStack {
+                        Scanner(onScan: onScan) { allowed = false }.ignoresSafeArea()
+                        VStack(spacing: 0) {
+                            Viewfinder()
+                                .stroke(Theme.text, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                                .frame(width: 240, height: 240)
+                            Text("Point at the pairing code").font(Theme.Font.subhead).foregroundStyle(Theme.text)
+                                .padding(.top, 36)
+                            Text("Run dray server pair on the server.").font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
+                                .padding(.top, Theme.Space.xs)
+                        }
+                        .allowsHitTesting(false)
+                    }
                 default:
                     EmptyState(title: "Can't use the camera",
                                message: "Allow Dray to use the camera in Settings, or type the address and token instead.") {
@@ -63,6 +75,21 @@ struct PairScanner: View {
             default: allowed = false
             }
         }
+    }
+}
+
+/// The four corners the code is aimed into, drawn on a 240pt square.
+private struct Viewfinder: Shape {
+    func path(in r: CGRect) -> Path {
+        let s = r.width / 240, inset = 4 * s, arm = 44 * s, radius = 20 * s
+        var p = Path()
+        for (x, y, dx, dy) in [(r.minX, r.minY, 1.0, 1.0), (r.maxX, r.minY, -1, 1), (r.maxX, r.maxY, -1, -1), (r.minX, r.maxY, 1, -1)] {
+            let cx = x + dx * inset, cy = y + dy * inset
+            p.move(to: CGPoint(x: cx, y: cy + dy * arm))
+            p.addArc(tangent1End: CGPoint(x: cx, y: cy), tangent2End: CGPoint(x: cx + dx * arm, y: cy), radius: radius)
+            p.addLine(to: CGPoint(x: cx + dx * arm, y: cy))
+        }
+        return p
     }
 }
 
