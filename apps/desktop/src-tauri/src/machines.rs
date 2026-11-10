@@ -122,7 +122,69 @@ async fn write(list: &[Saved]) -> Result<(), String> {
     let body = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
     store::write_atomic(&path, body).await.map_err(|e| format!("{e:#}"))?;
     tokio::spawn(crate::serve::host_call("reload_servers", Value::Null));
+    tokio::spawn(announce_sharing());
     Ok(())
+}
+
+/// What `share_machines` answers and `machines_shared` carries: whether this
+/// server shares its machines (#847), and which, by id and name. None while off.
+pub async fn sharing() -> Value {
+    let on = crate::settings::read().await.share_machines;
+    let machines: Vec<Value> = match on {
+        true => load().await.iter().filter(|s| !s.off).map(|s| json!({ "id": s.id, "name": s.name })).collect(),
+        false => Vec::new(),
+    };
+    json!({ "on": on, "machines": machines })
+}
+
+/// The switch on Settings → Servers and `dray machine share`.
+pub async fn set_sharing(on: bool) -> Result<Value, String> {
+    crate::settings::update(|s| s.share_machines = on).await.map_err(|e| format!("{e:#}"))?;
+    announce_sharing().await;
+    Ok(sharing().await)
+}
+
+/// Tells every client what is shared now. The Mac app's own list writes have
+/// no hub to tell, so a phone catches those up on its next connect.
+async fn announce_sharing() {
+    crate::serve::HUB.publish("machines_shared", &sharing().await);
+}
+
+/// A shared machine by id, refusing everything while sharing is off.
+async fn shared(id: &str) -> Result<Saved, String> {
+    if !crate::settings::read().await.share_machines {
+        return Err("this server does not share its machines".into());
+    }
+    load().await.into_iter().find(|s| s.id == id && !s.off).ok_or_else(|| "this server shares no such machine".into())
+}
+
+/// A socket to shared machine `id` that has said `hello` under that machine's
+/// token and read nothing back, so its welcome or refusal reaches the client
+/// the relay is for.
+pub async fn relay(id: &str, mut hello: Value) -> Result<Socket, String> {
+    let saved = shared(id).await?;
+    let (url, token) = reach(&saved).await?;
+    hello["token"] = token.into();
+    let attempt = async {
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.map_err(|e| format!("could not reach {}: {e}", saved.name))?;
+        ws.send(Message::text(hello.to_string())).await.map_err(|e| e.to_string())?;
+        Ok(ws)
+    };
+    let opened = tokio::time::timeout(ADMIT, attempt).await.unwrap_or_else(|_| Err(format!("{} did not answer in time", saved.name)));
+    if opened.is_err() {
+        drop_login(&saved.id, &url);
+    }
+    opened
+}
+
+/// Where shared machine `id` serves `/file` and `/upload`, and its token.
+pub async fn relay_http(id: &str) -> Result<(String, String), String> {
+    let (url, token) = reach(&shared(id).await?).await?;
+    let base = match url.strip_prefix("wss://") {
+        Some(rest) => format!("https://{rest}"),
+        None => url.replacen("ws://", "http://", 1),
+    };
+    Ok((base, token))
 }
 
 /// Spelled the way a reader types it — `host:port`, `http://…`, `ws://…`, or
@@ -321,14 +383,18 @@ async fn connect(saved: &Saved) -> Result<Socket, String> {
     match admit(&url, &token).await {
         Ok((ws, _)) => Ok(ws),
         Err(e) => {
-            // Only the login that failed: a retry may have replaced it with
-            // a working one meanwhile.
-            let mut tunnels = tunnels();
-            if tunnels.get(&saved.id).is_some_and(|t| format!("ws://127.0.0.1:{}", t.port) == url) {
-                tunnels.remove(&saved.id);
-            }
+            drop_login(&saved.id, &url);
             Err(e)
         }
+    }
+}
+
+/// Drops `id`'s kept login if it is the one at `url` — only the login that
+/// failed, since a retry may have replaced it with a working one meanwhile.
+fn drop_login(id: &str, url: &str) {
+    let mut tunnels = tunnels();
+    if tunnels.get(id).is_some_and(|t| format!("ws://127.0.0.1:{}", t.port) == url) {
+        tunnels.remove(id);
     }
 }
 

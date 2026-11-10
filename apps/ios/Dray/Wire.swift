@@ -210,6 +210,14 @@ struct BoatAlert: Decodable, Hashable {
     }
 }
 
+/// What `share_machines` answers and `machines_shared` carries: the machines a
+/// server lets this phone reach through it (#847). None while it shares none.
+struct Sharing: Decodable {
+    struct Machine: Decodable { let id: String; let name: String }
+    let on: Bool
+    let machines: [Machine]
+}
+
 struct BoatAlerts: Decodable {
     let alerts: [BoatAlert]
 }

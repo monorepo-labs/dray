@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Network
 import Observation
@@ -9,6 +10,16 @@ struct Server: Codable, Identifiable, Hashable {
     var url: String
     /// The phone's own switch: off, it neither connects nor shows the server's tasks. Never sent.
     var on = true
+    /// Set on a machine reached through a paired server that shares its list
+    /// (#847). Never saved: it comes and goes with that server's answer.
+    var via: Via?
+}
+
+/// A relayed server's way in: the paired server it goes through, whose token
+/// it uses, and its id in that server's list.
+struct Via: Codable, Hashable {
+    let parent: UUID
+    let machine: String
 }
 
 extension Server {
@@ -20,6 +31,13 @@ extension Server {
         url = try c.decode(String.self, forKey: .url)
         on = try c.decodeIfPresent(Bool.self, forKey: .on) ?? true
     }
+}
+
+/// A relayed machine's id, the same on every launch so its transcripts and
+/// Settings row survive a reconnect: hashed from the server it goes through.
+private func relayedId(_ parent: UUID, _ machine: String) -> UUID {
+    let digest = Array(SHA256.hash(data: Data("\(parent.uuidString)/\(machine)".utf8)))
+    return UUID(uuid: digest.withUnsafeBytes { $0.load(as: uuid_t.self) })
 }
 
 /// A session is named by its server and its id; nothing on the wire carries
@@ -149,6 +167,7 @@ final class Store {
     /// Transcripts stay: a session left open across off and on is reloaded by `connected`,
     /// which finds it only through them, and its view never asks again.
     private func drop(_ id: UUID) {
+        for s in servers where s.via?.parent == id { forget(s.id) }
         connections.removeValue(forKey: id)?.stop()
         serverState[id] = nil
         for key in items.keys where key.server == id { items[key] = nil }
@@ -191,6 +210,7 @@ final class Store {
     func updateToken(_ id: UUID, _ token: String) {
         Keychain.set(token, for: id.uuidString)
         connections[id]?.update(token: token)
+        for s in servers where s.via?.parent == id { connections[s.id]?.update(token: token) }
     }
 
     func connection(_ server: UUID) -> Connection? { connections[server] }
@@ -216,6 +236,7 @@ final class Store {
 
     func refresh() async {
         for s in servers where serverState[s.id] == .connected {
+            await loadShared(s.id)
             await loadIndex(s.id)
             await loadProjects(s.id)
             await loadMarks(s.id, force: true)
@@ -236,16 +257,43 @@ final class Store {
     }
 
     private func save() {
-        UserDefaults.standard.set(try? JSONEncoder().encode(servers), forKey: "servers")
+        UserDefaults.standard.set(try? JSONEncoder().encode(servers.filter { $0.via == nil }), forKey: "servers")
+    }
+
+    /// Brings `parent`'s relayed servers in line with what it shares. The Island
+    /// follows the app's links instead, which already name these machines.
+    private func share(_ parent: UUID, _ machines: [Sharing.Machine]) {
+        guard home == nil, let p = servers.first(where: { $0.id == parent }), p.via == nil else { return }
+        for s in servers where s.via?.parent == parent && !machines.contains(where: { $0.id == s.via?.machine }) { forget(s.id) }
+        for m in machines {
+            let id = relayedId(parent, m.id)
+            if let i = servers.firstIndex(where: { $0.id == id }) {
+                servers[i].name = m.name
+                continue
+            }
+            let s = Server(id: id, name: m.name, url: p.url, via: Via(parent: parent, machine: m.id))
+            // Listed under the server it goes through.
+            let after = servers.lastIndex { $0.id == parent || $0.via?.parent == parent } ?? servers.count - 1
+            servers.insert(s, at: after + 1)
+            start(s)
+        }
+    }
+
+    private func loadShared(_ server: UUID) async {
+        guard home == nil, servers.first(where: { $0.id == server })?.via == nil else { return }
+        // A server from before sharing answers `unknown command`, and shares nothing.
+        guard let sharing: Sharing = try? await connections[server]?.call("share_machines") else { return }
+        share(server, sharing.machines)
     }
 
     private func start(_ s: Server, read: (() -> (url: String, token: String)?)? = nil, client: String? = nil) {
         // No token saved connects anyway: the server refuses it, which draws as
         // a refused token, and that state is where a new one is pasted.
-        let token = read?()?.token ?? Keychain.get(s.id.uuidString) ?? ""
+        let token = read?()?.token ?? Keychain.get((s.via?.parent ?? s.id).uuidString) ?? ""
         let c = Connection(serverId: s.id, url: s.url, token: token)
         c.refresh = read
         c.client = client
+        c.via = s.via?.machine
         c.onState = { [weak self] state in
             guard let self else { return }
             serverState[s.id] = state
@@ -260,6 +308,8 @@ final class Store {
     /// transcript, so nothing that happened while it was down is missed.
     private func connected(_ server: UUID) async {
         if server == home { linksMayHaveMoved() }
+        // Its own task: a sandbox's sessions need not wait on this server's.
+        Task { await loadShared(server) }
         // Heard on the old socket, so older than the read below — and a read
         // never moves `modified`, so a stale `completed` would win the tie.
         for key in statuses.keys where key.server == server { statuses[key] = nil }
@@ -598,6 +648,9 @@ final class Store {
             linksMayHaveMoved()
         case "drafts_changed":
             draftsRevision += 1
+        case "machines_shared":
+            guard let sharing = try? decoder.decode(EventFrame<Sharing>.self, from: data).payload else { return }
+            share(server, sharing.machines)
         case "session_created", "session_changed":
             guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload else { return }
             items[SessionKey(server: server, id: item.sessionId)] = item

@@ -464,6 +464,7 @@ fn this_machine_only(request: &Request) -> bool {
             | Request::RenameServer(_)
             | Request::SetServerOn(_)
             | Request::SetRemoteAccess(_)
+            | Request::ShareMachines(_)
     )
 }
 
@@ -744,6 +745,12 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::SetRemoteAccess(set) => {
             let now = crate::remote_access::set_remote_access(app.clone(), set.on).await.map_err(anyhow::Error::msg)?;
             Ok(Response::RemoteAccess { on: now.on })
+        }
+        Request::ShareMachines(share) => {
+            let now = crate::machines::set_sharing(share.on).await.map_err(anyhow::Error::msg)?;
+            let names = now["machines"].as_array().into_iter().flatten();
+            let machines = names.filter_map(|m| m["name"].as_str().map(str::to_string)).collect();
+            Ok(Response::MachinesShared { on: share.on, machines })
         }
         Request::SetAside(aside) => {
             crate::set_session_flags(&aside.session_id, None, None, None, Some(aside.aside), app.clone()).await?;
