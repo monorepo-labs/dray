@@ -673,7 +673,7 @@ const GROUPS: { title: string; scenarios: Scenario[] }[] = [
         drive: async (d) => {
           await d.click("Add server");
           await d.click("Use an address and token instead");
-          await d.type('input[placeholder="127.0.0.1:7317"]', "100.64.0.12:7317");
+          await d.type('input[placeholder="wss://…opentunnel.xyz"]', "100.64.0.12:7317");
           await d.type('input[type="password"]', "4f1c9a7e2b6d0c3f8a5e1d7b9c2a4f6e");
           await d.type('input[placeholder="vps"]', "studio");
         },
