@@ -642,6 +642,15 @@ pub async fn island_done(session_id: String) -> Result<(), String> {
     if session_id.is_empty() || !session_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("not a session id".into());
     }
+    // Linux's island is this app's child, and hears it on the pipe it holds.
+    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    return crate::island::done(&session_id);
+    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    island_done_mac(session_id).await
+}
+
+#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+async fn island_done_mac(session_id: String) -> Result<(), String> {
     let dir = island_done_dir().ok_or("no home directory")?;
     tokio::fs::create_dir_all(&dir).await.map_err(|err| format!("could not reach the island: {err}"))?;
     tokio::fs::write(dir.join(&session_id), b"").await.map_err(|err| format!("could not reach the island: {err}"))?;
@@ -650,6 +659,7 @@ pub async fn island_done(session_id: String) -> Result<(), String> {
 }
 
 /// The island's inbox for finished sessions; `Delegate.doneDir` in the island names it too.
+#[cfg(not(all(feature = "desktop", target_os = "linux")))]
 fn island_done_dir() -> Option<std::path::PathBuf> {
     Some(std::env::home_dir()?.join("Library/Caches/com.yogesh.dray.island/done"))
 }
@@ -658,6 +668,7 @@ fn island_done_dir() -> Option<std::path::PathBuf> {
 /// writes the first three as well (a pinch writes the transcript too), so they
 /// are read back rather than kept here, and `captureTaken` is the island's
 /// alone: the chord it could not register.
+#[cfg(not(all(feature = "desktop", target_os = "linux")))]
 const ISLAND_PREFS: [&str; 6] =
     ["island.placement", "island.mode", "island.transcript", "island.tap", "island.captureKey", "island.captureTaken"];
 
@@ -678,6 +689,14 @@ fn island_pref_valid(name: &str, value: &str) -> bool {
 /// The island's stored picks, by name; an absent one is the island's default.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn island_prefs() -> std::collections::HashMap<String, String> {
+    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    return crate::island::prefs();
+    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    island_prefs_mac().await
+}
+
+#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+async fn island_prefs_mac() -> std::collections::HashMap<String, String> {
     let reads = ISLAND_PREFS.map(|name| async move {
         let out = tokio::process::Command::new("defaults")
             .args(["read", "com.yogesh.dray.island", name])
@@ -694,10 +713,18 @@ pub async fn island_prefs() -> std::collections::HashMap<String, String> {
 /// Darwin notification: it caches the picks, and holds its capture key.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_island_pref(name: String, value: String) -> Result<(), String> {
-    use tokio::process::Command;
     if !island_pref_valid(&name, &value) {
         return Err(format!("not an island setting: {name} = {value}"));
     }
+    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    return crate::island::set_pref(&name, &value);
+    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    set_island_pref_mac(name, value).await
+}
+
+#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+async fn set_island_pref_mac(name: String, value: String) -> Result<(), String> {
+    use tokio::process::Command;
     let out = Command::new("defaults")
         .args(["write", "com.yogesh.dray.island", &name, "-string", &value])
         .output()
