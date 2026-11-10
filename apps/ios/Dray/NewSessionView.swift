@@ -30,6 +30,7 @@ struct NewSessionView: View {
     @AppStorage("new.stance") private var stance = "auto"
     @AppStorage("new.fast") private var fast = false
     @AppStorage("new.worktree") private var worktree = false
+    @AppStorage(Dictations.serverKey) private var dictationPick = ""
     @State private var branches: BranchList?
     /// A branch picked over a dirty tree, waiting on Stash or Bring, with the
     /// project it was picked in.
@@ -244,10 +245,10 @@ struct NewSessionView: View {
             if dictating {
                 DictationBar(draft: .newSession)
                     .padding(Theme.Space.s)
-            } else if let server, store.canDictate(server) {
+            } else if store.dictationServer(dictationPick) != nil {
                 HStack {
                     Spacer(minLength: 0)
-                    DictateButton(server: server, draft: .newSession)
+                    DictateButton(draft: .newSession)
                 }
                 .padding(Theme.Space.s)
             }

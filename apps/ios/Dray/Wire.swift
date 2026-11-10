@@ -114,9 +114,17 @@ func parseDate(_ s: String) -> Date? {
     return f.date(from: s)
 }
 
-/// The server's first frame, for the one field the phone reads off it.
+/// The server's first frame: what it can do and what it runs.
 struct Welcome: Decodable {
     let dictation: Bool?
+    /// The crate version: the app's own on a Mac.
+    let version: String?
+    /// The CLI release a `dray-serve` shipped in; none on a local build or a Mac.
+    let release: String?
+    let dev: Bool?
+
+    /// Dray on a Mac, whose server follows the app's own updates.
+    var macApp: Bool { dictation == true && release == nil && dev != true }
 }
 
 struct SessionItem: Decodable, Hashable {

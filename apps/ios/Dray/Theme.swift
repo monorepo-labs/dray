@@ -17,6 +17,12 @@ enum Theme {
     static let raised = Color(hex: 0x262626)
     /// `--surface-selected`: the current row.
     static let selected = Color(hex: 0x2B2B2B)
+    /// An icon's tile on a raised card: a server, Add server, Scan QR code.
+    static let tile = Color(hex: 0x333333)
+    /// A switch's track when off.
+    static let off = Color(hex: 0x3A3A3A)
+    /// A server's dot while it is on its way: quieter than any word beside it.
+    static let dim = Color(hex: 0x525252)
 
     // Ink.
     static let text = Color(hex: 0xFAFAFA)
@@ -55,6 +61,10 @@ enum Theme {
         static let md: CGFloat = 10
         /// Cards and sheets' groups.
         static let lg: CGFloat = 14
+        /// Icon tiles.
+        static let tile: CGFloat = 12
+        /// Settings' server cards and a server's own groups.
+        static let group: CGFloat = 18
         /// The composer and the sent bubble.
         static let xl: CGFloat = 20
     }
@@ -180,6 +190,44 @@ struct PrimaryButtonStyle: ButtonStyle {
             .background(enabled ? fill : Theme.raised, in: .rect(cornerRadius: Theme.Radius.md, style: .continuous))
             .shadow(color: .black.opacity(enabled ? 0.4 : 0), radius: 2, y: 1)
             .pressed(configuration.isPressed)
+    }
+}
+
+/// The full-width white capsule inside a server's status card: Update, Scan QR code.
+struct CapsuleButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(Theme.Font.headline)
+            .foregroundStyle(enabled ? Theme.page : Theme.tertiary)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(enabled ? Theme.text : Theme.raised, in: Capsule())
+            .pressed(configuration.isPressed)
+    }
+}
+
+/// The settings switch: the desktop's near-white track with a dark thumb when
+/// on, which the system `Toggle` cannot draw.
+struct SwitchStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            withAnimation(Theme.motion) { configuration.isOn.toggle() }
+        } label: {
+            HStack(spacing: Theme.Space.m) {
+                configuration.label.frame(maxWidth: .infinity, alignment: .leading)
+                Capsule()
+                    .fill(configuration.isOn ? Theme.primary : Theme.off)
+                    .frame(width: 51, height: 31)
+                    .overlay(alignment: configuration.isOn ? .trailing : .leading) {
+                        Circle().fill(configuration.isOn ? Theme.onPrimary : Theme.secondary).padding(2)
+                    }
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(configuration.isOn ? "On" : "Off")
+        .accessibilityAddTraits(.isToggle)
     }
 }
 

@@ -623,7 +623,7 @@ struct Composer: View {
                         DictationBar(draft: key)
                     } else {
                         Spacer(minLength: 0)
-                        DictateButton(server: key.server, draft: key)
+                        DictateButton(draft: key)
                         if busy && text.isEmpty {
                             Button {
                                 Haptic.firm()
