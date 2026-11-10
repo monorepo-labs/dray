@@ -21,12 +21,6 @@ pub(crate) fn as_child() -> bool {
     crate::is_dev() || cfg!(not(target_os = "macos"))
 }
 
-/// Whether the server is this app's child rather than a launchd job: a dev
-/// build, and any build off a Mac, where there is no launchd to run one.
-pub(crate) fn as_child() -> bool {
-    crate::is_dev() || cfg!(not(target_os = "macos"))
-}
-
 fn target() -> String {
     format!("gui/{}/{}", unsafe { libc::getuid() }, label())
 }
