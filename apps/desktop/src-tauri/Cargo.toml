@@ -177,6 +177,8 @@ desktop = [
   # with `desktop` alone. See chromium.rs.
   "dep:bzip2",
   "dep:tar",
+  # The composer's paste reads GTK's clipboard on Linux (attachments.rs).
+  "dep:gtk",
 ]
 cef = ["desktop", "dep:cef", "dep:gtk", "dep:gdkx11", "dep:x11"]
 # `connect` and TLS: a server reaches other machines too (machines.rs).

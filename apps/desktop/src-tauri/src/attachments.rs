@@ -150,8 +150,12 @@ pub async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
 
 /// What the clipboard holds, as far as the composer's paste is concerned.
 #[derive(Debug, PartialEq)]
-// Built from the macOS pasteboard alone; elsewhere a paste reads as nothing.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+// Built from the Mac's pasteboard and the Linux app's GTK clipboard; a build
+// with neither reads every paste as text.
+#[cfg_attr(
+    not(any(target_os = "macos", all(target_os = "linux", feature = "desktop"))),
+    allow(dead_code)
+)]
 enum Pasted {
     Files(Vec<String>),
     Image(Vec<u8>),
@@ -162,14 +166,12 @@ enum Pasted {
 /// Paths for what a paste should pin to the tray: copied files as they are, or
 /// a clipboard image written out as a PNG. Empty means the paste is text.
 ///
-/// Read off `NSPasteboard` rather than the webview's `DataTransfer`, which
-/// hands a copied file over as bytes with no path, and a non-image file has to
-/// travel as an `@path` mention naming the real one.
+/// Read off `NSPasteboard` or GTK's clipboard rather than the webview's
+/// `DataTransfer`, which hands a copied file over as bytes with no path, and a
+/// non-image file has to travel as an `@path` mention naming the real one.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn paste_attachments() -> Vec<String> {
-    let pasted = tokio::task::spawn_blocking(read_pasteboard)
-        .await
-        .unwrap_or(Pasted::Text);
+    let pasted = read_pasteboard().await;
 
     match pasted {
         Pasted::Files(paths) => paths,
@@ -188,8 +190,12 @@ pub async fn paste_attachments() -> Vec<String> {
 /// spreadsheet or a Pages selection puts both on the clipboard, and pasting
 /// cells as a picture of them is not what anybody meant.
 #[cfg(target_os = "macos")]
-fn read_pasteboard() -> Pasted {
-    objc2::rc::autoreleasepool(|_| read_from(&objc2_app_kit::NSPasteboard::generalPasteboard()))
+async fn read_pasteboard() -> Pasted {
+    tokio::task::spawn_blocking(|| {
+        objc2::rc::autoreleasepool(|_| read_from(&objc2_app_kit::NSPasteboard::generalPasteboard()))
+    })
+    .await
+    .unwrap_or(Pasted::Text)
 }
 
 /// [`read_pasteboard`] over any pasteboard, so a test can hand it a private one
@@ -247,9 +253,130 @@ fn read_from(pb: &objc2_app_kit::NSPasteboard) -> Pasted {
     converted.map_or(Pasted::Text, |data| Pasted::Image(data.to_vec()))
 }
 
-#[cfg(not(target_os = "macos"))]
-fn read_pasteboard() -> Pasted {
+/// The Mac's order over GTK's clipboard, which owns the X selection on the
+/// connection the app already holds. A paste waits on another app answering,
+/// so one that never does reads as text after [`gtk_clipboard::PASTE_WAIT`]
+/// rather than holding the composer's text paste behind it.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+async fn read_pasteboard() -> Pasted {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    // GTK is main thread only, and the default context is the loop tao runs
+    // there. Every read below is a callback, so that loop never blocks on one.
+    gtk::glib::MainContext::default().invoke(move || gtk_clipboard::read(tx));
+    tokio::time::timeout(gtk_clipboard::PASTE_WAIT, rx)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or(Pasted::Text)
+}
+
+#[cfg(not(any(target_os = "macos", all(target_os = "linux", feature = "desktop"))))]
+async fn read_pasteboard() -> Pasted {
     Pasted::Text
+}
+
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+mod gtk_clipboard {
+    use super::Pasted;
+    use gtk::gdk;
+    use tokio::sync::oneshot::Sender;
+
+    pub(super) const PASTE_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+    /// File managers put a file list on the clipboard as URIs: `text/uri-list`
+    /// from most, `x-special/gnome-copied-files` from Nautilus and its forks,
+    /// whose first line is `copy` or `cut`.
+    const FILE_TARGETS: [&str; 2] = ["text/uri-list", "x-special/gnome-copied-files"];
+
+    /// What to fetch, decided from the target names alone.
+    #[derive(Debug, PartialEq)]
+    pub(super) enum Want {
+        Files(&'static str),
+        Text,
+        Png,
+        /// Any other `image/*`, converted through gdk-pixbuf.
+        Image,
+    }
+
+    /// Files, then text, then an image: the Mac's order, for the Mac's reason.
+    /// `None` is a clipboard holding nothing a paste could use.
+    pub(super) fn choose(targets: &[String]) -> Option<Want> {
+        let has = |name: &str| targets.iter().any(|t| t == name);
+        if let Some(files) = FILE_TARGETS.into_iter().find(|t| has(t)) {
+            return Some(Want::Files(files));
+        }
+        let text = targets.iter().any(|t| {
+            matches!(
+                t.as_str(),
+                "UTF8_STRING" | "STRING" | "TEXT" | "COMPOUND_TEXT"
+            ) || t.starts_with("text/plain")
+        });
+        if text {
+            return Some(Want::Text);
+        }
+        if has("image/png") {
+            return Some(Want::Png);
+        }
+        targets
+            .iter()
+            .any(|t| t.starts_with("image/"))
+            .then_some(Want::Image)
+    }
+
+    /// The local paths in a file list, skipping the `copy`/`cut` line and any
+    /// URI that names no local file.
+    pub(super) fn paths(list: &str) -> Vec<String> {
+        list.lines()
+            .filter_map(|line| gtk::glib::filename_from_uri(line.trim()).ok())
+            .map(|(path, _)| path.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// Asks for the clipboard's targets, then for the one [`choose`] picks,
+    /// and sends what came back.
+    pub(super) fn read(tx: Sender<Pasted>) {
+        let clipboard = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
+        clipboard.request_contents(&gdk::Atom::intern("TARGETS"), move |clipboard, data| {
+            let names: Vec<String> = data
+                .targets()
+                .unwrap_or_default()
+                .iter()
+                .map(|atom| atom.name().to_string())
+                .collect();
+            match choose(&names) {
+                Some(Want::Files(target)) => {
+                    clipboard.request_contents(&gdk::Atom::intern(target), move |_, data| {
+                        let files = paths(&String::from_utf8_lossy(&data.data()));
+                        // A list of web links alone is text to whoever copied it.
+                        let _ = tx.send(if files.is_empty() {
+                            Pasted::Text
+                        } else {
+                            Pasted::Files(files)
+                        });
+                    });
+                }
+                Some(Want::Png) => {
+                    clipboard.request_contents(&gdk::Atom::intern("image/png"), move |_, data| {
+                        let png = data.data();
+                        let _ = tx.send(if png.starts_with(b"\x89PNG") {
+                            Pasted::Image(png)
+                        } else {
+                            Pasted::Text
+                        });
+                    });
+                }
+                Some(Want::Image) => {
+                    clipboard.request_image(move |_, pixbuf| {
+                        let png = pixbuf.and_then(|p| p.save_to_bufferv("png", &[]).ok());
+                        let _ = tx.send(png.map_or(Pasted::Text, Pasted::Image));
+                    });
+                }
+                Some(Want::Text) | None => {
+                    let _ = tx.send(Pasted::Text);
+                }
+            }
+        });
+    }
 }
 
 /// How long a pasted image or an uploaded file outlives its arrival. The send
@@ -579,6 +706,40 @@ mod tests {
             pb.setString_forType(&NSString::from_str("file:///tmp/a%20b.txt"), NSPasteboardTypeFileURL);
         }
         assert_eq!(read_from(&pb), Pasted::Files(vec!["/tmp/a b.txt".into()]));
+    }
+
+    /// The same order on GTK's targets. The first list is Nautilus 46's,
+    /// captured; the rest are what Dolphin, a spreadsheet, a browser's Copy
+    /// Image and a BMP-only copy offer.
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
+    #[test]
+    fn a_linux_paste_takes_files_then_text_then_an_image() {
+        use gtk_clipboard::{choose, Want};
+        let pick = |list: &str| choose(&list.split(' ').map(String::from).collect::<Vec<_>>());
+
+        let nautilus = "SAVE_TARGETS TIMESTAMP TARGETS x-special/gnome-copied-files \
+            application/vnd.portal.filetransfer application/vnd.portal.files text/uri-list \
+            UTF8_STRING COMPOUND_TEXT TEXT STRING text/plain;charset=utf-8";
+        assert_eq!(pick(nautilus), Some(Want::Files("text/uri-list")));
+        assert_eq!(
+            pick("x-special/gnome-copied-files UTF8_STRING"),
+            Some(Want::Files("x-special/gnome-copied-files"))
+        );
+        assert_eq!(pick("text/plain;charset=utf-8 image/png"), Some(Want::Text));
+        assert_eq!(pick("text/html image/png image/bmp"), Some(Want::Png));
+        assert_eq!(pick("image/bmp TARGETS"), Some(Want::Image));
+        assert_eq!(pick("TARGETS TIMESTAMP"), None);
+    }
+
+    /// Nautilus's leading `copy`, a percent-escaped space and a web link.
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
+    #[test]
+    fn reads_local_paths_out_of_a_copied_file_list() {
+        let list = "copy\nfile:///tmp/a%20b.txt\r\nhttps://example.com/x\nfile:///home/me/c.png";
+        assert_eq!(
+            gtk_clipboard::paths(list),
+            vec!["/tmp/a b.txt", "/home/me/c.png"]
+        );
     }
 
     /// A file is named the way the CLI reading it can act on.
