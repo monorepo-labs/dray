@@ -179,6 +179,9 @@ pub struct Island {
     done_keys: Option<x11::DoneKeys>,
     /// The sender the done pill's keys report through.
     tx: Option<mpsc::UnboundedSender<Msg>>,
+    /// The panel stepped aside for a screenshot and comes back after it: not
+    /// a close the reader made, so what it covered is neither shown nor spent.
+    stepped_aside: bool,
 }
 
 /// One screenshot's run: the row held for it, whether dictation was
@@ -960,8 +963,11 @@ fn show(island: &Entity<Island>, cx: &mut App) {
     if island.read(cx).window.is_some() {
         return;
     }
-    // The panel covers the done pill: what it already showed is spent.
-    cover_done(island, cx);
+    // The panel covers the done pill: what it already showed is spent. Not
+    // on coming back from a screenshot, which covered nothing new.
+    if !island.update(cx, |island, _| std::mem::take(&mut island.stepped_aside)) {
+        cover_done(island, cx);
+    }
     if let Some(server) = &island.read(cx).server {
         server.relist();
         // Counted by the server off this connection; nothing rides but the name.
@@ -1840,6 +1846,7 @@ fn hide_own(island: &Entity<Island>, recording: bool, open: bool, cx: &mut App) 
         ids.extend(i.ink_window.as_ref().and_then(|w| w.1));
         ids.extend(i.pill_x_window);
     } else {
+        island.update(cx, |island, _| island.stepped_aside = true);
         close(island, cx);
     }
     unmap_own(ids)
@@ -1903,6 +1910,11 @@ fn end_capture(island: &Entity<Island>, shot: Option<(image::RgbaImage, capture:
         if run.was_open {
             show(island, cx);
         }
+    }
+    // Back from the shot: a finish that landed meanwhile has its pill now,
+    // and its clock with it, since none ran while the overlay was up.
+    if island.read(cx).window.is_none() && !island.read(cx).done.is_empty() {
+        start_done_clock(island, cx);
     }
     sync_pill(island, cx);
     let written = shot.as_ref().map(|(image, _, _)| capture::write(image));
@@ -2305,6 +2317,9 @@ fn cover_done(island: &Entity<Island>, cx: &mut App) {
 
 /// The panel shut: a finish held under it is announced now, as the pill.
 fn released_done(island: &Entity<Island>, cx: &mut App) {
+    if island.read(cx).stepped_aside {
+        return;
+    }
     let (held, empty_asks, any) = {
         let i = island.read(cx);
         (i.held_done, i.asks.attention().is_empty(), !i.done.is_empty())
@@ -2335,7 +2350,8 @@ fn start_done_clock(island: &Entity<Island>, cx: &mut App) {
             // Only a pill on screen runs out; one under the panel or the
             // attention pill waits.
             let i = island.read(cx);
-            if clock == i.done_clock && !i.done_hovered && i.window.is_none() && i.asks.attention().is_empty() {
+            // Nor one hidden under a screenshot's overlay.
+            if clock == i.done_clock && !i.done_hovered && i.window.is_none() && i.shot.is_none() && i.asks.attention().is_empty() {
                 clear_done(&island, cx);
             }
         });
