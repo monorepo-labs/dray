@@ -1799,10 +1799,171 @@ pub async fn fetch_file(server: &str, path: &str) -> Result<(String, Vec<u8>), S
     Ok((kind, body))
 }
 
-/// One span of a remote file, the `Range` the webview's `<video>` asked for
-/// passed through, so a video seeks and is not held whole in memory per read.
+/// One span of a remote file, for the webview's `<video>`, read through
+/// [`BLOCKS`]. WebKit walks a custom scheme's MP4 box by box — `bytes=0-7`,
+/// `bytes=28-35`, each waiting on the last — so passing each ask through cost
+/// a round trip per box header, ~0.5s through a tunnel, and a recording's
+/// metadata took minutes to arrive (#823). A miss fetches whole aligned
+/// blocks, and the rest of the walk answers from memory.
 pub async fn fetch_range(server: &str, path: &str, range: &str) -> Result<FetchedFile, String> {
-    download_file(server, path, Some(range)).await
+    let Some((first, last)) = open_span(range) else {
+        return download_file(server, path, Some(range)).await;
+    };
+    let file = (server.to_string(), path.to_string());
+    // The scheme cannot stream, so an open `bytes=0-` would wait on the whole
+    // file; a shorter 206 is legal and the player asks again where it ended.
+    let last = last.unwrap_or(u64::MAX).min(first.saturating_add(SPAN_LIMIT - 1));
+    let (from, to) = (first / BLOCK, last / BLOCK);
+    let missing = {
+        let mut blocks = BLOCKS.lock().unwrap();
+        blocks.first_missing(&file, from, to).map(|start| {
+            // Reading on from a held block is playback, which crosses a block
+            // a second at a recording's bitrate; one round trip a block only
+            // just kept up through a tunnel. A first read or a seek stays one
+            // block, so its frame comes sooner.
+            let playing = start > 0 && blocks.fresh(&file, start - 1).is_some();
+            (start, if playing { to.max(start + READ_AHEAD - 1) } else { to })
+        })
+    };
+    if let Some((start, to)) = missing {
+        let ask = format!("bytes={}-{}", start * BLOCK, to.saturating_add(1).saturating_mul(BLOCK) - 1);
+        let fetched = download_file(server, path, Some(&ask)).await?;
+        let (at, len) = match fetched.content_range.as_deref().and_then(content_range) {
+            Some((at, len)) => (at, len),
+            // A server answering the whole file: every block is in it.
+            None => (0, fetched.body.len() as u64),
+        };
+        BLOCKS.lock().unwrap().put(&file, at, len, &fetched.kind, &fetched.body);
+    }
+    let hit = BLOCKS.lock().unwrap().read(&file, first, last);
+    match hit {
+        Some(hit) => Ok(hit),
+        // `first`'s block went while the fetch waited — aged out, or pushed
+        // out by another file's reads — so the span is asked for itself.
+        None => download_file(server, path, Some(&format!("bytes={first}-{last}"))).await,
+    }
+}
+
+/// Bytes per cached block. A whole MP4 header fits in the first one.
+const BLOCK: u64 = 1 << 20;
+/// Most bytes one answer carries: a frame's worth sooner, rather than the
+/// whole file late.
+const SPAN_LIMIT: u64 = 4 * BLOCK;
+/// Blocks one miss fetches during playback.
+const READ_AHEAD: u64 = 4;
+/// Blocks held across every file, least recently used going first.
+const BLOCKS_HELD: usize = 64;
+/// How long a block is trusted. A recording is rewritten under the same name
+/// and nothing on the wire says it changed, so a block outliving its viewing
+/// would play the old take.
+const BLOCK_TTL: Duration = Duration::from_secs(120);
+
+static BLOCKS: LazyLock<Mutex<Blocks>> = LazyLock::new(Default::default);
+
+/// `(server, path)`.
+type FileKey = (String, String);
+
+struct Block {
+    file: FileKey,
+    index: u64,
+    fetched: std::time::Instant,
+    /// The whole file's length and type, carried on every block so any one
+    /// answers for them.
+    len: u64,
+    kind: String,
+    bytes: std::sync::Arc<[u8]>,
+}
+
+// ponytail: linear scan, fine at 64 entries.
+#[derive(Default)]
+struct Blocks {
+    held: VecDeque<Block>,
+}
+
+impl Blocks {
+    fn fresh(&mut self, file: &FileKey, index: u64) -> Option<&Block> {
+        self.held.retain(|b| b.fetched.elapsed() < BLOCK_TTL);
+        self.held.iter().find(|b| b.index == index && b.file == *file)
+    }
+
+    /// The first block in `from..=to` not held, stopping at the file's end
+    /// where a held block says where that is.
+    fn first_missing(&mut self, file: &FileKey, from: u64, to: u64) -> Option<u64> {
+        for index in from..=to {
+            match self.fresh(file, index) {
+                Some(b) if index.saturating_add(1).saturating_mul(BLOCK) >= b.len => return None,
+                Some(_) => {}
+                None => return Some(index),
+            }
+        }
+        None
+    }
+
+    /// Files `body`, which starts `at` bytes into a file `len` long. `at` is
+    /// block-aligned, since every ask this makes is.
+    fn put(&mut self, file: &FileKey, at: u64, len: u64, kind: &str, body: &[u8]) {
+        for (n, chunk) in body.chunks(BLOCK as usize).enumerate() {
+            let index = at / BLOCK + n as u64;
+            // A short block is only whole at the file's end.
+            if chunk.len() as u64 != BLOCK && index * BLOCK + chunk.len() as u64 != len {
+                break;
+            }
+            self.held.retain(|b| !(b.index == index && b.file == *file));
+            self.held.push_back(Block {
+                file: file.clone(),
+                index,
+                fetched: std::time::Instant::now(),
+                len,
+                kind: kind.to_string(),
+                bytes: chunk.into(),
+            });
+        }
+        while self.held.len() > BLOCKS_HELD {
+            self.held.pop_front();
+        }
+    }
+
+    /// Bytes `first..=last` as a 206, cut short where a block is missing or
+    /// the file ends; `None` where not even `first` is held.
+    fn read(&mut self, file: &FileKey, first: u64, last: u64) -> Option<FetchedFile> {
+        let (len, kind) = {
+            let b = self.fresh(file, first / BLOCK)?;
+            (b.len, b.kind.clone())
+        };
+        let last = last.min(len.checked_sub(1)?);
+        if first > last {
+            return None;
+        }
+        let mut body = Vec::with_capacity((last - first + 1) as usize);
+        for index in first / BLOCK..=last / BLOCK {
+            let Some(at) = self.held.iter().position(|b| b.index == index && b.file == *file) else { break };
+            // Touched, so the block being played is the last one dropped.
+            let block = self.held.remove(at)?;
+            let start = (first.max(index * BLOCK) - index * BLOCK) as usize;
+            let end = ((last + 1).min(index * BLOCK + block.bytes.len() as u64) - index * BLOCK) as usize;
+            body.extend_from_slice(&block.bytes[start..end]);
+            self.held.push_back(block);
+        }
+        let end = first + body.len() as u64 - 1;
+        Some(FetchedFile { status: 206, kind, content_range: Some(format!("bytes {first}-{end}/{len}")), body })
+    }
+}
+
+/// `bytes=a-` or `bytes=a-b`, the spans a player asks; `None` for a suffix
+/// or several ranges, which pass through uncached.
+fn open_span(range: &str) -> Option<(u64, Option<u64>)> {
+    let (first, last) = range.strip_prefix("bytes=")?.split_once('-')?;
+    let first = first.trim().parse().ok()?;
+    match last.trim() {
+        "" => Some((first, None)),
+        last => last.parse().ok().filter(|&l| l >= first).map(|l| (first, Some(l))),
+    }
+}
+
+/// `bytes a-b/len` → `(a, len)`.
+fn content_range(header: &str) -> Option<(u64, u64)> {
+    let (span, len) = header.strip_prefix("bytes ")?.split_once('/')?;
+    Some((span.split_once('-')?.0.parse().ok()?, len.parse().ok()?))
 }
 
 /// Written once under a fresh uuid (`attachments/<session>/<uuid>.<ext>`)
@@ -1965,6 +2126,55 @@ pub async fn upload_attachment(server: String, path: String, id: String) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WebKit's box walk: after one block lands, every small ask is answered
+    /// from it, and an answer never runs past the file's end.
+    #[test]
+    fn a_video_is_read_in_blocks() {
+        let file = ("s".to_string(), "/v.mp4".to_string());
+        let len = BLOCK * 2 + 10;
+        let body: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let mut blocks = Blocks::default();
+        assert_eq!(blocks.first_missing(&file, 0, 0), Some(0));
+
+        blocks.put(&file, 0, len, "video/mp4", &body[..(BLOCK * 2) as usize]);
+        assert_eq!(blocks.first_missing(&file, 0, 1), None);
+        let box_header = blocks.read(&file, 28, 35).unwrap();
+        assert_eq!(box_header.body, body[28..36]);
+        assert_eq!(box_header.content_range.as_deref(), Some(&*format!("bytes 28-35/{len}")));
+
+        // Across a block edge, and cut short where the next block is missing.
+        let across = blocks.read(&file, BLOCK - 4, BLOCK * 3).unwrap();
+        assert_eq!(across.body, body[(BLOCK - 4) as usize..(BLOCK * 2) as usize]);
+        assert_eq!(blocks.first_missing(&file, 2, 3), Some(2));
+
+        // The short last block is whole, and nothing is asked past it.
+        blocks.put(&file, BLOCK * 2, len, "video/mp4", &body[(BLOCK * 2) as usize..]);
+        assert_eq!(blocks.first_missing(&file, 2, 5), None);
+        let tail = blocks.read(&file, BLOCK * 2, u64::MAX).unwrap();
+        assert_eq!(tail.body, body[(BLOCK * 2) as usize..]);
+        assert!(blocks.read(&file, len, len + 5).is_none());
+    }
+
+    /// A body cut off mid-block files the whole blocks before it alone, or a
+    /// short block would answer as though the file ended there.
+    #[test]
+    fn a_short_block_mid_file_is_not_kept() {
+        let file = ("s".to_string(), "/v.mp4".to_string());
+        let mut blocks = Blocks::default();
+        blocks.put(&file, 0, BLOCK * 4, "video/mp4", &vec![0; (BLOCK + 5) as usize]);
+        assert_eq!(blocks.first_missing(&file, 0, 1), Some(1));
+    }
+
+    #[test]
+    fn reads_the_spans_a_player_asks() {
+        assert_eq!(open_span("bytes=0-"), Some((0, None)));
+        assert_eq!(open_span("bytes=28-35"), Some((28, Some(35))));
+        assert_eq!(open_span("bytes=-500"), None, "a suffix passes through");
+        assert_eq!(open_span("bytes=0-1,5-6"), None, "several pass through");
+        assert_eq!(open_span("bytes=9-3"), None);
+        assert_eq!(content_range("bytes 1048576-2097151/29806920"), Some((1048576, 29806920)));
+    }
 
     #[test]
     fn keeps_attachments_alone_within_budget() {
