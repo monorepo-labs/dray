@@ -1,12 +1,10 @@
 //! Which models pi can actually run here, asked of pi.
 //!
-//! The other two harnesses list their models in `models.rs` because each has
-//! one vendor and a handful of names. pi is multi-provider: the list depends on
-//! which providers the reader has logged into, and it changed the moment a
-//! second one was added on the probe machine. No table written here could name
-//! them.
+//! pi is multi-provider: the list depends on which providers the reader has
+//! logged into, and it changed the moment a second one was added on the probe
+//! machine. No table written here could name them.
 //!
-//! So this spawns a throwaway `pi --mode rpc`, asks, and kills it. There is
+//! So this spawns a throwaway `pi --mode rpc`, asks, and lets it exit. There is
 //! precedent: `claude_code::commands` does exactly this for the slash-command
 //! picker, and for the same reason — the picker has to exist before a session
 //! does, so there is no child to ask until one is made.
@@ -22,10 +20,10 @@ use super::rpc::{PiClient, HANDSHAKE_TIMEOUT};
 
 /// How long a cached answer stands.
 ///
-/// Unlike the slash-command cache next door, this one expires. A provider
-/// logged into while Dray is open is exactly the case a reader would then try
-/// to use, and "restart the app" is a poor answer to a list that is *supposed*
-/// to follow their logins.
+/// Expiring, like the slash-command cache next door and unlike Codex's list.
+/// A provider logged into while Dray is open is exactly the case a reader
+/// would then try to use, and "restart the app" is a poor answer to a list
+/// that is *supposed* to follow their logins.
 const FRESH_FOR: Duration = Duration::from_secs(120);
 
 /// One entry, keyed by nothing: the list depends on the reader's providers, not
@@ -66,7 +64,7 @@ pub fn forget() {
     CACHE.forget();
 }
 
-/// Spawns a throwaway pi, asks it, kills it.
+/// Spawns a throwaway pi, asks it, and lets it exit — never a kill.
 async fn probe() -> Result<Vec<Model>> {
     let (mut child, client) = super::spawn_probe(None, "models").await?;
 

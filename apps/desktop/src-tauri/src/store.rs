@@ -1436,7 +1436,12 @@ pub async fn backfill_removed_worktrees() -> Result<()> {
 fn mark_relocated(items: &mut [SessionIndexItem], dir_exists: impl Fn(&str) -> bool) -> bool {
     let mut changed = false;
     for item in items.iter_mut() {
-        if !dir_exists(&item.cwd) {
+        // A fork into a new tree has no directory until its first send makes
+        // one, and `fork_from` is what says so. Read as a tree that was
+        // deleted, it lost `worktree_name` here and then spawned in the shared
+        // checkout it was forked to get away from.
+        let unmade_fork = item.fork_from.is_some() && item.worktree_name.is_some();
+        if !unmade_fork && !dir_exists(&item.cwd) {
             if let Some(root) = surviving_root(item, &dir_exists) {
                 item.project_path = root.clone();
                 item.cwd = root;
@@ -2011,6 +2016,10 @@ pub async fn append_session_event(session_id: &str, event: AgentEvent) -> Result
     let line = format!("{}\n", serde_json::to_string(&event)?);
 
     file.write_all(line.as_bytes()).await?;
+    // tokio's `write_all` answers once the bytes are handed to a blocking task,
+    // not once they are written. The flush waits for that write and carries its
+    // error, so a full disk is reported and two appends keep their order.
+    file.flush().await?;
 
     Ok(())
 }
@@ -2070,6 +2079,8 @@ pub async fn record_parse_failure(
         .context("failed to open parse failure log")?;
 
     file.write_all(line.as_bytes()).await?;
+    // Waited for, or the lock above is released before the write it guards.
+    file.flush().await?;
 
     Ok(())
 }
@@ -3082,6 +3093,38 @@ mod tests {
             !mark_relocated(&mut items, |dir| dir == "/p"),
             "a second pass must report nothing to write"
         );
+    }
+
+    /// A fork into a new tree is indexed before the tree exists, and a server
+    /// restart in between must not read that as a tree someone deleted.
+    #[test]
+    fn a_fork_whose_tree_is_not_made_yet_keeps_its_worktree() {
+        let parent = SessionIndexItem::new(
+            "parent",
+            Harness::Codex,
+            "/p",
+            "/p",
+            None,
+            None,
+            "hi",
+            ModelId::new("gpt-6.1-sol"),
+            None,
+            ApprovalPolicy::Auto,
+            false,
+            None,
+        );
+        let mut items = vec![parent.fork("child", Some("calm-owl"))];
+
+        assert!(!mark_relocated(&mut items, |dir| dir == "/p"));
+        assert_eq!(items[0].cwd, "/p/.claude/worktrees/calm-owl");
+        assert_eq!(items[0].worktree_name.as_deref(), Some("calm-owl"));
+        assert!(!items[0].worktree_removed);
+
+        // Once it has spawned the instruction is cleared, and a missing tree
+        // means what it always did.
+        items[0].fork_from = None;
+        assert!(mark_relocated(&mut items, |dir| dir == "/p"));
+        assert_eq!(items[0].cwd, "/p");
     }
 
     /// Dray's own delete used to set `cwd = project_path` flat, so a session

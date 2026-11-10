@@ -320,6 +320,12 @@ pub(super) fn forget(tab: i32) {
     if let Some(m) = CONSOLE.lock().unwrap().as_mut() {
         m.remove(&tab);
     }
+    // Dropping a call's sender is what answers it "the tab closed": left in the
+    // map, a verb in flight sat out the whole timeout, a screenshot holding the
+    // capture lock with it.
+    if let Some(m) = PENDING.lock().unwrap().as_mut() {
+        m.retain(|(owner, _), _| *owner != tab);
+    }
     // A recorded tab closing uncovers the pane and unlocks its tabs, but the
     // recording stays until `record stop`, which still hands back what was
     // filmed before the close.
@@ -1006,7 +1012,8 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         BrowserAction::Wait { selector, ms, url, text, load } => {
             let tab = driven_tab(session)?;
             if let Some(ms) = ms {
-                tokio::time::sleep(Duration::from_millis(ms.min(60_000))).await;
+                let ms = ms.min(60_000);
+                tokio::time::sleep(Duration::from_millis(ms)).await;
                 return ok(format!("waited {ms}ms"));
             }
             if let Some(state) = load {
@@ -1283,7 +1290,7 @@ async fn capture(tab: i32, w: u32, h: u32, full: bool) -> Result<Vec<u8>, String
 
 /// Opens and closes the pane's shutter. The capture lays the page out at
 /// the asked-for size, and the widget the reader is watching is the one
-/// doing it — so the pane hides the view and draws a camera card for the
+/// doing it — so the pane hides the view behind a still of the page for the
 /// length of the shot, rather than showing a page reflowing to a size
 /// nobody asked to look at. `shot` names it, so the pane's ack can name it
 /// back; see the Mac's `cover`.
@@ -1377,7 +1384,15 @@ fn key_events(spec: &str) -> Result<(Value, Value), String> {
             } else {
                 String::new()
             };
-            let vk = c.to_ascii_uppercase() as i32;
+            // A letter's or digit's virtual key is its ASCII code, and nothing
+            // else's is: `.` is 46, which is Delete, and `%` is 37, which is
+            // Left — so punctuation sent that way ran an editing command before
+            // its own character landed. Zero names no key; `text` types it.
+            let vk = if c.is_ascii_alphanumeric() || c == ' ' {
+                c.to_ascii_uppercase() as i32
+            } else {
+                0
+            };
             // A chord is a command, not text: ⌘A must select all, not type "a".
             let text = (modifiers & !8 == 0).then(|| c.to_string());
             (k, code, vk, text)
@@ -1546,6 +1561,18 @@ mod tests {
         let (down, up) = key_events("Enter").unwrap();
         assert_eq!(down["windowsVirtualKeyCode"], 13);
         assert_eq!(up["type"], "keyUp");
+    }
+
+    /// Punctuation's ASCII codes are other keys' virtual codes.
+    #[test]
+    fn punctuation_never_borrows_another_keys_code() {
+        for key in [".", "%", "&", "'", "(", "#", "$", "!"] {
+            let (down, _) = key_events(key).unwrap();
+            assert_eq!(down["windowsVirtualKeyCode"], 0, "{key}");
+            assert_eq!(down["text"], key);
+        }
+        assert_eq!(key_events("a").unwrap().0["windowsVirtualKeyCode"], 65);
+        assert_eq!(key_events("7").unwrap().0["windowsVirtualKeyCode"], 55);
     }
 
     #[test]

@@ -446,17 +446,6 @@ function getVersion() {
   return version;
 }
 
-/// Keeps the open docs current with the files underneath them.
-///
-/// The watch set is re-armed whenever the open set changes — which a session
-/// switch is, so a session's docs stop being watched the moment its panel is off
-/// screen. An event landing after that finds nothing to patch and costs a
-/// no-op.
-///
-/// A clean doc adopts the new text silently, which is the whole point: an agent
-/// rewriting the file the reader is looking at should move the text on screen.
-/// A dirty one is flagged instead and keeps every keystroke, which is what puts
-/// the strip up over it with Discard and Overwrite to choose between.
 /// Every `watch_docs` call, in the order it was made.
 ///
 /// The command replaces the whole watch set, so the last one to *arrive* is the
@@ -482,6 +471,17 @@ function watch(paths: string[]): Promise<unknown> {
   return watching;
 }
 
+/// Keeps the open docs current with the files underneath them.
+///
+/// The watch set is re-armed whenever the open set changes — which a session
+/// switch is, so a session's docs stop being watched the moment its panel is off
+/// screen. An event landing after that finds nothing to patch and costs a
+/// no-op.
+///
+/// A clean doc adopts the new text silently, which is the whole point: an agent
+/// rewriting the file the reader is looking at should move the text on screen.
+/// A dirty one is flagged instead and keeps every keystroke, which is what puts
+/// the strip up over it with Discard and Overwrite to choose between.
 export function useDocWatcher(sid: string | null) {
   const { docs } = useDocs(sid);
   // A joined key rather than the array itself, so a render that rebuilds the

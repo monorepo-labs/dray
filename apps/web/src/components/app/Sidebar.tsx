@@ -305,7 +305,7 @@ export function TaskHint() {
   return (
     <HintRow>
       <Keys caps={["⌘", "Shift", "↑ ↓"]} className={HINT_KEYS} />
-      <Keys caps={["⌃", "1–0"]} className={HINT_KEYS} />
+      <Keys caps={["⌥", "1–0"]} className={HINT_KEYS} />
     </HintRow>
   );
 }

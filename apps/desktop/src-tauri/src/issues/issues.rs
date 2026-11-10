@@ -115,14 +115,6 @@ pub enum IssueStateKind {
     Other,
 }
 
-impl IssueStateKind {
-    /// Whether the work is over, either way it went. What "unfinished" means in
-    /// the issues page's default filter.
-    pub fn settled(self) -> bool {
-        matches!(self, Self::Completed | Self::Canceled)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
@@ -317,8 +309,9 @@ pub struct IssueQuery {
     /// absent one Linear, which is what every caller meant before there were
     /// two.
     pub tracker: IssueTracker,
-    /// Free text. Matched against title and identifier; an empty query is the
-    /// resting state and lists rather than searches.
+    /// Free text. Linear matches it against title, description and a whole
+    /// identifier, and GitHub reads it as its own search syntax; an empty query
+    /// is the resting state and lists rather than searches.
     pub text: Option<String>,
     pub scope: IssueScope,
     /// Linear team id — and under GitHub the **repository slug**, since a

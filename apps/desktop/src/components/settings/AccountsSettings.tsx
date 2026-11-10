@@ -127,7 +127,7 @@ function CommandRow({
 
 /// One credential, and nothing but what is true about it.
 ///
-/// **The row reads and does not act**, which is the whole of what makes four
+/// **The row reads and does not act**, which is the whole of what makes
 /// differently-capable CLIs draw as one list. Every route in is the form and
 /// every route out is the ⋯ menu, so a row whose CLI happens to have no key
 /// path is not a differently-shaped row — it is the same row, and the
@@ -385,10 +385,9 @@ function SignInForm({
         );
       }}
     >
-      {/* No control of its own on this row: leaving is a back arrow up in the
-          dialog's header, level with the close cross, where the reader already
-          looks to get out of something. A cross here said "close" a few pixels
-          from the one that closes the dialog. */}
+      {/* No control of its own on this row: leaving is the back arrow
+          `AccountsSettings` hangs on the page's heading, where the reader
+          already looks to get out of something. */}
       <span className="flex items-center gap-2 text-ui font-medium">
         <AgentIcon harness={agent.harness} className="size-4 text-muted-foreground" />
         {again ? "Reauthorize" : "Sign in to"} {agent.label}
@@ -580,25 +579,24 @@ function MissingAgent({ agent, server }: { agent: AgentAccounts; server: ServerI
 /// a turn has failed on auth, and never for a session that is working fine, so
 /// "which account is this running as" had nowhere to be asked.
 ///
-/// **Rows read; one form writes.** The four CLIs differ in what they can do
-/// without a terminal — Codex takes a key on stdin, pi's store is a file Dray
-/// writes, everything else is a command — and letting each row wear its own
-/// capability made four differently-shaped blocks out of one list. So every row
-/// is status plus a ⋯ menu, and every way *in* is the one form.
+/// **Rows read; one form writes.** The CLIs differ in what they can do without
+/// a terminal — Codex takes a key on stdin, pi's store is a file Dray writes,
+/// everything else is a command — and letting each row wear its own capability
+/// made differently-shaped blocks out of one list. So every row is status plus
+/// one control — Sign in, or a ⋯ menu once signed in — and every way *in* is
+/// the one form.
 ///
-/// **Dray runs no sign-in command and stores no credential.** A pasted key goes
-/// to the CLI's own store; everything else is a command shown with a copy on it
-/// beside the reader's own terminal. macOS lets no app type into another's
-/// prompt, so anything else would be Dray deciding what to execute in their
-/// shell.
+/// **Dray stores no credential.** A pasted key goes to the CLI's own store;
+/// everything else is a command Dray runs in Terminal, with a copy beside it
+/// for a reader who wants it elsewhere — see `CommandRow`.
 export default function AccountsSettings({
   cwd,
   only,
   onFormOpen,
 }: {
   /// Where the terminal button opens. The selected session's directory where
-  /// there is one. A courtesy, and the whole of what the directory decides: all
-  /// four stores live under the reader's home, so a sign-in run in one tree is
+  /// there is one. A courtesy, and the whole of what the directory decides:
+  /// every store lives under the reader's home, so a sign-in run in one tree is
   /// a sign-in everywhere.
   cwd: string;
   /// One server's installed agents and nothing else: the sign-in step of
@@ -609,7 +607,7 @@ export default function AccountsSettings({
   onFormOpen?: (open: boolean) => void;
 }) {
   // Owned here rather than in `App`, unlike the issue tracker's, and the
-  // dialog's own bargain is what makes that safe: bodies are *switched*, not
+  // page's own bargain is what makes that safe: bodies are *switched*, not
   // hidden, so this component exists only while its tab is the one on screen —
   // which is the gate. Four child processes on every settings open, whichever
   // tab the reader wanted, is the cost the external-app scan next door is

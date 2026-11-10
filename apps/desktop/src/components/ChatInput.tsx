@@ -618,7 +618,7 @@ export default function ChatInput({
     return false;
   };
 
-  // Bound on the document, not on the textarea: on the textarea it only fired
+  // Bound on the document, not on the editor: on the editor it only fired
   // while the box held focus, and every other press fell through unanswered.
   // Swallowed only when it did something; `main.tsx` swallows the rest so
   // Escape never leaves fullscreen.
@@ -798,7 +798,7 @@ export default function ChatInput({
     clearAttachments(attachKey);
   };
 
-  // Returns before the form, so there is no disabled textarea to focus and no
+  // Returns before the form, so there is no disabled editor to focus and no
   // submit path to reach at all — a disabled input still reads as "type here,
   // but not now", and this session isn't waiting on anything.
   //
@@ -813,7 +813,7 @@ export default function ChatInput({
     return (
       <div className="px-4 pb-[3.125rem]">
         {/* `px-3 py-3` is the live card's own padding, so the button's right edge
-            lands where the submit button's does. The label carries the textarea's
+            lands where the submit button's does. The label carries the editor's
             extra `px-1` itself — inside the card those two sit on different
             edges, and matching only one of them is what reads as a shift. */}
         <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-2xl border border-hairline bg-card px-3 py-3">
@@ -997,7 +997,7 @@ export default function ChatInput({
 
             {/* Inside the card and above the text, so an attachment reads as part
                 of the message being composed rather than as a separate control.
-                Padded on the same edges as the textarea below it. */}
+                Padded on the same edges as the editor below it. */}
             {attachments.length > 0 && (
               <div className={cn("pt-3", isNewTask ? "px-0" : "px-3")}>
                 <AttachmentTray

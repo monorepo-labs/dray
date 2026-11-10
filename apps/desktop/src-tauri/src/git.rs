@@ -215,16 +215,17 @@ pub async fn github_slug(cwd: &str) -> Option<String> {
 /// Answers `None` for anything that is not two segments — a remote pointing at
 /// the host's root names no repository, and half a slug reaches the wrong one.
 fn remote_path(url: &str) -> Option<&str> {
-    let after_scheme = match url.split_once("://") {
-        Some((_, rest)) => rest,
+    let path = match url.split_once("://") {
+        // A URL's authority ends at the first slash, and a colon inside it is
+        // a password's or a port's: split there, a clone made with a token —
+        // `https://x-access-token:…@github.com/owner/repo`, what a sandbox or
+        // CI leaves behind — read as no repository at all.
+        Some((_, rest)) => rest.split_once('/'),
         // scp syntax's own separator, and it is a `:` rather than a `/`.
-        None => url,
-    };
-
-    let path = after_scheme
-        .split_once(['/', ':'])
-        .map(|(_, rest)| rest)?
-        .trim_start_matches('/');
+        None => url.split_once(['/', ':']),
+    }
+    .map(|(_, rest)| rest)?
+    .trim_start_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
     // A trailing slash is legal and names the same repo; without this it makes
     // a third segment out of nothing.
@@ -333,7 +334,8 @@ async fn run(cwd: &str, args: &[&str]) -> Result<()> {
 }
 
 /// One git invocation: stdout on success, git's own stderr as the error.
-/// Every spawn but `cat-file`'s streamed one goes through here.
+/// Every spawn goes through here but `cat-file`'s streamed one and
+/// [`shared_remote`]'s, which has to die with its caller's timeout.
 async fn exec(cwd: &str, envs: &[(&str, &str)], args: &[&str]) -> Result<String> {
     let mut cmd = Command::new("git");
     cmd.args(args).current_dir(cwd);
@@ -1078,7 +1080,7 @@ pub async fn log_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<Commit>
     // closes the same rev-or-path ambiguity every diff here closes.
     let Some(raw) = git(
         cwd,
-        &["log", "-z", LOG_FORMAT, "-n", &limit, &skip, "HEAD", "--"],
+        &["log", "--no-show-signature", "-z", LOG_FORMAT, "-n", &limit, &skip, "HEAD", "--"],
     )
     .await
     else {
@@ -1174,6 +1176,7 @@ pub async fn log_branch_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<
         cwd,
         &[
             "log",
+            "--no-show-signature",
             "-z",
             LOG_FORMAT,
             "--first-parent",
@@ -1459,6 +1462,9 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
                 "--branches",
                 "--remotes",
                 "--tags",
+                // Or a file named `HEAD` in the tree makes the rev ambiguous,
+                // git dies, and the count reads zero: nothing at risk.
+                "--",
             ],
         )
         .await
@@ -1468,17 +1474,21 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
         None => 0,
     };
 
-    let locked_by = git(project_path, &["worktree", "list", "--porcelain"])
-        .await
-        .and_then(|raw| parse_lock_reason(&raw, Path::new(worktree_path)))
-        .filter(|reason| lock_owner_pid(reason).is_some_and(pid_is_alive));
-
     WorktreeDisposition {
         exists: true,
         changed_files,
         unpushed_commits,
-        locked_by,
+        locked_by: live_lock(worktree_path, project_path).await,
     }
+}
+
+/// The reason on a worktree's lock, where the process that took it is still
+/// alive. A lock a dead session left behind is no reason to keep the tree.
+async fn live_lock(worktree_path: &str, project_path: &str) -> Option<String> {
+    git(project_path, &["worktree", "list", "--porcelain"])
+        .await
+        .and_then(|raw| parse_lock_reason(&raw, Path::new(worktree_path)))
+        .filter(|reason| lock_owner_pid(reason).is_some_and(pid_is_alive))
 }
 
 /// The branch `cwd` has checked out, or `None` for a detached HEAD, a
@@ -1645,8 +1655,12 @@ pub async fn remove_worktree(project_path: &str, worktree_path: &str, branch: Op
         bail!("{worktree_path} is not a worktree Dray created, so it will not be removed");
     }
 
-    if let Some(reason) = worktree_disposition(worktree_path, project_path).await.locked_by {
-        bail!("that worktree is in use by another session ({reason})");
+    // The lock alone, not the whole disposition: that also counts dirty files
+    // and unpushed commits, two walks of a tree about to be deleted.
+    if tree.is_dir() {
+        if let Some(reason) = live_lock(worktree_path, project_path).await {
+            bail!("that worktree is in use by another session ({reason})");
+        }
     }
 
     // Failure is the ordinary case — most trees are not locked at all — so the
@@ -2015,6 +2029,8 @@ mod tests {
             "git@github.com:monorepo-labs/dray.git",
             "ssh://git@github.com/monorepo-labs/dray.git",
             "https://token@github.com/monorepo-labs/dray.git",
+            "https://x-access-token:ghs_abc@github.com/monorepo-labs/dray.git",
+            "ssh://git@github.com:22/monorepo-labs/dray.git",
             "https://github.com/monorepo-labs/dray/",
         ] {
             assert_eq!(remote_path(url), Some("monorepo-labs/dray"), "{url}");
@@ -2958,10 +2974,10 @@ mod tests {
         fs::remove_dir_all(&dir).await.ok();
     }
 
-    /// The `-w` shape, forked from `origin/<default>`, and the reason the
-    /// default base is excluded as well as the fork point: a session that
-    /// merges upstream in mid-flight pulls commits into HEAD that the fork
-    /// point predates. Drop the `default_base` exclusion and this one fails.
+    /// The `-w` shape, forked from `origin/<default>`, and the reason the log
+    /// walks `--first-parent`: a session that merges upstream in mid-flight
+    /// pulls commits into HEAD that the fork point predates. Drop the flag and
+    /// this one fails.
     #[tokio::test]
     async fn upstream_merged_in_after_the_fork_is_not_this_branch_s_work() {
         let dir = scratch_repo().await;
@@ -3198,7 +3214,7 @@ mod tests {
         fs::remove_dir_all(&remote).await.ok();
     }
 
-    /// What a pull request would contain, which is not what [`SyncStatus::ahead`]
+    /// What a pull request would contain, which is not what [`WorkStatus::ahead`]
     /// counts. A branch pushed in full is level with its upstream and still ahead
     /// of the base — the case where the button is most wanted, and the one
     /// reading `ahead` would hide.

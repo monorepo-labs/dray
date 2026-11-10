@@ -52,19 +52,6 @@
   );
 }
 
-/* Slides from (--x0, --y0) to (--x1, --y1) (user units) over --l, fading in
-   as it sets off and out once it arrives. */
-.travel {
-  transform: translate(
-    calc((var(--x0) + (var(--x1) - var(--x0)) * clamp(0, (var(--home-clock) - var(--s)) / var(--l), 1)) * 1px),
-    calc((var(--y0) + (var(--y1) - var(--y0)) * clamp(0, (var(--home-clock) - var(--s)) / var(--l), 1)) * 1px)
-  );
-  opacity: calc(
-    clamp(0, (var(--home-clock) - var(--s)) * 15, 1) *
-      (1 - clamp(0, (var(--home-clock) - var(--s) - var(--l)) * 15, 1))
-  );
-}
-
 /* Stroke drawn start to end over --l. Needs pathLength="1". */
 .draw {
   stroke-dasharray: 1;

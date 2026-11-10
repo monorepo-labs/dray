@@ -1,9 +1,9 @@
 //! In-app updates over the Tauri updater plugin.
 //!
 //! Two channels, one manifest each, both served from the repo's GitHub Pages
-//! branch. The channel is chosen per check rather than in `tauri.conf.json`,
-//! so switching it needs no rebuild — the config endpoint is only the fallback
-//! for a caller that names no channel.
+//! branch and pointing at bytes on R2. The channel is chosen per check rather
+//! than in `tauri.conf.json`, so switching it needs no rebuild — every check
+//! names one, so the config's endpoint is overridden each time.
 
 use std::sync::Mutex;
 

@@ -20,8 +20,12 @@ function start() {
   started = true;
   void listen<ServerInfo | null>("local_server_changed", ({ payload, server }) => {
     if (server !== LOCAL) return;
+    const was = local;
     local = payload;
     changed.emit();
+    // This Mac's server loses its watches on a restart as a remote one does,
+    // and `servers_changed` below never carries it.
+    if (payload?.status === "connected" && was && was.status !== "connected") rearm(LOCAL);
   }).then(() => invoke<ServerInfo | null>("local_server", {}, LOCAL).then((now) => {
     local ??= now;
     changed.emit();

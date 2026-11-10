@@ -137,7 +137,7 @@ function Demo() {
               prs={picked.prs}
               error={picked.error}
               loading={picked.loading}
-              acting={false}
+              acting={null}
               act={async () => {}}
               refresh={() => {}}
             />

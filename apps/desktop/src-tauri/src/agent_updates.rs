@@ -149,6 +149,13 @@ async fn check(harness: Harness) -> Result<Option<AgentUpdate>, ()> {
     if bin == std::path::Path::new(binpath::CHATGPT_APP_CODEX) {
         return Ok(None);
     }
+    // `latest.txt` is the stable channel's; a reader on fx's dev channel is
+    // ahead of it by design, and telling them to "update" would be wrong. Not
+    // Dray's to update, which is `None` — answered as unreadable it left a
+    // stale "behind" row standing from before they switched.
+    if harness == Harness::Fx && fx_channel().as_deref() == Some("dev") {
+        return Ok(None);
+    }
     let (current, latest) = tokio::time::timeout(CHECK_TIMEOUT, versions(harness, &bin))
         .await
         .ok()
@@ -188,9 +195,6 @@ async fn versions(harness: Harness, bin: &std::path::Path) -> Option<(String, St
         }
         Harness::Codex => json_version("https://registry.npmjs.org/@openai/codex/latest").await?,
         Harness::Pi => json_version("https://pi.dev/api/latest-version").await?,
-        // `latest.txt` is the stable channel's; a reader on fx's dev channel is
-        // ahead of it by design, and telling them to "update" would be wrong.
-        Harness::Fx if fx_channel().as_deref() == Some("dev") => return None,
         Harness::Fx => get("https://releases.fx.sh/latest.txt").await?,
         _ => return None,
     };

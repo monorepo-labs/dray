@@ -39,7 +39,8 @@ const config: NextConfig = {
             // No trailing slash: `blume dev` redirects `/docs/` to `/docs`,
             // which comes back here and loops.
             { source: "/docs", destination: DOCS_ORIGIN },
-            { source: "/docs/:path*", destination: `${DOCS_ORIGIN}/:path*` },          ]
+            { source: "/docs/:path*", destination: `${DOCS_ORIGIN}/:path*` },
+          ]
         : []),
     ];
   },

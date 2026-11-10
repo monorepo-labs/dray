@@ -11,13 +11,7 @@ import { cn } from "@/lib/utils";
 /// The slice a ranged `Read` returned, highlighted. Not a diff — nothing
 /// changed — so this is the `File` renderer with the gutter offset to match the
 /// real line numbers.
-export default function CodeView({
-  range,
-  className,
-}: {
-  range: ReadRange;
-  className?: string;
-}) {
+export default function CodeView({ range }: { range: ReadRange }) {
   const { pair, resolvedMode } = useCodeThemeWithMode();
 
   const name = basename(range.path);
@@ -59,7 +53,7 @@ export default function CodeView({
     [pair, resolvedMode, renumber],
   );
 
-  const frame = cn("overflow-hidden rounded-md border border-border/60 text-code", className);
+  const frame = "overflow-hidden rounded-md border border-border/60 text-code";
 
   // Plain text while the grammar loads, not an empty box. Grammar fetches range
   // from ~10ms to several hundred (Ruby pulls HTML, CSS, JS and SQL along for

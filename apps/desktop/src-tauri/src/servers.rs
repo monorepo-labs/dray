@@ -1,11 +1,11 @@
-//! Remote Dray servers the desktop app is connected to, beside its own
-//! in-process core. Each is a `dray-serve` reached over its WebSocket; this
-//! module holds the connections so the token never leaves Rust, and the
-//! frontend reaches a server through `server_invoke` and hears it through
-//! `server_event`. See SERVERS-PLAN.md.
+//! The Dray servers the desktop app is connected to: this Mac's own background
+//! server ([`LOCAL`]) and every remote `dray-serve`, each reached over its
+//! WebSocket. This module holds the connections so the token never leaves
+//! Rust, and the frontend reaches a server through `server_invoke` and hears
+//! it through `server_event`. See SERVERS-PLAN.md.
 //!
-//! The list is device-local: `servers.json` holds id, name and address, and
-//! each token sits in `credentials.json` under `server:<id>`, never on a
+//! The remote list is device-local: `servers.json` holds id, name and address,
+//! and each token sits in `credentials.json` under `server:<id>`, never on a
 //! struct the frontend is handed.
 
 use crate::machines::{admit_with, credential_name, default_name, normalize, BoatLink, Saved, Socket, Welcome, ADMIT};
@@ -18,7 +18,7 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::{
         atomic::{AtomicU64, Ordering},
-        LazyLock, Mutex, OnceLock,
+        Arc, LazyLock, Mutex, OnceLock,
     },
     time::Duration,
 };
@@ -26,8 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 use ts_rs::TS;
 
-/// Stated again from serve.rs's `PROTOCOL`, which this build may not compile.
-const PROTOCOL: u32 = 1;
+use crate::serve::PROTOCOL;
 
 /// Reconnect backoff ceiling. Agents keep running on a server the app cannot
 /// reach, so coming back soon matters more than sparing a refused connect.
@@ -1240,24 +1239,85 @@ pub fn list_servers() -> Vec<ServerInfo> {
     snapshot()
 }
 
+/// The adds a Cancel can still reach, by the ticket their dialog minted.
+/// Keyed rather than one signal for them all: `dray machine add` runs these
+/// same functions, and a Cancel in Settings must not stop an add it never
+/// started. An add with no ticket is in here under no name and cannot be woken.
+static ADDING: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>> = LazyLock::new(Default::default);
+
+/// One add's place in [`ADDING`], held for as long as the add runs.
+struct Cancellable {
+    ticket: Option<String>,
+    woken: Arc<tokio::sync::Notify>,
+}
+
+impl Cancellable {
+    fn new(ticket: Option<String>) -> Self {
+        let woken = Arc::new(tokio::sync::Notify::new());
+        if let Some(ticket) = &ticket {
+            ADDING.lock().unwrap_or_else(|e| e.into_inner()).insert(ticket.clone(), woken.clone());
+        }
+        Self { ticket, woken }
+    }
+}
+
+impl Drop for Cancellable {
+    fn drop(&mut self) {
+        if let Some(ticket) = &self.ticket {
+            ADDING.lock().unwrap_or_else(|e| e.into_inner()).remove(ticket);
+        }
+    }
+}
+
+/// What a cancelled add answers. The dialog that asked is gone by then, so
+/// nobody reads it; it only has to be an error, so nothing is saved.
+const CANCELLED: &str = "cancelled";
+
+/// Stops an Add server that is still connecting: the login, the server start
+/// and the admit are dropped where they stand, which kills the `ssh` they ran
+/// over. Closing the dialog used to leave all of it running, so the server
+/// turned up in the list a minute later, or its failure opened the install
+/// dialog over whatever the reader had moved on to. Past the connect there is
+/// nothing left to wait on, so a cancel landing after it finds the server added.
+///
+/// `notify_one`, which keeps the wake for an add that has not started waiting
+/// yet: a Cancel pressed in the same moment as Add is still a Cancel.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn cancel_add_server(ticket: String) {
+    if let Some(woken) = ADDING.lock().unwrap_or_else(|e| e.into_inner()).get(&ticket) {
+        woken.notify_one();
+    }
+}
+
 /// Adds a server once it has admitted the token, so a typo is refused here
 /// rather than saved as a row that never connects. An address already on the
 /// list is updated in place, which is how a reader reconnects after rotating
 /// the server's token.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn add_server(url: String, token: String, name: Option<String>) -> Result<ServerInfo, String> {
+pub async fn add_server(url: String, token: String, name: Option<String>, ticket: Option<String>) -> Result<ServerInfo, String> {
+    let cancel = Cancellable::new(ticket);
     let url = normalize(&url)?;
     let token = token.trim().to_string();
     if token.is_empty() {
         return Err("a token is required — it is in the server's serve-token file".into());
     }
     let existing = conns().iter().find(|c| c.saved.url == url).map(|c| c.saved.id.clone());
+    // A re-add is how a token is rotated, and its name field is usually left
+    // blank: the row keeps the name it has rather than falling back to the
+    // host, which `dray --machine <name>` would then stop finding.
+    let kept = conns().iter().find(|c| c.saved.url == url).map(|c| c.saved.name.clone());
     let name = name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
+        .or(kept)
         .unwrap_or_else(|| default_name(&url));
     refuse_taken(&conns(), &name, existing.as_deref())?;
-    admit(&url, &token).await?.0.close(None).await.ok();
+    tokio::select! {
+        admitted = admit(&url, &token) => {
+            admitted?.0.close(None).await.ok();
+        }
+        _ = cancel.woken.notified() => return Err(CANCELLED.into()),
+    }
 
     let id = existing.clone().unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
     crate::issues::set_credential(&credential_name(&id), Some(&token)).await?;
@@ -1354,27 +1414,37 @@ pub async fn remove_server(id: String) -> Result<(), String> {
 /// server that admitted us is saved, the token form's own rule. Each step goes
 /// out as `server_adding` so the dialog can say where it is.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<ServerInfo, ssh::Failure> {
+pub async fn add_ssh_server(line: String, name: Option<String>, ticket: Option<String>) -> Result<ServerInfo, ssh::Failure> {
+    let cancel = Cancellable::new(ticket);
     let failed = |message: String| ssh::Failure { message, fix: None, permanent: true };
     let target = ssh::parse(&line).map_err(failed)?;
+    // Kept on a re-add with the field blank, as the token form keeps it.
+    let kept = conns().iter().find(|c| c.saved.ssh.as_ref() == Some(&target)).map(|c| c.saved.name.clone());
     let name = name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
+        .or(kept)
         .unwrap_or_else(|| target.host().to_string());
     let existing = conns().iter().find(|c| c.saved.ssh.as_ref() == Some(&target)).map(|c| c.saved.id.clone());
     refuse_taken(&conns(), &name, existing.as_deref()).map_err(failed)?;
-    let tunnel = ssh::open(&target, |stage| {
-        if let Some(sink) = SINK.get() {
-            let _ = sink.emit("server_adding", stage);
+    let connect = async {
+        let tunnel = ssh::open(&target, |stage| {
+            if let Some(sink) = SINK.get() {
+                let _ = sink.emit("server_adding", stage);
+            }
+        })
+        .await?;
+        let url = format!("ws://127.0.0.1:{}", tunnel.port);
+        match admit(&url, &tunnel.token).await {
+            Ok((mut ws, _)) => drop(ws.close(None).await),
+            Err(e) => return Err(failed(tunnel.said().unwrap_or(e))),
         }
-    })
-    .await?;
-    let url = format!("ws://127.0.0.1:{}", tunnel.port);
-    match admit(&url, &tunnel.token).await {
-        Ok((mut ws, _)) => drop(ws.close(None).await),
-        Err(e) => return Err(failed(tunnel.said().unwrap_or(e))),
+        Ok(())
+    };
+    tokio::select! {
+        connected = connect => connected?,
+        _ = cancel.woken.notified() => return Err(failed(CANCELLED.into())),
     }
-    drop(tunnel);
 
     let id = {
         let mut list = conns();
@@ -2436,6 +2506,28 @@ mod tests {
         served
     }
 
+    /// A listener that takes the connection and never speaks is a connect
+    /// with nothing to end it but its own timeout — or the reader's Cancel.
+    #[tokio::test]
+    async fn cancel_stops_an_add_that_is_still_connecting() {
+        let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", silent.local_addr().unwrap());
+        let mut adding = tokio::spawn(add_server(url, "t".into(), Some("cancel-me".into()), Some("mine".into())));
+        let (_held, _) = silent.accept().await.unwrap();
+
+        // Another dialog's Cancel, or one from before this add: not this add's.
+        cancel_add_server("someone-elses".into());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut adding).await.is_err(),
+            "a cancel for another add stopped this one"
+        );
+
+        cancel_add_server("mine".into());
+        let said = tokio::time::timeout(Duration::from_secs(2), adding).await.expect("the cancel ended it").unwrap();
+        assert_eq!(said.err().as_deref(), Some(CANCELLED));
+        assert!(!conns().iter().any(|c| c.saved.name == "cancel-me"), "nothing was saved");
+    }
+
     #[tokio::test]
     async fn drops_a_server_gone_silent() {
         assert!(served_for("silent", false).await.is_some(), "a silent server is dropped");
@@ -2518,11 +2610,11 @@ mod tests {
         }))
         .await;
 
-        let refused = add_server(url.clone(), "wrong".into(), None).await.unwrap_err();
+        let refused = add_server(url.clone(), "wrong".into(), None, None).await.unwrap_err();
         assert!(refused.contains("wrong token"), "{refused}");
         assert!(list_servers().is_empty(), "a refused token is not saved");
 
-        let added = add_server(url, token.clone(), Some("vps".into())).await.unwrap();
+        let added = add_server(url, token.clone(), Some("vps".into()), None).await.unwrap();
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
         // Every connect opens with `live_state`, and it arrives tagged.
         let live = next_event(&mut rx, |e, p| e == "server_event" && p["event"] == "live_state").await;
@@ -2585,7 +2677,7 @@ mod tests {
         assert!(first.ends_with(".opentunnel.xyz"), "is the tunnel on? {first}");
 
         // By address alone, as another Mac with no SSH would add it.
-        let added = add_server(first.clone(), token.clone(), Some("tunnel".into())).await.unwrap();
+        let added = add_server(first.clone(), token.clone(), Some("tunnel".into()), None).await.unwrap();
         connected("by address");
         assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_ok());
 
@@ -2610,7 +2702,7 @@ mod tests {
         remove_server(added.id).await.unwrap();
 
         // Over SSH: the address rides the login.
-        let added = add_ssh_server(line, Some("vps".into())).await.map_err(|f| f.message).unwrap();
+        let added = add_ssh_server(line, Some("vps".into()), None).await.map_err(|f| f.message).unwrap();
         connected("by SSH");
         assert_eq!(list_servers()[0].url, first.replacen("https://", "wss://", 1));
         assert!(!std::fs::read_to_string(home.join("servers.json")).unwrap().contains(&token));
@@ -2644,7 +2736,7 @@ mod tests {
         }))
         .await;
 
-        let added = add_ssh_server(line, Some("vps".into())).await.map_err(|f| f.message).unwrap();
+        let added = add_ssh_server(line, Some("vps".into()), None).await.map_err(|f| f.message).unwrap();
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
         let saved = std::fs::read_to_string(home.join("servers.json")).unwrap();
         assert!(saved.contains("\"dest\""), "{saved}");

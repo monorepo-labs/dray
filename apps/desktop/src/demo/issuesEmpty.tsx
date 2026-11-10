@@ -116,7 +116,11 @@ const FILTERS: IssueFilters = {
 /// links on the connect pane have to be answered here. Stubbed *outside* the
 /// component, so nothing in `src/` carries a demo seam.
 (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
-  invoke: async (cmd: string, args: Record<string, unknown>) => {
+  invoke: async (called: string, given: Record<string, unknown>) => {
+    // A core command arrives wrapped: the app sends it to its server.
+    const wrapped = called === "server_invoke";
+    const cmd = wrapped ? (given.cmd as string) : called;
+    const args = wrapped ? (given.args as Record<string, unknown>) : given;
     if (cmd === "plugin:opener|open_url") {
       // eslint-disable-next-line no-console
       console.log("demo: would open", args.url);

@@ -294,7 +294,11 @@ impl Tap {
     /// only silence, and the raw samples no pull has read yet.
     pub fn take(&self) -> Result<(Option<Vec<f32>>, Vec<f32>)> {
         let mut c = self.capture.lock().map_err(|_| anyhow!("recording buffer was poisoned"))?;
-        let captured = std::mem::take(&mut c.buf);
+        // Replaced with the same headroom `start` gave it, not left empty: a
+        // cut records on into this buffer, and one with no capacity grows by
+        // doubling on the audio thread — the dropout the preallocation is for.
+        let headroom = self.rate as usize * self.channels as usize * PREALLOC_SECS;
+        let captured = std::mem::replace(&mut c.buf, Vec::with_capacity(headroom));
         let unpulled = captured[c.pulled.min(captured.len())..].to_vec();
         c.pulled = 0;
         c.held = true;

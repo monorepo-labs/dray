@@ -675,19 +675,16 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
   return turns;
 }
 
-/// Splits the event log into the main thread and the subagent runs the panel
-/// lists.
-///
-/// Correlation is `envelope.subagent.id === the spawning call's callId`, not the
-/// `agentId` on the subagent payloads — that is the harness's own handle and
-/// matches nothing else.
+/// The live-task set of a session with none. One shared instance, because
+/// `buildTranscript`'s memo compares the set by identity: two empty sets from
+/// two readers of one session cost a second walk per event.
+export const EMPTY_TASKS: ReadonlySet<string> = new Set();
+
 /// Stands in for the result a call will now never get.
 ///
 /// Not an error: nothing went wrong with the call, the process it belonged to
 /// stopped existing. Flagging it would tint the row red and spring it open on
 /// load, which is a lot of noise for "this didn't finish".
-const EMPTY_TASKS: ReadonlySet<string> = new Set();
-
 const ABANDONED: ToolResult = {
   text: "No result — the session ended before this call finished.",
   isError: false,
@@ -728,6 +725,12 @@ export function buildTranscript(
   return result;
 }
 
+/// Splits the event log into the main thread and the subagent runs the panel
+/// lists.
+///
+/// Correlation is `envelope.subagent.id === the spawning call's callId`, not the
+/// `agentId` on the subagent payloads — that is the harness's own handle and
+/// matches nothing else.
 function build(
   source: AgentEvent[],
   /// Whether a child is actually running this session. A call with no result is
@@ -813,9 +816,18 @@ function build(
     // already running, and the CLI folds it into that turn — so the calls open
     // in front of it are still live, and marking them here would stop a running
     // tool's row shimmering while it is genuinely still working.
+    //
+    // The main thread's calls only. A subagent's are judged with its run,
+    // below: a prompt does not end a background run, and this walk cannot
+    // place one against the main thread in the first place — a Claude Code
+    // subagent numbers its events from 0 again, so its newest call sorts ahead
+    // of every later prompt and was filed abandoned while it was still running.
     if (event.payload.type === "user_message" && !event.payload.queued) {
-      for (const callId of open) abandoned.add(callId);
-      open.clear();
+      for (const callId of open) {
+        if (callById.get(callId)?.subagent) continue;
+        abandoned.add(callId);
+        open.delete(callId);
+      }
     }
     if (
       event.payload.type === "permission_requested" ||
@@ -919,6 +931,13 @@ function build(
   for (const run of subagentById.values()) {
     if (run.done || (run.taskId !== null && liveTaskIds.has(run.taskId))) continue;
     run.done = resultByCallId.has(run.id);
+  }
+
+  // A subagent's call left open is pending for exactly as long as its run is.
+  for (const callId of open) {
+    if (resultByCallId.has(callId)) continue;
+    const ref = callById.get(callId)?.subagent;
+    if (ref && subagentById.get(ref.id)?.done) resultByCallId.set(callId, ABANDONED);
   }
 
   const mainThread = events.filter((event) => !event.subagent);

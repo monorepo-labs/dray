@@ -1,6 +1,6 @@
 # Orchestration
 
-**One agent can fan work out into several sessions**, each with its own worktree and sidebar row. Three commands: create, list, send.
+**One agent can fan work out into several sessions**, each with its own worktree and sidebar row. Sessions are made, listed, messaged, renamed, stopped and settled under `dray session`.
 
 **This is the first inbound channel into the app.** Every other command travels frontend → Rust; this one travels agent → Rust → frontend, so the frontend learns about a session from an *event* rather than a return value. That inversion is the whole of what [orchestration.rs](../src-tauri/src/orchestration.rs) adds. The work goes through `SessionManager::send_msg`, the same function the composer reaches, so a session created this way is not a second kind of session.
 
@@ -22,7 +22,7 @@
 
 ## The socket
 
-**Unix socket, not an HTTP port.** `~/.dray/dray.sock` — nothing on the network reaches it, no port to collide on. Stale sockets are unlinked at bind. **Dev builds listen on `dray-dev.sock`**, under `~/.dray-dev` since #456, which is what makes unlinking safe: one path for both builds means whichever starts last owns the channel, silently, since neither app reads a socket it no longer owns. **The child gets `DRAY_ENDPOINT` injected** rather than left to the CLI's default, or a dev app's agent files its session into the release app's sidebar. That one value is also what lets the app move to a server later — a `.sock` path today, an HTTPS URL and token in a cloud build.
+**Unix socket, not an HTTP port.** `~/.dray/dray.sock` — nothing on the network reaches it, no port to collide on. Stale sockets are unlinked at bind. **A dev build listens on `dray.sock` too, under its own home** — `~/.dray-dev`, or `~/.dray-worktrees/<name>` — since #456, which is what makes unlinking safe: one path for both builds means whichever starts last owns the channel, silently, since neither app reads a socket it no longer owns. **The child gets `DRAY_ENDPOINT` injected** rather than left to the CLI's default, or a dev app's agent files its session into the release app's sidebar. That one value is also what lets the app move to a server later — a `.sock` path today, an HTTPS URL and token in a cloud build.
 
 **The boundary is the directory's `0700`, not the socket's `0600`.** `bind` applies the process umask, so a socket lands world-writable under a permissive one and stays that way until a chmod runs a moment later — a window another local account can connect through and reach session creation unauthenticated. A directory cannot have that window, since connecting needs search permission on every dir in the path. `~/.dray` was `0755`, which also made every transcript readable by any local account. **Narrowing is best-effort, so `serve` checks rather than assumes**: a dir still group- or world-reachable → refuse to bind, naming `chmod 700`. Cost a feature, never the app — as does any `serve` error, logged and dropped in `setup()`.
 
@@ -43,7 +43,7 @@
 - **Mechanism: Dray makes the tree itself.** [create_worktree](../src-tauri/src/git.rs) runs `git worktree add --no-track -B worktree-<name> <path> <base>` and the child spawns **into** that directory with no `-w` at all. So the tree exists before the child does — a real `snapshot_tree` baseline rather than `base_ref_tree`'s approximation — and carries no lock.
 - **Session ids resolve through [`session_branch`](../src-tauri/src/store.rs), the same reading `sessionBranch` in [pr.ts](../src/lib/pr.ts) takes.** Two readers, neither can call the other, so the rule is stated and tested twice; what it must not become is two *different* rules. Id is tried before ref, since a v7 uuid is no branch name anybody types.
 
-**Model, effort, harness and permission mode inherit from the parent**, each overridable by flag. No parent means Rust's own default, since the composer's remembered pick lives in frontend localStorage; `ModelId::default()` cannot serve, being `Unknown`.
+**Model, effort, harness and permission mode inherit from the parent**, all but permission mode overridable by flag. No parent means Rust's own default, since the composer's remembered pick lives in frontend localStorage; `ModelId::default()` cannot serve, being `Unknown`.
 
 - **Model and effort both stop at the harness boundary.** The model half is obvious; the effort half is not — the two ladders share every name (`low`…`max`) and Codex accepts whatever is passed, so a Claude parent's `high` lands silently on a Codex child whose own default is `medium`.
 - **Whether to inherit at all is the agent's question and lives in [SKILL.md](../../cli/skill/SKILL.md) alone.** A parent on Fable, or above its harness's own default effort, wants the user's answer before fanning out. Restating it in `system_prompt.md` would be a second copy on the app's release train.
@@ -58,7 +58,7 @@
 
 ## Skills
 
-**The skill is embedded in the binary and written by `dray skill install`** — downloading it separately is how a skill ends up describing a different version of the CLI than the one installed. Global at `~/.claude/skills/dray/` **and** `~/.codex/skills/dray/`, both written every install, since the CLI cannot know which agent the user runs.
+**The skill is embedded in the binary and written by `dray skill install`** — downloading it separately is how a skill ends up describing a different version of the CLI than the one installed. Global at `~/.claude/skills/dray/`, `~/.codex/skills/dray/` **and** `~/.agents/skills/dray/`, all written every install, since the CLI cannot know which agent the user runs.
 
 **Freshness rides the CLI, never the app, and the chain closes on its own.** `include_str!` binds the skill to the binary at compile time; `install.sh` runs `dray skill install`, and so does the Mac app after copying a new CLI out; `dray update` re-runs `install.sh`. So every CLI update rewrites the skill, and on a Mac an app update moves it only because it moved the CLI. The skill and `PROTOCOL_VERSION` travel in the *same binary*, so a skill describing the wrong protocol is impossible without the CLI also being wrong. **The skill teaches how to cure a refusal, never which flag needs which version** — enumerating those ages badly and the agent cannot check versions anyway.
 
@@ -72,7 +72,7 @@
 - **One list per home, one writer at a time.** `servers.json` is the Mac app's Settings → Servers list too. The app holds it in memory and rewrites it whole, so while the app is open the Mac's server sends `dray machine` edits to it (`host_call`); with the window closed, or on a server with no app, the server edits the file itself under `SAVE`, and the app reads it fresh on its next launch. The app keeps its own live connections for its screens; reaching a remote's sessions through the Mac's server is #760's option B, not built.
 - **What only the Mac's index knows travels whole** (`Forward`): the calling session's row and its depth (`Caller`), so the remote inherits model, effort, harness, stance and fast without looking up an id it has never seen, and checks the depth cap against the carried number; and the sender as a `MessageSender` with `machine` set to `dray_proto::machine_name` (a Mac's `ComputerName`, else the host name). The remote takes both as given — it trusts its token holder already.
 - **The project is matched on `origin`** (`git::origin`, host and path, lowercased, `.git` and scheme dropped), since the CLI fills `--project` with a Mac path. Failing that a path that exists there is taken as named; else the refusal lists that machine's projects.
-- **A session id routes itself on a miss.** `route` looks locally first and only an id this index has never heard of is asked of every machine not turned off, at once and 5s each (`session_index_item`), so an ordinary call costs nothing. Only the socket's entry routes; a forwarded request is answered where it lands, so nothing bounces on.
+- **A session id routes itself on a miss.** `route` looks locally first and only an id this index has never heard of is asked of every machine not turned off, at once and 15s each (`machines::SWEEP`, `session_index_item`), so an ordinary call costs nothing. Only the socket's entry routes; a forwarded request is answered where it lands, so nothing bounces on.
 - **`ls --machine all`** lists here and every machine not turned off, each remote row carrying `SessionSummary.machine`. A machine that fails to answer is skipped unsaid.
 - **Machine and server verbs never cross** (`this_machine_only`), checked on both sides.
 

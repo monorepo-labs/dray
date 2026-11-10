@@ -222,7 +222,12 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
         case .turnCompleted(let failed, let finalText):
             if current == nil { current = Turn(id: "head-\(e.id)") }
             current?.completed = true
-            if failed { current?.failure = finalText ?? "Turn failed" }
+            if failed {
+                // Empty as well as absent, as the desktop reads it: a harness can
+                // send a failed turn's sentence as "".
+                let said = finalText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                current?.failure = said.isEmpty ? "Turn failed" : said
+            }
             close()
         default:
             break
@@ -233,9 +238,17 @@ func buildTurns(_ events: [AgentEvent], busy: Bool) -> [Turn] {
 }
 
 /// A relayed prompt opens with a line for the receiving agent; the bubble
-/// names the sender instead. Rebuilt exactly as `relay.ts` does, never parsed.
+/// names the sender instead. Rebuilt as `relay.ts` does up to the sender's id.
+///
+/// A sender on another machine is named with it, ` on <machine>`, which this
+/// client does not keep. That much is read to the line's end rather than
+/// rebuilt: everything before it matched whole, so it cannot take any of the
+/// message, and without it a remote sender's line stayed drawn in the bubble.
 func stripSender(_ text: String, title: String?, id: String?) -> String {
     guard let title, let id else { return text }
-    let prefix = "[message from the Dray session \"\(title)\" (\(id))]\n\n"
-    return text.hasPrefix(prefix) ? String(text.dropFirst(prefix.count)) : text
+    let opening = "[message from the Dray session \"\(title)\" (\(id))"
+    guard text.hasPrefix(opening) else { return text }
+    let rest = text.dropFirst(opening.count)
+    guard rest.hasPrefix("]\n\n") || rest.hasPrefix(" on "), let end = rest.range(of: "]\n\n") else { return text }
+    return String(rest[end.upperBound...])
 }

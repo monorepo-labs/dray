@@ -1596,15 +1596,15 @@ wrap_load_handler! {
             });
         }
 
-        /// The main frame leaving its document takes the picker's script
-        /// with it. Judged here and not on the loading state, which reports
-        /// the whole browser: an iframe loading would disarm a picker whose
-        /// document is still there.
         fn on_load_end(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _http_status_code: ::std::os::raw::c_int) {
             let Some(frame) = frame.filter(|f| f.is_main() != 0) else { return };
             frame.execute_java_script(Some(&CefString::from(BG_JS)), None, 0);
         }
 
+        /// The main frame leaving its document takes the picker's script
+        /// with it. Judged here and not on the loading state, which reports
+        /// the whole browser: an iframe loading would disarm a picker whose
+        /// document is still there.
         fn on_load_start(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _transition_type: TransitionType) {
             if !frame.map(|f| f.is_main() != 0).unwrap_or(false) {
                 return;

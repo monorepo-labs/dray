@@ -284,7 +284,7 @@ overageDisabledReason: string | null, } | { "type": "permission_requested",
 /**
  * Correlates the reply. Also what
  * [`PermissionDecided`](Self::PermissionDecided) joins on, which is how
- * a reloaded transcript knows an answered request from a live one.
+ * the transcript knows an answered request from a live one.
  */
 requestId: string, 
 /**
@@ -448,9 +448,10 @@ preview: string | null, };
  * A way of signing in, as an offer the reader picks between.
  *
  * The axis every one of these CLIs has and none of them calls the same thing:
- * Codex is ChatGPT-or-API-key, Claude is subscription-or-Console, pi and fx
- * are OAuth-or-key per provider. Modelled once here so the tab asks one
- * question rather than four differently-shaped ones.
+ * Codex is ChatGPT-or-API-key, Claude is subscription-or-Console, grok is
+ * browser-or-device-code, pi and fx are OAuth-or-key per provider. Modelled
+ * once here so the tab asks one question rather than five differently-shaped
+ * ones.
  */
 export type AuthOption = { 
 /**
@@ -1028,8 +1029,9 @@ export type IssueQuery = {
  */
 tracker: IssueTracker, 
 /**
- * Free text. Matched against title and identifier; an empty query is the
- * resting state and lists rather than searches.
+ * Free text. Linear matches it against title, description and a whole
+ * identifier, and GitHub reads it as its own search syntax; an empty query
+ * is the resting state and lists rather than searches.
  */
 text: string | null, scope: IssueScope, 
 /**
@@ -1404,10 +1406,9 @@ export type PrMarkState = "OPEN" | "MERGED";
  * Why there is nothing to show, when the reason is not "this branch has no PR".
  *
  * Typed rather than a string because the frontend acts differently on each:
- * a missing `gh` hides the tab outright — the app has no business claiming a
- * GitHub feature on a machine with no GitHub CLI — while a `gh` that is merely
- * logged out keeps the tab and says so, since someone who installed it clearly
- * works with GitHub and the fix is one command.
+ * no GitHub remote hides the tab outright, while a `gh` that is missing or
+ * logged out keeps it and names the command that cures it — the reader is in
+ * a GitHub repo, and the tab is the only place the app can say so.
  */
 export type PrUnavailable = { "kind": "no_cli" } | { "kind": "not_authenticated" } | { "kind": "no_remote" } | { "kind": "other", "detail": string };
 

@@ -14,11 +14,12 @@ export const FIRST_MOUNT = 8;
 /// finishes in under ten.
 export const MOUNT_STEP = 8;
 
-/// The window is the index of the oldest mounted turn, not a count from the
-/// end. A count would re-anchor on every turn the live session appends —
-/// evicting the oldest mounted turn until the next step put it back, losing
-/// its expansion state and shifting an unpinned reader's view. An index only
-/// ever moves down, and a turn appended at the end is inside the window by
+/// The window starts at the oldest mounted turn, not a count from the end. A
+/// count would re-anchor on every turn the live session appends — evicting the
+/// oldest mounted turn until the next step put it back, losing its expansion
+/// state and shifting an unpinned reader's view. `Chat` holds that turn by key
+/// and finds its index each render, since a page of older turns landing above
+/// shifts every index; a turn appended at the end is inside the window by
 /// construction.
 export function firstMount(total: number): number {
   return Math.max(0, total - FIRST_MOUNT);

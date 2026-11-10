@@ -61,7 +61,7 @@ export function ExtendBoat({
       <Button variant="ghost" size={icon} aria-label="Less time" disabled={busy || minutes <= EXTEND_STEP} onClick={() => step(-EXTEND_STEP)}>
         <Minus />
       </Button>
-      <span className="min-w-9 text-center text-ui-sm font-medium tabular-nums">{durationLabel(minutes)}</span>
+      <span className="min-w-9 text-center text-ui font-medium tabular-nums">{durationLabel(minutes)}</span>
       <Button variant="ghost" size={icon} aria-label="More time" disabled={busy || minutes >= MAX_EXTEND_MINUTES} onClick={() => step(EXTEND_STEP)}>
         <Plus />
       </Button>
@@ -99,7 +99,7 @@ export function Warning({
     <Alert className={cn(CARD, "relative overflow-hidden")}>
       <span className="flex min-w-0 items-start gap-2">
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="flex min-w-0 gap-1 text-ui-sm text-muted-foreground">
+          <span className="flex min-w-0 gap-1 text-ui text-muted-foreground">
             <span className="truncate" title={server.name}>
               {server.name}
             </span>
@@ -119,7 +119,7 @@ export function Warning({
           <X />
         </Button>
       </span>
-      {failed && <p className="text-ui-sm text-destructive">{failed}</p>}
+      {failed && <p className="text-ui text-destructive">{failed}</p>}
       <ExtendBoat id={server.id} onFail={setFailed} onDone={() => !offered && setOffer(true)} />
       <span
         aria-hidden
@@ -194,14 +194,19 @@ function useAutoExtend(busy: (server: string) => boolean, onFail: (key: string, 
   }, [servers, auto, busy, onFail]);
 }
 
+/// Owns the clock, so nothing ticks while no card is up.
+function LiveWarning(props: Omit<Parameters<typeof Warning>[0], "now">) {
+  return <Warning {...props} now={useNow()} />;
+}
+
 /// A sandbox about to auto-stop, floating at the sidebar's foot. Drawn outside
 /// `<aside>` so collapsing it hides nothing, but sized to the default sidebar
-/// (`SIDEBAR_MIN`, 240) less its rows' inset, so it reads as part of it. No
-/// countdown bar unlike a notice card: it stands until the time is extended or
-/// it stops, since missing it costs running work.
+/// (`SIDEBAR_MIN`, 240) less its rows' inset, so it reads as part of it. Its
+/// bar drains like a notice card's but takes nothing down: the card stands
+/// until the reader extends or dismisses it or the sandbox stops, since missing
+/// it costs running work.
 export default function BoatWarnings({ busy }: { busy: (server: string) => boolean }) {
   const servers = useServers();
-  const now = useNow();
   const { auto } = useBoatPrefs();
   // By deadline: the card comes back, with boat's reason, so the reader can.
   const [autoFailed, setAutoFailed] = useState<Record<string, string>>({});
@@ -220,11 +225,10 @@ export default function BoatWarnings({ busy }: { busy: (server: string) => boole
     <div className="pointer-events-none fixed bottom-2 left-2 z-50 flex w-56 flex-col gap-2">
       {offer && <AutoOffer />}
       {up.map(({ server, stopsAt }) => (
-        <Warning
+        <LiveWarning
           key={server.id}
           server={server}
           stopsAt={stopsAt}
-          now={now}
           autoFailed={autoFailed[`${server.id}:${stopsAt}`]}
           onDismiss={() => setDismissed((d) => [...d, `${server.id}:${stopsAt}`])}
         />

@@ -65,13 +65,9 @@ export function peekStreamingBlock(sessionId: string): StreamingBlock | null {
   return live[sessionId] ?? null;
 }
 
-/// Drops the session's preview — only where `match` accepts it, when given.
-export function retireStreamingBlock(
-  sessionId: string,
-  match?: (block: StreamingBlock) => boolean,
-) {
-  const cur = live[sessionId];
-  if (!cur || (match && !match(cur))) return;
+/// Drops the session's preview.
+export function retireStreamingBlock(sessionId: string) {
+  if (!live[sessionId]) return;
   const { [sessionId]: _, ...rest } = live;
   live = rest;
   publish();

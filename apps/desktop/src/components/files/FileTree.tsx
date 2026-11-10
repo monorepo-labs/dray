@@ -39,9 +39,9 @@ export default function FileTree({
   /// that was already open.
   reveal: number;
   onOpen: (path: string) => void;
-  /// True while the filter box is drawing its own list instead. The tree stays
-  /// mounted underneath, so its reads are held back rather than its state
-  /// thrown away.
+  /// True while the filter box is drawing its own list instead. The tree is
+  /// hidden rather than unmounted, so its expanded set and cursor survive the
+  /// search.
   filtering: boolean;
 }) {
   const [listings, setListings] = useState<Map<string, DirEntry[]>>(new Map());

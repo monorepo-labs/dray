@@ -289,7 +289,10 @@ export default function ShortcutsSettings({ onOpenIsland }: { onOpenIsland: () =
                       if (recording !== id) return;
                       e.preventDefault();
                       e.stopPropagation();
-                      if (e.key === "Escape") return setRecording(null);
+                      if (e.key === "Escape") {
+                        setRefused(null);
+                        return setRecording(null);
+                      }
                       // Bare Backspace is never a chord (`chordFromKey` refuses
                       // it), so it is free to mean "no chord at all".
                       if (
@@ -297,6 +300,7 @@ export default function ShortcutsSettings({ onOpenIsland }: { onOpenIsland: () =
                         !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
                       ) {
                         clearChord(id);
+                        setRefused(null);
                         return setRecording(null);
                       }
                       const chord = chordFromKey(e);
@@ -308,6 +312,9 @@ export default function ShortcutsSettings({ onOpenIsland }: { onOpenIsland: () =
                       const row = digitRowFor(e.nativeEvent, chord);
                       if (row) return setRefused({ id, reason: `Already used by ${row.label}.` });
                       setChord(id, chord);
+                      // Or the last refusal stays drawn under the chord that
+                      // was just accepted.
+                      setRefused(null);
                       setRecording(null);
                     }}
                   >

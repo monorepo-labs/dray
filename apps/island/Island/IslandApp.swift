@@ -301,7 +301,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 if composer.listShown { composer.choose() } else { Task { await composer.send() } }
             // Unless the caret is in a card's text box, where a digit is typed.
             case (let code, []) where composer.ask != nil && Self.digits[code] != nil && !(panel?.firstResponder is NSText):
-                composer.pickOption(Self.digits[code]!)
+                // One press, one answer: a key held past the first card went on to answer the next one unread.
+                if !e.isARepeat { composer.pickOption(Self.digits[code]!) }
             case (45, .command): composer.pick(.new)
             case (3, .command): composer.searches += 1
             case (36, .command): composer.addTyped()
@@ -581,7 +582,6 @@ final class Delegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Key codes of 1 through 9, which are not in order on the keyboard.
     /// False for a sideways swipe over nothing that scrolls sideways, which is
     /// dropped: AppKit rubber-bands whatever scroll view sits under it, and the
     /// whole transcript slid with the fingers. A wide code block still scrolls.
@@ -595,6 +595,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    /// Key codes of 1 through 9, which are not in order on the keyboard.
     private static let digits: [UInt16: Int] = [18: 0, 19: 1, 20: 2, 21: 3, 23: 4, 22: 5, 26: 6, 28: 7, 25: 8]
 
     /// The ⌘ and ⌘⇧ chords a text box answers: A C V X Z by letter, so any

@@ -81,6 +81,8 @@ const ISLAND: Sound[] = [
       "A permission or question card arrived while the panel is shut. Not while Dray is the app in front.",
       "A session finished where Dray would have posted its banner: the done pill.",
       "News held while the reader was busy in the panel, once the pill can be seen.",
+      "A card held while the reader was busy in the open panel, as it comes into view there.",
+      "A sandbox's stop warning began while the panel is shut.",
     ],
   },
   {

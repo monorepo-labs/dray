@@ -56,7 +56,7 @@ Options:
 
 ### Fast mode
 
-Claude Code, Codex and fx each have a faster tier, and each charges for it —
+Claude Code, Codex, fx and Grok each have a faster tier, and each charges for it —
 Codex's own words for it are "2x speed, increased usage". pi has none, and the
 flag is ignored there.
 
@@ -545,8 +545,9 @@ the cure is safe.
   dialogs are out of reach.
 - **No reading transcripts.** You can create, list and message. You cannot read
   what another session said — ask it to send you a summary instead.
-- **Other machines cannot answer.** A session on another machine can be
-  started, messaged and listed from here, but cannot message you back.
+- **Another machine answers only where it can reach this one.** A session
+  there can be started, messaged and listed from here; it can message you back
+  only if its machine added this one — see *Working on another machine*.
 - **Two levels deep.** A session you create may create sessions of its own; those
   may not. If you hit this, say so — the user can start the next batch from a
   top-level session.

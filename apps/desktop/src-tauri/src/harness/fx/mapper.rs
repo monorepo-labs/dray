@@ -46,8 +46,8 @@ pub struct Mapper {
     /// this, and the two are only joined on the index entry.
     session_id: String,
     seq: Arc<AtomicU64>,
-    /// Whether a prompt is running. Read by the read loop too: a title landing
-    /// outside a turn is `session/resume` restating one Dray already holds.
+    /// Whether this turn's `TurnStarted` has gone out. fx sends no start line,
+    /// so the first update mints one and this keeps the rest from repeating it.
     turn_open: bool,
     /// The one block streaming right now. fx interleaves thought and text
     /// chunks with no ids on the thoughts, so at most one block is open and a
@@ -121,7 +121,16 @@ impl Mapper {
                 // stream as chunks of their own ahead of the answer. Drop them,
                 // remembering the id so a diagnostic split across chunks goes
                 // whole rather than leaving its tail on screen.
-                if self.suppressed.contains(&id) || is_fx_diagnostic(text) {
+                //
+                // Judged on the chunk that *opens* a block and no later one. A
+                // reply is cut into chunks wherever fx likes, so one of them can
+                // start with a line reading `[context]` — a TOML table, say —
+                // and testing every chunk dropped it and the rest of the answer.
+                let opening = !self
+                    .open
+                    .as_ref()
+                    .is_some_and(|block| block.id == id && block.kind == BlockType::Text);
+                if self.suppressed.contains(&id) || (opening && is_fx_diagnostic(text)) {
                     self.suppressed.insert(id);
                     return Vec::new();
                 }
@@ -966,10 +975,6 @@ mod tests {
         );
     }
 
-    /// fx 0.0.15's close is the output, cut at 200 bytes and marked — the
-    /// shape `shellUpdateContentText` writes, in fx's own tests. The stream
-    /// carried all of it, so the stream wins; a shell refused before it ran
-    /// streamed nothing, and its close is the only reason there is.
     /// A shell whose closing update never comes — the turn ended under it —
     /// leaves nothing behind for the life of the session.
     #[test]
@@ -1002,6 +1007,10 @@ mod tests {
         assert_eq!(result.exit_code, Some(0));
     }
 
+    /// fx 0.0.15's close is the output, cut at 200 bytes and marked — the
+    /// shape `shellUpdateContentText` writes, in fx's own tests. The stream
+    /// carried all of it, so the stream wins; a shell refused before it ran
+    /// streamed nothing, and its close is the only reason there is.
     #[test]
     fn a_shell_keeps_its_stream_over_fxs_cut_close() {
         let long = "x".repeat(500);
@@ -1082,5 +1091,17 @@ mod tests {
             Some(P::TurnStarted(_))
         ));
         assert!(out.iter().any(|e| matches!(&e.payload, P::Delta(_))));
+
+        // A later chunk of that same reply that happens to start the way a
+        // diagnostic does is part of the answer, and so is what follows it.
+        for text in ["\n", "[context]\nwindow = 200", " tokens"] {
+            assert!(
+                mapper
+                    .update(chunk("m3", text))
+                    .iter()
+                    .any(|e| matches!(&e.payload, P::Delta(_))),
+                "{text:?} was dropped"
+            );
+        }
     }
 }
