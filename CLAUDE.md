@@ -139,6 +139,7 @@ Messages flow one way out to CLI and one way back in; return path = what most Ru
 - **The server calls back into the app** for what lives on screen: the app's hello carries `host:{browser}`, honoured on the local listener alone, and `host_call` sends `{"call":n}` frames the app answers with `{"reply":n}`. `dray browser` steps go to the app's CEF while it is open and to headless Chromium otherwise; `dray server …` is answered by the app while it is open and from the server's own file otherwise; settle closes the app's tabs. A host that drops answers every waiting call — read errors included, which is why that loop has no `?`.
 - **`settings.json` and `credentials.json` have two writers**, so `settings::update` and `set_credential` take an `flock` beside the process mutex.
 - **Quit asks, and offers a full stop**: Quit leaves sessions running; Quit and stop sessions is `launchctl bootout`, or `SIGTERM` to the pid in `serve-port` in dev.
+- **Linux has no launchd, so every build there takes the dev path** (`launchd::as_child`, #703): the server is the app's child in its own process group, restarted by the app's reconnect loop, stopped by `SIGTERM` to that pid. Its home is the build's as usual — `~/.dray` for a release.
 
 ### Updating a remote server
 
@@ -217,7 +218,7 @@ The baseline rides on `user_message.baseline`, the closing head on `turn_complet
 - **Two `cat-file` passes per file, and the split is about memory.** `--batch` is one spawn but drains stdout whole, so a 2GB blob is read in before `MAX_BLOB` could reject it; `--batch-check` returns headers only. Input is NUL-delimited (`-z`), since a rev embeds a path and a path may contain a newline. Both parsers always answer exactly as many entries as asked for, or one file's contents render under another's name.
 - **Every `git diff` here ends in `--`**, or a working-tree file *named* like a sha makes it die with "ambiguous argument". Covered by test.
 
-**Filtering `cargo test` rewrites generated TS.** ts-rs regenerates `src/types/events.ts` from whatever exports ran, so `cargo test git::` leaves only git's types and breaks the frontend build. **Always follow a filtered run with a bare `cargo test`.**
+**Filtering `cargo test` rewrites generated TS.** ts-rs regenerates `src/types/events.ts` from whatever exports ran, so `cargo test git::` leaves only git's types and breaks the frontend build. **Always follow a filtered run with a bare `cargo test`.** **A bare run on Linux is filtered too**: Mac-gated types (`ChromiumStatus`) are never exported there, so never commit the `events.ts` diff a Linux run leaves.
 
 ### Indicators and failed turns
 
