@@ -13,6 +13,16 @@ use serde_json::Value;
 
 use crate::sessions::Live;
 
+/// How a list read ended.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Read {
+    Landed,
+    /// A later read started; this answer was dropped.
+    Superseded,
+    /// No answer; the caller reads again.
+    Failed,
+}
+
 /// What applying an event asks of the view.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Applied {
@@ -111,6 +121,8 @@ impl Store {
                         self.asks.remove(session);
                         self.sync_asking();
                     }
+                    // A live reading settles it; nothing is left to defer.
+                    self.deferred.remove(session);
                     self.live.status.insert(session.to_string(), status);
                 }
                 self.index_event(name, payload);
@@ -178,20 +190,22 @@ impl Store {
     }
 
     /// Lands a list read's answer, unless a later read has started since.
-    /// Answers whether it landed.
-    pub fn finish_read(&mut self, read: u64, list: Result<Vec<SessionIndexItem>, String>) -> bool {
+    pub fn finish_read(&mut self, read: u64, list: Result<Vec<SessionIndexItem>, String>) -> Read {
         if read != self.reads {
-            return false;
+            return Read::Superseded;
         }
-        let replay = self.replay.take().unwrap_or_default();
-        match list {
-            Ok(items) => {
-                self.items = items;
-                for (name, payload) in replay {
-                    self.apply_index_fields(&name, payload);
-                }
+        let items = match list {
+            Ok(items) => items,
+            // No answer is no status either: the held list stays stale, so
+            // status stays unknown and nothing deferred is settled on it.
+            Err(e) => {
+                log::error!("list_session_index_items: {e}");
+                return Read::Failed;
             }
-            Err(e) => log::error!("list_session_index_items: {e}"),
+        };
+        self.items = items;
+        for (name, payload) in self.replay.take().unwrap_or_default() {
+            self.apply_index_fields(&name, payload);
         }
         for session in std::mem::take(&mut self.deferred) {
             if !self.tasked.contains(&session) && self.running(&session) == Some(false) {
@@ -199,7 +213,7 @@ impl Store {
             }
         }
         self.sync_asking();
-        true
+        Read::Landed
     }
 
     /// Whether a session's turn is running, or `None` while that is unknown:
@@ -285,7 +299,7 @@ mod tests {
         let read = s.begin_read();
         s.apply("session_created", serde_json::to_value(item("new", "idle")).unwrap());
         s.apply("session_title", json!({ "sessionId": "old", "title": "Renamed", "titleLocked": true }));
-        assert!(s.finish_read(read, Ok(vec![item("old", "idle")])));
+        assert_eq!(s.finish_read(read, Ok(vec![item("old", "idle")])), Read::Landed);
         let titles: Vec<_> = s.items.iter().map(|i| (i.session_id.as_str(), i.title.as_str())).collect();
         assert_eq!(titles, [("old", "Renamed"), ("new", "new")]);
     }
@@ -295,9 +309,9 @@ mod tests {
         let mut s = Store::default();
         let first = s.begin_read();
         let second = s.begin_read();
-        assert!(!s.finish_read(first, Ok(vec![item("stale", "idle")])));
+        assert_eq!(s.finish_read(first, Ok(vec![item("stale", "idle")])), Read::Superseded);
         assert!(s.items.is_empty());
-        assert!(s.finish_read(second, Ok(vec![item("fresh", "idle")])));
+        assert_eq!(s.finish_read(second, Ok(vec![item("fresh", "idle")])), Read::Landed);
         assert_eq!(s.items[0].session_id, "fresh");
     }
 
@@ -331,6 +345,20 @@ mod tests {
         s.apply("agent_event", tasks("a", 0));
         s.finish_read(read, Ok(vec![item("a", "in_progress")]));
         assert!(asking(&s, "a"));
+    }
+
+    #[test]
+    fn a_failed_read_settles_nothing_on_the_stale_list() {
+        let mut s = Store::default();
+        s.items = vec![item("a", "idle")];
+        s.apply("live_state", json!({ "asks": [ask("a", "r1")], "tasks": [{ "sessionId": "a" }] }));
+        let read = s.begin_read();
+        s.apply("agent_event", tasks("a", 0));
+        assert_eq!(s.finish_read(read, Err("gone".into())), Read::Failed);
+        assert!(asking(&s, "a"), "the held list's `idle` is stale, not an answer");
+        let retry = s.begin_read();
+        s.finish_read(retry, Ok(vec![item("a", "completed")]));
+        assert!(!asking(&s, "a"));
     }
 
     #[test]

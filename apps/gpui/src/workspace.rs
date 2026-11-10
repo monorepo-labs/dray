@@ -13,7 +13,7 @@ use gpui::{
 };
 use serde_json::json;
 
-use crate::store::Store;
+use crate::store::{Read, Store};
 use crate::theme::{Mode, Theme};
 use crate::wire::{Signal, Wire};
 
@@ -115,12 +115,18 @@ impl Workspace {
                     .map_err(|e| format!("a session list this build cannot read: {e}")),
                 Err(e) => Err(e.to_string()),
             };
-            this.update(cx, |this, cx| {
-                if this.store.finish_read(read, list) {
+            let outcome = this.update(cx, |this, cx| {
+                let outcome = this.store.finish_read(read, list);
+                if outcome == Read::Landed {
                     cx.notify();
                 }
-            })
-            .ok();
+                outcome
+            });
+            // Status stays unknown until a read lands, so a failed one is retried.
+            if let Ok(Read::Failed) = outcome {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                this.update(cx, |this, cx| this.reload(cx)).ok();
+            }
         })
         .detach();
 
