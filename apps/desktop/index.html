@@ -27,11 +27,12 @@
         el.dataset.mode = dark ? "dark" : "light";
         el.classList.toggle("dark", dark);
         el.style.colorScheme = dark ? "dark" : "light";
-        // Unconditional, and it reads no preference to decide it: a window is
-        // translucent, full stop. The stored setting only ever applies in
-        // fullscreen, and nothing can know it is fullscreen before first paint,
-        // so `useGlass` owns that case and this owns the ordinary one.
-        el.dataset.transparency = "";
+        // It reads no preference to decide it: a window is translucent, full
+        // stop. The stored setting only ever applies in fullscreen, and nothing
+        // can know it is fullscreen before first paint, so `useGlass` owns that
+        // case and this owns the ordinary one. Linux is the exception and draws
+        // flat, as a Mac does a flat palette; `useGlass` keeps it so.
+        if (!/Linux/.test(navigator.platform)) el.dataset.transparency = "";
         // The window's material is macOS-only, so the translucency that reveals
         // it is too — anywhere else it would punch a hole through to nothing.
         // It is the macOS flavour of the transparency above, not a second one:
