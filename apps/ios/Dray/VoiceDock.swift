@@ -396,6 +396,8 @@ struct TextSheet: View {
     let title: String
     @Binding var text: String
     var send: (() -> Void)?
+    /// False while dictation is still adding words: sending then would leave them behind.
+    var sendable = true
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
 
@@ -412,7 +414,7 @@ struct TextSheet: View {
                                 .frame(width: 32, height: 32)
                                 .background(Theme.text, in: Circle())
                         }
-                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(!sendable || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityLabel("Send")
                     } else {
                         done

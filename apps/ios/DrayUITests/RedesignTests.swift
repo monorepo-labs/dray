@@ -108,8 +108,9 @@ final class RedesignTests: XCTestCase {
             sleep(1)
         }
         start.tap()
-        // The started task opens, and the dock stays on the list behind it.
-        XCTAssertTrue(orb.waitForNonExistence(timeout: 60), "the task never started")
+        // The started task opens.
+        // The list dock's Project pick, which the session's dock has none of: the orb is in both.
+        XCTAssertTrue(app.buttons["Project"].waitForNonExistence(timeout: 60), "the task never started")
         sleep(4)
         snap(app, "voice-started")
     }
@@ -121,10 +122,15 @@ final class RedesignTests: XCTestCase {
         // Below the two cards, so off screen at first: the list is lazy and only draws what scrolls in.
         XCTAssertTrue(app.descendants(matching: .any)["orb"].waitForExistence(timeout: 20))
         let row = labelled(app, "Tighten session row spacing")
-        for _ in 0..<8 where !(row.exists && row.isHittable) { app.swipeUp() }
-        XCTAssertTrue(row.isHittable, "no row to open")
-        row.tap()
         let orb = app.descendants(matching: .any)["orb"]
+        // The dock floats over the list, so a row behind it still reads as hittable and the tap lands on the orb.
+        let clear = { row.exists && row.isHittable && row.frame.maxY < orb.frame.minY - 40 }
+        for _ in 0..<8 where !clear() { app.swipeUp() }
+        if !clear() { app.swipeDown(velocity: .slow) }
+        XCTAssertTrue(clear(), "no row to open")
+        row.tap()
+        // The list's dock has a Project pick and the session's has none; both have the orb.
+        XCTAssertTrue(app.buttons["Project"].waitForNonExistence(timeout: 20), "the session never opened")
         XCTAssertTrue(orb.waitForExistence(timeout: 20), "no dock in the session")
         sleep(3)
         snap(app, "reply-rest")

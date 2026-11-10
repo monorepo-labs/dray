@@ -81,7 +81,7 @@ struct ReplyDock: View {
         }
         .sheet(isPresented: $editing) {
             TextSheet(title: sheetTitle, text: Binding(get: { store.drafts[key] ?? "" }, set: { store.drafts[key] = $0 }),
-                      send: { editing = false; send() })
+                      send: { editing = false; send() }, sendable: dictation == .idle)
         }
         // Leaving mid-recording sends what was said into this session's draft, the desktop's rule.
         .onDisappear {
@@ -271,13 +271,15 @@ struct ReplyDock: View {
 
     private func send() {
         let words = text
-        guard !words.isEmpty, !sending else { return }
+        // Spoken words still on their way would land after this send, as a reply of their own.
+        guard !words.isEmpty, !sending, dictation == .idle else { return }
         sending = true
         failed = nil
         Haptic.tap()
-        let picks = (model: modelId, effort: current.flatMap { Picks.usableEffort($0, effortNow) } ?? effortNow, stance: stanceNow)
+        // Only what the reader moved; a new model takes an effort it offers.
+        let level = model != nil || effort != nil ? current.flatMap { Picks.usableEffort($0, effortNow) } ?? effortNow : nil
         Task {
-            if await store.send(key, words, picks: picks) {
+            if await store.send(key, words, model: model, effort: level, stance: stance) {
                 // Only if untouched meanwhile: words added while the send was out were never sent.
                 if store.drafts[key]?.trimmingCharacters(in: .whitespacesAndNewlines) == words { store.drafts[key] = nil }
                 model = nil
