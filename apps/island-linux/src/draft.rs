@@ -240,11 +240,6 @@ impl Draft {
         }
     }
 
-    /// A screenshot's place is still being filled.
-    pub fn holding(&self) -> bool {
-        self.rows.iter().any(|r| r.pending)
-    }
-
     /// An image row's label: its place among the draft's images, the order
     /// its block reaches the model in.
     pub fn label(&self, id: u64) -> String {

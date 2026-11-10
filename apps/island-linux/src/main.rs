@@ -638,17 +638,24 @@ pub fn stop_dictation(island: &Entity<Island>, then_send: bool, cx: &mut App) {
     }
     // A send waiting on the words goes where the reader pressed ⏎ with what
     // was there then, whatever they pick or write while the model works.
-    if then_send {
-        pin(island, true, cx);
-    }
+    let then_send = then_send && pin(island, true, cx);
     transcribe(island, "stop_transcription", json!({}), then_send, cx);
 }
 
 /// Holds the send as it stands at ⏎ in the draft until what it waits on has
 /// landed. The box's text joins it as a row of its own, and the box empties:
-/// what is typed next is not this message's. A send already waiting takes
-/// the new rows in, keeping where it goes.
-fn pin(island: &Entity<Island>, awaiting_words: bool, cx: &mut App) {
+/// what is typed next is not this message's. A send already waiting for the
+/// same task takes the new rows in; one waiting for another refuses, as one
+/// pin is all there is and the rows must not go to the wrong task.
+fn pin(island: &Entity<Island>, awaiting_words: bool, cx: &mut App) -> bool {
+    let clash = island.read(cx).draft().pinned.as_ref().is_some_and(|p| p.target != island.read(cx).draft().target);
+    if clash {
+        island.update(cx, |island, cx| {
+            island.notice = Some("The last message is still waiting on its screenshot.".into());
+            cx.notify();
+        });
+        return false;
+    }
     let typing = island.read(cx).draft().typing.clone();
     let text = typing.read(cx).text().trim().to_string();
     if !text.is_empty() {
@@ -665,13 +672,19 @@ fn pin(island: &Entity<Island>, awaiting_words: bool, cx: &mut App) {
         p.awaiting_words |= awaiting_words;
         cx.notify();
     });
+    true
+}
+
+/// Whether any of `ids` is a screenshot or moment still landing.
+fn landing(d: &Draft, ids: &[u64]) -> bool {
+    d.rows.iter().any(|r| r.pending && ids.contains(&r.id))
 }
 
 /// Something a waiting send held for has landed: it goes once its words
 /// are in and no screenshot or moment is still landing.
 fn release_send(island: &Entity<Island>, cx: &mut App) {
     let d = island.read(cx).draft();
-    if d.holding() || d.pinned.as_ref().is_none_or(|p| p.awaiting_words) {
+    if d.pinned.as_ref().is_none_or(|p| p.awaiting_words || landing(d, &p.rows)) {
         return;
     }
     if let Some(pinned) = island.update(cx, |island, _| island.draft_mut().pinned.take()) {
@@ -1161,7 +1174,10 @@ async fn after_flash(island: &Entity<Island>, clock: u64, cx: &mut gpui::AsyncAp
             let i = island.read(cx);
             (i.flash.is_some() && i.flash_clock == clock, i.asks.attention().is_empty())
         };
-        if flashing && empty {
+        // A waiting send can go while the reader dictates or writes the
+        // next one; closing then would throw that away.
+        let busy = island.read(cx).draft().busy(cx);
+        if flashing && empty && !busy {
             close(island, cx);
         } else if flashing {
             island.update(cx, |island, cx| {
@@ -1408,12 +1424,24 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
             _ => return,
         }
     }
+    // This send's rows: a pinned one's own, else every row no waiting send
+    // holds, so a second ⏎ sends what came after without waiting on the first.
+    let own: Vec<u64> = match &pinned {
+        Some(p) => p.rows.clone(),
+        None => {
+            let d = island.read(cx).draft();
+            let waiting = d.pinned.as_ref().map(|p| p.rows.clone()).unwrap_or_default();
+            d.rows.iter().map(|r| r.id).filter(|id| !waiting.contains(id)).collect()
+        }
+    };
     // A screenshot or moment still landing is part of this message: the send
     // waits for it, holding the rows as they are now.
-    if island.read(cx).draft().holding() {
+    if landing(island.read(cx).draft(), &own) {
         match pinned {
             Some(p) => island.update(cx, |island, _| island.draft_mut().pinned = Some(p)),
-            None => pin(island, false, cx),
+            None => {
+                pin(island, false, cx);
+            }
         }
         return;
     }
@@ -1423,8 +1451,8 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
         // A pinned send reads only its own rows, never the box or rows
         // written since ⏎.
         let (rows, typing) = match &pinned {
-            Some(p) => (d.snapshot(Some(&p.rows), cx), String::new()),
-            None => (d.snapshot(None, cx), d.typing.read(cx).text().to_string()),
+            Some(_) => (d.snapshot(Some(&own), cx), String::new()),
+            None => (d.snapshot(Some(&own), cx), d.typing.read(cx).text().to_string()),
         };
         let p = &d.picks;
         let picks = json!({
@@ -1464,10 +1492,7 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
     let clock = island.update(cx, |island, cx| {
         island.notice = None;
         let draft = island.draft_mut();
-        match &pinned {
-            Some(p) => draft.rows.retain(|r| !p.rows.contains(&r.id)),
-            None => draft.rows.clear(),
-        }
+        draft.rows.retain(|r| !own.contains(&r.id));
         draft.sending = true;
         draft.list_shown = false;
         draft.menu = None;
