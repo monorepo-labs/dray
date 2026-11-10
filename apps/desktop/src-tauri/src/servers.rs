@@ -1157,6 +1157,9 @@ static CLOUD_ERROR: Mutex<Option<String>> = Mutex::new(None);
 static CLOUD_LISTED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 /// One listing applied at a time, or two at once mint two rows for one machine.
 static CLOUD_SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Moved, under [`CLOUD_SYNC`], by everything that changes what a listing
+/// would be applied to: the key, the switch, and every listing applied.
+static CLOUD_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// How often the machines are listed while Dray Cloud is on. A stopped one is
 /// noticed resuming from elsewhere within this, as a parked boat row is.
@@ -1227,22 +1230,28 @@ fn valid_sandbox(id: &str) -> bool {
 /// machine, parked while it is stopped, gone once the control plane drops it.
 async fn sync_cloud() -> Result<(), String> {
     *CLOUD_LISTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
-    let (Some(key), true) = (cloud_key().await, crate::settings::read().await.dray_cloud) else {
-        return Ok(());
-    };
-    let listed = cloud::list(&key).await;
-    // Read again under the lock the switch takes: turned off while the list
-    // was out, the answer would add machines nothing turns off again.
-    let _one = CLOUD_SYNC.lock().await;
-    if !crate::settings::read().await.dray_cloud {
+    // Listed outside the lock, since a list can take seconds and the switch
+    // waits on the lock. So an answer may be stale by the time it lands: a
+    // key changed or cleared, the switch turned off, or a newer listing
+    // applied. Any of those moved the generation, and the list is read again.
+    for _ in 0..3 {
+        let generation = CLOUD_GENERATION.load(Ordering::SeqCst);
+        let (Some(key), true) = (cloud_key().await, crate::settings::read().await.dray_cloud) else {
+            return Ok(());
+        };
+        let listed = cloud::list(&key).await;
+        let _one = CLOUD_SYNC.lock().await;
+        if CLOUD_GENERATION.load(Ordering::SeqCst) != generation {
+            continue;
+        }
+        let error = listed.as_ref().err().cloned();
+        let changed = std::mem::replace(&mut *CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()), error.clone()) != error;
+        if changed {
+            announce_cloud().await;
+        }
+        apply_listing(listed?).await;
         return Ok(());
     }
-    let error = listed.as_ref().err().cloned();
-    let changed = std::mem::replace(&mut *CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()), error.clone()) != error;
-    if changed {
-        announce_cloud().await;
-    }
-    apply_listing(listed?).await;
     Ok(())
 }
 
@@ -1255,7 +1264,9 @@ async fn sync_cloud_soon() {
     }
 }
 
+/// Called under [`CLOUD_SYNC`].
 async fn apply_listing(listing: cloud::Listing) {
+    CLOUD_GENERATION.fetch_add(1, Ordering::SeqCst);
     let known: HashMap<String, String> =
         conns().iter().filter_map(|c| Some((c.saved.cloud.clone()?, c.saved.id.clone()))).collect();
     let machines: Vec<(cloud::Machine, String, String)> = listing
@@ -1356,20 +1367,19 @@ async fn watch_cloud() {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_cloud_key(key: String) -> Result<(), String> {
     let key = key.trim();
-    if key.is_empty() {
-        crate::issues::set_credential(cloud::KEY, None).await?;
-        *CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        let _one = CLOUD_SYNC.lock().await;
-        apply_listing(cloud::Listing { token: String::new(), machines: Vec::new() }).await;
-        announce_cloud().await;
-        return Ok(());
-    }
-    let listing = cloud::list(key).await?;
-    crate::issues::set_credential(cloud::KEY, Some(key)).await?;
+    let listing = match key.is_empty() {
+        true => cloud::Listing { token: String::new(), machines: Vec::new() },
+        false => cloud::list(key).await?,
+    };
+    let one = CLOUD_SYNC.lock().await;
+    crate::issues::set_credential(cloud::KEY, Some(key).filter(|k| !k.is_empty())).await?;
     *CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    set_cloud_on(true).await?;
-    let _one = CLOUD_SYNC.lock().await;
+    if !key.is_empty() {
+        switch_cloud(true).await?;
+    }
     apply_listing(listing).await;
+    drop(one);
+    announce_cloud().await;
     Ok(())
 }
 
@@ -1378,6 +1388,18 @@ pub async fn set_cloud_key(key: String) -> Result<(), String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_cloud_on(on: bool) -> Result<(), String> {
     let one = CLOUD_SYNC.lock().await;
+    switch_cloud(on).await?;
+    drop(one);
+    announce_cloud().await;
+    if on {
+        tokio::spawn(sync_cloud());
+    }
+    Ok(())
+}
+
+/// The switch itself, under [`CLOUD_SYNC`].
+async fn switch_cloud(on: bool) -> Result<(), String> {
+    CLOUD_GENERATION.fetch_add(1, Ordering::SeqCst);
     crate::settings::update(|s| s.dray_cloud = on).await.map_err(|e| format!("{e:#}"))?;
     let touched = {
         let mut list = conns();
@@ -1392,12 +1414,7 @@ pub async fn set_cloud_on(on: bool) -> Result<(), String> {
     if touched {
         save().await?;
     }
-    drop(one);
     announce();
-    announce_cloud().await;
-    if on {
-        tokio::spawn(sync_cloud());
-    }
     Ok(())
 }
 
