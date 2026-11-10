@@ -133,13 +133,26 @@ Swift island carries over.
   `$TMPDIR/dray-island-<uid>`, swept after seven days. They ride `send_msg`'s
   `attachmentPaths`, named `[Image N]` or `[file name]` in the prompt where
   they sat in the draft. Files dropped on the panel are rows too.
-- **The app hands asks to the island and keeps finished-session banners**:
-  `islandOn("asks")` is true on Linux while the island child lives
-  (`island::running`), `islandOn("done")` stays Mac-only until there is a done
-  pill.
+- **The app hands asks and finished sessions to the island** while its child
+  lives (`island::running`), for this computer's sessions alone: another
+  machine's keeps its banner (`islandOn` checks `serverOfSession`).
+- **The done pill is the Mac's**: a finished session in place of Dray's
+  banner, the pill's other face when no card waits. One names itself with
+  Open in app; several are a count that lists them on hover, five rows then
+  scrolling. Six seconds, held while hovered and while the panel or a card
+  covers it; what the panel covered is spent. Esc and Super+⏎ (the Mac's
+  ⌘⏎) are grabbed only while it is up.
+- **Dray talks down the pipe the island holds as stdin**: `done <session id>`
+  and `prefs`, a line each, besides the EOF that ends it.
 - **Prefs are `island.json` under the XDG config dir**, the stand-in for the
-  Mac's `defaults` domain: the app writes `key`, the island writes
-  `placement`, each keeping the other's field. Read at every tap.
+  Mac's `defaults` domain: the app writes `key`, and Settings → Island the
+  placement and layout, which the island's menu writes too; each write keeps
+  the other fields. Settings speaks the Mac's names (`island.placement` =
+  `notch`), mapped in `island.rs`, and a write tells a running island to read
+  them again and show them.
+- **The AppImage carries it** at `usr/bin/dray-island`, beside the app's
+  binary, where `island.rs` looks: `island-sidecar.sh` builds it and the
+  `tauri.island-linux.conf.json` overlay hands it to the bundler with the CLI.
 - **A client of This computer's `dray --serve`**, address and token from
   `serve-port` / `serve-token` in the `DRAY_HOME` the app hands over, read
   at every connect. Hello carries `client: "island"`. Lenient decoding: a
@@ -155,14 +168,17 @@ Each its own PR.
 3. **Reply, new task, the session switcher, typed rows** (#862).
 4. **Dictation rows, over `host_call` to the app as on the Mac**, and the orb
    (#866).
-5. **Screenshots and drawing on the live screen.**
+5. **Screenshots and drawing on the live screen** (#867).
+6. **Shipped**: the AppImage, Settings → Island, the done pill. What is left
+   is #868.
 
 ## Known limits
+
+The ones the Mac doesn't share are tracked in #868.
 
 - **X11 only.** Native Wayland is #839: a global key watch and screenshots go
   through portals there, and GNOME has no layer-shell. The app forces X11 too.
 - **Square, opaque edges without a compositor**, by design: see above.
-- **No done pill.** A finished session is still Dray's banner on Linux.
 - **This computer's sessions alone.** Other machines' (`island_links`) are not
   read yet, so a new task's bar has no machine control.
 - **Expanded's orb refracts nothing.** The Mac's `LensOrb` bends a live
@@ -174,12 +190,10 @@ Each its own PR.
 - **Not yet from the Mac's draft**: Ctrl+S saving it as a Dray draft,
   dragging rows to reorder, the last turns of the transcript above it, and
   the bar's step-through chords (⌘⇧A and the rest).
-- **The release bundle doesn't carry the island yet.** The app starts it as a
-  child where it finds the binary, which today is a dev build.
 - **A shot sees one screen.** The overlay covers GPUI's primary display, and
   the still is the whole root window.
-- **Settings → Island stays hidden off a Mac** until the island has more to
-  set than the key: the app hands over the default, Control.
+- **Settings → Island shows the switch, key, position and layout.** The tap
+  pick, the screenshot key and the transcript switch are the Mac's alone.
 - **One display.** The panel opens on GPUI's primary display; the Mac's
   "the screen with the notch" has no counterpart.
 

@@ -1,15 +1,23 @@
 import { readLocalStorage } from "@/hooks/useLocalStorage";
 import { IS_LINUX, IS_MAC } from "@/lib/platform";
-import { invoke } from "@/lib/transport";
+import { invoke, LOCAL, serverOfSession } from "@/lib/transport";
 
 /// The modifier tapped alone to open Dray Island, and again to dictate.
 export type IslandKey = "control" | "option" | "command";
 
-export const ISLAND_KEYS: { value: IslandKey; label: string }[] = [
-  { value: "control", label: "⌃ Control" },
-  { value: "option", label: "⌥ Option" },
-  { value: "command", label: "⌘ Command" },
-];
+/// The Mac's names travel to both islands; Linux reads Option as Alt and
+/// Command as Super, and its keyboards print those.
+export const ISLAND_KEYS: { value: IslandKey; label: string }[] = IS_LINUX
+  ? [
+      { value: "control", label: "Ctrl" },
+      { value: "option", label: "Alt" },
+      { value: "command", label: "Super" },
+    ]
+  : [
+      { value: "control", label: "⌃ Control" },
+      { value: "option", label: "⌥ Option" },
+      { value: "command", label: "⌘ Command" },
+    ];
 
 export const ISLAND_KEY = "ade.islandKey";
 export const ISLAND_ENABLED = "ade.islandEnabled";
@@ -32,13 +40,17 @@ export async function applyIsland(pick: { on?: boolean; key?: IslandKey } = {}) 
   }
 }
 
-/// Whether Dray Island is up to take what would be a banner — `asks`, the
-/// permission and question cards, or `done`, a finished session: asked of the
-/// process, since the switch says nothing about an island the reader quit. A
-/// failed ask reads as no island, so the banner is the one lost to doubt never.
-export async function islandOn(what: "asks" | "done"): Promise<boolean> {
-  // Linux's island has no done pill yet, so a finished session keeps its banner.
-  const draws = IS_MAC || (IS_LINUX && what === "asks");
+/// Whether Dray Island is up to take what would be a banner for `sessionId` —
+/// `asks`, the permission and question cards, or `done`, a finished session:
+/// asked of the process, since the switch says nothing about an island the
+/// reader quit. A failed ask reads as no island, so the banner is the one lost
+/// to doubt never.
+export async function islandOn(what: "asks" | "done", sessionId: string): Promise<boolean> {
+  void what;
+  // Linux's island reads this computer's sessions alone, so another
+  // machine's keeps its banner rather than going to an island that cannot
+  // show it.
+  const draws = IS_MAC || (IS_LINUX && serverOfSession(sessionId) === LOCAL);
   if (!draws || !enabled()) return false;
   return invoke<boolean>("island_running").catch(() => false);
 }

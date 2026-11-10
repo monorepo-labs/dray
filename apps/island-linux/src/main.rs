@@ -29,7 +29,6 @@ use prefs::Placement;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use serde_json::json;
 use server::{Session, Update};
-use std::io::Read;
 use std::time::Duration;
 
 /// The Mac panel's composer width, so both islands read alike.
@@ -57,6 +56,12 @@ enum Msg {
     /// Shift alone held, or let go: the pen armed while dictating.
     Shift(bool),
     Server(Update),
+    /// Dray says a session finished where its banner would have.
+    Done(String),
+    /// Dray's Settings changed a pick: read the prefs again and show it.
+    Prefs,
+    /// Esc or Super+⏎ under the done pill.
+    DoneKey(x11::DoneKey),
     /// Dray quit: the island does not outlive it.
     Quit,
 }
@@ -157,6 +162,23 @@ pub struct Island {
     pub draw_hint: bool,
     /// The pointer is on the camera, which shows its key beside it.
     pub camera_hovered: bool,
+    /// Sessions that finished while Dray was out of sight, newest last: the
+    /// done pill, in place of Dray's banner, until its clock runs out.
+    pub done: Vec<String>,
+    /// Finished while the panel or the attention pill covered the done pill,
+    /// so not yet seen: kept when the cover goes, where the rest are spent.
+    unseen_done: std::collections::HashSet<String>,
+    /// One finished under an open panel: announced when it closes.
+    held_done: bool,
+    done_clock: u64,
+    /// The pointer is on the done pill, which holds it up and lists several.
+    pub done_hovered: bool,
+    pub done_expanded: bool,
+    collapse_clock: u64,
+    /// Esc and Super+⏎, held while the done pill is up.
+    done_keys: Option<x11::DoneKeys>,
+    /// The sender the done pill's keys report through.
+    tx: Option<mpsc::UnboundedSender<Msg>>,
 }
 
 /// One screenshot's run: the row held for it, whether dictation was
@@ -275,6 +297,10 @@ fn main() {
     // `--orb-png <dir>`: the orb's reference frames as PNGs, for setting the
     // port beside the Mac's captures. No window, no server.
     let args: Vec<String> = std::env::args().collect();
+    // Answers with no display, so the release can check the binary it ships runs.
+    if args.iter().any(|a| a == "--version") {
+        return println!("dray-island {}", env!("CARGO_PKG_VERSION"));
+    }
     if let Some(dir) = args.iter().position(|a| a == "--orb-png").and_then(|i| args.get(i + 1)) {
         return orb::write_references(std::path::Path::new(dir)).expect("orb frames written");
     }
@@ -288,14 +314,24 @@ fn main() {
     let (tx, mut rx) = mpsc::unbounded::<Msg>();
     // Dray holds our stdin open for its life, so EOF is Dray gone however it
     // went — quit, crash or kill. Run by hand, the flag is left off.
+    // Dray's lines on the same pipe: `done <session id>` for a finished
+    // session, `prefs` after its Settings wrote one.
     if std::env::args().any(|a| a == "--child") {
         let tx = tx.clone();
         std::thread::spawn(move || {
-            let _ = std::io::stdin().read_to_end(&mut Vec::new());
+            for line in std::io::stdin().lines() {
+                let Ok(line) = line else { break };
+                let msg = match line.trim().split_once(' ') {
+                    Some(("done", id)) => Msg::Done(id.trim().to_string()),
+                    _ if line.trim() == "prefs" => Msg::Prefs,
+                    _ => continue,
+                };
+                let _ = tx.unbounded_send(msg);
+            }
             let _ = tx.unbounded_send(Msg::Quit);
         });
     }
-    let (taps, shots, shift) = (tx.clone(), tx.clone(), tx.clone());
+    let (taps, shots, shift, keys_tx) = (tx.clone(), tx.clone(), tx.clone(), tx.clone());
     x11::watch_taps(
         move || {
             let _ = taps.unbounded_send(Msg::Tap);
@@ -321,6 +357,7 @@ fn main() {
             mode: prefs::read().mode,
             server: Some(server),
             draft: Some(draft),
+            tx: Some(keys_tx),
             ..Default::default()
         });
         cx.spawn(async move |cx| {
@@ -334,6 +371,9 @@ fn main() {
                         let fresh = island.update(cx, |island, _| island.apply(update));
                         asks_changed(&island, fresh, had_cards, cx);
                     }
+                    Msg::Done(id) => finished(&island, id, 0, cx),
+                    Msg::Prefs => prefs_changed(&island, cx),
+                    Msg::DoneKey(key) => done_key(&island, key, cx),
                     Msg::Quit => {
                         sound::forget();
                         // Throws away what is being said, as quitting the Mac's does.
@@ -360,6 +400,17 @@ fn asks_changed(island: &Entity<Island>, fresh: bool, had_cards: bool, cx: &mut 
     };
     if fresh && !open {
         announce(island, cx);
+    }
+    if fresh {
+        cover_done(island, cx);
+    }
+    // Answered elsewhere with the panel shut: the done pill is back in view,
+    // its clock with it.
+    if empty && had_cards && !open {
+        island.update(cx, |island, _| island.unseen_done.clear());
+        if !island.read(cx).done.is_empty() {
+            start_done_clock(island, cx);
+        }
     }
     // Not while the reader is busy in the draft — dictating, or writing: a
     // card answered elsewhere leaves them to it, as on the Mac.
@@ -424,8 +475,10 @@ fn sync_card(island: &Entity<Island>, cx: &mut App) {
 fn sync_pill(island: &Entity<Island>, cx: &mut App) {
     let (want, has, placement) = {
         let i = island.read(cx);
-        (i.window.is_none() && !i.asks.attention().is_empty() && i.shot.is_none(), i.pill.is_some(), i.placement)
+        let news = !i.asks.attention().is_empty() || !i.done.is_empty();
+        (i.window.is_none() && news && i.shot.is_none(), i.pill.is_some(), i.placement)
     };
+    sync_done_keys(island, cx);
     if want && !has {
         let glass = x11::compositing();
         island.update(cx, |island, _| island.glass = glass);
@@ -993,6 +1046,7 @@ pub fn close(island: &Entity<Island>, cx: &mut App) {
     if let Some(window) = window {
         let _ = window.update(cx, |_, window, _| window.remove_window());
     }
+    released_done(island, cx);
     sync_pill(island, cx);
 }
 
@@ -1252,6 +1306,7 @@ pub fn pick_target(island: &Entity<Island>, target: Target, cx: &mut App) {
     island.update(cx, |island, cx| {
         let draft = island.draft_mut();
         draft.target = Some(target);
+        draft.target_picks += 1;
         draft.menu = None;
         if new {
             draft.list_shown = false;
@@ -1474,6 +1529,10 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
     };
     let (text, files) = draft::compose(&rows, &typing);
     let Some(target) = target else { return };
+    // A finish held for this session is the turn this message follows on from.
+    if let Target::Session(id) = &target {
+        island.update(cx, |island, _| island.done.retain(|d| d != id));
+    }
     // An image alone is a message, as in Dray's own composer; a screenshot
     // still being taken is not yet one.
     if (text.is_empty() && files.is_empty()) || island.read(cx).draft().sending {
@@ -1492,6 +1551,7 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
     if pinned.is_none() {
         typing_box.update(cx, |t, cx| t.clear(cx));
     }
+    let picked_at = island.read(cx).draft().target_picks;
     let clock = island.update(cx, |island, cx| {
         // A waiting send goes on its own, often as another fails; that
         // failure's notice is the reader's to read, not this send's to clear.
@@ -1567,8 +1627,9 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
             match outcome {
                 Ok(id) => {
                     state.update(cx, |island, _| island.draft_mut().sending = false);
-                    // A pick made while the request ran is the reader's, and outranks this one.
-                    if state.read(cx).draft().target.as_ref() == Some(&target) {
+                    // A pick made while the request ran is the reader's, and outranks this
+                    // one: a new task picked again since is a new one, not this.
+                    if state.read(cx).draft().target_picks == picked_at {
                         pick_target(&state, Target::Session(id), cx);
                     } else {
                         prefs::set("lastSession", &id);
@@ -2182,4 +2243,216 @@ pub fn drop_files(island: &Entity<Island>, paths: &[std::path::PathBuf], cx: &mu
         }
         cx.notify();
     });
+}
+
+/// How long the done pill stays up on its own: the Mac's `doneFor`.
+const DONE_FOR: Duration = Duration::from_secs(6);
+
+/// Dray says `id` finished where its banner would have. One this island
+/// has not read yet waits for the index a while, then is dropped: a pill
+/// keyed to a guess opens nothing.
+fn finished(island: &Entity<Island>, id: String, tries: u32, cx: &mut App) {
+    if island.read(cx).session(&id).is_none() {
+        if tries < 20 {
+            let island = island.clone();
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+                cx.update(|cx| finished(&island, id, tries + 1, cx));
+            })
+            .detach();
+        }
+        return;
+    }
+    let shown = island.read(cx).window.is_some();
+    let covered = shown || !island.read(cx).asks.attention().is_empty();
+    island.update(cx, |island, cx| {
+        island.done.retain(|d| *d != id);
+        island.done.push(id.clone());
+        if covered {
+            island.unseen_done.insert(id);
+        } else {
+            island.unseen_done.remove(&id);
+        }
+        // Its pill only hangs while the panel is shut, so its clock starts
+        // then, and one already running must not clear this with it.
+        if shown {
+            island.held_done = true;
+            island.done_clock += 1;
+        }
+        cx.notify();
+    });
+    if !shown {
+        announce(island, cx);
+        start_done_clock(island, cx);
+    }
+    sync_pill(island, cx);
+}
+
+/// The panel or the attention pill now covers the done pill: what it
+/// already showed is spent, not brought back when it is uncovered.
+fn cover_done(island: &Entity<Island>, cx: &mut App) {
+    island.update(cx, |island, cx| {
+        let unseen = island.unseen_done.clone();
+        island.done.retain(|d| unseen.contains(d));
+        // Any still unseen waits, its clock stopped until it is.
+        island.done_clock += 1;
+        cx.notify();
+    });
+}
+
+/// The panel shut: a finish held under it is announced now, as the pill.
+fn released_done(island: &Entity<Island>, cx: &mut App) {
+    let (held, empty_asks, any) = {
+        let i = island.read(cx);
+        (i.held_done, i.asks.attention().is_empty(), !i.done.is_empty())
+    };
+    island.update(cx, |island, _| {
+        island.held_done = false;
+        if empty_asks {
+            island.unseen_done.clear();
+        }
+    });
+    if held && any {
+        announce(island, cx);
+    }
+    if any {
+        start_done_clock(island, cx);
+    }
+}
+
+fn start_done_clock(island: &Entity<Island>, cx: &mut App) {
+    let clock = island.update(cx, |island, _| {
+        island.done_clock += 1;
+        island.done_clock
+    });
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(DONE_FOR).await;
+        cx.update(|cx| {
+            // Only a pill on screen runs out; one under the panel or the
+            // attention pill waits.
+            let i = island.read(cx);
+            if clock == i.done_clock && !i.done_hovered && i.window.is_none() && i.asks.attention().is_empty() {
+                clear_done(&island, cx);
+            }
+        });
+    })
+    .detach();
+}
+
+fn clear_done(island: &Entity<Island>, cx: &mut App) {
+    island.update(cx, |island, cx| {
+        island.done.clear();
+        island.done_expanded = false;
+        cx.notify();
+    });
+    sync_pill(island, cx);
+}
+
+/// The pointer on the done pill: held up while it is there, and several
+/// grow a row each; a beat before shutting, so a pointer grazing the edge
+/// it just grew past does not flicker it.
+pub fn done_hovered(island: &Entity<Island>, hovered: bool, cx: &mut App) {
+    let (several, clock) = island.update(cx, |island, cx| {
+        island.done_hovered = hovered;
+        island.collapse_clock += 1;
+        if hovered && island.done.len() > 1 {
+            island.done_expanded = true;
+        }
+        cx.notify();
+        (island.done.len() > 1, island.collapse_clock)
+    });
+    if hovered {
+        return;
+    }
+    start_done_clock(island, cx);
+    if several {
+        let island = island.clone();
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(Duration::from_millis(150)).await;
+            cx.update(|cx| {
+                island.update(cx, |island, cx| {
+                    if island.collapse_clock == clock {
+                        island.done_expanded = false;
+                        cx.notify();
+                    }
+                })
+            });
+        })
+        .detach();
+    }
+}
+
+/// A finished session's title clicked: the island opens on it, and the
+/// news is spent.
+pub fn open_done(island: &Entity<Island>, id: String, cx: &mut App) {
+    clear_done(island, cx);
+    pick_target(island, Target::Session(id), cx);
+    show(island, cx);
+}
+
+/// The done pill's Open in app: Dray comes forward on the session, and its
+/// sidebar already marks the rest unread.
+pub fn open_done_in_app(island: &Entity<Island>, id: String, cx: &mut App) {
+    clear_done(island, cx);
+    show_in_app(island, id, cx);
+}
+
+/// The done pill is the pill drawn while the panel is shut and no card waits.
+pub fn done_pill_up(i: &Island) -> bool {
+    i.window.is_none() && i.shot.is_none() && i.asks.attention().is_empty() && !i.done.is_empty()
+}
+
+/// Holds Esc and Super+⏎ exactly while the done pill is up.
+fn sync_done_keys(island: &Entity<Island>, cx: &mut App) {
+    let (want, has) = {
+        let i = island.read(cx);
+        (done_pill_up(i), i.done_keys.is_some())
+    };
+    if want && !has {
+        let Some(tx) = island.read(cx).tx.clone() else { return };
+        let keys = x11::grab_done_keys(move |key| {
+            let _ = tx.unbounded_send(Msg::DoneKey(key));
+        });
+        island.update(cx, |island, _| island.done_keys = keys);
+    } else if !want && has {
+        island.update(cx, |island, _| island.done_keys = None);
+    }
+}
+
+fn done_key(island: &Entity<Island>, key: x11::DoneKey, cx: &mut App) {
+    if !done_pill_up(island.read(cx)) {
+        return;
+    }
+    match key {
+        x11::DoneKey::Dismiss => clear_done(island, cx),
+        x11::DoneKey::OpenInApp => {
+            if let Some(id) = island.read(cx).done.last().cloned() {
+                open_done_in_app(island, id, cx);
+            }
+        }
+    }
+}
+
+/// Dray's Settings wrote a pick: placement and layout read again, and the
+/// panel shown in them, since both are only judged on screen.
+fn prefs_changed(island: &Entity<Island>, cx: &mut App) {
+    let p = prefs::read();
+    let moved = island.read(cx).placement != p.placement;
+    island.update(cx, |island, cx| {
+        island.placement = p.placement;
+        island.mode = p.mode;
+        cx.notify();
+    });
+    if island.read(cx).window.is_some() {
+        if moved {
+            // GPUI has no move for a window it made, so the panel is made again there.
+            close(island, cx);
+            show(island, cx);
+        }
+    } else {
+        // The pill, if up, is placed at its next showing.
+        sync_pill(island, cx);
+        open(island, cx);
+    }
 }

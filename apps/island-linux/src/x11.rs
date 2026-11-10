@@ -464,6 +464,64 @@ pub fn give_back(ours: u32, window: u32) {
     let _ = conn.flush();
 }
 
+/// A key the done pill answers while it is up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DoneKey {
+    /// Esc: the pill put away.
+    Dismiss,
+    /// Super+⏎, the Mac's ⌘⏎: the newest opened in Dray.
+    OpenInApp,
+}
+
+/// Esc and Super+⏎ held from every app while the done pill is up, as the
+/// Mac's are: the pill never takes the keyboard, so nothing else would hear
+/// them. Dropped, the grabs go with the connection that made them.
+pub struct DoneKeys {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for DoneKeys {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Grabs the done pill's keys on a connection of its own, polled rather than
+/// blocked on: only the client that grabbed can let go, and the pill is up
+/// for seconds at a time.
+pub fn grab_done_keys(on_key: impl Fn(DoneKey) + Send + 'static) -> Option<DoneKeys> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use x11rb::protocol::xproto::{GrabMode, ModMask};
+    let (conn, screen) = x11rb::connect(None).ok()?;
+    let root = conn.setup().roots[screen].root;
+    let keysyms = Keysyms::read(&conn).ok()?;
+    let escape = keysyms.code_of(0xff1b)?;
+    let enter = keysyms.code_of(0xff0d)?;
+    for extra in [ModMask::from(0u16), ModMask::LOCK, ModMask::M2, ModMask::LOCK | ModMask::M2] {
+        let _ = conn.grab_key(false, root, extra, escape, GrabMode::ASYNC, GrabMode::ASYNC);
+        let _ = conn.grab_key(false, root, ModMask::M4 | extra, enter, GrabMode::ASYNC, GrabMode::ASYNC);
+    }
+    conn.flush().ok()?;
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let stopped = stop.clone();
+    std::thread::Builder::new()
+        .name("island-done-keys".into())
+        .spawn(move || {
+            while !stopped.load(Ordering::Relaxed) {
+                while let Ok(Some(event)) = conn.poll_for_event() {
+                    match event {
+                        Event::KeyPress(e) if e.detail == escape => on_key(DoneKey::Dismiss),
+                        Event::KeyPress(e) if e.detail == enter => on_key(DoneKey::OpenInApp),
+                        _ => {}
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        })
+        .ok()?;
+    Some(DoneKeys { stop })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

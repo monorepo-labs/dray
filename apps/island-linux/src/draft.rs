@@ -94,6 +94,9 @@ pub struct Draft {
     /// The send the reader asked for that still waits: on the words being
     /// transcribed, or on a screenshot or moment still landing.
     pub pinned: Option<Pinned>,
+    /// Counts picks of where the draft goes, so a send's answer can tell a
+    /// new task picked again since from the one it was sent from.
+    pub target_picks: u64,
     /// Counts recordings thrown away, which void a cut still transcribing;
     /// `run` would not do, as starting again moves it too.
     pub thrown: u64,
@@ -134,6 +137,7 @@ impl Draft {
             run: 0,
             start_pending: false,
             pinned: None,
+            target_picks: 0,
             thrown: 0,
         }
     }

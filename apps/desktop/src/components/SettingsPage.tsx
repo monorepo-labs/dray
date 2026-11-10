@@ -1120,28 +1120,34 @@ function IslandSettings() {
             </DropdownMenuContent>
           </DropdownMenu>
         </SettingRow>
-        <SettingRow
-          id={tapId}
-          asGroup
-          label="Open with"
-          description={
-            double
-              ? "Two quick taps open it, so a stray tap never does. One tap in the open panel dictates."
-              : "One tap opens it. Two quick taps open it listening."
-          }
-        >
-          <SegmentedRadio
-            options={ISLAND_TAPS}
-            value={double ? "double" : "single"}
-            onPick={(v) => save("island.tap", v)}
-            labelledBy={tapId}
+        {/* Linux's island opens on one tap, two opening it listening, and
+            takes its screenshot on Super+Shift+2: neither is a pick there. */}
+        {IS_MAC && (
+          <SettingRow
+            id={tapId}
+            asGroup
+            label="Open with"
+            description={
+              double
+                ? "Two quick taps open it, so a stray tap never does. One tap in the open panel dictates."
+                : "One tap opens it. Two quick taps open it listening."
+            }
+          >
+            <SegmentedRadio
+              options={ISLAND_TAPS}
+              value={double ? "double" : "single"}
+              onPick={(v) => save("island.tap", v)}
+              labelledBy={tapId}
+            />
+          </SettingRow>
+        )}
+        {IS_MAC && (
+          <CaptureKeyRow
+            value={prefs["island.captureKey"]}
+            taken={on && prefs["island.captureTaken"] === "1"}
+            onChange={(v) => save("island.captureKey", v)}
           />
-        </SettingRow>
-        <CaptureKeyRow
-          value={prefs["island.captureKey"]}
-          taken={on && prefs["island.captureTaken"] === "1"}
-          onChange={(v) => save("island.captureKey", v)}
-        />
+        )}
       </Section>
       <Section>
         <SettingRow id={placeId} asGroup stacked label="Position">
@@ -1160,17 +1166,20 @@ function IslandSettings() {
             labelledBy={layoutId}
           />
         </SettingRow>
-        <SettingRow
-          id={messagesId}
-          label="Messages"
-          description="Pinch on the island to hide them, spread two fingers to bring them back."
-        >
-          <Switch
+        {/* The Linux island draws no transcript above the draft yet. */}
+        {IS_MAC && (
+          <SettingRow
             id={messagesId}
-            checked={prefs["island.transcript"] !== "hidden"}
-            onCheckedChange={(next) => save("island.transcript", next ? "shown" : "hidden")}
-          />
-        </SettingRow>
+            label="Messages"
+            description="Pinch on the island to hide them, spread two fingers to bring them back."
+          >
+            <Switch
+              id={messagesId}
+              checked={prefs["island.transcript"] !== "hidden"}
+              onCheckedChange={(next) => save("island.transcript", next ? "shown" : "hidden")}
+            />
+          </SettingRow>
+        )}
       </Section>
     </>
   );
@@ -1273,9 +1282,14 @@ function PositionPicture({ bottom }: { bottom: boolean }) {
   );
 }
 
+/// The Mac's `notch` is the top of the screen on Linux, which has none.
 const ISLAND_PLACEMENTS = [
-  { id: "notch", label: "Notch", hint: "Hanging from the notch.", picture: <PositionPicture bottom={false} /> },
-  { id: "bottom", label: "Bottom", hint: "Above the Dock.", picture: <PositionPicture bottom /> },
+  IS_LINUX
+    ? { id: "notch", label: "Top", hint: "At the top of the screen.", picture: <PositionPicture bottom={false} /> }
+    : { id: "notch", label: "Notch", hint: "Hanging from the notch.", picture: <PositionPicture bottom={false} /> },
+  IS_LINUX
+    ? { id: "bottom", label: "Bottom", hint: "At the bottom of the screen.", picture: <PositionPicture bottom /> }
+    : { id: "bottom", label: "Bottom", hint: "Above the Dock.", picture: <PositionPicture bottom /> },
 ] as const;
 const ISLAND_LAYOUTS = [
   { id: "compact", label: "Compact", hint: "The orb beside the input.", picture: <LayoutPicture expanded={false} /> },
@@ -1408,9 +1422,9 @@ const ALL_TABS = [
 
 export type SettingsTab = (typeof ALL_TABS)[number]["id"];
 
-/// Dray Island is a Mac app, so elsewhere its tab would be a page of controls for nothing.
+/// Dray Island runs on a Mac and on Linux, so elsewhere its tab would be a page of controls for nothing.
 const SETTINGS_TABS = ALL_TABS.filter(
-  (t) => (IS_MAC || t.id !== "island") && (HAS_DICTATION || t.id !== "transcription"),
+  (t) => (IS_MAC || IS_LINUX || t.id !== "island") && (HAS_DICTATION || t.id !== "transcription"),
 );
 
 /// A line under a tab's title saying what the tab is for. Accounts has one

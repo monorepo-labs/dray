@@ -16,6 +16,8 @@ use gpui::{
 const YELLOW: u32 = 0xffd23f;
 /// The Mac's waiting dot, `StatusDot.waiting`.
 const WAITING: u32 = 0xe5c057;
+/// The Mac's `StatusDot.unread`: a finished session not yet seen.
+const UNREAD: u32 = 0x09bb83;
 const RED: u32 = 0xff6b5e;
 /// The card's fill on a denial's flash, as the Mac turns its card red.
 const DENIED: u32 = 0xc4392f;
@@ -1623,12 +1625,13 @@ impl Render for Pill {
         let (glass, top, glowing) = (island.glass, island.placement == Placement::Top, island.glowing);
         let open = self.island.clone();
         let fit = self.island.clone();
-        let glow = gpui::rgb(WAITING);
+        // Cards come first; with none waiting, the pill is the done pill.
+        let done = count == 0 && !island.done.is_empty();
+        let glow = gpui::rgb(if done { UNREAD } else { WAITING });
         let face = div()
             .id("pill")
             .flex()
-            .items_center()
-            .gap_2()
+            .when(!done, |d| d.items_center().gap_2())
             .px(px(16.))
             .py(px(10.))
             .when(glass && top, |d| d.min_w(px(200.)).justify_center())
@@ -1646,18 +1649,26 @@ impl Render for Pill {
                 let d = if glass && top { d.border_l_1().border_r_1().border_b_1() } else { d.border_1() };
                 d.border_color(edge).when(glass, |d| d.shadow(vec![shadow(gpui::Hsla { a: 0.45, ..glow.into() }, 5., 0.)]))
             })
-            .child(div().size(px(6.)).rounded_full().bg(glow))
-            .child(text)
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                let hovered = *hovered;
-                later(&this.island, cx, move |i, cx| crate::pill_hovered(i, hovered, cx));
-            }))
-            .on_click(move |_, _, cx| {
-                later(&open, cx, |i, cx| {
-                    if i.read(cx).window.is_none() {
-                        crate::open(i, cx);
-                    }
-                })
+            .map(|d| {
+                if done {
+                    return d.child(done_face(&self.island, island)).on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                        let hovered = *hovered;
+                        later(&this.island, cx, move |i, cx| crate::done_hovered(i, hovered, cx));
+                    }));
+                }
+                d.child(div().size(px(6.)).rounded_full().bg(glow))
+                    .child(text)
+                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                        let hovered = *hovered;
+                        later(&this.island, cx, move |i, cx| crate::pill_hovered(i, hovered, cx));
+                    }))
+                    .on_click(move |_, _, cx| {
+                        later(&open, cx, |i, cx| {
+                            if i.read(cx).window.is_none() {
+                                crate::open(i, cx);
+                            }
+                        })
+                    })
             });
         let frame = div()
             .flex_none()
@@ -1686,4 +1697,89 @@ impl Render for Pill {
             .when(!glass, |d| d.bg(rgb(0x000000)))
             .child(frame)
     }
+}
+
+/// Sessions finished, in place of Dray's banner, newest first: the Mac's
+/// `DonePill`. One names itself and offers Open in app; several are a count
+/// that, under the pointer, grows a row each, five tall and then scrolling.
+/// A title opens the island on it.
+fn done_face(state: &Entity<Island>, island: &Island) -> impl IntoElement {
+    const ROW: f32 = 26.;
+    let items: Vec<(String, String)> = island.done.iter().rev().map(|id| (id.clone(), island.title(id))).collect();
+    let first = items[0].0.clone();
+    let title = |id: &str, name: &str, key: &str| {
+        let (state, id) = (state.clone(), id.to_string());
+        div()
+            .id(gpui::SharedString::from(format!("done-title-{key}")))
+            .max_w(px(240.))
+            .truncate()
+            .font_weight(gpui::FontWeight::NORMAL)
+            .text_color(white(0.55))
+            .hover(|s| s.text_color(white(0.95)))
+            .child(name.to_string())
+            .on_click(move |_, _, cx| {
+                let id = id.clone();
+                later(&state, cx, move |i, cx| crate::open_done(i, id, cx))
+            })
+    };
+    let in_app = |id: &str, chord: bool, key: &str| {
+        let (state, id) = (state.clone(), id.to_string());
+        div()
+            .id(gpui::SharedString::from(format!("done-app-{key}")))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(10.))
+            .h(px(22.))
+            .rounded_full()
+            .bg(white(0.12))
+            .hover(|s| s.bg(white(0.22)))
+            .text_size(px(SMALL))
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .child("Open in app")
+            // Super+⏎ opens the newest alone, so only its button names the chord.
+            .when(chord, |d| d.child(div().text_color(white(0.45)).child("Super ⏎")))
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                let id = id.clone();
+                later(&state, cx, move |i, cx| crate::open_done_in_app(i, id, cx))
+            })
+    };
+    let one = items.len() == 1;
+    let open_first = state.clone();
+    let head = div()
+        .id("done-head")
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(div().flex_none().size(px(6.)).rounded_full().bg(rgb(UNREAD)))
+        .child(div().flex_none().child(if one { "Done".to_string() } else { format!("{} tasks done", items.len()) }))
+        // Several are a count alone; their titles wait for the pointer.
+        .when(one, |d| d.child(title(&items[0].0, &items[0].1, "head")).child(in_app(&items[0].0, true, "head")))
+        .on_click(move |_, _, cx| {
+            let id = first.clone();
+            later(&open_first, cx, move |i, cx| crate::open_done(i, id, cx))
+        });
+    let list = (island.done_expanded && !one).then(|| {
+        div()
+            .id("done-list")
+            .w(px(360. - 32.))
+            .max_h(px(5. * ROW))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .children(items.iter().map(|(id, name)| {
+                div()
+                    .h(px(ROW))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(title(id, name, id))
+                    .child(div().flex_1())
+                    .child(in_app(id, false, id))
+            }))
+    });
+    div().flex().flex_col().gap(px(6.)).child(head).children(list)
 }
