@@ -383,12 +383,26 @@ fn basename(path: &str) -> &str {
 }
 
 /// Where `known` is installed: by one of its desktop ids, then by a desktop
-/// file whose program is one of its binaries, then by a binary on `PATH`.
+/// file whose program is one of its binaries, then by a binary `lookup` finds
+/// on `PATH`.
+///
+/// One of its ids marked `Hidden=true` is the spec's "deleted", and ends the
+/// search: the reader removed the app, and finding its binary anyway would
+/// list it again.
 fn find(
     known: &Known,
     entries: &[(String, PathBuf, Entry)],
     used: &mut HashSet<PathBuf>,
+    lookup: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> Option<(ExternalApp, Launch)> {
+    let hidden = known
+        .desktop
+        .iter()
+        .any(|id| entries.iter().any(|(eid, _, entry)| eid == id && entry.hidden));
+    if hidden {
+        return None;
+    }
+
     let make = |path: &Path, exec: Vec<String>, icon: Option<String>, desktop: Option<PathBuf>| {
         let own_binary = known.bins.contains(&basename(&exec[0]));
         let launch = Launch {
@@ -426,7 +440,7 @@ fn find(
         }
     }
 
-    let (bin, path) = known.bins.iter().find_map(|bin| Some((*bin, which(bin)?)))?;
+    let (bin, path) = known.bins.iter().find_map(|bin| Some((*bin, lookup(bin)?)))?;
     // Icon themes name most apps' icons after their binary.
     Some(make(&path, vec![path.to_string_lossy().into_owned()], Some(bin.to_string()), None))
 }
@@ -444,12 +458,16 @@ fn default_folder_handler() -> Option<String> {
 /// Every known app installed here, in [`KNOWN`]'s order, with one file manager
 /// last — the reader's default where it is one the table knows, `xdg-open`
 /// where none is. Split from [`detect`] so it can run on fake dirs.
-fn resolve(entries: &[(String, PathBuf, Entry)], default_files: Option<&str>) -> Vec<(ExternalApp, Launch)> {
+fn resolve(
+    entries: &[(String, PathBuf, Entry)],
+    default_files: Option<&str>,
+    lookup: &dyn Fn(&str) -> Option<PathBuf>,
+) -> Vec<(ExternalApp, Launch)> {
     let mut used = HashSet::new();
     let mut found: Vec<(ExternalApp, Launch)> = KNOWN
         .iter()
         .filter(|k| !k.desktop.is_empty() || !k.bins.is_empty())
-        .filter_map(|known| find(known, entries, &mut used))
+        .filter_map(|known| find(known, entries, &mut used, lookup))
         .collect();
 
     let files: Vec<usize> = (0..found.len()).filter(|i| found[*i].1.kind == ExternalAppKind::Files).collect();
@@ -496,7 +514,7 @@ fn resolve(entries: &[(String, PathBuf, Entry)], default_files: Option<&str>) ->
 /// The apps that can open a path here, icons read, and remembered for
 /// [`open_in_app`].
 pub(super) fn detect() -> Vec<ExternalApp> {
-    let found = resolve(&scan(&data_dirs()), default_folder_handler().as_deref());
+    let found = resolve(&scan(&data_dirs()), default_folder_handler().as_deref(), &which);
     let mut listed = HashMap::new();
     let apps = found
         .into_iter()
@@ -539,29 +557,39 @@ const FALLBACK_TERM: Term = Term { dir: None, exec: Some("-e") };
 
 /// The table's terminal whose binary `program` is, symlinks followed:
 /// `x-terminal-emulator` is an alternatives link to the real one.
-fn term_for(program: &Path) -> Term {
+fn term_for(program: &Path) -> Option<Term> {
     let real = std::fs::canonicalize(program).unwrap_or_else(|_| program.to_path_buf());
     let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     KNOWN
         .iter()
         .find(|k| k.kind == ExternalAppKind::Terminal && k.bins.contains(&name.as_str()))
-        .map_or(FALLBACK_TERM, |k| k.term)
+        .map(|k| k.term)
+}
+
+/// `$TERMINAL` as a base argv and its flags. A terminal the table knows keeps
+/// its program alone, since the table's flags follow — `wezterm start` would
+/// otherwise reach WezTerm as `start start --cwd`. One it does not know keeps
+/// every word and takes `-e`.
+fn named_terminal(value: &str, lookup: &dyn Fn(&str) -> Option<PathBuf>) -> Option<(Vec<String>, Term, String)> {
+    let mut words: Vec<String> = value.split_whitespace().map(String::from).collect();
+    let program = lookup(words.first()?)?;
+    words[0] = program.to_string_lossy().into_owned();
+    let name = basename(&words[0]).to_string();
+    Some(match term_for(&program) {
+        Some(term) => (words[..1].to_vec(), term, name),
+        None => (words, FALLBACK_TERM, name),
+    })
 }
 
 /// The terminal to run a command in, as a base argv and its flags: the
 /// reader's `$TERMINAL`, then `x-terminal-emulator`, then the table's own in
 /// its order. One that cannot be asked to run a command is passed over.
 fn pick_terminal() -> Option<(Vec<String>, Term, String)> {
-    let named = std::env::var("TERMINAL").ok().and_then(|value| {
-        let mut words: Vec<String> = value.split_whitespace().map(String::from).collect();
-        let program = which(words.first()?)?;
-        words[0] = program.to_string_lossy().into_owned();
-        let name = basename(&words[0]).to_string();
-        Some((words, term_for(&program), name))
-    });
+    let named = std::env::var("TERMINAL").ok().and_then(|value| named_terminal(&value, &which));
     let debian = || {
         let program = which("x-terminal-emulator")?;
-        Some((vec![program.to_string_lossy().into_owned()], term_for(&program), "x-terminal-emulator".into()))
+        let term = term_for(&program).unwrap_or(FALLBACK_TERM);
+        Some((vec![program.to_string_lossy().into_owned()], term, "x-terminal-emulator".into()))
     };
     let known = || {
         let entries = scan(&data_dirs());
@@ -569,7 +597,7 @@ fn pick_terminal() -> Option<(Vec<String>, Term, String)> {
         KNOWN
             .iter()
             .filter(|k| k.kind == ExternalAppKind::Terminal && k.term.exec.is_some())
-            .find_map(|k| find(k, &entries, &mut used))
+            .find_map(|k| find(k, &entries, &mut used, &which))
             .map(|(_, launch)| (terminal_base(&launch), launch.term, launch.name))
     };
     let asks = |t: &(Vec<String>, Term, String)| t.1.exec.is_some();
@@ -871,7 +899,7 @@ mod tests {
         write(&system.join("applications/org.gnome.Nautilus.desktop"), &app(&format!("{sh} %U"), ""));
         write(&system.join("applications/nemo.desktop"), &app(&format!("{sh} %U"), ""));
 
-        let found = resolve(&scan(&[user.clone(), system.clone()]), Some("nemo.desktop"));
+        let found = resolve(&scan(&[user.clone(), system.clone()]), Some("nemo.desktop"), &|_| None);
         let names: Vec<&str> = found.iter().map(|(a, _)| a.name.as_str()).collect();
         let known: Vec<&str> = names.iter().copied().filter(|n| ["VS Code", "GNOME Terminal", "Nemo", "Files", "Kitty", "XTerm", "Cursor"].contains(n)).collect();
         assert_eq!(&known[..2], ["VS Code", "GNOME Terminal"]);
@@ -885,5 +913,43 @@ mod tests {
         assert_eq!(code.1.icon.as_deref(), Some("vscode"));
 
         std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// A user's `Hidden=true` override is the spec's "deleted": the system copy
+    /// it shadows stays gone, and so does the binary on `PATH` behind both.
+    #[test]
+    fn a_hidden_entry_keeps_the_app_off_the_list() {
+        let tmp = std::env::temp_dir().join(format!("dray-xdg-{}", uuid::Uuid::now_v7()));
+        let (user, system) = (tmp.join("user"), tmp.join("system"));
+        let sh = which("sh").unwrap();
+        write(
+            &system.join("applications/code.desktop"),
+            &format!("[Desktop Entry]\nType=Application\nExec={} %F\n", sh.display()),
+        );
+        let on_path = |bin: &str| (bin == "code").then(|| PathBuf::from("/usr/bin/code"));
+        let listed = |dirs: &[PathBuf]| {
+            resolve(&scan(dirs), None, &on_path).iter().any(|(app, _)| app.name == "VS Code")
+        };
+        assert!(listed(&[user.clone(), system.clone()]));
+
+        write(&user.join("applications/code.desktop"), "[Desktop Entry]\nType=Application\nHidden=true\n");
+        assert!(!listed(&[user.clone(), system.clone()]));
+
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// `$TERMINAL` naming a known terminal keeps the program alone, so the
+    /// table's own subcommand is not doubled; an unknown one keeps its words.
+    #[test]
+    fn terminal_from_the_environment() {
+        let lookup = |bin: &str| Some(PathBuf::from(format!("/nonexistent/{bin}")));
+        let (argv, term, name) = named_terminal("wezterm start", &lookup).unwrap();
+        assert_eq!(argv, ["/nonexistent/wezterm"]);
+        assert_eq!(term.dir, Some("start --cwd"));
+        assert_eq!(name, "wezterm");
+
+        let (argv, term, _) = named_terminal("myterm --hold", &lookup).unwrap();
+        assert_eq!(argv, ["/nonexistent/myterm", "--hold"]);
+        assert_eq!(term.exec, Some("-e"));
     }
 }
