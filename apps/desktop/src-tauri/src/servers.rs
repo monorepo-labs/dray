@@ -1826,7 +1826,7 @@ pub async fn fetch_range(server: &str, path: &str, range: &str) -> Result<Fetche
         })
     };
     if let Some((start, to)) = missing {
-        let ask = format!("bytes={}-{}", start * BLOCK, (to + 1) * BLOCK - 1);
+        let ask = format!("bytes={}-{}", start * BLOCK, to.saturating_add(1).saturating_mul(BLOCK) - 1);
         let fetched = download_file(server, path, Some(&ask)).await?;
         let (at, len) = match fetched.content_range.as_deref().and_then(content_range) {
             Some((at, len)) => (at, len),
@@ -1835,11 +1835,13 @@ pub async fn fetch_range(server: &str, path: &str, range: &str) -> Result<Fetche
         };
         BLOCKS.lock().unwrap().put(&file, at, len, &fetched.kind, &fetched.body);
     }
-    BLOCKS
-        .lock()
-        .unwrap()
-        .read(&file, first, last)
-        .ok_or_else(|| format!("{range} is past the end of {path}"))
+    let hit = BLOCKS.lock().unwrap().read(&file, first, last);
+    match hit {
+        Some(hit) => Ok(hit),
+        // `first`'s block went while the fetch waited — aged out, or pushed
+        // out by another file's reads — so the span is asked for itself.
+        None => download_file(server, path, Some(&format!("bytes={first}-{last}"))).await,
+    }
 }
 
 /// Bytes per cached block. A whole MP4 header fits in the first one.
@@ -1889,7 +1891,7 @@ impl Blocks {
     fn first_missing(&mut self, file: &FileKey, from: u64, to: u64) -> Option<u64> {
         for index in from..=to {
             match self.fresh(file, index) {
-                Some(b) if (index + 1) * BLOCK >= b.len => return None,
+                Some(b) if index.saturating_add(1).saturating_mul(BLOCK) >= b.len => return None,
                 Some(_) => {}
                 None => return Some(index),
             }
