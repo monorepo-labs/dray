@@ -23,7 +23,7 @@ final class SmokeTests: XCTestCase {
         app.launch()
         snap(app, "1-empty")
 
-        app.buttons["Add server"].firstMatch.tap()
+        app.buttons["Enter an address"].tap()
         let address = app.textFields["Address"]
         address.tap()
         address.typeText(url)

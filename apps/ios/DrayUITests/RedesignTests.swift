@@ -117,12 +117,12 @@ final class RedesignTests: XCTestCase {
 
     /// Typing a task from scratch, then saving it as a draft from Cancel.
     /// A session's foot: hold to reply, the reply as a bubble, the sheet, Send, and Stop while it runs.
-    func testReplyDock() throws {
-        let app = try pair()
+    /// Opens a session from the list, scrolled clear of the dock first.
+    func openRow(_ app: XCUIApplication, _ title: String) {
         // Below the two cards, so off screen at first: the list is lazy and only draws what scrolls in.
-        XCTAssertTrue(app.descendants(matching: .any)["orb"].waitForExistence(timeout: 20))
-        let row = labelled(app, "Tighten session row spacing")
         let orb = app.descendants(matching: .any)["orb"]
+        XCTAssertTrue(orb.waitForExistence(timeout: 20))
+        let row = labelled(app, title)
         // The dock floats over the list, so a row behind it still reads as hittable and the tap lands on the orb.
         let clear = { row.exists && row.isHittable && row.frame.maxY < orb.frame.minY - 40 }
         for _ in 0..<8 where !clear() { app.swipeUp() }
@@ -132,6 +132,79 @@ final class RedesignTests: XCTestCase {
         // The list's dock has a Project pick and the session's has none; both have the orb.
         XCTAssertTrue(app.buttons["Project"].waitForNonExistence(timeout: 20), "the session never opened")
         XCTAssertTrue(orb.waitForExistence(timeout: 20), "no dock in the session")
+    }
+
+    /// A server going bad under an open session, then the list: reconnecting, can't reach,
+    /// needs an update, token refused. Wants `/tmp/dray825-proxy.py` in front of the server:
+    ///   TEST_RUNNER_DRAY_PROXY_URL=ws://127.0.0.1:… TEST_RUNNER_DRAY_PROXY_MODE=/tmp/…
+    func testConnectionBanners() throws {
+        guard let proxy = env["DRAY_PROXY_URL"], let modeFile = env["DRAY_PROXY_MODE"] else {
+            throw XCTSkip("set TEST_RUNNER_DRAY_PROXY_URL and TEST_RUNNER_DRAY_PROXY_MODE")
+        }
+        let mode = { (m: String) in try? m.write(toFile: modeFile, atomically: true, encoding: .utf8) }
+        mode("forward")
+        defer { mode("forward") }
+        let app = try pair(url: proxy)
+        openRow(app, "Tighten session row spacing")
+        sleep(2)
+        snap(app, "conn-session-ok")
+
+        mode("hang")
+        XCTAssertTrue(app.staticTexts["Reconnecting to Studio Mac…"].waitForExistence(timeout: 30), "no reconnecting banner")
+        sleep(1)
+        snap(app, "conn-session-reconnecting")
+
+        mode("down")
+        let unreachable = app.staticTexts["Can't reach Studio Mac"]
+        XCTAssertTrue(unreachable.waitForExistence(timeout: 60), "no can't-reach banner")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Trying again'")).firstMatch.exists)
+        snap(app, "conn-session-unreachable")
+        // At the top, the first row sits clear of the banner rather than under it.
+        for _ in 0..<6 { app.swipeDown(velocity: .fast) }
+        snap(app, "conn-session-top")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        // The banner heads the list, and opening the row left it scrolled down.
+        for _ in 0..<5 where !unreachable.waitForExistence(timeout: 2) { app.swipeDown() }
+        XCTAssertTrue(unreachable.exists, "the list says nothing of the server")
+        sleep(1)
+        snap(app, "conn-list-unreachable")
+
+        mode("older")
+        app.buttons["Retry"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Studio Mac needs an update"].waitForExistence(timeout: 30), "no needs-update banner")
+        openRow(app, "Tighten session row spacing")
+        sleep(1)
+        snap(app, "conn-session-older")
+
+        mode("token")
+        app.buttons["Retry"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Studio Mac refused the token"].waitForExistence(timeout: 30), "no token banner")
+        sleep(1)
+        snap(app, "conn-session-token")
+        app.buttons["Fix"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Paste a new token"].waitForExistence(timeout: 10)
+            || app.textFields["Token"].waitForExistence(timeout: 1), "Fix opened no settings")
+    }
+
+    /// No network: the session says its task keeps running, the list says it once for all.
+    func testOfflineBanners() throws {
+        let app = try pair(offline: true)
+        openRow(app, "Tighten session row spacing")
+        XCTAssertTrue(app.staticTexts["The task keeps running on Studio Mac."].waitForExistence(timeout: 10))
+        sleep(1)
+        snap(app, "conn-session-offline")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let offline = app.staticTexts["Tasks keep running on their servers."]
+        for _ in 0..<5 where !offline.waitForExistence(timeout: 2) { app.swipeDown() }
+        XCTAssertTrue(offline.exists, "the list says nothing of being offline")
+        sleep(1)
+        snap(app, "conn-list-offline")
+    }
+
+    func testReplyDock() throws {
+        let app = try pair()
+        openRow(app, "Tighten session row spacing")
+        let orb = app.descendants(matching: .any)["orb"]
         sleep(3)
         snap(app, "reply-rest")
 
@@ -175,12 +248,74 @@ final class RedesignTests: XCTestCase {
         sleep(2)
         snap(app, "reply-running")
         app.buttons["Model"].tap()
+        XCTAssertTrue(app.staticTexts["This task"].waitForExistence(timeout: 5), "the model pick opened no sheet")
         sleep(1)
-        snap(app, "reply-model-menu")
-        app.tap()
+        snap(app, "reply-this-task")
+        app.buttons["Done"].tap()
         XCTAssertTrue(stop.waitForNonExistence(timeout: 180), "the turn never ended")
         sleep(2)
         snap(app, "reply-answered")
+    }
+
+    /// Run with from the list's dock: a star, the project menu, and a branch switch over uncommitted
+    /// files. Wants `thinking-orbs` on the server holding a `fix-reconnect` branch and dirty files.
+    func testRunWithSheet() throws {
+        let app = try pair()
+        let model = app.buttons["Model"]
+        XCTAssertTrue(model.waitForExistence(timeout: 20))
+        sleep(2)
+        snap(app, "picks-dock")
+        model.tap()
+        XCTAssertTrue(app.staticTexts["Run with"].waitForExistence(timeout: 5), "the model pick opened no sheet")
+        let haiku = app.buttons["Haiku 5.5"]
+        XCTAssertTrue(haiku.waitForExistence(timeout: 15), "no model chips")
+        sleep(1)
+        snap(app, "picks-run-with")
+
+        haiku.doubleTap()
+        XCTAssertEqual(haiku.value as? String, "Starred", "a double-tap starred nothing")
+        sleep(1)
+        snap(app, "picks-starred")
+        haiku.doubleTap()
+        XCTAssertNotEqual(haiku.value as? String, "Starred", "a second double-tap left the star")
+
+        app.buttons["row.Project"].tap()
+        let orbs = menuItem(app, "thinking-orbs")
+        XCTAssertTrue(orbs.exists, "no thinking-orbs in the project menu")
+        XCTAssertTrue(app.buttons["Attach project…"].exists, "no Attach inside the project menu")
+        snap(app, "picks-project-menu")
+        orbs.tap()
+
+        let worktree = app.switches["Worktree"]
+        if worktree.value as? String == "On" { worktree.tap() }
+        let branch = app.buttons["row.Branch"]
+        XCTAssertTrue(branch.waitForExistence(timeout: 10), "worktree off shows no branch row")
+        snap(app, "picks-branch")
+        branch.tap()
+        menuItem(app, "fix-reconnect").tap()
+        let bring = app.buttons["Bring changes"]
+        XCTAssertTrue(bring.waitForExistence(timeout: 5), "uncommitted files asked nothing")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ENDSWITH 'uncommitted files'")).count > 0)
+        snap(app, "picks-dirty")
+        bring.tap()
+        XCTAssertTrue(app.staticTexts["fix-reconnect"].waitForExistence(timeout: 15), "the checkout never landed")
+        snap(app, "picks-switched")
+        // Back as it was, for the next run.
+        branch.tap()
+        menuItem(app, "main").tap()
+        app.buttons["Bring changes"].tap()
+        XCTAssertTrue(app.staticTexts["main"].waitForExistence(timeout: 15))
+        worktree.tap()
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.staticTexts["Run with"].waitForNonExistence(timeout: 5))
+    }
+
+    /// An open menu's item: the last of its name, since the list under the sheet can hold the same one.
+    private func menuItem(_ app: XCUIApplication, _ label: String) -> XCUIElement {
+        let all = app.buttons.matching(NSPredicate(format: "label == %@", label))
+        _ = all.firstMatch.waitForExistence(timeout: 5)
+        sleep(1)
+        return all.allElementsBoundByIndex.last { $0.isHittable } ?? all.firstMatch
     }
 
     func testTypeAndSaveDraft() throws {
@@ -212,29 +347,140 @@ final class RedesignTests: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch
     }
 
-    func testEmpty() throws {
+    /// The list with nothing in it, from no server to a quiet one. Wants a second server with no
+    /// sessions behind `/tmp/dray825-proxy.py`, and two projects on it, `thinking-orbs` one of them:
+    ///   TEST_RUNNER_DRAY_EMPTY_URL=ws://127.0.0.1:… TEST_RUNNER_DRAY_EMPTY_TOKEN=… TEST_RUNNER_DRAY_EMPTY_MODE=/tmp/…
+    func testEmptyStates() throws {
+        guard let url = env["DRAY_EMPTY_URL"], let token = env["DRAY_EMPTY_TOKEN"], let modeFile = env["DRAY_EMPTY_MODE"] else {
+            throw XCTSkip("set TEST_RUNNER_DRAY_EMPTY_URL, TEST_RUNNER_DRAY_EMPTY_TOKEN and TEST_RUNNER_DRAY_EMPTY_MODE")
+        }
+        let mode = { (m: String) in try? m.write(toFile: modeFile, atomically: true, encoding: .utf8) }
+        mode("hang")
+        defer { mode("forward") }
         let app = XCUIApplication()
         app.launchArguments = ["-servers", ""]
         app.launch()
-        sleep(2)
-        snap(app, "empty-connect")
+        XCTAssertTrue(app.staticTexts["Connect a server"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Scan QR code"].exists && app.buttons["Enter an address"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["orb"].exists, "a dock before any server")
+        // Nothing to show in either view, so neither button.
+        XCTAssertFalse(app.buttons["Drafts"].exists || app.buttons["Settled"].exists, "view buttons with no server")
+        sleep(1)
+        snap(app, "empty-01-connect")
+
+        connect(app, url: url, token: token)
+        XCTAssertTrue(app.staticTexts["Connecting"].waitForExistence(timeout: 15), "no connecting screen")
+        sleep(1)
+        snap(app, "empty-02-connecting")
+
+        mode("down")
+        XCTAssertTrue(app.staticTexts["Can't reach Studio Mac"].waitForExistence(timeout: 60), "no can't-reach screen")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Trying again'")).firstMatch.exists)
+        snap(app, "empty-03-unreachable")
+
+        // Gone while a try of its own is out, back once it fails.
+        let retry = app.buttons["Retry now"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 30), "no Retry now")
+        mode("forward")
+        retry.tap()
+        XCTAssertTrue(app.staticTexts["No tasks yet"].waitForExistence(timeout: 30), "no empty list once connected")
+        XCTAssertFalse(app.buttons["Drafts"].exists || app.buttons["Settled"].exists, "view buttons with nothing in them")
+        sleep(1)
+        snap(app, "empty-04-no-tasks")
+
+        // The strip's, not the dock's project pick of the same name.
+        app.descendants(matching: .any).matching(NSPredicate(format: "label == 'thinking-orbs'"))
+            .allElementsBoundByIndex.min { $0.frame.minY < $1.frame.minY }?.tap()
+        XCTAssertTrue(app.staticTexts["Nothing in thinking-orbs"].waitForExistence(timeout: 10), "no empty project")
+        sleep(1)
+        snap(app, "empty-05-project")
+    }
+
+    /// The same quiet server once a task was settled there today.
+    func testAllClear() throws {
+        guard let url = env["DRAY_EMPTY_URL"], let token = env["DRAY_EMPTY_TOKEN"] else {
+            throw XCTSkip("set TEST_RUNNER_DRAY_EMPTY_URL and TEST_RUNNER_DRAY_EMPTY_TOKEN")
+        }
+        let app = try pair(url: url, token: token)
+        XCTAssertTrue(app.staticTexts["All clear"].waitForExistence(timeout: 30), "no all-clear screen")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ENDSWITH 'settled today.'")).firstMatch.exists)
+        XCTAssertTrue(app.buttons["Settled"].exists && !app.buttons["Drafts"].exists, "Settled should show alone")
+        sleep(1)
+        snap(app, "empty-06-all-clear")
+    }
+
+    /// Switching a server off on the phone: its tasks leave the list, Settings reads Off, and on brings them back.
+    func testServerOff() throws {
+        guard let url2 = env["DRAY_EMPTY_URL"], let token2 = env["DRAY_EMPTY_TOKEN"] else {
+            throw XCTSkip("set TEST_RUNNER_DRAY_EMPTY_URL and TEST_RUNNER_DRAY_EMPTY_TOKEN")
+        }
+        let app = try pair()
+        let row = app.staticTexts["Tighten session row spacing"]
+        XCTAssertTrue(row.waitForExistence(timeout: 30), "no task from Studio Mac")
+        // Through Settings, not a second link: opening one relaunches the app, and its launch
+        // arguments clear the server just paired.
+        app.buttons["Settings"].tap()
+        app.staticTexts["Add server"].tap()
+        let address = app.textFields["Address"]
+        XCTAssertTrue(address.waitForExistence(timeout: 5))
+        address.tap()
+        address.typeText("\(url2) \(token2)")
+        app.textFields["Name"].tap()
+        app.textFields["Name"].typeText("Build Box")
+        app.buttons["Add"].tap()
+        XCTAssertTrue(app.staticTexts["Build Box"].waitForExistence(timeout: 10), "Build Box wasn't added")
+
+        app.staticTexts["Studio Mac"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 10), "no live state in the switch row")
+        sleep(1)
+        snap(app, "server-08-on")
+
+        app.switches.firstMatch.tap()
+        XCTAssertTrue(app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Off'")).firstMatch.waitForExistence(timeout: 5), "the switch row never read Off")
+        XCTAssertTrue(app.staticTexts["Its tasks are hidden until you turn it back on. They keep running on Studio Mac."].exists)
+        sleep(1)
+        snap(app, "server-09-off")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Off · '")).firstMatch
+            .waitForExistence(timeout: 5), "Settings doesn't say the server is off")
+        sleep(1)
+        snap(app, "settings-01d-off")
+
+        app.buttons["Done"].tap()
+        XCTAssertTrue(row.waitForNonExistence(timeout: 10), "the off server's task stayed in the list")
+        sleep(1)
+        snap(app, "server-list-off")
+
+        app.buttons["Settings"].tap()
+        app.staticTexts["Studio Mac"].firstMatch.tap()
+        app.switches.firstMatch.tap()
+        XCTAssertTrue(app.switches.matching(NSPredicate(format: "label BEGINSWITH 'Connected'")).firstMatch.waitForExistence(timeout: 30), "turning it on never reconnected")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["Done"].tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 30), "the task didn't come back")
     }
 
     /// A fresh launch with no saved server, paired through the link a QR carries.
-    func pair() throws -> XCUIApplication {
-        guard let url = env["DRAY_URL"], let token = env["DRAY_TOKEN"] else {
+    func pair(url: String? = nil, token: String? = nil, offline: Bool = false) throws -> XCUIApplication {
+        guard let url = url ?? env["DRAY_URL"], let token = token ?? env["DRAY_TOKEN"] else {
             throw XCTSkip("set TEST_RUNNER_DRAY_URL and TEST_RUNNER_DRAY_TOKEN")
         }
         let app = XCUIApplication()
-        app.launchArguments = ["-servers", ""]
+        app.launchArguments = ["-servers", ""] + (offline ? ["-offline"] : [])
         app.launch()
+        connect(app, url: url, token: token)
+        return app
+    }
+
+    /// Adds a server through the link a QR carries.
+    func connect(_ app: XCUIApplication, url: String, token: String, name: String = "Studio Mac") {
         var link = URLComponents(string: "dray://connect")!
-        link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: "Studio Mac")]
+        link.queryItems = [.init(name: "url", value: url), .init(name: "token", value: token), .init(name: "name", value: name)]
         app.open(link.url!)
         let add = app.buttons["Add"]
         XCTAssertTrue(add.waitForExistence(timeout: 10), "the link opened no add sheet")
         add.tap()
-        return app
     }
 
     func snap(_ app: XCUIApplication, _ name: String) {

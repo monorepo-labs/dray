@@ -5,6 +5,8 @@ struct TranscriptView: View {
     @Environment(Store.self) private var store
     let key: SessionKey
     @State private var fixing = false
+    /// The floating banner's height, kept clear above the first row so it never sits on "Load earlier".
+    @State private var bannerHeight: CGFloat = 0
 
     private var item: SessionItem? { store.items[key] }
     private var busy: Bool { item?.busy ?? false }
@@ -55,6 +57,7 @@ struct TranscriptView: View {
                 .frame(maxWidth: .infinity)
             }
             .scrollDismissesKeyboard(.interactively)
+            .contentMargins(.top, bannerHeight, for: .scrollContent)
             // Opens on the newest turn: a scrollTo on appear lands in a lazy stack's estimate and draws blank.
             .defaultScrollAnchor(.bottom)
             // The newest row, not the count, or loading earlier turns would jump to the end.
@@ -66,7 +69,11 @@ struct TranscriptView: View {
         .environment(\.imageServer, store.connection(key.server))
         // A card arriving is the agent stopping to ask: felt, once per card.
         .onChange(of: asks.count) { old, new in if new > old { Haptic.warning() } }
-        .safeAreaInset(edge: .bottom, spacing: 0) { ReplyDock(key: key) { fixing = true } }
+        .safeAreaInset(edge: .bottom, spacing: 0) { ReplyDock(key: key) }
+        .overlay(alignment: .top) {
+            SessionBanner(server: key.server) { fixing = true }
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { bannerHeight = $0 }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) { title }

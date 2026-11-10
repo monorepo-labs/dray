@@ -16,7 +16,7 @@ final class NewSessionTests: XCTestCase {
         }
         let app = try openNewSession()
 
-        pick(app, "Project", "Attach project…")
+        attachProject(app)
         XCTAssertTrue(app.buttons["Enter path"].waitForExistence(timeout: 15))
         snap(app, "1-attach")
         app.buttons["Enter path"].tap()
@@ -26,15 +26,20 @@ final class NewSessionTests: XCTestCase {
         app.alerts.buttons["Attach"].tap()
 
         XCTAssertTrue(app.staticTexts[(project as NSString).lastPathComponent].waitForExistence(timeout: 15))
+        app.buttons["Done"].tap()
         app.buttons["Keyboard"].tap()
         let prompt = app.textViews["New task"]
         XCTAssertTrue(prompt.waitForExistence(timeout: 5))
         prompt.typeText("Reply with the single word HELLO and nothing else.")
         app.buttons["Done"].tap()
 
-        pick(app, "Model", "Haiku 5.5")
-        pick(app, "More picks", "Permissions", "Ask every time")
+        app.buttons["Model"].firstMatch.tap()
+        let haiku = app.buttons["Haiku 5.5"]
+        XCTAssertTrue(haiku.waitForExistence(timeout: 15), "no Haiku chip")
+        haiku.tap()
+        pick(app, "row.Permissions", "Ask every time")
         snap(app, "2-new-task")
+        app.buttons["Done"].tap()
 
         app.buttons["Start task"].tap()
 
@@ -51,7 +56,7 @@ final class NewSessionTests: XCTestCase {
             throw XCTSkip("set TEST_RUNNER_DRAY_CLONE to a small repo of the server's GitHub account")
         }
         let app = try openNewSession()
-        pick(app, "Project", "Attach project…")
+        attachProject(app)
 
         // Rows are lazy: one below the fold does not exist until searched for.
         let search = app.searchFields["Search repositories"]
@@ -81,7 +86,7 @@ final class NewSessionTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-servers", ""]
         app.launch()
-        app.buttons["Add server"].firstMatch.tap()
+        app.buttons["Enter an address"].tap()
         let address = app.textFields["Address"]
         address.tap()
         address.typeText(url)
@@ -94,7 +99,14 @@ final class NewSessionTests: XCTestCase {
         return app
     }
 
-    /// Opens one of the dock's pick menus and walks down it, submenu by submenu.
+    /// Run with, from the dock's project pick: the row where nothing is attached yet, else the menu's last item.
+    private func attachProject(_ app: XCUIApplication) {
+        app.buttons["Project"].firstMatch.tap()
+        let row = app.buttons["Attach project"]
+        if row.waitForExistence(timeout: 5) { row.tap() } else { pick(app, "row.Project", "Attach project…") }
+    }
+
+    /// Opens a pick menu and walks down it, submenu by submenu.
     private func pick(_ app: XCUIApplication, _ menu: String, _ path: String...) {
         let button = app.buttons[menu].firstMatch
         XCTAssertTrue(button.waitForExistence(timeout: 15), "no \(menu) menu")

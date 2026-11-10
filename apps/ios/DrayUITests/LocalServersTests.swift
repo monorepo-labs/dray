@@ -18,7 +18,7 @@ final class LocalServersTests: XCTestCase {
         app.launchArguments = ["-servers", ""]
         app.launch()
 
-        app.buttons["Add server"].tap()
+        app.buttons["Enter an address"].tap()
         app.textFields["Address"].tap()
         app.textFields["Address"].typeText(url)
         app.textFields["Token"].tap()

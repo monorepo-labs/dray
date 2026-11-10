@@ -20,7 +20,7 @@ final class DesignTests: XCTestCase {
         let app = launch()
         snap(app, "01-onboarding")
 
-        app.buttons["Add server"].firstMatch.tap()
+        app.buttons["Enter an address"].tap()
         fill(app, url: url, token: token, name: "Studio Mac")
         snap(app, "02-add-server")
         app.buttons["Add"].tap()
@@ -92,7 +92,8 @@ final class DesignTests: XCTestCase {
         sleep(1)
         snap(app, "17-new-task-ready")
         app.buttons["Model"].firstMatch.tap()
-        snap(app, "18-model-menu")
+        sleep(1)
+        snap(app, "18-run-with")
     }
 
     func testFailureStates() throws {
@@ -201,9 +202,10 @@ final class DesignTests: XCTestCase {
         return app
     }
 
-    /// Taps whichever Add server is on screen: the empty list's, or Settings' once one is saved.
+    /// Taps whichever add is on screen: the empty list's Enter an address, or Settings' Add server once one is saved.
     private func addServer(_ app: XCUIApplication, url: String, token: String, name: String) {
-        app.buttons["Add server"].firstMatch.tap()
+        let empty = app.buttons["Enter an address"]
+        (empty.waitForExistence(timeout: 2) ? empty : app.buttons["Add server"].firstMatch).tap()
         fill(app, url: url, token: token, name: name)
         app.buttons["Add"].tap()
     }
