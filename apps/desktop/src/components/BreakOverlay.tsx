@@ -40,7 +40,8 @@ function useBreakClock() {
     for (const e of events) document.addEventListener(e, touch, { passive: true, capture: true });
     const id = setInterval(async () => {
       // The OS's idle time sees input everywhere; the listeners, which see this
-      // window alone, are the fallback off macOS, where focus has to gate them.
+      // window alone, are the fallback where the OS cannot say (Windows, Linux
+      // without X11 or libXss), and focus has to gate them there.
       const idle = await invoke<number | null>("idle_seconds").catch(() => null);
       const now = Date.now();
       const active =

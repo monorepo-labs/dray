@@ -36,6 +36,13 @@ pub async fn notify_session(
         return Ok(());
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        let _ = kind;
+        return linux::notify(app, session_id, title, body).await;
+    }
+
+    #[cfg(not(target_os = "linux"))]
     tauri::async_runtime::spawn_blocking(move || {
         #[cfg(target_os = "macos")]
         request_auth_once();
@@ -48,7 +55,7 @@ pub async fn notify_session(
             .summary(&title)
             .body(&body)
             .auto_icon()
-            .timeout(notify_rust::Timeout::Milliseconds(60_000));
+            .timeout(notify_rust::Timeout::Milliseconds(BANNER_MS));
 
         #[cfg(target_os = "macos")]
         notification.sound_name(sound_for(&kind));
@@ -75,7 +82,155 @@ pub async fn notify_session(
         }
     });
 
+    #[cfg(not(target_os = "linux"))]
     Ok(())
+}
+
+/// How long a banner stays up, and so how long its click is waited on.
+const BANNER_MS: u32 = 60_000;
+
+/// Marks the window urgent, Linux's nearest thing to the Mac's dock badge:
+/// the taskbar or dock highlights it until it is cleared. A no-op elsewhere.
+///
+/// Skipped on GNOME, whose shell answers an urgent window with a "Dray is
+/// ready" banner of its own — a second banner for an event that already
+/// posted one.
+#[tauri::command]
+pub fn set_window_urgent(app: AppHandle, urgent: bool) {
+    #[cfg(target_os = "linux")]
+    {
+        let gnome = std::env::var("XDG_CURRENT_DESKTOP")
+            .is_ok_and(|d| d.split(':').any(|d| d.eq_ignore_ascii_case("gnome")));
+        if urgent && gnome {
+            return;
+        }
+        if let Some(window) = app.get_webview_window("main") {
+            let kind = urgent.then_some(tauri::UserAttentionType::Informational);
+            let _ = window.request_user_attention(kind);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (app, urgent);
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use futures_util::StreamExt;
+    use tauri::AppHandle;
+
+    const BUS_NAME: &str = "org.freedesktop.Notifications";
+    const PATH: &str = "/org/freedesktop/Notifications";
+
+    /// Posts the banner and waits on its click over D-Bus, on a task.
+    ///
+    /// Not notify-rust's `wait_for_action`: that waits until the server
+    /// reports the banner closed, and GNOME keeps an expired banner in its
+    /// tray without saying so, so the wait would never end. This one ends at
+    /// the banner's own timeout and takes the banner down with it, as the
+    /// Mac's does, so a late click cannot land on nothing.
+    ///
+    /// Silent on purpose: the window plays the app's own clip beside it
+    /// (`notify.ts`), where a server's default sound is one every app makes.
+    pub async fn notify(
+        app: AppHandle,
+        session_id: String,
+        title: String,
+        body: String,
+    ) -> Result<(), String> {
+        let mut notification = notify_rust::Notification::new();
+        match icon() {
+            Some(path) => notification.icon(path),
+            None => notification.auto_icon(),
+        };
+        notification
+            .appname("Dray")
+            .summary(&title)
+            .body(&body)
+            // The spec's key for a click on the body. GNOME, KDE and dunst
+            // take it there; xfce draws it as a button, hence the label.
+            .action("default", "Open")
+            .hint(notify_rust::Hint::SuppressSound(true))
+            .timeout(notify_rust::Timeout::Milliseconds(super::BANNER_MS));
+        // Listening before posting, so no click can land between the two. A
+        // failed listen still posts: the banner is worth showing unclickable.
+        let signals = listen().await.inspect_err(|e| eprintln!("[notify listen err] {e}")).ok();
+        let id = notification.show_async().await.map_err(|e| e.to_string())?.id();
+        let Some(signals) = signals else { return Ok(()) };
+
+        tauri::async_runtime::spawn(async move {
+            let wait = std::time::Duration::from_millis(super::BANNER_MS.into());
+            match tokio::time::timeout(wait, clicked(signals, id)).await {
+                Ok(true) => super::activate(&app, &session_id),
+                Ok(false) => {}
+                Err(_) => close(id).await,
+            }
+        });
+        Ok(())
+    }
+
+    /// Every signal the notification server sends, in order. One stream for
+    /// both signals, never one each: a click is sent with the close right
+    /// behind it, and two streams raced in a `select!` read the close first
+    /// about half the time, losing the click.
+    async fn listen() -> zbus::Result<zbus::proxy::SignalStream<'static>> {
+        let conn = zbus::Connection::session().await?;
+        let proxy = zbus::Proxy::new(&conn, BUS_NAME, PATH, BUS_NAME).await?;
+        proxy.receive_all_signals().await
+    }
+
+    /// Whether banner `id` was clicked, answered once it is clicked or closed.
+    async fn clicked(mut signals: zbus::proxy::SignalStream<'static>, id: u32) -> bool {
+        while let Some(msg) = signals.next().await {
+            let header = msg.header();
+            match header.member().map(|m| m.as_str()) {
+                Some("ActionInvoked") => {
+                    if let Ok((nid, key)) = msg.body().deserialize::<(u32, String)>() {
+                        if nid == id {
+                            return key == "default";
+                        }
+                    }
+                }
+                Some("NotificationClosed") => {
+                    if msg.body().deserialize::<(u32, u32)>().is_ok_and(|(nid, _)| nid == id) {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// The app's icon as a file, written once a process. A banner names its
+    /// icon by theme name or path, and nothing installs Dray into an icon
+    /// theme — an AppImage installs nothing at all — so the name drew a
+    /// broken image.
+    fn icon() -> Option<&'static str> {
+        static ICON: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        ICON.get_or_init(|| {
+            let (name, bytes): (_, &[u8]) = if tauri::is_dev() {
+                ("icon-dev.png", include_bytes!("../icons/dev/128x128.png"))
+            } else {
+                ("icon.png", include_bytes!("../icons/128x128.png"))
+            };
+            let cache = std::env::var_os("XDG_CACHE_HOME")
+                .filter(|d| !d.is_empty())
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::home_dir().map(|h| h.join(".cache")))?;
+            let path = cache.join("dray").join(name);
+            std::fs::create_dir_all(path.parent()?).ok()?;
+            std::fs::write(&path, bytes).ok()?;
+            path.into_os_string().into_string().ok()
+        })
+        .as_deref()
+    }
+
+    async fn close(id: u32) {
+        let Ok(conn) = zbus::Connection::session().await else { return };
+        let _ = conn
+            .call_method(Some(BUS_NAME), PATH, Some(BUS_NAME), "CloseNotification", &(id,))
+            .await;
+    }
 }
 
 /// Pick the banner's sound from what the session wants.

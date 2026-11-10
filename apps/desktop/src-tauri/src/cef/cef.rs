@@ -222,15 +222,13 @@ fn dev_framework() -> Option<PathBuf> {
 /// See the headless module's: this Chromium reads CSS pixels under a recording's override.
 const INPUT_IN_DEVICE_PIXELS: bool = false;
 
-/// A dev build's profile root is in its own home, as its socket is:
-/// Chromium holds a singleton lock on the root, so a dev build sharing the
-/// release app's, or another worktree's, would fail to initialize and exit
-/// the process.
+/// The profile root is in the build's own home, as its socket is: Chromium
+/// holds a singleton lock on the root, so a dev build sharing the release
+/// app's, or another worktree's, would fail to initialize and exit the
+/// process. A release under `DRAY_HOME` moves it too, or two homes share
+/// profiles and a recording lands where its server cannot serve it.
 fn browser_dir() -> PathBuf {
-    match crate::store::home_override().filter(|_| tauri::is_dev()) {
-        Some(home) => home.join("browser"),
-        None => std::env::home_dir().unwrap_or_default().join(".dray/browser"),
-    }
+    crate::headless::browser_dir()
 }
 
 /// Call once from Tauri's `setup`. Chromium itself is not started here: it
@@ -306,6 +304,8 @@ fn start() -> Option<bool> {
         let mtm = MainThreadMarker::new().expect("cef::start off the main thread");
         unsafe { patch_nsapp(&NSApplication::sharedApplication(mtm)) };
     }
+
+    crate::headless::clear_stale_lock(&browser_dir());
 
     #[cfg(target_os = "linux")]
     let settings = Settings {

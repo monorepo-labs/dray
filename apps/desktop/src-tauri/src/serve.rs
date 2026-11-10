@@ -458,9 +458,7 @@ async fn shut_down(code: i32) -> ! {
 /// that settle without cleaning up are gone (#482).
 ///
 /// An empty index sweeps nothing, since a missing file reads as no sessions
-/// and would take every profile. The CEF root ignores `DRAY_HOME`, so a
-/// server on a home of its own leaves it alone: that index is not the one
-/// those profiles belong to.
+/// and would take every profile.
 async fn sweep_browser_profiles() {
     let Ok(index) = store::read_index().await else { return };
     if index.is_empty() {
@@ -473,9 +471,7 @@ async fn sweep_browser_profiles() {
     // Only the renames are waited on; the removals run on.
     let _ = tokio::task::spawn_blocking(move || {
         #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
-        if std::env::var_os("DRAY_HOME").is_none() {
-            crate::cef::automation::sweep_profiles(&live);
-        }
+        crate::cef::automation::sweep_profiles(&live);
         crate::headless::automation::sweep_profiles(&live);
     })
     .await;

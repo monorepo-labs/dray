@@ -186,6 +186,7 @@ export const APP_COMMANDS = new Set([
   "chromium_download",
   "chromium_remove",
   "notify_session",
+  "set_window_urgent",
   "check_update",
   "install_update",
   "confirm_quit",

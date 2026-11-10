@@ -133,6 +133,9 @@ transcribe-cpp = { version = "0.4", default-features = false, features = [
   "vulkan",
   "dynamic-backends",
 ], optional = true }
+# logind's `PrepareForSleep` and a banner's click, both D-Bus signals. The
+# version and features notify-rust already builds, so this costs no build.
+zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
 
 [target.'cfg(not(any(target_os = "macos", target_os = "linux")))'.dependencies]
 transcribe-cpp = { version = "0.4", default-features = false, optional = true }
@@ -179,6 +182,8 @@ desktop = [
   "dep:tar",
   # The composer's paste reads GTK's clipboard on Linux (attachments.rs).
   "dep:gtk",
+  # Linux's sleep and banner click. See transcription.rs and notifications.rs.
+  "dep:zbus",
 ]
 cef = ["desktop", "dep:cef", "dep:gtk", "dep:gdkx11", "dep:x11"]
 # `connect` and TLS: a server reaches other machines too (machines.rs).
