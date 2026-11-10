@@ -28,7 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useCopied } from "@/hooks/useCopied";
-import type { usePullRequest, PrAction } from "@/hooks/usePullRequest";
+import type { usePullRequest, PrActing, PrAction } from "@/hooks/usePullRequest";
 import { relativeTime } from "@/lib/format";
 import { TERMINAL_OPENER } from "@/lib/openWith";
 import {
@@ -304,7 +304,7 @@ function PrRow({
   /// arrow that can only ever point down is an affordance for nothing, and
   /// collapsing the single row leaves the tab showing one line.
   collapsible: boolean;
-  acting: boolean;
+  acting: PrActing | null;
   act: (number: number, action: PrAction) => Promise<void>;
 }) {
   const [collapsed, setCollapsed] = useState(!defaultOpen);
@@ -452,6 +452,13 @@ const MERGE_FILL =
 /// stops promising a click without any help here.
 const BUSY = "disabled:opacity-100";
 
+/// Whether `kind` on this pull request is the write in flight. One flag for
+/// the whole list drew a spinner and its own verb on every row's button, so
+/// merging one pull request read "Reopening…" on the closed one below it.
+function isBusy(acting: PrActing | null, pr: PullRequest, kind: PrAction["kind"]): boolean {
+  return acting?.number === pr.number && acting.kind === kind;
+}
+
 /// The verb, while it is happening.
 function busyLabel(kind: PrAction["kind"]): string {
   return {
@@ -480,10 +487,11 @@ function BranchCleanup({
   act,
 }: {
   pr: PullRequest;
-  acting: boolean;
+  acting: PrActing | null;
   act: (number: number, action: PrAction) => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const busy = isBusy(acting, pr, "delete_branch");
 
   return (
     <section className="flex min-h-7 items-center gap-2 px-3">
@@ -501,25 +509,27 @@ function BranchCleanup({
               variant="destructive"
               size="sm"
               className={BUSY}
-              disabled={acting}
+              disabled={!!acting}
               onClick={() => {
                 setConfirming(false);
                 void act(pr.number, { kind: "delete_branch" });
               }}
             >
-              {acting && <Spinner />}
-              {acting ? busyLabel("delete_branch") : "Delete branch"}
+              Delete branch
             </Button>
           </>
         ) : (
+          // The confirm above closes on its own click, so this is the button
+          // on screen while the delete runs and the one that says so.
           <Button
             variant="outline"
             size="sm"
             className={BUSY}
-            disabled={acting}
+            disabled={!!acting}
             onClick={() => setConfirming(true)}
           >
-            Delete branch
+            {busy && <Spinner />}
+            {busy ? busyLabel("delete_branch") : "Delete branch"}
           </Button>
         )}
       </div>
@@ -555,7 +565,7 @@ function Readiness({
   act,
 }: {
   pr: PullRequest;
-  acting: boolean;
+  acting: PrActing | null;
   act: (number: number, action: PrAction) => Promise<void>;
 }) {
   const [method, setMethod] = useState<MergeMethod>("squash");
@@ -588,11 +598,11 @@ function Readiness({
               variant="outline"
               size="sm"
               className={BUSY}
-              disabled={acting}
+              disabled={!!acting}
               onClick={() => void act(pr.number, { kind: "reopen" })}
             >
-              {acting && <Spinner />}
-              {acting ? busyLabel("reopen") : "Reopen"}
+              {isBusy(acting, pr, "reopen") && <Spinner />}
+              {isBusy(acting, pr, "reopen") ? busyLabel("reopen") : "Reopen"}
             </Button>
           )}
 
@@ -602,11 +612,11 @@ function Readiness({
                 variant="outline"
                 size="sm"
                 className={BUSY}
-                disabled={acting}
+                disabled={!!acting}
                 onClick={() => void act(pr.number, { kind: "ready" })}
               >
-                {acting && <Spinner />}
-                {acting ? busyLabel("ready") : "Ready for review"}
+                {isBusy(acting, pr, "ready") && <Spinner />}
+                {isBusy(acting, pr, "ready") ? busyLabel("ready") : "Ready for review"}
               </Button>
             ) : confirming ? (
               <>
@@ -616,7 +626,7 @@ function Readiness({
                 <Button
                   size="sm"
                   className={cn(MERGE_FILL, "shadow-(--shadow-button)")}
-                  disabled={acting}
+                  disabled={!!acting}
                   onClick={() => {
                     setConfirming(false);
                     void act(pr.number, { kind: "merge", method });
@@ -651,12 +661,12 @@ function Readiness({
                 <Button
                   size="sm"
                   className={cn(MERGE_FILL, BUSY, "rounded-r-none")}
-                  disabled={acting}
+                  disabled={!!acting}
                   title={ready ? undefined : "This pull request is not ready to merge"}
                   onClick={() => setConfirming(true)}
                 >
-                  {acting && <Spinner />}
-                  {acting ? busyLabel("merge") : METHOD_LABEL[method]}
+                  {isBusy(acting, pr, "merge") && <Spinner />}
+                  {isBusy(acting, pr, "merge") ? busyLabel("merge") : METHOD_LABEL[method]}
                 </Button>
 
                 <DropdownMenu>
@@ -668,7 +678,7 @@ function Readiness({
                         BUSY,
                         "rounded-l-none px-1.5 shadow-(--accent-merge-seam)",
                       )}
-                      disabled={acting}
+                      disabled={!!acting}
                       aria-label="Merge method"
                     >
                       <ChevronDown />
