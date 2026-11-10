@@ -1040,6 +1040,9 @@ async fn relay_http(stream: TcpStream, token: &str) -> Result<()> {
         return Ok(());
     };
     let url = format!("{base}{route}?{rest}");
+    // An upload's body goes out inside `send`, so its wait grows with the
+    // body: 64 KiB/s at worst.
+    let mut wait = PIPE_SILENCE;
     let mut request = match route {
         "/upload" => {
             let Some(length) = head.length.filter(|&l| l <= crate::attachments::MAX_UPLOAD_BYTES) else {
@@ -1050,6 +1053,7 @@ async fn relay_http(stream: TcpStream, token: &str) -> Result<()> {
             // if a client starts relaying attachments.
             let mut body = Vec::with_capacity(length as usize);
             (&early[..]).chain(&mut stream).take(length).read_to_end(&mut body).await?;
+            wait += std::time::Duration::from_secs(length / (64 * 1024));
             crate::http().post(url).body(body)
         }
         _ => crate::http().get(url),
@@ -1060,7 +1064,7 @@ async fn relay_http(stream: TcpStream, token: &str) -> Result<()> {
     }
     // `http()` has no timeout of its own, and a body may stream for minutes,
     // so the wait is bounded per step: the answer's head, then each chunk.
-    let Ok(Ok(mut response)) = tokio::time::timeout(PIPE_SILENCE, request.send()).await else {
+    let Ok(Ok(mut response)) = tokio::time::timeout(wait, request.send()).await else {
         stream.write_all(refuse("502 Bad Gateway").as_bytes()).await?;
         return Ok(());
     };
