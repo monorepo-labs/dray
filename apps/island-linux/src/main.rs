@@ -516,7 +516,8 @@ pub fn start_dictation(island: &Entity<Island>, cx: &mut App) {
         cx.update(|cx| {
             island.update(cx, |island, _| island.draft_mut().start_pending = false);
             // Cancelled while it opened: a start that took is closed again.
-            // No newer start can be under way, so this closes only its own.
+            // `start_pending` kept any newer start from going out until now,
+            // so this cancel can only close this run's own recording.
             let d = island.read(cx).draft();
             if d.run != run || d.dictation != orb::Dictation::Starting {
                 if matches!(answer, Ok(serde_json::Value::Null)) {
@@ -586,12 +587,16 @@ pub fn stop_dictation(island: &Entity<Island>, then_send: bool, cx: &mut App) {
     // A send waiting on the words goes where the reader pressed ⏎ with what
     // was there then, whatever they pick or write while the model works.
     let pinned = then_send.then(|| {
-        let d = island.read(cx).draft();
-        Pinned {
-            target: d.target.clone(),
-            rows: d.rows.iter().map(|r| r.id).collect(),
-            typing: d.typing.read(cx).text().to_string(),
+        // The box's text joins the send as a row of its own, and the box
+        // empties: what is typed next is not this message's.
+        let typing = island.read(cx).draft().typing.clone();
+        let text = typing.read(cx).text().trim().to_string();
+        if !text.is_empty() {
+            island.update(cx, |island, cx| island.draft_mut().add_row(&text, cx));
+            typing.update(cx, |t, cx| t.clear(cx));
         }
+        let d = island.read(cx).draft();
+        Pinned { target: d.target.clone(), rows: d.rows.iter().map(|r| r.id).collect() }
     });
     transcribe(island, "stop_transcription", json!({}), pinned, cx);
 }
@@ -1304,10 +1309,12 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
     let (target, rows, typing, picks) = {
         let i = island.read(cx);
         let d = i.draft();
+        // A pinned send reads only its own rows, never the box or rows
+        // written since ⏎.
         let (rows, typing) = match &pinned {
             Some(p) => (
                 d.rows.iter().filter(|r| p.rows.contains(&r.id)).map(|r| r.input.read(cx).text().to_string()).collect(),
-                p.typing.clone(),
+                String::new(),
             ),
             None => d.parts(cx),
         };
@@ -1341,7 +1348,7 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
     // The message leaves the draft whole first, so nothing typed after
     // Return can join it; a pinned one takes only what it held.
     let typing_box = island.read(cx).draft().typing.clone();
-    if pinned.as_ref().is_none_or(|p| typing_box.read(cx).text() == p.typing) {
+    if pinned.is_none() {
         typing_box.update(cx, |t, cx| t.clear(cx));
     }
     let clock = island.update(cx, |island, cx| {

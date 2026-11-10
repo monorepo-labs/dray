@@ -72,14 +72,14 @@ pub struct Draft {
     pub start_pending: bool,
 }
 
-/// A send that waits on the words still being said: where it goes and what
-/// it holds, both as they stood at ⏎, so a pick or text made meanwhile is
-/// never swept into it.
+/// A send that waits on the words still being said: where it goes and the
+/// rows it holds, both as they stood at ⏎. The box's text became one of those
+/// rows at ⏎, so the box is left for whatever is written meanwhile, which
+/// the send never takes.
 #[derive(Clone, Debug)]
 pub struct Pinned {
     pub target: Option<Target>,
     pub rows: Vec<u64>,
-    pub typing: String,
 }
 
 impl Draft {
