@@ -268,7 +268,7 @@ jobs:
       - run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev libasound2-dev cmake file patchelf libfuse2 \
+            librsvg2-dev libxdo-dev libssl-dev libdbus-1-dev libasound2-dev cmake ninja-build file patchelf libfuse2 \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good
 
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -281,15 +281,30 @@ jobs:
 
       # `createUpdaterArtifacts` signs the AppImage itself into a `.sig`
       # beside it, with the same minisign key as the Mac's — the one public
-      # key in tauri.conf.json verifies both. No `cef`: the Linux browser is
-      # its own piece of work, and turns up here as a feature flag.
-      - run: pnpm tauri build --bundles appimage
+      # key in tauri.conf.json verifies both. `cef` as on the Mac: the
+      # bindings compile against the CEF SDK, which `cef-dll-sys` downloads
+      # into CEF_PATH and builds with CMake and Ninja; libcef itself is never
+      # bundled, the app downloads its own (chromium.rs).
+      - run: pnpm tauri build --bundles appimage --features cef
         working-directory: apps/desktop
         env:
+          CEF_PATH: ${{ runner.temp }}/cef
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
           POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
+
+      # The Mac's framework check, Linux's way: libcef is opened at run time
+      # and downloaded by the app, so the binary must not link it — or the
+      # app refuses to start before the download — and the AppImage must not
+      # carry it, or every download and update grows by 300MB.
+      - name: Verify libcef stays out
+        run: |
+          set -euo pipefail
+          if readelf -d apps/desktop/src-tauri/target/release/dray | grep libcef; then exit 1; fi
+          IMAGE="$(realpath apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage)"
+          cd "$RUNNER_TEMP" && "$IMAGE" --appimage-extract >/dev/null
+          if find squashfs-root -name 'libcef*' | grep .; then exit 1; fi
 
       # The same mirror as the Mac's. The signature rides out as an output
       # for the manifest; the file goes to the release from there, since the
