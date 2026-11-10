@@ -45,6 +45,8 @@ final class NewTask {
     /// Lists that failed to read: not cached, so asking again retries, and no
     /// longer holding Start, since an empty list lets the pick stand.
     private var modelsFailed: Set<String> = []
+    /// Machines whose agents could not be read; not cached, so the next load asks again.
+    private var agentsFailed: Set<UUID> = []
     private(set) var sending = false
     /// Why the last start or save failed, said under the orb.
     var failure: String?
@@ -123,7 +125,8 @@ final class NewTask {
     var stanceLabel: String { Picks.stances.first { $0.0 == Picks.stanceFor(harness, stance) }?.1 ?? "Auto" }
 
     var ready: Bool {
-        !sending && hasText && cwd != nil && agent?.available == true
+        // An unread availability lets Start stand: `send_msg` refuses a missing agent itself, in words.
+        !sending && hasText && cwd != nil && (agent?.available == true || server.map(agentsFailed.contains) == true)
             && (models[modelsKey] != nil || modelsFailed.contains(modelsKey))
     }
 
@@ -142,8 +145,13 @@ final class NewTask {
     /// this agent's models. Read once per machine and agent.
     func load() async {
         guard let server else { return }
-        if agents[server] == nil, let read: [AgentAvailability] = try? await store.call(server, "agent_availability") {
-            agents[server] = read
+        if agents[server] == nil {
+            if let read: [AgentAvailability] = try? await store.call(server, "agent_availability") {
+                agents[server] = read
+                agentsFailed.remove(server)
+            } else {
+                agentsFailed.insert(server)
+            }
         }
         // A machine without the remembered agent starts on one it has; with only one, no picker shows to fix it.
         // Only while that machine is still the pick: a late answer for another must not move this one's agent.
@@ -173,6 +181,7 @@ final class NewTask {
         sending = true
         failure = nil
         defer { sending = false }
+        let opened = draftId
         let id = UUID().uuidString.lowercased()
         let sent = text
         do {
@@ -193,7 +202,7 @@ final class NewTask {
                 "isNewSession": true,
             ])
             if let item = outcome.snapshot { store.created(server, item) }
-            await dropDraft()
+            await dropDraft(opened)
             // Words added while the start was out were never sent, so they stay.
             if text == sent { text = "" }
             Haptic.success()
@@ -215,6 +224,7 @@ final class NewTask {
         sending = true
         defer { sending = false }
         let saved = text
+        let opened = draftId
         let draft: [String: JSON] = [
             "id": .string(UUID().uuidString.lowercased()),
             "prompt": .string(saved),
@@ -233,7 +243,7 @@ final class NewTask {
             failure = error.localizedDescription
             return false
         }
-        await dropDraft()
+        await dropDraft(opened)
         if text == saved { text = "" }
         return true
     }
@@ -245,10 +255,11 @@ final class NewTask {
         failure = nil
     }
 
-    /// The draft this text was opened from goes once its text has gone somewhere else.
-    private func dropDraft() async {
-        guard let d = draftId else { return }
-        draftId = nil
+    /// The draft a start or save began from goes once its text has gone somewhere else —
+    /// that one, taken before the request, never whichever is open by the time it answers.
+    private func dropDraft(_ d: (server: UUID, id: String)?) async {
+        guard let d else { return }
+        if draftId?.server == d.server && draftId?.id == d.id { draftId = nil }
         _ = try? await store.call(d.server, "delete_draft", ["id": .string(d.id)], as: JSON.self)
     }
 }
