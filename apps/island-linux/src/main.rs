@@ -1493,7 +1493,11 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
         typing_box.update(cx, |t, cx| t.clear(cx));
     }
     let clock = island.update(cx, |island, cx| {
-        island.notice = None;
+        // A waiting send goes on its own, often as another fails; that
+        // failure's notice is the reader's to read, not this send's to clear.
+        if pinned.is_none() {
+            island.notice = None;
+        }
         let draft = island.draft_mut();
         draft.rows.retain(|r| !own.contains(&r.id));
         draft.sending = true;
