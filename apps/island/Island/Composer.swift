@@ -520,8 +520,8 @@ final class Composer {
 
     /// A number key on a card: a permission's option outright, a question's toggled.
     func pickOption(_ i: Int) {
-        // The flash or the list covers the card, so a key now would answer one the reader cannot see.
-        guard !sent, !listing else { return }
+        // The flash, the list or a recording covers the card, so a key now would answer one the reader cannot see.
+        guard !sent, !listing, !listening else { return }
         switch ask?.event.payload {
         case .permissionRequested(let r)? where r.options.indices.contains(i):
             Task { await respond(r.options[i].id) }
