@@ -746,6 +746,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             let now = crate::remote_access::set_remote_access(app.clone(), set.on).await.map_err(anyhow::Error::msg)?;
             Ok(Response::RemoteAccess { on: now.on })
         }
+        #[cfg(any(feature = "serve", feature = "desktop"))]
         Request::ShareMachines(share) => {
             let now = crate::machines::set_sharing(share.on).await.map_err(anyhow::Error::msg)?;
             let names = now["machines"].as_array().into_iter().flatten();

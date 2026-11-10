@@ -148,6 +148,15 @@ pub async fn set_sharing(on: bool) -> Result<Value, String> {
 /// no hub to tell, so a phone catches those up on its next connect.
 async fn announce_sharing() {
     crate::serve::HUB.publish("machines_shared", &sharing().await);
+    SHARING_MOVED.notify_waiters();
+}
+
+/// Woken on every change to what is shared, so a live relay can stop at once.
+pub static SHARING_MOVED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Whether `id` is shared still: sharing on, and the machine listed and on.
+pub async fn still_shared(id: &str) -> bool {
+    shared(id).await.is_ok()
 }
 
 /// A shared machine by id, refusing everything while sharing is off.

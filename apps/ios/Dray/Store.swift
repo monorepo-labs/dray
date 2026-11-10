@@ -159,15 +159,21 @@ final class Store {
     }
 
     private func forget(_ id: UUID) {
+        let gone = Set([id] + servers.filter { $0.via?.parent == id }.map(\.id))
         drop(id)
-        for key in transcripts.keys where key.server == id { transcripts[key] = nil }
+        for key in transcripts.keys where gone.contains(key.server) { transcripts[key] = nil }
         servers.removeAll { $0.id == id }
     }
 
     /// Transcripts stay: a session left open across off and on is reloaded by `connected`,
     /// which finds it only through them, and its view never asks again.
     private func drop(_ id: UUID) {
-        for s in servers where s.via?.parent == id { forget(s.id) }
+        // Off, not forgotten: transcripts stay for `connected` to reload once
+        // the paired server shares them again under the same ids.
+        for s in servers where s.via?.parent == id {
+            drop(s.id)
+            servers.removeAll { $0.id == s.id }
+        }
         connections.removeValue(forKey: id)?.stop()
         serverState[id] = nil
         for key in items.keys where key.server == id { items[key] = nil }

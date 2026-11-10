@@ -954,6 +954,7 @@ where
             return Ok(());
         }
     };
+    let via = hello.via.unwrap_or_default();
     let (mut up_write, mut up_read) = upstream.split();
     // The client's pings are answered here, so they say nothing of the machine;
     // it is pinged from here and dropped once silent, which ends the client's
@@ -975,8 +976,19 @@ where
                     Some(Ok(frame)) => if write.send(frame).await.is_err() { break },
                 }
             }
+            // Sharing switched off, or the machine left the list, ends the relay
+            // too. The tick catches the Mac app's own list edits, which no
+            // notify in this process sees.
+            _ = crate::machines::SHARING_MOVED.notified() => {
+                if !crate::machines::still_shared(&via).await {
+                    break;
+                }
+            }
             _ = ping.tick() => {
-                if heard.elapsed() > PIPE_SILENCE || up_write.send(Message::Ping(Default::default())).await.is_err() {
+                if heard.elapsed() > PIPE_SILENCE
+                    || !crate::machines::still_shared(&via).await
+                    || up_write.send(Message::Ping(Default::default())).await.is_err()
+                {
                     break;
                 }
             }
@@ -1046,7 +1058,9 @@ async fn relay_http(stream: TcpStream, token: &str) -> Result<()> {
     if let Some(range) = &head.range {
         request = request.header(reqwest::header::RANGE, range);
     }
-    let Ok(mut response) = request.send().await else {
+    // `http()` has no timeout of its own, and a body may stream for minutes,
+    // so the wait is bounded per step: the answer's head, then each chunk.
+    let Ok(Ok(mut response)) = tokio::time::timeout(PIPE_SILENCE, request.send()).await else {
         stream.write_all(refuse("502 Bad Gateway").as_bytes()).await?;
         return Ok(());
     };
@@ -1059,7 +1073,7 @@ async fn relay_http(stream: TcpStream, token: &str) -> Result<()> {
     }
     reply.push_str("Connection: close\r\n\r\n");
     stream.write_all(reply.as_bytes()).await?;
-    while let Some(chunk) = response.chunk().await? {
+    while let Some(chunk) = tokio::time::timeout(PIPE_SILENCE, response.chunk()).await.context("the machine stopped sending")?? {
         stream.write_all(&chunk).await?;
     }
     stream.shutdown().await.ok();
