@@ -9,8 +9,6 @@ final class PrModel {
     var prs: [PullRequest] = []
     var unavailable: PrUnavailable?
     var branch: String?
-    /// False until the first read answers, which is what the skeleton stands for.
-    var loaded = false
     var acting = false
     var actionError: String?
     @ObservationIgnored private var generation = 0
@@ -25,7 +23,6 @@ final class PrModel {
         guard let item = store.items[key] else { return }
         generation += 1
         let gen = generation
-        defer { if gen == generation { loaded = true } }
         do {
             let status: WorkStatus = try await store.call(key.server, "work_status", ["cwd": .string(item.cwd)])
             let branch = sessionBranch(branch: item.branch, worktreeName: item.worktreeName,
@@ -146,18 +143,9 @@ struct PrSheet: View {
     }
 
     @ViewBuilder private var content: some View {
-        if !model.loaded {
-            ScrollView { PrSkeleton().padding(.horizontal, 20).padding(.top, 14) }
-                .scrollDisabled(true)
-                .accessibilityLabel("Loading pull request")
-        } else if model.prs.isEmpty, let u = model.unavailable, u.keepsButton {
+        // No loading or no-PR state: the button that opens this shows only once a read found one.
+        if model.prs.isEmpty, let u = model.unavailable, u.keepsButton {
             MissingCli(kind: u.kind, model: model)
-        } else if model.prs.isEmpty {
-            // No PR yet, or a failure with nothing on screen to keep: one centred sentence either way.
-            PrNotice(title: model.unavailable == nil ? "No pull request yet" : "Couldn't ask GitHub",
-                     message: model.unavailable.map(\.sentence) ?? "It shows here once one is opened.") {
-                PrOutline(tone: Theme.tertiary, dashed: true)
-            } actions: {}
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
@@ -266,7 +254,9 @@ private struct PrSection: View {
         let failing = pr.failingChecks
         if failing > 0 { return "\(failing) failing" }
         let done = pr.checks.filter { $0.state != "pending" }.count
-        return done < pr.checks.count ? "\(done) of \(pr.checks.count) done" : "All passed"
+        if done < pr.checks.count { return "\(done) of \(pr.checks.count) done" }
+        // Cancelled, skipped and neutral finish without passing.
+        return pr.checks.allSatisfy { $0.state == "success" } ? "All passed" : "All done"
     }
 
     private var tone: Color {
@@ -381,8 +371,12 @@ private struct MergeButton: View {
         .opacity(pr.verdict == .ready && !pr.checksHold ? 1 : 0.6)
         .allowsHitTesting(!pr.checksHold)
         .accessibilityElement(children: .contain)
+        // A poll can start or fail a check while the confirm is open; the hold covers it too.
+        .onChange(of: pr.checksHold) { _, hold in if hold { confirming = false } }
         .confirmationDialog("\(method.label) #\(pr.number)?", isPresented: $confirming, titleVisibility: .visible) {
             Button(method.label) {
+                // Read the model, not this view's copy, which can trail a refresh by a render.
+                guard model.prs.first(where: { $0.number == pr.number })?.checksHold == false else { return }
                 Task {
                     await model.act(store, "merge_pr", pr.number, ["method": .string(method.rawValue)])
                     model.actionError == nil ? Haptic.success() : Haptic.error()
@@ -578,89 +572,26 @@ private struct PrNotice<Mark: View, Actions: View>: View {
     }
 }
 
-/// The open-PR glyph at notice size in one tone; `dashed` draws the half a
-/// PR would complete, for a branch that has none yet.
+/// The open-PR glyph at notice size, in one tone.
 private struct PrOutline: View {
     let tone: Color
-    var dashed = false
 
     var body: some View {
         Canvas { ctx, box in
             ctx.scaleBy(x: box.width / 24, y: box.height / 24)
-            var base = Path()
-            base.addEllipse(in: CGRect(x: 3, y: 3, width: 6, height: 6))
-            base.move(to: CGPoint(x: 6, y: 9))
-            base.addLine(to: CGPoint(x: 6, y: 21))
-            var head = Path()
-            head.addEllipse(in: CGRect(x: 15, y: 15, width: 6, height: 6))
-            head.move(to: CGPoint(x: 13, y: 6))
-            head.addLine(to: CGPoint(x: 16, y: 6))
-            head.addArc(center: CGPoint(x: 16, y: 8), radius: 2, startAngle: .degrees(270), endAngle: .degrees(0), clockwise: false)
-            head.addLine(to: CGPoint(x: 18, y: 15))
-            ctx.stroke(base, with: .color(tone), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-            ctx.stroke(head, with: .color(tone), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: dashed ? [2.5, 2] : []))
+            var p = Path()
+            p.addEllipse(in: CGRect(x: 3, y: 3, width: 6, height: 6))
+            p.move(to: CGPoint(x: 6, y: 9))
+            p.addLine(to: CGPoint(x: 6, y: 21))
+            p.addEllipse(in: CGRect(x: 15, y: 15, width: 6, height: 6))
+            p.move(to: CGPoint(x: 13, y: 6))
+            p.addLine(to: CGPoint(x: 16, y: 6))
+            p.addArc(center: CGPoint(x: 16, y: 8), radius: 2, startAngle: .degrees(270), endAngle: .degrees(0), clockwise: false)
+            p.addLine(to: CGPoint(x: 18, y: 15))
+            ctx.stroke(p, with: .color(tone), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
         }
         .frame(width: 36, height: 36)
         .accessibilityHidden(true)
-    }
-}
-
-/// The ready sheet's shape with no words in it, while GitHub is first asked.
-private struct PrSkeleton: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.raised).frame(width: 20, height: 20)
-                        bone(250, 16, Theme.raised)
-                    }
-                    bone(170, 12, Theme.raised).padding(.leading, 30)
-                }
-                .padding(.top, Theme.Space.xs)
-                VStack(alignment: .leading, spacing: 14) {
-                    bone(150, 12)
-                    Capsule().fill(Theme.tile).frame(height: 44).opacity(0.6)
-                }
-                .padding(Theme.Space.l)
-                .prGroup(padding: 0)
-            }
-            VStack(alignment: .leading, spacing: Theme.Space.s) {
-                bone(52, 10, Theme.raised).padding(.leading, Theme.Space.xs)
-                VStack(spacing: 0) {
-                    ForEach([110, 80, 130], id: \.self) { w in
-                        HStack(spacing: Theme.Space.m) {
-                            Circle().fill(Theme.tile).frame(width: 18, height: 18)
-                            bone(CGFloat(w), 12)
-                        }
-                        .padding(.horizontal, Theme.Space.l)
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                        .opacity(w == 130 ? 0.6 : 1)
-                    }
-                }
-                .padding(.vertical, Theme.Space.xs)
-                .prGroup(padding: 0)
-            }
-            VStack(alignment: .leading, spacing: Theme.Space.s) {
-                bone(72, 10, Theme.raised).padding(.leading, Theme.Space.xs)
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: Theme.Space.s) {
-                        Circle().fill(Theme.tile).frame(width: 20, height: 20)
-                        bone(96, 12)
-                    }
-                    bone(290, 10)
-                    bone(200, 10)
-                }
-                .padding(14)
-                .prGroup(padding: 0)
-            }
-            .opacity(0.6)
-        }
-        .accessibilityHidden(true)
-    }
-
-    private func bone(_ width: CGFloat, _ height: CGFloat, _ fill: Color = Theme.tile) -> some View {
-        Capsule().fill(fill).frame(width: width, height: height)
     }
 }
 

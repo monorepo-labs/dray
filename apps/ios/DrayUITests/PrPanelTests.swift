@@ -1,10 +1,9 @@
 import XCTest
 
-/// The PR sheet in every state, against a `dray-serve` behind a proxy that
-/// answers the PR commands from fixtures keyed on each session's repo
-/// (`pr-running`, `pr-failing`, `pr-ready`, `pr-draft`, `pr-merged`,
-/// `pr-loggedout`), so a merge lands on the fixture and never on GitHub.
-///   TEST_RUNNER_DRAY_URL=ws://127.0.0.1:… TEST_RUNNER_DRAY_TOKEN=… xcodebuild test …
+/// The PR sheet in every state, against a `dray-serve` behind
+/// `scripts/pr_fixture_proxy.py`, which answers the PR commands from fixtures
+/// keyed on each session's repo, so a merge lands on the fixture and never on
+/// GitHub. Setup is in that script's header.
 final class PrPanelTests: XCTestCase {
     private var env: [String: String] { ProcessInfo.processInfo.environment }
 
@@ -34,13 +33,19 @@ final class PrPanelTests: XCTestCase {
         openSheet(app, "PR ready")
         let method = app.buttons["Merge method"]
         XCTAssertTrue(method.waitForExistence(timeout: 20), "no merge button")
-        XCTAssertTrue(app.buttons["Squash and merge"].exists, "squash is not the first-time default")
-        sleep(1)
-        method.tap()
         // A menu item's label is its title and subtitle joined.
         let item = { (title: String) in
             app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title + ",")).firstMatch
         }
+        // The pick outlives a run, so an earlier one may have left another method saved.
+        if !app.buttons["Squash and merge"].exists {
+            method.tap()
+            XCTAssertTrue(item("Squash and merge").waitForExistence(timeout: 5), "no method menu")
+            item("Squash and merge").tap()
+            XCTAssertTrue(app.buttons["Squash and merge"].waitForExistence(timeout: 5), "squash did not stick")
+        }
+        sleep(1)
+        method.tap()
         XCTAssertTrue(item("Rebase and merge").waitForExistence(timeout: 5), "no method menu")
         sleep(1)
         snap(app, "06-method-menu")
