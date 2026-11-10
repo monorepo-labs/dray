@@ -25,8 +25,12 @@ phone reads and drives it over the same WebSocket the desktop uses
 - **Pairing** by paste or by QR, and every server's name, token and removal
   in one Settings screen.
 - **Pull request** sheet from the session view: readiness in the desktop's
-  order, checks, comments; merge, mark ready, reopen. Hidden when the branch
-  has none.
+  order with checks speaking first, checks failing-first, comments; every
+  check and comment opens on GitHub. Merge is the desktop's split button —
+  the chevron picks the method, kept on the phone, and a confirm runs before
+  it lands; it stays shut while checks run or fail. Mark ready, reopen.
+  Hidden when the branch has none. Reads and merges only: no comment, reply
+  or close.
 - **Dictation**, transcribed on the Mac: the phone records a 16kHz mono WAV,
   uploads it through `POST /upload` and calls `transcribe_upload`. Only the
   Mac's server has that command, and its welcome frame says `dictation: true`,
