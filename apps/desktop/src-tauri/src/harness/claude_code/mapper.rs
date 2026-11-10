@@ -330,12 +330,6 @@ impl Mapper {
         seq
     }
 
-    /// A main-thread event the app mints itself, numbered through the same
-    /// counter as the mapped lines so `seq` stays gap-free.
-    pub fn synthesize(&mut self, session_id: &str, payload: AgentEventPayload) -> AgentEvent {
-        self.build(session_id.to_string(), None, None, payload)
-    }
-
     /// The only place `AgentEvent`s are built, so `seq` can't be skipped or
     /// double-assigned.
     fn build(
@@ -1200,7 +1194,8 @@ fn system_event_session_id(e: &SystemEvent) -> &str {
         | SystemEvent::PermissionCheckStatus { session_id }
         | SystemEvent::CommandsChanged { session_id }
         | SystemEvent::DevIntent { session_id }
-        | SystemEvent::HookProgress { session_id } => session_id,
+        | SystemEvent::HookProgress { session_id }
+        | SystemEvent::TaskSummary { session_id } => session_id,
         // No fields survive the catch-all. Harmless: an unrecognized subtype
         // maps to `None`, so no envelope is ever built from this value.
         SystemEvent::Unrecognized => "",

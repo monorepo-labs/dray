@@ -117,8 +117,12 @@ pub fn is_server() -> bool {
 
 /// Spawns onto the async runtime from anywhere, including a thread that is
 /// not one of its workers — CEF's main thread calls `analytics::track`.
-/// Tauri's runtime is global for that reason; the server only ever calls from
-/// inside its own.
+/// Tauri's runtime is global for that reason.
+///
+/// The server's is not, and one caller there is off it: the panic hook reports
+/// through here from whichever thread panicked. `tokio::spawn` panics with no
+/// runtime entered, and a panic inside the hook aborts the process — every
+/// running agent with it — so such a task is dropped instead.
 pub fn spawn<F>(task: F)
 where
     F: std::future::Future + Send + 'static,
@@ -127,7 +131,9 @@ where
     #[cfg(feature = "desktop")]
     tauri::async_runtime::spawn(task);
     #[cfg(not(feature = "desktop"))]
-    tokio::spawn(task);
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        runtime.spawn(task);
+    }
 }
 
 /// A command's failure as the frontend sees it: the outermost message, as a
@@ -772,10 +778,14 @@ pub fn run() {
         })
         .setup(|app| {
             // The configured scope names every home but one `DRAY_HOME` moved.
+            // Both things the webview loads from disk: recordings alone left
+            // every sent and tool-returned image broken under a moved home.
             if let Some(home) = store::home_override() {
-                let recordings = home.join("browser/recordings");
-                let _ = std::fs::create_dir_all(&recordings);
-                let _ = app.asset_protocol_scope().allow_directory(&recordings, true);
+                for dir in ["browser/recordings", "attachments"] {
+                    let dir = home.join(dir);
+                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = app.asset_protocol_scope().allow_directory(&dir, true);
+                }
             }
             // Chromium first: it patches NSApp and starts its pump, and every
             // window already exists here for it to parent a view into.

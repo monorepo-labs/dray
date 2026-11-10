@@ -26,8 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 use ts_rs::TS;
 
-/// Stated again from serve.rs's `PROTOCOL`, which this build may not compile.
-const PROTOCOL: u32 = 1;
+use crate::serve::PROTOCOL;
 
 /// Reconnect backoff ceiling. Agents keep running on a server the app cannot
 /// reach, so coming back soon matters more than sparing a refused connect.
@@ -1252,9 +1251,14 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
         return Err("a token is required — it is in the server's serve-token file".into());
     }
     let existing = conns().iter().find(|c| c.saved.url == url).map(|c| c.saved.id.clone());
+    // A re-add is how a token is rotated, and its name field is usually left
+    // blank: the row keeps the name it has rather than falling back to the
+    // host, which `dray --machine <name>` would then stop finding.
+    let kept = conns().iter().find(|c| c.saved.url == url).map(|c| c.saved.name.clone());
     let name = name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
+        .or(kept)
         .unwrap_or_else(|| default_name(&url));
     refuse_taken(&conns(), &name, existing.as_deref())?;
     admit(&url, &token).await?.0.close(None).await.ok();
@@ -1357,9 +1361,12 @@ pub async fn remove_server(id: String) -> Result<(), String> {
 pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<ServerInfo, ssh::Failure> {
     let failed = |message: String| ssh::Failure { message, fix: None, permanent: true };
     let target = ssh::parse(&line).map_err(failed)?;
+    // Kept on a re-add with the field blank, as the token form keeps it.
+    let kept = conns().iter().find(|c| c.saved.ssh.as_ref() == Some(&target)).map(|c| c.saved.name.clone());
     let name = name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
+        .or(kept)
         .unwrap_or_else(|| target.host().to_string());
     let existing = conns().iter().find(|c| c.saved.ssh.as_ref() == Some(&target)).map(|c| c.saved.id.clone());
     refuse_taken(&conns(), &name, existing.as_deref()).map_err(failed)?;

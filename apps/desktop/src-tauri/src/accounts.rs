@@ -1517,7 +1517,7 @@ mod tests {
                 }
                 // A key-taking option must be one of the two that can take one,
                 // or the field is drawn over a route that ends in a refusal.
-                for option in options.iter().filter(|o| o.needs_key) {
+                if options.iter().any(|o| o.needs_key) {
                     assert!(
                         matches!(harness, Harness::Codex | Harness::Pi),
                         "{} offers a key field it cannot honour",

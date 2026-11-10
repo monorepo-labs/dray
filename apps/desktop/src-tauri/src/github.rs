@@ -1176,11 +1176,28 @@ pub async fn delete_branch(cwd: String, number: u64) -> Result<(), String> {
 
     let branch = head_ref_to_delete(&out)?;
 
-    // `refs/heads/<branch>` is a path here, so a branch name carrying slashes
-    // needs no escaping — `fix/thing` addresses the ref it names.
-    let path = format!("repos/{owner}/{repo}/git/refs/heads/{branch}");
+    let path = format!("repos/{owner}/{repo}/git/refs/heads/{}", ref_path(&branch));
 
     gh(&cwd, &["api", "-X", "DELETE", &path]).await.map(|_| ())
+}
+
+/// A branch name as the tail of a REST path.
+///
+/// Slashes stay: `refs/heads/<branch>` is a path, so `fix/thing` addresses the
+/// ref it names. Everything else outside the unreserved set is escaped, because
+/// a ref may hold what a URL gives meaning to — `gh api` cuts the path at a
+/// `#`, so deleting `release#hotfix` sent the DELETE for `release`.
+fn ref_path(branch: &str) -> String {
+    let mut out = String::with_capacity(branch.len());
+    for byte in branch.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 /// The branch `delete_branch` may delete, or why it may not.
@@ -1558,6 +1575,16 @@ mod tests {
     fn a_same_repo_branch_resolves_to_its_own_name() {
         let out = r#"{"headRefName":"fix/slash","isCrossRepository":false}"#;
         assert_eq!(head_ref_to_delete(out).unwrap(), "fix/slash");
+    }
+
+    /// A ref may hold what a URL reads as syntax, and the request must still
+    /// name that ref and no shorter one.
+    #[test]
+    fn a_branch_name_survives_being_a_url_path() {
+        assert_eq!(ref_path("fix/slash"), "fix/slash");
+        assert_eq!(ref_path("release#hotfix"), "release%23hotfix");
+        assert_eq!(ref_path("a?b%c d"), "a%3Fb%25c%20d");
+        assert_eq!(ref_path("naïve"), "na%C3%AFve");
     }
 
     /// Absence has to read as *gone*, not as there. The button is the one

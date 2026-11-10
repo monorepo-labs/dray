@@ -215,16 +215,17 @@ pub async fn github_slug(cwd: &str) -> Option<String> {
 /// Answers `None` for anything that is not two segments — a remote pointing at
 /// the host's root names no repository, and half a slug reaches the wrong one.
 fn remote_path(url: &str) -> Option<&str> {
-    let after_scheme = match url.split_once("://") {
-        Some((_, rest)) => rest,
+    let path = match url.split_once("://") {
+        // A URL's authority ends at the first slash, and a colon inside it is
+        // a password's or a port's: split there, a clone made with a token —
+        // `https://x-access-token:…@github.com/owner/repo`, what a sandbox or
+        // CI leaves behind — read as no repository at all.
+        Some((_, rest)) => rest.split_once('/'),
         // scp syntax's own separator, and it is a `:` rather than a `/`.
-        None => url,
-    };
-
-    let path = after_scheme
-        .split_once(['/', ':'])
-        .map(|(_, rest)| rest)?
-        .trim_start_matches('/');
+        None => url.split_once(['/', ':']),
+    }
+    .map(|(_, rest)| rest)?
+    .trim_start_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
     // A trailing slash is legal and names the same repo; without this it makes
     // a third segment out of nothing.
@@ -1078,7 +1079,7 @@ pub async fn log_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<Commit>
     // closes the same rev-or-path ambiguity every diff here closes.
     let Some(raw) = git(
         cwd,
-        &["log", "-z", LOG_FORMAT, "-n", &limit, &skip, "HEAD", "--"],
+        &["log", "--no-show-signature", "-z", LOG_FORMAT, "-n", &limit, &skip, "HEAD", "--"],
     )
     .await
     else {
@@ -1174,6 +1175,7 @@ pub async fn log_branch_commits(cwd: &str, limit: u32, skip: u32) -> Result<Vec<
         cwd,
         &[
             "log",
+            "--no-show-signature",
             "-z",
             LOG_FORMAT,
             "--first-parent",
@@ -1459,6 +1461,9 @@ pub async fn worktree_disposition(worktree_path: &str, project_path: &str) -> Wo
                 "--branches",
                 "--remotes",
                 "--tags",
+                // Or a file named `HEAD` in the tree makes the rev ambiguous,
+                // git dies, and the count reads zero: nothing at risk.
+                "--",
             ],
         )
         .await
@@ -2015,6 +2020,8 @@ mod tests {
             "git@github.com:monorepo-labs/dray.git",
             "ssh://git@github.com/monorepo-labs/dray.git",
             "https://token@github.com/monorepo-labs/dray.git",
+            "https://x-access-token:ghs_abc@github.com/monorepo-labs/dray.git",
+            "ssh://git@github.com:22/monorepo-labs/dray.git",
             "https://github.com/monorepo-labs/dray/",
         ] {
             assert_eq!(remote_path(url), Some("monorepo-labs/dray"), "{url}");

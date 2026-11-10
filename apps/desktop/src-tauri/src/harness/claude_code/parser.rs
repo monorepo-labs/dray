@@ -1,5 +1,3 @@
-use std::format;
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -481,6 +479,12 @@ pub enum SystemEvent {
     /// A hook's output while it runs. `hook_started`/`hook_response` already
     /// say nothing to the reader.
     HookProgress {
+        session_id: String,
+    },
+    /// One line on what the agent is doing (`detail`, null between steps),
+    /// sent beside a long tool call. The tool row already says it; modelled so
+    /// each one stops landing in the failure log as an unknown subtype.
+    TaskSummary {
         session_id: String,
     },
     /// A subtype this build doesn't model. The CLI adds subtypes over time
@@ -1465,6 +1469,25 @@ mod tests {
             event,
             ClaudeCodeEvent::System(SystemEvent::Unrecognized)
         ));
+    }
+
+    /// The one pair across the committed captures that used to fall to the
+    /// catch-all, twice per long write.
+    #[test]
+    fn a_task_summary_is_modelled_rather_than_filed() {
+        let summaries = include_str!("fixtures/file_write.jsonl")
+            .lines()
+            .filter(|line| line.contains(r#""subtype":"task_summary""#))
+            .map(|line| parse_line(line).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(summaries.len(), 2);
+        for event in summaries {
+            assert!(matches!(
+                event,
+                ClaudeCodeEvent::System(SystemEvent::TaskSummary { .. })
+            ));
+        }
     }
 
     /// A real stdin-driven session: two prompts, an async subagent, and a third

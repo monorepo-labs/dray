@@ -391,8 +391,8 @@ struct VideoAdd {
 
 #[derive(Subcommand)]
 enum SkillCommand {
-    /// Write the skill to ~/.claude/skills/dray/ and ~/.codex/skills/dray/,
-    /// where Claude Code and Codex find it.
+    /// Write the skill to ~/.claude/skills/dray/, ~/.codex/skills/dray/ and
+    /// ~/.agents/skills/dray/, where Claude Code, Codex and pi find it.
     Install,
 }
 
@@ -1269,6 +1269,14 @@ fn parent_session_id() -> Option<String> {
 /// session's own project, and only refuses when there is no parent either.
 fn resolve_project(explicit: Option<PathBuf>) -> Option<String> {
     if let Some(path) = explicit {
+        // Made absolute here, as `add_video` resolves its file: a relative
+        // path means this shell's directory, and the server stands in another
+        // — under launchd that is `/`, so `--project .` matched no session.
+        // Left as typed for another machine, where the path is that machine's.
+        let path = match MACHINE.get() {
+            None => std::path::absolute(&path).unwrap_or(path),
+            Some(_) => path,
+        };
         return Some(path.to_string_lossy().into_owned());
     }
 

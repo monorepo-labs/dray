@@ -590,8 +590,13 @@ fn map_issue(node: &Value) -> Option<Issue> {
                 color: text(label, "color"),
             })
             .collect(),
-        team: node.get("team").map(|team| text(team, "key")),
-        project: node.get("project").map(|project| text(project, "name")),
+        // An issue in no project carries `"project": null`, which is present
+        // and so maps: filtered, or it crossed the wire as an empty name.
+        team: node.get("team").filter(|team| !team.is_null()).map(|team| text(team, "key")),
+        project: node
+            .get("project")
+            .filter(|project| !project.is_null())
+            .map(|project| text(project, "name")),
         updated_at: text(node, "updatedAt"),
         created_at: text(node, "createdAt"),
         pull_requests: pull_requests(node),

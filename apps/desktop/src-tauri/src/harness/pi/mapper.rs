@@ -209,9 +209,15 @@ impl Mapper {
             }
 
             // One model call inside the run. Dray's transcript groups by user
-            // message, so these draw nothing — the turn they sit inside is the
+            // message, so these draw no row — the turn they sit inside is the
             // one the reader sees.
-            PiEvent::TurnStart | PiEvent::TurnEnd => Vec::new(),
+            //
+            // The start is still the model being asked, and the working
+            // indicator is driven by exactly that: without it a pi turn said
+            // nothing between a tool's result and the next block opening.
+            // Unpersisted, like every harness's.
+            PiEvent::TurnStart => vec![self.event(AgentEventPayload::ModelRequestStarted)],
+            PiEvent::TurnEnd => Vec::new(),
 
             PiEvent::MessageStart { message } => match message {
                 // Minted per message so two in one turn cannot collide on
@@ -669,6 +675,26 @@ mod tests {
         assert!(
             kinds.contains(&"assistant_text"),
             "the assistant's answer drew nothing: {kinds:?}"
+        );
+    }
+
+    /// The working indicator follows `model_request_started` and nothing else,
+    /// so every model call has to announce itself — the one after a tool result
+    /// included, which is the wait a reader actually sits through.
+    #[test]
+    fn every_model_call_announces_itself() {
+        let events = mapped(LIVE_TURN);
+        let asked = |e: &&AgentEvent| matches!(e.payload, AgentEventPayload::ModelRequestStarted);
+
+        assert_eq!(events.iter().filter(asked).count(), 3);
+
+        let result = events
+            .iter()
+            .position(|e| matches!(e.payload, AgentEventPayload::ToolCallCompleted { .. }))
+            .expect("the capture runs a tool");
+        assert!(
+            events[result..].iter().any(|e| asked(&e)),
+            "nothing said the model was asked again after the tool result"
         );
     }
 

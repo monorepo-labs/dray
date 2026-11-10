@@ -496,7 +496,11 @@ pub async fn listen(
         };
         let (sink, hub, token, tunnel_file) = (sink.clone(), hub.clone(), token.clone(), tunnel_file.clone());
         connections.spawn(async move {
-            let served = match request_line(&stream).await {
+            // Bounded like the rest of what comes before the token: `peek`
+            // waits for a first byte, so a connect that sends nothing held
+            // its task and its socket until the peer went away.
+            let first = tokio::time::timeout(ADMIT, request_line(&stream)).await.ok().flatten();
+            let served = match first {
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
                 Some(line) if line.starts_with("POST /upload?") => upload(stream, &token).await,
                 Some(_) => connection(stream, sink, hub, &token, &tunnel_file, hosts).await,

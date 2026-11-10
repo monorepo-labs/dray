@@ -75,13 +75,14 @@ pub struct IssuesChangedEvent {
 /// field free to disagree with the chain it describes.
 const MAX_DEPTH: usize = 2;
 
-/// The socket this build listens on: `dray-dev.sock` under `pnpm tauri dev`,
-/// `dray.sock` otherwise.
+/// The socket this build listens on: `dray.sock`, in its own home.
 ///
-/// Split by build because the release app is normally running while this one is
-/// being developed, and one path between them means whichever started last owns
-/// the channel — `bind` unlinks the other's socket, so the app left behind
-/// keeps a listener no `dray` will ever reach again.
+/// Split by home because the release app is normally running while a dev build
+/// is being worked on, and one path between them means whichever started last
+/// owns the channel — `bind` unlinks the other's socket, so the app left behind
+/// keeps a listener no `dray` will ever reach again. A dev build always has a
+/// home of its own (`store::home_override`), so the `dray-dev.sock` fallback
+/// below is never reached by one.
 ///
 /// Under `DRAY_HOME` the socket moves with the data, so a second process on
 /// its own directory takes no channel from the app's.

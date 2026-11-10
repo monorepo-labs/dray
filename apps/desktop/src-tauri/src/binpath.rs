@@ -386,7 +386,7 @@ pub fn resolved_bin_dirs() -> Vec<PathBuf> {
     // Read, never probed: this runs on the spawn path, and `gh`'s slot is the
     // one here that can be empty because nothing has asked yet.
     let gh = GH_PATH.read().unwrap().clone().flatten();
-    [CLAUDE_PATH.get(), CODEX_PATH.get(), PI_PATH.get()]
+    [CLAUDE_PATH.get(), CODEX_PATH.get(), PI_PATH.get(), FX_PATH.get(), GROK_PATH.get()]
         .into_iter()
         .flatten()
         .cloned()

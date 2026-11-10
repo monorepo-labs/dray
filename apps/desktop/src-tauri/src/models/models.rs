@@ -476,7 +476,17 @@ pub fn runs_on(id: &ModelId, harness: Harness) -> bool {
     match harness {
         Harness::ClaudeCode => claude_code_models::find(id).is_some(),
         Harness::Codex => every_codex_model().iter().any(|m| &m.id == id),
-        Harness::Pi | Harness::Fx | Harness::Grok => find_model(id).is_none(),
+        Harness::Pi | Harness::Grok => find_model(id).is_none(),
+        // fx's codex provider names its models by Codex's wire ids, and the
+        // GPT-6 rows above are keyed by theirs. A row whose id *is* its wire id
+        // is therefore no other harness's alias, and reading it as one refused
+        // fx `gpt-6-sol` as "not a fx model".
+        Harness::Fx => {
+            claude_code_models::find(id).is_none()
+                && every_codex_model()
+                    .iter()
+                    .all(|m| &m.id != id || m.arg == id.as_str())
+        }
         // Nothing runs on a harness this build cannot spawn, and `false` is
         // the safe direction: it refuses a model rather than recording one
         // against a session that could never use it.
@@ -774,6 +784,20 @@ mod tests {
         assert!(from_old_enum.is_unset());
         assert!(find_model(&from_old_enum).is_none());
         assert!(!runs_on(&from_old_enum, Harness::Pi));
+    }
+
+    /// fx's codex provider and Codex's own table share wire ids, and fx has to
+    /// keep running its own. A Dray alias for another harness is still refused.
+    #[test]
+    fn fx_runs_a_wire_id_the_codex_table_also_holds() {
+        for wire in ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"] {
+            assert!(find_model(&id(wire)).is_some(), "{wire} left the Codex table");
+            assert!(runs_on(&id(wire), Harness::Fx), "fx refused {wire}");
+            assert_eq!(id_for_arg(wire, Harness::Fx), Some(id(wire)));
+        }
+        assert!(!runs_on(&id("gpt6_astra"), Harness::Fx));
+        assert!(!runs_on(&id("opus"), Harness::Fx));
+        assert!(!runs_on(&id("gpt-6-sol"), Harness::Pi));
     }
 
     /// An index entry naming a model this build dropped must not fail the whole

@@ -115,14 +115,6 @@ pub enum IssueStateKind {
     Other,
 }
 
-impl IssueStateKind {
-    /// Whether the work is over, either way it went. What "unfinished" means in
-    /// the issues page's default filter.
-    pub fn settled(self) -> bool {
-        matches!(self, Self::Completed | Self::Canceled)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]

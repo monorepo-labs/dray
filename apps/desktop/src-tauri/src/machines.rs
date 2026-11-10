@@ -512,6 +512,9 @@ pub async fn add(name: String, address: String, token: Option<String>) -> Result
         Some(at) => {
             saved.id = list[at].id.clone();
             saved.beta = list[at].beta;
+            // Kept as the app's own re-add keeps it: without the link a stopped
+            // sandbox has no Resume until some later login relearns it.
+            saved.boat = saved.boat.take().or(list[at].boat.take());
             saved.ignored = list[at].ignored.take();
             saved.unknown = std::mem::take(&mut list[at].unknown);
             list[at] = saved.clone();

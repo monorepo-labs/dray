@@ -601,7 +601,17 @@ async fn read_stdout(
     let mut mapper = mapper::Mapper::new(session_id.clone(), seq.clone(), context_window);
     let transport = Transport::Pi(client.clone());
 
-    while let Some(line) = lines.next_line().await? {
+    // A read error ends the loop like a closed pipe, never with `?`: either way
+    // no more of this turn is coming, and the cleanup below has to run.
+    loop {
+        let line = match lines.next_line().await {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(err) => {
+                eprintln!("[pi stdout err] {err}");
+                break;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -767,7 +777,13 @@ async fn read_stdout(
         if let Err(err) = app.emit("agent_event", &closed) {
             eprintln!("[pi emit err] {err}");
         }
-        status.lock().await.on_event(&closed.payload);
+        // Published as well as tracked: the frontend follows `session_status`
+        // alone, so a tracker closed quietly left the row and the composer busy
+        // under the red row saying pi had stopped.
+        let next = status.lock().await.on_event(&closed.payload);
+        if let Some(next) = next {
+            crate::session::publish_status(&session_id, next, &app).await;
+        }
     }
 
     Ok(())
