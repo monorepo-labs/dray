@@ -1,9 +1,12 @@
 //! Which apps on this machine can open a path — a session's working directory
 //! from the right panel's split button, or one file from a transcript row.
 //!
-//! Everything here is macOS-only and says so by returning an empty list
-//! elsewhere: `open(1)`, `.app` bundles and `.icns` are all one platform's,
-//! and no other build has a window to draw the button in yet.
+//! macOS reads `.app` bundles and hands paths over with `open(1)`; Linux reads
+//! `.desktop` files and runs their `Exec` ([`linux`]). Both draw from one
+//! [`KNOWN`] table. Any other platform answers an empty list.
+
+#[cfg(target_os = "linux")]
+mod linux;
 
 use std::{
     collections::HashMap,
@@ -49,26 +52,85 @@ pub struct ExternalApp {
     /// no `.icns` beside it — so the button falls back to a glyph rather than
     /// treating this as a failure.
     pub icon: Option<String>,
+    /// Takes a directory as well as a file. False for the editors that open
+    /// files alone — GNOME Text Editor and gedit answer a folder with "Could
+    /// not open file" — so the directory button leaves them out.
+    pub folders: bool,
 }
 
-/// One row of the curated table: the bundle's file name, what to call it, and
-/// which run it sits in.
+/// One row of the curated table: where the app is found on each platform, what
+/// to call it, and which run it sits in.
 struct Known {
-    /// Matched on the bundle's file name **exactly**, never as a substring.
+    /// The macOS bundle's file name, matched **exactly**, never as a substring.
     /// `Cloudflare WARP.app` is not `Warp.app`, and a contains-check lists it
-    /// as a terminal that then ignores the directory.
-    bundle: &'static str,
+    /// as a terminal that then ignores the directory. `None` for an app Dray
+    /// only knows on Linux.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    bundle: Option<&'static str>,
+    /// Linux `.desktop` file ids, tried before [`Known::bins`]: distro, Flatpak
+    /// and Snap packages each name the same app differently.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    desktop: &'static [&'static str],
+    /// Linux executables, for a `.desktop` file whose `Exec` names one and for
+    /// an install with no `.desktop` at all.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    bins: &'static [&'static str],
     name: &'static str,
     kind: ExternalAppKind,
+    /// How a Linux terminal takes a directory and a command, which no
+    /// `.desktop` file says.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    term: Term,
+    /// See [`ExternalApp::folders`].
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    files_only: bool,
 }
 
+/// A Linux terminal's argv for "start in this directory" and "run this".
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) struct Term {
+    /// Flag before the directory, joined to it where it ends in `=`. `None`
+    /// leaves the directory to the process's own cwd, which xterm reads.
+    pub dir: Option<&'static str>,
+    /// Flag before the command. `Some("")` is a terminal taking the command
+    /// as its positional arguments; `None` is one Dray cannot ask to run one.
+    pub exec: Option<&'static str>,
+}
+
+const NO_TERM: Term = Term { dir: None, exec: None };
+
 const fn editor(bundle: &'static str, name: &'static str) -> Known {
-    Known { bundle, name, kind: ExternalAppKind::Editor }
+    Known { bundle: Some(bundle), desktop: &[], bins: &[], name, kind: ExternalAppKind::Editor, term: NO_TERM, files_only: false }
 }
 
 const fn terminal(bundle: &'static str, name: &'static str) -> Known {
-    Known { bundle, name, kind: ExternalAppKind::Terminal }
+    Known { bundle: Some(bundle), desktop: &[], bins: &[], name, kind: ExternalAppKind::Terminal, term: NO_TERM, files_only: false }
 }
+
+const fn linux(kind: ExternalAppKind, name: &'static str) -> Known {
+    Known { bundle: None, desktop: &[], bins: &[], name, kind, term: NO_TERM, files_only: false }
+}
+
+impl Known {
+    const fn on_linux(mut self, desktop: &'static [&'static str], bins: &'static [&'static str]) -> Self {
+        self.desktop = desktop;
+        self.bins = bins;
+        self
+    }
+
+    const fn files_only(mut self) -> Self {
+        self.files_only = true;
+        self
+    }
+
+    const fn args(mut self, dir: Option<&'static str>, exec: Option<&'static str>) -> Self {
+        self.term = Term { dir, exec };
+        self
+    }
+}
+
+use ExternalAppKind::{Editor as E, Files as F, Terminal as T};
 
 /// The apps this menu knows how to hand a path to, in the order drawn.
 ///
@@ -80,47 +142,97 @@ const fn terminal(bundle: &'static str, name: &'static str) -> Known {
 /// it is the wrong gate — `open -a` names the app outright rather than asking
 /// Launch Services to rank handlers, so it reaches apps that declare nothing
 /// (MacVim declares no folder type and opens one fine). Gating on the
-/// declaration would hide apps that work.
+/// declaration would hide apps that work. Linux reads the same way: a
+/// `.desktop` file's `MimeType=` is not the gate, the table is.
 ///
 /// An app absent from this table costs one entry, never the list.
 const KNOWN: &[Known] = &[
-    editor("Visual Studio Code.app", "VS Code"),
-    editor("Visual Studio Code - Insiders.app", "VS Code Insiders"),
-    editor("Cursor.app", "Cursor"),
-    editor("Windsurf.app", "Windsurf"),
-    editor("Zed.app", "Zed"),
-    editor("Zed Preview.app", "Zed Preview"),
-    editor("Sublime Text.app", "Sublime Text"),
+    editor("Visual Studio Code.app", "VS Code")
+        .on_linux(&["code.desktop", "com.visualstudio.code.desktop", "code_code.desktop"], &["code"]),
+    editor("Visual Studio Code - Insiders.app", "VS Code Insiders")
+        .on_linux(&["code-insiders.desktop", "com.visualstudio.code.insiders.desktop"], &["code-insiders"]),
+    editor("Cursor.app", "Cursor").on_linux(&["cursor.desktop", "cursor_cursor.desktop"], &["cursor"]),
+    editor("Windsurf.app", "Windsurf").on_linux(&["windsurf.desktop"], &["windsurf"]),
+    editor("Zed.app", "Zed").on_linux(&["dev.zed.Zed.desktop", "zed.desktop"], &["zed", "zeditor"]),
+    editor("Zed Preview.app", "Zed Preview").on_linux(&["dev.zed.Zed-Preview.desktop"], &[]),
+    editor("Sublime Text.app", "Sublime Text")
+        .on_linux(&["sublime_text.desktop", "com.sublimetext.three.desktop"], &["subl"]),
     editor("Nova.app", "Nova"),
     editor("BBEdit.app", "BBEdit"),
     editor("Xcode.app", "Xcode"),
-    editor("IntelliJ IDEA.app", "IntelliJ IDEA"),
-    editor("IntelliJ IDEA CE.app", "IntelliJ IDEA CE"),
-    editor("WebStorm.app", "WebStorm"),
-    editor("PyCharm.app", "PyCharm"),
-    editor("PyCharm CE.app", "PyCharm CE"),
-    editor("GoLand.app", "GoLand"),
-    editor("RustRover.app", "RustRover"),
-    editor("CLion.app", "CLion"),
-    editor("PhpStorm.app", "PhpStorm"),
-    editor("RubyMine.app", "RubyMine"),
-    editor("DataGrip.app", "DataGrip"),
-    editor("Android Studio.app", "Android Studio"),
+    editor("IntelliJ IDEA.app", "IntelliJ IDEA")
+        .on_linux(&["jetbrains-idea.desktop", "com.jetbrains.IntelliJ-IDEA-Ultimate.desktop"], &[]),
+    editor("IntelliJ IDEA CE.app", "IntelliJ IDEA CE")
+        .on_linux(&["jetbrains-idea-ce.desktop", "com.jetbrains.IntelliJ-IDEA-Community.desktop"], &[]),
+    editor("WebStorm.app", "WebStorm").on_linux(&["jetbrains-webstorm.desktop"], &[]),
+    editor("PyCharm.app", "PyCharm").on_linux(&["jetbrains-pycharm.desktop"], &[]),
+    editor("PyCharm CE.app", "PyCharm CE")
+        .on_linux(&["jetbrains-pycharm-ce.desktop", "com.jetbrains.PyCharm-Community.desktop"], &[]),
+    editor("GoLand.app", "GoLand").on_linux(&["jetbrains-goland.desktop"], &[]),
+    editor("RustRover.app", "RustRover").on_linux(&["jetbrains-rustrover.desktop"], &[]),
+    editor("CLion.app", "CLion").on_linux(&["jetbrains-clion.desktop"], &[]),
+    editor("PhpStorm.app", "PhpStorm").on_linux(&["jetbrains-phpstorm.desktop"], &[]),
+    editor("RubyMine.app", "RubyMine").on_linux(&["jetbrains-rubymine.desktop"], &[]),
+    editor("DataGrip.app", "DataGrip").on_linux(&["jetbrains-datagrip.desktop"], &[]),
+    editor("Android Studio.app", "Android Studio")
+        .on_linux(&["android-studio.desktop", "jetbrains-studio.desktop"], &["android-studio"]),
     editor("VimR.app", "VimR"),
     editor("MacVim.app", "MacVim"),
-    terminal("Ghostty.app", "Ghostty"),
+    linux(E, "Kate").on_linux(&["org.kde.kate.desktop"], &["kate"]),
+    linux(E, "Text Editor").on_linux(&["org.gnome.TextEditor.desktop"], &["gnome-text-editor"]).files_only(),
+    linux(E, "gedit").on_linux(&["org.gnome.gedit.desktop"], &["gedit"]).files_only(),
+    linux(E, "GVim").on_linux(&["gvim.desktop", "org.vim.Vim.desktop"], &["gvim"]),
+    linux(E, "Emacs").on_linux(&["emacs.desktop", "org.gnu.emacs.desktop"], &["emacs"]),
+    terminal("Ghostty.app", "Ghostty")
+        .on_linux(&["com.mitchellh.ghostty.desktop"], &["ghostty"])
+        .args(Some("--working-directory="), Some("-e")),
     terminal("iTerm.app", "iTerm"),
-    terminal("Warp.app", "Warp"),
-    terminal("WezTerm.app", "WezTerm"),
+    terminal("Warp.app", "Warp").on_linux(&["dev.warp.Warp.desktop"], &["warp-terminal"]),
+    terminal("WezTerm.app", "WezTerm")
+        .on_linux(&["org.wezfurlong.wezterm.desktop"], &["wezterm"])
+        .args(Some("start --cwd"), Some("--")),
     terminal("Terminal.app", "Terminal"),
+    linux(T, "Kitty").on_linux(&["kitty.desktop"], &["kitty"]).args(Some("--directory"), Some("")),
+    linux(T, "Alacritty")
+        .on_linux(&["Alacritty.desktop", "alacritty.desktop", "org.alacritty.Alacritty.desktop"], &["alacritty"])
+        .args(Some("--working-directory"), Some("-e")),
+    linux(T, "Ptyxis")
+        .on_linux(&["org.gnome.Ptyxis.desktop"], &["ptyxis"])
+        .args(Some("--new-window --working-directory="), Some("--")),
+    linux(T, "Console").on_linux(&["org.gnome.Console.desktop"], &["kgx"]).args(Some("--working-directory="), Some("-e")),
+    linux(T, "GNOME Terminal")
+        .on_linux(&["org.gnome.Terminal.desktop"], &["gnome-terminal"])
+        .args(Some("--working-directory="), Some("--")),
+    linux(T, "Konsole").on_linux(&["org.kde.konsole.desktop"], &["konsole"]).args(Some("--workdir"), Some("-e")),
+    linux(T, "Xfce Terminal")
+        .on_linux(&["xfce4-terminal.desktop"], &["xfce4-terminal"])
+        .args(Some("--working-directory="), Some("-x")),
+    linux(T, "Tilix").on_linux(&["com.gexperts.Tilix.desktop"], &["tilix"]).args(Some("--working-directory="), Some("-e")),
+    linux(T, "Terminator")
+        .on_linux(&["terminator.desktop"], &["terminator"])
+        .args(Some("--working-directory="), Some("-x")),
+    linux(T, "foot")
+        .on_linux(&["org.codeberg.dnkl.foot.desktop", "foot.desktop"], &["foot"])
+        .args(Some("--working-directory="), Some("")),
+    linux(T, "XTerm").on_linux(&["xterm.desktop", "debian-xterm.desktop"], &["xterm"]).args(None, Some("-e")),
+    // Linux's stand-ins for Finder. One is listed, the reader's default where
+    // it is one of these — see `linux::detect`.
+    linux(F, "Files").on_linux(&["org.gnome.Nautilus.desktop"], &["nautilus"]),
+    linux(F, "Nemo").on_linux(&["nemo.desktop"], &["nemo"]),
+    linux(F, "Dolphin").on_linux(&["org.kde.dolphin.desktop"], &["dolphin"]),
+    linux(F, "Thunar").on_linux(&["thunar.desktop", "Thunar.desktop"], &["thunar"]),
+    linux(F, "Caja").on_linux(&["caja.desktop", "caja-browser.desktop"], &["caja"]),
+    linux(F, "PCManFM").on_linux(&["pcmanfm.desktop"], &["pcmanfm"]),
 ];
 
 /// Finder, which is in none of the scanned directories and on every mac.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 const FINDER: &str = "/System/Library/CoreServices/Finder.app";
 
 /// Where a `.app` bundle lives. One `read_dir` each and no `mdfind`: Spotlight
 /// can be off or still indexing, and the common case is an app that is not
 /// installed at all — where a per-app query is a spawn that answers nothing.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn search_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![
         PathBuf::from("/Applications"),
@@ -138,6 +250,7 @@ fn search_dirs() -> Vec<PathBuf> {
 }
 
 /// Bundle file name to its path, for every `.app` in `dirs`.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn installed(dirs: &[PathBuf]) -> HashMap<String, PathBuf> {
     let mut found = HashMap::new();
     for dir in dirs {
@@ -167,6 +280,7 @@ static ICONS: LazyLock<Mutex<HashMap<PathBuf, Option<String>>>> =
 ///
 /// `CFBundleIconFile` may or may not carry the extension, so both spellings are
 /// tried; `AppIcon` is the fallback for a bundle that names none.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn icns_path(bundle: &Path) -> Option<PathBuf> {
     let resources = bundle.join("Contents/Resources");
 
@@ -195,6 +309,7 @@ fn icns_path(bundle: &Path) -> Option<PathBuf> {
 
 /// The bundle's icon as a `data:` PNG, read through `sips` — on every mac, and
 /// the only thing here that turns an `.icns` into something a webview draws.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn read_icon(bundle: &Path) -> Option<String> {
     if let Ok(cache) = ICONS.lock() {
         if let Some(hit) = cache.get(bundle) {
@@ -239,16 +354,18 @@ fn read_icon(bundle: &Path) -> Option<String> {
 /// Finder sits at the end rather than the front on purpose: it is the entry
 /// every machine has, so leading with it puts the least specific answer where
 /// the eye lands first.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn resolve(installed: &HashMap<String, PathBuf>, finder: &Path) -> Vec<ExternalApp> {
     let mut apps: Vec<ExternalApp> = KNOWN
         .iter()
         .filter_map(|known| {
-            let path = installed.get(known.bundle)?;
+            let path = installed.get(known.bundle?)?;
             Some(ExternalApp {
                 path: path.to_string_lossy().into_owned(),
                 name: known.name.to_string(),
                 kind: known.kind,
                 icon: None,
+                folders: true,
             })
         })
         .collect();
@@ -259,12 +376,14 @@ fn resolve(installed: &HashMap<String, PathBuf>, finder: &Path) -> Vec<ExternalA
             name: "Finder".to_string(),
             kind: ExternalAppKind::Files,
             icon: None,
+            folders: true,
         });
     }
 
     apps
 }
 
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 fn detect() -> Vec<ExternalApp> {
     let mut apps = resolve(&installed(&search_dirs()), Path::new(FINDER));
     for app in &mut apps {
@@ -281,7 +400,9 @@ fn detect() -> Vec<ExternalApp> {
 /// asks, instead of needing a restart the way the slash-command cache does.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_open_apps() -> Vec<ExternalApp> {
-    if !cfg!(target_os = "macos") {
+    #[cfg(target_os = "linux")]
+    let detect = linux::detect;
+    if !cfg!(any(target_os = "macos", target_os = "linux")) {
         return Vec::new();
     }
     tokio::task::spawn_blocking(detect)
@@ -298,6 +419,9 @@ pub async fn list_open_apps() -> Vec<ExternalApp> {
 /// parses as a flag, which `--` ends.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    return linux::open_in_app(&app_path, &path).await;
+    #[allow(unreachable_code)]
     let out = tokio::process::Command::new("open")
         .arg("-a")
         .arg(&app_path)
@@ -545,7 +669,8 @@ pub async fn open_login_terminal(harness: Harness, cwd: String) -> Result<(), St
     run_in_terminal(&command, &cwd).await
 }
 
-/// Runs one shell line in Terminal.app at `cwd`.
+/// Runs one shell line in a terminal at `cwd`: Terminal.app on a Mac, the
+/// reader's own on Linux.
 ///
 /// **The caller owns what is in that line**, and every one of them composes it
 /// from a closed set — this harness's [`Harness::login_args`], or an
@@ -555,8 +680,11 @@ pub async fn open_login_terminal(harness: Harness, cwd: String) -> Result<(), St
 /// script, so the safety is in where it came from and not in any escaping this
 /// could do to it.
 pub(crate) async fn run_in_terminal(command: &str, cwd: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    return linux::run_in_terminal(command, cwd).await;
+    #[allow(unreachable_code)]
     if !cfg!(target_os = "macos") {
-        return Err("Opening a terminal is macOS only. Copy the command instead.".to_string());
+        return Err("Opening a terminal needs macOS or Linux. Copy the command instead.".to_string());
     }
 
     // Terminal runs a `.command` from the reader's home, not from the script's
@@ -635,11 +763,13 @@ mod tests {
     #[test]
     fn every_known_bundle_names_an_app() {
         for known in KNOWN {
-            assert!(
-                known.bundle.ends_with(".app"),
-                "{} is not a bundle name",
-                known.bundle
-            );
+            if let Some(bundle) = known.bundle {
+                assert!(bundle.ends_with(".app"), "{bundle} is not a bundle name");
+            }
+            for id in known.desktop {
+                assert!(id.ends_with(".desktop"), "{id} is not a desktop file id");
+            }
+            assert!(known.bundle.is_some() || !known.desktop.is_empty() || !known.bins.is_empty());
             assert!(!known.name.is_empty());
         }
     }
@@ -649,7 +779,9 @@ mod tests {
     fn known_bundles_are_unique() {
         let mut seen = std::collections::HashSet::new();
         for known in KNOWN {
-            assert!(seen.insert(known.bundle), "{} listed twice", known.bundle);
+            for name in known.bundle.iter().chain(known.desktop).chain(known.bins) {
+                assert!(seen.insert(*name), "{name} listed twice");
+            }
         }
     }
 
@@ -710,6 +842,8 @@ mod tests {
     #[test]
     #[ignore = "reports what is installed; asserts nothing"]
     fn report_detected_apps() {
+        #[cfg(target_os = "linux")]
+        let detect = linux::detect;
         for app in detect() {
             println!(
                 "{:?}\t{}\t{}\ticon={}",
