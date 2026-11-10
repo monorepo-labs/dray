@@ -61,7 +61,7 @@ final class NewTask {
     }
     var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
-    var connected: [Server] { store.servers.filter { store.serverState[$0.id] == .connected } }
+    var connected: [Server] { store.live.filter { store.serverState[$0.id] == .connected } }
 
     /// Every project name a connected machine holds, newest pick first.
     var projectNames: [String] {

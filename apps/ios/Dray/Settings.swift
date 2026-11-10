@@ -165,19 +165,23 @@ struct SettingsRow: View {
     }
 }
 
-/// A server's dot: green working, yellow needs the reader, dim on its way.
+/// A server's dot: green working, yellow needs the reader, dim on its way, grey when switched off.
 struct StatusDot: View {
     @Environment(Store.self) private var store
     let server: UUID
     var size: CGFloat = 8
 
     var body: some View {
-        let tone: Color = switch store.serverState[server] {
+        Circle().fill(tone).frame(width: size, height: size)
+    }
+
+    private var tone: Color {
+        if store.servers.first(where: { $0.id == server })?.on == false { return Theme.tertiary }
+        return switch store.serverState[server] {
         case .connected?: store.loadErrors[server] == nil ? Theme.add : Theme.accent
         case .failed(let p)? where !p.retries: Theme.accent
         default: Theme.dim
         }
-        Circle().fill(tone).frame(width: size, height: size)
     }
 }
 
@@ -290,10 +294,15 @@ struct ServerDetail: View {
         ScrollView {
             if let server {
                 VStack(spacing: Theme.Space.xl) {
-                    VStack(spacing: Theme.Space.s) {
-                        statusLine
-                        statusCard
+                    VStack(alignment: .leading, spacing: Theme.Space.s) {
+                        onRow(server)
+                        Text(server.on ? "Off stops this phone connecting and hides its tasks. Nothing stops on the server."
+                                       : "Its tasks are hidden until you turn it back on. They keep running on \(server.name).")
+                            .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, Theme.Space.xs)
                     }
+                    statusCard
                     VStack(alignment: .leading, spacing: Theme.Space.s) {
                         RowGroup(fill: Theme.card, radius: Theme.Radius.group) {
                             FieldRow(label: "Name", text: $name, prompt: server.name)
@@ -352,17 +361,25 @@ struct ServerDetail: View {
     private var welcome: Welcome? { store.connection(id)?.welcome }
     private var connected: Bool { store.serverState[id] == .connected }
 
-    private var statusLine: some View {
-        HStack(spacing: Theme.Space.s) {
-            StatusDot(server: id)
-            Text(store.stateLabel(id)).foregroundStyle(Theme.text)
-            if connected, let w = welcome {
-                Text(w.macApp ? "Dray \(w.version ?? "")" : "dray \(w.release ?? w.version ?? "")").foregroundStyle(Theme.tertiary)
+    /// The phone's switch for this server, carrying its live state beside it.
+    private func onRow(_ server: Server) -> some View {
+        Toggle(isOn: Binding(get: { server.on }, set: { Haptic.select(); store.setServerOn(id, $0) })) {
+            HStack(spacing: Theme.Space.s) {
+                StatusDot(server: id)
+                Text(store.stateLabel(id)).foregroundStyle(Theme.text)
+                if server.on, connected, let w = welcome {
+                    Text(w.macApp ? "Dray \(w.version ?? "")" : "dray \(w.release ?? w.version ?? "")")
+                        .foregroundStyle(Theme.tertiary).lineLimit(1)
+                }
             }
-            Spacer(minLength: 0)
         }
-        .font(Theme.Font.subhead)
-        .padding(.horizontal, Theme.Space.xs)
+        .toggleStyle(SwitchStyle())
+        .font(Theme.Font.body)
+        .padding(.leading, Theme.Space.l)
+        .padding(.trailing, 14)
+        .frame(height: 52)
+        .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.group, style: .continuous))
+        .accessibilityIdentifier("server.on")
     }
 
     /// What is wrong and its cure, else an update and its button; nothing when neither.
