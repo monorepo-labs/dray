@@ -64,6 +64,9 @@ code — and [auth.rs](src-tauri/src/mcp/auth.rs) copies it:
   endpoint) and held to S256 PKCE. No CIMD: Claude falls back to DCR when it is
   not advertised, and nothing needs it. Claude registers afresh on every new
   connection, so clients that never got a grant are dropped after a day.
+  Open to anyone who reaches the address, so what it stores is bounded: ten
+  redirects of 2KB a client, a hundred clients never signed in (the oldest
+  make room), twenty registrations a minute.
 - **Redirects accepted**: `https:`, loopback `http:` matched on any port (RFC
   8252; Claude Code's port changes per run), and an app's own scheme —
   Grok Bot registers `cursor://anysphere.cursor-mcp/oauth/callback`, and
@@ -105,9 +108,11 @@ code — and [auth.rs](src-tauri/src/mcp/auth.rs) copies it:
 `start_session`, `send_message`, `stop_session`, `answer_card`.
 
 - **Start, send and stop take the socket's own path**
-  (`orchestration::answer`), so a session started from a chat gets its
+  (`orchestration::answer_here`), so a session started from a chat gets its
   worktree, its defaults, its title and its sidebar row exactly as `dray
-  session new` gives them, in the server's default stance.
+  session new` gives them, in the server's default stance. **Never through
+  `route`**, which sends a session id this index lacks on to other machines
+  under their own tokens: an assistant is signed in to this server alone.
 - **A read-only grant is never shown a tool it cannot call**, and is refused
   one it names anyway. Access is chosen when the code is made and carried by
   the grant for its life.

@@ -722,12 +722,17 @@ mod elsewhere {
     }
 }
 
-/// Answers a request the way the socket does, for a caller already inside
-/// this process: an MCP assistant's start, send and stop take the same path as
-/// `dray session new`, `send` and `stop`.
+/// Answers a request here and nowhere else, for a caller already inside this
+/// process: an MCP assistant's start, send and stop take the same path as
+/// `dray session new`, `send` and `stop`. Never through [`route`], which
+/// sends a session id this index lacks on to other machines under their own
+/// tokens — an assistant is signed in to this server alone.
 #[cfg(any(feature = "serve", feature = "desktop"))]
-pub async fn answer(request: Request, app: &Sink) -> Response {
-    route(request, app).await.unwrap_or_else(|e| Response::error(format!("{e:#}")))
+pub async fn answer_here(request: Request, app: &Sink) -> Response {
+    if this_machine_only(&request) || matches!(request, Request::OnMachine(_)) {
+        return Response::error("not an assistant's request");
+    }
+    dispatch(request, app).await.unwrap_or_else(|e| Response::error(format!("{e:#}")))
 }
 
 #[cfg(any(feature = "serve", feature = "desktop"))]

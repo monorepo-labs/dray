@@ -38,6 +38,13 @@ const MAX_FAILURES: u32 = 10;
 /// Registered clients that never signed in, kept a day and then dropped.
 /// Claude registers afresh on every new connection, so these pile up.
 const IDLE_CLIENT_HOURS: i64 = 24;
+/// Registration is open to anyone who reaches the address, so what it may
+/// store is bounded three ways: per client, in count, and in rate. Past
+/// [`MAX_PENDING`] the oldest clients that never signed in make room.
+const MAX_REDIRECTS: usize = 10;
+const MAX_REDIRECT_LEN: usize = 2048;
+const MAX_PENDING: usize = 100;
+const REGISTRATIONS_PER_MINUTE: usize = 20;
 /// Unambiguous when read off a screen: no 0/O, 1/I/L, U.
 const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTVWXYZ23456789";
 
@@ -128,6 +135,7 @@ struct Memory {
     /// Keyed by the code's hash, like everything a client holds.
     codes: HashMap<String, Code>,
     access: HashMap<String, (String, Access, Instant)>,
+    registrations: std::collections::VecDeque<Instant>,
 }
 
 static MEMORY: LazyLock<Mutex<Memory>> = LazyLock::new(Default::default);
@@ -343,8 +351,20 @@ pub async fn register(body: &[u8]) -> (u16, Value) {
     let Ok(ask) = serde_json::from_slice::<Ask>(body) else {
         return (400, json!({ "error": "invalid_client_metadata", "error_description": "not a registration" }));
     };
-    if ask.redirect_uris.is_empty() || !ask.redirect_uris.iter().all(|u| acceptable_redirect(u)) {
+    if ask.redirect_uris.is_empty()
+        || ask.redirect_uris.len() > MAX_REDIRECTS
+        || !ask.redirect_uris.iter().all(|u| u.len() <= MAX_REDIRECT_LEN && acceptable_redirect(u))
+    {
         return (400, json!({ "error": "invalid_redirect_uri" }));
+    }
+    {
+        let mut memory = memory();
+        let window = Instant::now().checked_sub(Duration::from_secs(60));
+        memory.registrations.retain(|at| window.is_none_or(|w| *at > w));
+        if memory.registrations.len() >= REGISTRATIONS_PER_MINUTE {
+            return (429, json!({ "error": "temporarily_unavailable", "error_description": "too many registrations; try again in a minute" }));
+        }
+        memory.registrations.push_back(Instant::now());
     }
     let client = Client {
         id: secret("dray-client-"),
@@ -359,6 +379,13 @@ pub async fn register(body: &[u8]) -> (u16, Value) {
         let granted: std::collections::HashSet<String> = book.grants.iter().map(|g| g.client_id.clone()).collect();
         book.clients.retain(|c| {
             granted.contains(&c.id) || chrono::DateTime::parse_from_rfc3339(&c.created).is_ok_and(|t| t > cutoff)
+        });
+        // Oldest first, as they were pushed: drop pending ones from the front.
+        let mut pending = book.clients.iter().filter(|c| !granted.contains(&c.id)).count();
+        book.clients.retain(|c| {
+            let drop = pending >= MAX_PENDING && !granted.contains(&c.id);
+            pending -= usize::from(drop);
+            !drop
         });
         book.clients.push(client.clone());
         write_book(&book).await
@@ -621,6 +648,21 @@ mod tests {
         memory().pairings.insert("ABCDEFGH".into(), (Access::Read, Instant::now()));
         assert_eq!(redeem("abcd-efgh"), Some(Access::Read));
         assert_eq!(redeem("ABCD-EFGH"), None, "a code is spent on use");
+    }
+
+    #[tokio::test]
+    async fn registration_is_bounded_before_anything_is_written() {
+        let many: Vec<String> = (0..=MAX_REDIRECTS).map(|i| format!("https://a.test/{i}")).collect();
+        let (status, _) = register(&serde_json::to_vec(&json!({ "redirect_uris": many })).unwrap()).await;
+        assert_eq!(status, 400, "too many redirects");
+        let long = format!("https://a.test/{}", "x".repeat(MAX_REDIRECT_LEN));
+        let (status, _) = register(&serde_json::to_vec(&json!({ "redirect_uris": [long] })).unwrap()).await;
+        assert_eq!(status, 400, "a redirect too long");
+
+        memory().registrations.extend(std::iter::repeat_n(Instant::now(), REGISTRATIONS_PER_MINUTE));
+        let (status, _) = register(br#"{"redirect_uris":["https://a.test/cb"]}"#).await;
+        assert_eq!(status, 429);
+        memory().registrations.clear();
     }
 
     #[test]

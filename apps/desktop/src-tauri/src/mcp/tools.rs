@@ -1,5 +1,5 @@
 //! What an assistant can do here. Starting and messaging go through the same
-//! path as `dray session new` and `send` ([`orchestration::answer`]), so a
+//! path as `dray session new` and `send` ([`orchestration::answer_here`]), so a
 //! session started from a chat gets its worktree, its defaults and its sidebar
 //! row exactly as one started by an agent does.
 
@@ -334,7 +334,7 @@ async fn wait_for_session(session_id: &str, seconds: Option<u64>) -> Result<Valu
 }
 
 async fn orchestrate(request: Request, sink: &Sink) -> Result<Response, String> {
-    match orchestration::answer(request, sink).await {
+    match orchestration::answer_here(request, sink).await {
         Response::Error { message } => Err(message),
         answer => Ok(answer),
     }
