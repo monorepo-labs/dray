@@ -10,14 +10,14 @@ import {
   WARN_MINUTES,
   EXTEND_STEP,
   extendBoat,
-  MAX_EXTEND_MINUTES,
+  maxExtendMinutes,
   setBoatPrefs,
   useBoatPrefs,
 } from "@/lib/boat";
 import { channel } from "@/lib/channel";
 import { useServers } from "@/lib/servers";
 import { cn } from "@/lib/utils";
-import type { ServerInfo } from "@/types/events";
+import type { SandboxProvider, ServerInfo } from "@/types/events";
 
 /// Ticks once a second, for a countdown a reader watches.
 function useNow(): number {
@@ -34,19 +34,22 @@ function useNow(): number {
 /// trial's 2-hour cap, say — goes to `onFail`.
 export function ExtendBoat({
   id,
+  provider,
   onFail,
   onDone,
   size = "xs",
 }: {
   id: string;
+  provider: SandboxProvider | undefined;
   onFail: (why: string) => void;
   onDone?: () => void;
   size?: "xs" | "sm";
 }) {
   const { minutes: last } = useBoatPrefs();
-  const [minutes, setMinutes] = useState(last);
+  const max = maxExtendMinutes(provider);
+  const [minutes, setMinutes] = useState(Math.min(last, max));
   const [busy, setBusy] = useState(false);
-  const step = (by: number) => setMinutes((m) => Math.min(MAX_EXTEND_MINUTES, Math.max(EXTEND_STEP, m + by)));
+  const step = (by: number) => setMinutes((m) => Math.min(max, Math.max(EXTEND_STEP, m + by)));
   const extend = () => {
     setBusy(true);
     setBoatPrefs({ minutes });
@@ -62,7 +65,7 @@ export function ExtendBoat({
         <Minus />
       </Button>
       <span className="min-w-9 text-center text-ui-sm font-medium tabular-nums">{durationLabel(minutes)}</span>
-      <Button variant="ghost" size={icon} aria-label="More time" disabled={busy || minutes >= MAX_EXTEND_MINUTES} onClick={() => step(EXTEND_STEP)}>
+      <Button variant="ghost" size={icon} aria-label="More time" disabled={busy || minutes >= max} onClick={() => step(EXTEND_STEP)}>
         <Plus />
       </Button>
       <Button size={size} className="ml-auto px-2" disabled={busy} onClick={extend}>
@@ -120,7 +123,7 @@ export function Warning({
         </Button>
       </span>
       {failed && <p className="text-ui-sm text-destructive">{failed}</p>}
-      <ExtendBoat id={server.id} onFail={setFailed} onDone={() => !offered && setOffer(true)} />
+      <ExtendBoat id={server.id} provider={server.sandbox?.provider} onFail={setFailed} onDone={() => !offered && setOffer(true)} />
       <span
         aria-hidden
         className={cn(
@@ -185,7 +188,7 @@ function useAutoExtend(busy: (server: string) => boolean, onFail: (key: string, 
   useEffect(() => {
     if (!auto) return;
     for (const server of servers) {
-      const stopsAt = server.boat?.warning ? server.boat.stopsAt : null;
+      const stopsAt = server.sandbox?.warning ? server.sandbox.stopsAt : null;
       const key = `${server.id}:${stopsAt}`;
       if (!stopsAt || done.current.has(key) || !busy(server.id)) continue;
       done.current.add(key);
@@ -211,7 +214,7 @@ export default function BoatWarnings({ busy }: { busy: (server: string) => boole
   // By deadline, so an extend that runs out later warns again.
   const [dismissed, setDismissed] = useState<string[]>([]);
   const up = servers.flatMap((server) => {
-    const stopsAt = server.boat?.warning ? server.boat.stopsAt : null;
+    const stopsAt = server.sandbox?.warning ? server.sandbox.stopsAt : null;
     const handled = auto && busy(server.id) && !autoFailed[`${server.id}:${stopsAt}`];
     return stopsAt && !handled && !dismissed.includes(`${server.id}:${stopsAt}`) ? [{ server, stopsAt }] : [];
   });

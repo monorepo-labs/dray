@@ -340,6 +340,7 @@ Detail per subsystem lives in [apps/desktop/docs/](apps/desktop/docs/). **Read t
 - [composer.md](apps/desktop/docs/composer.md) — Composer: drafts, slash commands per harness, @file index, attachments, contenteditable editor.
 - [harnesses.md](apps/desktop/docs/harnesses.md) — Codex, fx and grok: what runs, wire quirks, MCP, effort ladders, plan mode, todos.
 - [boat.md](apps/desktop/docs/boat.md) — Boat sandboxes: detecting, stopped rows, resume and send, repointing the SSH alias, the auto-stop warning.
+- [sandboxes.md](apps/desktop/docs/sandboxes.md) — Sandbox providers behind one interface; Vercel added from a list, reached by Remote access, its server started through `exec`, its token left to its CLI.
 
 ## Known issues
 

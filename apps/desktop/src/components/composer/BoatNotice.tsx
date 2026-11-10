@@ -8,7 +8,7 @@ import type { ServerInfo } from "@/types/events";
 /// The open chat's sandbox is stopped or waking. Sits where `ServerOfflineNotice`
 /// does but never blocks the composer: a send here resumes it and waits.
 export default function BoatNotice({ server }: { server: ServerInfo }) {
-  const waking = server.boat?.phase === "resuming";
+  const waking = server.sandbox?.phase === "resuming";
 
   return (
     <div className="mb-2 flex min-h-7 items-center gap-2 px-1">
@@ -23,7 +23,7 @@ export default function BoatNotice({ server }: { server: ServerInfo }) {
         {waking ? `Resuming ${server.name}` : `${server.name} is stopped`}
         <span className="text-muted-foreground">
           {" · "}
-          {waking ? "This can take a few minutes. Messages go when it's back." : (server.boat?.note ?? "Sending resumes it automatically.")}
+          {waking ? "This can take a few minutes. Messages go when it's back." : (server.sandbox?.note ?? "Sending resumes it automatically.")}
         </span>
       </p>
       {!waking && (

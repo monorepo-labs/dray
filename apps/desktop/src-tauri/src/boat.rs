@@ -3,7 +3,7 @@
 //! without one this answers nothing and a sandbox is just another server. See
 //! docs/boat.md.
 
-use crate::{machines::BoatLink, ssh};
+use crate::{machines::BoatLink, sandbox::Sandbox, ssh};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::{path::{Path, PathBuf}, process::Stdio, time::Duration};
@@ -15,15 +15,6 @@ const API: &str = "https://boat.dev/api/v1";
 /// minutes. Past this the row says so rather than spinning on.
 pub const RESUMING: Duration = Duration::from_secs(10 * 60);
 const QUICK: Duration = Duration::from_secs(20);
-
-/// What `boat info` says about a sandbox.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Sandbox {
-    pub stopped: bool,
-    /// Where SSH reaches it, while it has a machine at all.
-    pub endpoint: Option<String>,
-    pub stops_at: Option<DateTime<Utc>>,
-}
 
 /// A sandbox id, as boat's API spells them. Checked since a server reports its
 /// own and this one lands on a command line.

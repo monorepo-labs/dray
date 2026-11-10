@@ -79,6 +79,10 @@ pub mod machines;
 #[cfg(feature = "desktop")]
 pub mod boat;
 #[cfg(feature = "desktop")]
+pub mod sandbox;
+#[cfg(feature = "desktop")]
+pub mod vercel;
+#[cfg(feature = "desktop")]
 pub mod servers;
 pub mod session;
 pub mod share;
@@ -875,6 +879,9 @@ pub fn run() {
             servers::list_servers,
             servers::local_server,
             servers::add_server,
+            servers::vercel_available,
+            servers::vercel_sandboxes,
+            servers::add_vercel_server,
             servers::remove_server,
             servers::reconnect_servers,
             servers::server_invoke,

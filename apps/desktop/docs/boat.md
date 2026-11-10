@@ -1,6 +1,6 @@
 # Boat sandboxes
 
-A boat sandbox stops on a timer and resumes on a new machine: new address, new host key. To plain SSH that is a dead host and then something that looks like an attack. Dray asks boat instead (#790). [boat.rs](../src-tauri/src/boat.rs) talks to boat, `servers.rs` decides what to do with the answer, and both exist only in the app: the timers and the row state live beside its connections.
+A boat sandbox stops on a timer and resumes on a new machine: new address, new host key. To plain SSH that is a dead host and then something that looks like an attack. Dray asks boat instead (#790). [boat.rs](../src-tauri/src/boat.rs) talks to boat, `servers.rs` decides what to do with the answer, and both exist only in the app: the timers and the row state live beside its connections. Boat is one provider behind [sandboxes.md](sandboxes.md)'s interface; what holds for every provider is written there.
 
 **No CLI or no login means no boat UI, with nothing said.** `boat::info` answers `None` for all of it, offline included, and `ServerInfo.boat` is `None` then. Every path falls through to what any server does. `binpath::boat` is uncached and runs no login shell, so installing the CLI needs no restart.
 

@@ -9,7 +9,7 @@ import type { ServerInfo } from "@/types/events";
 /// backoff, so this says that much and offers Try again, which skips the wait.
 export default function ServerOfflineNotice({ server }: { server: ServerInfo }) {
   const connecting = server.on && server.status === "connecting";
-  const reason = !server.on ? "turned off" : connecting ? "Reconnecting…" : (server.boat?.note ?? server.error);
+  const reason = !server.on ? "turned off" : connecting ? "Reconnecting…" : (server.sandbox?.note ?? server.error);
 
   return (
     // Button height, so the row holds still as the two states trade places.

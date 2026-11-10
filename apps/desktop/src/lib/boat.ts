@@ -5,30 +5,33 @@ import { writeDraft, readDraft } from "@/hooks/useDraft";
 import { channel } from "@/lib/channel";
 import { remoteServers } from "@/lib/servers";
 import { invoke, LOCAL, type ServerId } from "@/lib/transport";
-import type { ServerInfo } from "@/types/events";
+import type { SandboxProvider, ServerInfo } from "@/types/events";
 
 /// A sandbox with nothing to send to: stopped, or on its way back.
 export const boatAsleep = (server: ServerInfo | undefined): boolean =>
-  !!server?.boat && server.boat.phase !== "running";
+  !!server?.sandbox && server.sandbox.phase !== "running";
 
 export const boatAsleepById = (id: ServerId): boolean =>
   boatAsleep(remoteServers().find((s) => s.id === id));
 
 /// Resumes it, and answers once its server is up. Shared by every caller, so
-/// Resume pressed during a send runs one `boat resume`.
+/// Resume pressed during a send resumes once.
 export const resumeBoat = (id: ServerId): Promise<void> => invoke("resume_boat", { id }, LOCAL);
 
-/// `boat extend`: `minutes` from now, and every later resume's length. It
-/// sets the time left, never adds to it.
+/// `minutes` from now, and every later resume's length. It sets the time left,
+/// never adds to it, on Vercel too.
 export const extendBoat = (id: ServerId, minutes: number): Promise<void> =>
   invoke("extend_boat", { id, minutes }, LOCAL);
 
 /// How long before auto-stop the warning comes, `servers.rs`'s `WARN`.
 export const WARN_MINUTES = 10;
 
-/// Extend's stepper: 30-minute steps, up to boat's 30-day cap.
+/// Extend's stepper: 30-minute steps, up to the provider's cap: boat's 30 days,
+/// a Vercel session's 24 hours. Vercel's Hobby plan refuses past 45 minutes,
+/// and its refusal says so on the card.
 export const EXTEND_STEP = 30;
-export const MAX_EXTEND_MINUTES = 30 * 24 * 60;
+export const maxExtendMinutes = (provider: SandboxProvider | undefined): number =>
+  provider === "vercel" ? 24 * 60 : 30 * 24 * 60;
 
 /// "2h", "2h 30m", "30m".
 export function durationLabel(minutes: number): string {
