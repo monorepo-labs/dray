@@ -516,6 +516,7 @@ fn sync_pill(island: &Entity<Island>, cx: &mut App) {
     } else if !want && has {
         let pill = island.update(cx, |island, _| {
             island.pill_hovered = false;
+            island.done_hovered = false;
             island.pill_x_window = None;
             island.pill.take()
         });
@@ -720,8 +721,8 @@ fn pin(island: &Entity<Island>, awaiting_words: bool, cx: &mut App) -> bool {
     island.update(cx, |island, cx| {
         let d = island.draft_mut();
         let rows: Vec<u64> = d.rows.iter().map(|r| r.id).collect();
-        let target = d.target.clone();
-        let p = d.pinned.get_or_insert(Pinned { target, rows: Vec::new(), awaiting_words: false });
+        let (target, picked_at) = (d.target.clone(), d.target_picks);
+        let p = d.pinned.get_or_insert(Pinned { target, rows: Vec::new(), awaiting_words: false, picked_at });
         let fresh: Vec<u64> = rows.into_iter().filter(|id| !p.rows.contains(id)).collect();
         p.rows.extend(fresh);
         p.awaiting_words |= awaiting_words;
@@ -959,6 +960,8 @@ fn show(island: &Entity<Island>, cx: &mut App) {
     if island.read(cx).window.is_some() {
         return;
     }
+    // The panel covers the done pill: what it already showed is spent.
+    cover_done(island, cx);
     if let Some(server) = &island.read(cx).server {
         server.relist();
         // Counted by the server off this connection; nothing rides but the name.
@@ -1529,14 +1532,14 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
     };
     let (text, files) = draft::compose(&rows, &typing);
     let Some(target) = target else { return };
-    // A finish held for this session is the turn this message follows on from.
-    if let Target::Session(id) = &target {
-        island.update(cx, |island, _| island.done.retain(|d| d != id));
-    }
     // An image alone is a message, as in Dray's own composer; a screenshot
     // still being taken is not yet one.
     if (text.is_empty() && files.is_empty()) || island.read(cx).draft().sending {
         return;
+    }
+    // A finish held for this session is the turn this message follows on from.
+    if let Target::Session(id) = &target {
+        island.update(cx, |island, _| island.done.retain(|d| d != id));
     }
     if target == Target::New && picks["cwd"].is_null() {
         island.update(cx, |island, cx| {
@@ -1551,7 +1554,7 @@ fn send_to_target(island: &Entity<Island>, pinned: Option<Pinned>, cx: &mut App)
     if pinned.is_none() {
         typing_box.update(cx, |t, cx| t.clear(cx));
     }
-    let picked_at = island.read(cx).draft().target_picks;
+    let picked_at = pinned.as_ref().map_or(island.read(cx).draft().target_picks, |p| p.picked_at);
     let clock = island.update(cx, |island, cx| {
         // A waiting send goes on its own, often as another fails; that
         // failure's notice is the reader's to read, not this send's to clear.
@@ -2344,6 +2347,8 @@ fn clear_done(island: &Entity<Island>, cx: &mut App) {
     island.update(cx, |island, cx| {
         island.done.clear();
         island.done_expanded = false;
+        // The pill goes from under the pointer, which never hears it leave.
+        island.done_hovered = false;
         cx.notify();
     });
     sync_pill(island, cx);

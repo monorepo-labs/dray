@@ -112,6 +112,9 @@ pub struct Pinned {
     pub rows: Vec<u64>,
     /// The stop's words are still being transcribed, and belong to it.
     pub awaiting_words: bool,
+    /// `target_picks` at ⏎, so its answer, however late, outranks no pick
+    /// the reader made since.
+    pub picked_at: u64,
 }
 
 impl Draft {
