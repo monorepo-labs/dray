@@ -892,12 +892,12 @@ mod server_list {
     async fn add(add: AddServer) -> Result<Response> {
         let name = Some(add.name);
         let added = match add.token {
-            Some(token) => servers::add_server(add.address, token, name).await.map_err(anyhow::Error::msg)?,
+            Some(token) => servers::add_server(add.address, token, name, None).await.map_err(anyhow::Error::msg)?,
             None => {
                 // The whole login, port and user included: `[box]:2222` is the
                 // key the add needs trusted, not `box`'s.
                 let login = crate::ssh::parse(&add.address).map(|t| t.line()).unwrap_or_else(|_| add.address.clone());
-                servers::add_ssh_server(add.address, name)
+                servers::add_ssh_server(add.address, name, None)
                     .await
                     .map_err(|f| anyhow::anyhow!(crate::machines::explain(f, &login)))?
             }

@@ -18,7 +18,7 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::{
         atomic::{AtomicU64, Ordering},
-        LazyLock, Mutex, OnceLock,
+        Arc, LazyLock, Mutex, OnceLock,
     },
     time::Duration,
 };
@@ -1239,8 +1239,35 @@ pub fn list_servers() -> Vec<ServerInfo> {
     snapshot()
 }
 
-/// Wakes an add that is still connecting, for the dialog's Cancel.
-static ADD_CANCELLED: std::sync::LazyLock<tokio::sync::Notify> = std::sync::LazyLock::new(tokio::sync::Notify::new);
+/// The adds a Cancel can still reach, by the ticket their dialog minted.
+/// Keyed rather than one signal for them all: `dray machine add` runs these
+/// same functions, and a Cancel in Settings must not stop an add it never
+/// started. An add with no ticket is in here under no name and cannot be woken.
+static ADDING: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>> = LazyLock::new(Default::default);
+
+/// One add's place in [`ADDING`], held for as long as the add runs.
+struct Cancellable {
+    ticket: Option<String>,
+    woken: Arc<tokio::sync::Notify>,
+}
+
+impl Cancellable {
+    fn new(ticket: Option<String>) -> Self {
+        let woken = Arc::new(tokio::sync::Notify::new());
+        if let Some(ticket) = &ticket {
+            ADDING.lock().unwrap_or_else(|e| e.into_inner()).insert(ticket.clone(), woken.clone());
+        }
+        Self { ticket, woken }
+    }
+}
+
+impl Drop for Cancellable {
+    fn drop(&mut self) {
+        if let Some(ticket) = &self.ticket {
+            ADDING.lock().unwrap_or_else(|e| e.into_inner()).remove(ticket);
+        }
+    }
+}
 
 /// What a cancelled add answers. The dialog that asked is gone by then, so
 /// nobody reads it; it only has to be an error, so nothing is saved.
@@ -1252,9 +1279,14 @@ const CANCELLED: &str = "cancelled";
 /// turned up in the list a minute later, or its failure opened the install
 /// dialog over whatever the reader had moved on to. Past the connect there is
 /// nothing left to wait on, so a cancel landing after it finds the server added.
+///
+/// `notify_one`, which keeps the wake for an add that has not started waiting
+/// yet: a Cancel pressed in the same moment as Add is still a Cancel.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn cancel_add_server() {
-    ADD_CANCELLED.notify_waiters();
+pub fn cancel_add_server(ticket: String) {
+    if let Some(woken) = ADDING.lock().unwrap_or_else(|e| e.into_inner()).get(&ticket) {
+        woken.notify_one();
+    }
 }
 
 /// Adds a server once it has admitted the token, so a typo is refused here
@@ -1262,7 +1294,8 @@ pub fn cancel_add_server() {
 /// list is updated in place, which is how a reader reconnects after rotating
 /// the server's token.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn add_server(url: String, token: String, name: Option<String>) -> Result<ServerInfo, String> {
+pub async fn add_server(url: String, token: String, name: Option<String>, ticket: Option<String>) -> Result<ServerInfo, String> {
+    let cancel = Cancellable::new(ticket);
     let url = normalize(&url)?;
     let token = token.trim().to_string();
     if token.is_empty() {
@@ -1283,7 +1316,7 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
         admitted = admit(&url, &token) => {
             admitted?.0.close(None).await.ok();
         }
-        _ = ADD_CANCELLED.notified() => return Err(CANCELLED.into()),
+        _ = cancel.woken.notified() => return Err(CANCELLED.into()),
     }
 
     let id = existing.clone().unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
@@ -1381,7 +1414,8 @@ pub async fn remove_server(id: String) -> Result<(), String> {
 /// server that admitted us is saved, the token form's own rule. Each step goes
 /// out as `server_adding` so the dialog can say where it is.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<ServerInfo, ssh::Failure> {
+pub async fn add_ssh_server(line: String, name: Option<String>, ticket: Option<String>) -> Result<ServerInfo, ssh::Failure> {
+    let cancel = Cancellable::new(ticket);
     let failed = |message: String| ssh::Failure { message, fix: None, permanent: true };
     let target = ssh::parse(&line).map_err(failed)?;
     // Kept on a re-add with the field blank, as the token form keeps it.
@@ -1409,7 +1443,7 @@ pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<Server
     };
     tokio::select! {
         connected = connect => connected?,
-        _ = ADD_CANCELLED.notified() => return Err(failed(CANCELLED.into())),
+        _ = cancel.woken.notified() => return Err(failed(CANCELLED.into())),
     }
 
     let id = {
@@ -2268,13 +2302,17 @@ mod tests {
     async fn cancel_stops_an_add_that_is_still_connecting() {
         let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", silent.local_addr().unwrap());
-        let adding = tokio::spawn(add_server(url, "t".into(), Some("cancel-me".into())));
+        let mut adding = tokio::spawn(add_server(url, "t".into(), Some("cancel-me".into()), Some("mine".into())));
         let (_held, _) = silent.accept().await.unwrap();
-        // The add is parked on the handshake by now; a cancel only wakes one
-        // that is already waiting.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        cancel_add_server();
 
+        // Another dialog's Cancel, or one from before this add: not this add's.
+        cancel_add_server("someone-elses".into());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut adding).await.is_err(),
+            "a cancel for another add stopped this one"
+        );
+
+        cancel_add_server("mine".into());
         let said = tokio::time::timeout(Duration::from_secs(2), adding).await.expect("the cancel ended it").unwrap();
         assert_eq!(said.err().as_deref(), Some(CANCELLED));
         assert!(!conns().iter().any(|c| c.saved.name == "cancel-me"), "nothing was saved");
@@ -2362,11 +2400,11 @@ mod tests {
         }))
         .await;
 
-        let refused = add_server(url.clone(), "wrong".into(), None).await.unwrap_err();
+        let refused = add_server(url.clone(), "wrong".into(), None, None).await.unwrap_err();
         assert!(refused.contains("wrong token"), "{refused}");
         assert!(list_servers().is_empty(), "a refused token is not saved");
 
-        let added = add_server(url, token.clone(), Some("vps".into())).await.unwrap();
+        let added = add_server(url, token.clone(), Some("vps".into()), None).await.unwrap();
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
         // Every connect opens with `live_state`, and it arrives tagged.
         let live = next_event(&mut rx, |e, p| e == "server_event" && p["event"] == "live_state").await;
@@ -2429,7 +2467,7 @@ mod tests {
         assert!(first.ends_with(".opentunnel.xyz"), "is the tunnel on? {first}");
 
         // By address alone, as another Mac with no SSH would add it.
-        let added = add_server(first.clone(), token.clone(), Some("tunnel".into())).await.unwrap();
+        let added = add_server(first.clone(), token.clone(), Some("tunnel".into()), None).await.unwrap();
         connected("by address");
         assert!(server_invoke(added.id.clone(), "list_projects".into(), json!({})).await.is_ok());
 
@@ -2454,7 +2492,7 @@ mod tests {
         remove_server(added.id).await.unwrap();
 
         // Over SSH: the address rides the login.
-        let added = add_ssh_server(line, Some("vps".into())).await.map_err(|f| f.message).unwrap();
+        let added = add_ssh_server(line, Some("vps".into()), None).await.map_err(|f| f.message).unwrap();
         connected("by SSH");
         assert_eq!(list_servers()[0].url, first.replacen("https://", "wss://", 1));
         assert!(!std::fs::read_to_string(home.join("servers.json")).unwrap().contains(&token));
@@ -2488,7 +2526,7 @@ mod tests {
         }))
         .await;
 
-        let added = add_ssh_server(line, Some("vps".into())).await.map_err(|f| f.message).unwrap();
+        let added = add_ssh_server(line, Some("vps".into()), None).await.map_err(|f| f.message).unwrap();
         next_event(&mut rx, |e, p| e == "servers_changed" && p[0]["status"] == "connected").await;
         let saved = std::fs::read_to_string(home.join("servers.json")).unwrap();
         assert!(saved.contains("\"dest\""), "{saved}");

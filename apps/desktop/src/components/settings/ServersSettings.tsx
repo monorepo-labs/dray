@@ -715,6 +715,9 @@ function AddServerDialog({
   // Which add the dialog is waiting on. Leaving bumps it, so an add that
   // answers after Cancel writes nothing and opens nothing.
   const run = useRef(0);
+  // That add's name on the Rust side, so Cancel stops it and no other: the
+  // `dray` CLI adds servers through the same commands.
+  const ticket = useRef<string | null>(null);
 
   useEffect(() => {
     if (!busy || !viaSsh) return;
@@ -734,7 +737,9 @@ function AddServerDialog({
   /// run on and add the server after the dialog had gone.
   const close = (leaving = false) => {
     run.current += 1;
-    if (leaving && busy) void invoke("cancel_add_server", {}, LOCAL).catch(() => undefined);
+    if (leaving && busy && ticket.current) {
+      void invoke("cancel_add_server", { ticket: ticket.current }, LOCAL).catch(() => undefined);
+    }
     setLine("");
     setUrl("");
     setToken("");
@@ -747,15 +752,17 @@ function AddServerDialog({
 
   const add = async () => {
     const mine = (run.current += 1);
+    const id = crypto.randomUUID();
+    ticket.current = id;
     setStarted(true);
     setBusy(true);
     setStage(null);
     setFailure(null);
     try {
       if (viaSsh) {
-        await invoke<ServerInfo>("add_ssh_server", { line, name: name.trim() || null }, LOCAL);
+        await invoke<ServerInfo>("add_ssh_server", { line, name: name.trim() || null, ticket: id }, LOCAL);
       } else {
-        await invoke<ServerInfo>("add_server", { url, token, name: name.trim() || null }, LOCAL);
+        await invoke<ServerInfo>("add_server", { url, token, name: name.trim() || null, ticket: id }, LOCAL);
       }
       if (run.current === mine) close();
     } catch (err) {
