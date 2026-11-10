@@ -891,6 +891,7 @@ pub fn run() {
             servers::check_server_update,
             servers::forward_port,
             servers::add_ssh_server,
+            servers::cancel_add_server,
             servers::set_server_on,
             servers::rename_server,
             servers::set_server_address,

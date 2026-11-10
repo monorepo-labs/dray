@@ -1239,6 +1239,24 @@ pub fn list_servers() -> Vec<ServerInfo> {
     snapshot()
 }
 
+/// Wakes an add that is still connecting, for the dialog's Cancel.
+static ADD_CANCELLED: std::sync::LazyLock<tokio::sync::Notify> = std::sync::LazyLock::new(tokio::sync::Notify::new);
+
+/// What a cancelled add answers. The dialog that asked is gone by then, so
+/// nobody reads it; it only has to be an error, so nothing is saved.
+const CANCELLED: &str = "cancelled";
+
+/// Stops an Add server that is still connecting: the login, the server start
+/// and the admit are dropped where they stand, which kills the `ssh` they ran
+/// over. Closing the dialog used to leave all of it running, so the server
+/// turned up in the list a minute later, or its failure opened the install
+/// dialog over whatever the reader had moved on to. Past the connect there is
+/// nothing left to wait on, so a cancel landing after it finds the server added.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn cancel_add_server() {
+    ADD_CANCELLED.notify_waiters();
+}
+
 /// Adds a server once it has admitted the token, so a typo is refused here
 /// rather than saved as a row that never connects. An address already on the
 /// list is updated in place, which is how a reader reconnects after rotating
@@ -1261,7 +1279,12 @@ pub async fn add_server(url: String, token: String, name: Option<String>) -> Res
         .or(kept)
         .unwrap_or_else(|| default_name(&url));
     refuse_taken(&conns(), &name, existing.as_deref())?;
-    admit(&url, &token).await?.0.close(None).await.ok();
+    tokio::select! {
+        admitted = admit(&url, &token) => {
+            admitted?.0.close(None).await.ok();
+        }
+        _ = ADD_CANCELLED.notified() => return Err(CANCELLED.into()),
+    }
 
     let id = existing.clone().unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
     crate::issues::set_credential(&credential_name(&id), Some(&token)).await?;
@@ -1370,18 +1393,24 @@ pub async fn add_ssh_server(line: String, name: Option<String>) -> Result<Server
         .unwrap_or_else(|| target.host().to_string());
     let existing = conns().iter().find(|c| c.saved.ssh.as_ref() == Some(&target)).map(|c| c.saved.id.clone());
     refuse_taken(&conns(), &name, existing.as_deref()).map_err(failed)?;
-    let tunnel = ssh::open(&target, |stage| {
-        if let Some(sink) = SINK.get() {
-            let _ = sink.emit("server_adding", stage);
+    let connect = async {
+        let tunnel = ssh::open(&target, |stage| {
+            if let Some(sink) = SINK.get() {
+                let _ = sink.emit("server_adding", stage);
+            }
+        })
+        .await?;
+        let url = format!("ws://127.0.0.1:{}", tunnel.port);
+        match admit(&url, &tunnel.token).await {
+            Ok((mut ws, _)) => drop(ws.close(None).await),
+            Err(e) => return Err(failed(tunnel.said().unwrap_or(e))),
         }
-    })
-    .await?;
-    let url = format!("ws://127.0.0.1:{}", tunnel.port);
-    match admit(&url, &tunnel.token).await {
-        Ok((mut ws, _)) => drop(ws.close(None).await),
-        Err(e) => return Err(failed(tunnel.said().unwrap_or(e))),
+        Ok(())
+    };
+    tokio::select! {
+        connected = connect => connected?,
+        _ = ADD_CANCELLED.notified() => return Err(failed(CANCELLED.into())),
     }
-    drop(tunnel);
 
     let id = {
         let mut list = conns();
@@ -2231,6 +2260,24 @@ mod tests {
         // `CONNS` is shared, and the live tests read it from row 0.
         conns().retain(|c| c.saved.id != id);
         served
+    }
+
+    /// A listener that takes the connection and never speaks is a connect
+    /// with nothing to end it but its own timeout — or the reader's Cancel.
+    #[tokio::test]
+    async fn cancel_stops_an_add_that_is_still_connecting() {
+        let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", silent.local_addr().unwrap());
+        let adding = tokio::spawn(add_server(url, "t".into(), Some("cancel-me".into())));
+        let (_held, _) = silent.accept().await.unwrap();
+        // The add is parked on the handshake by now; a cancel only wakes one
+        // that is already waiting.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        cancel_add_server();
+
+        let said = tokio::time::timeout(Duration::from_secs(2), adding).await.expect("the cancel ended it").unwrap();
+        assert_eq!(said.err().as_deref(), Some(CANCELLED));
+        assert!(!conns().iter().any(|c| c.saved.name == "cancel-me"), "nothing was saved");
     }
 
     #[tokio::test]

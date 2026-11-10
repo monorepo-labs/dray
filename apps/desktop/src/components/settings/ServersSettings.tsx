@@ -712,6 +712,9 @@ function AddServerDialog({
   const [trusting, setTrusting] = useState<TrustHost | null>(null);
   // Pressing Add starts the setup, and from then on only the buttons leave.
   const [started, setStarted] = useState(false);
+  // Which add the dialog is waiting on. Leaving bumps it, so an add that
+  // answers after Cancel writes nothing and opens nothing.
+  const run = useRef(0);
 
   useEffect(() => {
     if (!busy || !viaSsh) return;
@@ -726,7 +729,12 @@ function AddServerDialog({
     };
   }, [busy, viaSsh]);
 
-  const close = () => {
+  /// `leaving` is the reader walking away, by Cancel or a dismissal, rather
+  /// than the add finishing: an add still out is stopped, where it used to
+  /// run on and add the server after the dialog had gone.
+  const close = (leaving = false) => {
+    run.current += 1;
+    if (leaving && busy) void invoke("cancel_add_server", {}, LOCAL).catch(() => undefined);
     setLine("");
     setUrl("");
     setToken("");
@@ -738,6 +746,7 @@ function AddServerDialog({
   };
 
   const add = async () => {
+    const mine = (run.current += 1);
     setStarted(true);
     setBusy(true);
     setStage(null);
@@ -748,8 +757,9 @@ function AddServerDialog({
       } else {
         await invoke<ServerInfo>("add_server", { url, token, name: name.trim() || null }, LOCAL);
       }
-      close();
+      if (run.current === mine) close();
     } catch (err) {
+      if (run.current !== mine) return;
       const failed = asFailure(err);
       if (failed.fix?.kind === "install") {
         const [l, n] = [line.trim(), name.trim()];
@@ -773,7 +783,7 @@ function AddServerDialog({
   const ready = viaSsh ? line.trim() : url.trim() && token.trim();
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && close()}>
+    <Dialog open={open} onOpenChange={(next) => !next && close(true)}>
       <DialogContent className="grid-cols-[minmax(0,1fr)]" showClose={false} dismissible={!started}>
         <DialogHeader>
           <DialogTitle>Add server</DialogTitle>
@@ -848,7 +858,7 @@ function AddServerDialog({
             {viaSsh ? "Use an address and token instead" : "Use an SSH login instead"}
           </Button>
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={close}>
+            <Button type="button" variant="ghost" onClick={() => close(true)}>
               Cancel
             </Button>
             <Button type="submit" disabled={busy || !ready}>
