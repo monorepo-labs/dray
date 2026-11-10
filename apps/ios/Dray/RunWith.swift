@@ -52,7 +52,11 @@ struct RunWithSheet: View {
         .presentationDragIndicator(.visible)
         .presentationCornerRadius(38)
         .presentationBackground(Theme.card)
-        .task(id: "\(task.server?.uuidString ?? "")|\(task.cwd ?? "")") { await readBranches() }
+        .task(id: place) {
+            branches = nil
+            branchError = nil
+            await readBranches()
+        }
         .confirmationDialog(dirtyTitle, isPresented: Binding(get: { switching != nil }, set: { if !$0 { switching = nil } }),
                             titleVisibility: .visible, presenting: switching) { branch in
             Button("Bring changes") { Task { await checkout(branch, stash: false) } }
@@ -144,27 +148,41 @@ struct RunWithSheet: View {
         return n == 1 ? "1 uncommitted file" : "\(n) uncommitted files"
     }
 
-    private func readBranches() async {
-        branches = nil
-        branchError = nil
-        guard let server = task.server, let cwd = task.cwd else { return }
-        branches = try? await store.call(server, "list_branches", ["cwd": .string(cwd)])
+    /// The checkout the branch row speaks for; a reply for any other is dropped on landing.
+    private var place: String { "\(task.server?.uuidString ?? "")|\(task.cwd ?? "")" }
+
+    @discardableResult
+    private func readBranches() async -> BranchList? {
+        let at = place
+        guard let server = task.server, let cwd = task.cwd else { return nil }
+        let read: BranchList? = try? await store.call(server, "list_branches", ["cwd": .string(cwd)])
+        guard at == place else { return nil }
+        branches = read
+        return read
     }
 
     /// A clean checkout switches at once; uncommitted files ask first, as the desktop's picker does.
+    /// Counted afresh, since the agent or an editor may have written since the sheet opened.
     private func pickBranch(_ branch: String) {
         guard branch != branches?.current else { return }
-        if (branches?.dirty ?? 0) > 0 { switching = branch } else { Task { await checkout(branch, stash: false) } }
+        Task {
+            guard let fresh = await readBranches() else { return }
+            if fresh.dirty > 0 { switching = branch } else { await checkout(branch, stash: false) }
+        }
     }
 
     private func checkout(_ branch: String, stash: Bool) async {
+        let at = place
         guard let server = task.server, let cwd = task.cwd else { return }
         branchError = nil
         do {
-            branches = try await store.call(server, "checkout_branch",
-                                            ["cwd": .string(cwd), "branch": .string(branch), "stash": .bool(stash)])
+            let list: BranchList = try await store.call(server, "checkout_branch",
+                                                        ["cwd": .string(cwd), "branch": .string(branch), "stash": .bool(stash)])
+            guard at == place else { return }
+            branches = list
             Haptic.success()
         } catch {
+            guard at == place else { return }
             // Git refusing names the files in the way, which is the part to act on.
             branchError = error.localizedDescription
             Haptic.error()
@@ -354,6 +372,8 @@ struct ChipRow<Content: View>: View {
             .contentMargins(.horizontal, Theme.Space.l, for: .scrollContent)
             .padding(.horizontal, -Theme.Space.l)
             .onAppear { if let focus { proxy.scrollTo(focus, anchor: .center) } }
+            // A new agent brings a new list and pick while the row stays on screen.
+            .onChange(of: focus) { if let focus { withAnimation(Theme.motion) { proxy.scrollTo(focus, anchor: .center) } } }
         }
     }
 }
