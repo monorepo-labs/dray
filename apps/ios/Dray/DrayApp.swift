@@ -3,13 +3,21 @@ import ThinkingOrbs
 
 @main
 struct DrayApp: App {
-    @State private var store = Store()
+    @State private var store: Store
+    @State private var task: NewTask
+
+    init() {
+        let store = Store()
+        _store = State(initialValue: store)
+        _task = State(initialValue: NewTask(store: store))
+    }
     @Environment(\.scenePhase) private var phase
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(store)
+                .environment(task)
                 .preferredColorScheme(.dark)
                 // Text no screen styles still sits on the scale.
                 .font(Theme.Font.body)
@@ -28,13 +36,11 @@ enum RootSheet: Identifiable {
     /// Settings, opened on one server's page where a banner's Fix asked for it.
     case settings(server: UUID?)
     case add(PairLink?, scan: Bool)
-    case new
 
     var id: String {
         switch self {
         case .settings(let s): "settings\(s?.uuidString ?? "")"
         case .add(let link, let scan): "add\(link?.id ?? "")\(scan)"
-        case .new: "new"
         }
     }
 }
@@ -64,7 +70,6 @@ struct RootView: View {
             case .settings(let server): SettingsView(focus: server)
             // Filled in, not added: a link from anywhere should not add a server unasked.
             case .add(let link, let scan): AddServerView(link: link, scanFirst: scan)
-            case .new: NewSessionView { selection = $0 }
             }
         }
         .onOpenURL { url in

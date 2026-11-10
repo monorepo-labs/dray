@@ -66,6 +66,9 @@ final class Dictations {
     /// The server each draft's recording goes to, taken at the press.
     @ObservationIgnored private var servers: [SessionKey: UUID] = [:]
     @ObservationIgnored private var recorders: [SessionKey: AVAudioRecorder] = [:]
+    /// The transcription each draft is waiting on. Cancel clears it, so an
+    /// answer landing after that is dropped rather than written in.
+    @ObservationIgnored private var pending: [SessionKey: UUID] = [:]
 
     func state(_ draft: SessionKey) -> Dictation { phase[draft] ?? .idle }
 
@@ -142,6 +145,7 @@ final class Dictations {
             release()
         }
         since[draft] = nil
+        pending[draft] = nil
         phase[draft] = nil
     }
 
@@ -160,11 +164,19 @@ final class Dictations {
     /// The file goes once the server has answered, whatever it said; a send
     /// that never reached it keeps the file for Retry.
     private func send(_ store: Store, _ server: UUID, _ draft: SessionKey, _ url: URL) async {
+        let run = UUID()
+        pending[draft] = run
         phase[draft] = .transcribing
-        defer { phase[draft] = nil }
+        defer {
+            if pending[draft] == run {
+                pending[draft] = nil
+                phase[draft] = nil
+            }
+        }
         do {
             let outcome = try await store.transcribe(server, wav: url)
             try? FileManager.default.removeItem(at: url)
+            guard pending[draft] == run else { return }
             switch outcome {
             case .text(let words):
                 store.appendToDraft(draft, words)
@@ -175,6 +187,10 @@ final class Dictations {
             case .failed(let message): notes[draft] = sentence(message)
             }
         } catch {
+            guard pending[draft] == run else {
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
             kept[draft] = url
             notes[draft] = "Couldn't transcribe: \(error.localizedDescription)"
         }
@@ -182,90 +198,5 @@ final class Dictations {
 
     private func release() {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-    }
-}
-
-/// The mic, where some server can transcribe. Pressing it opens the voice orb
-/// in its place; nothing else of dictation draws until then.
-struct DictateButton: View {
-    @Environment(Store.self) private var store
-    @AppStorage(Dictations.serverKey) private var pick = ""
-    let draft: SessionKey
-
-    var body: some View {
-        // A kept recording is retried or let go first, or a new one would bury its Retry.
-        if let server = store.dictationServer(pick), Dictations.shared.state(draft) == .idle, Dictations.shared.kept[draft] == nil {
-            Button {
-                Task { await Dictations.shared.start(store, server: server, draft: draft) }
-            } label: {
-                Image(systemName: "mic")
-            }
-            .buttonStyle(IconButtonStyle())
-            .accessibilityLabel("Dictate")
-            // The keyboard's own mic is also "Dictate".
-            .accessibilityIdentifier("dictate")
-        }
-    }
-}
-
-/// A dictation under way: the voice orb hearing the reader, how long it has
-/// run, and the two ways out. Transcribing keeps the orb, curled and turning.
-struct DictationBar: View {
-    @Environment(Store.self) private var store
-    let draft: SessionKey
-    private let shared = Dictations.shared
-
-    var body: some View {
-        let state = shared.state(draft)
-        HStack(spacing: Theme.Space.s) {
-            // Polled at the island's ~20fps; the orb eases between readings itself.
-            TimelineView(.animation(minimumInterval: 1 / 20, paused: state != .recording)) { _ in
-                VoiceOrb(size: 36, level: state == .recording ? shared.level(draft) : 0, state: state)
-            }
-            .frame(width: 36, height: 36)
-            .accessibilityHidden(true)
-            if state == .transcribing {
-                Text("Transcribing…").font(Theme.Font.subhead).foregroundStyle(Theme.secondary).shimmer()
-            } else {
-                RecordingTimer(since: shared.since[draft])
-            }
-            Spacer(minLength: 0)
-            if state != .transcribing {
-                Button { shared.cancel(draft) } label: { Image(systemName: "xmark") }
-                    .buttonStyle(IconButtonStyle())
-                    .accessibilityLabel("Cancel dictation")
-                Button { Task { await shared.stop(store, draft: draft) } } label: { Image(systemName: "checkmark") }
-                    .buttonStyle(IconButtonStyle(filled: true))
-                    .disabled(state != .recording)
-                    .accessibilityLabel("Stop dictation")
-            }
-        }
-        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .trailing)))
-    }
-}
-
-/// What a dictation said instead of words, inside the composer, with Retry
-/// where the recording was kept.
-struct DictationNote: View {
-    @Environment(Store.self) private var store
-    let draft: SessionKey
-
-    var body: some View {
-        if let note = Dictations.shared.notes[draft] {
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-                Image(systemName: "waveform").foregroundStyle(Theme.tertiary)
-                Text(note).foregroundStyle(Theme.secondary).fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                if Dictations.shared.kept[draft] != nil {
-                    Button("Retry") { Task { await Dictations.shared.retry(store, draft: draft) } }
-                        .foregroundStyle(Theme.text)
-                }
-                Button { Dictations.shared.dismiss(draft) } label: { Image(systemName: "xmark") }
-                    .foregroundStyle(Theme.tertiary)
-                    .accessibilityLabel("Dismiss")
-            }
-            .font(Theme.Font.footnote)
-            .buttonStyle(.borderless)
-        }
     }
 }

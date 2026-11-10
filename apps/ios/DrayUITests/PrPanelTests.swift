@@ -13,9 +13,8 @@ final class PrPanelTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-servers", ""]
         app.launch()
-        // The empty list's own button: through Settings there are two, and
-        // which one `firstMatch` takes is not stable.
-        app.buttons["Add server"].firstMatch.tap()
+        // The empty list's own button, which Settings has none of.
+        app.buttons["Enter an address"].tap()
         app.textFields["Address"].tap()
         app.textFields["Address"].typeText(url)
         app.textFields["Token"].tap()
