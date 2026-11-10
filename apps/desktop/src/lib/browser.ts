@@ -77,9 +77,10 @@ function start() {
   // document never saw the key; re-raise it as a synthetic event, which is
   // all `useHotkey` needs. Shifted letters arrive upper-cased, as a real
   // event carries them. Off a Mac the accelerator is Ctrl, raised as Ctrl:
-  // the digit chords take exactly one of the two, never Meta there.
-  void listen<{ key: string; code: string; shift: boolean; alt: boolean; ctrl: boolean }>("cef_key", (e) => {
-    const { key, code, shift, alt, ctrl } = e.payload;
+  // the digit chords take exactly one of the two, never Meta there. `accel`
+  // is off for Linux's Alt+digit, which is a chord without one.
+  void listen<{ key: string; code: string; shift: boolean; alt: boolean; ctrl: boolean; accel?: boolean }>("cef_key", (e) => {
+    const { key, code, shift, alt, ctrl, accel = true } = e.payload;
     document.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: shift && key.length === 1 ? key.toUpperCase() : key,
@@ -87,7 +88,7 @@ function start() {
         metaKey: IS_MAC,
         shiftKey: shift,
         altKey: alt,
-        ctrlKey: IS_MAC ? ctrl : true,
+        ctrlKey: IS_MAC ? ctrl : accel || ctrl,
         bubbles: true,
         cancelable: true,
       }),

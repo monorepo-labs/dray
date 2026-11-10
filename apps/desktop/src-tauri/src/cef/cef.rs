@@ -1188,8 +1188,8 @@ fn reveal(id: i32) {
 /// keyboard, and one anywhere else in the window takes it back from a tab
 /// holding it. Main thread.
 #[cfg(target_os = "linux")]
-fn pressed() {
-    match x11::under_pointer() {
+fn pressed(leaf: u64) {
+    match x11::classify(leaf) {
         x11::Pressed::Page => {
             let Some(id) = shown_tab() else { return };
             let view = TABS.lock().unwrap().iter().find(|t| t.id == id).map_or(0, |t| t.view);
@@ -1894,6 +1894,9 @@ struct ForwardedKey {
     shift: bool,
     alt: bool,
     ctrl: bool,
+    /// Whether the platform accelerator was held. Always on a Mac; off on
+    /// Linux for Alt+digit, which is a chord of its own (`session.jump`).
+    accel: bool,
 }
 
 /// The character a Windows virtual-key code stands for, unshifted: the keys
@@ -1956,11 +1959,18 @@ wrap_keyboard_handler! {
             let (meta, ctrl) = (event.modifiers & 128 != 0, event.modifiers & 4 != 0);
             #[cfg(target_os = "linux")]
             let (meta, ctrl) = (event.modifiers & 4 != 0, false);
-            if !raw_down || !meta {
-                return 0;
-            }
             let shift = event.modifiers & 2 != 0;
             let alt = event.modifiers & 8 != 0;
+            // Alt+digit jumps between sessions with no accelerator held, so
+            // Linux forwards it too. The Mac forwards ⌘ chords alone.
+            let alt_digit = cfg!(target_os = "linux")
+                && !meta
+                && alt
+                && !shift
+                && (0x30..=0x39).contains(&event.windows_key_code);
+            if !raw_down || !(meta || alt_digit) {
+                return 0;
+            }
             // Ctrl+←/→ moves a word in a Linux text field, and no app chord
             // takes it, so the page keeps it.
             if cfg!(target_os = "linux") && !shift && !alt && matches!(event.windows_key_code, 0x25 | 0x27) {
@@ -1975,7 +1985,13 @@ wrap_keyboard_handler! {
             // to the page. The key code is the key.
             #[cfg(target_os = "linux")]
             let ch = key_char(event.windows_key_code);
-            if let Some(browser) = browser {
+            // Redo is the page's: Ctrl+Shift+Z is reserved for editing and
+            // Ctrl+Y is Linux's other spelling of it, and no app chord takes
+            // either, so forwarding them only swallowed the key.
+            if cfg!(target_os = "linux") && meta && !alt && ((shift && ch == 'z') || (!shift && ch == 'y')) {
+                return 0;
+            }
+            if let Some(browser) = browser.filter(|_| meta) {
                 let plain = !shift && !alt && !ctrl;
                 match ch {
                     '=' | '+' if plain => return { zoom(browser, "in"); 1 },
@@ -1987,7 +2003,7 @@ wrap_keyboard_handler! {
                     _ => {}
                 }
             }
-            if !shift && !alt && !ctrl && PAGE_CHORDS.contains(&ch) {
+            if meta && !shift && !alt && !ctrl && PAGE_CHORDS.contains(&ch) {
                 return 0;
             }
             let (key, code) = match event.windows_key_code {
@@ -2012,7 +2028,7 @@ wrap_keyboard_handler! {
                 }
             };
             if let Some(app) = APP.get() {
-                let _ = app.emit("cef_key", ForwardedKey { key, code, shift, alt, ctrl });
+                let _ = app.emit("cef_key", ForwardedKey { key, code, shift, alt, ctrl, accel: meta });
             }
             1
         }

@@ -274,7 +274,10 @@ pub(super) enum Pressed {
 }
 
 /// Calls `on_press` on the main thread after every left, middle or right
-/// button press anywhere on the display. Started once.
+/// button press anywhere on the display, with the deepest window under the
+/// pointer *at the press*: read here rather than when the main thread gets to
+/// it, or a click on the composer followed by a quick move onto the page
+/// would hand the page the keyboard. Started once.
 ///
 /// **This is click-to-focus, and nobody else provides it.** A tab's window
 /// is a child of a foreign window, so a click on the page never moves X's
@@ -286,7 +289,7 @@ pub(super) enum Pressed {
 /// events because they reach every client whoever holds the button's
 /// selection — Chromium does, and only one client may — and grab nothing,
 /// so a stalled main loop can never freeze the pointer.
-pub(super) fn watch_presses(on_press: fn()) {
+pub(super) fn watch_presses(on_press: fn(u64)) {
     std::thread::Builder::new()
         .name("cef-x11-presses".into())
         .spawn(move || unsafe {
@@ -327,32 +330,38 @@ pub(super) fn watch_presses(on_press: fn()) {
                     && (1..=3).contains(&(*(cookie.data as *const xi::XIRawEvent)).detail);
                 xlib::XFreeEventData(display, &mut cookie);
                 if pressed {
-                    let _ = super::on_main(on_press);
+                    let leaf = leaf_under_pointer(display) as u64;
+                    let _ = super::on_main(move || on_press(leaf));
                 }
             }
         })
         .expect("cef click thread");
 }
 
-/// What lies under the pointer now: walked down from the root to the
-/// deepest window, then placed against the frame and the main window.
-pub(super) fn under_pointer() -> Pressed {
+/// The deepest window under the pointer, walked down from the root.
+unsafe fn leaf_under_pointer(display: *mut xlib::Display) -> xlib::Window {
+    let mut window = xlib::XDefaultRootWindow(display);
+    loop {
+        let (mut root, mut child) = (0, 0);
+        let (mut rx, mut ry, mut x, mut y, mut mask) = (0, 0, 0, 0, 0);
+        if xlib::XQueryPointer(display, window, &mut root, &mut child, &mut rx, &mut ry, &mut x, &mut y, &mut mask) == 0
+            || child == 0
+        {
+            return window;
+        }
+        window = child;
+    }
+}
+
+/// Where a press landed, from the window it landed in: the page, elsewhere in
+/// the main window, or another app.
+pub(super) fn classify(leaf: u64) -> Pressed {
     with_display(|h| unsafe {
         let frame = FRAME.load(Ordering::Relaxed);
-        let mut window = xlib::XDefaultRootWindow(h.display);
-        loop {
-            let (mut root, mut child) = (0, 0);
-            let (mut rx, mut ry, mut x, mut y, mut mask) = (0, 0, 0, 0, 0);
-            if xlib::XQueryPointer(h.display, window, &mut root, &mut child, &mut rx, &mut ry, &mut x, &mut y, &mut mask) == 0
-                || child == 0
-            {
-                break;
-            }
-            window = child;
-        }
-        if frame != 0 && is_within(h.display, window, frame) {
+        let leaf = leaf as xlib::Window;
+        if frame != 0 && is_within(h.display, leaf, frame) {
             Pressed::Page
-        } else if is_within(h.display, window, h.window) {
+        } else if is_within(h.display, leaf, h.window) {
             Pressed::App
         } else {
             Pressed::Elsewhere
