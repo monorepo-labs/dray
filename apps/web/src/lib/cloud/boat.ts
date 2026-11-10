@@ -42,6 +42,8 @@ export async function boat<T>(
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: "no-store",
+  }).catch((e: Error) => {
+    throw new BoatError(502, "boat_unreachable", e.message);
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {

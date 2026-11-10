@@ -25,6 +25,7 @@ export async function fakeBoat({ key, org, pageSize = 2 }) {
   const sandboxes = new Map();
   const calls = [];
   let n = 0;
+  let drops = 0;
   let clock = Date.parse("2026-11-01T00:00:00Z");
   const now = () => new Date((clock += 1000)).toISOString();
   const mint = () => {
@@ -78,6 +79,10 @@ export async function fakeBoat({ key, org, pageSize = 2 }) {
     const call = { method: req.method, path, query: url.search, body, org: req.headers["x-boat-org"] };
     calls.push(call);
     res.on("finish", () => (call.status = res.statusCode));
+    if (drops > 0) {
+      drops--;
+      return req.socket.destroy();
+    }
 
     if (req.headers.authorization !== `Bearer ${key}`) return fail(res, 401, "unauthorized");
 
@@ -189,6 +194,9 @@ export async function fakeBoat({ key, org, pageSize = 2 }) {
     calls,
     add,
     now,
+    /// Hangs up on the next call without answering, the way a refused
+    /// connection or a dropped socket looks to fetch.
+    dropNext: () => drops++,
     close: () => new Promise((r) => server.close(r)),
   };
 }

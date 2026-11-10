@@ -250,6 +250,13 @@ describe("with DRAY_CLOUD_KEY", () => {
     assert.equal(bad.status, 400);
   });
 
+  test("boat out of reach answers a JSON 502", async () => {
+    boat.dropNext();
+    const { status, json } = await call("GET", "/api/cloud/machines");
+    assert.equal(status, 502);
+    assert.equal(json.error, "boat_unreachable");
+  });
+
   test("boat refused nothing but the expired resume", () => {
     const refused = boat.calls.filter((c) => c.status >= 400).map((c) => `${c.method} ${c.path} ${c.status}`);
     const expired = [...boat.sandboxes.values()].find((s) => s.dataExpiredAt);

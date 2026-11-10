@@ -43,6 +43,9 @@ function machine(s: Sandbox, subdomain = s.subdomain): Machine {
   };
 }
 
+/// Derived, never stored. A machine holds both values from its create on, and
+/// forks and resumes keep them, so changing `DRAY_CLOUD_SECRET` strands the
+/// whole pool: rotating means deleting every `dray=cloud` sandbox with it.
 const derive = (secret: string, what: string) =>
   createHmac("sha256", secret).update(what).digest("hex");
 
