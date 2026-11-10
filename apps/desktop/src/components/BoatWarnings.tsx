@@ -194,6 +194,11 @@ function useAutoExtend(busy: (server: string) => boolean, onFail: (key: string, 
   }, [servers, auto, busy, onFail]);
 }
 
+/// Owns the clock, so nothing ticks while no card is up.
+function LiveWarning(props: Omit<Parameters<typeof Warning>[0], "now">) {
+  return <Warning {...props} now={useNow()} />;
+}
+
 /// A sandbox about to auto-stop, floating at the sidebar's foot. Drawn outside
 /// `<aside>` so collapsing it hides nothing, but sized to the default sidebar
 /// (`SIDEBAR_MIN`, 240) less its rows' inset, so it reads as part of it. No
@@ -201,7 +206,6 @@ function useAutoExtend(busy: (server: string) => boolean, onFail: (key: string, 
 /// it stops, since missing it costs running work.
 export default function BoatWarnings({ busy }: { busy: (server: string) => boolean }) {
   const servers = useServers();
-  const now = useNow();
   const { auto } = useBoatPrefs();
   // By deadline: the card comes back, with boat's reason, so the reader can.
   const [autoFailed, setAutoFailed] = useState<Record<string, string>>({});
@@ -220,11 +224,10 @@ export default function BoatWarnings({ busy }: { busy: (server: string) => boole
     <div className="pointer-events-none fixed bottom-2 left-2 z-50 flex w-56 flex-col gap-2">
       {offer && <AutoOffer />}
       {up.map(({ server, stopsAt }) => (
-        <Warning
+        <LiveWarning
           key={server.id}
           server={server}
           stopsAt={stopsAt}
-          now={now}
           autoFailed={autoFailed[`${server.id}:${stopsAt}`]}
           onDismiss={() => setDismissed((d) => [...d, `${server.id}:${stopsAt}`])}
         />

@@ -29,6 +29,7 @@ import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedMo
 import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
 import { setOlderLoader } from "@/lib/olderPages";
+import { EMPTY_TASKS } from "@/lib/transcript";
 import { stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
@@ -170,8 +171,9 @@ const removed = (server: ServerId): boolean =>
 const connectedRemotes = (): ServerId[] =>
   remoteServers().flatMap((s) => (s.status === "connected" ? [s.id] : []));
 
-/// One shared empty set, so a session with no tasks keeps its transcript memo.
-const NO_TASKS: ReadonlySet<string> = new Set();
+/// The transcript's own empty set, so a session with no tasks shares one memo
+/// entry with every reader that passes none.
+const NO_TASKS = EMPTY_TASKS;
 
 /// What a transcript pane draws for one session. The selected session's fields
 /// on the hook's return are this, spread.
@@ -1064,8 +1066,9 @@ const handleSendMsg = async (
       // A new session is never archived, so it belongs to the active list only —
       // pushed unconditionally it would show up under the archived filter too.
       // Deduped: the server announces every new session on `session_created`,
-      // and that can land before this reply does.
-      if (!showArchived) {
+      // and that can land before this reply does. The ref, not the closure:
+      // the reader can toggle the split while the send is in flight.
+      if (!showArchivedRef.current) {
         setSessionIndexItems((prev) =>
           prev.some((i) => i.sessionId === snapshot.sessionId)
             ? prev.map((i) => (i.sessionId === snapshot.sessionId ? snapshot : i))
@@ -1742,8 +1745,9 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
   setError(null);
   upsertSession(snapshot);
   // A fork is never archived, so it belongs to the active list alone — pushed
-  // unconditionally it would show up under the archived filter too.
-  if (!showArchived) {
+  // unconditionally it would show up under the archived filter too. The ref,
+  // since this runs after the fork's round trip.
+  if (!showArchivedRef.current) {
     setSessionIndexItems((prev) => [...prev, snapshot]);
   }
   // Claimed like every other selection path, or an eviction tick landing
@@ -1995,8 +1999,6 @@ useEffect(() => {
 useEffect(() => {
   const setupListener = async () => {
     const unlisten = await listen<AgentEvent>("agent_event", (event) => {
-      // console.log(event);
-
       const agentEvent = event.payload;
 
         // A signal to re-read git and GitHub, never a row: kept out of the
@@ -3170,13 +3172,6 @@ useDockBadge(statusBySession, asksBySession, sessionIndexItems);
 // and the flush that empties it is the thing that clears these.
 const queuedMessages = selectedSessionId ? queuedBySession[selectedSessionId] ?? [] : [];
 
-// Gated on `busy` for the same reason the background-task set is: this is live
-// state, and a session that ended while it was unmounted has no event left to
-// arrive and clear it.
-const working: Working | null = busy && selectedSessionId
-  ? workingBySession[selectedSessionId] ?? null
-  : null;
-
 // Not gated on `busy`, unlike the two around it: a task outlives the turn that
 // spawned it, and that is the whole point of the set having its own indicator.
 const backgroundTasks: BackgroundTask[] = useMemo(
@@ -3197,9 +3192,6 @@ const liveTaskIdsBySession = useMemo(
   [tasksBySession],
 );
 const liveTaskIds = liveTaskIdsBySession[selectedSessionId ?? ""] ?? NO_TASKS;
-
-const compacting = compactingOf(selectedSession, busy);
-const apiRetry = apiRetryOf(selectedSession, busy);
 
 /// The live state one split pane draws — what the selected session's own
 /// fields above answer, for any loaded session.
@@ -3269,6 +3261,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
 
 }

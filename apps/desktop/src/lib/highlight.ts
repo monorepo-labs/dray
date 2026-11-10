@@ -140,11 +140,17 @@ function urlAt(text: string, i: number): Url | null {
 /// `url` without the sentence punctuation after it, and without a closing paren
 /// it never opened.
 function trimUrlTail(url: string): string {
-  let out = url.replace(URL_TAIL, "");
-  while (out.endsWith(")") && (out.match(/\(/g) ?? []).length < (out.match(/\)/g) ?? []).length) {
-    out = out.slice(0, -1);
+  let out = url;
+  // Both strips until neither bites: `docs.)` loses its paren and then has a
+  // dot to lose, which one pass in either order leaves behind.
+  for (;;) {
+    const before = out;
+    out = out.replace(URL_TAIL, "");
+    while (out.endsWith(")") && (out.match(/\(/g) ?? []).length < (out.match(/\)/g) ?? []).length) {
+      out = out.slice(0, -1);
+    }
+    if (out === before) return out;
   }
-  return out;
 }
 
 /// A mention split into the part worth reading and the part that is only there

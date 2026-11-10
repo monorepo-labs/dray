@@ -368,10 +368,7 @@ export default function NoticeStack({
   //
   // Registered here rather than in `App` so it exists only while a card does —
   // ⌘G with nothing raised should stay free for whatever wants it later.
-  useHotkey("notice.take", () => {
-    if (!next) return;
-    take(next);
-  });
+  useHotkey("notice.take", () => next && take(next), { enabled: next !== null });
 
   // Said, not awaited — and "Deleted" is *optimistic*, deliberately. It
   // reports a removal that is under way rather than one that has happened:
@@ -395,8 +392,8 @@ export default function NoticeStack({
   // and marked itself acted, `next` moved to B before B's listener ran, and B
   // fired too, down the whole stack on one press. One listener reads `next`
   // once, so one press is one card by construction.
-  useHotkey("notice.delete", () => {
-    if (next?.kind === "worktree") remove(next);
+  useHotkey("notice.delete", () => next?.kind === "worktree" && remove(next), {
+    enabled: next?.kind === "worktree",
   });
 
   if (notices.length === 0) return null;

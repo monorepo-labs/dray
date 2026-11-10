@@ -77,7 +77,8 @@ export function toolSummary(
     case "shell":
       return field(input, "command");
     case "search":
-      return field(input, "pattern") ?? field(input, "query");
+      // A pattern already returned above.
+      return field(input, "query");
     case "web":
       return field(input, "url") ?? field(input, "query");
     case "subagent_spawn":
@@ -92,8 +93,7 @@ export function toolSummary(
     field(input, "description") ??
     field(input, "command") ??
     field(input, "query") ??
-    field(input, "prompt") ??
-    (name ? null : null)
+    field(input, "prompt")
   );
 }
 
@@ -259,6 +259,10 @@ export function toolLabel(name: string, pending: boolean): string {
 /// otherwise say it twice — "Searching web 4 queries".
 const GROUP_VERBS: Record<string, [running: string, done: string]> = {
   Bash: ["Running", "Ran"],
+  // "Todo" is a heading, not a verb: counted or streaming it read "Todo a todo
+  // list".
+  TodoWrite: ["Updating", "Updated"],
+  todo_write: ["Updating", "Updated"],
   BashOutput: ["Reading", "Read"],
   KillShell: ["Killing", "Killed"],
   WebSearch: ["Searching", "Searched"],

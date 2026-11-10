@@ -675,19 +675,16 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
   return turns;
 }
 
-/// Splits the event log into the main thread and the subagent runs the panel
-/// lists.
-///
-/// Correlation is `envelope.subagent.id === the spawning call's callId`, not the
-/// `agentId` on the subagent payloads — that is the harness's own handle and
-/// matches nothing else.
+/// The live-task set of a session with none. One shared instance, because
+/// `buildTranscript`'s memo compares the set by identity: two empty sets from
+/// two readers of one session cost a second walk per event.
+export const EMPTY_TASKS: ReadonlySet<string> = new Set();
+
 /// Stands in for the result a call will now never get.
 ///
 /// Not an error: nothing went wrong with the call, the process it belonged to
 /// stopped existing. Flagging it would tint the row red and spring it open on
 /// load, which is a lot of noise for "this didn't finish".
-const EMPTY_TASKS: ReadonlySet<string> = new Set();
-
 const ABANDONED: ToolResult = {
   text: "No result — the session ended before this call finished.",
   isError: false,
@@ -728,6 +725,12 @@ export function buildTranscript(
   return result;
 }
 
+/// Splits the event log into the main thread and the subagent runs the panel
+/// lists.
+///
+/// Correlation is `envelope.subagent.id === the spawning call's callId`, not the
+/// `agentId` on the subagent payloads — that is the harness's own handle and
+/// matches nothing else.
 function build(
   source: AgentEvent[],
   /// Whether a child is actually running this session. A call with no result is

@@ -24,15 +24,17 @@ type HighlightResult = NonNullable<ReturnType<CodeHighlighterPlugin["highlight"]
 export function createSharedCodePlugin(pair: CodeThemePair): CodeHighlighterPlugin {
   const themes: [string, string] = [pair.light, pair.dark];
 
-  // Results are cached by the same key Streamdown would use, since `highlight`
-  // is called on every render of every block and re-tokenizing is the expensive
-  // part. Pending callbacks are held per key so N blocks of one language share
-  // a single load rather than each starting their own.
+  // Results are cached, since `highlight` is called on every render of every
+  // block and re-tokenizing is the expensive part. Pending callbacks are held
+  // per key so N blocks of one language share a single load rather than each
+  // starting their own.
   const done = new Map<string, HighlightResult>();
   const waiting = new Map<string, Set<(result: HighlightResult) => void>>();
 
-  const keyOf = (code: string, lang: string) =>
-    `${lang}:${themes[0]}:${themes[1]}:${code.length}:${code.slice(0, 100)}`;
+  // The whole text, not Streamdown's own length-and-first-100-characters: a
+  // "before" and "after" fence of one snippet share both, and the second then
+  // drew the first's tokens — which carry the text, so it drew the wrong code.
+  const keyOf = (code: string, lang: string) => `${lang}:${themes[0]}:${themes[1]}:${code}`;
 
   return {
     name: "shiki",

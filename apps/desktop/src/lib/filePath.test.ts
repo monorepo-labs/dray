@@ -129,6 +129,13 @@ describe("findFilePaths", () => {
     expect(findFilePaths("fix /a/b.ts now")[0].line).toBeUndefined();
   });
 
+  /// A range is what an agent cites a block with. Left unread, the range stayed
+  /// in the path and the link named a file that does not exist.
+  it("reads a line range as its first line", () => {
+    expect(findFilePaths("see /a/b.ts:12-20 there")[0]).toMatchObject({ path: "/a/b.ts", line: 12 });
+    expect(findFilePaths("see /a/b.ts#L12-L20 there")[0]).toMatchObject({ path: "/a/b.ts", line: 12 });
+  });
+
   /// The locator strip runs before the path is judged, so what is left of a
   /// one-segment path is still refused.
   it("does not let a locator strip conjure a path", () => {

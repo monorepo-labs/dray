@@ -954,10 +954,13 @@ function App() {
       if (!key) return;
       setPanelOpens((prev) => {
         const next = typeof open === "function" ? open(prev[key] ?? false) : open;
-        return id ? { ...prev, [key]: next, [id]: next } : { ...prev, [key]: next };
+        // Both keys, as the note above promises: written to the group's alone,
+        // the pane snapped back to its pre-group state when the group dissolved.
+        const session = id ?? selectedSessionId;
+        return session ? { ...prev, [key]: next, [session]: next } : { ...prev, [key]: next };
       });
     },
-    [panelKey, openKey],
+    [panelKey, openKey, selectedSessionId],
   );
 
   /// Opens the pane onto one tab. The pick moves as well as the pane opening:
@@ -3289,6 +3292,8 @@ function App() {
     <NoticeStack
       onSelect={(id) => goToSession(() => void openNotice(id))}
       onOpenDrafts={() => {
+        // The drafts list lives in the sidebar, as the search field does.
+        setCollapsed(false);
         setShowArchived(false);
         setDraftsShown(true);
       }}
@@ -3296,10 +3301,12 @@ function App() {
       // transcript does not show. The pick is written the same way
       // `usePullRequest`'s `onOpened` writes it — `activeTab` honours a
       // standing pick, and opening the pane stores "changes" on its own.
-      onOpenPr={(id) => {
-        void openFromNotice(id);
-        showPanel("pr", id);
-      }}
+      onOpenPr={(id) =>
+        goToSession(() => {
+          void openFromNotice(id);
+          showPanel("pr", id);
+        })
+      }
       onDeleteWorktree={(id) => removeWorktree(id)}
     />
     {whatsNew && (

@@ -22,7 +22,6 @@ import { openIssue, parseIdentifier } from "@/lib/issue";
 import { openLink } from "@/lib/openLink";
 import { commandBrand } from "@/lib/pluginBrand";
 import { stripSenderPrefix } from "@/lib/relay";
-import { shortenPath } from "@/lib/tools";
 import { useSendProgress } from "@/lib/uploads";
 import { cn } from "@/lib/utils";
 import type { ImageRef, IssueRef, MessageSender } from "@/types/events";
@@ -329,10 +328,10 @@ export default function UserMessage({
 
       {/* An image whose file is gone. Named rather than drawn as a broken frame,
           which says nothing about what was sent. */}
-      {missing.map((image, i) => (
+      {missing.map((_, i) => (
         <span key={i} className="flex items-center gap-1.5 text-chat text-muted-foreground">
           <Image className="size-3.5 shrink-0" />
-          <span className="truncate">{image.path ? shortenPath(image.path) : "image"}</span>
+          <span className="truncate">image</span>
         </span>
       ))}
 

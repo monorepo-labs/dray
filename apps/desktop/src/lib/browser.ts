@@ -1,7 +1,7 @@
 import { invoke, listen, LOCAL, serverOfSession } from "@/lib/transport";
 import { useSyncExternalStore } from "react";
 
-import { readLocalStorage } from "@/hooks/useLocalStorage";
+import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
 import { pushClosedTab } from "@/lib/tabOrder";
 import type { BrowserVisit } from "@/lib/history";
@@ -664,7 +664,7 @@ let customDevices: Device[] = readLocalStorage<Device[]>(DEVICES_KEY, []);
 
 function storeDevices(next: Device[]) {
   customDevices = next;
-  localStorage.setItem(DEVICES_KEY, JSON.stringify(next));
+  writeLocalStorage(DEVICES_KEY, next);
   notify();
 }
 

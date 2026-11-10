@@ -26,7 +26,7 @@ const TRAILING = new Set([...".,;:!?)]}>\"'"]);
 const GAP = /[^\S\r\n]/;
 
 /// A trailing `:12`, `:12:5`, `:L12` or `#L12`, its line in the first group
-/// that matched.
+/// that matched. A range — `:12-20`, `#L12-L20` — is read as its first line.
 ///
 /// The app's own harness prompt asks for `file_path:line_number`, so this is
 /// the commonest shape an absolute path takes in a transcript. The locator is
@@ -40,7 +40,7 @@ const GAP = /[^\S\r\n]/;
 /// the suffix, so the last segment stopped ending in a filename and the path
 /// was not picked out at all. The `L` is optional rather than a fourth
 /// alternative, since `:12` and `:L12` are one idea spelled two ways.
-const LOCATOR = /(?::L?(\d+)(?::\d+)?|#L(\d+))$/;
+const LOCATOR = /(?::L?(\d+)(?:-L?\d+)?(?::\d+)?|#L(\d+)(?:-L?\d+)?)$/;
 
 /// `end` reaches past the locator where there is one, so the whole reference is
 /// the link; `path` never holds it, so what opens is the file.
@@ -111,6 +111,8 @@ export function isRelativePath(path: string): boolean {
   // own checkout. A directory is not named with a leading `@` here, and the
   // reader's own `@mention` is read before this and never reaches it.
   if (parts[0].startsWith("@")) return false;
+  // `~/x` and `$HOME/x` are anchored somewhere, and it is not the cwd.
+  if (parts[0].startsWith("~") || parts[0].startsWith("$")) return false;
 
   return NAMES_FILE.test(parts.at(-1) ?? "");
 }
@@ -181,6 +183,10 @@ export function findRelativePaths(text: string): FilePathMatch[] {
     const { end, pathEnd, line } = trimTail(text, i, stop);
     const path = text.slice(i, pathEnd);
     if (!isRelativePath(path)) continue;
+    // The run began after an opener, so a closer left inside it is the far
+    // half of `app/[slug]/page.tsx`, and `=` the value half of `--flag=a/b.ts`.
+    // Either resolves to a file that is not there; no link beats a dead one.
+    if (/[)\]}=]/.test(path)) continue;
 
     found.push({ start: i, end, path, line });
     i = end - 1;

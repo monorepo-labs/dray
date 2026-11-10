@@ -150,7 +150,9 @@ export default function PrPanel({
           // ahead of settled ones, so row zero is the one being worked on and
           // opening it costs the reader nothing they didn't want.
           <PrRow
-            key={pr.number}
+            // The URL, not the number: two repos share numbers, and a row kept
+            // across a session switch would carry its armed merge confirm over.
+            key={pr.url}
             pr={pr}
             defaultOpen={i === 0}
             collapsible={prs.length > 1}
@@ -323,6 +325,8 @@ function PrRow({
               tabIndex: 0,
               onClick: toggle,
               onKeyDown: (e: React.KeyboardEvent) => {
+                // A control inside the row answers its own keys.
+                if (e.target !== e.currentTarget) return;
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   toggle();

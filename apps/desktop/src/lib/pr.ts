@@ -377,7 +377,12 @@ export function summarizeChecks(checks: PrCheck[]): CheckSummary {
 /// re-asked. See `OPEN_POLL_MS`.
 export function isSettling(pr: PullRequest | null): boolean {
   if (!pr || pr.state !== "OPEN") return false;
-  return pr.mergeable === "UNKNOWN" || pr.checks.some((c) => c.state === "pending");
+  return (
+    pr.mergeable === "UNKNOWN" ||
+    // The second way GitHub says "not worked out yet" — see `mergeVerdict`.
+    pr.mergeStateStatus === "UNKNOWN" ||
+    pr.checks.some((c) => c.state === "pending")
+  );
 }
 
 const ENTITIES: Record<string, string> = {
