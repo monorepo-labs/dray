@@ -489,25 +489,30 @@ pub fn start_dictation(island: &Entity<Island>, cx: &mut App) {
         return;
     }
     let Some(reply) = call(island, "start_transcription", json!({}), cx) else { return };
-    island.update(cx, |island, cx| {
+    let run = island.update(cx, |island, cx| {
         island.notice = None;
+        // The pill opened the panel on its cards; dictating is the reader
+        // turning to the draft, so the orb and its clock must show.
+        island.cards_first = false;
         let d = island.draft_mut();
+        d.run += 1;
         d.dictation = orb::Dictation::Starting;
         d.list_shown = false;
         d.menu = None;
-        d.retry_path = None;
         // The box leaves the panel while listening — gone in compact, hidden
         // in expanded — so its keys go to the panel, where ⏎ and Ctrl+Esc are
         // read; the box takes them back once the words land.
         d.want_focus = Some(Field::Panel);
         cx.notify();
+        d.run
     });
     let island = island.clone();
     cx.spawn(async move |cx| {
         let answer = wait(reply, cx).await;
         cx.update(|cx| {
             // Cancelled while it opened: a start that took is closed again.
-            if island.read(cx).draft().dictation != orb::Dictation::Starting {
+            let d = island.read(cx).draft();
+            if d.run != run || d.dictation != orb::Dictation::Starting {
                 if matches!(answer, Ok(serde_json::Value::Null)) {
                     let _ = call(&island, "cancel_transcription", json!({}), cx);
                 }
@@ -572,7 +577,10 @@ pub fn stop_dictation(island: &Entity<Island>, then_send: bool, cx: &mut App) {
     if island.read(cx).draft().dictation != orb::Dictation::Recording {
         return;
     }
-    transcribe(island, "stop_transcription", json!({}), then_send, cx);
+    // A send waiting on the words goes where the reader pressed ⏎, whatever
+    // they pick while the model works.
+    let target = then_send.then(|| island.read(cx).draft().target.clone()).flatten();
+    transcribe(island, "stop_transcription", json!({}), target, cx);
 }
 
 /// Runs the model again over the recording a failed run kept, so the words
@@ -582,21 +590,25 @@ pub fn retry_dictation(island: &Entity<Island>, cx: &mut App) {
     if island.read(cx).draft().dictation != orb::Dictation::Idle {
         return;
     }
-    transcribe(island, "retry_transcription", json!({ "path": path }), false, cx);
+    transcribe(island, "retry_transcription", json!({ "path": path }), None, cx);
 }
 
 /// How long the model may take over a long recording.
 const TRANSCRIBE_WITHIN: Duration = Duration::from_secs(180);
 
-fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, then_send: bool, cx: &mut App) {
+fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, send_to: Option<Target>, cx: &mut App) {
     let Some(reply) = call(island, cmd, args, cx) else { return };
-    island.update(cx, |island, cx| {
+    let run = island.update(cx, |island, cx| {
         island.notice = None;
         let d = island.draft_mut();
+        // A retry is a run of its own; a stop finishes the run it stops.
+        if d.dictation == orb::Dictation::Idle {
+            d.run += 1;
+        }
         d.dictation = orb::Dictation::Transcribing;
         d.recording_since = None;
-        d.retry_path = None;
         cx.notify();
+        d.run
     });
     let island = island.clone();
     cx.spawn(async move |cx| {
@@ -606,6 +618,10 @@ fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, then_
             futures::future::Either::Right(_) => Err("Dray didn't answer in time.".into()),
         };
         cx.update(|cx| {
+            // Thrown away meanwhile: its words, its state and its send are void.
+            if island.read(cx).draft().run != run {
+                return;
+            }
             let placed = island.update(cx, |island, cx| {
                 let placed = place_words(island, answer, cx);
                 let d = island.draft_mut();
@@ -614,8 +630,8 @@ fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, then_
                 cx.notify();
                 placed
             });
-            if placed && then_send {
-                send(&island, cx);
+            if placed && let Some(target) = send_to {
+                send_to_target(&island, Some(target), cx);
             }
         });
     })
@@ -627,6 +643,7 @@ fn transcribe(island: &Entity<Island>, cmd: &str, args: serde_json::Value, then_
 fn place_words(island: &mut Island, answer: server::Reply, cx: &mut App) -> bool {
     let outcome = match answer {
         Ok(v) => v,
+        // Nothing was read or deleted: whatever Retry held still stands.
         Err(why) => {
             island.notice = Some(why);
             return false;
@@ -648,8 +665,12 @@ fn place_words(island: &mut Island, answer: server::Reply, cx: &mut App) -> bool
         _ => (Some(value.get("message").and_then(|m| m.as_str()).unwrap_or("Dictation failed.").to_string()), false),
     };
     island.notice = notice;
-    if !ok {
-        island.draft_mut().retry_path = value.get("audioPath").and_then(|p| p.as_str()).map(str::to_string);
+    let kept = value.get("audioPath").and_then(|p| p.as_str()).map(str::to_string);
+    let d = island.draft_mut();
+    if ok {
+        d.retry_path = None;
+    } else if kept.is_some() {
+        d.retry_path = kept;
     }
     ok
 }
@@ -657,16 +678,25 @@ fn place_words(island: &mut Island, answer: server::Reply, cx: &mut App) -> bool
 /// Ctrl+Esc: throws away what is being said and puts the panel away, the
 /// Mac's ⌘Esc.
 pub fn cancel_dictation(island: &Entity<Island>, cx: &mut App) {
-    if island.read(cx).draft().dictation != orb::Dictation::Idle {
-        let _ = call(island, "cancel_transcription", json!({}), cx);
-        island.update(cx, |island, cx| {
-            let d = island.draft_mut();
-            d.dictation = orb::Dictation::Idle;
-            d.recording_since = None;
-            cx.notify();
-        });
-    }
+    throw_away(island, cx);
     close(island, cx);
+}
+
+/// Ends the current run unheard: the recorder is told, and any reply still
+/// coming for it is ignored.
+fn throw_away(island: &Entity<Island>, cx: &mut App) {
+    if island.read(cx).draft().dictation == orb::Dictation::Idle {
+        return;
+    }
+    let _ = call(island, "cancel_transcription", json!({}), cx);
+    island.update(cx, |island, cx| {
+        let d = island.draft_mut();
+        d.run += 1;
+        d.dictation = orb::Dictation::Idle;
+        d.recording_since = None;
+        d.peak = 0.0;
+        cx.notify();
+    });
 }
 
 /// The reader's layout pick, kept and drawn at once.
@@ -802,6 +832,9 @@ fn show(island: &Entity<Island>, cx: &mut App) {
 }
 
 pub fn close(island: &Entity<Island>, cx: &mut App) {
+    if island.read(cx).draft().listening() {
+        throw_away(island, cx);
+    }
     let (window, focus) = island.update(cx, |island, cx| {
         // The text box's focus goes with the window, so it reopens as the
         // button showing what was typed; a click takes the keyboard back.
@@ -1242,6 +1275,12 @@ pub fn pick_project(island: &Entity<Island>, path: String, cx: &mut App) {
 /// task. Sent is said at once and the request runs behind it; a send that
 /// fails comes back as the draft, with the reason.
 pub fn send(island: &Entity<Island>, cx: &mut App) {
+    send_to_target(island, None, cx);
+}
+
+/// `send`, to `pinned` where a send waited on dictation, else to the task
+/// picked now.
+fn send_to_target(island: &Entity<Island>, pinned: Option<Target>, cx: &mut App) {
     match island.read(cx).draft().dictation {
         orb::Dictation::Recording => return stop_dictation(island, true, cx),
         orb::Dictation::Idle => {}
@@ -1260,7 +1299,7 @@ pub fn send(island: &Entity<Island>, cx: &mut App) {
             "cwd": p.project,
             "useWorktree": p.worktree(),
         });
-        (d.target.clone(), rows, typing, picks)
+        (pinned.clone().or_else(|| d.target.clone()), rows, typing, picks)
     };
     let text = draft::prompt(&rows, &typing);
     let Some(target) = target else { return };

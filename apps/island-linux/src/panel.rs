@@ -163,8 +163,11 @@ impl Render for Panel {
         // panel for a card, and wherever a key asked for it.
         let mut want = self.island.read(cx).draft().want_focus;
         if self.showing_card != Some(card_up.is_some()) && self.island.read(cx).flash.is_none() {
-            if self.showing_card.is_some() {
-                want = Some(if card_up.is_some() { Field::Panel } else { Field::Typing });
+            // A focus asked for outranks the default, and listening keeps the
+            // keys on the panel, since the box is hidden or gone.
+            let listening = self.island.read(cx).draft().listening();
+            if self.showing_card.is_some() && want.is_none() {
+                want = Some(if card_up.is_some() || listening { Field::Panel } else { Field::Typing });
             }
             self.showing_card = Some(card_up.is_some());
         }

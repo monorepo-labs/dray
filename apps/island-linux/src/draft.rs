@@ -63,6 +63,9 @@ pub struct Draft {
     pub recording_since: Option<std::time::Instant>,
     /// A failed transcription's recording, which Retry runs again.
     pub retry_path: Option<String>,
+    /// Counts dictation runs; a reply for any run but the current one —
+    /// cancelled, or replaced — is ignored whole.
+    pub run: u64,
 }
 
 impl Draft {
@@ -84,6 +87,7 @@ impl Draft {
             peak: 0.0,
             recording_since: None,
             retry_path: None,
+            run: 0,
         }
     }
 
