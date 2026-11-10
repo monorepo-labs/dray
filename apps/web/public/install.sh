@@ -295,8 +295,10 @@ add_to_path || case ":$PATH:" in
 esac
 
 # The Dray app's login agent or bundle on a Mac, the AppImage the app recorded
-# on Linux: `app_ships_this_cli` in apps/cli/src/setup.rs.
+# on Linux: `app_ships_this_cli` in apps/cli/src/setup.rs. A `DRAY_HOME` of its
+# own is a server apart from the app, as `app_updates_this_cli` reads it.
 app_on_this_machine() {
+  [ -z "${DRAY_HOME:-}" ] || return 1
   if [ "$(uname -s)" = Darwin ]; then
     [ -e "$HOME/Library/LaunchAgents/com.yogesh.dray.server.plist" ] \
       || [ -e /Applications/Dray.app ] || [ -e "$HOME/Applications/Dray.app" ]
