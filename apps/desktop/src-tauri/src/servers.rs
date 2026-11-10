@@ -545,7 +545,7 @@ async fn admit(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
 /// This Mac's own server, which may call back into the app: browser steps go
 /// to the app's Chromium where this build has one.
 async fn admit_as_host(url: &str, token: &str) -> Result<(Socket, Welcome), String> {
-    let browser = cfg!(all(feature = "cef", target_os = "macos"));
+    let browser = cfg!(all(feature = "cef", any(target_os = "macos", target_os = "linux")));
     admit_with(url, json!({ "v": PROTOCOL, "token": token, "host": { "browser": browser } })).await
 }
 
@@ -612,8 +612,9 @@ async fn run(id: String) {
                 },
                 Err(e) => set_status(&id, ServerStatus::Disconnected, Some(e)),
             }
-            // launchd brings it back within seconds; a dev build has to ask.
-            if crate::is_dev() {
+            // launchd brings it back within seconds; a dev build, or one off
+            // a Mac, has to ask.
+            if crate::launchd::as_child() {
                 let _ = crate::launchd::ensure().await;
             }
             tokio::time::sleep(Duration::from_millis(500)).await;

@@ -87,6 +87,17 @@ enum Picks {
         }
     }
 
+    /// `liveControls.ts`'s table: what each harness carries onto a prompt sent while a turn runs.
+    /// Stated a third time beside the desktop and `send_msg`'s gate; change all three together.
+    private static let live: [String: Set<String>] = [
+        "claude_code": ["model", "stance", "fast"], "grok": ["model", "effort", "fast"],
+        "pi": ["model", "effort"], "fx": ["model", "effort", "stance", "fast"], "codex": [],
+    ]
+
+    static func lockedMidTurn(_ harness: String, _ control: String, _ busy: Bool) -> Bool {
+        busy && !(live[harness]?.contains(control) ?? false)
+    }
+
     /// `offersFast` and `fastFor` for a new session: the harness needs a route
     /// to one (pi has none) and the model a faster tier. fx alone stands with no
     /// model picked, since it decides per model itself.

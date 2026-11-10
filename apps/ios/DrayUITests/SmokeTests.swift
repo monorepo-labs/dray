@@ -23,7 +23,7 @@ final class SmokeTests: XCTestCase {
         app.launch()
         snap(app, "1-empty")
 
-        app.buttons["Add server"].firstMatch.tap()
+        app.buttons["Enter an address"].tap()
         let address = app.textFields["Address"]
         address.tap()
         address.typeText(url)
@@ -59,12 +59,9 @@ final class SmokeTests: XCTestCase {
         // holding an earlier run's turns cannot answer for this one.
         let run = String(UUID().uuidString.prefix(6))
 
-        let message = app.textFields["Message"]
-        XCTAssertTrue(message.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.dock.waitForExistence(timeout: 15))
         snap(app, "5-transcript")
-        message.tap()
-        message.typeText("Run the shell command `touch phone-file.txt`, then reply with the single word PHONE\(run).")
-        app.buttons["Send"].tap()
+        app.reply("Run the shell command `touch phone-file.txt`, then reply with the single word PHONE\(run).")
 
         let allow = app.buttons["Allow once"]
         XCTAssertTrue(allow.waitForExistence(timeout: 90), "no permission card")
@@ -78,14 +75,12 @@ final class SmokeTests: XCTestCase {
 
         // A long turn of read-only calls, which manual stance runs without a card:
         // past five rows it folds as it runs, and lands collapsed.
-        message.tap()
-        message.typeText("""
+        app.reply("""
             One step at a time, never in parallel, and write one short sentence after each step: \
             glob *.txt, read alpha.txt, grep for needle, read beta.txt, grep for apple, read gamma.txt, \
             glob *.md, read notes.md. Then read delta.txt and alpha.txt back to back with no sentence \
             between them. Then reply with the single word DONE\(run).
             """)
-        app.buttons["Send"].tap()
 
         // This run's rows are the ones below its own prompt.
         let prompt = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "DONE\(run).")).firstMatch

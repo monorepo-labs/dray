@@ -110,18 +110,34 @@ flate2 = { version = "1", optional = true }
 # The This Mac row's pairing QR for the phone. SVG alone: no `image` tree.
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 
-# Metal on macOS, CPU everywhere else — the backend is chosen at *build* time,
-# so it cannot be switched per model or per machine. Split across two tables
-# rather than one entry, since the `metal` feature does not compile elsewhere.
+# Metal on macOS, compiled in. Split across tables rather than one entry, since
+# the `metal` feature does not compile elsewhere.
 [target.'cfg(target_os = "macos")'.dependencies]
 transcribe-cpp = { version = "0.4", default-features = false, features = [
   "metal",
 ], optional = true }
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+# Linux loads its backends at runtime, from modules shipped beside a shared
+# libtranscribe (build.rs copies them out). Compiled in, Vulkan would make
+# `libvulkan.so.1` a link-time need of the whole app, so a machine without the
+# loader could not start Dray at all; as a module, a missing loader or driver
+# leaves the CPU. And a static build tunes ggml to the *build* machine's CPU,
+# where the modules ship one CPU variant per x86 tier and pick at runtime.
+[target.'cfg(target_os = "linux")'.dependencies]
+# Capture through PulseAudio where its socket answers, PipeWire's included:
+# `default_host` then prefers it, and a source is named by its description
+# ("Built-in Audio Analog Stereo"). ALSA alone lists its plugin hints as
+# devices — "Rate Converter Plugin Using Speex Resampler" among them.
+cpal = { version = "0.18", features = ["pulseaudio"], optional = true }
+transcribe-cpp = { version = "0.4", default-features = false, features = [
+  "vulkan",
+  "dynamic-backends",
+], optional = true }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "linux")))'.dependencies]
 transcribe-cpp = { version = "0.4", default-features = false, optional = true }
 
-# Embedded Chromium for the in-app browser, macOS only for now. Behind a
+# Embedded Chromium for the in-app browser, on macOS and Linux (X11). Behind a
 # feature so a build without the CEF binaries on disk still compiles: the
 # `cef-dll-sys` build script downloads ~130MB and runs CMake, which is not
 # something `cargo check` should need. See cef/cef.rs.
@@ -157,8 +173,12 @@ desktop = [
   # MAC-SERVER-PLAN.md.
   "dep:zip",
   "dep:flate2",
+  # Chromium's download unpacks in-process on Linux; `chromium` compiles
+  # with `desktop` alone. See chromium.rs.
+  "dep:bzip2",
+  "dep:tar",
 ]
-cef = ["desktop", "dep:cef"]
+cef = ["desktop", "dep:cef", "dep:gtk", "dep:gdkx11", "dep:x11"]
 # `connect` and TLS: a server reaches other machines too (machines.rs).
 serve = [
   "dep:tokio-tungstenite",
@@ -169,10 +189,38 @@ serve = [
   "dep:flate2",
 ]
 
-[target.'cfg(target_os = "macos")'.dependencies.cef]
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies.cef]
 version = "154.5.0"
 optional = true
 default-features = false
+
+# A tab on Linux is an X11 window parented into the main window's, moved and
+# shown through Xlib on GDK's own connection. All three are already in the
+# lock under tao, so they cost no build. See cef/x11.rs.
+[target.'cfg(target_os = "linux")'.dependencies.gtk]
+version = "0.18"
+optional = true
+
+[target.'cfg(target_os = "linux")'.dependencies.gdkx11]
+version = "0.18"
+optional = true
+
+[target.'cfg(target_os = "linux")'.dependencies.x11]
+version = "2.21"
+optional = true
+features = ["xlib", "xinput"]
+
+# Chromium's tarball unpacked in-process on Linux: an AppImage cannot declare
+# `bzip2`, and a desktop without it would fail every download. Both already
+# in the lock — `bzip2` on the pure-Rust libbz2 under `download-cef`, `tar`
+# under the updater. See chromium.rs.
+[target.'cfg(target_os = "linux")'.dependencies.bzip2]
+version = "0.6"
+optional = true
+
+[target.'cfg(target_os = "linux")'.dependencies.tar]
+version = "0.4"
+optional = true
 
 # Unconditional, not CEF's alone: the composer's paste reads NSPasteboard
 # (attachments.rs). tao already compiles all three, so this costs no build.

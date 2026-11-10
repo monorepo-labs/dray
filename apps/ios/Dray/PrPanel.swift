@@ -96,7 +96,7 @@ private struct PrPanelModifier: ViewModifier {
                         // The list row's own glyph, so the button says the PR's state before it is opened.
                         Button { showing = true } label: {
                             if let pr = model.prs.first {
-                                PrGlyph(mark: pr.mark, size: 18)
+                                PrGlyph(mark: pr.mark, size: 20)
                             } else {
                                 Image(systemName: "arrow.triangle.pull")
                             }

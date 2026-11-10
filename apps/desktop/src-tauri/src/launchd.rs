@@ -8,10 +8,17 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use tokio::process::Command;
 
-/// The release app's job. A dev build names none: [`ensure`] and [`stop`] turn
-/// off to a child process before anything here is asked.
+/// The release app's job on a Mac. A dev build, or one off a Mac, names none:
+/// [`ensure`] and [`stop`] turn off to a child process before anything here is
+/// asked.
 fn label() -> &'static str {
     "com.yogesh.dray.server"
+}
+
+/// Whether the server is this app's child rather than a launchd job: a dev
+/// build, and any build off a Mac, where there is no launchd to run one.
+pub(crate) fn as_child() -> bool {
+    crate::is_dev() || cfg!(not(target_os = "macos"))
 }
 
 fn target() -> String {
@@ -78,9 +85,9 @@ static PENDING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// exception and moves at once: that server keeps its port in the other home,
 /// so the app could never reach it to ask.
 pub async fn ensure() -> Result<()> {
-    let exe = std::env::current_exe().context("no path to this binary")?;
+    let exe = crate::serve::executable().context("no path to this binary")?;
     let log = crate::store::get_home_app_dir().await?.join(crate::serve::SERVER_LOG);
-    if crate::is_dev() {
+    if as_child() {
         return spawn_dev(&exe, &log);
     }
     let env: Vec<(&str, String)> = ["DRAY_HOME", "DRAY_NO_ANALYTICS"]
@@ -176,14 +183,27 @@ fn spawn_dev(exe: &std::path::Path, log: &std::path::Path) -> Result<()> {
     let out = std::fs::OpenOptions::new().create(true).append(true).open(log)?;
     // Its own process group, so Ctrl-C on `pnpm tauri dev` leaves it running
     // the way quitting the release app does.
-    Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .arg("--serve")
         .stdin(std::process::Stdio::null())
         .stdout(out.try_clone()?)
         .stderr(out)
-        .process_group(0)
-        .spawn()
-        .context("could not start the dev server")?;
+        .process_group(0);
+    // Off the app's AppImage mount, which goes when the app quits.
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(dir) = crate::serve::appimage_safe_cwd() {
+            command.current_dir(dir);
+        }
+        for (key, value) in crate::serve::appimage_env_undo() {
+            match value {
+                Some(value) => command.env(key, value),
+                None => command.env_remove(key),
+            };
+        }
+    }
+    command.spawn().context("could not start the dev server")?;
     Ok(())
 }
 
@@ -191,7 +211,7 @@ fn spawn_dev(exe: &std::path::Path, log: &std::path::Path) -> Result<()> {
 /// the next launch of the app, or the next login. A dev server has no agent,
 /// so it is signalled by the pid it wrote beside its port.
 pub async fn stop() -> Result<()> {
-    if crate::is_dev() {
+    if as_child() {
         let home = crate::store::get_home_app_dir().await?;
         let written = tokio::fs::read_to_string(home.join(crate::serve::PORT_FILE)).await?;
         let pid: i32 = written.lines().nth(2).and_then(|l| l.trim().parse().ok()).context("no pid in serve-port")?;
