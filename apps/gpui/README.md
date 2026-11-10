@@ -56,6 +56,36 @@ Geist is the Vercel font (SIL OFL, [assets/fonts/LICENSE.txt](assets/fonts/LICEN
 icons are lucide (ISC) and heroicons (MIT), licences beside them in
 [assets/icons](assets/icons).
 
+## Settled before building on it
+
+The four questions #856 asked first, each answered by a spike in
+[examples/](examples) that stays, so the next pin can be measured the same way.
+
+- **(a) A blurred window in the VM.** Yes, once `font-kit` is on (see above).
+- **(b) A virtualised transcript scrolls smoothly while streaming grows at the
+  bottom.** Yes. `spike_transcript`: 3,000 messages in GPUI's `list`, the last
+  growing every frame in paragraphs. Median frame 16.7ms in every phase. The
+  tail (p95 27–40ms) is the VM's own: an idle baseline with nothing changing
+  measures p95 38ms. `FollowMode::Tail` lets go when scrolled up and picks up
+  again at the bottom, as Chat.tsx does.
+- **(c) Markdown with tables, fences, links and images, as well as now.** Yes.
+  `spike_markdown`: gpui-base's `TextView`, the parser and layout under
+  gpui-component, styled through its hooks. Tables with row rules only, inline
+  code chips, fences coloured by tree-sitter, autolinks, remote images (with an
+  HTTP client set), selection, and incremental parsing on `push_str`.
+- **(d) Text input good enough for the composer.** Yes. `spike_input`:
+  gpui-base's `Textarea`. It grows by row, Enter sends and Shift+Enter breaks
+  the line. Word deletion, undo, select-all and UTF-8 paste (emoji, CJK) all
+  work. It also has inline tokens and a highlighter hook, which is what M2's
+  chips and `@` colouring want. IME composition is handled by GPUI's input
+  handler and was not driven in the VM.
+
+```bash
+cargo run --release --example spike_transcript
+cargo run --example spike_markdown [-- --stream]
+cargo run --example spike_input
+```
+
 ## Milestone 1, so far
 
 - [x] Crate, pinned GPUI, glass window, titlebar drag row

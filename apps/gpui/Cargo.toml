@@ -40,3 +40,11 @@ raw-window-handle = "0.6"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSVisualEffectView", "NSView", "NSResponder", "NSWindow", "NSAppearance"] }
 objc2-foundation = "0.3"
+
+# The spikes in examples/ that settled #856's open questions. Kept, so they
+# can be run again against the next GPUI pin.
+[dev-dependencies]
+gpui_base = { package = "gpui-base", version = "=0.9.1" }
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.12" }
+tree-sitter-highlight = "0.27"
+tree-sitter-rust = "0.24"
