@@ -56,6 +56,7 @@ pnpm workspace, three apps, no shared JS package yet — plus two native Swift a
 
 ```
 apps/desktop/       the Tauri app — everything below this section describe it
+apps/gpui/          the GPUI rewrite (#856), a client of the serve wire — read apps/gpui/README.md
 apps/web/           marketing site: Next.js App Router, Tailwind 4, deploy Vercel
 apps/docs/          docs: Blume (Astro), own Vercel project, served at drayhq.com/docs
 apps/ios/           SwiftUI client of dray-serve, XcodeGen project — read apps/ios/PLAN.md
