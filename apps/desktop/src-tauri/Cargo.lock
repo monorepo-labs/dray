@@ -1412,6 +1412,7 @@ dependencies = [
  "anyhow",
  "base64 0.23.1",
  "block2",
+ "bzip2",
  "cef",
  "chrono",
  "cpal",
@@ -1421,6 +1422,8 @@ dependencies = [
  "flate2",
  "form_urlencoded",
  "futures-util",
+ "gdkx11",
+ "gtk",
  "hyper",
  "hyper-util",
  "libc",
@@ -1438,6 +1441,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -1450,6 +1454,7 @@ dependencies = [
  "transcribe-cpp",
  "ts-rs",
  "uuid",
+ "x11",
  "zip 9.0.5",
 ]
 
