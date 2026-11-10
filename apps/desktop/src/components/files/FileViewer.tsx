@@ -28,11 +28,7 @@ type VirtualizedInstance = {
   getEditorViewport?: () => HTMLElement | Document | undefined;
 };
 
-/// The active file, read and highlighted.
-///
-/// Read-only throughout: the one control here that writes anything is the
-/// button handing the path to the reader's own editor, and that writes nothing
-/// either.
+/// The active file, read and highlighted. Read-only throughout.
 export default function FileViewer({
   file,
 }: {
@@ -122,7 +118,7 @@ export default function FileViewer({
     () => ({
       theme: pair,
       themeType: resolvedMode,
-      // The header row above already names the file.
+      // The titlebar's tab already names the file.
       disableFileHeader: true,
       // Scroll rather than wrap: this is a pane with the window's whole width,
       // where a wrapped long line costs the gutter's meaning.
@@ -145,9 +141,9 @@ export default function FileViewer({
     );
   }
 
-  // No header row: the tab strip above already names the file and carries the
-  // full path on its own `title`, so a second line here would say it twice —
-  // the reading the Docs panel's chip strip takes. No padding either: the
+  // No header row: the titlebar's tab already names the file, so a second line
+  // here would say it twice — the reading the Docs panel's chip strip takes.
+  // No padding either: the
   // pane's own border is the frame, and an inset would only make the code
   // narrower than the window it was given.
   //

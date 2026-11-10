@@ -91,7 +91,7 @@ export const PANEL_LABELS: Record<PanelTab, string> = {
 /// The PR tab leads wherever it is drawn, and its place does not move with the
 /// pull request's state. It used to: merging one sent the tab to the end, so
 /// the row reshuffled under the cursor at the exact moment the reader was
-/// looking at what they had just done, and ⌘⇧[ / ⌘⇧] then stepped a different
+/// looking at what they had just done, and ⌘⌥[ / ⌘⌥] then stepped a different
 /// order than the one they had learned. A tab's position is where it is found,
 /// not a ranking.
 ///
@@ -133,7 +133,7 @@ export function tabOrder({
   // After Changes, which is what keeps Issue immediately before More.
   if (docs) tabs.push("docs");
   // Immediately before More wherever it is drawn, so the row's order is the
-  // same one ⌘⇧[ steps whether or not a session has an issue on it.
+  // same one ⌘⌥[ steps whether or not a session has an issue on it.
   if (issue) tabs.push("issue");
   // Before More: a plan is what the session agreed to do, which belongs with
   // the work rather than with the catch-all.
@@ -216,6 +216,10 @@ export function MountOnce({ when, children }: { when: boolean; children: React.R
   return seen || when ? <Suspense fallback={null}>{children}</Suspense> : null;
 }
 
+/// The panel's floor, and what the crew counts on it holding when it judges
+/// whether there is room to stand beside the chat.
+export const PANEL_MIN = 320;
+
 /// The frame every right-hand inspector shares: one border, one row of tabs.
 /// Bodies render inside it and own no chrome of their own, so adding a third
 /// view is a tab and a component rather than another panel competing for the
@@ -228,10 +232,6 @@ export function MountOnce({ when, children }: { when: boolean; children: React.R
 /// No titlebar spacer either, unlike the main column. This pane reaches the top
 /// of the window and its tab row is what sits there; the traffic lights are on
 /// the far side, so nothing needs clearing.
-/// The panel's floor, and what the crew counts on it holding when it judges
-/// whether there is room to stand beside the chat.
-export const PANEL_MIN = 320;
-
 export default function RightPanel({
   open,
   tab,
@@ -260,7 +260,7 @@ export default function RightPanel({
     pane: open ? "panel" : undefined,
   });
 
-  // A swipe over the pane steps its tabs, wrapping, the way ⌘⇧[ ] does.
+  // A swipe over the pane steps its tabs, wrapping, the way ⌘⌥[ ] does.
   const asideRef = useRef<HTMLElement>(null);
   useSwipe(asideRef, (delta) => {
     const from = tabs.indexOf(tab);

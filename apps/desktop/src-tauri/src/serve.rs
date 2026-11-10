@@ -400,16 +400,14 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
         anyhow::bail!("a Dray server is already running on {}", home.display());
     }
     std::mem::forget(held);
-    for name in [dray_proto::SOCKET_NAME, dray_proto::SOCKET_NAME_DEV] {
-        let socket = home.join(name);
-        if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
-            anyhow::bail!(
-                "a Dray is already running on {} ({} answers). Quit it, or start \
-                 dray-serve with DRAY_HOME set to a directory of its own.",
-                home.display(),
-                socket.display()
-            );
-        }
+    let socket = home.join(dray_proto::SOCKET_NAME);
+    if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+        anyhow::bail!(
+            "a Dray is already running on {} ({} answers). Quit it, or start \
+             dray-serve with DRAY_HOME set to a directory of its own.",
+            home.display(),
+            socket.display()
+        );
     }
 
     if let Err(e) = store::reset_in_progress_sessions().await {
@@ -432,9 +430,8 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
 }
 
 /// What every client of this process hears: each event the core emits, and
-/// [`Live`] beside it for a client that connects later. `dray-serve` builds
-/// its `Sink` on one; the desktop app's `Sink` publishes into [`HUB`] as well
-/// as its webview, so the app can serve the same stream.
+/// [`Live`] beside it for a client that connects later. Both servers,
+/// `dray-serve` and the Mac's `dray --serve`, build their `Sink` on [`HUB`].
 #[derive(Clone)]
 pub struct Hub {
     events: broadcast::Sender<Arc<str>>,
@@ -496,7 +493,11 @@ pub async fn listen(
         };
         let (sink, hub, token, tunnel_file) = (sink.clone(), hub.clone(), token.clone(), tunnel_file.clone());
         connections.spawn(async move {
-            let served = match request_line(&stream).await {
+            // Bounded like the rest of what comes before the token: `peek`
+            // waits for a first byte, so a connect that sends nothing held
+            // its task and its socket until the peer went away.
+            let first = tokio::time::timeout(ADMIT, request_line(&stream)).await.ok().flatten();
+            let served = match first {
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
                 Some(line) if line.starts_with("POST /upload?") => upload(stream, &token).await,
                 Some(_) => connection(stream, sink, hub, &token, &tunnel_file, hosts).await,

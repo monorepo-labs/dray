@@ -535,6 +535,23 @@ fn approval_for(mode: ApprovalPolicy) -> (&'static str, &'static str) {
     }
 }
 
+/// What the session's turn id becomes on `event`, or `None` to leave it.
+///
+/// Only the session's own thread moves it. A subagent runs on a thread of its
+/// own over the same connection, and its `turn/started` and `turn/completed`
+/// land while the main turn is still running: taken as the session's, the
+/// first aimed Stop at the subagent's turn and the second cleared the id, so
+/// Stop sent nothing and reported success.
+fn turn_id_after(event: &parser::CodexEvent, thread_id: &str) -> Option<Option<String>> {
+    match event {
+        parser::CodexEvent::TurnStarted(turn) if turn.thread_id == thread_id => {
+            Some(Some(turn.turn.id.clone()))
+        }
+        parser::CodexEvent::TurnCompleted(turn) if turn.thread_id == thread_id => Some(None),
+        _ => None,
+    }
+}
+
 /// The handles the read loop needs that are not per-event state.
 struct ReaderHandles {
     client: RpcClient,
@@ -563,7 +580,17 @@ async fn read_stdout(
     let mut ready = Some(ready);
     let mut transport: Option<Transport> = None;
 
-    while let Some(line) = lines.next_line().await? {
+    // A read error ends the loop like a closed pipe, never with `?`: either way
+    // no more of this turn is coming, and the cleanup below has to run.
+    loop {
+        let line = match lines.next_line().await {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(err) => {
+                eprintln!("[codex stdout err] {err}");
+                break;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -680,14 +707,8 @@ async fn read_stdout(
         // left standing after its turn ended would have Stop interrupting
         // something already over.
         if let Transport::Rpc(thread) = transport {
-            match &event {
-                parser::CodexEvent::TurnStarted(turn) => {
-                    *thread.turn_id.lock().await = Some(turn.turn.id.clone());
-                }
-                parser::CodexEvent::TurnCompleted(_) => {
-                    *thread.turn_id.lock().await = None;
-                }
-                _ => {}
+            if let Some(next) = turn_id_after(&event, &thread.id) {
+                *thread.turn_id.lock().await = next;
             }
         }
 
@@ -705,6 +726,25 @@ async fn read_stdout(
             crate::session::ingest(&ingest, agent_event, &handles.app).await;
         }
     }
+
+    // The app-server is gone. Nothing below used to run: a request in flight
+    // waited out its timeout under the session's lock, the turn it had open
+    // never closed, and prompts queued behind it were dropped by the next send.
+    handles.client.fail_pending();
+    if let Some(Transport::Rpc(thread)) = transport.as_ref() {
+        // A Stop pressed now names nothing.
+        *thread.turn_id.lock().await = None;
+    }
+    crate::session::settle_dead_child(
+        &handles.session_id,
+        Codex,
+        &seq,
+        &status,
+        &queued,
+        "Codex stopped before the turn finished",
+        &handles.app,
+    )
+    .await;
 
     Ok(())
 }
@@ -1206,9 +1246,6 @@ mod tests {
         panic!("the capture holds no approval request");
     }
 
-    /// The smallest complete turn has to produce a turn that opens, text that
-    /// commits, and a turn that closes. If the shapes drifted, this is where a
-    /// transcript that draws nothing shows up as a test failure.
     /// Every tool Codex ran in the capture reaches the transcript as a row.
     ///
     /// The regression this pins is a silent one. An item kind we have not typed
@@ -1546,6 +1583,63 @@ mod tests {
         );
     }
 
+    /// The capture runs a subagent to completion inside the main turn. Stop
+    /// must still name the main turn afterwards, and nothing else in between.
+    #[test]
+    fn a_subagents_turn_never_moves_the_sessions_turn_id() {
+        let mut main: Option<(String, String)> = None;
+        let mut tracked: Option<String> = None;
+        let mut foreign_turns = 0;
+
+        for line in TOOL_KINDS.lines().filter(|l| !l.trim().is_empty()) {
+            let record: Value = serde_json::from_str(line).unwrap();
+            if record["dir"] != "in" {
+                continue;
+            }
+            let message: Value = serde_json::from_str(record["line"].as_str().unwrap()).unwrap();
+            let (Some(method), None) = (
+                message.get("method").and_then(Value::as_str),
+                message.get("id"),
+            ) else {
+                continue;
+            };
+            let params = message.get("params").cloned().unwrap_or(Value::Null);
+            let event = parser::parse_notification(method, params).unwrap();
+
+            if let parser::CodexEvent::TurnStarted(turn) | parser::CodexEvent::TurnCompleted(turn) =
+                &event
+            {
+                // The first turn in the capture is the session's own.
+                let (thread, id) =
+                    main.get_or_insert_with(|| (turn.thread_id.clone(), turn.turn.id.clone()));
+                if turn.thread_id != *thread {
+                    foreign_turns += 1;
+                    let before = tracked.clone();
+                    if let Some(next) = turn_id_after(&event, thread) {
+                        tracked = next;
+                    }
+                    assert_eq!(tracked, before, "a subagent's turn moved the id");
+                    assert_eq!(tracked.as_deref(), Some(id.as_str()));
+                    continue;
+                }
+            }
+
+            let thread = main.as_ref().map(|(thread, _)| thread.clone());
+            if let Some(next) = thread.and_then(|thread| turn_id_after(&event, &thread)) {
+                tracked = next;
+            }
+        }
+
+        assert!(foreign_turns >= 2, "the capture no longer holds a subagent's turn");
+        // The capture stops with the main turn still open, which is the state
+        // Stop has to be able to name.
+        let (_, id) = main.expect("the capture opens a turn");
+        assert_eq!(tracked, Some(id));
+    }
+
+    /// The smallest complete turn has to produce a turn that opens, text that
+    /// commits, and a turn that closes. If the shapes drifted, this is where a
+    /// transcript that draws nothing shows up as a test failure.
     #[test]
     fn simple_turn_draws_a_whole_exchange() {
         let (events, _) = replay(SIMPLE_TURN);

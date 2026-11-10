@@ -1,8 +1,9 @@
 //! The model/effort menu the UI renders and the CLI accepts.
 //!
-//! Only aliases go on the wire — `claude --model opus` always resolves to the
-//! latest Opus, so pinning a dated id here would silently freeze sessions to an
-//! old model as new ones ship.
+//! The top tier goes on the wire as aliases — `claude --model opus` always
+//! resolves to the latest Opus, so a dated id there would silently freeze
+//! sessions to an old model as new ones ship. A pinned id is a second-tier row,
+//! for the reader asking for exactly that.
 
 use crate::harness::claude_code::models as claude_code_models;
 use crate::harness::Harness;
@@ -153,9 +154,9 @@ pub fn default_model_for(harness: Harness) -> Option<ModelId> {
         Harness::Pi | Harness::Fx => None,
         // Single-vendor, unlike the two above, so a constant here names a model
         // every signed-in reader has. The list is still a probe — xAI ships
-        // models faster than Dray does — and `grok::models::default_model`
-        // checks this against what the installed CLI reports, the same guard
-        // Codex's default takes.
+        // models faster than Dray does — and nothing checks this against it:
+        // `grok::models::default_model` would, the guard Codex's default
+        // takes, and has no caller.
         Harness::Grok => Some(ModelId::new("grok-4.7")),
         // No list to default out of, and nothing will spawn for it anyway, so
         // there is no model to name — the same `None` pi takes, for a different
@@ -321,11 +322,9 @@ pub fn claude_models() -> Vec<Model> {
     ]
 }
 
-/// The models a harness can actually run.
-///
-/// Static rather than read from `model/list`, which app-server does answer:
-/// the picker has to be built before a session exists, and there is no child to
-/// ask until one does. Worth revisiting once a spare connection is cheap.
+/// Codex's model table — the fallback since `harness/codex/models.rs` asks
+/// `model/list` itself. It is what the picker draws where that probe cannot
+/// run, and what orders the rows it does answer.
 ///
 /// `ultra` is offered per model rather than across the family, because Codex
 /// answers it that way: Sol and Terra report it, Luna does not.
@@ -438,12 +437,11 @@ pub(crate) fn every_codex_model() -> Vec<Model> {
     all
 }
 
-/// What the picker offers for a harness.
+/// The static table for a harness, where this build holds one.
 ///
-/// Empty for pi, and that is this slice's shape rather than pi's: its list is
-/// answered by the machine, so it arrives from a probe rather than from here.
-/// `agent_availability` reports pi unavailable until that probe exists, so an
-/// empty list cannot reach a picker.
+/// Empty for pi, fx and grok: each one's list is answered by the machine, so it
+/// arrives from a probe rather than from here. The picker reads `list_models`,
+/// which asks the CLI first.
 pub fn models_for(harness: Harness) -> Vec<Model> {
     match harness {
         Harness::ClaudeCode => claude_models(),
@@ -476,7 +474,17 @@ pub fn runs_on(id: &ModelId, harness: Harness) -> bool {
     match harness {
         Harness::ClaudeCode => claude_code_models::find(id).is_some(),
         Harness::Codex => every_codex_model().iter().any(|m| &m.id == id),
-        Harness::Pi | Harness::Fx | Harness::Grok => find_model(id).is_none(),
+        Harness::Pi | Harness::Grok => find_model(id).is_none(),
+        // fx's codex provider names its models by Codex's wire ids, and the
+        // GPT-6 rows above are keyed by theirs. A row whose id *is* its wire id
+        // is therefore no other harness's alias, and reading it as one refused
+        // fx `gpt-6-sol` as "not a fx model".
+        Harness::Fx => {
+            claude_code_models::find(id).is_none()
+                && every_codex_model()
+                    .iter()
+                    .all(|m| &m.id != id || m.arg == id.as_str())
+        }
         // Nothing runs on a harness this build cannot spawn, and `false` is
         // the safe direction: it refuses a model rather than recording one
         // against a session that could never use it.
@@ -774,6 +782,20 @@ mod tests {
         assert!(from_old_enum.is_unset());
         assert!(find_model(&from_old_enum).is_none());
         assert!(!runs_on(&from_old_enum, Harness::Pi));
+    }
+
+    /// fx's codex provider and Codex's own table share wire ids, and fx has to
+    /// keep running its own. A Dray alias for another harness is still refused.
+    #[test]
+    fn fx_runs_a_wire_id_the_codex_table_also_holds() {
+        for wire in ["gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"] {
+            assert!(find_model(&id(wire)).is_some(), "{wire} left the Codex table");
+            assert!(runs_on(&id(wire), Harness::Fx), "fx refused {wire}");
+            assert_eq!(id_for_arg(wire, Harness::Fx), Some(id(wire)));
+        }
+        assert!(!runs_on(&id("gpt6_astra"), Harness::Fx));
+        assert!(!runs_on(&id("opus"), Harness::Fx));
+        assert!(!runs_on(&id("gpt-6-sol"), Harness::Pi));
     }
 
     /// An index entry naming a model this build dropped must not fail the whole

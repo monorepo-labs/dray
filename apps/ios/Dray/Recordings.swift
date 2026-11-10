@@ -20,7 +20,7 @@ func recordingPaths(in text: String) -> [String] {
 
 /// The token rides the query, where the images send a header: AVPlayer has no
 /// documented way to set one, and `/file` takes either.
-func recordingURL(_ path: String, on server: Connection) -> URL? {
+@MainActor func recordingURL(_ path: String, on server: Connection) -> URL? {
     guard let socket = socketURL(server.url),
           var parts = URLComponents(url: socket, resolvingAgainstBaseURL: false) else { return nil }
     parts.scheme = parts.scheme == "wss" ? "https" : "http"

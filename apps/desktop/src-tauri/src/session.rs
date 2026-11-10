@@ -536,11 +536,19 @@ async fn close_unanswered_stop(
 ///
 /// Emitted, never logged: a delete may have removed the file, where an append
 /// would quietly recreate it.
+///
+/// Prompts queued behind the dead turn are the exception, and only while the
+/// slot still holds this child: they are stranded first, each as a bubble with
+/// a failure beside it, the way fx and grok report theirs. Left alone they
+/// stayed drawn as pending and the next send dropped them with the `Session`,
+/// saying nothing. An emptied slot is a session being deleted or settled,
+/// whose log must not be written back.
 pub async fn settle_dead_child(
     session_id: &str,
     harness: Harness,
-    seq: &AtomicU64,
+    seq: &Arc<AtomicU64>,
     status: &Arc<Mutex<StatusTracker>>,
+    queued: &QueuedMessages,
     why: &str,
     app: &Sink,
 ) {
@@ -549,12 +557,12 @@ pub async fn settle_dead_child(
         Some(slot) => Some(slot.lock().await),
         None => None,
     };
-    let replaced = guard
-        .as_ref()
-        .and_then(|g| g.as_ref())
-        .is_some_and(|s| !Arc::ptr_eq(&s.status, status));
-    if replaced {
+    let held = guard.as_ref().and_then(|g| g.as_ref());
+    if held.is_some_and(|s| !Arc::ptr_eq(&s.status, status)) {
         return;
+    }
+    if held.is_some() {
+        strand_queue_on_exit(session_id, harness, queued, seq, app).await;
     }
 
     let mint = |payload| {
@@ -1801,12 +1809,6 @@ impl SessionManager {
         guard.as_ref()?.child.id()
     }
 
-    /// Stops what a session has running and nothing else: the child with
-    /// everything it started, and its browser tabs. Log and index entry stay,
-    /// so an unsettle resumes as any idle session does. Settle and delete both
-    /// come through here — settling is the reader saying the work is done,
-    /// and a child left running behind a settled row was a dev server and a
-    /// page nobody could see.
     /// Whether a turn is running in this session now. Fork and the CLI's
     /// settle refuse on it, the same question the sidebar asks of `in_progress`.
     pub async fn turn_in_flight(&self, session_id: &str) -> bool {
@@ -1818,6 +1820,12 @@ impl SessionManager {
         }
     }
 
+    /// Stops what a session has running and nothing else: the child with
+    /// everything it started, and its browser tabs. Log and index entry stay,
+    /// so an unsettle resumes as any idle session does. Settle and delete both
+    /// come through here — settling is the reader saying the work is done,
+    /// and a child left running behind a settled row was a dev server and a
+    /// page nobody could see.
     pub async fn settle(&self, session_id: &str) -> Result<()> {
         let running = self.take(session_id).await;
         // The tabs close whatever the kill answered: the session is already
@@ -2038,10 +2046,9 @@ pub struct Session {
     pub model: ModelId,
     pub effort: Option<Effort>,
     pub permission_mode: ApprovalPolicy,
-    /// What the child was last told about fast mode — the spawn's flag for
-    /// Claude Code and Codex, and for fx the value stamped onto its session,
-    /// which nothing can move after. Compared against the composer's pick to
-    /// decide whether anything has to happen at all.
+    /// What the child was last told about fast mode: the pick it was spawned
+    /// on, then whatever [`Session::set_fast`] last landed. Compared against
+    /// the composer's pick to decide whether anything has to happen at all.
     pub fast: bool,
     pub seq: Arc<AtomicU64>,
     /// Shared with the stdout task: sends flip it here, `result` and
@@ -2511,12 +2518,11 @@ impl Session {
 
     /// Moves a running child on or off its harness's faster tier — Claude
     /// Code's `apply_flag_settings`, grok's model twin, fx's `fast` config
-    /// option.
+    /// option, Codex's `serviceTier` on the next `turn/start`.
     ///
-    /// `Capabilities::fast_mode` is what keeps the others off this path:
-    /// Codex's rides its spawn and pi has none. The recorded value moves only
-    /// once the write has, so a failed control leaves the session describing
-    /// what the child is still on.
+    /// `Capabilities::fast_mode` is what keeps pi, which has none, off this
+    /// path. The recorded value moves only once the write has, so a failed
+    /// control leaves the session describing what the child is still on.
     pub async fn set_fast(&mut self, fast: bool) -> Result<()> {
         // grok's fast tier is a model id, so its switch is a model switch and
         // there is no flag to send. `fast_arg` is what pairs the two, and the
@@ -2558,12 +2564,13 @@ impl Session {
         Ok(())
     }
 
-    /// Switches the effort of a running child — fx alone, whose ACP session
-    /// takes it as a config option. Every other harness respawns for one, and
-    /// `caps().applies_effort_in_place` is what keeps them off this path.
+    /// Switches the effort of a running child wherever the wire carries one:
+    /// a config option on fx and grok, `set_thinking_level` on pi, the next
+    /// `turn/start` on Codex. Claude Code respawns for one, and
+    /// `caps().applies_effort_in_place` is what keeps it off this path.
     ///
-    /// `None` is fx's own `auto`, which nothing here can spell back onto the
-    /// wire, so it is recorded and left to the next respawn.
+    /// `None` is the harness's own default, which nothing here can spell back
+    /// onto the wire, so it is recorded and left to the next respawn.
     pub async fn set_effort(&mut self, effort: Option<Effort>, app: &Sink) -> Result<()> {
         // grok takes the same config option and needs no `Sink`: its
         // ladder rides the handshake, per model, so the picker learns nothing
@@ -3031,9 +3038,9 @@ async fn deliver_prompt(
     // running. Ignored by every other transport, which has one way in.
     delivery: crate::harness::pi::Delivery,
     // `false` logs the prompt and hands its prepared text back without sending
-    // it — [`flush_fx`] alone, which logs every held message as its own bubble
-    // and then opens **one** turn with the lot, fx taking one prompt per turn.
-    // No other transport is written to answer it, and none passes it.
+    // it — [`flush_one_per_turn`] alone, which logs every held message as its
+    // own bubble and then opens **one** turn with the lot, fx taking one prompt
+    // per turn. No other transport is written to answer it, and none passes it.
     send: bool,
     from: Option<MessageSender>,
     seq: &Arc<AtomicU64>,
@@ -3314,7 +3321,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
     // sit two awaits (publish, append). A send racing that gap would read no
     // turn in flight and start a second fx prompt over the one id.
     //
-    // A send decides queue-vs-deliver in `fx_queue_if_in_flight`, which takes
+    // A send decides queue-vs-deliver in `queue_if_in_flight`, which takes
     // this same status lock across its `turn_in_flight` read *and* its enqueue.
     // So this section and that one cannot interleave: whichever holds the lock
     // runs whole. Either the send queues first and this sees the message and
@@ -3700,8 +3707,8 @@ pub async fn flush_queued(
 /// and its own line in the log; what they share is the turn they open.
 ///
 /// The empty-check and the release of the reservation are done **while holding
-/// both status and queued** — the crux, symmetric to `fx_queue_if_in_flight`
-/// on the send side. Release the queue lock before marking the turn Completed
+/// both status and queued** — the crux, symmetric to `queue_if_in_flight` on
+/// the send side. Release the queue lock before marking the turn Completed
 /// and a send can enqueue in the gap, leaving a prompt with no turn to flush
 /// it. Holding both, a send either lands its message before the take (drained
 /// here, or reserved for the next turn) or reads the released Completed after

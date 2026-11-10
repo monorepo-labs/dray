@@ -192,12 +192,11 @@ pub async fn init(
     // the handshake even returns.
     let pending: PendingPermissions = Default::default();
 
-    // Open before the reader, and before the handshake it starts for. pi can ask
-    // a blocking question during startup — `resolveProjectTrusted` calls
-    // `ctx.ui.select` for any directory holding `.pi` resources with no stored
-    // decision — which is long before this session reaches `SessionManager`'s
-    // map. See [`desk`] for the two windows and why the answer cannot go
-    // through the session.
+    // Open before the reader: the reader is what draws a card, so a desk
+    // opened second leaves a question asked that nothing can answer. A new
+    // session's first prompt can ask before this session reaches
+    // `SessionManager`'s map. See [`desk`] for the two windows and why the
+    // answer cannot go through the session.
     let desk_token = desk::open(session_id, client.clone(), pending.clone(), seq.clone());
 
     // The ring's denominator, filled by the handshake below and read by the
@@ -261,9 +260,8 @@ pub async fn init(
 
     // pi says **nothing at all** on spawn — no banner, no ready line — so this
     // is the only thing that proves the child is alive and speaking. On its own
-    // bound, tighter than an ordinary command's: silence here is
-    // indistinguishable from a slow start, and thirty seconds of a blank
-    // composer reads as broken.
+    // bound, wider than an ordinary command's: a stale `auth.json.lock` holds a
+    // start ~30s, and a bound under that fails a session that was only slow.
     let state = client
         .request_within("get_state", Value::Null, HANDSHAKE_TIMEOUT)
         .await;
@@ -369,6 +367,29 @@ fn register_dialog(
 
     guard.insert(request_id.to_string(), request);
     true
+}
+
+/// A failed turn closing on a run the reader stopped, rewritten as the abort
+/// it was.
+///
+/// pi reports its own abort as `stopReason: "error"` carrying "This operation
+/// was aborted", which drew the reader's Stop as a red failed turn. Told by the
+/// stop window rather than by that sentence: Dray knows it asked, and a
+/// sentence is pi's to reword. `aborted` is the stop reason every harness's
+/// Stop closes on, and what the transcript draws no failure for.
+fn as_stopped(payload: &mut AgentEventPayload) {
+    if let AgentEventPayload::TurnCompleted {
+        status: TurnStatus::Error,
+        stop_reason,
+        final_text,
+        auth_failed,
+        ..
+    } = payload
+    {
+        *stop_reason = Some("aborted".to_string());
+        *final_text = None;
+        *auth_failed = false;
+    }
 }
 
 /// Writes one prompt.
@@ -601,7 +622,17 @@ async fn read_stdout(
     let mut mapper = mapper::Mapper::new(session_id.clone(), seq.clone(), context_window);
     let transport = Transport::Pi(client.clone());
 
-    while let Some(line) = lines.next_line().await? {
+    // A read error ends the loop like a closed pipe, never with `?`: either way
+    // no more of this turn is coming, and the cleanup below has to run.
+    loop {
+        let line = match lines.next_line().await {
+            Ok(Some(line)) => line,
+            Ok(None) => break,
+            Err(err) => {
+                eprintln!("[pi stdout err] {err}");
+                break;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -734,10 +765,19 @@ async fn read_stdout(
             flush_transport: &transport,
         };
 
-        for agent_event in mapper.map(event) {
+        for mut agent_event in mapper.map(event) {
+            // The stop window stays open until the next prompt goes out, so
+            // the turn end the abort produces always lands inside it.
+            if client.stopping() {
+                as_stopped(&mut agent_event.payload);
+            }
             crate::session::ingest(&ingest, agent_event, &app).await;
         }
     }
+
+    // Whatever still waits on an answer learns pi exited, rather than waiting
+    // out its timeout.
+    client.fail_pending();
 
     // The child is gone. `agent_settled` is the only line that closes a turn,
     // and a pi that dies mid-turn cannot send one — so without this the session
@@ -767,7 +807,13 @@ async fn read_stdout(
         if let Err(err) = app.emit("agent_event", &closed) {
             eprintln!("[pi emit err] {err}");
         }
-        status.lock().await.on_event(&closed.payload);
+        // Published as well as tracked: the frontend follows `session_status`
+        // alone, so a tracker closed quietly left the row and the composer busy
+        // under the red row saying pi had stopped.
+        let next = status.lock().await.on_event(&closed.payload);
+        if let Some(next) = next {
+            crate::session::publish_status(&session_id, next, &app).await;
+        }
     }
 
     Ok(())
@@ -776,6 +822,39 @@ async fn read_stdout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// pi closes the reader's own Stop as `error` with a sentence. Inside the
+    /// stop window that is an abort, which the transcript draws nothing for;
+    /// a turn that ended well in that window is left exactly as it was.
+    #[test]
+    fn a_stopped_turn_closes_as_an_abort_not_a_failure() {
+        let closed = |status, stop_reason: &str, final_text: Option<&str>| AgentEventPayload::TurnCompleted {
+            status,
+            stop_reason: Some(stop_reason.to_string()),
+            final_text: final_text.map(str::to_string),
+            auth_failed: false,
+            usage: None,
+            duration_ms: None,
+            head: None,
+        };
+
+        let mut stopped = closed(TurnStatus::Error, "error", Some("This operation was aborted"));
+        as_stopped(&mut stopped);
+        let AgentEventPayload::TurnCompleted { status, stop_reason, final_text, .. } = &stopped else {
+            unreachable!()
+        };
+        assert_eq!(*status, TurnStatus::Error);
+        assert_eq!(stop_reason.as_deref(), Some("aborted"));
+        assert_eq!(*final_text, None);
+
+        let mut finished = closed(TurnStatus::Success, "stop", None);
+        as_stopped(&mut finished);
+        assert!(matches!(
+            &finished,
+            AgentEventPayload::TurnCompleted { status: TurnStatus::Success, stop_reason: Some(reason), .. }
+                if reason == "stop"
+        ));
+    }
 
     /// `Plan` is the one stance pi can enforce, and it enforces it with a flag.
     #[test]
@@ -951,7 +1030,7 @@ mod tests {
                 let client = client.clone();
                 let pending = pending.clone();
                 std::thread::spawn(move || {
-                    // The order `Session::cancel_pending_dialogs` uses, and the
+                    // The order `Desk::cancel_outstanding` uses, and the
                     // order the argument rests on: the flag is stored before the
                     // lock is taken.
                     client.begin_stop();

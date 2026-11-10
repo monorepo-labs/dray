@@ -39,6 +39,8 @@ export const useBreakSettings = () => useSyncExternalStore(changed.subscribe, ()
 
 export const useBreakDue = () => useSyncExternalStore(changed.subscribe, () => due);
 
+export const isBreakDue = () => due;
+
 export function setBreakDue(next: boolean) {
   if (next === due) return;
   due = next;

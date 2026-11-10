@@ -6,11 +6,11 @@ use tauri::{AppHandle, Emitter, Manager};
 /// it out on their own. It drops the handle `show` returns, and that handle is
 /// the only thing a click is reported through. And it posts through
 /// `NSUserNotificationCenter`, which current macOS does not deliver for an app
-/// at all — see the notifications section of CLAUDE.md for what was measured.
+/// at all — see `apps/desktop/docs/notifications.md` for what was measured.
 ///
 /// Waiting on the handle blocks until the reader acts or the banner times out,
 /// hence `spawn_blocking`: one parked thread per banner, and the timeout is the
-/// only thing bounding it — without one the wait polls forever (#458, CLAUDE.md).
+/// only thing bounding it — without one the wait polls forever (#458).
 #[tauri::command]
 pub async fn notify_session(
     app: AppHandle,

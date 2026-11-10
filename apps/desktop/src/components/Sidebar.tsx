@@ -1207,8 +1207,8 @@ export default function Sidebar({
   // The step ticks for itself, in `App`, where the chords land too.
   useSwipe(asideRef, onStepProjectFilter);
 
-  // Collapsed is nothing at all, not a rail. The toggle moves to the app header
-  // in that state, which is the one row present either way.
+  // Collapsed is nothing at all, not a rail. The toggle lives in the app header,
+  // which is the one row present either way.
   if (collapsed) return null;
 
   return (
@@ -1218,10 +1218,7 @@ export default function Sidebar({
       ref={asideRef}
     >
       {handle}
-      {/* `px-1.5` on the buttons rather than `size="sm"`'s `px-2.5`, so their
-          icons land on the same 12px inset as the toggle above.
-
-          All three are drawn as session rows: `/80` text and `--sidebar-accent`
+      {/* All three buttons are drawn as session rows: `/80` text and `--sidebar-accent`
           at half strength under the cursor, which is exactly what an unselected
           row in the list below carries. They were `/70` with `ghost`'s own
           `hover:bg-muted` and `hover:text-foreground`, which made them a second
@@ -1633,9 +1630,9 @@ function HintRow({
 /// the eye is already on, but in a hint row it is the row, so the default fill
 /// makes a hint the loudest thing in the list.
 ///
-/// Exported because the crew's foot teaches its chord the same way, and two
-/// copies of one hint style is the pair that drifts on whichever list nobody
-/// is looking at.
+/// Exported because the composer's update line teaches its chord the same way,
+/// and two copies of one hint style is the pair that drifts on whichever one
+/// nobody is looking at.
 export const HINT_KEYS = "[&_kbd]:bg-muted/40 [&_kbd]:text-muted-foreground/60";
 
 /// From this many projects a hover opens a menu beside the tap's step. Tapping

@@ -43,7 +43,7 @@ final class Store {
     private(set) var olderErrors: [SessionKey: String] = [:]
     private(set) var tasks: [SessionKey: Int] = [:]
 
-    /// For a client that reacts beside drawing: the Island opens itself on a card.
+    /// For a client that reacts beside drawing: the Island chimes and counts a new card on its pill.
     @ObservationIgnored var asksChanged: () -> Void = {}
     /// The Island's: its own server came up, or Dray's window came or went, so
     /// the machines it follows may have moved.
@@ -290,12 +290,29 @@ final class Store {
         guard let c = connections[server] else { return }
         do {
             let list: [SessionItem] = try await c.call("list_session_index_items", ["archived": false])
-            for key in items.keys where key.server == server { items[key] = nil }
+            // Settled rows are the settled view's to replace; this read never holds them.
+            for key in items.keys where key.server == server && items[key]?.archived != true { items[key] = nil }
             for item in list { store(SessionKey(server: server, id: item.sessionId), item) }
             loadErrors[server] = nil
         } catch {
             // The rows already listed stay; the list says this read failed beside them.
             loadErrors[server] = error.localizedDescription
+        }
+    }
+
+    /// Settled sessions, read only when the settled view asks: the live read
+    /// leaves them out, and its next pass clears them again.
+    func loadSettled() async {
+        for s in servers where serverState[s.id] == .connected {
+            // Rows held before the read; one the reply leaves out was deleted, unless an event
+            // moved it meanwhile. Unsettling leaves `modified` alone, so `archived` is read again too.
+            let held = items.filter { $0.key.server == s.id && $0.value.archived == true }.mapValues(\.modified)
+            guard let list: [SessionItem] = try? await call(s.id, "list_session_index_items", ["archived": true]) else { continue }
+            let listed = Set(list.map(\.sessionId))
+            for (key, modified) in held where !listed.contains(key.id) {
+                if let now = items[key], now.archived == true, now.modified == modified { items[key] = nil }
+            }
+            for item in list { store(SessionKey(server: s.id, id: item.sessionId), item) }
         }
     }
 
@@ -312,12 +329,13 @@ final class Store {
 
     // MARK: Sessions
 
-    /// What the list draws, in the desktop sidebar's runs, narrowed to one
-    /// project first when a chip is picked.
-    func runs(_ project: ProjectKey?) -> [(stage: Stage, rows: [ListRow])] {
-        let list = items.filter { key, item in
-            item.hidden != true && item.archived != true
-                && (project.map { $0 == ProjectKey(server: key.server, path: item.projectPath) } ?? true)
+    /// What the list draws, in the desktop sidebar's runs: the live sessions,
+    /// or the settled ones, narrowed to one project by name when one is picked —
+    /// by name, so a repo checked out on two machines is one project.
+    func runs(project: String?, settled: Bool = false) -> [(stage: Stage, rows: [ListRow])] {
+        let list = items.filter { _, item in
+            item.hidden != true && (item.archived == true) == settled
+                && (project.map { $0 == item.project } ?? true)
         }.map { (key: $0.key, item: $0.value) }
         return stageRuns(list) { stage($0.key, $0.item) }
     }
@@ -376,7 +394,12 @@ final class Store {
         do {
             let snap: Snapshot? = try await c.call("get_session_by_id", ["sessionId": .string(key.id), "turns": 8])
             // Dropped while the read was out: writing it back would hold it, growing, until the next drop.
-            guard let snap, drop == drops || key == kept else { return }
+            guard drop == drops || key == kept else { return }
+            // Deleted from another client. Said, or the transcript waits on a read that already answered.
+            guard let snap else {
+                transcriptErrors[key] = "Session not found."
+                return
+            }
             let read = Set(snap.events.map(\.id))
             let held = transcripts[key]?.events ?? []
             let live = held.filter { !before.contains($0.id) && !read.contains($0.id) }
@@ -541,9 +564,9 @@ final class Store {
         }
     }
 
-    /// A session another client started reaches this one as events alone —
-    /// `send_msg` hands its entry back to the caller — so an id the index
-    /// does not name re-reads it, once per burst.
+    /// An id the index does not name re-reads it, once per burst.
+    /// `session_created` carries a new session's entry to every client, so this
+    /// is what is left for a server from before that event.
     private func notice(_ key: SessionKey) {
         guard items[key] == nil, !reading.contains(key.server) else { return }
         reading.insert(key.server)

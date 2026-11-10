@@ -12,9 +12,9 @@
 //! `availableCommands` of its own and it is exactly grok's seven TUI built-ins,
 //! every one of them on [`WITHHELD`] — so probing for it would spend a child to
 //! learn nothing. Hence a per-directory cache the read loop fills, and an
-//! `Err` until it does: [`crate::lib`]'s picker leaves a failed read **pending
-//! forever** rather than answering empty, which is the honest state here. A
-//! harness with no commands says so out loud, and grok is not one.
+//! `Err` until it does: the picker's `useSlashCommands` leaves a failed read
+//! **pending forever** rather than answering empty, which is the honest state
+//! here. A harness with no commands says so out loud, and grok is not one.
 
 use crate::harness::claude_code::commands::SlashCommand;
 use crate::harness::ProbeCache;

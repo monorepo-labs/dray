@@ -244,17 +244,20 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
     let mut address_coming = false;
     let mut boat = None;
     let script = async {
-        let mut line = String::new();
+        let mut bytes = Vec::new();
         let mut failed: Option<String> = None;
         loop {
-            line.clear();
-            let read = (&mut stdout).take(MAX_READ as u64).read_line(&mut line).await.unwrap_or(0);
+            bytes.clear();
+            // Bytes, not `read_line`, as in `run` below: a dotfile echoing one
+            // byte that is not UTF-8 is an error there, and read as ssh exiting.
+            let read = (&mut stdout).take(MAX_READ as u64).read_until(b'\n', &mut bytes).await.unwrap_or(0);
             if read == 0 {
                 return Err(failed);
             }
-            if read == MAX_READ && !line.ends_with('\n') {
+            if read == MAX_READ && !bytes.ends_with(b"\n") {
                 return Ok(Err("oversize"));
             }
+            let line = String::from_utf8_lossy(&bytes);
             let said = line.trim_end();
             if let Some(out) = failed.as_mut() {
                 if out.len() < MAX_READ {
@@ -271,6 +274,13 @@ pub async fn open(target: &Target, stage: impl Fn(Stage)) -> Result<Tunnel, Fail
                 Some("failed") => failed = Some(String::new()),
                 Some("tunnel-coming") => address_coming = true,
                 Some(rest) => {
+                    // An empty token file says `token ` and nothing after,
+                    // and the trim above has taken that space: answered here
+                    // as an empty token, which is "never run there" below,
+                    // rather than waited on until the timeout.
+                    if rest == "token" {
+                        return Ok(Ok(String::new()));
+                    }
                     if let Some(token) = rest.strip_prefix("token ") {
                         return Ok(Ok(token.trim().to_string()));
                     }

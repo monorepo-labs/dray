@@ -621,6 +621,66 @@ describe("a call whose background task the child still holds", () => {
     expect(subagentById.get("c2")?.background).toBe(false);
   });
 
+  /// A Claude Code subagent numbers its events from 0 again, so its newest
+  /// call sorts ahead of every later prompt on the main thread. That prompt
+  /// says nothing about it: the call is open for as long as its run is.
+  describe("the subagent's own call", () => {
+    const inner = (seq: number, callId: string, runId: string): AgentEvent => ({
+      ...callStarted(seq, callId),
+      subagent: { id: runId, label: "Explore" },
+    });
+    const answered = (seq: number, callId: string): AgentEvent =>
+      event(seq, {
+        type: "tool_call_completed",
+        callId,
+        result: { text: "", isError: false, structured: null, exitCode: null, durationMs: null, images: [] },
+      } as AgentEventPayload);
+
+    it("stays pending under a prompt its restarted seq sorts ahead of", () => {
+      const { resultByCallId } = buildTranscript(
+        [
+          prompt(0, "first", false),
+          completed(10),
+          prompt(11, "second", false),
+          callStarted(12, "c1"),
+          spawn(13, "c1", "t1"),
+          inner(5, "inner", "c1"),
+        ],
+        true,
+        new Set(["t1"]),
+      );
+
+      expect(resultByCallId.get("inner")).toBeUndefined();
+    });
+
+    it("is abandoned once its run is over", () => {
+      const { resultByCallId, subagentById } = buildTranscript(
+        [
+          prompt(0, "first", false),
+          callStarted(1, "c1"),
+          spawn(2, "c1", "t1"),
+          inner(5, "inner", "c1"),
+          answered(6, "c1"),
+          completed(10),
+          prompt(11, "second", false),
+        ],
+        true,
+      );
+
+      expect(subagentById.get("c1")?.done).toBe(true);
+      expect(resultByCallId.get("inner")?.text).toMatch(ABANDONED);
+    });
+
+    it("is abandoned with everything else once nothing is running", () => {
+      const { resultByCallId } = buildTranscript(
+        [prompt(0, "go", false), callStarted(1, "c1"), spawn(2, "c1", "t1"), inner(5, "inner", "c1")],
+        false,
+      );
+
+      expect(resultByCallId.get("inner")?.text).toMatch(ABANDONED);
+    });
+  });
+
   /// The abandoned stand-in is a result too, and must not count: nothing
   /// answered, the child died.
   it("does not read an abandoned run as background", () => {

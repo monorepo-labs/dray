@@ -150,9 +150,13 @@ pub fn watch_docs(app: Sink, scope: String, paths: Vec<String>) -> Result<(), St
     for dir in dirs {
         // Non-recursive: a doc's own directory can be a source tree, and a
         // recursive watch there would report every file the agent touches.
-        watcher
-            .watch(&dir, RecursiveMode::NonRecursive)
-            .map_err(|e| e.to_string())?;
+        //
+        // Skipped where it cannot be watched, as promised above: failing the
+        // call here dropped the new watcher whole, so one unreadable directory
+        // left every other newly opened doc unwatched too.
+        if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
+            eprintln!("[watch_docs] {}: {e}", dir.display());
+        }
     }
 
     held.insert(scope, watcher);

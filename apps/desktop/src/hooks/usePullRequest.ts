@@ -57,6 +57,10 @@ const partsOf = (key: string) => {
 /// overwrote the newer one, undoing exactly the sync it was asked for.
 const latest = new Map<string, number>();
 
+/// Reads in flight per branch, counted rather than flagged: a forced read may
+/// start over one still out, and the first to land must not clear the other.
+const reading = new Map<string, number>();
+
 // The sidebar's read saw this branch change. Every cwd's stamp for it under
 // that repo goes, not just the selected one: the marks are keyed by repo root
 // and the panel by cwd, which differ for a worktree session, and a stale stamp
@@ -103,6 +107,10 @@ export function prTabVisible(prs: PullRequest[], error: PrUnavailable | null): b
   if (error?.kind === "no_cli" || error?.kind === "not_authenticated") return true;
   return prs.length > 0;
 }
+
+/// The write in flight: which pull request, and which button. Every button
+/// in the list is disabled by it; only the one that was pressed says so.
+export type PrActing = { number: number; kind: PrAction["kind"] };
 
 export type PrAction =
   | { kind: "merge"; method: MergeMethod }
@@ -164,7 +172,7 @@ export function usePullRequest(
     error: null,
     loading: false,
   }));
-  const [acting, setActing] = useState(false);
+  const [acting, setActing] = useState<PrActing | null>(null);
 
   // Read inside async work that outlives the render it started in, so a write
   // landing after a session switch can tell it is answering the wrong branch.
@@ -198,8 +206,12 @@ export function usePullRequest(
         commit(key, () => ({ prs: cache.get(key) ?? [], error: null, loading: false }));
         return;
       }
+      // A switch runs two effects that both ask, and each started a `gh` of
+      // its own for the one answer — out of a budget every agent shares.
+      if (!force && reading.get(key)) return;
 
       commit(key, (prev) => ({ ...prev, loading: true }));
+      reading.set(key, (reading.get(key) ?? 0) + 1);
 
       // Read before the write below, since that is what makes this an
       // appearance rather than a first sighting.
@@ -232,6 +244,8 @@ export function usePullRequest(
         // The previous answer stays up: a failed refresh is a refresh that
         // failed, not the PR going away.
         commit(key, (prev) => ({ ...prev, error: asUnavailable(e), loading: false }));
+      } finally {
+        reading.set(key, (reading.get(key) ?? 1) - 1);
       }
     },
     [cwd, branch, key, commit],
@@ -243,7 +257,7 @@ export function usePullRequest(
   // flag set would disable the arriving session's buttons.
   useEffect(() => {
     setState({ prs: key ? (cache.get(key) ?? []) : [], error: null, loading: false });
-    setActing(false);
+    setActing(null);
   }, [key]);
 
   useEffect(() => {
@@ -303,7 +317,7 @@ export function usePullRequest(
       if (acting) return;
       const k = key;
 
-      setActing(true);
+      setActing({ number, kind: action.kind });
       try {
         if (action.kind === "merge") {
           await invoke("merge_pr", { cwd, number, method: action.method });
@@ -324,7 +338,7 @@ export function usePullRequest(
         // Both guarded together: the arriving session owns `acting` now, and
         // refreshing a branch the reader has left would overwrite its rows.
         if (keyRef.current === k) {
-          setActing(false);
+          setActing(null);
           await load(true);
         }
       }

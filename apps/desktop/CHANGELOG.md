@@ -19,6 +19,35 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.29.19 · 2026-11-09 · notify
+
+### New
+
+- **Break reminders.** After an hour of active use, Dray asks you to
+  stand up and stretch. Set the interval or turn it off in Settings →
+  Breaks.
+
+  ![](changelog/break-reminder.png)
+
+- **Crew shows only what needs you.** When a session you started waits on
+  a permission or a question, its card shows above your composer. Arrows
+  step through several; number keys answer.
+- ⌘⇧S picks the next machine on a new task.
+
+### Improved
+
+- The Island stacks waiting cards, and lists them all from the header.
+  Dismiss hides them until the next new ask.
+- A remote session's machine name sits beside its branch in the header.
+- Dictation works in remote chats.
+
+### Fixed
+
+- A Mac running Dray as a server now says when it's behind.
+- Extending a boat sandbox clears the Island's warning at once.
+- `dray` keeps working after its socket file is deleted or replaced.
+- Pressing Escape or Tab in the browser no longer opens About Dray.
+
 ## 0.29.18 · 2026-11-08
 
 ### New

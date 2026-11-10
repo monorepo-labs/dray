@@ -30,6 +30,7 @@ import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedMo
 import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
 import { setOlderLoader } from "@/lib/olderPages";
+import { EMPTY_TASKS } from "@/lib/transcript";
 import { stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
@@ -171,8 +172,9 @@ const removed = (server: ServerId): boolean =>
 const connectedRemotes = (): ServerId[] =>
   remoteServers().flatMap((s) => (s.status === "connected" ? [s.id] : []));
 
-/// One shared empty set, so a session with no tasks keeps its transcript memo.
-const NO_TASKS: ReadonlySet<string> = new Set();
+/// The transcript's own empty set, so a session with no tasks shares one memo
+/// entry with every reader that passes none.
+const NO_TASKS = EMPTY_TASKS;
 
 /// What a transcript pane draws for one session. The selected session's fields
 /// on the hook's return are this, spread.
@@ -859,7 +861,7 @@ const handleSendMsg = async (
   // Read before the optimistic write below overwrites it. A send onto a running
   // turn must not release that turn's status if it fails — the turn is still
   // running, and the failure was this prompt's alone.
-  const wasBusy = statusBySession[sessionId] === "in_progress";
+  const wasBusy = statusOf(sessionId) === "in_progress";
   // Optimistic: the backend publishes the same transition once the prompt
   // reaches the child, but the composer must read busy the moment Enter lands.
   setStatusBySession((prev) => ({ ...prev, [sessionId]: "in_progress" }));
@@ -1067,8 +1069,9 @@ const handleSendMsg = async (
       // A new session is never archived, so it belongs to the active list only —
       // pushed unconditionally it would show up under the archived filter too.
       // Deduped: the server announces every new session on `session_created`,
-      // and that can land before this reply does.
-      if (!showArchived) {
+      // and that can land before this reply does. The ref, not the closure:
+      // the reader can toggle the split while the send is in flight.
+      if (!showArchivedRef.current) {
         setSessionIndexItems((prev) =>
           prev.some((i) => i.sessionId === snapshot.sessionId)
             ? prev.map((i) => (i.sessionId === snapshot.sessionId ? snapshot : i))
@@ -1368,8 +1371,7 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   // every selection rather than only its own: the mark survives being looked
   // away from, and the next visit is what answers it.
   keptUnreadRef.current = null;
-  const clicked = sessionIndexItems.find((i) => i.sessionId === sessionId);
-  if ((statusBySession[sessionId] ?? clicked?.status) === "completed") {
+  if (statusOf(sessionId) === "completed") {
     markSessionRead(sessionId);
   }
 
@@ -1439,12 +1441,6 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   return false;
 }
 
-
-
-// One call for both flags, so a click writes only the one it owns. The row is
-// replaced from what the store returned rather than from the value we sent —
-// the index is authoritative, and a failed write must not leave the sidebar
-// showing a state the disk doesn't have.
 /// Cuts a spawned session loose from its parent, so the sidebar stops nesting
 /// it under a row it no longer belongs to.
 ///
@@ -1522,7 +1518,13 @@ const applyIndexItem = (updated: SessionIndexItem) => {
   if (updated.archived) evictSessions({ sessionId });
 };
 
-/// Writes a session's settled or pinned flag, and answers whether it landed.
+/// Writes a session's flags — settled, pinned, hidden, set aside — and answers
+/// whether it landed.
+///
+/// One call for all of them, so a click writes only the one it owns. The row is
+/// replaced from what the store returned rather than from the value sent — the
+/// index is authoritative, and a failed write must not leave the sidebar
+/// showing a state the disk doesn't have.
 ///
 /// The answer is what callers navigate on. A failed write leaves the row where
 /// it was, so acting anyway — following it to the other view, celebrating a
@@ -1752,8 +1754,9 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
   setError(null);
   upsertSession(snapshot);
   // A fork is never archived, so it belongs to the active list alone — pushed
-  // unconditionally it would show up under the archived filter too.
-  if (!showArchived) {
+  // unconditionally it would show up under the archived filter too. The ref,
+  // since this runs after the fork's round trip.
+  if (!showArchivedRef.current) {
     setSessionIndexItems((prev) => [...prev, snapshot]);
   }
   // Claimed like every other selection path, or an eviction tick landing
@@ -1776,9 +1779,23 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
 // is the one path that also restores the user's own defaults.
 const deleteSession = async (sessionId: string) => {
   const fail = failUnlessLeft();
+  // Marked before the call, not after it. Deleting a session mid-turn kills
+  // its child, and the status that publishes lands while this is still
+  // awaiting its answer — where it announced "Done" for a session on its way
+  // out and left its status behind for good.
+  deletedRef.current.add(sessionId);
   try {
     await invoke<boolean>("delete_session", { sessionId });
   } catch (e) {
+    deletedRef.current.delete(sessionId);
+    // A delete can stop the child and then fail, and the status that said so
+    // was dropped above. The index has it: the live reading goes, so the row
+    // falls back on the entry read here.
+    setStatusBySession(({ [sessionId]: _, ...rest }) => rest);
+    setWorkingBySession(({ [sessionId]: _, ...rest }) => rest);
+    invoke<SessionIndexItem | null>("session_index_item", { sessionId })
+      .then((item) => item && applyIndexItem(item))
+      .catch((err) => console.error("could not reread", sessionId, err));
     fail(e);
     return;
   }
@@ -1793,7 +1810,8 @@ const deleteSession = async (sessionId: string) => {
   setWorkingBySession(({ [sessionId]: _, ...rest }) => rest);
   setTasksBySession(({ [sessionId]: _, ...rest }) => rest);
   setQueuedBySession(({ [sessionId]: _, ...rest }) => rest);
-  deletedRef.current.add(sessionId);
+  // Every kind: a card about a session that is gone opens nothing.
+  dismissNotice(sessionId);
   forgetTranscript(sessionId);
   forgetDocs(sessionId);
   forgetOpenFiles(sessionId);
@@ -2005,8 +2023,6 @@ useEffect(() => {
 useEffect(() => {
   const setupListener = async () => {
     const unlisten = await listen<AgentEvent>("agent_event", (event) => {
-      // console.log(event);
-
       const agentEvent = event.payload;
 
         // A signal to re-read git and GitHub, never a row: kept out of the
@@ -2060,7 +2076,10 @@ useEffect(() => {
                 commit();
                 retireStreamingBlock(agentEvent.sessionId);
               });
-            } else {
+            } else if (agentEvent.payload.type !== "usage_update") {
+              // A running counter the indicator reads below and no row draws.
+              // Several land a second while the model thinks, and each one in
+              // the events was a new array and a transcript rebuilt for nothing.
               commit();
             }
 
@@ -2168,10 +2187,7 @@ useEffect(() => {
               // ended with a task still open kept its asks, since the task's
               // subagent could be the one asking. With the set drained and no
               // turn running, nothing is left that could answer them.
-              if (
-                tasks.length === 0 &&
-                statusBySessionRef.current[agentEvent.sessionId] !== "in_progress"
-              ) {
+              if (tasks.length === 0 && statusOf(agentEvent.sessionId) !== "in_progress") {
                 setAsksBySession((prev) =>
                   prev[agentEvent.sessionId]?.length
                     ? { ...prev, [agentEvent.sessionId]: [] }
@@ -2338,6 +2354,13 @@ const projectsRef = useRef(orderedProjects);
 projectsRef.current = orderedProjects;
 const statusBySessionRef = useRef(statusBySession);
 statusBySessionRef.current = statusBySession;
+/// A session's status: the live reading where one has arrived, the index's
+/// otherwise. The live map starts empty and every `live_state` empties it
+/// again, so read alone it calls a session idle that is mid-turn on its server
+/// — which evicted its transcript and released its status on a failed send.
+const statusOf = (sessionId: string): SessionStatus | undefined =>
+  statusBySessionRef.current[sessionId]
+  ?? sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId)?.status;
 const tasksBySessionRef = useRef(tasksBySession);
 tasksBySessionRef.current = tasksBySession;
 
@@ -2567,10 +2590,7 @@ const setOnScreen = (ids: string[]) => {
   for (const id of next) {
     if (prev.has(id)) continue;
     lastViewedRef.current.set(id, now);
-    const status =
-      statusBySessionRef.current[id]
-      ?? sessionIndexItemsRef.current.find((i) => i.sessionId === id)?.status;
-    if (isWindowFocused() && status === "completed") markSessionRead(id);
+    if (isWindowFocused() && statusOf(id) === "completed") markSessionRead(id);
     // Selecting a session already asked for it, and a group opens that way.
     if (id !== selectionRequestRef.current) refreshHeld(id);
   }
@@ -2660,7 +2680,7 @@ const neighboursRef = useRef<ReadonlySet<string>>(new Set());
 const setNeighbours = (ids: string[]) => {
   neighboursRef.current = new Set(ids);
   for (const id of ids) {
-    if (statusBySessionRef.current[id] !== "in_progress") void ensureLoaded(id, false);
+    if (statusOf(id) !== "in_progress") void ensureLoaded(id, false);
   }
 };
 /// Lets the warmed neighbours go now rather than at the next sweep. One the
@@ -2756,8 +2776,7 @@ const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) =>
   // the early-event hold), or one holding a card only its child can redraw.
   const held = (s: SessionSnapshot) => {
     const forced = s.sessionId === force?.sessionId;
-    const status =
-      forced && force.status ? force.status : statusBySessionRef.current[s.sessionId];
+    const status = forced && force.status ? force.status : statusOf(s.sessionId);
     return (
       onScreen(s.sessionId)
       || s.sessionId === selectionRequestRef.current
@@ -2831,19 +2850,6 @@ const markSessionUnread = (sessionId: string) => {
   void invoke("mark_session_read", { sessionId, read: false }).catch(() => {});
 };
 
-/// Tell the reader about something that happened in a session, on exactly one
-/// channel, chosen by where they are. Returns whether they were already looking
-/// at it — the one case nothing is raised, since the transcript itself is the
-/// notification.
-///
-/// Shared by every announcement rather than repeated per event: a desktop banner
-/// in front of someone looking at the window is an interruption, and an in-app
-/// card is invisible from another app, so the split has to be made the same way
-/// everywhere or one event ends up on two channels.
-/// The two channels are told apart on purpose. A desktop banner lands in a
-/// stack beside every other app's, so it has to name the session and the
-/// project or it says nothing; the in-app card is the only card on screen next
-/// to a sidebar already marking the row, so it needs the verb and nothing else.
 /// Whether a session may say anything at all right now — the space rule, asked
 /// once for every channel.
 ///
@@ -2871,6 +2877,22 @@ const canAnnounce = (sessionId: string): boolean => {
   return allowedInSpace(projectsRef.current, space, projectPath);
 };
 
+/// Tell the reader about something that happened in a session, on exactly one
+/// channel, chosen by where they are. Returns whether they were already looking
+/// at it — the one case nothing is raised, since the transcript itself is the
+/// notification.
+///
+/// Shared by every announcement rather than repeated per event: a desktop banner
+/// in front of someone looking at the window is an interruption, and an in-app
+/// card is invisible from another app, so the split has to be made the same way
+/// everywhere or one event ends up on two channels. Away from the window, Dray
+/// Island takes an ask or a finished turn while it runs and the banner stays
+/// down.
+///
+/// Banner and card are worded apart on purpose. A desktop banner lands in a
+/// stack beside every other app's, so it has to name the session or it says
+/// nothing; the in-app card is the only card on screen next to a sidebar
+/// already marking the row, so it needs the verb and nothing else.
 const announce = (sessionId: string, kind: NoticeKind, label: string): boolean => {
   const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
 
@@ -2945,7 +2967,7 @@ useEffect(
       const shown = [selectedSessionIdRef.current, ...onScreenRef.current];
       for (const sessionId of shown) {
         if (sessionId === keptUnreadRef.current) continue;
-        if (sessionId && statusBySessionRef.current[sessionId] === "completed") {
+        if (sessionId && statusOf(sessionId) === "completed") {
           markSessionRead(sessionId);
         }
       }
@@ -3003,6 +3025,8 @@ useEffect(() => {
 useEffect(() => {
   const listenerPromise = listen<SessionStatusEvent>("session_status", (event) => {
     const { sessionId, status, modified } = event.payload;
+    // Its child dying is the last thing a deleted session says.
+    if (deletedRef.current.has(sessionId)) return;
 
     // Only completion moves this, and the sidebar sorts by it — so a session
     // finishing in the background rises to the top the moment it does, rather
@@ -3047,10 +3071,6 @@ useEffect(() => {
   };
 }, []);
 
-// The backend generates a title a few seconds after a session starts and writes
-// it to the index itself, so this only mirrors what's already on disk. Its own
-// listener rather than a branch in `agent_event`: nothing here came from the
-// agent, and it must not land in the session's event list.
 // A session created by something other than the composer — an agent calling the
 // `dray` CLI, which reaches the backend over its own socket. The row has to
 // appear without a refetch, the way a composer-created one does.
@@ -3112,6 +3132,10 @@ useEffect(() => {
   };
 }, []);
 
+// The backend generates a title a few seconds after a session starts and writes
+// it to the index itself, so this only mirrors what's already on disk. Its own
+// listener rather than a branch in `agent_event`: nothing here came from the
+// agent, and it must not land in the session's event list.
 useEffect(() => {
   const listenerPromise = listen<SessionTitleEvent>("session_title", (event) => {
     const { sessionId, title, titleLocked } = event.payload;
@@ -3180,13 +3204,6 @@ useDockBadge(statusBySession, asksBySession, sessionIndexItems);
 // and the flush that empties it is the thing that clears these.
 const queuedMessages = selectedSessionId ? queuedBySession[selectedSessionId] ?? [] : [];
 
-// Gated on `busy` for the same reason the background-task set is: this is live
-// state, and a session that ended while it was unmounted has no event left to
-// arrive and clear it.
-const working: Working | null = busy && selectedSessionId
-  ? workingBySession[selectedSessionId] ?? null
-  : null;
-
 // Not gated on `busy`, unlike the two around it: a task outlives the turn that
 // spawned it, and that is the whole point of the set having its own indicator.
 const backgroundTasks: BackgroundTask[] = useMemo(
@@ -3207,9 +3224,6 @@ const liveTaskIdsBySession = useMemo(
   [tasksBySession],
 );
 const liveTaskIds = liveTaskIdsBySession[selectedSessionId ?? ""] ?? NO_TASKS;
-
-const compacting = compactingOf(selectedSession, busy);
-const apiRetry = apiRetryOf(selectedSession, busy);
 
 /// The live state one split pane draws — what the selected session's own
 /// fields above answer, for any loaded session.
@@ -3279,6 +3293,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
 
 }

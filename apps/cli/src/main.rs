@@ -391,8 +391,8 @@ struct VideoAdd {
 
 #[derive(Subcommand)]
 enum SkillCommand {
-    /// Write the skill to ~/.claude/skills/dray/ and ~/.codex/skills/dray/,
-    /// where Claude Code and Codex find it.
+    /// Write the skill to ~/.claude/skills/dray/, ~/.codex/skills/dray/ and
+    /// ~/.agents/skills/dray/, where Claude Code, Codex and pi find it.
     Install,
 }
 
@@ -1049,11 +1049,17 @@ fn update(args: Update) -> Result<(), String> {
         }
     }
 
+    // The installer exits 0 on "already installed" too, so success alone says
+    // nothing about the server being left behind. A replaced binary does.
+    let serve = dir.join("dray-serve");
+    let stamp = || std::fs::metadata(&serve).and_then(|meta| meta.modified()).ok();
+    let before = stamp();
+
     match sh.status() {
         Ok(status) if status.success() => {
             // Not restarted for the reader: that stops every agent running on
             // it, and the usual caller here is one of those agents.
-            if let Some(restart) = setup::installed_restart() {
+            if let Some(restart) = setup::installed_restart().filter(|_| stamp() != before) {
                 eprintln!(
                     "The background server runs the old version until restarted, which \
                      stops running agents: {restart}"
@@ -1269,6 +1275,14 @@ fn parent_session_id() -> Option<String> {
 /// session's own project, and only refuses when there is no parent either.
 fn resolve_project(explicit: Option<PathBuf>) -> Option<String> {
     if let Some(path) = explicit {
+        // Made absolute here, as `add_video` resolves its file: a relative
+        // path means this shell's directory, and the server stands in another
+        // — under launchd that is `/`, so `--project .` matched no session.
+        // Left as typed for another machine, where the path is that machine's.
+        let path = match MACHINE.get() {
+            None => std::path::absolute(&path).unwrap_or(path),
+            Some(_) => path,
+        };
         return Some(path.to_string_lossy().into_owned());
     }
 

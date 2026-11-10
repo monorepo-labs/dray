@@ -136,7 +136,8 @@ pub(super) async fn initialize(cwd: &str) -> Result<Value> {
 /// of it changes the answer and every flag is one more way the probe can fail
 /// where a session would not.
 async fn probe(cwd: &str) -> Result<Value> {
-    let mut child = Command::new(crate::binpath::claude().await)
+    let bin = crate::binpath::claude().await;
+    let mut child = Command::new(&bin)
         .args([
             "-p",
             "--input-format",
@@ -146,6 +147,9 @@ async fn probe(cwd: &str) -> Result<Value> {
             "--verbose",
         ])
         .current_dir(cwd)
+        // As every other spawn of it: an npm-installed `claude` is a node
+        // script, and launchd's `PATH` holds no `node` to run it on.
+        .env("PATH", crate::harness::agent_path(&bin))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

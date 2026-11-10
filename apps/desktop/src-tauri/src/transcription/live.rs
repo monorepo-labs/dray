@@ -62,7 +62,7 @@ impl Live {
     /// Also the press's warm: a model that cannot stream is loaded and left in
     /// the slot for the batch run at the stop.
     pub fn start(engine: Engine, model: &'static TranscriptionModel, tap: Tap) -> Self {
-        // Taken before any await, for `warm_selected`'s old reason: a switch
+        // Taken before any await, for [`Engine::token`]'s reason: a switch
         // landing in a gap would otherwise be adopted as this load's own.
         let token = engine.token();
         let (tx, rx) = mpsc::channel();

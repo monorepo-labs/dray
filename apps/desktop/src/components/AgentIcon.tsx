@@ -1,12 +1,12 @@
 import { cn } from "@/lib/utils";
 import type { Harness } from "@/types/events";
 
-/// The two agents' own marks, drawn wherever a session's harness is named.
+/// The agents' own marks, drawn wherever a session's harness is named.
 ///
 /// `currentColor` for [`LinearIcon`](./LinearIcon.tsx)'s reason: these sit in a
 /// row of muted chrome, and a saturated logo would be the loudest thing on a
 /// surface whose job is to be quiet. It also lets one selected icon go
-/// `text-foreground` while the other stays muted, which is the whole of how the
+/// `text-foreground` while the others stay muted, which is the whole of how the
 /// picker shows which agent is on.
 function ClaudeIcon({ className }: { className?: string }) {
   return (
@@ -103,7 +103,7 @@ function PiIcon({ className }: { className?: string }) {
 const CLAUDE_RUST = "text-[#d97757]";
 
 /// The mark for a harness, so a caller with a `Harness` in hand never has to
-/// branch on it. One place to add the third agent's.
+/// branch on it. One place to add the next agent's.
 ///
 /// `brand` where the mark is the subject — the agent picker, and the trigger
 /// that names which agent is running. Everywhere else it stays `currentColor`,

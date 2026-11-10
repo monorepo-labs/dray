@@ -1,5 +1,10 @@
 name: Release
 
+# Third-party actions are pinned to commit SHAs, for release-cli.yml's reason:
+# a tag can be moved by whoever owns the action, and this job holds the signing
+# and upload keys. The trailing comment is the readable version; bump both
+# together. desktop-setup and warm-cache.yml follow the same rule.
+
 # A tag is the whole trigger, and its shape picks the channel: `v0.3.0` is
 # stable, `v0.3.0-beta.1` is beta. Semver's own prerelease rule is what makes
 # that work end to end — the updater compares versions, and `0.3.0-beta.1` is
@@ -36,7 +41,7 @@ jobs:
       channel: ${{ steps.channel.outputs.channel }}
       dmg: ${{ steps.mirror.outputs.dmg }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # The manifest's version is the app's, not the tag's — a tag that names a
       # version the conf doesn't carry publishes a manifest no client considers
@@ -107,7 +112,7 @@ jobs:
       #
       # It used to run as its own step ahead of the action, with a cargo build
       # of its own. See the script for why that compiled the tree twice.
-      - uses: apple-actions/import-codesign-certs@v3
+      - uses: apple-actions/import-codesign-certs@63fff01cd422d4b7b855d40ca1e9d34d2de9427d # v3
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -128,7 +133,7 @@ jobs:
       - name: Build the dray CLI
         run: apps/desktop/scripts/cli-sidecar.sh apps/desktop/src-tauri/target/cli
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Signs the updater bundle. Separate from Apple's signature and not
@@ -244,7 +249,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: updates
           fetch-depth: 1

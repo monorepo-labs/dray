@@ -8,9 +8,6 @@ import { diffSides, type EditSides } from "@/lib/diff";
 import { basename } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-/// `parseDiffFromFile` is pure and synchronous but walks both files, so it is
-/// memoized on the text rather than run on every transcript re-render — a
-/// streaming turn re-renders the whole list on each delta.
 export default function DiffView({
   sides,
   className,
@@ -51,6 +48,8 @@ export default function DiffView({
   const name = basename(sides.path);
   const ready = useHighlighter(getFiletypeFromFileName(name), pair);
 
+  // `parseDiffFromFile` is pure and synchronous but walks both files, so it is
+  // memoized on the text rather than run on every transcript re-render.
   const fileDiff = useMemo(
     () => parseDiffFromFile(...diffSides(sides)),
     [sides.path, sides.oldText, sides.newText],

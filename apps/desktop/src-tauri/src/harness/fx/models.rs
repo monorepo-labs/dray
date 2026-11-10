@@ -257,7 +257,7 @@ static SETTINGS_WRITE: LazyLock<tokio::sync::Mutex<()>> =
 
 /// Sets one field in `~/.fx/settings.json`, preserving every other. Errors —
 /// no home dir, missing or unparseable file — are the caller's to answer for:
-/// the provider switch falls back to the CLI, the fast-mode write carries on
+/// the provider switch falls back to the CLI, the titling write carries on
 /// without it.
 ///
 /// **Read, modify, write — never write a whole object built here.** The file is
@@ -296,7 +296,7 @@ async fn write_setting_at(
         .context("fx settings is not an object")?;
 
     // Nothing to do, and that is worth checking rather than writing anyway:
-    // every fx session creation asks for the fast-mode field, and a rename over
+    // every fx session creation asks for `session_titles` off, and a rename over
     // somebody else's config file is not a thing to do for no change. It also
     // keeps the one window this cannot close — an fx write landing between the
     // read and the rename — shut for the overwhelmingly common case.
@@ -310,8 +310,8 @@ async fn write_setting_at(
     // mint a mode of our own — and fx keeps it at `0600`, as it does every file
     // beside it. `fs::write` creates at the process umask, so the rename was
     // handing the reader back a `0644` copy of their own config on every write
-    // through here — a provider switch, and every session creation that moves
-    // fast mode — readable by any other account on the machine. Measured, not
+    // through here — a provider switch, and a session creation that turns fx's
+    // titling off — readable by any other account on the machine. Measured, not
     // feared: fx rewrites the mode to `0600` on each of its own writes, so the
     // widening was Dray's alone and came back every time.
     //
@@ -1087,7 +1087,7 @@ mod tests {
 
     /// The file is fx's, kept at `0600` like everything beside it, and **every**
     /// write through here must hand it back at the mode it was found at — the
-    /// provider switch and the fast-mode write each session creation makes.
+    /// provider switch and the titling write each session creation makes.
     /// `fs::write` creates at the process umask, so without this the reader's own
     /// config came back `0644` — and fx rewrites `0600` on its next write, so the
     /// widening returned each time rather than settling.

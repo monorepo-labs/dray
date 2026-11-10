@@ -65,9 +65,9 @@ Fast mode runs the model at its faster tier. The **Fast mode** switch sits in th
 
 | Agent | Fast mode |
 |---|---|
-| Claude Code | Opus models. Changes in place, even mid-turn. |
-| Codex | Models that report a fast tier. A change restarts the agent process at the next send. |
-| fx | New tasks only. It cannot change after the session starts. It also sets fx's own default on your machine. |
+| Claude Code | Opus 5.5 and Opus 5. Changes in place, even mid-turn. |
+| Codex | Models that report a fast tier. A change applies from your next turn. |
+| fx | Models that report a fast tier. A change applies from your next turn. |
 | Grok | Grok 4.7 only. |
 | pi | None. |
 
@@ -91,7 +91,7 @@ Each agent offers only the modes it can honour:
 | Claude Code | All four. |
 | Codex | Ask every time, Auto, Bypass permissions. |
 | Grok | Ask every time, Auto, Bypass permissions. Grok has a plan mode of its own; see [Permissions](/using-dray/permissions#approve-a-plan). |
-| fx | Ask every time, Auto. |
+| fx | Ask every time, Auto, Bypass permissions. |
 | pi | No picker. pi has no permission system of its own; an extension you install decides. |
 
 When the agent asks, a card appears in the transcript. See [Permissions](/using-dray/permissions).
@@ -105,7 +105,7 @@ Some agents cannot take a change in the middle of a turn. There, the control dim
 | Claude Code | Effort |
 | Codex | Model, effort, permission mode, fast mode |
 | Grok | Permission mode |
-| fx | Provider. Model, effort and permission mode stay open and apply to the next turn. |
+| fx | Provider. Model, effort, permission mode and fast mode stay open and apply to the next turn. |
 | pi | Nothing |
 
 ## Send while a turn runs
@@ -165,6 +165,5 @@ You can change any of these in Settings → Shortcuts.
 ## Limits
 
 - Agent, project, branch and worktree are set at creation and cannot change later.
-- On Codex, changing the model or effort applies at the next send by restarting the agent process.
 - On Claude Code, changing effort restarts the agent process at the next send.
-- fx's fast mode and provider are fx's own machine-wide settings, so changing them also changes fx in your terminal.
+- fx's provider and permission mode are fx's own machine-wide settings, so changing them also changes fx in your terminal.

@@ -225,21 +225,21 @@ mod pi_resolution_tests {
 
 /// Whether the agent's CLI is installed and usable.
 ///
-/// Read off the resolver's own answer rather than probing again: both cache in
-/// a `OnceLock`, absence included, so this costs nothing after the first call —
-/// which matters, since a failed resolution is the expensive one (it ends in a
-/// login shell reading the whole rc chain).
+/// Read off the resolver's own answer rather than probing again: each caches
+/// in a `OnceCell`, absence included, so this costs nothing after the first
+/// call — which matters, since a failed resolution is the expensive one (it
+/// ends in a login shell reading the whole rc chain).
 ///
 /// **The test is `is_absolute`.** A successful resolution is always an absolute
-/// path; the bare-name fallback both resolvers end at is the only relative
-/// answer either can give. For Codex that covers the stale binary for free: one
+/// path; the bare-name fallback every resolver ends at is the only relative
+/// answer any of them can give. For Codex that covers the stale binary for free: one
 /// with no `app-server` subcommand never satisfies `speaks_app_server`, so it
 /// falls through to the bare name exactly like an absent one — and "installed
 /// but cannot be driven" is the same answer to the reader as "not installed".
 ///
 /// The cache never invalidates, so a CLI installed while the app runs still
-/// reads as missing until restart. That is the same bargain `gh` already makes,
-/// and it is why nothing here offers to install anything: the reader is at a
+/// reads as missing until restart — `gh` alone has a recheck, [`forget_gh`].
+/// It is why nothing here offers to install anything: the reader is at a
 /// terminal by then anyway.
 pub async fn agent_available(harness: Harness) -> bool {
     harness.names_a_cli() && agent_installed(harness).await
@@ -386,7 +386,7 @@ pub fn resolved_bin_dirs() -> Vec<PathBuf> {
     // Read, never probed: this runs on the spawn path, and `gh`'s slot is the
     // one here that can be empty because nothing has asked yet.
     let gh = GH_PATH.read().unwrap().clone().flatten();
-    [CLAUDE_PATH.get(), CODEX_PATH.get(), PI_PATH.get()]
+    [CLAUDE_PATH.get(), CODEX_PATH.get(), PI_PATH.get(), FX_PATH.get(), GROK_PATH.get()]
         .into_iter()
         .flatten()
         .cloned()

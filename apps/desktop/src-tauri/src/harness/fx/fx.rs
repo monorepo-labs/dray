@@ -102,6 +102,10 @@ pub struct FxSession {
     /// Fast mode as fx last reported it, or `None` where the active model has
     /// no `fast` option — fx before 0.0.14, or a model with no fast lane.
     fast: Arc<std::sync::Mutex<Option<bool>>>,
+    /// The mode id the session is on: what it opened in, then whatever
+    /// [`set_mode`] last put it on. What lets an unchanged stance send nothing,
+    /// since every `session/set_mode` rewrites the reader's global default.
+    mode: Arc<std::sync::Mutex<Option<String>>>,
     /// Settings a send made while a prompt was open, held for the turn the
     /// queue opens. fx refuses every config change mid-prompt
     /// (`-32600 Prompt already in progress`, measured), and its queued
@@ -326,6 +330,7 @@ pub async fn init(
         provider: Arc::new(std::sync::Mutex::new(None)),
         model: Arc::new(std::sync::Mutex::new(None)),
         fast: Arc::new(std::sync::Mutex::new(None)),
+        mode: Arc::new(std::sync::Mutex::new(opened_mode(&answer).map(str::to_string))),
         deferred: Arc::default(),
         applied: Arc::default(),
         legacy_modes: offers_code_mode(&answer),
@@ -384,16 +389,15 @@ pub async fn init(
     // freer or narrower than the reader asked, which is not something to
     // report and carry on from.
     //
-    // Skipped where the session already opened on it. fx 0.0.14 writes every
-    // `set_mode` into the reader's global `permission_mode` — by design, its
-    // changelog says ACP changes are remembered "for future CLI and ACP
-    // sessions" — and a session opens in that saved mode, so asking again
-    // would rewrite their TUI default for nothing.
-    if opened_mode(&answer) != Some(mode_for(permission_mode, session.legacy_modes)) {
-        if let Err(error) = set_mode(&session, permission_mode).await {
-            let _ = child.kill().await;
-            return Err(error);
-        }
+    // [`set_mode`] sends nothing where the session already opened on it. fx
+    // 0.0.14 writes every `set_mode` into the reader's global
+    // `permission_mode` — by design, its changelog says ACP changes are
+    // remembered "for future CLI and ACP sessions" — and a session opens in
+    // that saved mode, so asking again would rewrite their TUI default for
+    // nothing.
+    if let Err(error) = set_mode(&session, permission_mode).await {
+        let _ = child.kill().await;
+        return Err(error);
     }
 
     let _ = ready_tx.send(session.clone());
@@ -861,15 +865,23 @@ pub fn mode_for(mode: ApprovalPolicy, legacy: bool) -> &'static str {
     }
 }
 
-/// Moves a live session onto another stance.
+/// Moves a live session onto another stance. Sends nothing where it is
+/// already there: the deferred flush hands over the whole pick on every prompt
+/// queued mid-turn, and each call fx takes rewrites `~/.fx/settings.json` and
+/// leaves a backup beside it.
 pub async fn set_mode(session: &FxSession, mode: ApprovalPolicy) -> Result<()> {
+    let wanted = mode_for(mode, session.legacy_modes);
+    if session.mode.lock().expect("fx mode poisoned").as_deref() == Some(wanted) {
+        return Ok(());
+    }
     session
         .client
         .request(
             "session/set_mode",
-            json!({"sessionId": session.id, "modeId": mode_for(mode, session.legacy_modes)}),
+            json!({"sessionId": session.id, "modeId": wanted}),
         )
         .await?;
+    *session.mode.lock().expect("fx mode poisoned") = Some(wanted.to_string());
     Ok(())
 }
 
@@ -1073,6 +1085,22 @@ async fn read_stdout(
                                 .await;
                             continue;
                         }
+                        // An update kind this build has not met. It maps to
+                        // nothing either way; filed, so a kind fx adds shows up
+                        // in the log rather than vanishing.
+                        Ok(parser::FxEvent::Update(parser::SessionUpdate::Unknown)) => {
+                            let kind = serde_json::from_str::<Value>(&line)
+                                .ok()
+                                .and_then(|v| {
+                                    v.pointer("/params/update/sessionUpdate")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_string)
+                                })
+                                .unwrap_or_default();
+                            record_failure(Fx, &handles.session_id, "unknown_subtype", &kind, &line)
+                                .await;
+                            continue;
+                        }
                         Ok(event) => event,
                         Err(err) => {
                             record_failure(Fx, &handles.session_id, "map", &err.to_string(), &line)
@@ -1148,6 +1176,10 @@ async fn read_stdout(
             crate::session::ingest(&ingest, agent_event, &handles.app).await;
         }
     }
+
+    // Whatever still waits on an answer learns the child exited, rather than
+    // waiting out its timeout.
+    handles.client.fail_pending();
 
     // The child's stdout has ended. If a prompt was still in flight its answer
     // will never arrive, so close the turn as a failure — without which the
@@ -1428,6 +1460,7 @@ mod tests {
                 provider: Arc::new(std::sync::Mutex::new(None)),
                 model: Arc::new(std::sync::Mutex::new(None)),
                 fast: Arc::new(std::sync::Mutex::new(None)),
+                mode: Arc::default(),
                 deferred: Arc::default(),
                 applied: Arc::default(),
                 legacy_modes: false,
@@ -1644,6 +1677,33 @@ mod tests {
         *session.fast.lock().unwrap() = Some(true);
         set_fast(&session, true).await.unwrap();
         assert!(rx.try_recv().is_err(), "already on");
+    }
+
+    /// The deferred flush restates the stance on every prompt queued mid-turn,
+    /// and each `session/set_mode` fx takes rewrites the reader's global
+    /// settings. One the session is already on must write nothing.
+    #[tokio::test]
+    async fn a_stance_the_session_is_already_on_is_not_sent_again() {
+        let (session, mut rx) = session_on(None);
+        *session.mode.lock().unwrap() = Some("full-access".to_string());
+
+        set_mode(&session, ApprovalPolicy::BypassPermissions).await.unwrap();
+        assert!(rx.try_recv().is_err(), "nothing was written");
+
+        // A different one still goes out. Nothing answers it here, so only the
+        // write is looked at.
+        let moving = tokio::spawn({
+            let session = session.clone();
+            async move { set_mode(&session, ApprovalPolicy::Manual).await }
+        });
+        let line = loop {
+            if let Ok(Outbound::Line(line)) = rx.try_recv() {
+                break line;
+            }
+            tokio::task::yield_now().await;
+        };
+        assert!(line.contains(r#""modeId":"ask""#), "{line}");
+        moving.abort();
     }
 
     /// A model switch whose reply says fast is off, or carries no `fast`

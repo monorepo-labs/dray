@@ -126,6 +126,12 @@ impl RpcClient {
         let _ = self.tx.send(Outbound::Close);
     }
 
+    /// Answers every request still waiting as "the agent exited". For the read
+    /// loop to call once the child's output has ended.
+    pub fn fail_pending(&self) {
+        self.pending.fail_all();
+    }
+
     /// Sends a request and waits for its answer, up to [`REQUEST_TIMEOUT`].
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
         self.request_within(method, params, REQUEST_TIMEOUT).await

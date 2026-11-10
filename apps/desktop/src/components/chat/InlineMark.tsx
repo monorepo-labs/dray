@@ -12,8 +12,8 @@ import { openLink } from "@/lib/openLink";
 /// as the app changing what the reader wrote.
 ///
 /// The delimiters are dropped here and nowhere else. `Segment.text` keeps them,
-/// which is what lets the composer's overlay paint the same segments over a
-/// textarea that still lays every one of them out.
+/// which is what lets the composer's editor draw the same segments over a
+/// value that still holds every one of them.
 export function inlineMark(segment: Segment, key: number): ReactElement | null {
   const inner = segment.inner ?? "";
 

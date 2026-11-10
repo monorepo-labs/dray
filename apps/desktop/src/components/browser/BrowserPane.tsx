@@ -370,9 +370,10 @@ function Chrome({
   const openError = useOpenError(sessionId);
   const inputRef = useRef<HTMLInputElement>(null);
   const picking = usePicking(sessionId);
-  // The reader cannot change tabs mid-recording: the agent's next verb goes to
-  // whichever tab is active, and a switch here would send it somewhere else.
-  // The agent's own tab verbs stay open, since a flow may cross tabs.
+  // The reader cannot change tabs mid-recording. That once kept the agent's
+  // next verb on the recorded tab; the agent holds its own tab now (`DRIVEN`),
+  // so the lock is a candidate to go. The agent's own tab verbs stay open,
+  // since a flow may cross tabs.
   const recording = useRecording(sessionId);
   const opening = useOpeningUrl(sessionId);
   const url = current?.url ?? opening ?? "";
@@ -1113,7 +1114,9 @@ function EmptyState({ sessionId, active }: { sessionId: string; active: boolean 
   if (chromium && chromium.state !== "ready") {
     return <ChromiumState status={chromium} />;
   }
-  return <Servers sessionId={sessionId} active={active} />;
+  // Keyed, so one session's servers and its share in flight are never drawn
+  // under another: the list is read on a timer and a failed read keeps the old.
+  return <Servers key={sessionId} sessionId={sessionId} active={active} />;
 }
 
 /// Chromium is fetched after install (see chromium.rs), and this is where the

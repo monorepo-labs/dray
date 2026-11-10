@@ -21,8 +21,8 @@ const FILE_BYTES_BUDGET = 32 << 20;
 ///
 /// The two are not equally safe, and the difference decides how each is used.
 ///
-/// `fileVersions` is keyed by the **snapshot** its contents came from, so an
-/// entry genuinely cannot go stale — a new snapshot is a new key — and it is
+/// `fileVersions` is keyed by the **two snapshots** its contents came from, so
+/// an entry genuinely cannot go stale — a new snapshot is a new key — and it is
 /// read as authoritative, fetched once and never refetched.
 ///
 /// `changeSets` is keyed by the **range**. A finished turn's key names two
@@ -236,8 +236,10 @@ export function useChanges(
   return { changes, error, loading, refresh: read };
 }
 
-/// Same `\0` separator as `useChanges`' key, for the same reason.
-const fileKey = (head: string, path: string) => `${head}\0${path}`;
+/// Same `\0` separator as `useChanges`' key, for the same reason. `base` is in
+/// it because the old side is read from there: the turn panel and the Diff
+/// view can end on one tree from two different starts.
+const fileKey = (base: string, head: string, path: string) => `${base}\0${head}\0${path}`;
 
 /// One file's two sides, cached against the snapshot they were read from.
 export function useFileVersions(
@@ -249,7 +251,7 @@ export function useFileVersions(
   /// diff to fetch.
   enabled: boolean,
 ): { versions: FileVersions | null; error: string | null } {
-  const key = fileKey(head, file.path);
+  const key = fileKey(base, head, file.path);
 
   const [versions, setVersions] = useState<FileVersions | null>(
     () => fileVersions.get(key) ?? null,
