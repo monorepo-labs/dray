@@ -400,16 +400,14 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
         anyhow::bail!("a Dray server is already running on {}", home.display());
     }
     std::mem::forget(held);
-    for name in [dray_proto::SOCKET_NAME, dray_proto::SOCKET_NAME_DEV] {
-        let socket = home.join(name);
-        if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
-            anyhow::bail!(
-                "a Dray is already running on {} ({} answers). Quit it, or start \
-                 dray-serve with DRAY_HOME set to a directory of its own.",
-                home.display(),
-                socket.display()
-            );
-        }
+    let socket = home.join(dray_proto::SOCKET_NAME);
+    if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+        anyhow::bail!(
+            "a Dray is already running on {} ({} answers). Quit it, or start \
+             dray-serve with DRAY_HOME set to a directory of its own.",
+            home.display(),
+            socket.display()
+        );
     }
 
     if let Err(e) = store::reset_in_progress_sessions().await {

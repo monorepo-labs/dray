@@ -1049,11 +1049,17 @@ fn update(args: Update) -> Result<(), String> {
         }
     }
 
+    // The installer exits 0 on "already installed" too, so success alone says
+    // nothing about the server being left behind. A replaced binary does.
+    let serve = dir.join("dray-serve");
+    let stamp = || std::fs::metadata(&serve).and_then(|meta| meta.modified()).ok();
+    let before = stamp();
+
     match sh.status() {
         Ok(status) if status.success() => {
             // Not restarted for the reader: that stops every agent running on
             // it, and the usual caller here is one of those agents.
-            if let Some(restart) = setup::installed_restart() {
+            if let Some(restart) = setup::installed_restart().filter(|_| stamp() != before) {
                 eprintln!(
                     "The background server runs the old version until restarted, which \
                      stops running agents: {restart}"

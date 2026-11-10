@@ -8,7 +8,7 @@
 //! composer reaches, so a session created here is not a second kind of session.
 //!
 //! Newline-delimited JSON over a unix socket at `~/.dray/dray.sock` — or
-//! `dray-dev.sock` for a dev build, see [`socket_path`] — one
+//! the same name in this build's own home, see [`socket_path`] — one
 //! request per connection. Nothing on the network can reach it at all, and
 //! access control is the containing directory's `0700` — see
 //! [`serve`](serve) for why the socket's own mode cannot be the boundary.
@@ -81,8 +81,8 @@ const MAX_DEPTH: usize = 2;
 /// is being worked on, and one path between them means whichever started last
 /// owns the channel — `bind` unlinks the other's socket, so the app left behind
 /// keeps a listener no `dray` will ever reach again. A dev build always has a
-/// home of its own (`store::home_override`), so the `dray-dev.sock` fallback
-/// below is never reached by one.
+/// home of its own (`store::home_override`), which the CLI's own resolver
+/// below knows nothing of.
 ///
 /// Under `DRAY_HOME` the socket moves with the data, so a second process on
 /// its own directory takes no channel from the app's.
@@ -90,7 +90,7 @@ pub fn socket_path() -> Option<std::path::PathBuf> {
     if let Some(home) = store::home_override() {
         return Some(home.join(dray_proto::SOCKET_NAME));
     }
-    dray_proto::socket_path(crate::is_dev())
+    dray_proto::socket_path()
 }
 
 /// What a spawned agent's `DRAY_ENDPOINT` is set to.
