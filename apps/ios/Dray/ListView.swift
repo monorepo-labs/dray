@@ -92,8 +92,9 @@ struct SessionList: View {
             .animation(Theme.motion, value: runs.map { $0.rows.map(\.id) })
             .refreshable {
                 await store.refresh()
-                if mode == .drafts { await loadDrafts() }
-                if mode == .settled { await store.loadSettled() }
+                // Both, whatever the view: a failed read hides a button, and this is the way to retry it.
+                await loadDrafts()
+                await store.loadSettled()
             }
             .overlay { if blank { empty(filter) } }
         }
@@ -162,13 +163,19 @@ struct SessionList: View {
         }
     }
 
-    /// Every connected server's drafts, newest first. A server that cannot say is left out.
+    /// Every connected server's drafts, newest first. A server whose read fails keeps what it last
+    /// said, so a dropped reply never reads as no drafts.
     private func loadDrafts() async {
         var all: [(server: UUID, draft: DraftItem)] = []
         for s in store.servers where store.serverState[s.id] == .connected {
-            let list: [DraftItem] = (try? await store.call(s.id, "list_drafts")) ?? []
-            all += list.map { (s.id, $0) }
+            if let list: [DraftItem] = try? await store.call(s.id, "list_drafts") {
+                all += list.map { (s.id, $0) }
+            } else {
+                all += drafts.filter { $0.server == s.id }
+            }
         }
+        // A newer read replaced this task, and its reply may land before this one.
+        if Task.isCancelled { return }
         drafts = all.sorted { ($0.draft.created ?? "") > ($1.draft.created ?? "") }
     }
 
@@ -200,8 +207,8 @@ struct SessionList: View {
                 } else if !store.online {
                     EmptyScreen(art: EmptyArt(kind: .unreachable), title: "You're offline",
                                 message: "Tasks keep running on their servers.")
-                } else if let p = store.servers.lazy.compactMap({ s in self.store.health(s.id).map { (s, $0) } }).first,
-                          !p.1.working {
+                } else if let p = store.servers.lazy.compactMap({ s in self.store.health(s.id).map { (s, $0) } })
+                            .first(where: { !$0.1.working }) {
                     unreachable(p.0, p.1)
                 } else {
                     EmptyScreen(art: EmptyArt(kind: .connecting), title: "Connecting",
