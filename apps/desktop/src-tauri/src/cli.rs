@@ -1,5 +1,6 @@
-//! The `dray` CLI the bundle carries as `Contents/MacOS/dray-cli`
-//! (tauri.cli.conf.json), put where agents and shells find it.
+//! The `dray` CLI the bundle carries as `dray-cli` beside the app's binary
+//! (tauri.cli.conf.json) — `Contents/MacOS` on a Mac, the AppImage's `usr/bin`
+//! on Linux — put where agents and shells find it.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -36,6 +37,10 @@ fn install_bundled(shell: Option<PathBuf>) -> Result<(), String> {
     let home = std::env::home_dir().ok_or("no home directory")?;
     let dest = home.join(".local/bin/dray");
     copy_if_changed(&bundled, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+    #[cfg(target_os = "linux")]
+    if let Err(e) = record_appimage(&home) {
+        eprintln!("[cli install] {APPIMAGE_RECORD}: {e}");
+    }
 
     // A CLI installed elsewhere with `DRAY_INSTALL_DIR` sits ahead of this copy
     // on the reader's PATH, and would keep answering stale. A symlink is left
@@ -48,7 +53,7 @@ fn install_bundled(shell: Option<PathBuf>) -> Result<(), String> {
 
     // Every launch, not only after a copy: a failed write would otherwise
     // never be retried, the bytes matching from then on.
-    let status = Command::new(&dest)
+    let status = command(&dest)
         .args(["skill", "install"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -65,12 +70,52 @@ fn install_bundled(shell: Option<PathBuf>) -> Result<(), String> {
 /// generic enough for something else on PATH to carry it.
 fn is_plain_dray(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
-        && Command::new(path)
+        && command(path)
             .arg("--version")
             .stdin(Stdio::null())
             .stderr(Stdio::null())
             .output()
             .is_ok_and(|out| out.status.success() && out.stdout.starts_with(b"dray "))
+}
+
+/// A command for a CLI binary, without what an AppImage's AppRun added to
+/// this process's environment for its own libraries.
+fn command(path: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(path);
+    #[cfg(target_os = "linux")]
+    for (key, value) in crate::serve::appimage_env_undo() {
+        match value {
+            Some(value) => cmd.env(key, value),
+            None => cmd.env_remove(key),
+        };
+    }
+    cmd
+}
+
+/// Where the Linux app writes down the AppImage it runs from, under home.
+/// `app_on_this_machine` in apps/cli/src/setup.rs and install.sh read it.
+#[cfg(target_os = "linux")]
+const APPIMAGE_RECORD: &str = ".local/share/dray/appimage";
+
+/// Records which AppImage installed the CLI, so `dray update` and install.sh
+/// leave alone a `dray` the app would put back on its next launch — a Mac's
+/// app is found at fixed paths, an AppImage can live anywhere. The path, not
+/// a flag: one deleted since frees the CLI to update itself, and one moved is
+/// written again by its next launch.
+#[cfg(target_os = "linux")]
+fn record_appimage(home: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let Some(image) = crate::serve::appimage() else {
+        return Ok(());
+    };
+    let record = home.join(APPIMAGE_RECORD);
+    let bytes = image.as_os_str().as_bytes();
+    if std::fs::read(&record).is_ok_and(|on_disk| on_disk == bytes) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(record.parent().expect("record names a file in a directory"))?;
+    std::fs::write(&record, bytes)
 }
 
 /// Writes `bytes` to `dest` unless it holds them already, answering whether it
