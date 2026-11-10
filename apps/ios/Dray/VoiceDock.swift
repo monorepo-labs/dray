@@ -30,7 +30,9 @@ struct VoiceDock: View {
     private var open: Bool { phase != .rest }
     private var busy: Bool { phase == .recording || phase == .transcribing }
     /// The machine that turns speech into words: only a Mac's server can.
-    private var transcriber: UUID? { store.servers.first { store.canDictate($0.id) }?.id }
+    @AppStorage(Dictations.serverKey) private var dictationPick = ""
+    /// The machine that turns speech into words: Settings' pick, else any that can.
+    private var transcriber: UUID? { store.dictationServer(dictationPick) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -162,9 +164,12 @@ struct VoiceDock: View {
                 HStack(spacing: Theme.Space.s) {
                     Text(note).font(Theme.Font.subhead).foregroundStyle(Theme.secondary)
                         .multilineTextAlignment(.center)
+                    // The recording alone: the task's words stay.
                     if Dictations.shared.kept[draft] != nil {
                         Button("Retry") { Task { await Dictations.shared.retry(store, draft: draft) } }
                             .font(Theme.Font.subhead).foregroundStyle(Theme.text)
+                        Button("Discard") { Dictations.shared.dismiss(draft) }
+                            .font(Theme.Font.subhead).foregroundStyle(Theme.destructive)
                     }
                 }
             }

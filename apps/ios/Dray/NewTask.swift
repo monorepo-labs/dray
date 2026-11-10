@@ -146,7 +146,8 @@ final class NewTask {
             agents[server] = read
         }
         // A machine without the remembered agent starts on one it has; with only one, no picker shows to fix it.
-        if let held = agents[server], !held.contains(where: { $0.harness == harness && $0.available }),
+        // Only while that machine is still the pick: a late answer for another must not move this one's agent.
+        if server == self.server, let held = agents[server], !held.contains(where: { $0.harness == harness && $0.available }),
            let first = held.first(where: \.available) {
             harness = first.harness
         }
