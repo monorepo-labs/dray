@@ -3,6 +3,7 @@
 //! window manager does not manage.
 
 use crate::prefs::{self, Key};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
@@ -56,10 +57,10 @@ fn run_taps(on_tap: impl Fn()) -> anyhow::Result<()> {
         match conn.wait_for_event()? {
             Event::XinputRawKeyPress(e) => {
                 let repeat = u32::from(e.flags) & u32::from(KeyEventFlags::KEY_REPEAT) != 0;
-                tap.press(ours(&keysyms, e.detail), repeat, Instant::now());
+                tap.press(e.detail, ours(&keysyms, e.detail), repeat, Instant::now());
             }
             Event::XinputRawKeyRelease(e) => {
-                if tap.release(ours(&keysyms, e.detail), Instant::now()) {
+                if tap.release(e.detail, ours(&keysyms, e.detail), Instant::now()) {
                     on_tap();
                 }
             }
@@ -70,23 +71,33 @@ fn run_taps(on_tap: impl Fn()) -> anyhow::Result<()> {
     }
 }
 
-/// One tap's progress: when the reader's key went down, while nothing else has.
+/// A key held longer than this is taken to have been released unseen, so one
+/// lost release can never stop every tap after it.
+const STALE: Duration = Duration::from_secs(30);
+
+/// One tap's progress: when the reader's key went down, and every key held,
+/// so the key pressed while Shift is already down is a chord and no tap.
 #[derive(Default)]
 struct Tap {
     down: Option<Instant>,
+    held: HashMap<u32, (bool, Instant)>,
 }
 
 impl Tap {
-    fn press(&mut self, ours: bool, repeat: bool, at: Instant) {
+    fn press(&mut self, code: u32, ours: bool, repeat: bool, at: Instant) {
         if repeat {
             return;
         }
+        self.held.retain(|_, (_, since)| at.duration_since(*since) < STALE);
         // Left then right of the same key keeps the first down's time.
-        self.down = if ours { self.down.or(Some(at)) } else { None };
+        let alone = self.held.values().all(|(ours, _)| *ours);
+        self.held.insert(code, (ours, at));
+        self.down = if ours && alone { self.down.or(Some(at)) } else { None };
     }
 
     /// Whether this release ends a tap.
-    fn release(&mut self, ours: bool, at: Instant) -> bool {
+    fn release(&mut self, code: u32, ours: bool, at: Instant) -> bool {
+        self.held.remove(&code);
         if !ours {
             self.down = None;
             return false;
@@ -180,12 +191,21 @@ pub fn take_focus(window: u32) -> Option<u32> {
     Some(before)
 }
 
-/// Hands the keyboard back to the window that had it before the panel took it.
-/// Where that window has gone meanwhile, X answers an error and the window
-/// manager picks the focus on its own.
-pub fn give_back(window: u32) {
+/// Hands the keyboard back to the window that had it before the panel took
+/// it — only while the panel still holds it: a reader who clicked into another
+/// app meanwhile keeps that app. Where the old window has gone, X answers an
+/// error and the window manager picks the focus on its own.
+pub fn give_back(ours: u32, window: u32) {
     let Some((conn, _)) = conn() else { return };
     if window == x11rb::NONE || window == u32::from(InputFocus::POINTER_ROOT) {
+        return;
+    }
+    let holding = conn
+        .get_input_focus()
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .is_some_and(|reply| reply.focus == ours);
+    if !holding {
         return;
     }
     let _ = conn.set_input_focus(InputFocus::PARENT, window, x11rb::CURRENT_TIME);
@@ -200,49 +220,69 @@ mod tests {
         start + Duration::from_millis(ms)
     }
 
+    const CTRL: u32 = 37;
+    const SHIFT: u32 = 50;
+    const C: u32 = 54;
+
     #[test]
     fn a_quick_bare_press_is_a_tap() {
         let (mut tap, t) = (Tap::default(), Instant::now());
-        tap.press(true, false, t);
-        assert!(tap.release(true, after(t, 120)));
+        tap.press(CTRL, true, false, t);
+        assert!(tap.release(CTRL, true, after(t, 120)));
     }
 
     #[test]
     fn a_hold_is_no_tap() {
         let (mut tap, t) = (Tap::default(), Instant::now());
-        tap.press(true, false, t);
-        assert!(!tap.release(true, after(t, 600)));
+        tap.press(CTRL, true, false, t);
+        assert!(!tap.release(CTRL, true, after(t, 600)));
     }
 
     #[test]
     fn a_chord_is_no_tap() {
         let (mut tap, t) = (Tap::default(), Instant::now());
-        tap.press(true, false, t);
-        tap.press(false, false, after(t, 50));
-        tap.release(false, after(t, 80));
-        assert!(!tap.release(true, after(t, 100)));
+        tap.press(CTRL, true, false, t);
+        tap.press(C, false, false, after(t, 50));
+        tap.release(C, false, after(t, 80));
+        assert!(!tap.release(CTRL, true, after(t, 100)));
+    }
+
+    #[test]
+    fn a_key_already_held_makes_a_chord() {
+        let (mut tap, t) = (Tap::default(), Instant::now());
+        tap.press(SHIFT, false, false, t);
+        tap.press(CTRL, true, false, after(t, 50));
+        assert!(!tap.release(CTRL, true, after(t, 100)));
+    }
+
+    #[test]
+    fn a_key_held_past_stale_is_forgotten() {
+        let (mut tap, t) = (Tap::default(), Instant::now());
+        tap.press(SHIFT, false, false, t);
+        tap.press(CTRL, true, false, after(t, 31_000));
+        assert!(tap.release(CTRL, true, after(t, 31_100)));
     }
 
     #[test]
     fn a_click_between_is_no_tap() {
         let (mut tap, t) = (Tap::default(), Instant::now());
-        tap.press(true, false, t);
+        tap.press(CTRL, true, false, t);
         tap.click();
-        assert!(!tap.release(true, after(t, 100)));
+        assert!(!tap.release(CTRL, true, after(t, 100)));
     }
 
     #[test]
     fn key_repeat_keeps_the_first_down() {
         let (mut tap, t) = (Tap::default(), Instant::now());
-        tap.press(true, false, t);
-        tap.press(true, true, after(t, 500));
-        assert!(!tap.release(true, after(t, 550)));
+        tap.press(CTRL, true, false, t);
+        tap.press(CTRL, true, true, after(t, 500));
+        assert!(!tap.release(CTRL, true, after(t, 550)));
     }
 
     #[test]
     fn a_release_with_nothing_down_is_no_tap() {
         let mut tap = Tap::default();
-        assert!(!tap.release(true, Instant::now()));
+        assert!(!tap.release(CTRL, true, Instant::now()));
     }
 
     #[test]

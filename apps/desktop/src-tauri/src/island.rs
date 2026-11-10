@@ -88,9 +88,14 @@ fn prefs_path() -> Option<PathBuf> {
     Some(base.join("dray/island.json"))
 }
 
-/// Rewrites `key` alone, keeping the placement the island wrote.
+/// Rewrites `key` alone, keeping the placement the island wrote. The island
+/// rewrites the same file, so both hold `island.json.lock` from the read to
+/// the rename, or one could save over the other's field.
 fn write_key(key: &str) -> std::io::Result<()> {
     let path = prefs_path().ok_or_else(|| std::io::Error::other("no home directory"))?;
+    std::fs::create_dir_all(path.parent().expect("a file under a dir"))?;
+    let lock = std::fs::File::create(path.with_extension("json.lock"))?;
+    lock.lock()?;
     let mut prefs: serde_json::Map<String, serde_json::Value> = std::fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -99,8 +104,7 @@ fn write_key(key: &str) -> std::io::Result<()> {
         return Ok(());
     }
     prefs.insert("key".into(), key.into());
-    std::fs::create_dir_all(path.parent().expect("a file under a dir"))?;
-    let tmp = path.with_extension("json.tmp");
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
     std::fs::write(&tmp, serde_json::to_vec_pretty(&prefs)?)?;
     std::fs::rename(tmp, path)
 }

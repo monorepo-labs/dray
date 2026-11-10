@@ -68,14 +68,18 @@ pub fn read() -> Prefs {
     Prefs { key: field(&raw, "key"), placement: field(&raw, "placement") }
 }
 
-/// Writes `placement` alone, through a temp file and a rename.
+/// Writes `placement` alone, through a temp file and a rename. Dray rewrites
+/// the same file, so both take `island.json.lock` from the read to the
+/// rename (`island.rs` in the app), or one could save over the other's field.
 pub fn set_placement(placement: Placement) {
     let Some(path) = path() else { return };
-    let mut raw = raw();
-    raw.insert("placement".into(), serde_json::to_value(placement).unwrap_or_default());
     let write = || -> std::io::Result<()> {
         std::fs::create_dir_all(path.parent().expect("a file under a dir"))?;
-        let tmp = path.with_extension("json.tmp");
+        let lock = std::fs::File::create(path.with_extension("json.lock"))?;
+        lock.lock()?;
+        let mut raw = raw();
+        raw.insert("placement".into(), serde_json::to_value(placement)?);
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
         std::fs::write(&tmp, serde_json::to_vec_pretty(&raw)?)?;
         std::fs::rename(tmp, &path)
     };

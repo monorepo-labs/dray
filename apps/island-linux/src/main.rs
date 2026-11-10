@@ -48,9 +48,10 @@ struct Island {
     sessions: Vec<Session>,
     placement: Placement,
     window: Option<WindowHandle<Panel>>,
-    /// Whoever had the keyboard before the panel took it.
-    focus_before: Option<u32>,
+    /// The panel's X window and whoever had the keyboard before it took it.
+    focus: Option<(u32, u32)>,
     menu: bool,
+    server: Option<server::Server>,
 }
 
 impl Island {
@@ -59,7 +60,7 @@ impl Island {
     fn pinned(&self) -> Option<&Session> {
         self.sessions
             .iter()
-            .filter(|s| s.hidden != Some(true))
+            .filter(|s| s.hidden != Some(true) && s.archived != Some(true))
             .max_by(|a, b| a.modified.cmp(&b.modified))
     }
 
@@ -71,6 +72,8 @@ impl Island {
                 self.link = Link::Up;
                 self.sessions = list;
             }
+            // A settle from the CLI arrives as a changed entry, archived.
+            Update::Session(s) if s.archived == Some(true) => self.sessions.retain(|o| o.session_id != s.session_id),
             Update::Session(s) => match self.sessions.iter_mut().find(|o| o.session_id == s.session_id) {
                 Some(old) => *old = s,
                 None => self.sessions.push(s),
@@ -107,14 +110,14 @@ fn main() {
     x11::watch_taps(move || {
         let _ = taps.unbounded_send(Msg::Tap);
     });
-    server::run(move |update| {
+    let server = server::run(move |update| {
         let _ = tx.unbounded_send(Msg::Server(update));
     });
 
     // Off a Mac GPUI quits once its last window closes, and the panel's
     // window goes on every close.
     gpui_platform::application().with_quit_mode(QuitMode::Explicit).run(move |cx: &mut App| {
-        let island = cx.new(|_| Island { placement: prefs::read().placement, ..Default::default() });
+        let island = cx.new(|_| Island { placement: prefs::read().placement, server: Some(server), ..Default::default() });
         cx.spawn(async move |cx| {
             while let Some(msg) = rx.next().await {
                 cx.update(|cx| match msg {
@@ -142,6 +145,9 @@ fn toggle(island: &Entity<Island>, cx: &mut App) {
 }
 
 fn open(island: &Entity<Island>, cx: &mut App) {
+    if let Some(server) = &island.read(cx).server {
+        server.relist();
+    }
     let placement = island.read(cx).placement;
     let bounds = place(placement, cx);
     let state = island.clone();
@@ -173,26 +179,28 @@ fn open(island: &Entity<Island>, cx: &mut App) {
         eprintln!("island: could not open the panel");
         return;
     };
-    let focus_before = handle
+    let focus = handle
         .update(cx, |_, window, _| x_window(window))
         .ok()
         .flatten()
-        .and_then(x11::take_focus);
+        .and_then(|ours| Some((ours, x11::take_focus(ours)?)));
     island.update(cx, |island, cx| {
         island.window = Some(handle);
-        island.focus_before = focus_before;
+        island.focus = focus;
         island.menu = false;
         cx.notify();
     });
 }
 
 fn close(island: &Entity<Island>, cx: &mut App) {
-    let (window, before) = island.update(cx, |island, _| (island.window.take(), island.focus_before.take()));
+    let (window, focus) = island.update(cx, |island, _| (island.window.take(), island.focus.take()));
+    // Before the window goes, while the panel can still be asked whether it
+    // holds the keyboard.
+    if let Some((ours, before)) = focus {
+        x11::give_back(ours, before);
+    }
     if let Some(window) = window {
         let _ = window.update(cx, |_, window, _| window.remove_window());
-    }
-    if let Some(before) = before {
-        x11::give_back(before);
     }
 }
 

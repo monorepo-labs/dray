@@ -5,7 +5,9 @@
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::io::ErrorKind;
 use std::net::TcpStream;
+use std::sync::mpsc::{Receiver, Sender};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tungstenite::{Message, WebSocket};
@@ -24,6 +26,7 @@ pub struct Session {
     pub status: String,
     pub modified: String,
     pub hidden: Option<bool>,
+    pub archived: Option<bool>,
 }
 
 impl Session {
@@ -63,14 +66,28 @@ fn address() -> Option<(String, String)> {
     (!port.is_empty() && !token.is_empty()).then(|| (format!("ws://127.0.0.1:{port}"), token))
 }
 
+/// Asks the connection thread for a fresh session list.
+pub struct Server {
+    relist: Sender<()>,
+}
+
+impl Server {
+    /// The index changes without telling other clients — the sidebar's own
+    /// settle and delete emit nothing — so the panel asks again on each open.
+    pub fn relist(&self) {
+        let _ = self.relist.send(());
+    }
+}
+
 /// Keeps a connection up for the island's life on a thread of its own,
 /// calling `on_update` from that thread.
-pub fn run(on_update: impl Fn(Update) + Send + 'static) {
+pub fn run(on_update: impl Fn(Update) + Send + 'static) -> Server {
+    let (relist, asks) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("island-server".into())
         .spawn(move || {
             loop {
-                let wait = match connect(&on_update) {
+                let wait = match connect(&on_update, &asks) {
                     Ok(()) => Duration::from_secs(1),
                     Err(Gone::Refused(why)) => {
                         on_update(Update::Refused(why));
@@ -87,6 +104,7 @@ pub fn run(on_update: impl Fn(Update) + Send + 'static) {
             }
         })
         .expect("server thread");
+    Server { relist }
 }
 
 enum Gone {
@@ -94,10 +112,14 @@ enum Gone {
     Refused(String),
 }
 
+/// How often a quiet socket checks for a relist.
+const POLL: Duration = Duration::from_millis(200);
+
 /// One connection, from hello to the socket dropping.
-fn connect(on_update: &impl Fn(Update)) -> Result<(), Gone> {
+fn connect(on_update: &impl Fn(Update), asks: &Receiver<()>) -> Result<(), Gone> {
     let (url, token) = address().ok_or(Gone::Unreachable)?;
-    let (mut socket, _) = tungstenite::connect(&url).map_err(|_| Gone::Unreachable)?;
+    let stream = TcpStream::connect(url.trim_start_matches("ws://")).map_err(|_| Gone::Unreachable)?;
+    let (mut socket, _) = tungstenite::client(url.as_str(), stream).map_err(|_| Gone::Unreachable)?;
     // `client` is what the server counts the island's use by, and is what
     // `island_links` answers to.
     let hello = json!({ "v": PROTOCOL, "token": token, "client": "island" });
@@ -106,19 +128,46 @@ fn connect(on_update: &impl Fn(Update)) -> Result<(), Gone> {
     if let Some(err) = welcome.get("err").and_then(Value::as_str) {
         return Err(Gone::Refused(err.to_string()));
     }
-    let list = json!({ "id": 1, "cmd": "list_session_index_items", "args": { "archived": false } });
-    socket.send(Message::text(list.to_string())).map_err(|_| Gone::Unreachable)?;
-    while let Some(frame) = next_json(&mut socket) {
-        if let Some(update) = read(frame) {
-            on_update(update);
+    // Only after the handshake: a timeout mid-handshake fails it.
+    socket.get_ref().set_read_timeout(Some(POLL)).map_err(|_| Gone::Unreachable)?;
+    // Asks from before this connection are answered by the list below.
+    while asks.try_recv().is_ok() {}
+    let mut next_id = 0;
+    let mut list = |socket: &mut WebSocket<TcpStream>| {
+        next_id += 1;
+        let ask = json!({ "id": next_id, "cmd": "list_session_index_items", "args": { "archived": false } });
+        socket.send(Message::text(ask.to_string())).is_ok()
+    };
+    if !list(&mut socket) {
+        return Ok(());
+    }
+    loop {
+        match socket.read() {
+            Ok(Message::Text(text)) => {
+                if let Some(update) = serde_json::from_str(&text).ok().and_then(read) {
+                    on_update(update);
+                }
+            }
+            Ok(Message::Close(_)) => return Ok(()),
+            Ok(_) => {}
+            // tungstenite keeps a half-read frame buffered, so a timeout
+            // mid-frame resumes where it left off.
+            Err(tungstenite::Error::Io(e)) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                if asks.try_recv().is_ok() {
+                    while asks.try_recv().is_ok() {}
+                    if !list(&mut socket) {
+                        return Ok(());
+                    }
+                }
+            }
+            Err(_) => return Ok(()),
         }
     }
-    Ok(())
 }
 
 /// The next text frame as JSON, skipping pings and anything unparseable.
 /// `None` once the socket has closed.
-fn next_json(socket: &mut WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>) -> Option<Value> {
+fn next_json(socket: &mut WebSocket<TcpStream>) -> Option<Value> {
     loop {
         match socket.read() {
             Ok(Message::Text(text)) => match serde_json::from_str(&text) {
@@ -133,7 +182,8 @@ fn next_json(socket: &mut WebSocket<tungstenite::stream::MaybeTlsStream<TcpStrea
 
 /// What one frame means to the island; most mean nothing yet.
 fn read(mut frame: Value) -> Option<Update> {
-    if frame.get("id").and_then(Value::as_u64) == Some(1) {
+    // Every call this connection makes is a list.
+    if frame.get("id").is_some() {
         return serde_json::from_value(frame.get_mut("ok")?.take()).ok().map(Update::Sessions);
     }
     let name = frame.get("event")?.as_str()?.to_string();
