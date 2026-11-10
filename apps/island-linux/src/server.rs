@@ -30,6 +30,15 @@ pub struct Session {
     pub modified: String,
     pub hidden: Option<bool>,
     pub archived: Option<bool>,
+    /// Set aside by the reader: started, not wanted now. Out of the switcher.
+    pub aside: Option<bool>,
+    // What a reply is sent with: the session's own settings, read fresh.
+    pub harness: String,
+    pub model: String,
+    pub effort: Option<String>,
+    pub permission_mode: String,
+    pub fast: Option<bool>,
+    pub cwd: String,
 }
 
 impl Session {

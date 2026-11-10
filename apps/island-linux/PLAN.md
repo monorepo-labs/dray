@@ -67,6 +67,28 @@ Swift island carries over.
 - **Free text is a GPUI text box of our own** (`input.rs`): GPUI ships none, so
   it is GPUI's `examples/input.rs` cut down. Typing goes through GPUI's input
   handler and XIM, as any GPUI app's does.
+- **The draft is the Mac's**: typed rows and the box make one message,
+  joined in order; Ctrl+⏎ queues the box as a row, ⏎ sends, a row is edited
+  in place or removed. Sent is said at once and the request runs behind it; a
+  send that fails comes back as the draft, ahead of anything typed since, with
+  the reason. A call unanswered for 30s fails rather than holding the send.
+  A reply reads the session fresh (`get_session_by_id`) and sends with its own
+  settings, as the phone does; a new task sends the bar's picks.
+- **Where the draft goes**: the session Dray's window has open, asked of the
+  app (`selected_session`) before the panel shows, at most half a second; else
+  the session last used (`lastSession` in prefs); else the newest; else a new
+  task. Ctrl+N is a new task.
+- **The switcher**: the title, ↑/↓ from an empty box, or Ctrl+F opens it as a
+  second card on the far side from the edge. Newest first, the sidebar's
+  rule for what is left out (hidden, settled, set aside, three days still),
+  searched by title and project; ⏎ or a click picks.
+- **A new task's bar**: agent and model with the hovered model's efforts
+  flying out, project, worktree, stance — the desktop composer's rules
+  restated in `newtask.rs` (default model per agent, usable model and effort,
+  stances each agent honours). The picks persist in prefs as the Mac's do; a
+  project pick is stamped on the server as Dray's own.
+- **The text box wraps**, growing to 6 lines and scrolling to the caret past
+  that, as the Mac's field does. GPUI's wrapped layout does the shaping.
 - **The app hands asks to the island and keeps finished-session banners**:
   `islandOn("asks")` is true on Linux while the island child lives
   (`island::running`), `islandOn("done")` stays Mac-only until there is a done
@@ -85,8 +107,8 @@ Each its own PR.
 
 1. **Spike** (#851): panel window, placement, modifier tap, connected to the
    server, pinned to the newest session.
-2. **Waiting-card pill and answering cards**, and the Mac look.
-3. Reply, new task, the session switcher, typed rows.
+2. **Waiting-card pill and answering cards**, and the Mac look (#860).
+3. **Reply, new task, the session switcher, typed rows.**
 4. Dictation rows, over `host_call` to the app as on the Mac.
 5. Screenshots and drawing on the live screen.
 
@@ -97,7 +119,10 @@ Each its own PR.
 - **Square, opaque edges without a compositor**, by design: see above.
 - **No done pill.** A finished session is still Dray's banner on Linux.
 - **This computer's sessions alone.** Other machines' (`island_links`) are not
-  read yet.
+  read yet, so a new task's bar has no machine control.
+- **Not yet from the Mac's draft**: Ctrl+S saving it as a Dray draft,
+  dragging rows to reorder, the last turns of the transcript above it, and
+  the bar's step-through chords (⌘⇧A and the rest).
 - **Settings → Island stays hidden off a Mac** until the island has more to
   set than the key: the app hands over the default, Control.
 - **One display.** The panel opens on GPUI's primary display; the Mac's

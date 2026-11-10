@@ -3,7 +3,9 @@
 //! reader's modifier tapped alone. See PLAN.md.
 
 mod asks;
+mod draft;
 mod input;
+mod newtask;
 mod panel;
 mod prefs;
 mod server;
@@ -11,6 +13,7 @@ mod sound;
 mod x11;
 
 use asks::{Ask, AskKind, Asks};
+use draft::{Draft, Field, Target};
 use futures::StreamExt;
 use futures::channel::mpsc;
 use gpui::{
@@ -111,16 +114,40 @@ pub struct Island {
     glow_clock: u64,
     pill_hovered: bool,
     hover_clock: u64,
+    /// Made at start, since its text boxes need the app: always `Some` after.
+    draft: Option<Draft>,
+    /// The pill opened the panel, whose whole point is the cards: they show
+    /// even over a draft under way.
+    pub cards_first: bool,
+    /// Asking Dray which session its window has open, before the panel shows.
+    asking_app: bool,
 }
 
 impl Island {
-    /// The session the panel is pinned to: the newest that is not hidden.
-    /// The switcher and "last used" come with replying (stage 3).
-    pub fn pinned(&self) -> Option<&Session> {
-        self.sessions
-            .iter()
-            .filter(|s| s.hidden != Some(true) && s.archived != Some(true))
-            .max_by(|a, b| a.modified.cmp(&b.modified))
+    pub fn draft(&self) -> &Draft {
+        self.draft.as_ref().expect("made at start")
+    }
+
+    pub fn draft_mut(&mut self) -> &mut Draft {
+        self.draft.as_mut().expect("made at start")
+    }
+
+    pub fn session(&self, id: &str) -> Option<&Session> {
+        self.sessions.iter().find(|s| s.session_id == id)
+    }
+
+    /// The switcher's rows for the search typed so far.
+    pub fn listed(&self, cx: &App) -> Vec<&Session> {
+        draft::listed(&self.sessions, self.draft().search.read(cx).text(), &draft::stale_line())
+    }
+
+    /// The card the panel draws in place of the draft: held back while the
+    /// reader is busy in it, unless they came for the cards.
+    pub fn card_up(&self, cx: &App) -> Option<(String, Ask)> {
+        if self.flash.is_some() || (!self.cards_first && self.draft().busy(cx)) {
+            return None;
+        }
+        self.current()
     }
 
     pub fn title(&self, session_id: &str) -> String {
@@ -213,7 +240,13 @@ fn main() {
     // window goes on every close.
     gpui_platform::application().with_quit_mode(QuitMode::Explicit).run(move |cx: &mut App| {
         input::bind_keys(cx);
-        let island = cx.new(|_| Island { placement: prefs::read().placement, server: Some(server), ..Default::default() });
+        let draft = Draft::new(cx);
+        let island = cx.new(|_| Island {
+            placement: prefs::read().placement,
+            server: Some(server),
+            draft: Some(draft),
+            ..Default::default()
+        });
         cx.spawn(async move |cx| {
             while let Some(msg) = rx.next().await {
                 cx.update(|cx| match msg {
@@ -369,7 +402,7 @@ pub fn pill_hovered(island: &Entity<Island>, hovered: bool, cx: &mut App) {
         cx.update(|cx| {
             let i = island.read(cx);
             if i.pill_hovered && i.hover_clock == clock && i.window.is_none() {
-                open(&island, cx);
+                open_cards(&island, cx);
             }
         });
     })
@@ -386,10 +419,75 @@ fn toggle(island: &Entity<Island>, cx: &mut App) {
     }
 }
 
-fn open(island: &Entity<Island>, cx: &mut App) {
+/// The pill: the panel, on the cards, whatever the draft holds.
+pub fn open_cards(island: &Entity<Island>, cx: &mut App) {
+    island.update(cx, |island, _| island.cards_first = true);
+    open(island, cx);
+}
+
+/// A tap over Dray's window opens on the session that window has open, asked
+/// before the panel shows so the title never flips under the reader. The app
+/// answers nothing unless its window has focus, so every open asks, and gives
+/// up after half a second.
+pub fn open(island: &Entity<Island>, cx: &mut App) {
+    if island.read(cx).asking_app || island.read(cx).window.is_some() {
+        return;
+    }
+    let Some(reply) = island.read(cx).server.as_ref().map(|s| s.call("selected_session", json!({}))) else { return };
+    island.update(cx, |island, _| island.asking_app = true);
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        let timer = cx.background_executor().timer(Duration::from_millis(500));
+        let picked = match futures::future::select(reply, Box::pin(timer)).await {
+            futures::future::Either::Left((Ok(Ok(serde_json::Value::String(id))), _)) => Some(id),
+            _ => None,
+        };
+        cx.update(|cx| {
+            island.update(cx, |island, _| island.asking_app = false);
+            if let Some(id) = picked.filter(|id| island.read(cx).session(id).is_some()) {
+                pick_target(&island, Target::Session(id), cx);
+            }
+            show(&island, cx);
+        });
+    })
+    .detach();
+}
+
+/// With nothing picked, or a pick gone from the index: the session last
+/// used, else the newest, else a new task.
+fn settle_target(island: &Entity<Island>, cx: &mut App) {
+    let target = {
+        let i = island.read(cx);
+        let ok = match &i.draft().target {
+            Some(Target::Session(id)) => i.session(id).is_some(),
+            Some(Target::New) => true,
+            None => false,
+        };
+        if ok {
+            return;
+        }
+        let listed = i.listed(cx);
+        let last: Option<String> = prefs::get("lastSession");
+        listed
+            .iter()
+            .find(|s| Some(&s.session_id) == last.as_ref())
+            .or(listed.first())
+            .map(|s| Target::Session(s.session_id.clone()))
+            .unwrap_or(Target::New)
+    };
+    pick_target(island, target, cx);
+}
+
+fn show(island: &Entity<Island>, cx: &mut App) {
+    if island.read(cx).window.is_some() {
+        return;
+    }
     if let Some(server) = &island.read(cx).server {
         server.relist();
+        // Counted by the server off this connection; nothing rides but the name.
+        let _ = server.call("island_opened", json!({}));
     }
+    settle_target(island, cx);
     sync_card(island, cx);
     let glass = x11::compositing();
     island.update(cx, |island, _| island.glass = glass);
@@ -431,6 +529,8 @@ fn open(island: &Entity<Island>, cx: &mut App) {
         island.x_window = ours;
         island.focus = focus;
         island.menu = false;
+        let field = if island.card_up(cx).is_some() { Field::Panel } else { Field::Typing };
+        island.draft_mut().want_focus = Some(field);
         cx.notify();
     });
     sync_pill(island, cx);
@@ -446,6 +546,10 @@ pub fn close(island: &Entity<Island>, cx: &mut App) {
         island.notice = None;
         island.ask_tab = None;
         island.x_window = None;
+        island.cards_first = false;
+        let draft = island.draft_mut();
+        draft.list_shown = false;
+        draft.menu = None;
         cx.notify();
         (island.window.take(), island.focus.take())
     });
@@ -577,7 +681,7 @@ pub fn show_in_app(island: &Entity<Island>, session_id: String, cx: &mut App) {
     };
     let island = island.clone();
     cx.spawn(async move |cx| {
-        let answer = reply.await.unwrap_or_else(|_| Err("No answer from Dray.".into()));
+        let answer = wait(reply, cx).await;
         cx.update(|cx| match answer {
             Ok(_) => close(&island, cx),
             Err(why) => island.update(cx, |island, cx| {
@@ -612,6 +716,46 @@ pub fn answer(island: &Entity<Island>, cx: &mut App) {
     send_answer(island, key, ask, "answer_questions", args, "Sent", cx);
 }
 
+/// How long a call may go unanswered before the reader is told: a server
+/// stopped with its socket still open would otherwise hold a send forever.
+const ANSWER_WITHIN: Duration = Duration::from_secs(30);
+
+/// A call's answer, or the reason there is none.
+async fn wait(reply: futures::channel::oneshot::Receiver<server::Reply>, cx: &mut gpui::AsyncApp) -> server::Reply {
+    let timer = cx.background_executor().timer(ANSWER_WITHIN);
+    match futures::future::select(reply, Box::pin(timer)).await {
+        futures::future::Either::Left((answer, _)) => answer.unwrap_or_else(|_| Err("No answer from Dray.".into())),
+        futures::future::Either::Right(_) => Err("Dray didn't answer in time.".into()),
+    }
+}
+
+/// Says what was done and starts its clock; `after_flash` with the same
+/// clock closes on it, or turns to a card still waiting.
+fn start_flash(island: &mut Island, label: &'static str) -> u64 {
+    island.flash = Some(label);
+    island.flash_clock += 1;
+    sound::send();
+    island.flash_clock
+}
+
+async fn after_flash(island: &Entity<Island>, clock: u64, cx: &mut gpui::AsyncApp) {
+    cx.background_executor().timer(FLASH).await;
+    cx.update(|cx| {
+        let (flashing, empty) = {
+            let i = island.read(cx);
+            (i.flash.is_some() && i.flash_clock == clock, i.asks.attention().is_empty())
+        };
+        if flashing && empty {
+            close(island, cx);
+        } else if flashing {
+            island.update(cx, |island, cx| {
+                island.flash = None;
+                cx.notify();
+            });
+        }
+    });
+}
+
 /// Sends an answer. The last card says what was done, then the panel
 /// closes; an answer that did not land leaves the card, with the reason.
 fn send_answer(
@@ -630,19 +774,14 @@ fn send_answer(
         let last = island.asks.attention() == [key.clone()] && island.asks.waiting(&key).len() == 1;
         island.card.busy = true;
         island.notice = None;
-        let flash = last.then(|| {
-            island.flash = Some(label);
-            island.flash_clock += 1;
-            sound::send();
-            island.flash_clock
-        });
+        let flash = last.then(|| start_flash(island, label));
         cx.notify();
         Some((island.server.as_ref()?.call(cmd, args), flash))
     });
     let Some((reply, flash)) = reply else { return };
     let island = island.clone();
     cx.spawn(async move |cx| {
-        let answer = reply.await.unwrap_or_else(|_| Err("No answer from Dray.".into()));
+        let answer = wait(reply, cx).await;
         let landed = answer.is_ok();
         cx.update(|cx| {
             let had_cards = !island.read(cx).asks.attention().is_empty();
@@ -663,21 +802,337 @@ fn send_answer(
         });
         // Only an answer that drew the flash closes on it.
         let Some(clock) = flash.filter(|_| landed) else { return };
-        cx.background_executor().timer(FLASH).await;
+        after_flash(&island, clock, cx).await;
+    })
+    .detach();
+}
+
+/// Where the draft goes: a session, remembered as the last one used, or a
+/// new task, whose lists are read fresh.
+pub fn pick_target(island: &Entity<Island>, target: Target, cx: &mut App) {
+    if let Target::Session(id) = &target {
+        prefs::set("lastSession", id);
+    }
+    let new = target == Target::New;
+    island.update(cx, |island, cx| {
+        let draft = island.draft_mut();
+        draft.target = Some(target);
+        draft.menu = None;
+        if new {
+            draft.list_shown = false;
+        }
+        cx.notify();
+    });
+    if new {
+        load_picks(island, cx);
+    }
+}
+
+/// ↑/↓ through the switcher; opening it, either lands on its top row.
+pub fn move_list(island: &Entity<Island>, delta: isize, cx: &mut App) {
+    let next = {
+        let i = island.read(cx);
+        let list = i.listed(cx);
+        if list.is_empty() {
+            None
+        } else {
+            let opening = !i.draft().list_shown;
+            let at = (!opening).then(|| i.draft().session().and_then(|id| list.iter().position(|s| s.session_id == id))).flatten();
+            let next = at.map_or(0, |at| at.saturating_add_signed(delta).min(list.len() - 1));
+            i.draft().list_scroll.scroll_to_item(next);
+            Some(list[next].session_id.clone())
+        }
+    };
+    island.update(cx, |island, cx| {
+        island.draft_mut().list_shown = true;
+        cx.notify();
+    });
+    if let Some(id) = next {
+        pick_target(island, Target::Session(id), cx);
+    }
+}
+
+/// Return in the switcher, or a click on a row: that session, then back to
+/// the box. A search with no row picked takes its best match.
+pub fn choose(island: &Entity<Island>, picked: Option<String>, cx: &mut App) {
+    let target = picked.or_else(|| {
+        let i = island.read(cx);
+        let list = i.listed(cx);
+        let held = i.draft().session().is_some_and(|id| list.iter().any(|s| s.session_id == id));
+        (!held).then(|| list.first().map(|s| s.session_id.clone())).flatten()
+    });
+    if let Some(id) = target {
+        pick_target(island, Target::Session(id), cx);
+    }
+    let search = island.read(cx).draft().search.clone();
+    search.update(cx, |s, cx| s.clear(cx));
+    island.update(cx, |island, cx| {
+        let draft = island.draft_mut();
+        draft.list_shown = false;
+        draft.want_focus = Some(Field::Typing);
+        cx.notify();
+    });
+}
+
+/// Opens or closes the switcher; opened, the search takes the keys.
+pub fn toggle_list(island: &Entity<Island>, cx: &mut App) {
+    island.update(cx, |island, cx| {
+        let draft = island.draft_mut();
+        draft.list_shown = !draft.list_shown;
+        draft.want_focus = Some(if draft.list_shown { Field::Search } else { Field::Typing });
+        cx.notify();
+    });
+}
+
+/// Ctrl+⏎: what is in the box becomes a row of the message.
+pub fn add_typed(island: &Entity<Island>, cx: &mut App) {
+    let typing = island.read(cx).draft().typing.clone();
+    let text = typing.read(cx).text().trim().to_string();
+    if text.is_empty() {
+        return;
+    }
+    island.update(cx, |island, cx| {
+        island.draft_mut().add_row(&text, cx);
+        cx.notify();
+    });
+    typing.update(cx, |t, cx| t.clear(cx));
+}
+
+pub fn remove_row(island: &Entity<Island>, id: u64, cx: &mut App) {
+    island.update(cx, |island, cx| {
+        island.draft_mut().rows.retain(|r| r.id != id);
+        cx.notify();
+    });
+}
+
+/// Every connected list a new task's bar reads, fresh on every new task:
+/// projects get attached in Dray.
+pub fn load_picks(island: &Entity<Island>, cx: &mut App) {
+    let Some((projects, agents)) = island
+        .read(cx)
+        .server
+        .as_ref()
+        .map(|s| (s.call("list_projects", json!({})), s.call("agent_availability", json!({}))))
+    else {
+        return;
+    };
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        let (projects, agents) = futures::join!(projects, agents);
+        let read = |r: Result<server::Reply, _>| r.ok().and_then(Result::ok);
+        let (projects, agents) = (read(projects), read(agents));
         cx.update(|cx| {
-            let (flashing, empty) = {
-                let i = island.read(cx);
-                (i.flash.is_some() && i.flash_clock == clock, i.asks.attention().is_empty())
-            };
-            if flashing && empty {
-                close(&island, cx);
-            } else if flashing {
-                island.update(cx, |island, cx| {
-                    island.flash = None;
-                    cx.notify();
-                });
-            }
+            island.update(cx, |island, cx| {
+                let projects = projects.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+                let agents = agents.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+                island.draft_mut().picks.take(projects, agents);
+                cx.notify();
+            });
+            load_models(&island, cx);
         });
     })
     .detach();
+}
+
+/// The picked agent's models, read once per run: a failure caches nothing.
+pub fn load_models(island: &Entity<Island>, cx: &mut App) {
+    let harness = island.read(cx).draft().picks.harness.clone();
+    if island.read(cx).draft().picks.models.contains_key(&harness) {
+        return;
+    }
+    let Some(reply) = island.read(cx).server.as_ref().map(|s| s.call("list_models", json!({ "harness": harness })))
+    else {
+        return;
+    };
+    let island = island.clone();
+    cx.spawn(async move |cx| {
+        let Ok(Ok(list)) = reply.await else { return };
+        let Ok(list) = serde_json::from_value::<Vec<newtask::Model>>(list) else { return };
+        cx.update(|cx| {
+            island.update(cx, |island, cx| {
+                island.draft_mut().picks.models.insert(harness, list);
+                cx.notify();
+            })
+        });
+    })
+    .detach();
+}
+
+/// Picks a project, stamped on the server as Dray's own pick is, so the next
+/// new task in either lands on it.
+pub fn pick_project(island: &Entity<Island>, path: String, cx: &mut App) {
+    if let Some(server) = &island.read(cx).server {
+        let _ = server.call("set_last_selected_project", json!({ "path": path }));
+    }
+    island.update(cx, |island, cx| {
+        let draft = island.draft_mut();
+        draft.picks.project = Some(path);
+        draft.menu = None;
+        draft.want_focus = Some(Field::Typing);
+        cx.notify();
+    });
+}
+
+/// ⏎: the rows and the box as one prompt, to the session picked or as a new
+/// task. Sent is said at once and the request runs behind it; a send that
+/// fails comes back as the draft, with the reason.
+pub fn send(island: &Entity<Island>, cx: &mut App) {
+    let (target, rows, typing, picks) = {
+        let i = island.read(cx);
+        let d = i.draft();
+        let (rows, typing) = d.parts(cx);
+        let p = &d.picks;
+        let picks = json!({
+            "harness": p.harness,
+            "model": p.model_id(),
+            "effort": p.effort(),
+            "permissionMode": p.stance(),
+            "cwd": p.project,
+            "useWorktree": p.worktree(),
+        });
+        (d.target.clone(), rows, typing, picks)
+    };
+    let text = draft::prompt(&rows, &typing);
+    let Some(target) = target else { return };
+    if text.is_empty() || island.read(cx).draft().sending {
+        return;
+    }
+    if target == Target::New && picks["cwd"].is_null() {
+        island.update(cx, |island, cx| {
+            island.notice = Some("Pick a project first.".into());
+            cx.notify();
+        });
+        return;
+    }
+    // The message leaves the draft whole first, so nothing typed after
+    // Return can join it.
+    let typing_box = island.read(cx).draft().typing.clone();
+    typing_box.update(cx, |t, cx| t.clear(cx));
+    let clock = island.update(cx, |island, cx| {
+        island.notice = None;
+        let draft = island.draft_mut();
+        draft.rows.clear();
+        draft.sending = true;
+        draft.list_shown = false;
+        draft.menu = None;
+        cx.notify();
+        start_flash(island, "Sent")
+    });
+    // The panel closes on Sent's own clock while the request runs behind
+    // it; a failure brings the draft back up.
+    let flashing = island.clone();
+    cx.spawn(async move |cx| after_flash(&flashing, clock, cx).await).detach();
+    let island = island.clone();
+    let server = |cx: &mut App, cmd: &str, args: serde_json::Value| island.read(cx).server.as_ref().map(|s| s.call(cmd, args));
+    let fresh = match &target {
+        Target::Session(id) => server(cx, "get_session_by_id", json!({ "sessionId": id, "turns": 0 })),
+        Target::New => None,
+    };
+    let send_new = match &target {
+        Target::New => {
+            let id = draft::new_session_id();
+            let mut args = picks.clone();
+            args["sessionId"] = json!(id);
+            args["prompt"] = json!(text);
+            args["fast"] = json!(false);
+            // No branch picker here, so the server reads the checkout's own.
+            args["branch"] = serde_json::Value::Null;
+            args["worktreeName"] = serde_json::Value::Null;
+            args["baseRef"] = serde_json::Value::Null;
+            args["attachmentPaths"] = json!([]);
+            args["isNewSession"] = json!(true);
+            server(cx, "send_msg", args).map(|reply| (id, reply))
+        }
+        Target::Session(_) => None,
+    };
+    let state = island.clone();
+    cx.spawn(async move |cx| {
+        let outcome: Result<String, String> = match (&target, fresh, send_new) {
+            (Target::Session(id), Some(fresh), _) => {
+                // The session's own settings, read fresh, as the phone's reply does.
+                match wait(fresh, cx).await {
+                    Ok(item) => match serde_json::from_value::<Session>(item) {
+                        Ok(s) => {
+                            let args = json!({
+                                "sessionId": id, "prompt": text, "attachmentPaths": [],
+                                "harness": s.harness, "model": s.model, "effort": s.effort,
+                                "permissionMode": s.permission_mode, "fast": s.fast.unwrap_or(false),
+                                "cwd": s.cwd, "branch": null, "useWorktree": false,
+                                "worktreeName": null, "baseRef": null, "isNewSession": false,
+                            });
+                            match cx.update(|cx| state.read(cx).server.as_ref().map(|s| s.call("send_msg", args))) {
+                                Some(reply) => wait(reply, cx).await.map(|_| id.clone()),
+                                None => Err("Dray's server isn't reachable.".into()),
+                            }
+                        }
+                        Err(_) => Err("That task is gone.".into()),
+                    },
+                    Err(why) => Err(why),
+                }
+            }
+            (Target::New, _, Some((id, reply))) => {
+                wait(reply, cx).await.map(|_| id)
+            }
+            _ => Err("Dray's server isn't reachable.".into()),
+        };
+        cx.update(|cx| match outcome {
+            Ok(id) => {
+                state.update(cx, |island, _| island.draft_mut().sending = false);
+                // A pick made while the request ran is the reader's, and outranks this one.
+                if state.read(cx).draft().target.as_ref() == Some(&target) {
+                    pick_target(&state, Target::Session(id), cx);
+                } else {
+                    prefs::set("lastSession", &id);
+                }
+            }
+            Err(why) => restore(&state, rows, typing, target, why, cx),
+        });
+    })
+    .detach();
+}
+
+/// A send that failed behind its Sent comes back as the draft, on the target
+/// it was for, the panel open on it. Anything written since stays after it,
+/// in order: the failed box text becomes a row ahead of newer rows. A draft
+/// begun since for somewhere else is the reader's and is left alone, so the
+/// failed message goes to the clipboard instead, as on the Mac.
+fn restore(island: &Entity<Island>, rows: Vec<String>, typing: String, target: Target, why: String, cx: &mut App) {
+    let typing_box = island.read(cx).draft().typing.clone();
+    let now = typing_box.read(cx).text().to_string();
+    let (same, empty) = {
+        let d = island.read(cx).draft();
+        (d.target.as_ref() == Some(&target), d.rows.is_empty() && now.trim().is_empty())
+    };
+    let mut why = why;
+    if empty {
+        typing_box.update(cx, |t, cx| t.set_text(&typing, cx));
+    } else if !same {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(draft::prompt(&rows, &typing)));
+        why.push_str(" The message is on the clipboard.");
+    }
+    island.update(cx, |island, cx| {
+        island.flash = None;
+        let draft = island.draft_mut();
+        draft.sending = false;
+        if same || empty {
+            draft.target = Some(target);
+            let held = std::mem::take(&mut draft.rows);
+            for text in &rows {
+                draft.add_row(text, cx);
+            }
+            if !empty && !typing.trim().is_empty() {
+                draft.add_row(&typing, cx);
+            }
+            draft.rows.extend(held);
+        }
+        cx.notify();
+    });
+    if island.read(cx).window.is_none() {
+        show(island, cx);
+    }
+    // Last: opening the panel clears it.
+    island.update(cx, |island, cx| {
+        island.notice = Some(why);
+        cx.notify();
+    });
 }
