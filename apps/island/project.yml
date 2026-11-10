@@ -86,7 +86,9 @@ targets:
     type: application
     platform: macOS
     sources:
-      - Lab
+      # reference/ is captured frames and their generator, which has its own `@main`.
+      - path: Lab
+        excludes: ["reference/**"]
       - path: Island/VoiceOrb.swift
       - path: Island/VoiceOrb.metal
     settings:
