@@ -43,6 +43,15 @@ export function withKept<T>(
 export const unreachable = (list: ServerInfo[]): ServerId[] =>
   list.flatMap((s) => (s.on && s.status !== "connected" ? [s.id] : []));
 
+/// A row as the index holds it. A session created this run enters the list as
+/// its whole snapshot, events and all, and a cache of every server's rows has
+/// no use for a transcript.
+export function indexRow(item: SessionIndexItem): SessionIndexItem {
+  if (!("events" in item)) return item;
+  const { events: _, ...row } = item as SessionIndexItem & { events: unknown };
+  return row;
+}
+
 const written = new Map<ServerId, string>();
 const writes = new Map<ServerId, Promise<unknown>>();
 

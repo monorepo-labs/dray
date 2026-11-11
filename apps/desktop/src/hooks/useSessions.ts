@@ -1,7 +1,7 @@
 import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
-import { loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
+import { indexRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
 import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
@@ -2021,7 +2021,7 @@ useEffect(() => {
     // empty, and must not be written over what it last said.
     for (const { id } of remoteServers().filter((s) => s.on)) {
       if (live && answered.has(`${id}:sessions`)) {
-        lastIndex.set(`${id}:false`, sessionIndexItems.filter((i) => serverOfPath(i.cwd) === id));
+        lastIndex.set(`${id}:false`, sessionIndexItems.filter((i) => serverOfPath(i.cwd) === id).map(indexRow));
       }
       if (answered.has(`${id}:projects`)) {
         lastProjects.set(id, projects.filter((p) => serverOfPath(p.path) === id));
