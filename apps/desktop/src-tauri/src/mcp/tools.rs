@@ -288,9 +288,7 @@ async fn read_session(session_id: &str) -> Result<Value, String> {
         .filter(|p| p["type"] == "tool_call_started")
         .filter_map(|p| p["name"].as_str())
         .collect();
-    let turn = since.iter().rev().find(|p| p["type"] == "turn_completed").map(|p| {
-        json!({ "status": p["status"], "error": (p["status"] == "error").then(|| p["finalText"].clone()) })
-    });
+    let turn = since.iter().rev().find(|p| p["type"] == "turn_completed").map(turn_outcome);
     let asks = serve::open_asks();
     Ok(json!({
         "session_id": item.session_id,
@@ -306,6 +304,22 @@ async fn read_session(session_id: &str) -> Result<Value, String> {
         "turn": turn,
         "open_cards": cards(&asks, session_id),
     }))
+}
+
+/// How a turn ended, in the words a model should read. A Stop the user asked
+/// for closes as an error on Claude's wire (`aborted_*`) and as a success on
+/// Codex's (`interrupted`); reported raw, the first reads as a crash. The app's
+/// `drawsFailure` makes the same call.
+fn turn_outcome(turn: &Value) -> Value {
+    let reason = turn["stopReason"].as_str().unwrap_or_default();
+    if reason.starts_with("aborted") || reason == "interrupted" {
+        return json!({ "outcome": "stopped", "note": "Stopped on request. Send a message to carry on." });
+    }
+    if turn["status"] == "error" {
+        let why = turn["finalText"].as_str().filter(|t| !t.trim().is_empty()).unwrap_or("The turn failed.");
+        return json!({ "outcome": "failed", "error": why });
+    }
+    json!({ "outcome": "finished" })
 }
 
 async fn wait_for_session(session_id: &str, seconds: Option<u64>) -> Result<Value, String> {
@@ -355,7 +369,9 @@ async fn start_session(args: &Value, sink: &Sink) -> Result<Value, String> {
             "session_id": session.session_id,
             "title": session.title,
             "branch": session.branch,
-            "status": session.status,
+            // The summary is taken from the index before the tracker flips it,
+            // so it reads idle; the prompt has gone out and a turn is running.
+            "status": "in_progress",
             "next": "Call wait_for_session with this session_id to follow it.",
         })),
         other => Err(format!("unexpected answer: {other:?}")),
@@ -389,4 +405,26 @@ async fn answer_card(args: &Value, sink: &Sink) -> Result<Value, String> {
     };
     answered.map_err(|e| format!("{e:#}"))?;
     Ok(json!({ "answered": true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stop_reads_as_stopped_never_as_a_crash() {
+        let claude = json!({ "type": "turn_completed", "status": "error", "stopReason": "aborted_tools", "finalText": null });
+        assert_eq!(turn_outcome(&claude)["outcome"], "stopped");
+        let codex = json!({ "type": "turn_completed", "status": "success", "stopReason": "interrupted" });
+        assert_eq!(turn_outcome(&codex)["outcome"], "stopped");
+    }
+
+    #[test]
+    fn a_failure_always_says_why() {
+        let bare = json!({ "type": "turn_completed", "status": "error", "stopReason": "stop_sequence", "finalText": null });
+        assert_eq!(turn_outcome(&bare), json!({ "outcome": "failed", "error": "The turn failed." }));
+        let said = json!({ "type": "turn_completed", "status": "error", "finalText": "Credit balance is too low" });
+        assert_eq!(turn_outcome(&said)["error"], "Credit balance is too low");
+        assert_eq!(turn_outcome(&json!({ "status": "success" }))["outcome"], "finished");
+    }
 }
