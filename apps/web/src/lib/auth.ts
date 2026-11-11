@@ -68,8 +68,11 @@ export async function createPersonalOrg(user: {
   const root = slugProblem(base) ? "org" : base;
   // Try and retry rather than look first: two sign-ups as sam@a and sam@b can
   // both find `sam` free, and the loser must move on to `sam-2`, not fail.
-  for (let n = 1; n <= 100; n++) {
-    const slug = n === 1 ? root : `${root.slice(0, 36)}-${n}`;
+  // Past a few small numbers the suffix turns random, so a prefix as common
+  // as `admin` never runs out of room or walks a long line of taken slugs.
+  for (let n = 1; n <= 20; n++) {
+    const suffix = n <= 5 ? n : 10_000 + Math.floor(Math.random() * 90_000);
+    const slug = n === 1 ? root : `${root.slice(0, 34)}-${suffix}`;
     try {
       await auth.api.createOrganization({ body: { name, slug, userId: user.id } });
       return { slug };
