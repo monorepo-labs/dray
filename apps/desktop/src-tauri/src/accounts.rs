@@ -418,7 +418,9 @@ fn options(harness: Harness, provider: Option<&str>, headless: bool) -> Vec<Auth
             if entry.is_none_or(|entry| entry.oauth) {
                 // `--no-browser` is safe on a provider whose only way in is the
                 // browser: pi prints the link rather than opening it.
-                let shell = provider.map(|provider| {
+                // A name that fails the shape check falls back to bare `pi`,
+                // since the line is copyable and the copy is never re-checked.
+                let shell = provider.filter(|provider| plausible_provider(provider)).map(|provider| {
                     format!("pi auth login {provider}{}", if headless { " --no-browser" } else { "" })
                 });
                 options.push(match shell.as_deref() {
@@ -1511,6 +1513,7 @@ mod tests {
         );
         assert_eq!(oauth(None, false).command.as_deref(), Some("pi"));
         assert_eq!(oauth(None, false).hint.as_deref(), Some(PI_TUI_HINT));
+        assert_eq!(oauth(Some("x; touch /tmp/y"), false).command.as_deref(), Some("pi"));
 
         assert_eq!(
             login_command(Harness::Pi, Some("openai".into()), "oauth", true).as_deref(),

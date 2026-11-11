@@ -455,14 +455,27 @@ fn logins_to_do() -> Vec<String> {
         };
         if probe.is_empty() || !signed_in(&bin, probe) {
             // `agent.login` is bare `pi`, a TUI. A reader at a shell types the
-            // provider themselves, so the shell command reads better here.
-            todo.push(if agent.id == "pi" { "pi auth login <provider>".into() } else { agent.login.to_string() });
+            // provider themselves, so pi 1.5.1's shell command reads better.
+            todo.push(if agent.id == "pi" && pi_shell_auth(&bin) {
+                "pi auth login <provider>".into()
+            } else {
+                agent.login.to_string()
+            });
         }
     }
     if find("gh").is_some_and(|gh| !signed_in(&gh, &["auth", "status"])) {
         todo.push("gh auth login".into());
     }
     todo
+}
+
+/// Whether this pi has `pi auth login`, which came in 1.5.1. `setup` leaves an
+/// installed pi alone, so an older one is still here to be told about.
+fn pi_shell_auth(bin: &PathBuf) -> bool {
+    let Ok(out) = Command::new(bin).arg("--version").stdin(Stdio::null()).output() else { return false };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut parts = text.trim().trim_start_matches('v').split('.').map(|p| p.parse::<u64>().ok());
+    matches!((parts.next(), parts.next(), parts.next()), (Some(Some(a)), Some(Some(b)), Some(Some(c))) if (a, b, c) >= (1, 5, 1))
 }
 
 /// What the reader pastes into the app: the address they reached this machine
