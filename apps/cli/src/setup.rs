@@ -454,7 +454,9 @@ fn logins_to_do() -> Vec<String> {
             _ => &[],
         };
         if probe.is_empty() || !signed_in(&bin, probe) {
-            todo.push(agent.login.to_string());
+            // `agent.login` is bare `pi`, a TUI. A reader at a shell types the
+            // provider themselves, so the shell command reads better here.
+            todo.push(if agent.id == "pi" { "pi auth login <provider>".into() } else { agent.login.to_string() });
         }
     }
     if find("gh").is_some_and(|gh| !signed_in(&gh, &["auth", "status"])) {

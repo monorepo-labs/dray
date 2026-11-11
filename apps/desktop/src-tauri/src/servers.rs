@@ -1608,7 +1608,8 @@ pub async fn run_server_login(
     auth: Option<String>,
 ) -> Result<(), String> {
     let command = match auth {
-        Some(auth) => crate::accounts::login_command(harness, provider, &auth)?,
+        // Headless: the server's browser is nowhere the reader can see.
+        Some(auth) => crate::accounts::login_command(harness, provider, &auth, true)?,
         None => harness.login_command().to_string(),
     };
     run_on_server(&server, &command).await

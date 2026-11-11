@@ -7,12 +7,13 @@
 //! about to change a login.
 //!
 //! **No CLI here exposes a headless OAuth flow.** `claude auth login`,
-//! `codex login`, `fx login`, `grok login` and pi's `/login` are all
+//! `codex login`, `fx login`, `grok login` and `pi auth login` are all
 //! interactive, so an OAuth choice opens a terminal and the page re-reads
 //! afterwards. What can be done without one is an **API key**, and only where
 //! the CLI has a way to take it:
 //! `codex login --with-api-key` reads one off stdin, and pi's own store is a
-//! JSON file this module writes. Everything else is a terminal.
+//! JSON file this module writes, since `pi auth login --api-key` wants a
+//! terminal too. Everything else is a terminal.
 //!
 //! Dray keeps no copy of any key. A pasted one is handed to the CLI's own store
 //! and dropped — a second store here would be free to disagree with the one the
@@ -164,9 +165,10 @@ pub struct AuthOption {
     /// option Dray cannot carry out.
     ///
     /// **Shown, copyable, and run by [`run_agent_login`] on the reader's say
-    /// so.** Every one of these is a literal in [`auth_options`], which is what
+    /// so.** Every one of these is built in [`auth_options`], which is what
     /// makes running it safe: the frontend names an option id and the string is
-    /// looked up here, so nothing anybody typed reaches a command line. The
+    /// looked up here. The one typed word that reaches it, pi's provider, has
+    /// passed [`plausible_provider`] first. The
     /// string is still drawn, since a reader is owed sight of what a button is
     /// about to run in their shell.
     pub command: Option<String>,
@@ -345,6 +347,22 @@ pub fn providers_of(harness: Harness) -> Vec<ProviderChoice> {
 /// offers OAuth on eight of its providers and a key on all but five, and
 /// drawing the same pair on every row promised a sign-in most do not have.
 pub fn auth_options(harness: Harness, provider: Option<&str>) -> Vec<AuthOption> {
+    options(harness, provider, HEADLESS)
+}
+
+/// Whether this build answers for a machine with no browser on it.
+///
+/// A `dray-serve` build is a server the reader reaches over SSH, so a browser
+/// pi opens there opens nowhere they can see. The desktop build, `dray
+/// --serve` included, runs where the reader sits.
+const HEADLESS: bool = cfg!(not(feature = "desktop"));
+
+/// pi's sign-in before 1.5.1, which only its TUI could start.
+const PI_TUI_HINT: &str = "Type /login in pi, then pick the provider.";
+
+/// [`auth_options`] for a machine with or without a browser, which is the one
+/// thing [`login_command`]'s caller knows and the build it runs in does not.
+fn options(harness: Harness, provider: Option<&str>, headless: bool) -> Vec<AuthOption> {
     let option = |id: &str, label: &str, command: Option<&str>, hint: Option<&str>| AuthOption {
         id: id.to_string(),
         label: label.to_string(),
@@ -384,10 +402,10 @@ pub fn auth_options(harness: Harness, provider: Option<&str>) -> Vec<AuthOption>
                 Some("Billed per token. Replaces the ChatGPT sign-in until you sign in again."),
             ),
         ],
-        // pi: whatever *this* provider actually has. Its OAuth is a slash
-        // command inside the TUI rather than a subcommand, so the command is
-        // `pi` and the hint carries the rest — a reader dropped into a TUI with
-        // no idea what to type is a cure that does not cure.
+        // pi: whatever *this* provider actually has. `pi auth login <p>`
+        // (pi 1.5.1) signs in and exits, but only for a named provider, so
+        // without one the command opens pi and the hint carries the rest. An
+        // older pi is caught by [`installed_options`], which can spawn one.
         Harness::Pi => {
             let entry = provider.and_then(pi_known);
             let mut options = Vec::new();
@@ -398,12 +416,20 @@ pub fn auth_options(harness: Harness, provider: Option<&str>) -> Vec<AuthOption>
             // pi; under-offering makes a provider added after this build
             // unreachable, which is the same reading the shortlist takes.
             if entry.is_none_or(|entry| entry.oauth) {
-                options.push(option(
-                    "oauth",
-                    "Sign in with the provider",
-                    Some("pi"),
-                    Some("Type /login in pi, then pick the provider."),
-                ));
+                // `--no-browser` is safe on a provider whose only way in is the
+                // browser: pi prints the link rather than opening it.
+                let shell = provider.map(|provider| {
+                    format!("pi auth login {provider}{}", if headless { " --no-browser" } else { "" })
+                });
+                options.push(match shell.as_deref() {
+                    Some(command) => option(
+                        "oauth",
+                        "Sign in with the provider",
+                        Some(command),
+                        headless.then_some("pi prints a link or code to finish in your browser."),
+                    ),
+                    None => option("oauth", "Sign in with the provider", Some("pi"), Some(PI_TUI_HINT)),
+                });
             }
             if entry.is_none_or(|entry| entry.api_key) {
                 options.push(option("api_key", "API key", None, None));
@@ -935,7 +961,7 @@ fn pi_write_key(provider: &str, key: &str) -> Result<(), String> {
     })
 }
 
-/// Removes one provider from pi's store.
+/// Removes one provider from pi's store, for a pi older than `pi auth logout`.
 fn pi_forget_provider(provider: &str) -> Result<(), String> {
     pi_edit_store(|auth| {
         auth.remove(provider)
@@ -950,7 +976,7 @@ fn pi_forget_provider(provider: &str) -> Result<(), String> {
 ///
 /// A closed set rather than an escaping rule, which is what makes handing the
 /// name to a command line safe. pi's providers are deliberately **not** here:
-/// its sign-out is a write to its own store, so there is no word to append.
+/// its set is open, so a pi name is judged by [`plausible_provider`] instead.
 fn login_provider(harness: Harness, provider: &str) -> bool {
     harness == Harness::Fx && FX_PROVIDERS.iter().any(|(arg, _, _)| *arg == provider)
 }
@@ -1177,11 +1203,11 @@ async fn grok() -> anyhow::Result<Vec<Account>> {
 
 /// Signs one credential out, where the CLI can do it without a terminal.
 ///
-/// Four of the five can: `claude auth logout`, `codex logout` and `grok logout`
-/// drop the one credential each holds, `fx logout <provider>` drops one of
-/// three. pi has no such subcommand, so its half is removing the record from
-/// the store this module writes the other half of — which is why it is offered
-/// on a pi row only where that store actually holds the provider.
+/// All five can: `claude auth logout`, `codex logout` and `grok logout` drop
+/// the one credential each holds, `fx logout <provider>` drops one of three,
+/// and `pi auth logout <provider>` one of pi's. pi's removes only what pi
+/// stored, never an environment variable, which is why a pi row offers it only
+/// where the store holds the provider.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn sign_out_agent(harness: Harness, provider: Option<String>) -> Result<(), String> {
     let provider = provider.filter(|p| !p.is_empty());
@@ -1202,7 +1228,10 @@ pub async fn sign_out_agent(harness: Harness, provider: Option<String>) -> Resul
             if !plausible_provider(provider) {
                 return Err(format!("{provider} is not a provider name."));
             }
-            return pi_forget_provider(provider);
+            if !pi_shell_auth().await {
+                return pi_forget_provider(provider);
+            }
+            vec!["auth", "logout", provider]
         }
         Harness::Other(_) => return Err("Dray cannot drive that agent.".to_string()),
     };
@@ -1213,22 +1242,65 @@ pub async fn sign_out_agent(harness: Harness, provider: Option<String>) -> Resul
     run(harness, &args, "")
         .await
         .map_err(|err| format!("{err:#}"))?
-        .or_refused(format!("{} refused the sign-out.", harness.label()))
+        .or_refused(format!("{} refused the sign-out.", harness.label()))?;
+    if harness == Harness::Pi {
+        // The model list is per provider, as in `pi_edit_store`.
+        crate::harness::pi::models::forget();
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------------ commands
 
 /// The ways into one harness, for the Add-account flow's second step.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn agent_auth_options(harness: Harness, provider: Option<String>) -> Vec<AuthOption> {
-    auth_options(harness, provider.as_deref())
+pub async fn agent_auth_options(harness: Harness, provider: Option<String>) -> Vec<AuthOption> {
+    installed_options(harness, provider.as_deref(), HEADLESS).await
+}
+
+/// [`options`], with pi's sign-in moved back into its TUI where the pi
+/// installed here predates `pi auth login`.
+async fn installed_options(harness: Harness, provider: Option<&str>, headless: bool) -> Vec<AuthOption> {
+    let mut offered = options(harness, provider, headless);
+    if harness == Harness::Pi && !pi_shell_auth().await {
+        for option in offered.iter_mut().filter(|option| option.id == "oauth") {
+            option.command = Some("pi".to_string());
+            option.hint = Some(PI_TUI_HINT.to_string());
+        }
+    }
+    offered
+}
+
+/// The first pi with `pi auth login` and `pi auth logout`.
+const PI_SHELL_AUTH: (u64, u64, u64) = (1, 5, 1);
+
+/// Whether the pi here has `pi auth login` and `pi auth logout`.
+///
+/// Read off `--version` rather than tried, so an old pi is never handed
+/// `auth logout` to make sense of. An unreadable version takes the old road,
+/// which works on every pi. Only yes
+/// is remembered, since an update adds the commands and never takes them away.
+async fn pi_shell_auth() -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static HAS: AtomicBool = AtomicBool::new(false);
+    if HAS.load(Ordering::Relaxed) {
+        return true;
+    }
+    let has = run(Harness::Pi, &["--version"], "")
+        .await
+        .ok()
+        .and_then(|said| crate::agent_updates::version_in(&said.out))
+        .and_then(|version| crate::agent_updates::parse(&version))
+        .is_some_and(|version| version >= PI_SHELL_AUTH);
+    HAS.store(has, Ordering::Relaxed);
+    has
 }
 
 /// Runs an interactive sign-in in a terminal.
 ///
 /// **No shell string crosses the bridge.** The caller names the same closed set
 /// `add_agent_account` takes — harness, provider, option id — and the command
-/// is looked up here in [`auth_options`], where every one of them is a literal.
+/// is looked up here in [`auth_options`], which builds every one of them.
 /// A frontend can therefore ask for a flow this build offered and nothing else,
 /// which is the rule `permissions.rs` states and the reason this is not simply
 /// handed the string the row is already showing.
@@ -1243,21 +1315,35 @@ pub async fn run_agent_login(
     auth: String,
     cwd: String,
 ) -> Result<(), String> {
-    let command = login_command(harness, provider, &auth)?;
+    let provider = checked_provider(provider)?;
+    let offered = installed_options(harness, provider.as_deref(), false).await;
+    let command = pick(offered, harness, &auth)?;
     crate::apps::run_in_terminal(&command, &cwd).await
 }
 
-/// The sign-in command `auth` names, looked up in [`auth_options`] — a literal
-/// from that table, never text a frontend sent.
-pub fn login_command(harness: Harness, provider: Option<String>, auth: &str) -> Result<String, String> {
-    let provider = provider.filter(|p| !p.is_empty());
-    if let Some(provider) = provider.as_deref() {
-        if !plausible_provider(provider) {
-            return Err(format!("{provider} is not a provider name."));
-        }
-    }
+/// The sign-in command `auth` names, built by [`options`] — never text a
+/// frontend sent.
+///
+/// For a server, which is why `headless` is the caller's: this runs on the Mac
+/// and answers for the machine at the other end of SSH. It cannot ask which pi
+/// is installed there either, so it names the current one, which `dray setup`
+/// installs.
+pub fn login_command(harness: Harness, provider: Option<String>, auth: &str, headless: bool) -> Result<String, String> {
+    let provider = checked_provider(provider)?;
+    pick(options(harness, provider.as_deref(), headless), harness, auth)
+}
 
-    auth_options(harness, provider.as_deref())
+/// A provider fit for a command line, or none.
+fn checked_provider(provider: Option<String>) -> Result<Option<String>, String> {
+    match provider.filter(|p| !p.is_empty()) {
+        Some(provider) if !plausible_provider(&provider) => Err(format!("{provider} is not a provider name.")),
+        provider => Ok(provider),
+    }
+}
+
+/// The command of the option `auth` names.
+fn pick(offered: Vec<AuthOption>, harness: Harness, auth: &str) -> Result<String, String> {
+    offered
         .into_iter()
         .find(|option| option.id == auth)
         .and_then(|option| option.command)
@@ -1403,6 +1489,34 @@ mod tests {
         // Typed by the reader and unknown to this build, so both are offered
         // and pi is what refuses — the same reading the seed list takes.
         assert_eq!(ids("some-new-provider"), vec!["oauth", "api_key"]);
+    }
+
+    /// pi 1.5.1 signs a named provider in from the shell; with no name it
+    /// still has only its TUI. A server adds `--no-browser`, since its browser
+    /// opens nowhere the reader can see.
+    #[test]
+    fn pi_signs_in_from_the_shell_where_it_has_a_provider() {
+        let oauth = |provider, headless| {
+            options(Harness::Pi, provider, headless)
+                .into_iter()
+                .find(|option| option.id == "oauth")
+                .unwrap()
+        };
+
+        assert_eq!(oauth(Some("anthropic"), false).command.as_deref(), Some("pi auth login anthropic"));
+        assert_eq!(oauth(Some("anthropic"), false).hint, None);
+        assert_eq!(
+            oauth(Some("anthropic"), true).command.as_deref(),
+            Some("pi auth login anthropic --no-browser")
+        );
+        assert_eq!(oauth(None, false).command.as_deref(), Some("pi"));
+        assert_eq!(oauth(None, false).hint.as_deref(), Some(PI_TUI_HINT));
+
+        assert_eq!(
+            login_command(Harness::Pi, Some("openai".into()), "oauth", true).as_deref(),
+            Ok("pi auth login openai --no-browser")
+        );
+        assert!(login_command(Harness::Pi, Some("a;b".into()), "oauth", true).is_err());
     }
 
     /// A provider whose credential is structured rather than a key or a

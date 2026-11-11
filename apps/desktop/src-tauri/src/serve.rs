@@ -1777,7 +1777,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         list_slash_commands(cwd: String, harness: Harness) => crate::list_slash_commands(&cwd, harness).await;
         agent_accounts(cwd: String) => ok(crate::accounts::agent_accounts(cwd).await);
         agent_auth_options(harness: Harness, provider: Option<String>) =>
-            ok(crate::accounts::agent_auth_options(harness, provider));
+            ok(crate::accounts::agent_auth_options(harness, provider).await);
         add_agent_account(harness: Harness, provider: Option<String>, auth: String, key: Option<String>) =>
             crate::accounts::add_agent_account(harness, provider, auth, key).await;
         sign_out_agent(harness: Harness, provider: Option<String>) =>
