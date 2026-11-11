@@ -899,6 +899,8 @@ pub fn run() {
             servers::local_server,
             servers::add_server,
             servers::remove_server,
+            servers::save_server_cache,
+            servers::server_caches,
             servers::reconnect_servers,
             servers::server_invoke,
             servers::update_server,

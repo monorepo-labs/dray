@@ -10,10 +10,17 @@ const TURNS = [
   { prompt: "w-1/4", tool: "w-40", answer: ["w-full", "w-full", "w-5/6", "w-2/5"] },
 ];
 
-export default function TranscriptSkeleton() {
+/// `still` drops the pulse for a transcript nothing is loading: its server is
+/// down and not trying, so breathing would promise an answer on the way.
+export default function TranscriptSkeleton({ still = false }: { still?: boolean }) {
   return (
     <div aria-hidden className="h-full overflow-hidden">
-      <div className="mx-auto flex h-full max-w-3xl animate-pulse flex-col justify-end gap-10 px-6 pt-6 pb-6 will-change-[opacity] [mask-image:linear-gradient(to_bottom,transparent,black_45%)]">
+      <div
+        className={cn(
+          "mx-auto flex h-full max-w-3xl flex-col justify-end gap-10 px-6 pt-6 pb-6 [mask-image:linear-gradient(to_bottom,transparent,black_45%)]",
+          !still && "animate-pulse will-change-[opacity]",
+        )}
+      >
         {TURNS.map((turn) => (
           <div key={turn.prompt} className="flex flex-col gap-5">
             <div className={cn("ml-auto h-10 rounded-xl bg-card shadow-(--shadow-card)", turn.prompt)} />

@@ -94,6 +94,27 @@ export function serverConnected(id: ServerId): boolean {
   return id === LOCAL || servers.some((s) => s.id === id && s.status === "connected");
 }
 
+/// A remote's connection state; `undefined` for This Mac and a server no
+/// longer listed.
+export const serverStatus = (id: ServerId) => servers.find((s) => s.id === id)?.status;
+
+/// Why a remote that is not connected is not: its own words where it gave
+/// any, a stopped sandbox's note before them. `null` where nothing was said.
+export function offlineReason(server: ServerInfo): string | null {
+  if (!server.on) return "turned off";
+  if (server.status === "connecting") return "Reconnecting…";
+  return server.boat?.note ?? server.error;
+}
+
+/// One line naming a server that is not connected and why, for a tooltip.
+/// `null` for one that is, and for This Mac, whose calls wait out a restart.
+export function offlineLine(id: ServerId): string | null {
+  const server = servers.find((s) => s.id === id);
+  if (!server || server.status === "connected") return null;
+  const reason = offlineReason(server);
+  return reason ? `${server.name} is offline · ${reason}` : `${server.name} is offline`;
+}
+
 /// `prev` with `server`'s share replaced by `next`, which is how a list merged
 /// from several servers takes one server's fresh answer. Local stays first.
 export function mergeFrom<T>(prev: T[], server: ServerId, next: T[], pathOf: (item: T) => string): T[] {

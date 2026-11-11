@@ -1,6 +1,7 @@
 import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
+import { loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
 import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
@@ -150,8 +151,18 @@ const modelsKey = (server: ServerId, harness: Harness): string =>
 const pathOfProject = (p: Project) => p.path;
 
 /// Each server's last index answer, per side (`<server>:<archived>`), so a
-/// server that cannot be asked still draws the side the reader picks.
+/// server that cannot be asked still draws the side the reader picks. Seeded
+/// from disk at launch and written back there (`serverCache.ts`).
 const lastIndex = new Map<string, SessionIndexItem[]>();
+
+/// Each remote's last projects answer, kept for the same reason.
+const lastProjects = new Map<ServerId, Project[]>();
+
+/// What a remote has answered this run (`<server>:sessions`, `<server>:projects`).
+/// Only those shares are written to disk: before its first answer, a server's
+/// share on screen is the kept one or nothing, and writing nothing back over a
+/// good cache is how a quick quit would lose it.
+const answered = new Set<string>();
 
 /// Per session, how many index entries have landed. A server's replies and
 /// events leave on separate queues, so a read can answer after a newer change
@@ -1841,7 +1852,7 @@ useEffect(() => {
   setSessionIndexItems((prev) => {
     let next = prev.filter((i) => servers.includes(serverOfPath(i.cwd)));
     for (const s of remoteServers()) {
-      if (servers.includes(s.id)) continue;
+      if (servers.includes(s.id) || !s.on) continue;
       const left = prev.filter((i) => serverOfPath(i.cwd) === s.id);
       lastIndex.set(`${s.id}:${!showArchived}`, left);
       const moved = new Set(left.map((i) => i.sessionId));
@@ -1947,6 +1958,7 @@ const readServer = (server: ServerId) => {
     .then((items) => {
       if (removed(server)) return;
       lastIndex.set(`${server}:${archived}`, items);
+      answered.add(`${server}:sessions`);
       // A read outlived by a toggle is the side just left.
       if (archived !== showArchivedRef.current) return;
       setSessionIndexItems((prev) => mergeFrom(prev, server, items, (i) => i.cwd));
@@ -1958,6 +1970,8 @@ const readServer = (server: ServerId) => {
   invoke<Project[]>("list_projects", {}, server)
     .then((list) => {
       if (removed(server)) return;
+      lastProjects.set(server, list);
+      answered.add(`${server}:projects`);
       setProjects((prev) => mergeFrom(prev, server, list, pathOfProject));
       // A launch whose first read beat the server to it picked nothing.
       if (server === LOCAL) setProjectPath((path) => path ?? lastSelected(list)?.path ?? null);
@@ -1965,18 +1979,63 @@ const readServer = (server: ServerId) => {
     .catch(() => {});
 };
 
-// A server taken off the list takes its rows with it; one that is merely
-// unreachable keeps them.
-useEffect(
-  () =>
-    subscribeServers(() => {
-      const listed = new Set(remoteServers().map((s) => s.id));
-      const kept = (path: string) => serverOfPath(path) === LOCAL || listed.has(serverOfPath(path));
-      setProjects((prev) => (prev.every((p) => kept(p.path)) ? prev : prev.filter((p) => kept(p.path))));
-      setSessionIndexItems((prev) => (prev.every((i) => kept(i.cwd)) ? prev : prev.filter((i) => kept(i.cwd))));
-    }),
-  [],
-)
+// A server taken off the list or turned off takes its rows with it; one that
+// is merely unreachable keeps them, drawn muted (#871). Kept rows come from
+// this run's reads or, after a restart, from disk, and stand in until the
+// server answers again — its read then replaces them whole.
+useEffect(() => {
+  const keep = () => {
+    const list = remoteServers();
+    const absent = unreachable(list);
+    const side = showArchivedRef.current;
+    setProjects((prev) => withKept(prev, list, absent, (id) => lastProjects.get(id), pathOfProject));
+    setSessionIndexItems((prev) => withKept(prev, list, absent, (id) => lastIndex.get(`${id}:${side}`), (i) => i.cwd));
+  };
+  const unsubscribe = subscribeServers(keep);
+  void loadServerCaches().then((caches) => {
+    for (const [id, cache] of Object.entries(caches)) {
+      // A read that already landed this run is newer.
+      if (!lastProjects.has(id) && cache.projects) lastProjects.set(id, cache.projects);
+      for (const [side, items] of [[false, cache.sessions], [true, cache.archived]] as const) {
+        if (!items || lastIndex.has(`${id}:${side}`)) continue;
+        // Routes a click on a kept row to its server, as a read would have.
+        for (const item of items) noteSession(item.sessionId, id);
+        lastIndex.set(`${id}:${side}`, items);
+      }
+    }
+    keep();
+  });
+  return unsubscribe;
+}, [])
+
+// Every remote's share as it stands, written to disk a second after the last
+// change, so a session started or retitled since the last read is kept too.
+// The live side only, and only while it is the one loaded: during a toggle the
+// list briefly holds the other side, and filing that under this one would
+// draw settled rows as live after the next restart. The settled side is kept
+// from reads alone.
+useEffect(() => {
+  const timer = setTimeout(() => {
+    const live = !showArchivedRef.current && indexSide === false;
+    // An off server's rows are hidden, not gone: its share on screen is
+    // empty, and must not be written over what it last said.
+    for (const { id } of remoteServers().filter((s) => s.on)) {
+      if (live && answered.has(`${id}:sessions`)) {
+        lastIndex.set(`${id}:false`, sessionIndexItems.filter((i) => serverOfPath(i.cwd) === id));
+      }
+      if (answered.has(`${id}:projects`)) {
+        lastProjects.set(id, projects.filter((p) => serverOfPath(p.path) === id));
+      }
+      if (!answered.has(`${id}:sessions`) && !answered.has(`${id}:projects`)) continue;
+      saveServerCache(id, {
+        sessions: lastIndex.get(`${id}:false`),
+        archived: lastIndex.get(`${id}:true`),
+        projects: lastProjects.get(id),
+      });
+    }
+  }, 1000);
+  return () => clearTimeout(timer);
+}, [sessionIndexItems, projects, indexSide])
 
 // Refetched per project rather than cached: branches change outside the app.
 // The guard matters because switching projects quickly would otherwise let a
