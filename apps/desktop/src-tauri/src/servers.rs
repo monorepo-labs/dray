@@ -1451,9 +1451,10 @@ pub async fn save_server_cache(server: String, cache: Value) -> Result<(), Strin
 /// list every cache would go.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn server_caches() -> HashMap<String, Value> {
-    let listed: Vec<String> = crate::machines::load().await.into_iter().map(|s| s.id).collect();
-    // An unreadable file loads as none, and that must not read as "all removed".
-    let prune = !listed.is_empty();
+    // A file that failed to read must not count as "all removed".
+    let read = crate::machines::try_load().await;
+    let prune = read.is_ok();
+    let listed: Vec<String> = read.unwrap_or_default().into_iter().map(|s| s.id).collect();
     let mut out = HashMap::new();
     let Ok(dir) = store::app_subdir("server-cache").await else { return out };
     let Ok(mut entries) = tokio::fs::read_dir(&dir).await else { return out };

@@ -102,11 +102,15 @@ static SAVE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// The saved list, read fresh: the Mac app may have changed it since.
 pub async fn load() -> Vec<Saved> {
-    let Ok(path) = path().await else { return Vec::new() };
-    store::read_json(&path).await.unwrap_or_else(|e| {
+    try_load().await.unwrap_or_else(|e| {
         eprintln!("[servers read err] {e:#}");
         Vec::new()
     })
+}
+
+/// [`load`], telling a file that failed to read from one that lists none.
+pub async fn try_load() -> anyhow::Result<Vec<Saved>> {
+    store::read_json(&path().await?).await
 }
 
 pub async fn save(list: &[Saved]) -> Result<(), String> {
