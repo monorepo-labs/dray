@@ -66,12 +66,27 @@ export async function createPersonalOrg(user: {
   const name = user.name.trim().split(/\s+/)[0] || local;
   const base = slugify(local);
   const root = slugProblem(base) ? "org" : base;
-  let slug = root;
-  for (let n = 2; ; n++) {
-    const { rowCount } = await pool.query(`select 1 from organization where slug = $1`, [slug]);
-    if (!rowCount) break;
-    slug = `${root.slice(0, 36)}-${n}`;
+  // Try and retry rather than look first: two sign-ups as sam@a and sam@b can
+  // both find `sam` free, and the loser must move on to `sam-2`, not fail.
+  for (let n = 1; n <= 100; n++) {
+    const slug = n === 1 ? root : `${root.slice(0, 36)}-${n}`;
+    try {
+      await auth.api.createOrganization({ body: { name, slug, userId: user.id } });
+      return { slug };
+    } catch (e) {
+      if (!slugTaken(e)) throw e;
+    }
   }
-  await auth.api.createOrganization({ body: { name, slug, userId: user.id } });
-  return { slug };
+  throw new Error(`No free slug for ${root}`);
+}
+
+/// Better Auth's own "already exists", or Postgres refusing the unique slug
+/// when two creations pass that check together.
+function slugTaken(e: unknown): boolean {
+  const err = e as { message?: string; code?: string; cause?: { code?: string } };
+  return (
+    err.message === "Organization already exists" ||
+    err.code === "23505" ||
+    err.cause?.code === "23505"
+  );
 }
