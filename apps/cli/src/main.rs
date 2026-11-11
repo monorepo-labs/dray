@@ -1008,19 +1008,22 @@ fn print_table(sessions: &[SessionSummary]) {
 /// into a shell a failed download runs an empty script and reports success.
 /// curl or wget, the pair the installer itself accepts.
 fn update(args: Update) -> Result<(), String> {
-    // The app writes the CLI it ships to ~/.local/bin on every launch, so an
-    // update here would fight it: undone at the next launch, and until then
-    // a CLI the app was not released beside. A server on its own `DRAY_HOME`
-    // still updates its `dray-serve` here.
-    if setup::app_runs_this_home() {
-        eprintln!("The Dray app keeps this CLI up to date. Update the app to update it.");
-        return Ok(());
-    }
     let exe = std::env::current_exe()
         .map_err(|e| format!("could not find the running dray binary: {e}"))?;
     let dir = exe
         .parent()
         .ok_or("the running dray binary sits in no directory")?;
+
+    // The app writes the CLI it ships to ~/.local/bin on every launch, so an
+    // update here would fight it: undone at the next launch, and until then
+    // a CLI the app was not released beside. A server on its own `DRAY_HOME`
+    // still updates its `dray-serve` here, and so does one beside a Linux
+    // app, whose own server is its child and never this binary.
+    let own_server = cfg!(target_os = "linux") && dir.join("dray-serve").is_file();
+    if setup::app_updates_this_cli() && !own_server {
+        eprintln!("The Dray app keeps this CLI up to date. Update the app to update it.");
+        return Ok(());
+    }
 
     let mut sh = std::process::Command::new("sh");
     sh.args([
@@ -1037,7 +1040,7 @@ fn update(args: Update) -> Result<(), String> {
     .env("DRAY_UPDATING", "1")
     .env("DRAY_CHANNEL", args.channel.as_deref().unwrap_or(own_channel()));
 
-    let current = if setup::app_on_this_mac() { serve_tag_beside(dir) } else { Some(current_tag()) };
+    let current = if setup::app_ships_this_cli() { serve_tag_beside(dir) } else { Some(current_tag()) };
     match current.filter(|_| !args.force) {
         Some(tag) => {
             sh.env("DRAY_CURRENT_VERSION", tag);
@@ -1072,11 +1075,11 @@ fn update(args: Update) -> Result<(), String> {
     }
 }
 
-/// The release the `dray-serve` beside this binary was built as, for a Mac with
-/// the app: its launches rewrite `dray` and never `dray-serve`, so this binary's
-/// version would stop the installer at "already current" with the server left
-/// behind. No `dray-serve` there is no pair to keep, so this binary's tag; one
-/// too old to say is reinstalled.
+/// The release the `dray-serve` beside this binary was built as, for a machine
+/// whose app ships `dray`: its launches rewrite `dray` and never `dray-serve`,
+/// so this binary's version would stop the installer at "already current" with
+/// the server left behind. No `dray-serve` there is no pair to keep, so this
+/// binary's tag; one too old to say is reinstalled.
 fn serve_tag_beside(dir: &std::path::Path) -> Option<String> {
     let serve = dir.join("dray-serve");
     if !serve.exists() {

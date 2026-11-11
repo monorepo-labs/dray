@@ -129,7 +129,10 @@ fn set(app: &AppHandle, status: ChromiumStatus) {
 }
 
 /// `~/.dray/cef/` (`cef-dev/` under `tauri dev`, `~/.dray-dev/cef` on
-/// Linux), one version directory at a time.
+/// Linux), one version directory at a time. `DRAY_HOME` does not move it, on
+/// purpose: one release's framework is the same bytes in every home, and
+/// sharing it is ~330MB downloaded once a machine. The profiles it writes do
+/// move (`headless::browser_dir`).
 fn cef_dir() -> PathBuf {
     // Split like the profile root: the sweep deletes every version but its
     // own, so a dev build on a newer CEF would take the release app's

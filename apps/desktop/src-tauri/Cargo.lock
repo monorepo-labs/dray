@@ -1456,6 +1456,7 @@ dependencies = [
  "ts-rs",
  "uuid",
  "x11",
+ "zbus",
  "zip 9.0.5",
 ]
 

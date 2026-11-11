@@ -1,4 +1,4 @@
-import { Cog6ToothIcon } from "@heroicons/react/16/solid";
+import { Cog6ToothIcon, SignalSlashIcon } from "@heroicons/react/16/solid";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
@@ -41,7 +41,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ShortcutKeys, { DigitKeys } from "@/components/ShortcutKeys";
-import { useSwipe } from "@/lib/swipe";
+import { HAS_SWIPE, useSwipe } from "@/lib/swipe";
 import { playSwipeTick } from "@/lib/tick";
 import { Kbd } from "@/components/ui/kbd";
 import {
@@ -57,7 +57,7 @@ import { basename, isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
 import { sessionBranch } from "@/lib/pr";
 import { checkoutsOf, groupProjects, keyOfPath, leadPath, soleServer } from "@/lib/projectGroups";
-import { projectLabel, serverConnected, serverName, useServers } from "@/lib/servers";
+import { offlineLine, projectLabel, serverConnected, serverName, useServers } from "@/lib/servers";
 import { LOCAL, serverOfPath } from "@/lib/transport";
 import { useResizable } from "@/components/ResizeHandle";
 import { useJumpDigit } from "@/lib/digitChords";
@@ -1450,6 +1450,7 @@ export default function Sidebar({
                     // A row on a server that dropped stays listed — its agent
                     // is still running there — and fades with its heading.
                     faded={(archivedShown && !isToday(item.modified)) || offline(item.cwd)}
+                    offline={offlineLine(serverOfPath(item.cwd))}
                     // The flag too, for a row drawn in a split group or under a
                     // pinned ancestor, where no aside run holds it.
                     aside={
@@ -1880,7 +1881,7 @@ function ProjectFilter({
         <TooltipTrigger asChild>{trigger}</TooltipTrigger>
         <TooltipContent side="bottom" align="start" className="flex items-center gap-1.5 px-1.5">
           <ShortcutKeys ids={["filter.prev", "filter.next"]} />
-          or swipe anywhere on the sidebar
+          {HAS_SWIPE && "or swipe anywhere on the sidebar"}
         </TooltipContent>
       </Tooltip>
     );
@@ -1976,7 +1977,7 @@ function ProjectFilter({
         <DropdownMenuSeparator />
         <div className="flex flex-col items-start gap-1 px-2 py-1 text-xs text-muted-foreground">
           <ShortcutKeys ids={["filter.prev", "filter.next"]} />
-          <span>or swipe the sidebar</span>
+          {HAS_SWIPE && <span>or swipe the sidebar</span>}
         </div>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -2330,6 +2331,7 @@ function SessionRow({
   pr,
   active,
   faded = false,
+  offline = null,
   aside = false,
   marksLive = true,
   onSelect,
@@ -2357,6 +2359,9 @@ function SessionRow({
   pr?: PrMark;
   active: boolean;
   faded?: boolean;
+  /// Its server is not connected, said as the mark's tooltip. The row is what
+  /// the server last answered, so nothing on it is live.
+  offline?: string | null;
   /// Drawn in its project's set-aside run, or flagged aside itself. Faded
   /// further than `faded`, since the reader asked for it out of the way.
   aside?: boolean;
@@ -2404,7 +2409,9 @@ function SessionRow({
   const ownRail = RAIL_X + (depth - 1) * STEP;
   const parentCarriesOn = guides[depth - 1] ?? false;
   // The trailing slot is drawing a spinner or an orb rather than a timestamp.
-  const live = (marksLive && pr?.checksState === "RUNNING") || status === "in_progress";
+  // An offline row's mark stays under the cursor like the orb does, since its
+  // tooltip is the only place the reason is said.
+  const live = !!offline || (marksLive && pr?.checksState === "RUNNING") || status === "in_progress";
   // While the jump modifier is held, this row's digit takes the slot.
   const digit = useJumpDigit(item.sessionId);
 
@@ -2690,6 +2697,13 @@ function SessionRow({
                 it the mark shifts sideways row to row. */}
             {digit ? (
               <Kbd>{digit}</Kbd>
+            ) : offline ? (
+              // Ahead of the orb and the checks, which would animate a claim
+              // nobody can currently make. Hovered for the reason, since the
+              // fade alone cannot say a sandbox stopped.
+              <span className="pointer-events-auto mr-[3px] flex" title={offline}>
+                <SignalSlashIcon className="size-3.5" aria-label={offline} />
+              </span>
             ) : marksLive && pr?.checksState === "RUNNING" ? (
               <CircleDashed
                 className="mr-[3px] size-3.5 animate-spin text-accent-command [animation-duration:3s]"

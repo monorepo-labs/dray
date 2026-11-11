@@ -495,9 +495,10 @@ needsKey: boolean,
  * option Dray cannot carry out.
  *
  * **Shown, copyable, and run by [`run_agent_login`] on the reader's say
- * so.** Every one of these is a literal in [`auth_options`], which is what
+ * so.** Every one of these is built in [`auth_options`], which is what
  * makes running it safe: the frontend names an option id and the string is
- * looked up here, so nothing anybody typed reaches a command line. The
+ * looked up here. The one typed word that reaches it, pi's provider, has
+ * passed [`plausible_provider`] first. The
  * string is still drawn, since a reader is owed sight of what a button is
  * about to run in their shell.
  */

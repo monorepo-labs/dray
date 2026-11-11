@@ -1152,10 +1152,13 @@ dependencies = [
  "futures",
  "gpui",
  "gpui_platform",
+ "image",
  "raw-window-handle",
  "serde",
  "serde_json",
  "tungstenite",
+ "unicode-segmentation",
+ "uuid",
  "x11rb",
 ]
 

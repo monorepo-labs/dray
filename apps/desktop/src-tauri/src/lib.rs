@@ -36,7 +36,7 @@ pub mod chromium;
 mod trackpad;
 #[cfg(all(feature = "desktop", target_os = "linux"))]
 mod island;
-#[cfg(all(feature = "desktop", target_os = "macos"))]
+#[cfg(all(feature = "desktop", any(target_os = "macos", target_os = "linux")))]
 mod cli;
 // `dray browser` on a server: a headless Chromium under the same verbs the
 // Mac's CEF answers. In the desktop build too, since that binary is also the
@@ -57,6 +57,8 @@ pub mod git;
 pub mod github;
 #[path = "harness/harness.rs"]
 pub mod harness;
+#[cfg(target_os = "linux")]
+pub mod ibus;
 #[path = "issues/issues.rs"]
 pub mod issues;
 #[path = "models/models.rs"]
@@ -791,6 +793,9 @@ pub fn run() {
             // window already exists here for it to parent a view into.
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::init(app.handle());
+            // Mac only: X11 reports a two-finger scroll with no phases, so a
+            // swipe's start and lift could only be guessed from timing, the
+            // route #445 took out.
             #[cfg(target_os = "macos")]
             trackpad::watch(app.handle());
             // GTK draws the menu as a bar inside the window, over the app's own
@@ -804,14 +809,14 @@ pub fn run() {
                 let _ = window.remove_menu();
                 let _ = window.set_decorations(false);
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             cli::install();
             // Dictations kept past a failure. Pruning on write alone left the
             // last one on disk forever, since nothing else sweeps them and a
             // reader who gives up after one failure writes no more.
             tauri::async_runtime::spawn(transcription::recordings::prune());
             transcription::serve_host(app.handle());
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             transcription::stop_on_sleep(app.handle());
 
             // Sessions live in the background server launchd runs from this
@@ -897,6 +902,8 @@ pub fn run() {
             servers::local_server,
             servers::add_server,
             servers::remove_server,
+            servers::save_server_cache,
+            servers::server_caches,
             servers::reconnect_servers,
             servers::server_invoke,
             servers::update_server,
@@ -954,6 +961,7 @@ pub fn run() {
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             chromium::chromium_remove,
             notifications::notify_session,
+            notifications::set_window_urgent,
             updater::check_update,
             updater::install_update,
             quit::confirm_quit,

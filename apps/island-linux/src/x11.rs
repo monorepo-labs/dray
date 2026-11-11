@@ -24,18 +24,31 @@ const ALL_MASTER: u16 = 1;
 /// nothing, so no other app loses a key to the island. A key or a click
 /// between down and up rules the tap out, which is what keeps Ctrl+C and a
 /// Ctrl-click from opening the panel.
-pub fn watch_taps(on_tap: impl Fn() + Send + 'static) {
+pub fn watch_taps(on_tap: impl Fn() + Send + 'static, on_capture: impl Fn() + Send + 'static, on_shift: impl Fn(bool) + Send + 'static) {
     std::thread::Builder::new()
         .name("island-taps".into())
         .spawn(move || {
-            if let Err(err) = run_taps(on_tap) {
+            if let Err(err) = run_taps(on_tap, on_capture, on_shift) {
                 eprintln!("island: no modifier tap: {err}");
             }
         })
         .expect("tap thread");
 }
 
-fn run_taps(on_tap: impl Fn()) -> anyhow::Result<()> {
+/// The screenshot key: Super+Shift+2, the Mac's ⌘⇧2 with ⌘ read as Super, as
+/// the tap key's Command is. Grabbed for the island's life, as the Mac holds
+/// its hot key, with Caps Lock and Num Lock either way.
+fn grab_capture_key(conn: &RustConnection, root: u32, keysyms: &Keysyms) -> Option<u8> {
+    use x11rb::protocol::xproto::{GrabMode, ModMask};
+    let code = keysyms.code_of(0x32)?;
+    for extra in [ModMask::from(0u16), ModMask::LOCK, ModMask::M2, ModMask::LOCK | ModMask::M2] {
+        let mods = ModMask::M4 | ModMask::SHIFT | extra;
+        let _ = conn.grab_key(false, root, mods, code, GrabMode::ASYNC, GrabMode::ASYNC);
+    }
+    Some(code)
+}
+
+fn run_taps(on_tap: impl Fn(), on_capture: impl Fn(), on_shift: impl Fn(bool)) -> anyhow::Result<()> {
     // A connection of its own: the loop below blocks on it.
     let (conn, screen) = x11rb::connect(None)?;
     let root = conn.setup().roots[screen].root;
@@ -53,7 +66,10 @@ fn run_taps(on_tap: impl Fn()) -> anyhow::Result<()> {
     xinput::xi_select_events(&conn, root, &[xinput::EventMask { deviceid: ALL_MASTER, mask: vec![mask] }])?;
     conn.flush()?;
     let mut keysyms = Keysyms::read(&conn)?;
+    let mut capture_code = grab_capture_key(&conn, root, &keysyms);
+    conn.flush()?;
     let mut tap = Tap::default();
+    let mut pen = Pen::default();
     // The prefs file is read only for a modifier, never for every key typed.
     let ours = |keysyms: &Keysyms, code: u32| keysyms.of(code).is_some_and(|sym| is_key(sym, None) && is_key(sym, Some(prefs::read().key)));
     loop {
@@ -61,17 +77,88 @@ fn run_taps(on_tap: impl Fn()) -> anyhow::Result<()> {
             Event::XinputRawKeyPress(e) => {
                 let repeat = u32::from(e.flags) & u32::from(KeyEventFlags::KEY_REPEAT) != 0;
                 tap.press(e.detail, ours(&keysyms, e.detail), repeat, Instant::now());
+                if let Some(armed) = pen.press(e.detail, keysyms.of(e.detail)) {
+                    on_shift(armed);
+                }
             }
             Event::XinputRawKeyRelease(e) => {
                 if tap.release(e.detail, ours(&keysyms, e.detail), Instant::now()) {
                     on_tap();
                 }
+                if let Some(armed) = pen.release(e.detail) {
+                    on_shift(armed);
+                }
+            }
+            // While our own grab holds the keyboard the server sends its
+            // keys to us as core events and skips our raw listener, so the
+            // chord's releases arrive here or never, and a Shift held stale
+            // would stop every tap for half a minute.
+            Event::KeyPress(e) => {
+                let code = u32::from(e.detail);
+                tap.press(code, ours(&keysyms, code), false, Instant::now());
+                if let Some(armed) = pen.press(code, keysyms.of(code)) {
+                    on_shift(armed);
+                }
+                if Some(e.detail) == capture_code {
+                    on_capture();
+                }
+            }
+            Event::KeyRelease(e) => {
+                let code = u32::from(e.detail);
+                if tap.release(code, ours(&keysyms, code), Instant::now()) {
+                    on_tap();
+                }
+                if let Some(armed) = pen.release(code) {
+                    on_shift(armed);
+                }
             }
             Event::XinputRawButtonPress(e) => tap.button(e.detail, true, Instant::now()),
             Event::XinputRawButtonRelease(e) => tap.button(e.detail, false, Instant::now()),
-            Event::MappingNotify(_) => keysyms = Keysyms::read(&conn)?,
+            Event::MappingNotify(_) => {
+                keysyms = Keysyms::read(&conn)?;
+                capture_code = grab_capture_key(&conn, root, &keysyms);
+                conn.flush()?;
+            }
             _ => {}
         }
+    }
+}
+
+/// Whether Shift alone is held, which arms the pen while dictating: any
+/// other modifier with it is a chord and draws nothing. Answers a change.
+#[derive(Default)]
+struct Pen {
+    shift: HashMap<u32, ()>,
+    others: HashMap<u32, ()>,
+    armed: bool,
+}
+
+impl Pen {
+    fn press(&mut self, code: u32, sym: Option<u32>) -> Option<bool> {
+        match sym {
+            Some(0xffe1 | 0xffe2) => {
+                self.shift.insert(code, ());
+            }
+            Some(s) if is_key(s, None) => {
+                self.others.insert(code, ());
+            }
+            _ => {}
+        }
+        self.settle()
+    }
+
+    fn release(&mut self, code: u32) -> Option<bool> {
+        self.shift.remove(&code);
+        self.others.remove(&code);
+        self.settle()
+    }
+
+    fn settle(&mut self) -> Option<bool> {
+        let armed = !self.shift.is_empty() && self.others.is_empty();
+        (armed != self.armed).then(|| {
+            self.armed = armed;
+            armed
+        })
     }
 }
 
@@ -152,6 +239,12 @@ impl Keysyms {
         Ok(Self { first, per: reply.keysyms_per_keycode, syms: reply.keysyms })
     }
 
+    /// The keycode whose unshifted keysym is `sym`.
+    fn code_of(&self, sym: u32) -> Option<u8> {
+        let per = self.per.max(1) as usize;
+        self.syms.chunks(per).position(|c| c.first() == Some(&sym)).map(|i| self.first + i as u8)
+    }
+
     fn of(&self, keycode: u32) -> Option<u32> {
         let index = (keycode.checked_sub(self.first as u32)? as usize) * self.per as usize;
         self.syms.get(index).copied()
@@ -193,6 +286,152 @@ pub fn screen_width() -> Option<i32> {
     Some(conn.setup().roots[*screen].width_in_pixels as i32)
 }
 
+/// Whether a compositor runs, which is what makes a window's clear pixels
+/// clear: EWMH has it own the `_NET_WM_CM_S<screen>` selection. Without one
+/// they draw black, so the island draws square and opaque instead.
+pub fn compositing() -> bool {
+    let Some((conn, screen)) = conn() else { return false };
+    let name = format!("_NET_WM_CM_S{screen}");
+    let Some(atom) = conn.intern_atom(false, name.as_bytes()).ok().and_then(|c| c.reply().ok()).map(|r| r.atom) else {
+        return false;
+    };
+    conn.get_selection_owner(atom).ok().and_then(|c| c.reply().ok()).is_some_and(|r| r.owner != x11rb::NONE)
+}
+
+/// The screen's pixels in `rect` (X pixels), as RGBA, read off the root
+/// window. With a compositor this is the composited screen, our own windows
+/// included, so the island hides or clears them first where that matters.
+pub fn capture(x: i32, y: i32, width: u32, height: u32) -> Option<image::RgbaImage> {
+    use x11rb::protocol::xproto::ImageFormat;
+    let (conn, screen) = conn()?;
+    let root = &conn.setup().roots[*screen];
+    let reply = conn
+        .get_image(ImageFormat::Z_PIXMAP, root.root, x as i16, y as i16, width as u16, height as u16, !0)
+        .ok()?
+        .reply()
+        .ok()?;
+    // 24-bit depth arrives as 32 bits a pixel, BGRx, on every server we meet.
+    if reply.data.len() < (width * height * 4) as usize {
+        return None;
+    }
+    let rgba: Vec<u8> = reply.data.chunks_exact(4).take((width * height) as usize).flat_map(|p| [p[2], p[1], p[0], 255]).collect();
+    image::RgbaImage::from_raw(width, height, rgba)
+}
+
+/// The root window's size in X pixels.
+pub fn screen_size() -> Option<(u32, u32)> {
+    let (conn, screen) = conn()?;
+    let root = &conn.setup().roots[*screen];
+    Some((root.width_in_pixels as u32, root.height_in_pixels as u32))
+}
+
+/// Lets the mouse through `window`, or stops letting it through: an empty
+/// input region passes every click to whatever is beneath, so the page under
+/// the ink still scrolls and clicks until the pen is armed.
+pub fn pass_mouse(window: u32, through: bool) {
+    use x11rb::protocol::shape::{self, SK, SO};
+    use x11rb::protocol::xproto::{ClipOrdering, Rectangle};
+    let Some((conn, _)) = conn() else { return };
+    let region: &[Rectangle] = if through { &[] } else { &[Rectangle { x: 0, y: 0, width: u16::MAX, height: u16::MAX }] };
+    let _ = shape::rectangles(conn, SO::SET, SK::INPUT, ClipOrdering::UNSORTED, window, 0, 0, region);
+    let _ = conn.flush();
+}
+
+/// Takes a window of ours off the screen for a moment, as a read of the
+/// screen must not see it, or puts it back.
+pub fn unmap(window: u32) {
+    let Some((conn, _)) = conn() else { return };
+    let _ = conn.unmap_window(window);
+    let _ = conn.flush();
+}
+
+pub fn map(window: u32) {
+    let Some((conn, _)) = conn() else { return };
+    let _ = conn.map_window(window);
+    let _ = conn.flush();
+}
+
+/// Hands the keyboard back to `window`, whoever holds it now.
+pub fn refocus(window: u32) {
+    let Some((conn, _)) = conn() else { return };
+    if window == x11rb::NONE || window == u32::from(InputFocus::POINTER_ROOT) {
+        return;
+    }
+    let _ = conn.set_input_focus(InputFocus::PARENT, window, x11rb::CURRENT_TIME);
+    let _ = conn.flush();
+}
+
+/// Whether Shift alone is down right now, read off the pointer's modifier
+/// state: the pen may be armed before the microphone opened.
+pub fn shift_alone() -> bool {
+    use x11rb::protocol::xproto::KeyButMask;
+    let Some((conn, screen)) = conn() else { return false };
+    let root = conn.setup().roots[*screen].root;
+    let Some(reply) = conn.query_pointer(root).ok().and_then(|c| c.reply().ok()) else { return false };
+    let mods = u16::from(reply.mask);
+    let shift = u16::from(KeyButMask::SHIFT);
+    let others = u16::from(KeyButMask::CONTROL) | u16::from(KeyButMask::MOD1) | u16::from(KeyButMask::MOD4);
+    mods & shift != 0 && mods & others == 0
+}
+
+/// Puts `window` over every other window of ours: the panel over a capture's
+/// overlay, so dictation stays in sight and in reach.
+pub fn raise(window: u32) {
+    use x11rb::protocol::xproto::{ConfigureWindowAux, StackMode};
+    let Some((conn, _)) = conn() else { return };
+    let _ = conn.configure_window(window, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE));
+    let _ = conn.flush();
+}
+
+/// Moves and sizes a window of ours in X pixels. GPUI has no move for a
+/// window it made, and reads the `ConfigureNotify` this causes as its new
+/// bounds; the panel is override-redirect, so nothing second-guesses it.
+pub fn configure(window: u32, x: i32, y: i32, width: i32, height: i32) {
+    use x11rb::protocol::xproto::ConfigureWindowAux;
+    let Some((conn, _)) = conn() else { return };
+    let aux = ConfigureWindowAux::new().x(x).y(y).width(width.max(1) as u32).height(height.max(1) as u32);
+    let _ = conn.configure_window(window, &aux);
+    let _ = conn.flush();
+}
+
+/// Whether Dray's own window is the one in front, which sounds its own
+/// notice, so the island's chime would double it. Read off the window
+/// manager's `_NET_ACTIVE_WINDOW` and that window's `WM_CLASS`.
+pub fn dray_in_front() -> bool {
+    let Some((conn, screen)) = conn() else { return false };
+    let root = conn.setup().roots[*screen].root;
+    let atom = |name: &[u8]| conn.intern_atom(true, name).ok()?.reply().ok().map(|r| r.atom).filter(|a| *a != 0);
+    let Some(active) = atom(b"_NET_ACTIVE_WINDOW") else { return false };
+    let Some(window) = conn
+        .get_property(false, root, active, AtomEnum::WINDOW, 0, 1)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .and_then(|r| r.value32()?.next())
+        .filter(|w| *w != 0)
+    else {
+        return false;
+    };
+    let class = conn
+        .get_property(false, window, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 64)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .map(|r| String::from_utf8_lossy(&r.value).to_lowercase())
+        .unwrap_or_default();
+    is_dray_class(&class)
+}
+
+/// `WM_CLASS` is instance and class, NUL-separated; Tauri names both after
+/// the binary, `dray`.
+fn is_dray_class(class: &str) -> bool {
+    class.split('\0').any(|part| part == "dray" || part == "dray dev")
+}
+
+/// The window holding the keyboard.
+pub fn focus() -> Option<u32> {
+    let (conn, _) = conn()?;
+    Some(conn.get_input_focus().ok()?.reply().ok()?.focus)
+}
+
 /// Gives `window` the keyboard and answers whoever had it. The panel is
 /// override-redirect, so no window manager will ever focus it, and
 /// `_NET_ACTIVE_WINDOW` (what GPUI's `activate` sends) is ignored for it.
@@ -223,6 +462,64 @@ pub fn give_back(ours: u32, window: u32) {
     }
     let _ = conn.set_input_focus(InputFocus::PARENT, window, x11rb::CURRENT_TIME);
     let _ = conn.flush();
+}
+
+/// A key the done pill answers while it is up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DoneKey {
+    /// Esc: the pill put away.
+    Dismiss,
+    /// Super+⏎, the Mac's ⌘⏎: the newest opened in Dray.
+    OpenInApp,
+}
+
+/// Esc and Super+⏎ held from every app while the done pill is up, as the
+/// Mac's are: the pill never takes the keyboard, so nothing else would hear
+/// them. Dropped, the grabs go with the connection that made them.
+pub struct DoneKeys {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for DoneKeys {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Grabs the done pill's keys on a connection of its own, polled rather than
+/// blocked on: only the client that grabbed can let go, and the pill is up
+/// for seconds at a time.
+pub fn grab_done_keys(on_key: impl Fn(DoneKey) + Send + 'static) -> Option<DoneKeys> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use x11rb::protocol::xproto::{GrabMode, ModMask};
+    let (conn, screen) = x11rb::connect(None).ok()?;
+    let root = conn.setup().roots[screen].root;
+    let keysyms = Keysyms::read(&conn).ok()?;
+    let escape = keysyms.code_of(0xff1b)?;
+    let enter = keysyms.code_of(0xff0d)?;
+    for extra in [ModMask::from(0u16), ModMask::LOCK, ModMask::M2, ModMask::LOCK | ModMask::M2] {
+        let _ = conn.grab_key(false, root, extra, escape, GrabMode::ASYNC, GrabMode::ASYNC);
+        let _ = conn.grab_key(false, root, ModMask::M4 | extra, enter, GrabMode::ASYNC, GrabMode::ASYNC);
+    }
+    conn.flush().ok()?;
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let stopped = stop.clone();
+    std::thread::Builder::new()
+        .name("island-done-keys".into())
+        .spawn(move || {
+            while !stopped.load(Ordering::Relaxed) {
+                while let Ok(Some(event)) = conn.poll_for_event() {
+                    match event {
+                        Event::KeyPress(e) if e.detail == escape => on_key(DoneKey::Dismiss),
+                        Event::KeyPress(e) if e.detail == enter => on_key(DoneKey::OpenInApp),
+                        _ => {}
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        })
+        .ok()?;
+    Some(DoneKeys { stop })
 }
 
 #[cfg(test)]

@@ -3222,7 +3222,7 @@ function App() {
         {/* A transcript its server has not answered for yet; the reconnect
             loads it. One already loaded keeps drawing what it has. */}
         {offlineServer && !selectedSession ? (
-          <TranscriptSkeleton />
+          <TranscriptSkeleton still={offlineServer.status !== "connecting"} />
         ) : (
           <Chat
             {...paneState(selectedSessionId ?? "")}

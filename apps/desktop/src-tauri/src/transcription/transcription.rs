@@ -130,11 +130,14 @@ type Interruption = tauri::async_runtime::JoinHandle<TranscribeOutcome>;
 /// Mac went down drops it rather than holding it through the sleep.
 static SLEEPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// What went to sleep, in the sentences that say so.
+const MACHINE: &str = if cfg!(target_os = "macos") { "the Mac" } else { "the computer" };
+
 /// The interrupted recording, where it is this client's.
 async fn take_interrupted(state: &TranscriptionState, host: bool) -> Option<TranscribeOutcome> {
     let interruption = state.interrupted[host as usize].lock().await.take()?;
     Some(interruption.await.unwrap_or_else(|e| TranscribeOutcome::Failed {
-        message: format!("the Mac went to sleep, and the recording was lost: {e}"),
+        message: format!("{MACHINE} went to sleep, and the recording was lost: {e}"),
         audio_path: None,
     }))
 }
@@ -376,7 +379,7 @@ async fn open_recorder(
     // Under the lock [`stop_on_sleep`] takes after counting the sleep, so a sleep
     // landing during the open is either seen here or finds this recording there.
     if SLEEPS.load(SeqCst) != sleeps {
-        return Err("The Mac went to sleep.".into());
+        return Err(if cfg!(target_os = "macos") { "The Mac went to sleep." } else { "The computer went to sleep." }.into());
     }
     *slot = Some(recording);
     *state.live.lock().await = Some(live);
@@ -723,65 +726,71 @@ pub async fn cancel_transcription(state: State<'_, TranscriptionState>) -> Resul
     Ok(())
 }
 
-/// Closes a recording when the Mac goes to sleep, and parks what was said.
+/// Closes the recording as the machine goes to sleep, and parks what was said.
 ///
 /// A recording left open across sleeps once held the built-in mic for thirteen
 /// hours, and closing it then crashed coreaudiod's mic: no app could record until
 /// coreaudiod was restarted (#582). Nobody dictates through a sleep, so the
-/// stream closes inside the notification, before the machine goes down. The
-/// resample and the save follow on a task, held for the owning client's stop,
-/// which answers with a Retry; `transcription_interrupted` tells the window to
-/// ask, and the Island asks when the reader presses stop.
+/// stream closes before the machine goes down. The resample and the save follow
+/// on a task, held for the owning client's stop, which answers with a Retry;
+/// `transcription_interrupted` tells the window to ask, and the Island asks when
+/// the reader presses stop.
+fn close_for_sleep(app: &AppHandle) {
+    use std::sync::atomic::Ordering::SeqCst;
+
+    use tauri::{Emitter, Manager};
+
+    // Counted before the lock, so a start between its open and its store
+    // either sees the count or leaves its recording here to be taken.
+    SLEEPS.fetch_add(1, SeqCst);
+    // `main` is `#[tokio::main]`, so the event loop runs inside `block_on` and a
+    // bare `blocking_lock` here panics, quitting the app on every sleep (#624).
+    tokio::task::block_in_place(|| {
+        let state = app.state::<TranscriptionState>();
+        let Some(recording) = state.recording.blocking_lock().take() else { return };
+        let tap = recording.close();
+        let live = state.live.blocking_lock().take();
+        let host = HOST_OWNS.load(SeqCst);
+        // Held while the task is spawned, so a stop the event prompts cannot
+        // look before the outcome is in the slot.
+        let mut slot = state.interrupted[host as usize].blocking_lock();
+        let app = app.clone();
+        let outcome = tauri::async_runtime::spawn(async move {
+            drop(live);
+            restore_other_audio().await;
+            let outcome = match tauri::async_runtime::spawn_blocking(move || tap.take()).await {
+                Ok(Ok((Some(audio), _))) => TranscribeOutcome::Failed {
+                    message: format!("{MACHINE} went to sleep"),
+                    audio_path: recordings::save(&audio)
+                        .await
+                        .ok()
+                        .map(|p| p.to_string_lossy().into_owned()),
+                },
+                Ok(Ok((None, _))) => TranscribeOutcome::NoAudio,
+                _ => TranscribeOutcome::Failed {
+                    message: format!("{MACHINE} went to sleep, and the recording was lost"),
+                    audio_path: None,
+                },
+            };
+            let _ = app.emit("transcription_interrupted", ());
+            outcome
+        });
+        *slot = Some(outcome);
+    });
+}
+
+/// Runs [`close_for_sleep`] inside AppKit's will-sleep notification, which
+/// the Mac waits on before it goes down.
 #[cfg(target_os = "macos")]
 pub fn stop_on_sleep(app: &AppHandle) {
     use std::ptr::NonNull;
-    use std::sync::atomic::Ordering::SeqCst;
 
     use block2::RcBlock;
     use objc2_app_kit::{NSWorkspace, NSWorkspaceWillSleepNotification};
     use objc2_foundation::NSNotification;
-    use tauri::{Emitter, Manager};
 
     let app = app.clone();
-    let block = RcBlock::new(move |_: NonNull<NSNotification>| {
-        // Counted before the lock, so a start between its open and its store
-        // either sees the count or leaves its recording here to be taken.
-        SLEEPS.fetch_add(1, SeqCst);
-        // `main` is `#[tokio::main]`, so the event loop runs inside `block_on` and a
-        // bare `blocking_lock` here panics, quitting the app on every sleep (#624).
-        tokio::task::block_in_place(|| {
-            let state = app.state::<TranscriptionState>();
-            let Some(recording) = state.recording.blocking_lock().take() else { return };
-            let tap = recording.close();
-            let live = state.live.blocking_lock().take();
-            let host = HOST_OWNS.load(SeqCst);
-            // Held while the task is spawned, so a stop the event prompts cannot
-            // look before the outcome is in the slot.
-            let mut slot = state.interrupted[host as usize].blocking_lock();
-            let app = app.clone();
-            let outcome = tauri::async_runtime::spawn(async move {
-                drop(live);
-                restore_other_audio().await;
-                let outcome = match tauri::async_runtime::spawn_blocking(move || tap.take()).await {
-                    Ok(Ok((Some(audio), _))) => TranscribeOutcome::Failed {
-                        message: "the Mac went to sleep".into(),
-                        audio_path: recordings::save(&audio)
-                            .await
-                            .ok()
-                            .map(|p| p.to_string_lossy().into_owned()),
-                    },
-                    Ok(Ok((None, _))) => TranscribeOutcome::NoAudio,
-                    _ => TranscribeOutcome::Failed {
-                        message: "the Mac went to sleep, and the recording was lost".into(),
-                        audio_path: None,
-                    },
-                };
-                let _ = app.emit("transcription_interrupted", ());
-                outcome
-            });
-            *slot = Some(outcome);
-        });
-    });
+    let block = RcBlock::new(move |_: NonNull<NSNotification>| close_for_sleep(&app));
     let center = NSWorkspace::sharedWorkspace().notificationCenter();
     // SAFETY: the name is AppKit's own constant, no object filter, and a nil
     // queue runs the block on the posting thread, which for workspace
@@ -796,6 +805,57 @@ pub fn stop_on_sleep(app: &AppHandle) {
     };
     // Lives as long as the app; nothing ever removes it.
     std::mem::forget(observer);
+}
+
+/// Runs [`close_for_sleep`] on logind's `PrepareForSleep`, holding a delay
+/// lock so the machine waits for it the way the Mac waits on its notification.
+/// Without the lock logind only announces the sleep, and the suspend can land
+/// before the stream is closed.
+#[cfg(target_os = "linux")]
+pub fn stop_on_sleep(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = watch_logind(&app).await {
+            eprintln!("[sleep watch err] {e}");
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+async fn watch_logind(app: &AppHandle) -> zbus::Result<()> {
+    use futures_util::StreamExt;
+
+    let conn = zbus::Connection::system().await?;
+    let logind = zbus::Proxy::new(
+        &conn,
+        "org.freedesktop.login1",
+        "/org/freedesktop/login1",
+        "org.freedesktop.login1.Manager",
+    )
+    .await?;
+    let mut signals = logind.receive_signal("PrepareForSleep").await?;
+    // The lock is a file descriptor: held while open, released by dropping it.
+    let inhibit = || async {
+        let args = ("sleep", "Dray", "Closing the microphone before sleep", "delay");
+        match logind.call::<_, _, zbus::zvariant::OwnedFd>("Inhibit", &args).await {
+            Ok(fd) => Some(fd),
+            Err(e) => {
+                eprintln!("[sleep inhibit err] {e}");
+                None
+            }
+        }
+    };
+    let mut lock = inhibit().await;
+    while let Some(msg) = signals.next().await {
+        // `true` going down, `false` coming back.
+        if msg.body().deserialize::<bool>()? {
+            close_for_sleep(app);
+            lock = None;
+        } else if lock.is_none() {
+            lock = inhibit().await;
+        }
+    }
+    Ok(())
 }
 
 /// How long the mute waits after the microphone opens: `dictate-start.wav`

@@ -510,9 +510,10 @@ pub fn app_selection() -> Option<String> {
     APP_SELECTION.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// Seconds since the last key or pointer input anywhere on this Mac. The break
-/// clock reads it because the browser pane is a native view whose input never
-/// reaches the webview's document. `None` off macOS.
+/// Seconds since the last key or pointer input anywhere on this desktop. The
+/// break clock reads it because the browser pane is a native view whose input
+/// never reaches the webview's document. `None` where the OS cannot say:
+/// Windows, or Linux without an X display or libXss.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn idle_seconds() -> Option<f64> {
     #[cfg(target_os = "macos")]
@@ -524,14 +525,105 @@ pub fn idle_seconds() -> Option<f64> {
         // Combined session state, any input event type; needs no permission.
         return Some(unsafe { CGEventSourceSecondsSinceLastEventType(0, u32::MAX) });
     }
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
+    return x11_idle::seconds();
     #[allow(unreachable_code)]
     None
+}
+
+/// The XScreenSaver extension's idle time, on a display connection of its own.
+///
+/// Both libraries are opened at run time rather than linked: libXss is not a
+/// library every desktop has, and linked it would stop the app starting where
+/// it is missing. x11-dl would do the opening but asks for `libXss.so.2`, a
+/// soname no distribution ships, and `libXss.so` exists only with the dev
+/// package.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+mod x11_idle {
+    use std::ffi::{c_char, c_int, c_ulong, c_void, CStr};
+    use std::sync::{Mutex, OnceLock};
+
+    #[repr(C)]
+    struct Info {
+        window: c_ulong,
+        state: c_int,
+        kind: c_int,
+        til_or_since: c_ulong,
+        /// Milliseconds.
+        idle: c_ulong,
+        event_mask: c_ulong,
+    }
+
+    type Query = unsafe extern "C" fn(*mut c_void, c_ulong, *mut Info) -> c_int;
+
+    struct Xss {
+        display: *mut c_void,
+        root: c_ulong,
+        info: *mut Info,
+        query: Query,
+    }
+
+    // SAFETY: the display is this module's own connection, never handed to
+    // GDK, and only touched under the mutex.
+    unsafe impl Send for Xss {}
+
+    /// Opened once; a failure is remembered, since nothing makes it succeed later.
+    static XSS: OnceLock<Option<Mutex<Xss>>> = OnceLock::new();
+
+    pub fn seconds() -> Option<f64> {
+        let xss = XSS.get_or_init(|| unsafe { open() }.map(Mutex::new)).as_ref()?;
+        let xss = xss.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: all three came from `open`, which checked each.
+        let ok = unsafe { (xss.query)(xss.display, xss.root, xss.info) } != 0;
+        ok.then(|| unsafe { (*xss.info).idle } as f64 / 1000.0)
+    }
+
+    unsafe fn sym<T: Copy>(lib: *mut c_void, name: &CStr) -> Option<T> {
+        let p = unsafe { libc::dlsym(lib, name.as_ptr()) };
+        // SAFETY: `T` is the C signature the symbol is declared with.
+        (!p.is_null()).then(|| unsafe { std::mem::transmute_copy(&p) })
+    }
+
+    unsafe fn open() -> Option<Xss> {
+        let flags = libc::RTLD_NOW | libc::RTLD_LOCAL;
+        let x11 = unsafe { libc::dlopen(c"libX11.so.6".as_ptr(), flags) };
+        let xss = unsafe { libc::dlopen(c"libXss.so.1".as_ptr(), flags) };
+        if x11.is_null() || xss.is_null() {
+            return None;
+        }
+        unsafe {
+            let open_display: unsafe extern "C" fn(*const c_char) -> *mut c_void =
+                sym(x11, c"XOpenDisplay")?;
+            let root_of: unsafe extern "C" fn(*mut c_void) -> c_ulong = sym(x11, c"XDefaultRootWindow")?;
+            let has_ext: unsafe extern "C" fn(*mut c_void, *mut c_int, *mut c_int) -> c_int =
+                sym(xss, c"XScreenSaverQueryExtension")?;
+            let alloc: unsafe extern "C" fn() -> *mut Info = sym(xss, c"XScreenSaverAllocInfo")?;
+            let query: Query = sym(xss, c"XScreenSaverQueryInfo")?;
+
+            let display = open_display(std::ptr::null());
+            if display.is_null() {
+                return None;
+            }
+            let (mut event_base, mut error_base) = (0, 0);
+            if has_ext(display, &mut event_base, &mut error_base) == 0 {
+                return None;
+            }
+            let info = alloc();
+            if info.is_null() {
+                return None;
+            }
+            Some(Xss { display, root: root_of(display), info, query })
+        }
+    }
 }
 
 /// Whether Dray Island is running, asked at each permission or question so a
 /// island the reader quit never swallows the banner that would have replaced it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn island_running() -> bool {
+    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    return crate::island::running();
+    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
     tokio::process::Command::new("pgrep")
         .args(["-x", "Dray Island"])
         .output()
@@ -550,6 +642,15 @@ pub async fn island_done(session_id: String) -> Result<(), String> {
     if session_id.is_empty() || !session_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("not a session id".into());
     }
+    // Linux's island is this app's child, and hears it on the pipe it holds.
+    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    return crate::island::done(&session_id);
+    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    island_done_mac(session_id).await
+}
+
+#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+async fn island_done_mac(session_id: String) -> Result<(), String> {
     let dir = island_done_dir().ok_or("no home directory")?;
     tokio::fs::create_dir_all(&dir).await.map_err(|err| format!("could not reach the island: {err}"))?;
     tokio::fs::write(dir.join(&session_id), b"").await.map_err(|err| format!("could not reach the island: {err}"))?;
@@ -558,6 +659,7 @@ pub async fn island_done(session_id: String) -> Result<(), String> {
 }
 
 /// The island's inbox for finished sessions; `Delegate.doneDir` in the island names it too.
+#[cfg(not(all(feature = "desktop", target_os = "linux")))]
 fn island_done_dir() -> Option<std::path::PathBuf> {
     Some(std::env::home_dir()?.join("Library/Caches/com.yogesh.dray.island/done"))
 }
@@ -566,6 +668,7 @@ fn island_done_dir() -> Option<std::path::PathBuf> {
 /// writes the first three as well (a pinch writes the transcript too), so they
 /// are read back rather than kept here, and `captureTaken` is the island's
 /// alone: the chord it could not register.
+#[cfg(not(all(feature = "desktop", target_os = "linux")))]
 const ISLAND_PREFS: [&str; 6] =
     ["island.placement", "island.mode", "island.transcript", "island.tap", "island.captureKey", "island.captureTaken"];
 
@@ -586,6 +689,14 @@ fn island_pref_valid(name: &str, value: &str) -> bool {
 /// The island's stored picks, by name; an absent one is the island's default.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn island_prefs() -> std::collections::HashMap<String, String> {
+    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    return crate::island::prefs();
+    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    island_prefs_mac().await
+}
+
+#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+async fn island_prefs_mac() -> std::collections::HashMap<String, String> {
     let reads = ISLAND_PREFS.map(|name| async move {
         let out = tokio::process::Command::new("defaults")
             .args(["read", "com.yogesh.dray.island", name])
@@ -602,10 +713,18 @@ pub async fn island_prefs() -> std::collections::HashMap<String, String> {
 /// Darwin notification: it caches the picks, and holds its capture key.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_island_pref(name: String, value: String) -> Result<(), String> {
-    use tokio::process::Command;
     if !island_pref_valid(&name, &value) {
         return Err(format!("not an island setting: {name} = {value}"));
     }
+    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    return crate::island::set_pref(&name, &value);
+    #[cfg(not(all(feature = "desktop", target_os = "linux")))]
+    set_island_pref_mac(name, value).await
+}
+
+#[cfg(not(all(feature = "desktop", target_os = "linux")))]
+async fn set_island_pref_mac(name: String, value: String) -> Result<(), String> {
+    use tokio::process::Command;
     let out = Command::new("defaults")
         .args(["write", "com.yogesh.dray.island", &name, "-string", &value])
         .output()

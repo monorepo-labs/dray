@@ -1,7 +1,8 @@
 //! The island's own preferences, the Linux stand-in for the Mac's `defaults`
-//! domain: `island.json` under the XDG config dir. Dray writes `key`, the
-//! island writes `placement`; each rewrites only its own field, keeping the
-//! other as read, so neither undoes the other.
+//! domain: `island.json` under the XDG config dir. Dray writes `key`; the
+//! island writes `placement`, the session last used and a new task's picks.
+//! Each write rewrites one field, keeping the rest as read, so neither side
+//! undoes the other.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -42,6 +43,18 @@ impl Key {
 pub struct Prefs {
     pub key: Key,
     pub placement: Placement,
+    pub mode: Mode,
+}
+
+/// The panel's layout, the reader's pick and never switched for them, as on
+/// the Mac: expanded, the orb alone in the middle with the box beneath it, or
+/// compact, one row with the orb beside the box.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    #[default]
+    Expanded,
+    Compact,
 }
 
 fn path() -> Option<PathBuf> {
@@ -65,25 +78,35 @@ pub fn read() -> Prefs {
     fn field<T: serde::de::DeserializeOwned + Default>(raw: &serde_json::Map<String, serde_json::Value>, name: &str) -> T {
         raw.get(name).cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
     }
-    Prefs { key: field(&raw, "key"), placement: field(&raw, "placement") }
+    Prefs { key: field(&raw, "key"), placement: field(&raw, "placement"), mode: field(&raw, "mode") }
 }
 
-/// Writes `placement` alone, through a temp file and a rename. Dray rewrites
+/// One of the island's own fields, as last written; `None` where absent or
+/// unreadable.
+pub fn get<T: serde::de::DeserializeOwned>(name: &str) -> Option<T> {
+    raw().get(name).cloned().and_then(|v| serde_json::from_value(v).ok())
+}
+
+/// Writes one field alone, through a temp file and a rename. Dray rewrites
 /// the same file, so both take `island.json.lock` from the read to the
 /// rename (`island.rs` in the app), or one could save over the other's field.
-pub fn set_placement(placement: Placement) {
+pub fn set(name: &str, value: impl serde::Serialize) {
     let Some(path) = path() else { return };
     let write = || -> std::io::Result<()> {
         std::fs::create_dir_all(path.parent().expect("a file under a dir"))?;
         let lock = std::fs::File::create(path.with_extension("json.lock"))?;
         lock.lock()?;
         let mut raw = raw();
-        raw.insert("placement".into(), serde_json::to_value(placement)?);
+        raw.insert(name.into(), serde_json::to_value(value)?);
         let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
         std::fs::write(&tmp, serde_json::to_vec_pretty(&raw)?)?;
         std::fs::rename(tmp, &path)
     };
     if let Err(err) = write() {
-        eprintln!("island: could not save placement: {err}");
+        eprintln!("island: could not save {name}: {err}");
     }
+}
+
+pub fn set_placement(placement: Placement) {
+    set("placement", placement);
 }

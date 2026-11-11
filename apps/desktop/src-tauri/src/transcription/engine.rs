@@ -371,9 +371,10 @@ async fn load(path: &Path) -> Result<Session> {
     .context("the model loader panicked")?
 }
 
-/// Registers Linux's backend modules, which sit beside libtranscribe (build.rs
-/// puts them there). Once per process, since the native call cannot be retried,
-/// and before any load, which is why it rides the load itself.
+/// Registers Linux's backend modules, from the bundle's directory where there
+/// is one and from beside libtranscribe otherwise (build.rs puts them in both).
+/// Once per process, since the native call cannot be retried, and before any
+/// load, which is why it rides the load itself.
 ///
 /// A missing Vulkan loader or driver is not an error here: that module fails to
 /// register and the CPU module answers. Only a directory holding no usable
@@ -382,7 +383,11 @@ async fn load(path: &Path) -> Result<Session> {
 fn init_backends() -> Result<()> {
     static INIT: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
     INIT.get_or_init(|| {
-        transcribe_cpp::init_backends_default().map_err(|e| e.to_string())?;
+        match bundled_modules() {
+            Some(dir) => transcribe_cpp::init_backends(dir),
+            None => transcribe_cpp::init_backends_default(),
+        }
+        .map_err(|e| e.to_string())?;
         let devices: Vec<String> = transcribe_cpp::devices()
             .iter()
             .map(|d| format!("{} ({})", d.name, d.description))
@@ -393,6 +398,17 @@ fn init_backends() -> Result<()> {
     })
     .clone()
     .map_err(|e| anyhow::anyhow!("could not load the transcription backends: {e}"))
+}
+
+/// The bundle's module directory, build.rs's `BUNDLED_RPATH` from the binary.
+/// Named outright because the default looks beside whichever libtranscribe
+/// loaded, and in the AppImage that is linuxdeploy's own copy in `usr/lib`,
+/// with no module beside it — measured: every dictation failed.
+#[cfg(target_os = "linux")]
+fn bundled_modules() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?.join("../lib/Dray/transcribe");
+    dir.is_dir().then_some(dir)
 }
 
 #[cfg(test)]

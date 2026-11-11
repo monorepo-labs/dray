@@ -65,6 +65,21 @@ pub async fn configure(key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether the island this app started is still up, so a waiting card goes
+/// to it rather than to a banner. Reaps one that exited, which also lets the
+/// next launch start a fresh one.
+pub fn running() -> bool {
+    let mut island = ISLAND.lock().unwrap_or_else(|e| e.into_inner());
+    match island.as_mut().map(Child::try_wait) {
+        Some(Ok(None)) => true,
+        Some(_) => {
+            *island = None;
+            false
+        }
+        None => false,
+    }
+}
+
 /// Beside the app's own binary, where a release will carry it; in a dev
 /// build, the island crate's own target dir, since `tauri dev` builds the
 /// app alone.
@@ -88,23 +103,102 @@ fn prefs_path() -> Option<PathBuf> {
     Some(base.join("dray/island.json"))
 }
 
-/// Rewrites `key` alone, keeping the placement the island wrote. The island
+fn write_key(key: &str) -> std::io::Result<()> {
+    write_field("key", key)
+}
+
+/// Rewrites one field alone, keeping the rest the island wrote. The island
 /// rewrites the same file, so both hold `island.json.lock` from the read to
 /// the rename, or one could save over the other's field.
-fn write_key(key: &str) -> std::io::Result<()> {
+fn write_field(name: &str, value: &str) -> std::io::Result<()> {
     let path = prefs_path().ok_or_else(|| std::io::Error::other("no home directory"))?;
     std::fs::create_dir_all(path.parent().expect("a file under a dir"))?;
     let lock = std::fs::File::create(path.with_extension("json.lock"))?;
     lock.lock()?;
-    let mut prefs: serde_json::Map<String, serde_json::Value> = std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default();
-    if prefs.get("key").and_then(|v| v.as_str()) == Some(key) {
+    let mut prefs = read_prefs(&path);
+    if prefs.get(name).and_then(|v| v.as_str()) == Some(value) {
         return Ok(());
     }
-    prefs.insert("key".into(), key.into());
+    prefs.insert(name.into(), value.into());
     let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
     std::fs::write(&tmp, serde_json::to_vec_pretty(&prefs)?)?;
     std::fs::rename(tmp, path)
+}
+
+fn read_prefs(path: &std::path::Path) -> serde_json::Map<String, serde_json::Value> {
+    std::fs::read(path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+}
+
+/// Settings' island picks that apply here, in the Mac's names, which is what
+/// Settings reads: the Mac's `notch` is the top of the screen. An absent one
+/// is the island's default.
+pub fn prefs() -> std::collections::HashMap<String, String> {
+    prefs_path().map(|path| settings_view(&read_prefs(&path))).unwrap_or_default()
+}
+
+fn settings_view(file: &serde_json::Map<String, serde_json::Value>) -> std::collections::HashMap<String, String> {
+    let field = |name: &str| file.get(name).and_then(|v| v.as_str()).map(str::to_string);
+    let mut out = std::collections::HashMap::new();
+    if let Some(p) = field("placement") {
+        out.insert("island.placement".into(), if p == "bottom" { "bottom" } else { "notch" }.into());
+    }
+    if let Some(m) = field("mode") {
+        out.insert("island.mode".into(), m);
+    }
+    out
+}
+
+/// Writes a Settings pick the Linux island reads, and has a running one show
+/// it, as the Mac's does: placement and layout are only judged on screen.
+pub fn set_pref(name: &str, value: &str) -> Result<(), String> {
+    let Some((field, value)) = file_field(name, value) else {
+        return Err(format!("not an island setting here: {name} = {value}"));
+    };
+    write_field(field, value).map_err(|err| format!("could not save the island setting: {err}"))?;
+    send("prefs");
+    Ok(())
+}
+
+/// A Settings pick as the field `island.json` holds, where the Linux island
+/// reads one; `None` for the Mac's alone.
+fn file_field<'a>(name: &str, value: &'a str) -> Option<(&'static str, &'a str)> {
+    match (name, value) {
+        ("island.placement", "notch") => Some(("placement", "top")),
+        ("island.placement", "bottom") => Some(("placement", "bottom")),
+        ("island.mode", "expanded" | "compact") => Some(("mode", value)),
+        _ => None,
+    }
+}
+
+/// A finished session, for the island's done pill.
+pub fn done(session_id: &str) -> Result<(), String> {
+    if send(&format!("done {session_id}")) { Ok(()) } else { Err("Dray Island isn't running".into()) }
+}
+
+/// One line down the pipe the island holds as its stdin, which it reads
+/// for these besides waiting on its end. Answers whether it was written.
+fn send(line: &str) -> bool {
+    use std::io::Write;
+    let mut island = ISLAND.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(stdin) = island.as_mut().and_then(|child| child.stdin.as_mut()) else { return false };
+    stdin.write_all(format!("{line}\n").as_bytes()).and_then(|()| stdin.flush()).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{file_field, settings_view};
+
+    #[test]
+    fn settings_names_map_onto_the_islands_file_and_back() {
+        assert_eq!(file_field("island.placement", "notch"), Some(("placement", "top")));
+        assert_eq!(file_field("island.mode", "compact"), Some(("mode", "compact")));
+        // The Mac's alone: the Linux island has no such pick.
+        assert_eq!(file_field("island.tap", "double"), None);
+        assert_eq!(file_field("island.transcript", "hidden"), None);
+        let file = serde_json::json!({ "placement": "top", "mode": "compact", "key": "option" });
+        let view = settings_view(file.as_object().unwrap());
+        assert_eq!(view.get("island.placement").map(String::as_str), Some("notch"));
+        assert_eq!(view.get("island.mode").map(String::as_str), Some("compact"));
+        assert_eq!(view.len(), 2);
+    }
 }
