@@ -614,6 +614,16 @@ pub fn manager() -> &'static SessionManager {
     &MANAGER
 }
 
+/// Refuses a folder that is gone. Spawned there, every harness fails with the
+/// OS's bare `No such file or directory`, pinned on the agent's name — read as
+/// "claude isn't installed" when the project was what went missing.
+async fn require_dir(dir: &str, what: &str) -> Result<()> {
+    if tokio::fs::metadata(dir).await.is_ok_and(|m| m.is_dir()) {
+        return Ok(());
+    }
+    bail!("{what} {dir} no longer exists. Restore it, or remove the project from Dray.")
+}
+
 /// The live session in a locked slot, or the error every caller answers a dead
 /// child with.
 fn live<'a>(slot: &'a mut Option<Session>, id: &str) -> Result<&'a mut Session> {
@@ -883,6 +893,7 @@ impl SessionManager {
                     harness.install_command(),
                 );
             }
+            require_dir(cwd, "The project folder").await?;
 
             // Only Claude Code's `-w` makes its own tree. For everything else
             // the tree has to be one Dray makes — the same route `--from`
@@ -1178,6 +1189,12 @@ impl SessionManager {
             Some(item) => item.cwd.clone(),
             None => cwd.to_string(),
         };
+        // A fork into a new worktree has no folder until this send makes one,
+        // further down; only its project has to be there already.
+        match indexed.as_ref().filter(|i| i.fork_from.is_some() && i.worktree_name.is_some()) {
+            Some(unmade) => require_dir(&unmade.project_path, "The project folder").await?,
+            None => require_dir(&session_cwd, "This session's folder").await?,
+        }
 
         // Recorded before the prompt goes out, and before the queue branch
         // below returns: a tag on a prompt held behind a running turn still

@@ -8,6 +8,10 @@
 // --start starts a session there and follows it to the end of its turn.
 // --card starts one that asks a question, answers the card it stops on, then
 //   sends it a follow-up. Make the code with full access.
+// --stop starts a long one, stops it, and expects the turn to read "stopped".
+// --missing expects a project whose folder is gone to be refused by name.
+// --send messages an existing session — an unstarted worktree fork, say — and
+//   expects it to answer.
 // A code made with --read-only is checked to be refused start_session.
 
 import { createHash, randomBytes } from "node:crypto";
@@ -215,6 +219,41 @@ if (writing) {
   if (!/again/i.test(after.reply)) fail(`the follow-up was not answered: ${after.reply}`);
   step("follow-up answered", { first: settled.reply.slice(-60), second: after.reply });
 }
+const stopping = flag("--stop");
+if (stopping) {
+  const started = await call("start_session", {
+    project: stopping,
+    prompt: "Run exactly this shell command and nothing else: for i in $(seq 120); do echo $i; sleep 1; done",
+    title: "MCP stop smoke",
+  });
+  if (started.status !== "in_progress") fail(`start answered ${started.status}`);
+  step("started, in_progress");
+  await new Promise((r) => setTimeout(r, 10_000));
+  await call("stop_session", { session_id: started.session_id });
+  let now;
+  for (let i = 0; i < 15 && !now?.turn; i++) {
+    now = await call("read_session", { session_id: started.session_id });
+    if (!now.turn) await new Promise((r) => setTimeout(r, 1000));
+  }
+  if (now?.turn?.outcome !== "stopped") fail(`a stop read as ${JSON.stringify(now?.turn)}`);
+  step("stop reads as stopped", now.turn);
+}
+
+const sendTo = flag("--send");
+if (sendTo) {
+  await call("send_message", { session_id: sendTo, message: "Reply with the single word: forked." });
+  const after = await follow(sendTo);
+  if (!/forked/i.test(after.reply)) fail(`the session did not answer: ${after.reply}`);
+  step("an existing session answered", after.reply);
+}
+
+const missing = flag("--missing");
+if (missing) {
+  const refused = await rpc("tools/call", { name: "start_session", arguments: { project: missing, prompt: "x" } });
+  if (!refused.isError || !/no longer exists/.test(refused.content[0].text)) fail(`a missing folder answered ${refused.content[0].text}`);
+  step("a missing folder is named", refused.content[0].text);
+}
+
 // For checking a revoke by hand: the tokens, and the client they belong to.
 if (args.includes("--tokens")) console.log(JSON.stringify({ ...tokens, client_id: client.client_id, token_endpoint: server.token_endpoint }));
 console.log("\nAll good.");
