@@ -1442,12 +1442,18 @@ pub async fn save_server_cache(server: String, cache: Value) -> Result<(), Strin
     store::write_atomic(&path, cache.to_string()).await.map_err(|e| e.to_string())
 }
 
-/// Every listed remote's kept lists, by id. A file whose server is gone is
+/// Every saved remote's kept lists, by id. A file whose server is gone is
 /// deleted on the way, which covers one removed by the CLI while the app was
 /// closed, or a write that lost the race with `remove_server`.
+///
+/// Listed means `servers.json`, not the connections: the webview asks at
+/// mount, which can beat `start` filling them, and judged against an empty
+/// list every cache would go.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn server_caches() -> HashMap<String, Value> {
-    let listed: Vec<String> = conns().iter().filter(|c| c.saved.id != LOCAL).map(|c| c.saved.id.clone()).collect();
+    let listed: Vec<String> = crate::machines::load().await.into_iter().map(|s| s.id).collect();
+    // An unreadable file loads as none, and that must not read as "all removed".
+    let prune = !listed.is_empty();
     let mut out = HashMap::new();
     let Ok(dir) = store::app_subdir("server-cache").await else { return out };
     let Ok(mut entries) = tokio::fs::read_dir(&dir).await else { return out };
@@ -1456,7 +1462,7 @@ pub async fn server_caches() -> HashMap<String, Value> {
         let Some(id) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".json")) else {
             continue;
         };
-        if !listed.iter().any(|l| l == id) {
+        if prune && !listed.iter().any(|l| l == id) {
             let _ = tokio::fs::remove_file(&path).await;
             continue;
         }

@@ -2008,24 +2008,28 @@ useEffect(() => {
   return unsubscribe;
 }, [])
 
-// Every remote's share as it stands, written to disk a second after the last
-// change, so a session started or retitled since the last read is kept too.
-// The live side only, and only while it is the one loaded: during a toggle the
-// list briefly holds the other side, and filing that under this one would
-// draw settled rows as live after the next restart. The settled side is kept
-// from reads alone.
+// Every remote's share as it stands, kept in memory on each change and
+// written to disk a second after the last, so a session started or retitled
+// since the last read is kept too. The copy is not delayed with the write: a
+// server turned off inside that second hides its rows, and a copy taken after
+// would find none. The live side only, and only while it is the one loaded:
+// during a toggle the list briefly holds the other side, and filing that under
+// this one would draw settled rows as live after the next restart. The settled
+// side is kept from reads alone.
 useEffect(() => {
+  const live = !showArchivedRef.current && indexSide === false;
+  // An off server's rows are hidden, not gone: its share on screen is empty,
+  // and must not be copied over what it last said.
+  for (const { id } of remoteServers().filter((s) => s.on)) {
+    if (live && answered.has(`${id}:sessions`)) {
+      lastIndex.set(`${id}:false`, sessionIndexItems.filter((i) => serverOfPath(i.cwd) === id).map(indexRow));
+    }
+    if (answered.has(`${id}:projects`)) {
+      lastProjects.set(id, projects.filter((p) => serverOfPath(p.path) === id));
+    }
+  }
   const timer = setTimeout(() => {
-    const live = !showArchivedRef.current && indexSide === false;
-    // An off server's rows are hidden, not gone: its share on screen is
-    // empty, and must not be written over what it last said.
-    for (const { id } of remoteServers().filter((s) => s.on)) {
-      if (live && answered.has(`${id}:sessions`)) {
-        lastIndex.set(`${id}:false`, sessionIndexItems.filter((i) => serverOfPath(i.cwd) === id).map(indexRow));
-      }
-      if (answered.has(`${id}:projects`)) {
-        lastProjects.set(id, projects.filter((p) => serverOfPath(p.path) === id));
-      }
+    for (const { id } of remoteServers()) {
       if (!answered.has(`${id}:sessions`) && !answered.has(`${id}:projects`)) continue;
       saveServerCache(id, {
         sessions: lastIndex.get(`${id}:false`),
