@@ -100,8 +100,26 @@ function BotEditor({ bot, onClose }: { bot: Bot; onClose: () => void }) {
   }, [bot.id]);
 
   const save = async () => {
+    if (!detail) return;
     try {
-      await invoke("update_bot", { id: bot.id, name, instructions, memory });
+      // The bot edits both files itself between turns, so only what was
+      // changed here is sent, and a field the bot moved meanwhile is refused
+      // rather than replaced by the copy this editor opened with.
+      const now = await invoke<BotDetail>("read_bot", { id: bot.id });
+      const changed = (field: "instructions" | "memory", value: string) =>
+        value === detail[field] ? null : value;
+      const edits = {
+        instructions: changed("instructions", instructions),
+        memory: changed("memory", memory),
+      };
+      const moved = (["instructions", "memory"] as const).filter(
+        (field) => edits[field] !== null && now[field] !== detail[field],
+      );
+      if (moved.length > 0) {
+        setError(`The bot changed its ${moved.join(" and ")} while you edited. Cancel and open it again to see the new text.`);
+        return;
+      }
+      await invoke("update_bot", { id: bot.id, name, ...edits });
       await refreshBots();
       onClose();
     } catch (e) {
