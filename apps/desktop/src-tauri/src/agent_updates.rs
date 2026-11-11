@@ -237,13 +237,13 @@ async fn json_version(url: &str) -> Option<String> {
 
 /// The first `x.y.z` in a line, which is how all five spell it — `2.1.280 (Claude
 /// Code)`, `codex-cli 0.156.1`, `v0.0.10`.
-fn version_in(text: &str) -> Option<String> {
+pub(crate) fn version_in(text: &str) -> Option<String> {
     text.split(|c: char| !(c.is_ascii_digit() || c == '.'))
         .find(|word| parse(word).is_some())
         .map(|word| word.trim_matches('.').to_string())
 }
 
-fn parse(version: &str) -> Option<(u64, u64, u64)> {
+pub(crate) fn parse(version: &str) -> Option<(u64, u64, u64)> {
     let mut parts = version.trim_matches('.').split('.').map(|p| p.parse::<u64>().ok());
     let triple = (parts.next()??, parts.next()??, parts.next()??);
     parts.next().is_none().then_some(triple)
