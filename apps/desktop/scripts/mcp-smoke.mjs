@@ -10,6 +10,8 @@
 //   sends it a follow-up. Make the code with full access.
 // --stop starts a long one, stops it, and expects the turn to read "stopped".
 // --missing expects a project whose folder is gone to be refused by name.
+// --send messages an existing session — an unstarted worktree fork, say — and
+//   expects it to answer.
 // A code made with --read-only is checked to be refused start_session.
 
 import { createHash, randomBytes } from "node:crypto";
@@ -235,6 +237,14 @@ if (stopping) {
   }
   if (now?.turn?.outcome !== "stopped") fail(`a stop read as ${JSON.stringify(now?.turn)}`);
   step("stop reads as stopped", now.turn);
+}
+
+const sendTo = flag("--send");
+if (sendTo) {
+  await call("send_message", { session_id: sendTo, message: "Reply with the single word: forked." });
+  const after = await follow(sendTo);
+  if (!/forked/i.test(after.reply)) fail(`the session did not answer: ${after.reply}`);
+  step("an existing session answered", after.reply);
 }
 
 const missing = flag("--missing");

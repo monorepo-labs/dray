@@ -1189,7 +1189,12 @@ impl SessionManager {
             Some(item) => item.cwd.clone(),
             None => cwd.to_string(),
         };
-        require_dir(&session_cwd, "This session's folder").await?;
+        // A fork into a new worktree has no folder until this send makes one,
+        // further down; only its project has to be there already.
+        match indexed.as_ref().filter(|i| i.fork_from.is_some() && i.worktree_name.is_some()) {
+            Some(unmade) => require_dir(&unmade.project_path, "The project folder").await?,
+            None => require_dir(&session_cwd, "This session's folder").await?,
+        }
 
         // Recorded before the prompt goes out, and before the queue branch
         // below returns: a tag on a prompt held behind a running turn still

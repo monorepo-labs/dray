@@ -308,11 +308,11 @@ async fn read_session(session_id: &str) -> Result<Value, String> {
 
 /// How a turn ended, in the words a model should read. A Stop the user asked
 /// for closes as an error on Claude's wire (`aborted_*`) and as a success on
-/// Codex's (`interrupted`); reported raw, the first reads as a crash. The app's
-/// `drawsFailure` makes the same call.
+/// Codex's (`interrupted`) and fx's and Grok's (`cancelled`); reported raw, the
+/// first reads as a crash and the rest as work done.
 fn turn_outcome(turn: &Value) -> Value {
     let reason = turn["stopReason"].as_str().unwrap_or_default();
-    if reason.starts_with("aborted") || reason == "interrupted" {
+    if reason.starts_with("aborted") || matches!(reason, "interrupted" | "cancelled") {
         return json!({ "outcome": "stopped", "note": "Stopped on request. Send a message to carry on." });
     }
     if turn["status"] == "error" {
@@ -417,6 +417,8 @@ mod tests {
         assert_eq!(turn_outcome(&claude)["outcome"], "stopped");
         let codex = json!({ "type": "turn_completed", "status": "success", "stopReason": "interrupted" });
         assert_eq!(turn_outcome(&codex)["outcome"], "stopped");
+        let fx_or_grok = json!({ "type": "turn_completed", "status": "success", "stopReason": "cancelled" });
+        assert_eq!(turn_outcome(&fx_or_grok)["outcome"], "stopped");
     }
 
     #[test]
