@@ -561,6 +561,13 @@ impl Hub {
 /// reads it from the command table.
 pub static HUB: std::sync::LazyLock<Hub> = std::sync::LazyLock::new(Hub::default);
 
+/// The permission and question cards open now, every session's, as
+/// `agent_event` payloads. What an MCP assistant reads to learn a session is
+/// blocked on the user, since nothing can be pushed to it.
+pub fn open_asks() -> Vec<Value> {
+    HUB.live.lock().unwrap_or_else(|e| e.into_inner()).asks.clone()
+}
+
 /// Serves `listener` until the future is dropped, which also drops every
 /// connection it accepted — how the desktop app turns serving off.
 /// `tunnel_file` holds the address whose origin is let through. `hosts` lets a
@@ -598,6 +605,9 @@ pub async fn listen(
                 Some(line) if relayed(&line) => relay_http(stream, &token).await,
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
                 Some(line) if line.starts_with("POST /upload?") => upload(stream, &token).await,
+                // Its own sign-in, never the serve token: an assistant's cloud
+                // must not hold the key to every other door here.
+                Some(line) if crate::mcp::routes(&line) => crate::mcp::serve(stream, sink).await,
                 Some(_) => connection(stream, sink, hub, &token, &tunnel_file, hosts).await,
                 None => Ok(()),
             };
@@ -1837,6 +1847,11 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             saved
         };
         delete_draft(id: String) => crate::drafts::delete_draft(id).await;
+
+        // Assistants signed in to `/mcp`.
+        mcp_pair(read_only: bool, replaces: Option<String>) => crate::mcp::pair(sink, read_only, replaces).await;
+        mcp_assistants() => crate::mcp::assistants().await;
+        mcp_revoke(id: String) => crate::mcp::revoke(sink, id).await;
         read_doc(path: String) => crate::docs::read_doc(path).await;
         save_doc(path: String, text: String, expect: Option<String>) => crate::docs::save_doc(path, text, expect).await;
         watch_docs(scope: String, paths: Vec<String>) => {

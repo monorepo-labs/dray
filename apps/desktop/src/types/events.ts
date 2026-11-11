@@ -2,6 +2,12 @@
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
+ * What an assistant may do. Chosen when the code is made, carried by the
+ * grant for its life.
+ */
+export type Access = "full" | "read";
+
+/**
  * One credential a harness holds, which for two of them is one of several.
  */
 export type Account = { 
@@ -422,6 +428,20 @@ shareMachines: boolean, };
  * sends — see [`PermissionMode`] for the wider set the CLI reports.
  */
 export type ApprovalPolicy = "plan" | "manual" | "auto" | "dontAsk" | "bypassPermissions";
+
+/**
+ * One connected assistant, as Settings → Servers and `dray server assistant
+ * ls` list it.
+ */
+export type AssistantSummary = { id: string, 
+/**
+ * What the client called itself when it registered: "Claude", "Grok".
+ */
+name: string, access: Access, created: string, 
+/**
+ * Moves on each token refresh, so it is right to the hour.
+ */
+lastUsed: string, };
 
 /**
  * One thing the user attached, as the composer needs to draw it.
@@ -1289,6 +1309,19 @@ model: string, inputTokens: number | null, outputTokens: number | null, cachedIn
  * against — see `context_window` in the Claude Code mapper.
  */
 contextWindow: number | null, maxOutputTokens: number | null, };
+
+/**
+ * A code waiting to be typed into an assistant's sign-in page.
+ */
+export type Pairing = { 
+/**
+ * The MCP URL to paste into the assistant.
+ */
+url: string, 
+/**
+ * `ABCD-EFGH`.
+ */
+code: string, expiresInSecs: number, access: Access, };
 
 export type PermissionBehavior = "allow" | "deny";
 

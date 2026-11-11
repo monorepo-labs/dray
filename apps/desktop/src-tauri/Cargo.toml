@@ -100,6 +100,9 @@ opentunnel = "0.5.1"
 # tree under `reqwest`.
 hyper = { version = "1", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
+# Whole-body requests and answers for `/mcp` and its OAuth routes. Already in
+# the tree under `reqwest`.
+http-body-util = "0.1"
 tauri-plugin-window-state = { version = "2", optional = true }
 # `dray-serve`'s WebSocket. The server half alone, and no TLS: it binds localhost.
 tokio-tungstenite = { version = "0.30", optional = true, default-features = false, features = ["handshake"] }
