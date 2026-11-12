@@ -213,13 +213,12 @@ describe("taskContext", () => {
       said("Need line written."),
       user("next thing"),
     ]);
-    const ctx = taskContext(items, ID);
-    expect(ctx.report).toBe(report.id);
-    expect([...ctx.keys]).toEqual([report.id, reply.id]);
+    expect([...taskContext(items, ID)]).toEqual([reply.id]);
   });
 
-  it("falls back to the line that started a task that never reported", () => {
-    const items = botItems([call("c1", `dray session new "Pricing"`), result("c1", `${ID}\nStarted`)]);
-    expect(taskContext(items, ID)).toEqual({ keys: new Set(["c1"]) });
+  it("falls back to the line that started a task with no reply to point at", () => {
+    const start = [call("c1", `dray session new "Pricing"`), result("c1", `${ID}\nStarted`)];
+    expect([...taskContext(botItems(start), ID)]).toEqual(["c1"]);
+    expect([...taskContext(botItems([...start, from("done")]), ID)]).toEqual(["c1"]);
   });
 });

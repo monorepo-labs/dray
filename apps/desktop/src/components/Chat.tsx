@@ -568,9 +568,9 @@ export default function Chat({
     scroller.scrollTo({ top: Math.max(top, 0), behavior: "smooth" });
   };
 
-  // A task picked from the bot's "Waiting on you" card: its report and the
-  // bot's reply, at the top of the pane. A frame late, since the report opens
-  // in an effect of its own; the pin drops as a jump to a turn's does.
+  // A task picked from the bot's "Waiting on you" card: the bot's reply about
+  // it, at the top of the pane, once the lit block is laid out. The pin drops
+  // as a jump to a turn's does.
   useEffect(() => {
     if (!botFocus) return;
     const frame = requestAnimationFrame(() => {

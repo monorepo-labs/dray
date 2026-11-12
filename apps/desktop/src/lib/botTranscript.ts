@@ -275,11 +275,12 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
   return items;
 }
 
-/// What a stalled task's row in the "Waiting on you" card scrolls the chat to:
-/// the task's last report and everything the bot did before the next message
-/// came in, by item key. A stall nudge is Dray's, not the task's, so it is
-/// skipped. A task that never reported falls back to the line that started it.
-export function taskContext(items: readonly BotItem[], sessionId: string): { report?: string; keys: Set<string> } {
+/// What a stalled task's row in the "Waiting on you" card scrolls the chat to,
+/// by item key: the bot's reply to the task's last report, everything it did
+/// before the next message came in. The report itself stays folded, since the
+/// reply already says what it held. A stall nudge is Dray's, not the task's, so
+/// it is skipped. With no reply to point at, the line that started the task.
+export function taskContext(items: readonly BotItem[], sessionId: string): Set<string> {
   let at = items.length - 1;
   for (; at >= 0; at--) {
     const i = items[at];
@@ -292,16 +293,14 @@ export function taskContext(items: readonly BotItem[], sessionId: string): { rep
       break;
     }
   }
-  if (at < 0) {
-    const started = items.find((i) => i.kind === "task" && i.sessionId === sessionId);
-    return { keys: new Set(started ? [itemKey(started)] : []) };
-  }
-  const keys = new Set([itemKey(items[at])]);
-  for (const item of items.slice(at + 1)) {
+  const keys = new Set<string>();
+  for (const item of at < 0 ? [] : items.slice(at + 1)) {
     if (item.kind === "user" || item.kind === "report" || item.kind === "botMessage") break;
     keys.add(itemKey(item));
   }
-  return { report: itemKey(items[at]), keys };
+  if (keys.size > 0) return keys;
+  const started = items.find((i) => i.kind === "task" && i.sessionId === sessionId);
+  return new Set(started ? [itemKey(started)] : []);
 }
 
 /// An item's React key, as the chat draws it.

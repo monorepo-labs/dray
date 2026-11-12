@@ -59,9 +59,9 @@ export default function BotTranscript({
   /// `alone`: a ⌘-click, which switches to a task rather than opening its tab.
   onOpenSession: (sessionId: string, alone?: boolean) => void;
   onOpenBot?: (bot: Bot) => void;
-  /// A task picked from the "Waiting on you" card: its last report is drawn
-  /// open and, with the bot's reply, lit for a moment under `data-bot-focus`,
-  /// which the chat scrolls to. `at` tells a second pick of the same task apart.
+  /// A task picked from the "Waiting on you" card: the bot's reply to its last
+  /// report is lit for a moment under `data-bot-focus`, which the chat scrolls
+  /// to. `at` tells a second pick of the same task apart.
   focus?: { sessionId: string; at: number } | null;
 }) {
   const bots = useBots();
@@ -70,13 +70,8 @@ export default function BotTranscript({
   // "From" rows, a task's messages to the bot, are hidden for now: the bot's
   // reply already says what came in. To draw them again, swap these back.
   // const rows = useMemo(() => botRows(items), [items]);
-  // A picked task's report is the one drawn, since it is what the reader asked to see.
+  const rows = useMemo(() => botRows(items.filter((i) => i.kind !== "report")), [items]);
   const context = useMemo(() => (focus ? taskContext(items, focus.sessionId) : null), [items, focus]);
-  const rows = useMemo(
-    () => botRows(items.filter((i) => i.kind !== "report" || itemKey(i) === context?.report)),
-    [items, context?.report],
-  );
-  const reveal = context?.report && focus ? { key: context.report, at: focus.at } : undefined;
   const [lit, setLit] = useState(false);
   useEffect(() => {
     if (!focus) return;
@@ -129,7 +124,7 @@ export default function BotTranscript({
                 onOpenBot={onOpenBot}
               />
             ) : item.kind === "talk" ? (
-              <TalkLine items={item.items} taskOf={taskOf} onOpenSession={onOpenSession} reveal={reveal} />
+              <TalkLine items={item.items} taskOf={taskOf} onOpenSession={onOpenSession} />
             ) : item.kind === "task" ? (
               <StartedLine
                 party={{ id: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? "Task" }}
@@ -149,7 +144,7 @@ export default function BotTranscript({
   });
   // The picked task's rows sit in one block, so they light and scroll as one.
   const inContext = rows.map((row) =>
-    row.kind === "talk" ? row.items.some((t) => context?.keys.has(itemKey(t))) : !!context?.keys.has(itemKey(row)),
+    row.kind === "talk" ? row.items.some((t) => context?.has(itemKey(t))) : !!context?.has(itemKey(row)),
   );
   const first = inContext.indexOf(true);
   const last = inContext.lastIndexOf(true);
@@ -210,21 +205,14 @@ function TalkLine({
   bare = false,
   taskOf,
   onOpenSession,
-  reveal,
 }: {
   items: TalkItem[];
   /// Inside an opened run, whose line already says which way: no verb.
   bare?: boolean;
   taskOf: TaskOf | undefined;
   onOpenSession: (sessionId: string, alone?: boolean) => void;
-  /// A report to open to, picked from the "Waiting on you" card.
-  reveal?: { key: string; at: number };
 }) {
-  const holds = !!reveal && items.some((i) => itemKey(i) === reveal.key);
-  const [open, setOpen] = useState(holds);
-  useEffect(() => {
-    if (holds) setOpen(true);
-  }, [holds, reveal?.at]);
+  const [open, setOpen] = useState(false);
   const parties = [...new Map(items.map((i) => partyOf(i, taskOf)).map((p) => [p.id, p])).values()];
   const from = items.filter((i) => i.kind === "report").length;
   const verb = from === 0 ? "Messaged" : from < items.length ? `${items.length} messages with` : "From";
@@ -262,7 +250,6 @@ function TalkLine({
                 bare
                 taskOf={taskOf}
                 onOpenSession={onOpenSession}
-                reveal={reveal}
               />
             ))}
           </div>
