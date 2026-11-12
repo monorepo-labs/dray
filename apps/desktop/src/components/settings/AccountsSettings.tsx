@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { MACHINE } from "@/lib/platform";
 import { invoke, LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
 import { serverName, useServers } from "@/lib/servers";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -715,7 +716,7 @@ export default function AccountsSettings({
         <SettingRow
           id="auto-update-agents"
           label="Update agents automatically"
-          description="Keeps the agents you have turned on up to date on this Mac. Off, you update each one yourself."
+          description={`Keeps the agents you have turned on up to date on this ${MACHINE}. Off, you update each one yourself.`}
         >
           <Switch
             id="auto-update-agents"

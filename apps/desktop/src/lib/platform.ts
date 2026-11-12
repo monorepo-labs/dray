@@ -4,3 +4,15 @@
 /// accepts either modifier, so this only decides which symbol a tooltip shows.
 export const IS_MAC =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+
+export const IS_LINUX =
+  typeof navigator !== "undefined" && /Linux/.test(navigator.platform);
+
+/// Dictation runs on the machine the reader sits at, so a Mac and a Linux
+/// desktop have it and nothing else does: elsewhere its button, chord and tab
+/// are not drawn.
+export const HAS_DICTATION = IS_MAC || IS_LINUX;
+
+/// What copy calls the machine the app runs on: "this Mac" on a Mac, "this
+/// machine" anywhere else. One noun, so every sentence reads the same per platform.
+export const MACHINE = IS_MAC ? "Mac" : "machine";

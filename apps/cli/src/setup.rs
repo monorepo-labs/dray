@@ -43,6 +43,25 @@ pub enum ServerCommand {
     },
     /// Show a QR code the Dray iPhone app scans to add this server.
     Pair,
+    /// Connect Grok, Claude or ChatGPT to this server over MCP, list the
+    /// ones connected, or sign one out.
+    #[command(subcommand)]
+    Assistant(AssistantCommand),
+}
+
+#[derive(Subcommand)]
+pub enum AssistantCommand {
+    /// Print the MCP URL to add as a custom connector, and a one-time code
+    /// its sign-in asks for. Turns on the public address if it is off.
+    Add {
+        /// Let it list and read sessions, never start, message or stop them.
+        #[arg(long)]
+        read_only: bool,
+    },
+    /// List the assistants signed in to this server.
+    Ls,
+    /// Sign an assistant out, by the id `ls` shows.
+    Revoke { id: String },
 }
 
 pub fn server(command: ServerCommand) -> Result<(), String> {
@@ -54,6 +73,54 @@ pub fn server(command: ServerCommand) -> Result<(), String> {
         ServerCommand::Status => service(ServiceCommand::Status),
         ServerCommand::Tunnel { state } => service(ServiceCommand::Tunnel { state }),
         ServerCommand::Pair => pair(),
+        ServerCommand::Assistant(command) => assistant(command),
+    }
+}
+
+/// Asks the server whose home this is, like [`set_remote_access`]: pairing
+/// lives in that server's memory.
+fn assistant(command: AssistantCommand) -> Result<(), String> {
+    use dray_proto::{AssistantRef, PairAssistant, Request, Response};
+    let endpoint = dray_proto::endpoint().ok_or("could not resolve your home directory")?;
+    let revoking = matches!(command, AssistantCommand::Revoke { .. });
+    let request = match command {
+        AssistantCommand::Add { read_only } => {
+            eprintln!("{DIM}Starting the public address if it is off. The first time takes about a minute.{RESET}");
+            Request::PairAssistant(PairAssistant { read_only })
+        }
+        AssistantCommand::Ls => Request::ListAssistants,
+        AssistantCommand::Revoke { id } => Request::RevokeAssistant(AssistantRef { id }),
+    };
+    match super::send_to(&endpoint, request)? {
+        Response::AssistantPairing { url, code, expires_in_secs, read_only } => {
+            let reach = if read_only {
+                "Read-only: it can list and read sessions."
+            } else {
+                "Full access: it can start, message and stop sessions, and answer their questions."
+            };
+            println!(
+                "In Grok, Claude or ChatGPT, add a custom connector with this URL:\n\n   {url}\n\n\
+                 When it asks you to sign in, enter this code:\n\n   {code}\n\n\
+                 {DIM}Good once, for {} minutes. {reach}{RESET}",
+                expires_in_secs / 60
+            );
+            Ok(())
+        }
+        Response::Assistants { assistants } => {
+            if revoking {
+                eprintln!("Signed out.");
+            }
+            if assistants.is_empty() {
+                println!("No assistants connected. Connect one: dray server assistant add");
+            }
+            for a in assistants {
+                let used = a.last_used.split('T').next().unwrap_or_default().to_string();
+                println!("{}  {}  {}  last used {used}", a.id, a.name, a.access);
+            }
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(format!("unexpected answer from the server: {other:?}")),
     }
 }
 
@@ -124,9 +191,38 @@ fn may_serve() -> Result<(), String> {
 /// Whether the Dray app owns this Mac's server and CLI for the home this runs
 /// on. A server on a `DRAY_HOME` of its own is set up and updated apart from it.
 pub(crate) fn app_runs_this_home() -> bool {
-    let own_home = std::env::var_os("DRAY_HOME").is_some_and(|v| !v.is_empty());
-    !own_home && app_on_this_mac()
+    !own_home() && app_on_this_mac()
 }
+
+/// Whether the Dray app keeps this machine's `dray` for the home this runs on,
+/// rewriting it on every launch.
+pub(crate) fn app_updates_this_cli() -> bool {
+    !own_home() && app_ships_this_cli()
+}
+
+fn own_home() -> bool {
+    std::env::var_os("DRAY_HOME").is_some_and(|v| !v.is_empty())
+}
+
+/// Whether a Dray app here copies its own `dray` to ~/.local/bin: any Mac app,
+/// and on Linux the AppImage the app records on launch (cli.rs), while that
+/// file is still there. Its server is the app's child on Linux, so this says
+/// nothing about who serves. install.sh asks the same.
+pub(crate) fn app_ships_this_cli() -> bool {
+    if MAC {
+        return app_on_this_mac();
+    }
+    let Some(home) = std::env::home_dir() else {
+        return false;
+    };
+    std::fs::read(home.join(APPIMAGE_RECORD)).is_ok_and(|image| {
+        use std::os::unix::ffi::OsStrExt;
+        !image.is_empty() && Path::new(std::ffi::OsStr::from_bytes(&image)).is_file()
+    })
+}
+
+/// Written by the Linux app on launch, naming the AppImage it runs from.
+const APPIMAGE_RECORD: &str = ".local/share/dray/appimage";
 
 /// The app's login agent, which every launch installs, or its bundle, for one
 /// installed and never opened. install.sh asks the same three paths.
@@ -425,13 +521,28 @@ fn logins_to_do() -> Vec<String> {
             _ => &[],
         };
         if probe.is_empty() || !signed_in(&bin, probe) {
-            todo.push(agent.login.to_string());
+            // `agent.login` is bare `pi`, a TUI. A reader at a shell types the
+            // provider themselves, so pi 1.5.1's shell command reads better.
+            todo.push(if agent.id == "pi" && pi_shell_auth(&bin) {
+                "pi auth login <provider>".into()
+            } else {
+                agent.login.to_string()
+            });
         }
     }
     if find("gh").is_some_and(|gh| !signed_in(&gh, &["auth", "status"])) {
         todo.push("gh auth login".into());
     }
     todo
+}
+
+/// Whether this pi has `pi auth login`, which came in 1.5.1. `setup` leaves an
+/// installed pi alone, so an older one is still here to be told about.
+fn pi_shell_auth(bin: &PathBuf) -> bool {
+    let Ok(out) = Command::new(bin).arg("--version").stdin(Stdio::null()).output() else { return false };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut parts = text.trim().trim_start_matches('v').split('.').map(|p| p.parse::<u64>().ok());
+    matches!((parts.next(), parts.next(), parts.next()), (Some(Some(a)), Some(Some(b)), Some(Some(c))) if (a, b, c) >= (1, 5, 1))
 }
 
 /// What the reader pastes into the app: the address they reached this machine

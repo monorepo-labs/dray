@@ -18,20 +18,47 @@ phone reads and drives it over the same WebSocket the desktop uses
   running turn keeps its newest five rows on screen. No diffs, no
   highlighting. A tapped picture opens full screen among the rest of its
   turn's: swipe or the strip to page, pinch to zoom, drag down to close.
-- **Reply** to a session, **Stop** a turn.
+- **Reply** from a dock at the session's foot, the list's orb held to talk:
+  the words show as the bubble they will send as, the keyboard edits them
+  in a sheet that can also send, and Cancel asks first. The model chip and
+  "···" open **This task**: the session's model, effort, fast mode and
+  stance for the next reply, each locked mid-turn where the harness can't
+  carry it onto a queued prompt (`liveControls.ts`, restated in
+  `Picks.lockedMidTurn`). Nothing there reaches the session until a reply
+  goes out, since `send_msg` is what carries it. **Stop** sits at the end of
+  the picks while a turn runs. The top bar names the project and machine,
+  never the branch.
 - **Permission and question cards**, answered in place.
-- **New session** with the desktop composer's picks: project, harness, model,
-  effort, stance, fast mode, worktree, branch.
+- **New task by voice**, from a dock under the list: hold the orb to talk,
+  and the recording runs hands-free until Done or Cancel. The words land as
+  the task's text; holding again adds to them, the keyboard edits them in a
+  sheet, and Cancel offers Save draft (`create_draft`), Keep or Discard.
+  Every pick under the orb opens **Run with**: server (where two hold the
+  project), project with Attach inside its menu, worktree, the agent and its
+  model as chips, effort, fast mode and stance. Double-tapping a model stars
+  it, on this phone, per agent; starred ones lead. With the worktree off a
+  Branch row switches the checkout at once (`checkout_branch`), asking
+  Bring or Stash first where files are uncommitted, as the desktop does.
 - **Pairing** by paste or by QR, and every server's name, token and removal
   in one Settings screen.
+- **Shared machines** (#847): a paired server that shares its list
+  (`share_machines`, `machines_shared`) adds each machine as a server of its
+  own, never saved, with a hello naming `via` its id and `/file`/`/upload`
+  carrying `via=`, under the paired server's token. Its id is hashed from the
+  pair, so transcripts survive a reconnect. The Island skips this: it follows
+  the app's links, which already name those machines.
 - **Pull request** sheet from the session view: readiness in the desktop's
-  order, checks, comments; merge, mark ready, reopen. Hidden when the branch
-  has none.
+  order with checks speaking first, checks failing-first, comments; every
+  check and comment opens on GitHub. Merge is the desktop's split button —
+  the chevron picks the method, kept on the phone, and a confirm runs before
+  it lands; it stays shut while checks run or fail. Mark ready, reopen.
+  Hidden when the branch has none. Reads and merges only: no comment, reply
+  or close.
 - **Dictation**, transcribed on the Mac: the phone records a 16kHz mono WAV,
   uploads it through `POST /upload` and calls `transcribe_upload`. Only the
   Mac's server has that command, and its welcome frame says `dictation: true`,
-  so the mic is drawn nowhere else. Both composers carry it, and the Island's
-  voice orb takes the row while it records.
+  so the orb says "Type instead" where no server can. The Island's `VoiceOrb`
+  draws it.
 
 Left out: push, attachments, the Diff/Files/Browser views,
 forks, settle/pin, the settled list, spaces, issues.
@@ -78,18 +105,25 @@ app to update — and nothing else, so the global tint is the page's ink.
 Rationale and the screens it was judged on are in #631.
 
 - **The list has no title.** Settings on the left, the drafts and settled
-  views in one glass pill on the right, the project strip under them once
-  there are two projects. Rows are one line; a child hangs off its parent on
-  a solid elbow, and a waiting card sits under its row, a fill and no border.
+  views in one glass pill on the right, each only while a server is connected
+  and it has something in it, the project strip under them once there are two
+  projects. Rows are one line; a child hangs off its parent on a solid elbow,
+  and a waiting card sits under its row, a fill and no border.
+- **An empty list is the whole screen** ([EmptyArt.swift](Dray/EmptyArt.swift)),
+  drawn in the middle: connect a server (no dock until one is paired),
+  connecting, can't reach with its countdown (the dock dims), no tasks yet or
+  nothing in this project with a line down to the orb, and all clear with
+  the last task settled today and how many were.
 - **One type scale** in `Theme.Font`, five rungs, SF Pro only, regular and
   semibold only. Buttons are semibold: Headline full-width, `pill` compact;
   a text-only action stays regular.
-- **Each server reports its own trouble** in a banner at the top of the list
-  and a strip above the composer, written by `Store.health`
-  ([ConnectionStatus.swift](Dray/ConnectionStatus.swift)): reconnecting with a
-  visible countdown, can't reach, token refused, protocol behind in either
-  direction, a list that failed to load. Each carries Retry or Fix, and none
-  holds up another server. Offline is one banner, not one per server.
+- **Each server reports its own trouble**, written by `Store.health`
+  ([ConnectionStatus.swift](Dray/ConnectionStatus.swift)): reconnecting,
+  can't reach with a visible countdown, token refused, protocol behind in
+  either direction, a list that failed to load. Each carries Retry or Fix, and
+  none holds up another server. In the list it is a card at the top and that
+  server's tasks dim; in a session it floats under the title bar and the dock
+  dims, still usable. Offline is one banner, not one per server.
 - **A failure stays where it happened.** A failed send keeps the draft and
   offers Retry under it; a failed transcript read is the screen's own empty
   state with Try again; an action with nowhere of its own is a toast, never an
@@ -127,10 +161,10 @@ Commands used: `list_session_index_items`, `get_session_by_id`,
 `list_branches`, `checkout_branch`, `mark_session_read`, `work_status`,
 `prs_for_branch`, `merge_pr`, `mark_pr_ready`, `reopen_pr`, `set_last_selected_project`,
 `add_project`, `github_repos`, `clone_github_repo`, `recheck_gh`, `pr_marks`,
-`transcribe_upload`.
+`transcribe_upload`, `create_draft`, `delete_draft`.
 
-**New session restates the desktop composer's rules** (`Picks` in
-`NewSessionView.swift`): which stances each harness honours (`permission.ts`),
+**A new task restates the desktop composer's rules** (`Picks` in
+`Picks.swift`): which stances each harness honours (`permission.ts`),
 fast mode only where the harness has a route and the model a faster tier
 (`fastMode.ts`), the effort ladder per model and the model fallback
 (`model.ts`). Change one there, change it here.
@@ -145,6 +179,13 @@ never take the list down.
 A session is `(serverId, sessionId)`. The server id is a UUID the phone mints
 when a server is added. Nothing on the wire carries it; the connection a frame
 arrived on is the answer.
+
+**A server can be switched off on the phone alone** (`Server.on`, saved with
+the list and read as on where absent). Off drops its connection and everything
+held of it, so its tasks, cards, banners and Run with rows go; nothing is sent,
+and its tasks keep running there. Everything the list reasons about reads
+`store.live`, never `store.servers`, or an off server comes back as a stuck
+"Connecting".
 
 ## Transcript
 

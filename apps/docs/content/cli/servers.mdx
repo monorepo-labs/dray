@@ -27,6 +27,7 @@ dray server status
 | `stop` | Stops the server and removes it from the background. |
 | `status` | Says whether the server is running, and its public address if it has one. |
 | `tunnel on` / `tunnel off` | Puts a public address in front of the server, or takes it down. |
+| `assistant add` / `ls` / `revoke <id>` | Connects Grok, Claude or ChatGPT to the server, lists the ones connected, or signs one out. See [Connect an assistant](/reference/assistants). |
 
 ### Install
 
@@ -71,6 +72,19 @@ Gives the server a public address that stays the same across restarts, and waits
 
 `dray server tunnel off` takes the address down. The server is then reachable over SSH alone. The address is off until you turn it on.
 
+### Assistants
+
+```bash
+dray server assistant add
+dray server assistant add --read-only
+dray server assistant ls
+dray server assistant revoke <id>
+```
+
+`add` prints the URL to add as a custom connector in Grok, Claude or ChatGPT, and a code the connector's sign-in asks for. The code works once, for 10 minutes. It turns on the public address first if it is off, and waits for it. `--read-only` makes an assistant that can list and read sessions but not change them.
+
+`ls` lists the assistants signed in, with their id, name, access and when each was last used. `revoke` signs one out at once. See [Connect an assistant](/reference/assistants).
+
 ### On a Mac with the Dray app
 
 The app runs this Mac's server, so `start`, `run` and `status` are refused with `the Dray app runs this Mac's server`. `install` still installs tools and then stops. `tunnel on` and `tunnel off` work, and do the same as the Remote access switch in Settings → Servers.
@@ -104,6 +118,7 @@ Edits the app's list of servers. Changes show in Settings → Servers as you run
 | `connect <name>` | Connects now, or tries again on one that failed. Waits and says how it went. |
 | `disconnect <name>` | Stops connecting. It stays on the list with its token, and its agents keep running. |
 | `rm <name>` | Takes a server off the list, with its token. Its agents keep running there. |
+| `share on` / `share off` | Lets whoever holds this machine's token reach every server on its list through it. Off until you turn it on. Works on a server with no app too. |
 
 Each name belongs to one server; `add` and `rename` refuse a name another server has.
 

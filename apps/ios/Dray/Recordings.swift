@@ -25,7 +25,7 @@ func recordingPaths(in text: String) -> [String] {
           var parts = URLComponents(url: socket, resolvingAgainstBaseURL: false) else { return nil }
     parts.scheme = parts.scheme == "wss" ? "https" : "http"
     parts.path = (parts.path.hasSuffix("/") ? String(parts.path.dropLast()) : parts.path) + "/file"
-    parts.queryItems = [URLQueryItem(name: "token", value: server.token), URLQueryItem(name: "path", value: path)]
+    parts.queryItems = [URLQueryItem(name: "token", value: server.token), URLQueryItem(name: "path", value: path)] + server.viaQuery
     return parts.url
 }
 

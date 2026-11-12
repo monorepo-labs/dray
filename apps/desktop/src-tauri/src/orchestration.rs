@@ -464,6 +464,10 @@ fn this_machine_only(request: &Request) -> bool {
             | Request::RenameServer(_)
             | Request::SetServerOn(_)
             | Request::SetRemoteAccess(_)
+            | Request::ShareMachines(_)
+            | Request::PairAssistant(_)
+            | Request::ListAssistants
+            | Request::RevokeAssistant(_)
     )
 }
 
@@ -718,6 +722,35 @@ mod elsewhere {
     }
 }
 
+/// Answers a request here and nowhere else, for a caller already inside this
+/// process: an MCP assistant's start, send and stop take the same path as
+/// `dray session new`, `send` and `stop`. Never through [`route`], which
+/// sends a session id this index lacks on to other machines under their own
+/// tokens — an assistant is signed in to this server alone.
+#[cfg(any(feature = "serve", feature = "desktop"))]
+pub async fn answer_here(request: Request, app: &Sink) -> Response {
+    if this_machine_only(&request) || matches!(request, Request::OnMachine(_)) {
+        return Response::error("not an assistant's request");
+    }
+    dispatch(request, app).await.unwrap_or_else(|e| Response::error(format!("{e:#}")))
+}
+
+#[cfg(any(feature = "serve", feature = "desktop"))]
+fn assistants(list: Result<Vec<crate::mcp::AssistantSummary>, String>) -> Result<Response> {
+    let assistants = list
+        .map_err(anyhow::Error::msg)?
+        .into_iter()
+        .map(|a| dray_proto::AssistantSummary {
+            id: a.id,
+            name: a.name,
+            access: serde_json::to_value(a.access).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default(),
+            created: a.created,
+            last_used: a.last_used,
+        })
+        .collect();
+    Ok(Response::Assistants { assistants })
+}
+
 async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
     match request {
         Request::CreateSession(create) => create_session(create, None, app).await,
@@ -745,6 +778,27 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             let now = crate::remote_access::set_remote_access(app.clone(), set.on).await.map_err(anyhow::Error::msg)?;
             Ok(Response::RemoteAccess { on: now.on })
         }
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        Request::ShareMachines(share) => {
+            let now = crate::machines::set_sharing(share.on).await.map_err(anyhow::Error::msg)?;
+            let names = now["machines"].as_array().into_iter().flatten();
+            let machines = names.filter_map(|m| m["name"].as_str().map(str::to_string)).collect();
+            Ok(Response::MachinesShared { on: share.on, machines })
+        }
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        Request::PairAssistant(pair) => {
+            let pairing = crate::mcp::pair(app.clone(), pair.read_only, None).await.map_err(anyhow::Error::msg)?;
+            Ok(Response::AssistantPairing {
+                url: pairing.url,
+                code: pairing.code,
+                expires_in_secs: pairing.expires_in_secs,
+                read_only: pair.read_only,
+            })
+        }
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        Request::ListAssistants => assistants(crate::mcp::assistants().await),
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        Request::RevokeAssistant(revoke) => assistants(crate::mcp::revoke(app.clone(), revoke.id).await),
         Request::SetAside(aside) => {
             crate::set_session_flags(&aside.session_id, None, None, None, Some(aside.aside), app.clone()).await?;
             answer_session(&aside.session_id).await
@@ -820,7 +874,7 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
             Ok(serde_json::json!(focused.then(crate::apps::app_selection).flatten()))
         }
         "close_session" => {
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             if let Some(id) = args["sessionId"].as_str() {
                 crate::cef::close_session(id);
             }
@@ -1039,7 +1093,7 @@ async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
         Ok((output, data)) => Response::Browser { output, data },
         Err(message) => Response::error(message),
     };
-    #[cfg(all(feature = "cef", target_os = "macos"))]
+    #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
     if !crate::is_server() {
         return Ok(answered(crate::cef::automation::run(&request.session_id, request.action).await));
     }

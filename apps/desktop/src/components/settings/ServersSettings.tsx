@@ -1,4 +1,4 @@
-import { Check, CircleArrowUp, Copy, Globe, GlobeOff, MoreHorizontal, Plus, QrCode, RotateCw } from "lucide-react";
+import { Bot, Check, CircleArrowUp, Copy, Globe, GlobeOff, MoreHorizontal, Plus, QrCode, RotateCw } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import CommandChip from "@/components/settings/CommandChip";
@@ -26,10 +26,21 @@ import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { useCopied } from "@/hooks/useCopied";
 import { AUTO_EXTEND_MINUTES, boatAsleep, resumeBoat, setBoatPrefs, useBoatPrefs } from "@/lib/boat";
-import { useLocalServer, useServers } from "@/lib/servers";
+import { relativeTime } from "@/lib/format";
+import { MACHINE } from "@/lib/platform";
+import { serverName, useLocalServer, useServers } from "@/lib/servers";
 import { invoke, listen, LOCAL } from "@/lib/transport";
 import { cn } from "@/lib/utils";
-import type { Failure, Fix, RemoteAccess, ServerInfo, ServerStatus, Stage } from "@/types/events";
+import type {
+  AssistantSummary,
+  Failure,
+  Fix,
+  Pairing,
+  RemoteAccess,
+  ServerInfo,
+  ServerStatus,
+  Stage,
+} from "@/types/events";
 
 type TrustHost = Extract<Fix, { kind: "trust_host" }>;
 
@@ -91,6 +102,7 @@ export default function ServersSettings() {
   };
   // The host-key question for a saved row, whose loop parked on it.
   const [trusting, setTrusting] = useState<{ server: ServerInfo; fix: TrustHost } | null>(null);
+  const [pairing, setPairing] = useState<ServerInfo | null>(null);
   // A server with no Dray on it, being set up: from its row, or from Add.
   const [installing, setInstalling] = useState<{
     line: string;
@@ -178,13 +190,16 @@ export default function ServersSettings() {
               void invoke("remove_server", { id: server.id }, LOCAL).catch(console.error);
             }}
             onCheckUpdate={server.status === "connected" ? () => checkUpdate(server.id) : undefined}
+            onAssistant={server.status === "connected" ? () => setPairing(server) : undefined}
           >
             {showsUpdate(server, updates[server.id] ?? {}) && (
               <UpdateLine server={server} state={updates[server.id] ?? {}} onChange={(next) => patchUpdate(server.id, next)} />
             )}
+            {server.status === "connected" && <Assistants server={server.id} />}
           </Row>
           </div>
         ))}
+        {servers.length > 0 && <ShareMachinesRow />}
         {servers.some((s) => s.boat) && <AutoExtendRow />}
       </div>
 
@@ -202,6 +217,7 @@ export default function ServersSettings() {
         }}
       />
       {installing && <ServerSetupDialog {...installing} onClose={() => setInstalling(null)} />}
+      {pairing && <ConnectAssistantDialog server={pairing.id} name={pairing.name} onClose={() => setPairing(null)} />}
       {trusting?.server.ssh && (
         <HostKeyDialog
           line={trusting.server.ssh}
@@ -215,6 +231,53 @@ export default function ServersSettings() {
         />
       )}
     </>
+  );
+}
+
+type Sharing = { on: boolean; machines: { id: string; name: string }[] };
+
+/// Whether a phone or Mac paired with this one reaches the machines above
+/// through it (#847). Off by default: it hands this Mac's token their reach.
+function ShareMachinesRow() {
+  const [on, setOn] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    let unlisten: (() => void) | undefined;
+    void listen<Sharing>("machines_shared", ({ payload, server }) => {
+      if (server === LOCAL) setOn(payload.on);
+    }).then((off) => {
+      if (!live) return off();
+      unlisten = off;
+      void invoke<Sharing>("share_machines", {}, LOCAL).then((now) => live && setOn(now.on));
+    });
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const toggle = (next: boolean) => {
+    setOn(next);
+    invoke<Sharing>("set_share_machines", { on: next }, LOCAL)
+      .then((now) => setOn(now.on))
+      .catch((e) => {
+        setOn(!next);
+        console.error(e);
+      });
+  };
+
+  return (
+    <div className="flex min-h-7 items-center gap-3 py-1.5 pl-4.5">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="text-ui font-medium">Share these servers</span>
+        <span className="text-ui text-muted-foreground">
+          Your phone, or a Mac paired with this one, reaches every server above through this Mac, with no pairing of
+          its own.
+        </span>
+      </div>
+      <Switch aria-label="Share these servers" checked={on} onCheckedChange={toggle} />
+    </div>
   );
 }
 
@@ -353,6 +416,7 @@ function ThisMacRow() {
   const server = useLocalServer();
   const [remote, setRemote] = useState<RemoteAccess>({ on: false, address: null, error: null });
   const [copied, copy] = useCopied<"address" | "token">();
+  const [pairing, setPairing] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -374,7 +438,7 @@ function ThisMacRow() {
   const starting = remote.on && !remote.address && !remote.error;
   const down = server?.status === "disconnected";
   const detail = down ? (
-    (server.error ?? "The server on this Mac is not running.")
+    (server.error ?? `The server on this ${MACHINE} is not running.`)
   ) : !remote.on ? (
     "Runs your sessions, with Dray open or closed"
   ) : starting ? (
@@ -383,12 +447,12 @@ function ThisMacRow() {
       Starting remote access. The first time takes about 30 seconds.
     </span>
   ) : (
-    (remote.error ?? "Other Macs can reach it while this Mac is awake, with Dray open or closed.")
+    (remote.error ?? `Other ${MACHINE}s can reach it while this ${MACHINE} is awake, with Dray open or closed.`)
   );
 
   return (
     <Row
-      name="This Mac"
+      name={serverName(LOCAL)}
       detail={detail}
       status={server?.status ?? "connected"}
       action={
@@ -404,7 +468,9 @@ function ThisMacRow() {
           </Button>
         )
       }
+      onAssistant={down ? undefined : () => setPairing(true)}
     >
+      {pairing && <ConnectAssistantDialog server={LOCAL} name={serverName(LOCAL)} onClose={() => setPairing(false)} />}
       {remote.on && remote.address && (
         // Both halves of Add server's form. The token is fetched on Copy alone
         // and never held here.
@@ -426,6 +492,7 @@ function ThisMacRow() {
           <PairButton />
         </div>
       )}
+      {!down && <Assistants server={LOCAL} />}
     </Row>
   );
 }
@@ -478,7 +545,7 @@ function PairButton() {
           <DialogHeader>
             <DialogTitle>Pair a phone</DialogTitle>
             <DialogDescription>
-              Point the iPhone's Camera at this, or scan it from Dray's Add server. Anyone holding it can use this Mac.
+              Point the iPhone's Camera at this, or scan it from Dray's Add server. Anyone holding it can use this {MACHINE}.
             </DialogDescription>
           </DialogHeader>
           {/* White under the code whatever the theme: a scanner reads dark on light. */}
@@ -494,6 +561,185 @@ function PairButton() {
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+/// The assistants signed in to one server's `/mcp` (#858), each with Sign
+/// out. Draws nothing while there are none, and nothing for a server from
+/// before MCP, which answers `unknown command`.
+function Assistants({ server }: { server: string }) {
+  const [list, setList] = useState<AssistantSummary[]>([]);
+  const [confirming, setConfirming] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    let unlisten: (() => void) | undefined;
+    const load = () =>
+      void invoke<AssistantSummary[]>("mcp_assistants", {}, server)
+        .then((now) => live && setList(now))
+        .catch(() => live && setList([]));
+    void listen("mcp_assistants_changed", ({ server: from }) => {
+      if (from === server) load();
+    }).then((off) => {
+      if (!live) return off();
+      unlisten = off;
+      load();
+    });
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, [server]);
+
+  if (list.length === 0) return null;
+  return (
+    <div className="flex flex-col">
+      {list.map((assistant) => (
+        <div key={assistant.id} className="flex min-h-7 items-center gap-2">
+          <Bot aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-ui">
+            {assistant.name}
+            <span className="text-muted-foreground">
+              {assistant.access === "read" ? " · Read only" : ""} · Used {relativeTime(assistant.lastUsed)}
+            </span>
+          </span>
+          {confirming === assistant.id ? (
+            <CancelOrConfirm
+              verb="Sign out"
+              autoFocus
+              onCancel={() => setConfirming(null)}
+              onConfirm={() => {
+                setConfirming(null);
+                void invoke<AssistantSummary[]>("mcp_revoke", { id: assistant.id }, server)
+                  .then(setList)
+                  .catch(console.error);
+              }}
+            />
+          ) : (
+            <Button variant="ghost" size="sm" onClick={() => setConfirming(assistant.id)}>
+              Sign out
+            </Button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/// An assistant's way in: the MCP URL to add as a custom connector and a
+/// one-time code for its sign-in page. The code is minted by the server and
+/// held only while this is open. Asking turns Remote access on, since an
+/// assistant's cloud reaches nothing else.
+function ConnectAssistantDialog({ server, name, onClose }: { server: string; name: string; onClose: () => void }) {
+  const [readOnly, setReadOnly] = useState(false);
+  const [pairing, setPairing] = useState<Pairing | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Who signed in while this was open: the code on screen is spent by then.
+  const [connected, setConnected] = useState<string | null>(null);
+  const [copied, copy] = useCopied<"url" | "code">();
+  // The code on screen, which a re-mint for the other access retires: a
+  // full-access code left good after switching to read-only is a way round it.
+  const shown = useRef<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    setPairing(null);
+    setError(null);
+    void invoke<Pairing>("mcp_pair", { readOnly, replaces: shown.current }, server)
+      .then((next) => {
+        if (!live) return;
+        shown.current = next.code;
+        setPairing(next);
+      })
+      .catch((e) => live && setError(String(e)));
+    return () => {
+      live = false;
+    };
+  }, [server, readOnly]);
+
+  useEffect(() => {
+    let live = true;
+    let unlisten: (() => void) | undefined;
+    let before: Set<string> | null = null;
+    const list = () => invoke<AssistantSummary[]>("mcp_assistants", {}, server).catch(() => []);
+    void list().then((now) => (before = new Set(now.map((a) => a.id))));
+    void listen("mcp_assistants_changed", ({ server: from }) => {
+      if (from !== server || !before) return;
+      const known = before;
+      void list().then((now) => {
+        const fresh = now.find((a) => !known.has(a.id));
+        if (live && fresh) setConnected(fresh.name);
+      });
+    }).then((off) => {
+      if (!live) return off();
+      unlisten = off;
+    });
+    return () => {
+      live = false;
+      unlisten?.();
+    };
+  }, [server]);
+
+  if (connected) {
+    return (
+      <Dialog open onOpenChange={(next) => !next && onClose()}>
+        <DialogContent className="grid-cols-[minmax(0,1fr)]">
+          <DialogHeader>
+            <DialogTitle>{connected} is connected</DialogTitle>
+            <DialogDescription>
+              It can work with sessions on {name} now. Sign it out from the server's row any time.
+            </DialogDescription>
+          </DialogHeader>
+          <Button className="justify-self-end" onClick={onClose}>
+            Done
+          </Button>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  return (
+    <Dialog open onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="grid-cols-[minmax(0,1fr)]">
+        <DialogHeader>
+          <DialogTitle>Connect an assistant</DialogTitle>
+          <DialogDescription>
+            Start and follow sessions on {name} from Grok, Claude or ChatGPT. Add a custom connector with this URL, and
+            enter the code when it asks you to sign in.
+          </DialogDescription>
+        </DialogHeader>
+        {pairing ? (
+          <div className="flex min-w-0 flex-col gap-3">
+            <div className="flex h-8 w-full min-w-0 items-center rounded-md border border-border dark:border-input">
+              <code className="flex-1 truncate pl-3 font-mono text-code text-foreground">{pairing.url}</code>
+              <CopyIcon label="Copy URL" done={copied === "url"} onClick={() => void copy(pairing.url, "url")} />
+            </div>
+            <div className="flex items-center justify-between rounded-md border border-border px-3 py-2 dark:border-input">
+              <code className="font-mono text-lg font-semibold tracking-widest">{pairing.code}</code>
+              <CopyIcon label="Copy code" done={copied === "code"} onClick={() => void copy(pairing.code, "code")} />
+            </div>
+            <p className="text-ui text-muted-foreground">
+              Good once, for {Math.round(pairing.expiresInSecs / 60)} minutes. Stopping remote access cuts every
+              assistant off.
+            </p>
+          </div>
+        ) : error ? (
+          <p className="text-ui text-destructive">{error}</p>
+        ) : (
+          <span className="flex items-center gap-2 text-ui text-muted-foreground">
+            <Spinner className="size-3" />
+            Getting a code. Turning on remote access takes about 30 seconds the first time.
+          </span>
+        )}
+        <div className="flex items-center gap-3">
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="text-ui font-medium">Read only</span>
+            <span className="text-ui text-muted-foreground">It can list and read sessions, never start or change them.</span>
+          </div>
+          <Switch aria-label="Read only" checked={readOnly} onCheckedChange={setReadOnly} />
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -514,6 +760,7 @@ function Row({
   beta = false,
   onBeta,
   onCheckUpdate,
+  onAssistant,
   confirming = false,
   onRemove,
   onCancel,
@@ -543,6 +790,8 @@ function Row({
   onBeta?: (beta: boolean) => void;
   /// Present while connected: a check needs the server to know its release.
   onCheckUpdate?: () => void;
+  /// Present while connected: the code comes from the server itself.
+  onAssistant?: () => void;
   confirming?: boolean;
   onRemove?: () => void;
   onCancel?: () => void;
@@ -582,7 +831,7 @@ function Row({
           // is more than forgetting an address is worth.
           <CancelOrConfirm verb="Remove" onConfirm={onConfirm!} onCancel={onCancel!} autoFocus />
         ) : (
-          (onToggle || onRemove || action) && (
+          (onToggle || onRemove || onAssistant || action) && (
             <div className="flex items-center gap-1.5">
               {onRetry && (
                 <Button variant="ghost" size="sm" onClick={onRetry}>
@@ -592,7 +841,7 @@ function Row({
               {action}
               {/* The Accounts rows' ⋯: the switch is what a row is for, and the
                   items that change the row itself wait beside it. */}
-              {onRemove && (
+              {(onRemove || onAssistant) && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" size="sm" aria-label={`${name} options`}>
@@ -601,22 +850,29 @@ function Row({
                   </DropdownMenuTrigger>
                   <DropdownMenuContent
                     align="end"
-                    className="min-w-36"
+                    className="min-w-44"
                     onCloseAutoFocus={(e) => {
                       if (movedFocus.current) e.preventDefault();
                       movedFocus.current = false;
                     }}
                   >
                     {onRename && <DropdownMenuItem onSelect={elsewhere(onRename)}>Rename</DropdownMenuItem>}
+                    {onAssistant && (
+                      <DropdownMenuItem className="whitespace-nowrap" onSelect={elsewhere(onAssistant)}>
+                        Connect an assistant…
+                      </DropdownMenuItem>
+                    )}
                     {onCheckUpdate && <DropdownMenuItem onSelect={onCheckUpdate}>Check for updates</DropdownMenuItem>}
                     {onBeta && (
                       <DropdownMenuItem onSelect={() => onBeta(!beta)}>
                         {beta ? "Leave beta" : "Join beta"}
                       </DropdownMenuItem>
                     )}
-                    <DropdownMenuItem variant="destructive" onSelect={elsewhere(onRemove)}>
-                      Remove
-                    </DropdownMenuItem>
+                    {onRemove && (
+                      <DropdownMenuItem variant="destructive" onSelect={elsewhere(onRemove)}>
+                        Remove
+                      </DropdownMenuItem>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}
@@ -630,7 +886,9 @@ function Row({
       {/* Under the whole row, not the text column, so the buttons stay level
           with the name and the strip gets the row's width. Indented past the
           dot. */}
-      {children && <div className="pl-4.5">{children}</div>}
+      {/* `empty:` because a child may draw nothing — no assistants yet — and
+          an empty block would still take the row's gap. */}
+      {children && <div className="flex flex-col gap-2 pl-4.5 empty:hidden">{children}</div>}
     </div>
   );
 }
@@ -926,7 +1184,7 @@ function HostKeyDialog({
         <DialogHeader>
           <DialogTitle>Is this the right server?</DialogTitle>
           <DialogDescription>
-            This Mac has never connected to {fix.host}. Its {fix.keyType} key fingerprint is:
+            This {MACHINE} has never connected to {fix.host}. Its {fix.keyType} key fingerprint is:
           </DialogDescription>
         </DialogHeader>
         <code className="rounded-md border border-border px-2 py-1.5 font-mono text-code break-all dark:border-input">

@@ -2,6 +2,12 @@
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
+ * What an assistant may do. Chosen when the code is made, carried by the
+ * grant for its life.
+ */
+export type Access = "full" | "read";
+
+/**
  * One credential a harness holds, which for two of them is one of several.
  */
 export type Account = { 
@@ -408,7 +414,13 @@ transcription: TranscriptionSettings,
  * Whether this Mac serves itself through a quick tunnel. Here because
  * Rust starts it at launch, before any webview exists to ask.
  */
-remoteAccess: boolean, };
+remoteAccess: boolean, 
+/**
+ * Whether a client holding this server's token reaches the machines it
+ * lists through it (#847). Off by default: it hands that token every
+ * machine's reach, SSH logins included.
+ */
+shareMachines: boolean, };
 
 /**
  * Permission stance a session *runs under*, in roughly increasing order of
@@ -416,6 +428,20 @@ remoteAccess: boolean, };
  * sends — see [`PermissionMode`] for the wider set the CLI reports.
  */
 export type ApprovalPolicy = "plan" | "manual" | "auto" | "dontAsk" | "bypassPermissions";
+
+/**
+ * One connected assistant, as Settings → Servers and `dray server assistant
+ * ls` list it.
+ */
+export type AssistantSummary = { id: string, 
+/**
+ * What the client called itself when it registered: "Claude", "Grok".
+ */
+name: string, access: Access, created: string, 
+/**
+ * Moves on each token refresh, so it is right to the hour.
+ */
+lastUsed: string, };
 
 /**
  * One thing the user attached, as the composer needs to draw it.
@@ -469,9 +495,10 @@ needsKey: boolean,
  * option Dray cannot carry out.
  *
  * **Shown, copyable, and run by [`run_agent_login`] on the reader's say
- * so.** Every one of these is a literal in [`auth_options`], which is what
+ * so.** Every one of these is built in [`auth_options`], which is what
  * makes running it safe: the frontend names an option id and the string is
- * looked up here, so nothing anybody typed reaches a command line. The
+ * looked up here. The one typed word that reaches it, pi's provider, has
+ * passed [`plausible_provider`] first. The
  * string is still drawn, since a reader is owed sight of what a button is
  * about to run in their shell.
  */
@@ -728,7 +755,13 @@ path: string, name: string, kind: ExternalAppKind,
  * no `.icns` beside it — so the button falls back to a glyph rather than
  * treating this as a failure.
  */
-icon: string | null, };
+icon: string | null, 
+/**
+ * Takes a directory as well as a file. False for the editors that open
+ * files alone — GNOME Text Editor and gedit answer a folder with "Could
+ * not open file" — so the directory button leaves them out.
+ */
+folders: boolean, };
 
 /**
  * Which run of the menu an app belongs to. Not cosmetic: "open in Cursor" and
@@ -1300,6 +1333,19 @@ model: string, inputTokens: number | null, outputTokens: number | null, cachedIn
  * against — see `context_window` in the Claude Code mapper.
  */
 contextWindow: number | null, maxOutputTokens: number | null, };
+
+/**
+ * A code waiting to be typed into an assistant's sign-in page.
+ */
+export type Pairing = { 
+/**
+ * The MCP URL to paste into the assistant.
+ */
+url: string, 
+/**
+ * `ABCD-EFGH`.
+ */
+code: string, expiresInSecs: number, access: Access, };
 
 export type PermissionBehavior = "allow" | "deny";
 

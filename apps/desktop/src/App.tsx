@@ -108,7 +108,9 @@ import {
 } from "@/lib/groups";
 import ComposerToolbar from "@/components/composer/ComposerToolbar";
 import DictateControl from "@/components/composer/DictateControl";
+import { HAS_DICTATION, IS_MAC } from "@/lib/platform";
 import AppShell from "@/components/layout/AppShell";
+import WindowControls from "@/components/layout/WindowControls";
 import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { nextEffort } from "@/components/composer/ModelSelector";
@@ -714,8 +716,8 @@ function App() {
   // shortcut is for. Enabled always: pressed with nothing downloaded it opens
   // settings, which is the answer the reader needs rather than a dead key.
   // On for a remote session too: mic, model and transcription all run on this
-  // Mac, and the words land in a local draft.
-  useHotkey("dictate", () => void recorder.toggle(), { platformOnly: true });
+  // machine, and the words land in a local draft.
+  useHotkey("dictate", () => void recorder.toggle(), { platformOnly: true, enabled: HAS_DICTATION });
 
   const [worktreePrompt, setWorktreePrompt] = useState<WorktreePrompt | null>(null);
 
@@ -2611,6 +2613,8 @@ function App() {
   useHotkey("issues.open", () => setIssuesOpen(true));
   const fullscreen = useFullscreen();
   useGlass(fullscreen);
+  // Only a windowed Mac has traffic lights over the strip to clear.
+  const lights = IS_MAC && !fullscreen;
 
   // The session on screen, whether or not its transcript has landed. A session
   // just selected is not in memory for the round trip that reads it, and
@@ -2766,17 +2770,17 @@ function App() {
           // decides that it has to.
           //
           // It spans the window, sidebar and panes below it, so it is the row
-          // that clears the traffic lights — fullscreen has none. A step darker
+          // that clears the traffic lights — fullscreen and Linux have none. A step darker
           // than the window, so the active tab can stand out of it the way a
           // browser's does.
           className={cn(
             // No fill of its own: it floats over the frame, whose strip above
             // the sheet is what gives this row its colour.
             "relative flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-3",
-            !fullscreen && "pl-(--traffic-lights-w)",
+            lights && "pl-(--traffic-lights-w)",
             // What sits before the tab row: this padding, the 28px sidebar
             // toggle and one gap. `ViewTabs` lines its row up from it.
-            fullscreen ? "[--tabs-lead:3rem]" : "[--tabs-lead:calc(var(--traffic-lights-w)+2.25rem)]",
+            lights ? "[--tabs-lead:calc(var(--traffic-lights-w)+2.25rem)]" : "[--tabs-lead:3rem]",
           )}
           // `deep`, not bare: bare drags only on direct hits, so every label
           // inside this row was a dead strip in a titlebar that looks uniform.
@@ -2907,6 +2911,7 @@ function App() {
                   )}
                 </>
               )}
+          <WindowControls />
         </header>
       }
       panel={
@@ -3081,7 +3086,7 @@ function App() {
           }}
           dictating={recorder.state !== "idle"}
           dictation={
-            <DictateControl
+            HAS_DICTATION && <DictateControl
               state={recorder.state}
               level={recorder.level}
               savedAudio={recorder.savedAudio}
@@ -3274,7 +3279,7 @@ function App() {
         {/* A transcript its server has not answered for yet; the reconnect
             loads it. One already loaded keeps drawing what it has. */}
         {offlineServer && !selectedSession ? (
-          <TranscriptSkeleton />
+          <TranscriptSkeleton still={offlineServer.status !== "connecting"} />
         ) : (
           <Chat
             {...paneState(selectedSessionId ?? "")}

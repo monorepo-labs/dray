@@ -17,6 +17,7 @@ import {
 import {
   chordFromKey,
   isReserved,
+  offered,
   SHORTCUT_GROUPS,
   SHORTCUTS,
   type ShortcutId,
@@ -39,7 +40,7 @@ import {
   useAnyModsOverride,
   useMods,
 } from "@/lib/digitChords";
-import { IS_MAC } from "@/lib/platform";
+import { IS_LINUX, IS_MAC } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /// Who already answers `mods` plus one of the first `slots` digits: another
@@ -197,10 +198,10 @@ export default function ShortcutsSettings({ onOpenIsland }: { onOpenIsland: () =
     !q || label.toLowerCase().includes(q) || group.toLowerCase().includes(q);
   const shown = SHORTCUT_GROUPS.map((group) => ({
     group,
-    rows: SHORTCUTS.filter((s) => s.group === group && matches(s.label, group)),
+    rows: SHORTCUTS.filter((s) => s.group === group && matches(s.label, group) && offered(s.id)),
     digits: DIGIT_CHORDS.filter((c) => c.group === group && matches(c.label, group)),
   })).filter((g) => g.rows.length + g.digits.length > 0);
-  const islandShown = IS_MAC && matches("Open Dray Island", "Dray Island");
+  const islandShown = (IS_MAC || IS_LINUX) && matches("Open Dray Island", "Dray Island");
 
   return (
     <div className="flex flex-col gap-5">
@@ -221,7 +222,8 @@ export default function ShortcutsSettings({ onOpenIsland }: { onOpenIsland: () =
       />
       {islandShown && (
         <p className="text-ui text-muted-foreground">
-          Dray Island's open and screenshot keys are under{" "}
+          {/* Linux's screenshot key is fixed, so only the open key is a pick. */}
+          {IS_MAC ? "Dray Island's open and screenshot keys are under" : "Dray Island's open key is under"}{" "}
           <button
             type="button"
             onClick={onOpenIsland}

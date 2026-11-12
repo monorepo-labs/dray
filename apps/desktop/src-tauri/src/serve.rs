@@ -212,7 +212,108 @@ async fn write_port_file(home: &Path, port: u16) -> Result<()> {
 /// rebuilds. The server writes the one it started from under its port; the
 /// app compares it with the file now to tell a server running old code.
 pub fn exe_stamp() -> Option<String> {
-    stamp_of(&std::env::current_exe().ok()?)
+    stamp_of(&executable()?)
+}
+
+/// The file this process was started from. An AppImage's binary runs out of a
+/// FUSE mount that lives only as long as the app, so the server is started from
+/// the AppImage itself and judged by its stamp — the file an update replaces.
+pub fn executable() -> Option<PathBuf> {
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
+    if let Some(image) = appimage() {
+        return Some(image);
+    }
+    std::env::current_exe().ok()
+}
+
+/// `$APPIMAGE`, only while this binary really runs from an AppImage's mount —
+/// Tauri's own test. A terminal started from some other AppImage hands the
+/// variable down to anything run in it.
+/// The environment changes that take back what an AppImage's AppRun added:
+/// every entry pointing into an AppImage mount, dropped from every variable,
+/// and a variable left with nothing removed. `None` means remove.
+///
+/// AppRun prepends its mount to `PATH`, `LD_LIBRARY_PATH`, GStreamer's and
+/// GTK's paths and more, and keeps no copy of what was there. Inherited as is,
+/// an agent's `git` loads the bundle's libraries, and a relaunched app reads
+/// the old mount's — which pins that mount, and the replaced AppImage under
+/// it, for as long as the new one runs. The app itself needs them, so this is
+/// for what it spawns, and for the headless server's own.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+pub fn appimage_env_undo() -> Vec<(std::ffi::OsString, Option<std::ffi::OsString>)> {
+    use std::os::unix::ffi::OsStringExt;
+    let mount = std::env::temp_dir().join(".mount_").into_os_string().into_vec();
+    undo_mount_entries(std::env::vars_os(), &mount)
+}
+
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+fn undo_mount_entries(
+    vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    mount: &[u8],
+) -> Vec<(std::ffi::OsString, Option<std::ffi::OsString>)> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let mut undo = Vec::new();
+    for (key, value) in vars {
+        if key == "APPIMAGE" {
+            continue;
+        }
+        let bytes = value.as_bytes();
+        if !bytes.windows(mount.len()).any(|w| w == mount) {
+            continue;
+        }
+        let kept: Vec<&[u8]> = bytes
+            .split(|b| *b == b':')
+            .filter(|entry| !entry.is_empty() && !entry.starts_with(mount))
+            .collect();
+        let value = (!kept.is_empty()).then(|| std::ffi::OsString::from_vec(kept.join(&b':')));
+        undo.push((key, value));
+    }
+    undo
+}
+
+/// Marks every descriptor this process inherited close-on-exec, when it runs
+/// from an AppImage. The runtime hands the app its keepalive pipe and its
+/// mountpoint (fds 3 and 1023) without the flag, and it unmounts only once
+/// every holder is gone — so a relaunched app, the server and every agent
+/// kept the replaced AppImage's mount alive, measured. Nothing spawned from
+/// here needs an inherited descriptor, and what Rust opens has the flag
+/// already. Call before anything is spawned.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+pub fn appimage_cloexec() {
+    if appimage().is_none() {
+        return;
+    }
+    let Ok(fds) = std::fs::read_dir("/proc/self/fd") else {
+        return;
+    };
+    let fds: Vec<i32> = fds.flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).collect();
+    for fd in fds.into_iter().filter(|fd| *fd > 2) {
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 {
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
+        }
+    }
+}
+
+/// Home, where this process runs inside an AppImage mount: AppRun starts the
+/// app there, and a child keeping it as its cwd keeps the mount busy.
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+pub fn appimage_safe_cwd() -> Option<PathBuf> {
+    let mount = std::env::temp_dir().join(".mount_");
+    let cwd = std::env::current_dir().ok()?;
+    cwd.to_string_lossy()
+        .starts_with(&*mount.to_string_lossy())
+        .then(|| std::env::home_dir().unwrap_or_else(|| PathBuf::from("/")))
+}
+
+#[cfg(all(target_os = "linux", feature = "desktop"))]
+pub(crate) fn appimage() -> Option<PathBuf> {
+    let image = std::env::var_os("APPIMAGE").filter(|v| !v.is_empty())?;
+    let mount = std::env::temp_dir().join(".mount_");
+    let exe = std::env::current_exe().ok()?;
+    exe.to_string_lossy().starts_with(&*mount.to_string_lossy()).then(|| PathBuf::from(image))
 }
 
 fn stamp_of(path: &Path) -> Option<String> {
@@ -357,9 +458,7 @@ async fn shut_down(code: i32) -> ! {
 /// that settle without cleaning up are gone (#482).
 ///
 /// An empty index sweeps nothing, since a missing file reads as no sessions
-/// and would take every profile. The CEF root ignores `DRAY_HOME`, so a
-/// server on a home of its own leaves it alone: that index is not the one
-/// those profiles belong to.
+/// and would take every profile.
 async fn sweep_browser_profiles() {
     let Ok(index) = store::read_index().await else { return };
     if index.is_empty() {
@@ -371,10 +470,8 @@ async fn sweep_browser_profiles() {
     // session made or unsettled meanwhile would lose a profile it just opened.
     // Only the renames are waited on; the removals run on.
     let _ = tokio::task::spawn_blocking(move || {
-        #[cfg(all(feature = "cef", target_os = "macos"))]
-        if std::env::var_os("DRAY_HOME").is_none() {
-            crate::cef::automation::sweep_profiles(&live);
-        }
+        #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+        crate::cef::automation::sweep_profiles(&live);
         crate::headless::automation::sweep_profiles(&live);
     })
     .await;
@@ -464,6 +561,13 @@ impl Hub {
 /// reads it from the command table.
 pub static HUB: std::sync::LazyLock<Hub> = std::sync::LazyLock::new(Hub::default);
 
+/// The permission and question cards open now, every session's, as
+/// `agent_event` payloads. What an MCP assistant reads to learn a session is
+/// blocked on the user, since nothing can be pushed to it.
+pub fn open_asks() -> Vec<Value> {
+    HUB.live.lock().unwrap_or_else(|e| e.into_inner()).asks.clone()
+}
+
 /// Serves `listener` until the future is dropped, which also drops every
 /// connection it accepted — how the desktop app turns serving off.
 /// `tunnel_file` holds the address whose origin is let through. `hosts` lets a
@@ -498,8 +602,12 @@ pub async fn listen(
             // its task and its socket until the peer went away.
             let first = tokio::time::timeout(ADMIT, request_line(&stream)).await.ok().flatten();
             let served = match first {
+                Some(line) if relayed(&line) => relay_http(stream, &token).await,
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
                 Some(line) if line.starts_with("POST /upload?") => upload(stream, &token).await,
+                // Its own sign-in, never the serve token: an assistant's cloud
+                // must not hold the key to every other door here.
+                Some(line) if crate::mcp::routes(&line) => crate::mcp::serve(stream, sink).await,
                 Some(_) => connection(stream, sink, hub, &token, &tunnel_file, hosts).await,
                 None => Ok(()),
             };
@@ -601,6 +709,10 @@ struct Hello {
     /// than being a client: see [`pipe`].
     #[serde(default)]
     forward: Option<u16>,
+    /// A machine this server shares, by id: the socket is that machine's,
+    /// relayed through here. See [`relay`].
+    #[serde(default)]
+    via: Option<String>,
 }
 
 /// What the app can answer when it connects as the host.
@@ -826,6 +938,156 @@ where
         _ = outbound => {}
         _ = inbound => {}
     }
+}
+
+/// Passes one client's socket to a machine this server shares (#847), frames
+/// untouched both ways, so the machine's welcome, events and replies reach the
+/// client as if it had connected there. Admitted by this server's token; the
+/// machine is told its own. Only what a plain client says is passed on — never
+/// `host` or `client`, which a machine honours on its local listener, where
+/// an SSH forward lands — and no `via`, so a relay is one hop.
+async fn relay<W, R>(mut write: W, mut read: R, hello: Hello) -> Result<()>
+where
+    W: futures_util::Sink<Message> + Unpin,
+    R: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    let theirs = json!({ "v": hello.v, "deflate": hello.deflate, "counts": hello.counts });
+    let upstream = match crate::machines::relay(hello.via.as_deref().unwrap_or_default(), theirs).await {
+        Ok(upstream) => upstream,
+        Err(refusal) => {
+            write.send(Message::text(json!({ "err": refusal }).to_string())).await.ok();
+            write.close().await.ok();
+            return Ok(());
+        }
+    };
+    let via = hello.via.unwrap_or_default();
+    let (mut up_write, mut up_read) = upstream.split();
+    // The client's pings are answered here, so they say nothing of the machine;
+    // it is pinged from here and dropped once silent, which ends the client's
+    // socket and has it reconnect.
+    let mut ping = tokio::time::interval(PIPE_PING);
+    let mut heard = tokio::time::Instant::now();
+    loop {
+        tokio::select! {
+            frame = read.next() => match frame {
+                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(frame)) => if up_write.send(frame).await.is_err() { break },
+            },
+            frame = up_read.next() => {
+                heard = tokio::time::Instant::now();
+                match frame {
+                    Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(frame)) => if write.send(frame).await.is_err() { break },
+                }
+            }
+            // Sharing switched off, or the machine left the list, ends the relay
+            // too. The tick catches the Mac app's own list edits, which no
+            // notify in this process sees.
+            _ = crate::machines::SHARING_MOVED.notified() => {
+                if !crate::machines::still_shared(&via).await {
+                    break;
+                }
+            }
+            _ = ping.tick() => {
+                if heard.elapsed() > PIPE_SILENCE
+                    || !crate::machines::still_shared(&via).await
+                    || up_write.send(Message::Ping(Default::default())).await.is_err()
+                {
+                    break;
+                }
+            }
+        }
+    }
+    up_write.close().await.ok();
+    write.close().await.ok();
+    Ok(())
+}
+
+/// Whether an HTTP request line names a shared machine with `via=`.
+fn relayed(line: &str) -> bool {
+    let target = line.split(' ').nth(1).unwrap_or_default();
+    let routed = line.starts_with("GET /file?") || line.starts_with("POST /upload?");
+    routed && target.split_once('?').is_some_and(|(_, q)| form_urlencoded::parse(q.as_bytes()).any(|(k, _)| k == "via"))
+}
+
+/// `/file` or `/upload` with `via=<machine id>`: answered by that machine under
+/// its own token, the HTTP half of [`relay`]. This server's token admits it,
+/// as a header or `token=` in the query the way `/file` takes it.
+async fn relay_http(stream: TcpStream, token: &str) -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (head, reader) = read_head(stream).await?;
+    let early = reader.buffer().to_vec();
+    let mut stream = reader.into_inner().into_inner();
+    let (route, query) = head.target.split_once('?').unwrap_or((&head.target, ""));
+    let (mut given, mut via, mut rest) = (head.bearer.clone().unwrap_or_default(), String::new(), String::new());
+    for (key, value) in form_urlencoded::parse(query.as_bytes()) {
+        match &*key {
+            "token" => {
+                if given.is_empty() {
+                    given = value.into_owned();
+                }
+            }
+            "via" => via = value.into_owned(),
+            _ => {
+                form_urlencoded::Serializer::for_suffix(&mut rest, 0).append_pair(&key, &value);
+            }
+        }
+    }
+    let refuse = |status: &str| format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    if !same_token(&given, token) {
+        stream.write_all(refuse("401 Unauthorized").as_bytes()).await?;
+        return Ok(());
+    }
+    let Ok((base, theirs)) = crate::machines::relay_http(&via).await else {
+        stream.write_all(refuse("502 Bad Gateway").as_bytes()).await?;
+        return Ok(());
+    };
+    let url = format!("{base}{route}?{rest}");
+    // An upload's body goes out inside `send`, so its wait grows with the
+    // body: 64 KiB/s at worst.
+    let mut wait = PIPE_SILENCE;
+    let mut request = match route {
+        "/upload" => {
+            let Some(length) = head.length.filter(|&l| l <= crate::attachments::MAX_UPLOAD_BYTES) else {
+                stream.write_all(refuse("413 Content Too Large").as_bytes()).await?;
+                return Ok(());
+            };
+            // ponytail: held whole, which a phone's dictation fits; stream it
+            // if a client starts relaying attachments.
+            let mut body = Vec::with_capacity(length as usize);
+            (&early[..]).chain(&mut stream).take(length).read_to_end(&mut body).await?;
+            wait += std::time::Duration::from_secs(length / (64 * 1024));
+            crate::http().post(url).body(body)
+        }
+        _ => crate::http().get(url),
+    }
+    .bearer_auth(theirs);
+    if let Some(range) = &head.range {
+        request = request.header(reqwest::header::RANGE, range);
+    }
+    // `http()` has no timeout of its own, and a body may stream for minutes,
+    // so the wait is bounded per step: the answer's head, then each chunk.
+    let Ok(Ok(mut response)) = tokio::time::timeout(wait, request.send()).await else {
+        stream.write_all(refuse("502 Bad Gateway").as_bytes()).await?;
+        return Ok(());
+    };
+    let status = response.status();
+    let mut reply = format!("HTTP/1.1 {} {}\r\n", status.as_u16(), status.canonical_reason().unwrap_or_default());
+    for name in ["content-type", "content-length", "content-range", "accept-ranges"] {
+        if let Some(value) = response.headers().get(name).and_then(|v| v.to_str().ok()) {
+            reply.push_str(&format!("{name}: {value}\r\n"));
+        }
+    }
+    reply.push_str("Connection: close\r\n\r\n");
+    stream.write_all(reply.as_bytes()).await?;
+    while let Some(chunk) = tokio::time::timeout(PIPE_SILENCE, response.chunk()).await.context("the machine stopped sending")?? {
+        stream.write_all(&chunk).await?;
+    }
+    stream.shutdown().await.ok();
+    Ok(())
 }
 
 /// An HTTP request head: its target, the bearer token if one was sent, the
@@ -1145,6 +1407,9 @@ async fn connection(
             .ok();
         write.close().await.ok();
         return Ok(());
+    }
+    if let Some(relayed) = serde_json::from_str::<Hello>(&hello).ok().filter(|h| h.via.is_some()) {
+        return relay(write, read, relayed).await;
     }
     if let Some(port) = serde_json::from_str::<Hello>(&hello).ok().and_then(|h| h.forward) {
         // `localhost` rather than 127.0.0.1: every address it resolves to is
@@ -1508,6 +1773,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         set_auto_continue(session_id: String, on: bool) => crate::auto_continue::set_auto_continue(session_id, on, sink).await;
         list_session_index_items(archived: bool) => store::list_session_index_items(archived).await;
         reachable_sessions() => ok(crate::machines::reachable_sessions().await);
+        share_machines() => ok(crate::machines::sharing().await);
+        set_share_machines(on: bool) => crate::machines::set_sharing(on).await;
         get_session_by_id(session_id: String, turns: Option<u32>) => store::get_session_by_id(&session_id, turns).await;
         get_session_page(session_id: String, before: u64, turns: u32) => store::get_session_page(&session_id, before, turns).await;
         get_session_since(session_id: String, after: Vec<String>) => store::get_session_since(&session_id, after).await;
@@ -1520,7 +1787,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         list_slash_commands(cwd: String, harness: Harness) => crate::list_slash_commands(&cwd, harness).await;
         agent_accounts(cwd: String) => ok(crate::accounts::agent_accounts(cwd).await);
         agent_auth_options(harness: Harness, provider: Option<String>) =>
-            ok(crate::accounts::agent_auth_options(harness, provider));
+            ok(crate::accounts::agent_auth_options(harness, provider).await);
         add_agent_account(harness: Harness, provider: Option<String>, auth: String, key: Option<String>) =>
             crate::accounts::add_agent_account(harness, provider, auth, key).await;
         sign_out_agent(harness: Harness, provider: Option<String>) =>
@@ -1586,6 +1853,11 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         update_bot(id: String, name: Option<String>, instructions: Option<String>, memory: Option<String>) =>
             crate::bots::update_bot(id, name, instructions, memory).await;
         delete_bot(id: String) => crate::bots::delete_bot(id).await;
+
+        // Assistants signed in to `/mcp`.
+        mcp_pair(read_only: bool, replaces: Option<String>) => crate::mcp::pair(sink, read_only, replaces).await;
+        mcp_assistants() => crate::mcp::assistants().await;
+        mcp_revoke(id: String) => crate::mcp::revoke(sink, id).await;
         read_doc(path: String) => crate::docs::read_doc(path).await;
         save_doc(path: String, text: String, expect: Option<String>) => crate::docs::save_doc(path, text, expect).await;
         watch_docs(scope: String, paths: Vec<String>) => {
@@ -1637,7 +1909,44 @@ mod tests {
         assert_eq!(byte_span(Some("bytes=0-"), 0), Unsatisfiable);
     }
 
+    #[test]
+    fn only_a_file_or_upload_naming_via_is_relayed() {
+        use super::relayed;
+        assert!(relayed("GET /file?path=%2Fa&via=69b4 HTTP/1.1"));
+        assert!(relayed("POST /upload?via=69b4&name=a.wav HTTP/1.1"));
+        assert!(!relayed("GET /file?path=%2Fvia%3Dx HTTP/1.1"), "a path holding via= is not a via");
+        assert!(!relayed("GET /file?path=%2Fa HTTP/1.1"));
+        assert!(!relayed("GET /?via=69b4 HTTP/1.1"), "the socket's upgrade carries via in its hello");
+    }
+
     use super::*;
+
+    /// Shapes measured off a real AppImage's environment: AppRun prepends its
+    /// mount and appends what was there, a hook replaces a value outright, and
+    /// a variable that was unset comes back as the mount alone.
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
+    #[test]
+    fn appimage_entries_are_taken_back_out() {
+        use std::ffi::OsString;
+        let m = "/tmp/.mount_Dray.Ab";
+        let vars = [
+            ("PATH", format!("{m}/usr/bin/:{m}/usr/sbin/:/usr/local/bin:/usr/bin")),
+            ("LD_LIBRARY_PATH", format!("{m}/usr/lib/:{m}/usr/lib/x86_64-linux-gnu/:")),
+            ("GTK_PATH", format!("{m}//usr/lib/gtk-3.0")),
+            ("APPIMAGE", "/home/me/Dray.AppImage".into()),
+            ("HOME", "/home/me".into()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)));
+        let undo = undo_mount_entries(vars, b"/tmp/.mount_");
+        let get = |k: &str| undo.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
+        assert_eq!(get("PATH"), Some(Some("/usr/local/bin:/usr/bin".into())));
+        assert_eq!(get("LD_LIBRARY_PATH"), Some(None));
+        assert_eq!(get("GTK_PATH"), Some(None));
+        // The server's own stamp reads it, and it names no mount.
+        assert_eq!(get("APPIMAGE"), None);
+        assert_eq!(get("HOME"), None);
+    }
 
     /// The local peer reads nothing and the socket takes nothing, so both
     /// directions sit in a write.

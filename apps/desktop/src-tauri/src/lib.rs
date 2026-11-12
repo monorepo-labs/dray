@@ -25,16 +25,18 @@ pub mod apps;
 pub mod attachments;
 pub mod auto_continue;
 pub mod binpath;
-#[cfg(all(feature = "cef", target_os = "macos"))]
+#[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
 #[path = "cef/cef.rs"]
 pub mod cef;
 // Compiled without the feature too: it needs nothing of CEF's, and that is
 // what keeps its types in `events.ts` and its tests in a bare `cargo test`.
-#[cfg(all(feature = "desktop", target_os = "macos"))]
+#[cfg(all(feature = "desktop", any(target_os = "macos", target_os = "linux")))]
 pub mod chromium;
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 mod trackpad;
-#[cfg(all(feature = "desktop", target_os = "macos"))]
+#[cfg(all(feature = "desktop", target_os = "linux"))]
+mod island;
+#[cfg(all(feature = "desktop", any(target_os = "macos", target_os = "linux")))]
 mod cli;
 // `dray browser` on a server: a headless Chromium under the same verbs the
 // Mac's CEF answers. In the desktop build too, since that binary is also the
@@ -55,6 +57,8 @@ pub mod git;
 pub mod github;
 #[path = "harness/harness.rs"]
 pub mod harness;
+#[cfg(target_os = "linux")]
+pub mod ibus;
 #[path = "issues/issues.rs"]
 pub mod issues;
 #[path = "models/models.rs"]
@@ -74,6 +78,9 @@ pub mod launchd;
 pub mod serve;
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod remote_access;
+#[cfg(any(feature = "serve", feature = "desktop"))]
+#[path = "mcp/mcp.rs"]
+pub mod mcp;
 // Every server reaches other machines on its own (#760).
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod machines;
@@ -785,18 +792,32 @@ pub fn run() {
             }
             // Chromium first: it patches NSApp and starts its pump, and every
             // window already exists here for it to parent a view into.
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::init(app.handle());
+            // Mac only: X11 reports a two-finger scroll with no phases, so a
+            // swipe's start and lift could only be guessed from timing, the
+            // route #445 took out.
             #[cfg(target_os = "macos")]
             trackpad::watch(app.handle());
-            #[cfg(target_os = "macos")]
+            // GTK draws the menu as a bar inside the window, over the app's own
+            // titlebar strip. The webview answers the edit chords without it.
+            // The window manager's bar sat above that strip too, so it goes and
+            // `WindowControls` draws its buttons. tauri.linux.conf.json already
+            // says so; this is for the window-state plugin, which restores a
+            // `decorated` flag saved by a build that still had the bar.
+            #[cfg(target_os = "linux")]
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.remove_menu();
+                let _ = window.set_decorations(false);
+            }
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             cli::install();
             // Dictations kept past a failure. Pruning on write alone left the
             // last one on disk forever, since nothing else sweeps them and a
             // reader who gives up after one failure writes no more.
             tauri::async_runtime::spawn(transcription::recordings::prune());
             transcription::serve_host(app.handle());
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             transcription::stop_on_sleep(app.handle());
 
             // Sessions live in the background server launchd runs from this
@@ -882,6 +903,8 @@ pub fn run() {
             servers::local_server,
             servers::add_server,
             servers::remove_server,
+            servers::save_server_cache,
+            servers::server_caches,
             servers::reconnect_servers,
             servers::server_invoke,
             servers::update_server,
@@ -908,37 +931,38 @@ pub fn run() {
             // Here and not on the server: a video plays through this
             // webview's asset protocol, which only this process can widen.
             files::read_file,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_open,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_tabs,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_history,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_activate,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_close,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_move,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_nav,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_layout,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_shutter_ready,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_devtools,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_pick,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_snapshot,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             chromium::chromium_status,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             chromium::chromium_download,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             chromium::chromium_remove,
             notifications::notify_session,
+            notifications::set_window_urgent,
             updater::check_update,
             updater::install_update,
             quit::confirm_quit,
@@ -979,7 +1003,7 @@ pub fn run() {
             // kill still gets past this — see `Known issues`.
             if matches!(event, tauri::RunEvent::Exit) {
                 transcription::audio::restore_other_audio();
-                #[cfg(all(feature = "cef", target_os = "macos"))]
+                #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
                 cef::save_now();
                 // Tao ends the process with `process::exit`, which runs the C
                 // atexit chain — and ggml-metal's global device registry frees

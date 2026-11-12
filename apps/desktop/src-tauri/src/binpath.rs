@@ -543,7 +543,17 @@ static LOGIN_PATH_STALE: AtomicBool = AtomicBool::new(false);
 async fn login_shell_path() -> Option<OsString> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
 
-    let output = Command::new(shell)
+    let mut cmd = Command::new(shell);
+    // AppRun puts the AppImage's own usr/bin first on `PATH`, and the shell
+    // keeps it, so `dray` could resolve to the app's own binary.
+    #[cfg(all(target_os = "linux", feature = "desktop"))]
+    for (key, value) in crate::serve::appimage_env_undo() {
+        match value {
+            Some(value) => cmd.env(key, value),
+            None => cmd.env_remove(key),
+        };
+    }
+    let output = cmd
         // Behind a marker, since an rc file is free to print on its own.
         // `printenv` rather than `$PATH`, which fish expands as a list, and by
         // absolute path, since the `PATH` being read need not hold it.
