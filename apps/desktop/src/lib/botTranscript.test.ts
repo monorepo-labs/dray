@@ -165,6 +165,34 @@ describe("botItems", () => {
     expect(items[1]).toMatchObject({ botId: bot });
   });
 
+  it("reads no send out of a new task's brief that names one", () => {
+    const sent = "01a1d052-e620-74d4-8ef2-aa9965929e13";
+    const started = "01a1d06c-7868-719b-b026-8ad0a260666b";
+    const cmd = `D=/private/tmp/images; dray session send ${sent} "User feedback on the sidebar bot rows, screenshot at $D/8.png: make bot rows line up."
+dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot prompt: relay feedback without adding steps" "Edit the Dray bot system prompt. Problem: when a bot passes the user's feedback to one of its tasks with 'dray session send', it adds instructions the user never gave, like 'push to the PR'."`;
+    const items = botItems([
+      call("c", cmd),
+      result("c", `Delivered.\n${started}\nStarted "Bot prompt: relay feedback without adding steps" in worktree gentle-ochre-meadow`),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["task", "sent"]);
+    expect(items[0]).toMatchObject({ sessionId: started });
+    expect(items[1]).toMatchObject({ target: sent, text: expect.stringContaining("$D/8.png") });
+  });
+
+  it("skips a send whose target the shell fills in", () => {
+    expect(sentMessages(`for id in aaa bbb; do dray session send "$id" "hello"; done`)).toEqual([]);
+    expect(sentMessages(`dray session send $ID hi && dray session send abc12345 'yo'`)).toEqual([
+      { target: "abc12345", text: "yo" },
+    ]);
+  });
+
+  it("reads past a heredoc that spells a send", () => {
+    expect(sentMessages(`dray session send aaa "$(cat <<'EOF'\nthen run dray session send bbb "x"\nEOF\n)" && dray session send ccc ok`)).toEqual([
+      { target: "aaa", text: `then run dray session send bbb "x"` },
+      { target: "ccc", text: "ok" },
+    ]);
+  });
+
   it("draws no task for a create that failed", () => {
     const items = botItems([call("c", "dray session new x"), result("c", `no project ${ID}`, true)]);
     expect(items).toEqual([]);

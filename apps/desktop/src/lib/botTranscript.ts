@@ -136,27 +136,38 @@ function shellWord(text: string): { value: string; length: number } {
   return { value: bare, length: bare.length };
 }
 
+/// `cmd` with every quoted string, escape and heredoc body blanked to spaces,
+/// so a `dray … send` spelled inside a message is never read as a command —
+/// a brief that names `dray session send` drew a send to nobody. Same length,
+/// so an index into it is an index into `cmd`.
+function unquoted(cmd: string): string {
+  const blank = (s: string) => s.replace(/[^\n]/g, " ");
+  return cmd
+    .replace(
+      /(<<-?\s*(['"]?)(\w+)\2[^\n]*\n)([\s\S]*?)(?=\n[ \t]*\3[ \t]*(?:\n|\)|$))/g,
+      (_, open: string, _q, _w, body: string) => open + blank(body),
+    )
+    .replace(/\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"/g, blank);
+}
+
 /// Every `dray session send` and `dray bot send` in one command the bot ran —
 /// one command often carries several, joined by `&&` — each with who to, what
-/// it said, and whether it went to a bot. A send spelled out inside another's
-/// message is that message's text, so the search resumes after each message.
+/// it said, and whether it went to a bot. A target the shell fills in, as a
+/// loop's `"$id"`, is skipped: nothing here can say which task it named.
 export function sentMessages(cmd: string): { target: string; text: string; bot?: true }[] {
   const out: { target: string; text: string; bot?: true }[] = [];
-  let cursor = 0;
-  for (const m of cmd.matchAll(SENDS)) {
-    if (m.index < cursor) continue;
+  for (const m of unquoted(cmd).matchAll(SENDS)) {
     let at = m.index + m[0].length;
     const skipSpace = () => {
       while (at < cmd.length && /\s/.test(cmd[at])) at++;
     };
     skipSpace();
     const target = firstWord(cmd.slice(at));
-    if (!target) continue;
+    if (!target || /[$`]/.test(target.word)) continue;
     at += target.length;
     skipSpace();
     const message = shellWord(cmd.slice(at));
     if (message.length === 0) continue;
-    cursor = at + message.length;
     const sent = { target: target.word, text: message.value };
     out.push(m[1] === "bot" ? { ...sent, bot: true as const } : sent);
   }
@@ -247,7 +258,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       items.push({ kind: "notice", event });
     } else if (p.type === "tool_call_started") {
       const cmd = command(p.input);
-      if (cmd && STARTS_SESSION.test(cmd)) starts.add(p.callId);
+      if (cmd && STARTS_SESSION.test(unquoted(cmd))) starts.add(p.callId);
       const sent = cmd ? sentMessages(cmd) : [];
       if (sent.length > 0) sends.set(p.callId, sent);
     } else if (p.type === "tool_call_completed" && !p.result.isError) {
