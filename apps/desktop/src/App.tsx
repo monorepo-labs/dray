@@ -115,7 +115,7 @@ import WindowControls from "@/components/layout/WindowControls";
 import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { nextEffort } from "@/components/composer/ModelSelector";
-import { HARNESS_ORDER, nextHarness } from "@/lib/model";
+import { AGENT_LABELS, HARNESS_ORDER, nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { closeActiveTab, ItemTab, type ViewTab } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
@@ -181,10 +181,12 @@ import { changeRange, lastToolResult } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { botAt, botChatOf, botEntries, inBotTree, refreshBots, useBots } from "@/lib/bots";
+import { botAt, botBrowser, botChat, botEntries, botSession, inBotTree, refreshBots, useBots } from "@/lib/bots";
+import { loadOlder } from "@/lib/olderPages";
 import NewBotDialog from "@/components/NewBotDialog";
+import AgentIcon from "@/components/AgentIcon";
 import ModelSelector from "@/components/composer/ModelSelector";
-import { stanceFor } from "@/lib/permission";
+import { botStance } from "@/lib/permission";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -196,7 +198,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { crewRows, crewSeen, inSidebar, withHiddenAsks } from "@/lib/crew";
-import { closeTaskTab, openTaskTab, stripOf, type TaskTabs } from "@/lib/taskTabs";
+import { closeTaskTab, openTaskTab, rowBotOf, stripOf, type TaskTabs } from "@/lib/taskTabs";
 import { panelMove } from "@/lib/sidebarAuto";
 import { playCelebration, playNotification } from "@/lib/sound";
 import {
@@ -603,10 +605,19 @@ function App() {
   // the app onto a repo view for every session would be wrong more often than
   // right.
   const [viewTabs, setViewTabs] = useState<Record<string, ViewTab>>({});
-  // A bot chat's tasks open as tabs in its row, and the chat a task tab was
-  // last picked from — see `stripOf`. In memory, like `viewTabs`.
+  // A bot's tasks open as tabs in its row, and the bot a task tab was last
+  // picked from — see `stripOf`. Both by bot id. In memory, like `viewTabs`.
   const [taskTabs, setTaskTabs] = useState<TaskTabs>({});
   const [taskTabVia, setTaskTabVia] = useState<string | null>(null);
+  const bots = useBots();
+  /// A bot's current chat session: its newest, since an agent switch starts one.
+  const chatOfBot = useCallback(
+    (id: string) => {
+      const bot = bots.find((b) => b.id === id);
+      return bot && botSession(sessionIndexItems, bot)?.sessionId;
+    },
+    [bots, sessionIndexItems],
+  );
   // Whether the issues page is what the main column is showing. Not a session
   // and not a per-session tab, so it is neither in `viewTabs` nor in the
   // selection: it is a place the reader goes and comes back from, and the
@@ -919,9 +930,11 @@ function App() {
   // across the row and shows whatever tab is lit. A pick the lit session does
   // not draw falls back to its default, as anywhere — see `activeTab`.
   const rowOf = useCallback(
-    (id: string) =>
-      taskTabVia && taskTabs[taskTabVia]?.some((t) => t.sessionId === id) ? taskTabVia : id,
-    [taskTabs, taskTabVia],
+    (id: string) => {
+      const bot = rowBotOf(taskTabs, id, taskTabVia);
+      return (bot && chatOfBot(bot)) || id;
+    },
+    [taskTabs, taskTabVia, chatOfBot],
   );
   const openKey = useCallback(
     (id: string) => {
@@ -1017,13 +1030,33 @@ function App() {
   /// preference is kept, so coming back restores the pane exactly as it was;
   /// everything that draws or reads reads this instead.
   const panelShown = panelOpen && !issuesOpen;
+
+  const selectedBot = useMemo(() => {
+    // The held transcript answers too: a session an agent switch just started
+    // reaches the index only once the send returns, and the chat must stay a
+    // bot's chat for that while.
+    const cwd = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.cwd ?? selectedSession?.cwd;
+    return cwd ? botAt(bots, cwd) : undefined;
+  }, [bots, sessionIndexItems, selectedSessionId, selectedSession?.cwd]);
+
+  // A bot chat's sessions from before the selected one: each agent switch
+  // started a new one, and the chat draws them all as one conversation. A
+  // selected session not on the index yet is the newest, just started.
+  const earlierIds = useMemo(() => {
+    if (!selectedBot) return [];
+    const chat = botChat(sessionIndexItems, selectedBot).map((i) => i.sessionId);
+    const at = chat.indexOf(selectedSessionId ?? "");
+    return at >= 0 ? chat.slice(0, at) : chat;
+  }, [selectedBot, sessionIndexItems, selectedSessionId]);
+
   // Every session the selected one started, at any depth. The crew column
   // draws only the ones holding a card, and only while one is; a bot's Tasks
-  // tab lists them all. Off every held session, not the space's: a bot hands
-  // work to whichever project it likes, in any space.
+  // tab lists them all, its earlier sessions' tasks included. Off every held
+  // session, not the space's: a bot hands work to whichever project it likes,
+  // in any space.
   const crew = useMemo(
-    () => crewRows(sessionIndexItems, selectedSessionId, { statusBySession, askingSessions }),
-    [sessionIndexItems, selectedSessionId, statusBySession, askingSessions],
+    () => crewRows(sessionIndexItems, selectedSessionId, { statusBySession, askingSessions }, earlierIds),
+    [sessionIndexItems, selectedSessionId, statusBySession, askingSessions, earlierIds],
   );
   const crewAsks = useMemo(() => crew.filter((r) => r.asking), [crew]);
   // A split has no crew column: it is already several conversations side by
@@ -1066,7 +1099,8 @@ function App() {
   // as on screen. One effect for the grid and the crew together, since
   // `setOnScreen` takes the whole set rather than adding to it — two callers
   // would each wipe the other's.
-  const onScreenKey = [mainGroup ? memberKey : "", crewShown].filter(Boolean).join("\n");
+  // A bot chat's earlier sessions are drawn with it, so they are on screen too.
+  const onScreenKey = [mainGroup ? memberKey : earlierIds.join("\n"), crewShown].filter(Boolean).join("\n");
   useEffect(() => {
     const ids = [...new Set(onScreenKey.split("\n").filter(Boolean))];
     setOnScreen(ids);
@@ -1133,7 +1167,6 @@ function App() {
   // the sidebar, since ⌘F has to open it from a collapsed one, which is not
   // mounted at all.
   const [searchOpen, setSearchOpen] = useState(false);
-  const bots = useBots();
   useEffect(() => void refreshBots(), []);
   const searchedSessions = useMemo(
     () => filterSessions(inSidebar(visibleSessions, bots), search),
@@ -1385,7 +1418,7 @@ function App() {
   // Whose browser the selection shows: a bot and its tasks share the bot
   // chat's, as the server routes their agents' `dray browser` steps (#881).
   const browserSession = selectedSessionId
-    ? (botChatOf(bots, sessionIndexItems, rowOf(selectedSessionId)) ?? rowOf(selectedSessionId))
+    ? (botBrowser(bots, sessionIndexItems, rowOf(selectedSessionId)) ?? rowOf(selectedSessionId))
     : null;
   const browserTabs = useBrowserTabs(browserSession);
   const blankTabs = useBlankTabs(browserSession ?? "");
@@ -1463,13 +1496,24 @@ function App() {
     [crew, sessionIndexItems],
   );
 
-  const selectedBot = useMemo(() => {
-    const cwd = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.cwd;
-    return cwd ? botAt(bots, cwd) : undefined;
-  }, [bots, sessionIndexItems, selectedSessionId]);
+  const earlierLoaded = sessions.filter((s) => earlierIds.includes(s.sessionId));
+  const earlierKey = earlierLoaded.map((s) => `${s.sessionId}:${s.olderBefore}:${s.events.length}`).join();
+  // Loaded and held as on screen (`onScreenKey`); here read whole, page by
+  // page, as the chat's own log is.
+  useEffect(() => {
+    for (const held of earlierLoaded) {
+      if (held.olderBefore != null) loadOlder(held.sessionId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [earlierKey]);
+  const earlier = useMemo(
+    () => earlierIds.flatMap((id) => earlierLoaded.find((s) => s.sessionId === id) ?? []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [earlierIds.join(), earlierKey],
+  );
 
   // The bot chat whose row the titlebar draws, and the task lit in it.
-  const strip = stripOf(taskTabs, selectedSessionId, !!selectedBot, taskTabVia);
+  const strip = stripOf(taskTabs, selectedSessionId, selectedBot?.id ?? null, taskTabVia, chatOfBot);
   const stripOwner = strip && strip.owner !== selectedSessionId
     ? sessionIndexItems.find((i) => i.sessionId === strip.owner)
     : undefined;
@@ -2775,8 +2819,8 @@ function App() {
   // What every transcript on screen reports back through: the main column, a
   // split pane and a crew card alike.
   /// Steps into a task tab: its chat on screen, the bot's row kept above it.
-  const pickTaskTab = (owner: string, id: string) => {
-    setTaskTabVia(owner);
+  const pickTaskTab = (bot: string, id: string) => {
+    setTaskTabVia(bot);
     setViewTabs((prev) => ({ ...prev, [id]: "chat" }));
     void handleSelectSessionIndexItem(id);
   };
@@ -2785,32 +2829,34 @@ function App() {
   /// bot's row (#881). ⌘-click, or a session that is no task of this bot,
   /// switches to it alone, the way it always did.
   const openTask = async (id: string, alone = false) => {
-    const owner = selectedBot ? selectedSessionId : null;
+    const bot = selectedBot;
     // A settled task is in no crew, so it is asked for and its parents walked
-    // up to the bot: its chat still names it, and settling is not what closes
-    // a tab. Bounded like `inBotTree`.
+    // up to the bot's folder — any of its chat's sessions, since a task
+    // started before an agent switch names the old one. Its chat still names
+    // it, and settling is not what closes a tab. Bounded like `inBotTree`.
     const indexItem = (sid: string) =>
       sessionIndexItems.find((i) => i.sessionId === sid) ??
       invoke<SessionIndexItem | null>("session_index_item", { sessionId: sid }).catch(() => null);
     let task = crew.find((r) => r.item.sessionId === id)?.item;
-    if (!task && owner && !alone) {
+    if (!task && bot && !alone) {
       const found = await indexItem(id);
       let at = found;
-      for (let hops = 0; at && at.parentSessionId && hops < 8; hops++) {
-        if (at.parentSessionId === owner) {
+      for (let hops = 0; at?.parentSessionId && hops < 8; hops++) {
+        const parent = await indexItem(at.parentSessionId);
+        if (parent && botAt(bots, parent.cwd)?.id === bot.id) {
           task = found ?? undefined;
           break;
         }
-        at = await indexItem(at.parentSessionId);
+        at = parent;
       }
     }
-    if (alone || !owner || !task) {
+    if (alone || !bot || !task) {
       setTaskTabVia(null);
       void handleSelectSessionIndexItem(id);
       return;
     }
-    setTaskTabs((prev) => openTaskTab(prev, owner, { sessionId: id, title: task.title }));
-    pickTaskTab(owner, id);
+    setTaskTabs((prev) => openTaskTab(prev, bot.id, { sessionId: id, title: task.title }));
+    pickTaskTab(bot.id, id);
   };
 
   const deleteTask = async (id: string) => {
@@ -3055,17 +3101,17 @@ function App() {
               tasks={
                 strip
                   ? {
-                      items: (taskTabs[strip.owner] ?? []).map((t) => ({
+                      items: (taskTabs[strip.bot] ?? []).map((t) => ({
                         sessionId: t.sessionId,
                         title: sessionIndexItems.find((i) => i.sessionId === t.sessionId)?.title ?? t.title,
                         working: statusBySession[t.sessionId] === "in_progress",
                       })),
                       lit: strip.lit,
-                      onPick: (id) => pickTaskTab(strip.owner, id),
+                      onPick: (id) => pickTaskTab(strip.bot, id),
                       onClose: (id) => setTaskTabs((prev) => closeTaskTab(prev, id)),
                       onReopen: (id) =>
                         setTaskTabs((prev) =>
-                          openTaskTab(prev, strip.owner, {
+                          openTaskTab(prev, strip.bot, {
                             sessionId: id,
                             title: sessionIndexItems.find((i) => i.sessionId === id)?.title ?? "Task",
                           }),
@@ -3394,6 +3440,15 @@ function App() {
           pending={
             sleepingBoat ? (
               <BoatNotice server={sleepingBoat} />
+            ) : selectedBot && selectedSession && harness !== selectedSession.harness ? (
+              // A bot chat picked onto another agent: the send moves it there.
+              <div className="mb-2 flex min-h-7 items-center gap-2 px-1">
+                <AgentIcon harness={harness} brand className="size-3.5 shrink-0" />
+                <p className="min-w-0 flex-1 truncate text-ui text-foreground">
+                  Moving to {AGENT_LABELS[harness]}
+                  <span className="text-muted-foreground"> · Your next message goes to it, with this conversation.</span>
+                </p>
+              </div>
             ) : selectedItem?.continueAt && (
               <AutoContinueNotice
                 at={selectedItem.continueAt}
@@ -3459,6 +3514,7 @@ function App() {
               onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
               contextUsage={contextUsage}
               isNewSession={!selectedSessionId}
+              agentSwitch={!!selectedBot}
               bot={newBot}
               busy={busy}
             />
@@ -3522,6 +3578,7 @@ function App() {
             {...paneState(selectedSessionId ?? "")}
             {...paneChat}
             bot={!!selectedBot}
+            earlier={earlier}
             taskOf={taskOf}
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
             crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
@@ -3693,7 +3750,7 @@ function App() {
         harness,
         model: modelId,
         effort,
-        permissionMode: stanceFor(harness, permissionMode),
+        permissionMode: botStance(harness, permissionMode),
         fast,
       }}
       onStarted={(chat) => goToSession(() => void handleSelectSessionIndexItem(chat.sessionId))}
