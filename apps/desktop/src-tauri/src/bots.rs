@@ -467,7 +467,19 @@ pub async fn rename_bot(key: &str, name: &str, sink: &Sink) -> Result<Bot> {
 }
 
 /// Held by `dray bot send` from finding a bot has no chat until it has one.
-pub static FIRST_CHAT: Mutex<()> = Mutex::const_new(());
+/// One per bot, so an agent slow to start delays no other bot's messages.
+pub fn first_chat_lock(bot_id: &str) -> std::sync::Arc<Mutex<()>> {
+    static LOCKS: std::sync::Mutex<Vec<(String, std::sync::Arc<Mutex<()>>)>> = std::sync::Mutex::new(Vec::new());
+    let mut locks = LOCKS.lock().unwrap();
+    match locks.iter().find(|(id, _)| id == bot_id) {
+        Some((_, lock)) => lock.clone(),
+        None => {
+            let lock = std::sync::Arc::new(Mutex::const_new(()));
+            locks.push((bot_id.to_string(), lock.clone()));
+            lock
+        }
+    }
+}
 
 /// The session a message to `bot` lands in: its chat's newest.
 pub async fn chat_of(bot: &Bot) -> Option<SessionIndexItem> {

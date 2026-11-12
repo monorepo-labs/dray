@@ -1806,7 +1806,8 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
     }
     // Held from the lookup until a new chat is on the index, or two first
     // messages would each start an agent in the one folder.
-    let first = bots::FIRST_CHAT.lock().await;
+    let lock = bots::first_chat_lock(&bot.id);
+    let first = lock.lock().await;
     if let Some(chat) = bots::chat_of(&bot).await {
         drop(first);
         let send = SendMessage { session_id: chat.session_id, prompt: send.prompt, from_session_id: send.from_session_id };
