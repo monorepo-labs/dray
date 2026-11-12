@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDown } from "lucide-react";
 
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import BotTranscript, { type BotTask } from "@/components/chat/BotTranscript";
 import BackgroundTasksIndicator from "@/components/chat/BackgroundTasksIndicator";
 import CheckpointRail, { type Checkpoint } from "@/components/chat/CheckpointRail";
+import { MergeCardChatContext } from "@/components/chat/MergeCard";
 import ApiRetryIndicator from "@/components/chat/ApiRetryIndicator";
 import PermissionRequest from "@/components/chat/PermissionRequest";
 import QueuedMessages from "@/components/chat/QueuedMessages";
@@ -28,17 +29,19 @@ import { RANK_OWN } from "@/lib/cardKeys";
 import { planAsked, setPlan } from "@/lib/plan";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
+import { readerMessagesAfter } from "@/lib/mergeCard";
 import { loadOlder } from "@/lib/olderPages";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
-import type { SessionSnapshot } from "@/types/events";
+import type { Bot, SessionSnapshot } from "@/types/events";
 
 type ChatProps = {
   session: SessionSnapshot | null;
   onOpenSubagent: (id: string) => void;
   /// Opens the session that relayed a prompt into this one, for the avatar a
   /// `dray send` message draws. Selecting the session is all it does — the same
-  /// thing clicking its sidebar row does.
-  onOpenSession: (sessionId: string) => void;
+  /// thing clicking its sidebar row does. `alone` is a bot chat's ⌘-click on a
+  /// task, which opens it in place of the chat rather than as a tab beside it.
+  onOpenSession: (sessionId: string, alone?: boolean) => void;
   /// Opens the subagent panel on no particular run — what the background-task
   /// notice needs, since it stands for the whole set rather than for one of them.
   onOpenSubagentPanel: () => void;
@@ -98,8 +101,14 @@ type ChatProps = {
   earlier?: SessionSnapshot[];
   /// Names a task the bot started, for its card.
   taskOf?: (sessionId: string) => BotTask | undefined;
+  /// Opens another bot's chat, from a message between it and this one.
+  onOpenBot?: (bot: Bot) => void;
   /// The session had unread replies, for a bot chat's NEW divider.
   unread?: boolean;
+  /// Drawn under a bot chat's conversation: its stalled tasks.
+  botFooter?: ReactNode;
+  /// A task picked from that card, scrolled to. See [BotTranscript]'s `focus`.
+  botFocus?: { sessionId: string; at: number } | null;
 };
 
 const NO_EARLIER: SessionSnapshot[] = [];
@@ -205,7 +214,10 @@ export default function Chat({
   bot = false,
   earlier = NO_EARLIER,
   taskOf,
+  onOpenBot,
   unread = false,
+  botFooter,
+  botFocus,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -556,6 +568,22 @@ export default function Chat({
     scroller.scrollTo({ top: Math.max(top, 0), behavior: "smooth" });
   };
 
+  // A task picked from the bot's "Waiting on you" card: the bot's reply about
+  // it, at the top of the pane, once the lit block is laid out. The pin drops
+  // as a jump to a turn's does.
+  useEffect(() => {
+    if (!botFocus) return;
+    const frame = requestAnimationFrame(() => {
+      const scroller = scrollRef.current;
+      const node = contentRef.current?.querySelector<HTMLElement>("[data-bot-focus]");
+      if (!scroller || !node) return;
+      const top = node.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      followRef.current = false;
+      scroller.scrollTo({ top: Math.max(top - JUMP_PAD_PX, 0), behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [botFocus]);
+
   useEffect(() => () => cancelAnimationFrame(spyFrame.current), []);
 
   // The rail overlays the scroller as a sibling rather than sitting inside it,
@@ -604,8 +632,19 @@ export default function Chat({
   // scrolls land at the bottom and pinning writes land at the bottom, so
   // position alone re-confirms the pin — but a wheel-up during streaming must
   // win instantly, before the next delta's pin can yank the view back down.
+  //
+  // Only a wheel that will move *this* scroller, though: React bubbles wheels
+  // from portals (the image viewer, menus) and from nested scrollers, none of
+  // which move the chat, and with no scroll event after them nothing re-armed
+  // the pin — the chat sat at the bottom unpinned, and whatever landed next,
+  // seen or behind another tab, was left below the view.
   const onWheel = (e: React.WheelEvent) => {
-    if (e.deltaY < 0) followRef.current = false;
+    const el = scrollRef.current;
+    if (!el || e.deltaY >= 0 || el.scrollTop <= 0) return;
+    for (let n = e.target as Element | null; n !== el; n = n.parentElement) {
+      if (!n || n.scrollTop > 0) return;
+    }
+    followRef.current = false;
   };
 
   const onScroll = () => {
@@ -678,7 +717,10 @@ export default function Chat({
   const callbacks = useRef({ onOpenSubagent, onOpenSession });
   callbacks.current = { onOpenSubagent, onOpenSession };
   const openSubagent = useCallback((id: string) => callbacks.current.onOpenSubagent(id), []);
-  const openSession = useCallback((id: string) => callbacks.current.onOpenSession(id), []);
+  const openSession = useCallback(
+    (id: string, alone?: boolean) => callbacks.current.onOpenSession(id, alone),
+    [],
+  );
 
   // With no session there is no transcript to draw; AppShell centers the
   // composer and skips this pane entirely. A session still being read draws the
@@ -687,6 +729,10 @@ export default function Chat({
   // Held across renders: a fresh array would rebuild the bot chat's rows on
   // every event.
   const segments = useMemo(() => (session ? [...earlier, session] : earlier), [earlier, session]);
+  const cardChat = useMemo(
+    () => ({ after: readerMessagesAfter(segments.flatMap((s) => s.events)), bot: !!bot }),
+    [segments, bot],
+  );
 
   if (!session) return null;
 
@@ -699,6 +745,7 @@ export default function Chat({
     // The session rides a context because the things that read it are leaves — a
     // `@mention` and a file link, several components down. See `useChatSession`.
     <ChatSessionContext value={chatSession}>
+      <MergeCardChatContext value={cardChat}>
       <div className="relative h-full">
         <div
           ref={scrollRef}
@@ -715,16 +762,21 @@ export default function Chat({
             data-bot-chat={bot || undefined}
           >
             {bot ? (
-              <BotTranscript
-                key={session.sessionId}
-                unread={unread}
-                segments={segments}
-                busy={busy}
-                preview={previewShown ? <StreamingPreview sessionId={session.sessionId} /> : undefined}
-                taskOf={taskOf}
-                onOpenSession={openSession}
-              />
-            ) : shownTurns.map((turn, i) => (
+              <>
+                <BotTranscript
+                  key={session.sessionId}
+                  unread={unread}
+                  segments={segments}
+                  busy={busy}
+                  preview={previewShown ? <StreamingPreview sessionId={session.sessionId} /> : undefined}
+                  taskOf={taskOf}
+                  onOpenSession={openSession}
+                  onOpenBot={onOpenBot}
+                  focus={botFocus}
+                />
+                {botFooter}
+              </>
+            ) :shownTurns.map((turn, i) => (
               // The wrapper is what the rail measures and scrolls to. It carries
               // no styles of its own — it stands in for the block as the flex item.
               <div
@@ -872,6 +924,7 @@ export default function Chat({
           />
         )}
       </div>
+      </MergeCardChatContext>
     </ChatSessionContext>
   );
 }
@@ -881,7 +934,7 @@ export default function Chat({
 ///
 /// Told apart by the type `block_start` declared, not by content — thinking
 /// deltas are plain text on the wire. Only one block streams at a time.
-function StreamingPreview({ sessionId }: { sessionId: string }) {
+export function StreamingPreview({ sessionId }: { sessionId: string }) {
   const block = useStreamingBlock(sessionId);
   if (!block) return null;
 

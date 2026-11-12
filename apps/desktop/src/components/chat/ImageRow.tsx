@@ -107,7 +107,7 @@ export default function ImageRow({
                   // Square, so a row of mixed aspect ratios is a grid rather
                   // than a ragged strip. `object-cover` crops to hold that; the
                   // whole picture is one click away and that view contains it.
-                  ? "size-20 object-cover"
+                  ? "sent-image size-20 object-cover"
                   // Capped on both axes and cropped on neither: with both
                   // dimensions left `auto`, the caps scale the picture rather
                   // than trim it, so a wide screenshot and a tall one each land

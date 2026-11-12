@@ -12,7 +12,7 @@ import {
   useBreakDue,
   useBreakSettings,
 } from "@/lib/breaks";
-import { BREAK_LINES } from "@/components/breakScenes";
+import { BREAK_CARDS, StillScenes } from "@/components/breakScenes";
 import { isWindowFocused } from "@/lib/focus";
 import { invoke } from "@/lib/transport";
 
@@ -79,6 +79,11 @@ async function raiseWindow() {
 export default function BreakOverlay() {
   useBreakClock();
   const due = useBreakDue();
+  const content = useRef<HTMLDivElement>(null);
+  const openedAt = useRef(0);
+  useEffect(() => {
+    if (due) openedAt.current = Date.now();
+  }, [due]);
 
   const done = () => {
     clock = { used: 0, away: 0 };
@@ -96,18 +101,20 @@ export default function BreakOverlay() {
           data-slot="dialog-content"
           aria-describedby={undefined}
           onInteractOutside={(e) => e.preventDefault()}
+          // Escape is the same way out as the button, so it waits out the same lock.
+          onEscapeKeyDown={(e) => Date.now() - openedAt.current < LOCK_MS && e.preventDefault()}
+          // Focus the dialog itself, not "I'm back": a key pressed mid-thought
+          // as the overlay landed would otherwise end the break unseen.
+          ref={content}
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            content.current?.focus();
+          }}
           className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-10 p-8 text-center outline-none data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
         >
           <PickedCard />
           <Countdown />
-          <button
-            type="button"
-            onClick={done}
-            autoFocus
-            className="rounded-sm text-sm text-muted-foreground underline underline-offset-4 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            I'm back
-          </button>
+          <BackButton onClick={done} />
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
@@ -116,13 +123,58 @@ export default function BreakOverlay() {
 
 const any = <T,>(list: T[]) => list[Math.floor(Math.random() * list.length)];
 
-/// Opens on a line picked at random, with one of the drawings made for it.
+/// Opens on a card picked at random from those left on in Settings, or from
+/// all of them if a stale setting leaves none.
 function PickedCard() {
+  const { off } = useBreakSettings();
   const [pick] = useState(() => {
-    const line = any(BREAK_LINES);
-    return { text: line.text, Scene: any(line.scenes).Scene };
+    const on = BREAK_CARDS.filter((c) => !off.includes(c.name));
+    return any(on.length ? on : BREAK_CARDS);
   });
   return <BreakCard text={pick.text} Scene={pick.Scene} Title={DialogPrimitive.Title} />;
+}
+
+const LOCK_MS = 30_000;
+
+/// The way out, held shut for the break's first 30 seconds, so the break is at
+/// least half taken before it can be skipped. The minute's own countdown above
+/// says time is running; a second number here read as a timer to wait out.
+function BackButton({ onClick }: { onClick: () => void }) {
+  const left = useSecondsLeft(LOCK_MS);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={left > 0}
+      className="rounded-sm text-sm text-muted-foreground underline underline-offset-4 outline-none enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      I'm back
+    </button>
+  );
+}
+
+// 2px stripes every 6px, the site's own pitch.
+const FACE =
+  "overflow-hidden bg-(--break-card,var(--surface-card)) bg-[repeating-linear-gradient(90deg,var(--break-stripe,#00000012)_0_2px,transparent_2px_6px)] text-left text-(--break-ink,var(--foreground))";
+
+/// A card shrunk for Settings' picker: flat, its drawing held still until the
+/// pointer is over it.
+export function BreakTile({ text, Scene }: { text: string; Scene: () => ReactNode }) {
+  const [playing, setPlaying] = useState(false);
+  return (
+    <div
+      className={`${FACE} h-full rounded-lg shadow-[0_0_0_1px_#0000000F]`}
+      onPointerEnter={() => setPlaying(true)}
+      onPointerLeave={() => setPlaying(false)}
+    >
+      <div className="flex h-20 items-end justify-center pt-2 [&_svg]:h-18">
+        <StillScenes.Provider value={!playing}>
+          <Scene />
+        </StillScenes.Provider>
+      </div>
+      <p className="px-3 pt-2 pb-3 text-[13px] leading-[1.2] tracking-[-0.02em] text-balance">{text}</p>
+    </div>
+  );
 }
 
 /// The reminder as a card in the site's language: striped, a drawing on top
@@ -159,10 +211,9 @@ export function BreakCard({
 
   return (
     <div className="shrink-0 [perspective:900px]" onPointerMove={tilt} onPointerLeave={rest}>
-      {/* 2px stripes every 6px, the site's own pitch. */}
       <div
         ref={card}
-        className="w-72 overflow-hidden rounded-xl bg-(--break-card,var(--surface-card)) bg-[repeating-linear-gradient(90deg,var(--break-stripe,#00000012)_0_2px,transparent_2px_6px)] text-left text-(--break-ink,var(--foreground)) shadow-[0_0_0_1px_#0000000F,0_10px_24px_-12px_#00000040] [transform:rotateX(6deg)_rotateY(-8deg)_rotateZ(1deg)]"
+        className={`${FACE} w-72 rounded-xl shadow-[0_0_0_1px_#0000000F,0_10px_24px_-12px_#00000040] [transform:rotateX(6deg)_rotateY(-8deg)_rotateZ(1deg)]`}
       >
         <div className="flex h-36 items-end justify-center pt-4">
           <Scene />
@@ -175,16 +226,21 @@ export function BreakCard({
 
 const BREAK_MS = 60_000;
 
-/// A suggested minute, one tick a second, counted from when the overlay opened. It asks for
-/// nothing at zero: "I'm back" is still the only way out.
-export function Countdown() {
+/// Whole seconds left of `ms`, counted from mount and ticking once a second.
+function useSecondsLeft(ms: number) {
   const [start] = useState(Date.now);
   const [now, setNow] = useState(start);
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
-  const left = Math.max(0, Math.ceil((BREAK_MS - (now - start)) / 1000));
+  return Math.max(0, Math.ceil((ms - (now - start)) / 1000));
+}
+
+/// A suggested minute, one tick a second, counted from when the overlay opened. It asks for
+/// nothing at zero: "I'm back" is still the only way out.
+export function Countdown() {
+  const left = useSecondsLeft(BREAK_MS);
   return (
     <div aria-hidden className="flex flex-col items-center gap-3">
       <div className="flex h-12 gap-1">

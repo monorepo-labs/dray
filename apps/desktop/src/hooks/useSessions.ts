@@ -21,7 +21,7 @@ import {
   pushNotice,
   type NoticeKind,
 } from "@/hooks/useNotices";
-import { hiddenChildren } from "@/lib/crew";
+import { hiddenChildren, leftToParent } from "@/lib/crew";
 import { repoChanged } from "@/lib/prSync";
 import { dropHeld, dropHeldAsks, heldFor, holdEarlyEvent, isAsk } from "@/lib/earlyEvents";
 import { fastFor, fastNotice } from "@/lib/fastMode";
@@ -360,6 +360,11 @@ export function useSessions() {
     // snapshot pushed a moment later carries the `idle` it was indexed with. The
     // sidebar's dot never appeared for the session that most needed it.
     const [statusBySession, setStatusBySession] = useState<Record<string, SessionStatus>>({});
+    // Sessions whose replies were unread when a turn of their own began.
+    // `completed` is the unread mark and the new turn overwrites it, so the
+    // mark is held here until the session is read — a bot row keeps its count
+    // beside the typing dots.
+    const [unreadWorking, setUnreadWorking] = useState<ReadonlySet<string>>(() => new Set());
     // sessionId → the current blank-screen wait, or absent when something is
     // actually rendering. Not derived from the event list: `model_request_started`
     // and the thinking deltas that drive it are transient and unpersisted, so
@@ -872,7 +877,7 @@ const handleSendMsg = async (
     setError("Attach a project first.");
     return false;
   }
-  // A bot's folder is no repository, and its chat runs in the folder itself.
+  // A bot's folder is no project, and its chat runs in the folder itself.
   const worktree = useWorktree && !isBotPath(cwd);
   const stance = isBotPath(cwd) ? botStance(harness, permissionMode) : stanceFor(harness, permissionMode);
   if (!sessionId) {
@@ -1405,6 +1410,7 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   // every selection rather than only its own: the mark survives being looked
   // away from, and the next visit is what answers it.
   keptUnreadRef.current = null;
+  forgetUnreadWorking(sessionId);
   if (statusOf(sessionId) === "completed") {
     markSessionRead(sessionId);
   }
@@ -1811,7 +1817,8 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
 // Deleting the open one falls back to the empty composer rather than to a
 // neighbour — the next session is not a guess worth making, and `handleNewSession`
 // is the one path that also restores the user's own defaults.
-const deleteSession = async (sessionId: string) => {
+/// Deletes a session and every hidden child; false where the server refused.
+const deleteSession = async (sessionId: string): Promise<boolean> => {
   const fail = failUnlessLeft();
   // Marked before the call, not after it. Deleting a session mid-turn kills
   // its child, and the status that publishes lands while this is still
@@ -1831,7 +1838,7 @@ const deleteSession = async (sessionId: string) => {
       .then((item) => item && applyIndexItem(item))
       .catch((err) => console.error("could not reread", sessionId, err));
     fail(e);
-    return;
+    return false;
   }
 
   // Read before the row goes. A hidden child has no row of its own to be
@@ -1856,6 +1863,7 @@ const deleteSession = async (sessionId: string) => {
     handleNewSession();
   }
   await Promise.all(children.map((c) => deleteSession(c.sessionId)));
+  return true;
 };
 
 // Refetched on every toggle rather than filtered from one cached list: the two
@@ -2679,7 +2687,10 @@ const setOnScreen = (ids: string[]) => {
   for (const id of next) {
     if (prev.has(id)) continue;
     lastViewedRef.current.set(id, now);
-    if (isWindowFocused() && statusOf(id) === "completed") markSessionRead(id);
+    if (isWindowFocused()) {
+      forgetUnreadWorking(id);
+      if (statusOf(id) === "completed") markSessionRead(id);
+    }
     // Selecting a session already asked for it, and a group opens that way.
     if (id !== selectionRequestRef.current) refreshHeld(id);
   }
@@ -2918,6 +2929,7 @@ useEffect(() => {
 // a window that finished its turn while it was in the background.
 const markSessionRead = (sessionId: string) => {
   setStatusBySession((prev) => ({ ...prev, [sessionId]: "idle" }));
+  forgetUnreadWorking(sessionId);
   // The notice and the unread dot report the same thing, so the read that
   // retires one retires the other.
   dismissNotice(sessionId, ANSWERED_BY_OPENING);
@@ -2925,6 +2937,14 @@ const markSessionRead = (sessionId: string) => {
   // costs one stale unread dot after a restart, so a failure isn't surfaced.
   void invoke("mark_session_read", { sessionId, read: true }).catch(() => {});
 };
+
+const forgetUnreadWorking = (sessionId: string) =>
+  setUnreadWorking((prev) => {
+    if (!prev.has(sessionId)) return prev;
+    const next = new Set(prev);
+    next.delete(sessionId);
+    return next;
+  });
 
 /// The reader asked for the unread mark back, from the row's own menu. The
 /// reverse of `markSessionRead`, and it has to hold against the path that would
@@ -2939,6 +2959,12 @@ const markSessionUnread = (sessionId: string) => {
   void invoke("mark_session_read", { sessionId, read: false }).catch(() => {});
 };
 
+/// A session as `canAnnounce` and `announce` both read it: the index's row,
+/// else the loaded copy, since the index holds one side of the archived split.
+const announcedItem = (sessionId: string) =>
+  sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId) ??
+  sessionsRef.current.find((s) => s.sessionId === sessionId);
+
 /// Whether a session may say anything at all right now — the space rule, asked
 /// once for every channel.
 ///
@@ -2952,18 +2978,19 @@ const markSessionUnread = (sessionId: string) => {
 /// Both lists, since the index holds one side of the archived split at a time.
 /// `allowedInSpace` is what refuses a session neither can name — see its own
 /// note for why that direction.
-const canAnnounce = (sessionId: string): boolean => {
+///
+/// `kind` adds the hidden rule, `leftToParent`: a hidden session's done and
+/// ready-to-merge are its parent's to report, on every channel at once.
+const canAnnounce = (sessionId: string, kind?: NoticeKind): boolean => {
+  const item = announcedItem(sessionId);
+  if (leftToParent(item, kind)) return false;
+
   const space = activeSpace(
     projectsRef.current,
     readLocalStorage<string | null>(SPACE_KEY, null),
     readLocalStorage<string[]>(SPACE_LIST_KEY, []),
   );
-  const projectPath =
-    sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId)?.projectPath ??
-    sessionsRef.current.find((s) => s.sessionId === sessionId)?.projectPath ??
-    null;
-
-  return allowedInSpace(projectsRef.current, space, projectPath);
+  return allowedInSpace(projectsRef.current, space, item?.projectPath ?? null);
 };
 
 /// Tell the reader about something that happened in a session, on exactly one
@@ -2983,12 +3010,15 @@ const canAnnounce = (sessionId: string): boolean => {
 /// nothing; the in-app card is the only card on screen next to a sidebar
 /// already marking the row, so it needs the verb and nothing else.
 const announce = (sessionId: string, kind: NoticeKind, label: string): boolean => {
-  const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
+  const item = announcedItem(sessionId);
 
   // A session in another space keeps running; it just has no channel here.
   // Both channels name the session out loud, and naming a personal one over a
   // shared screen is the thing spaces exist to stop.
-  if (!canAnnounce(sessionId)) return false;
+  //
+  // A hidden session's finish is read rather than withheld: left unread, it
+  // would hold the dock badge up with no row of its own to clear it from.
+  if (!canAnnounce(sessionId, kind)) return leftToParent(item, kind);
 
   if (!isWindowFocused()) {
     // A card is the island's to raise while it runs: its pill counts what waits
@@ -3152,6 +3182,9 @@ useEffect(() => {
       return;
     }
 
+    if (status === "in_progress" && statusOf(sessionId) === "completed") {
+      setUnreadWorking((prev) => new Set(prev).add(sessionId));
+    }
     setStatusBySession((prev) => ({ ...prev, [sessionId]: status }));
   });
 
@@ -3382,6 +3415,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
 
 }

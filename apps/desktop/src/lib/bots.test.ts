@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botAt, botChat, botSession, inBotTree, previewLine } from "@/lib/bots";
+import { botAt, botBrowser, botChat, botNamed, botSession, inBotTree, previewLine } from "@/lib/bots";
 import type { Bot, SessionIndexItem } from "@/types/events";
 
 const bot: Bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
@@ -13,6 +13,21 @@ const item = (sessionId: string, extra: Partial<SessionIndexItem> = {}) =>
     created: "2026-11-01T00:00:00Z",
     ...extra,
   }) as SessionIndexItem;
+
+describe("botNamed", () => {
+  const twin = (id: string, name: string): Bot => ({ ...bot, id, name });
+  const list = [bot, twin("r", "Research"), twin("t1", "Twin"), twin("t2", "twin")];
+
+  it("finds a bot by id or by its name in any case, as `dray bot send` does", () => {
+    expect(botNamed(list, "ops")).toBe(bot);
+    expect(botNamed(list, "r")?.name).toBe("Research");
+    expect(botNamed(list, "nobody")).toBeUndefined();
+  });
+
+  it("names no bot where two share the name", () => {
+    expect(botNamed(list, "Twin")).toBeUndefined();
+  });
+});
 
 describe("botAt", () => {
   it("matches the bot's folder with or without a trailing slash", () => {
@@ -27,6 +42,12 @@ describe("previewLine", () => {
       "Done. See the PR. Next?",
     );
   });
+
+  it("drops heading marks and keeps a PR number", () => {
+    expect(previewLine("## Status\n> Opened #908.")).toBe("Status Opened #908.");
+    expect(previewLine("#917 conflicts with main.")).toBe("#917 conflicts with main.");
+    expect(previewLine("Both changed `parse_args`.")).toBe("Both changed parse_args.");
+  });
 });
 
 describe("inBotTree", () => {
@@ -39,6 +60,21 @@ describe("inBotTree", () => {
     ];
     expect(inBotTree([bot], items, "grand")).toBe(true);
     expect(inBotTree([bot], items, "other")).toBe(false);
+  });
+});
+
+describe("botBrowser", () => {
+  it("is the chat's oldest session across an agent switch, and never a task's", () => {
+    const items = [
+      item("chat", { created: "2026-11-01T00:00:00Z" }),
+      // A switch to another agent: a newer session in the same folder.
+      item("switched", { created: "2026-11-02T00:00:00Z" }),
+      item("task", { cwd: "/repo/wt", parentSessionId: "switched" }),
+      item("other", { cwd: "/repo" }),
+    ];
+    expect(botBrowser([bot], items, "task")).toBeUndefined();
+    expect(botBrowser([bot], items, "switched")).toBe("chat");
+    expect(botBrowser([bot], items, "other")).toBeUndefined();
   });
 });
 

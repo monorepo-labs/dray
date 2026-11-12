@@ -74,7 +74,7 @@ import {
   usePendingTab,
   useUrlDraft,
   usePicking,
-  useRecording,
+  useRecordedTab,
   useViewport,
   VIEWPORT_PRESETS,
   type Snapshot as BrowserSnapshot,
@@ -157,7 +157,7 @@ export default function BrowserPane({
   // Responsive with no size typed is a flag; with one, it is a viewport.
   const responsive = useResponsive(sessionId) || viewport?.preset === "responsive";
   const snapshot = useBrowserSnapshot(sessionId);
-  const recording = useRecording(sessionId);
+  const recorded = useRecordedTab(sessionId);
   const key = useId();
   const stageRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
@@ -277,7 +277,7 @@ export default function BrowserPane({
         ) : (
           <Snapshot of={snapshot} />
         )}
-        {recording && !empty && <RecordingNotice />}
+        {current && current.id === recorded && <RecordingNotice />}
       </div>
     </div>
   );
@@ -370,11 +370,9 @@ function Chrome({
   const openError = useOpenError(sessionId);
   const inputRef = useRef<HTMLInputElement>(null);
   const picking = usePicking(sessionId);
-  // The reader cannot change tabs mid-recording. That once kept the agent's
-  // next verb on the recorded tab; the agent holds its own tab now (`DRIVEN`),
-  // so the lock is a candidate to go. The agent's own tab verbs stay open,
-  // since a flow may cross tabs.
-  const recording = useRecording(sessionId);
+  // Only the recorded tab is held, and only from closing: the agent drives its
+  // own tab (`DRIVEN`), so the reader switching tabs moves nothing it films.
+  const recorded = useRecordedTab(sessionId);
   const opening = useOpeningUrl(sessionId);
   const url = current?.url ?? opening ?? "";
   const loading = current ? current.loading : opening !== null;
@@ -438,8 +436,7 @@ function Chrome({
           {reorder.shown.map((tab, i) => (
             <TabButton
               key={tab.id}
-              // Not mid-recording, when the agent's tab numbers must hold still.
-              onPointerDown={recording ? undefined : (e) => reorder.start(e, i)}
+              onPointerDown={(e) => reorder.start(e, i)}
               transform={reorder.offset(i)}
               held={reorder.drag?.from === i}
               gliding={!!reorder.drag && reorder.drag.from !== i}
@@ -450,7 +447,7 @@ function Chrome({
               icon={<Favicon tab={tab} />}
               overlay={<AgentBeam tab={tab.id} top />}
               label={tab.error ? "Can't reach page" : tab.title || hostOf(tab.url)}
-              locked={recording}
+              locked={tab.id === recorded}
               onPick={() => {
                 setPendingTab(sessionId, false);
                 if (!tab.active) void activateTab(sessionId, tab.id);
@@ -481,7 +478,6 @@ function Chrome({
                 )
               }
               label={parkedPages[id] ? parkedPages[id].title || hostOf(parkedPages[id].url) : "New tab"}
-              locked={recording}
               onPick={() =>
                 blanks.active === id ? inputRef.current?.focus() : activateBlankTab(sessionId, id)
               }
@@ -495,7 +491,6 @@ function Chrome({
                 size="icon-sm"
                 className="mb-0.5 shrink-0"
                 aria-label="New tab"
-                disabled={recording}
                 onClick={newTab}
               >
                 <Plus className="size-3.5" />
@@ -756,7 +751,7 @@ function TabButton({
   /// Drawn over the whole tab, out of the row's flow: the agent's beam.
   overlay?: React.ReactNode;
   label: string;
-  /// Neither picked nor closed, while a recording holds the strip.
+  /// Not closed, while a recording films it.
   locked?: boolean;
   onPick: () => void;
   onClose: () => void;
@@ -772,27 +767,23 @@ function TabButton({
   /// The page's colour, from `tint`, on the tab joined to the URL row.
   paint?: React.CSSProperties;
 }) {
-  const pick = locked ? undefined : onPick;
   return (
     <TabMenu onDuplicate={locked ? undefined : onDuplicate}>
     <ContextMenuTrigger asChild disabled={!onDuplicate || locked}>
     <div
       role="tab"
       aria-selected={active}
-      aria-disabled={locked || undefined}
-      tabIndex={locked ? -1 : 0}
+      tabIndex={0}
       title={title}
-      onClick={pick}
-      onKeyDown={(e) => e.key === "Enter" && pick?.()}
+      onClick={onPick}
+      onKeyDown={(e) => e.key === "Enter" && onPick()}
       onPointerDown={onPointerDown}
       style={{ ...paint, transform }}
       className={cn(
         "group/tab relative flex h-7 w-40 min-w-0 shrink-0 cursor-default items-center gap-1.5 rounded-t-md px-2 text-ui",
         active
           ? "browser-tab-active bg-card text-foreground [--tab-edge:color-mix(in_oklab,var(--foreground)_10%,transparent)]"
-          : locked
-            ? "text-muted-foreground opacity-50"
-            : held
+          : held
               ? "bg-card/50 text-foreground"
               : "text-muted-foreground hover:text-foreground",
         // The one in hand tracks the pointer and draws over the tabs it

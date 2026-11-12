@@ -19,6 +19,36 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.0 · 2026-11-12 · notify
+
+### New
+
+- **Bots.** A bot is one long-running chat with its own instructions
+  and memory. It starts tasks for you and hears back when each one
+  finishes. Find them at the top of the sidebar, starting with Dray Bot.
+- **Tasks open as tabs.** Click a task in a bot's Tasks list and it
+  opens as a tab beside the bot's chat. Add Diff and Files tabs with +.
+- **Switch a bot's agent.** Pick another agent mid-chat and the
+  conversation carries over.
+- **Bots message each other.** `dray bot send` reaches another bot by
+  name, and `dray bot new|ls|rename|rm` manage them from the terminal.
+- A bot's folder keeps its own git history, so lost notes can come back.
+
+### Improved
+
+- A server that drops keeps its sessions in the sidebar, faded, with
+  the reason on hover.
+- Idle agents stop after 15 minutes to free memory, and pick up where
+  they left off on your next message.
+- pi signs in and out from Settings → Accounts without opening its TUI.
+
+### Fixed
+
+- Break reminders count time spent outside Dray, and the window comes
+  forward when one is due.
+- Recordings from a remote server play at once instead of sitting at
+  0:00.
+
 ## 0.29.19 · 2026-11-09 · notify
 
 ### New

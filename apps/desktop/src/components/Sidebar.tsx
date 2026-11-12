@@ -23,7 +23,7 @@ import BotAvatar from "@/components/BotAvatar";
 import { TypingDots } from "@/components/chat/BotTranscript";
 import { previewLine, type BotEntry } from "@/lib/bots";
 
-import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
+import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
 import PanelLeftIcon from "@/components/icons/PanelLeftIcon";
 import { Button } from "@/components/ui/button";
@@ -105,6 +105,8 @@ type SidebarProps = {
   // The live status of every session the app has heard about this run. Wins over
   // the item's own field, which is only as fresh as the last list fetch.
   statusBySession: Record<string, SessionStatus>;
+  /// Sessions working again with replies still unread; a bot row keeps its count.
+  unreadWorking: ReadonlySet<string>;
   // Sessions standing still behind a permission request or a question. Kept
   // apart from `statusBySession` rather than folded into it: the backend's
   // status machine still reads these as `in_progress`, and it is right to —
@@ -395,6 +397,44 @@ function splitAside(
 /// How many rows a project needs before it is split at all.
 const STATE_SPLIT_MIN = 3;
 
+/// Nests filed into one run per state, the way the live list splits; shared
+/// with the bot Tasks tab so both lists break alike. Draw in your own state
+/// order, a `h-4 shrink-0` break between runs.
+export function stageRuns<S, R>(
+  nests: R[][],
+  stateOf: (nest: R[]) => S,
+  sharedBreaks: S[][],
+): Map<S, R[]> {
+  const byState = new Map<S, R[]>();
+  const file = (state: S, rows: R[]) => byState.set(state, [...(byState.get(state) ?? []), ...rows]);
+  // A short list draws as one run. The split earns its break by making a long
+  // list quicker to scan, and there is nothing to scan in two rows.
+  const flat = nests.flat();
+  if (flat.length < STATE_SPLIT_MIN) {
+    if (flat.length) file(stateOf(flat), flat);
+    return byState;
+  }
+  for (const nest of nests) file(stateOf(nest), nest);
+  // A run of one row between two breaks reads as a heading rather than as a
+  // row. So neighbouring single-row stages in one family share a break: the
+  // row's own mark — yellow, green, the PR glyph, the checks spinner — tells
+  // them apart. A stage with nothing in it is skipped, since on screen its
+  // neighbours touch.
+  for (const family of sharedBreaks) {
+    let into: R[] | undefined;
+    for (const state of family) {
+      const rows = byState.get(state);
+      if (!rows) continue;
+      if (rows.length > 1) into = undefined;
+      else if (into) {
+        into.push(...rows);
+        byState.delete(state);
+      } else into = rows;
+    }
+  }
+  return byState;
+}
+
 /// How many settled rows the window opens by, and opens by again at each edge.
 const SETTLED_STEP = 40;
 
@@ -553,37 +593,9 @@ export function sessionGroups(
   // The live list is stages on top, workspace-wide. Split per project, the
   // answer to "what wants me" was scattered under every heading, and past three
   // rows nobody could read it. Rows inside a stage stay newest-first.
-  const byState = new Map<SessionState, SessionListRow[]>();
-  const file = (state: SessionState, rows: SessionListRow[]) =>
-    byState.set(state, [...(byState.get(state) ?? []), ...rows]);
-  const held = nestsOf(activeItems);
-  // A short list draws as one run. The split earns its break by making a long
-  // list quicker to scan, and there is nothing to scan in two rows.
-  const flat = held.flat();
-  if (flat.length < STATE_SPLIT_MIN) {
-    if (flat.length) file(nestState(flat), flat);
-  } else {
-    for (const nest of held) file(nestState(nest), nest);
-    // A run of one row between two breaks reads as a heading rather than as a
-    // row. So neighbouring single-row stages in one family share a break: the
-    // row's own mark — yellow, green, the PR glyph, the checks spinner — tells
-    // them apart. A stage with nothing in it is skipped, since on screen its
-    // neighbours touch.
-    for (const family of SHARED_BREAKS) {
-      let into: SessionListRow[] | undefined;
-      for (const state of family) {
-        const rows = byState.get(state);
-        if (!rows) continue;
-        if (rows.length > 1) into = undefined;
-        else if (into) {
-          into.push(...rows);
-          byState.delete(state);
-        } else into = rows;
-      }
-    }
-  }
+  const byState = stageRuns(nestsOf(activeItems), nestState, SHARED_BREAKS);
   const aside = nestsOf(asideItems).flat();
-  if (aside.length) file("aside", aside);
+  if (aside.length) byState.set("aside", aside);
 
   return [
     ...lead,
@@ -978,6 +990,7 @@ export default function Sidebar({
   searchOpen,
   onSearchOpenChange,
   statusBySession,
+  unreadWorking,
   askingSessions,
   prFor,
   selectedSessionId,
@@ -1330,45 +1343,23 @@ export default function Sidebar({
       {/* Above the project filter: a bot belongs to no project, it hands work
           to any of them. No heading — the face on a row is what says it is a
           bot. New bot sits in the strip above, beside the other ways in. */}
-      {/* The inbox rows — big face, name and time, last reply under it —
-          are off for now in favour of the one-line rows below. Kept to try
-          again: uncomment this block, and drop `compact` below to swap.
-      {bots.length > 0 && <div className="mt-4 flex flex-col gap-0.5 px-2">
-        {bots.map(({ bot, session, preview }) => (
-          <BotRow
+      {bots.length > 0 && <div className="mt-4 flex flex-col gap-px px-2">
+        {bots.map(({ bot, session, preview }) => {
+          const status = session ? (statusBySession[session.sessionId] ?? session.status) : "idle";
+          return <BotRow
             key={bot.id}
             bot={bot}
             preview={preview}
             sessionId={session?.sessionId}
             modified={session?.modified}
-            status={session ? (statusBySession[session.sessionId] ?? session.status) : "idle"}
+            status={status}
+            unread={status === "completed" || (!!session && unreadWorking.has(session.sessionId))}
             asking={!!session && askingSessions.has(session.sessionId)}
             active={!!session && session.sessionId === selectedSessionId}
             onOpen={() => onOpenBot?.(bot)}
             onDelete={() => onDeleteBot?.(bot)}
-          />
-        ))}
-      </div>}
-      */}
-
-      {/* One bot (Dray Bot alone) reads as part of the list above; several
-          make a group of their own, set apart. */}
-      {bots.length > 0 && <div className={cn("flex flex-col gap-px px-2", bots.length === 1 ? "mt-px" : "mt-6 mb-2")}>
-        {bots.map(({ bot, session, preview }) => (
-          <BotRow
-            key={bot.id}
-            compact
-            bot={bot}
-            preview={preview}
-            sessionId={session?.sessionId}
-            modified={session?.modified}
-            status={session ? (statusBySession[session.sessionId] ?? session.status) : "idle"}
-            asking={!!session && askingSessions.has(session.sessionId)}
-            active={!!session && session.sessionId === selectedSessionId}
-            onOpen={() => onOpenBot?.(bot)}
-            onDelete={() => onDeleteBot?.(bot)}
-          />
-        ))}
+          />;
+        })}
       </div>}
 
       {/* The filter is where project grouping went. */}
@@ -1763,225 +1754,137 @@ function cutout(width: number, height: number, face = 40, gap = 2): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${face}" height="${face}"><path fill-rule="evenodd" d="M0 0H${face}V${face}H0Z${hole}"/></svg>`;
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
-const ROUND_CUTOUT = cutout(16, 16);
-const DOT_CUTOUT = cutout(12, 12);
-const PILL_CUTOUT = cutout(24, 14);
-// The one-line row's 20px face takes a small dot and a thinner gap.
-const SMALL_DOT_CUTOUT = cutout(8, 8, 20, 1.5);
+// The inbox row's 32px face: a dot while it waits on the reader, the unread count after.
+const DOT_CUTOUT = cutout(10, 10, 32);
+const COUNT_CUTOUT = cutout(16, 16, 32);
 
 function BotRow({
   bot,
-  compact = false,
   preview,
   sessionId,
   modified,
   status,
+  unread,
   asking,
   active,
   onOpen,
   onDelete,
 }: {
   bot: Bot;
-  /// One line, the session rows' height: a small face, the name, and the
-  /// state where the time sits. No preview.
-  compact?: boolean;
   /// The chat's last reply and the replies since the reader last wrote.
   preview?: BotPreview;
   /// Its chat, for the jump digit; absent before the first message.
   sessionId?: string;
   modified?: string;
   status: SessionStatus;
+  /// Replies wait unread: `completed`, or a turn begun on top of them.
+  unread: boolean;
   asking: boolean;
   active: boolean;
   onOpen: () => void;
   onDelete: () => void;
 }) {
   const digit = useJumpDigit(sessionId ?? "");
-  const badge = asking
-    ? { kind: "asking" as const, mask: DOT_CUTOUT }
-    : status === "in_progress"
-      ? { kind: "working" as const, mask: PILL_CUTOUT }
-      : status === "completed"
-        ? { kind: "unread" as const, mask: ROUND_CUTOUT }
-        : null;
   const [hovered, setHovered] = useState(false);
-  const server = serverOfPath(bot.path);
-  const offline = offlineLine(server);
-  if (compact) {
-    return (
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <button
-            type="button"
-            onClick={onOpen}
-            onPointerEnter={() => setHovered(true)}
-            onPointerLeave={() => setHovered(false)}
-            className={cn(
-              "group relative flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pr-1.5 pl-1.5 text-left",
-              "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
-              active
-                ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
-              offline && "opacity-50",
-            )}
-          >
-            {/* State on the face as a dot: orange while it waits on the reader,
-                green while a reply is unread. */}
-            <span className="relative shrink-0">
-              <span
-                className="block size-5"
-                style={
-                  asking || status === "completed"
-                    ? {
-                        maskImage: SMALL_DOT_CUTOUT,
-                        WebkitMaskImage: SMALL_DOT_CUTOUT,
-                        maskRepeat: "no-repeat",
-                        WebkitMaskRepeat: "no-repeat",
-                      }
-                    : undefined
-                }
-              >
-                <BotAvatar seed={bot.id} avatar={bot.avatar} follow={hovered} className="block size-5 scale-[1.18]" />
-              </span>
-              {(asking || status === "completed") && (
-                <span
-                  role="img"
-                  aria-label={asking ? "Waiting for you" : "Unread"}
-                  className={cn(
-                    "absolute -right-0.5 -bottom-0.5 size-2 rounded-full",
-                    asking ? "bg-accent-command" : "bg-accent-add",
-                  )}
-                />
-              )}
-            </span>
+  const badge = asking ? "asking" : unread ? "unread" : null;
+  const mask = badge === "asking" ? DOT_CUTOUT : badge === "unread" ? COUNT_CUTOUT : undefined;
+  // Before its first chat, Dray Bot's welcome is what its chat opens on.
+  const last = preview?.text || (!sessionId && bot.welcome);
+  const glimpse = last && previewLine(last);
+  const offline = offlineLine(serverOfPath(bot.path));
+
+  // StalledTasks' row layout, so a bot and its stalled tasks read alike.
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <button
+          type="button"
+          onClick={onOpen}
+          onPointerEnter={() => setHovered(true)}
+          onPointerLeave={() => setHovered(false)}
+          className={cn(
+            "group relative flex w-full cursor-pointer items-center gap-2 rounded-md py-1 pr-[5px] pl-1 text-left",
+            "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
+            active
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
+            offline && "opacity-50",
+          )}
+        >
+          <span className="relative shrink-0">
             <span
-              className={cn(
-                "min-w-0 flex-1 truncate text-ui text-sidebar-foreground",
-                status === "completed" && "font-medium",
-              )}
+              className="block size-8"
+              style={
+                mask
+                  ? { maskImage: mask, WebkitMaskImage: mask, maskRepeat: "no-repeat", WebkitMaskRepeat: "no-repeat" }
+                  : undefined
+              }
             >
-              {bot.name}
+              <BotAvatar seed={bot.id} avatar={bot.avatar} follow={hovered} className="block size-8 scale-[1.18]" />
             </span>
-            {/* The trailing slot a session row keeps its time in: the digit
-                while the jump modifier is held, the offline mark, typing dots
-                while it works, else when. */}
-            {digit ? (
-              <Kbd>{digit}</Kbd>
-            ) : offline ? (
-              <span className="mr-0.5 flex shrink-0" title={offline}>
-                <SignalSlashIcon className="size-3.5 text-muted-foreground" aria-label={offline} />
+            {badge === "asking" && (
+              <span
+                role="img"
+                aria-label="Waiting for you"
+                className="absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full bg-accent-command"
+              />
+            )}
+            {badge === "unread" && (
+              <span
+                role="img"
+                aria-label={`${preview?.replies || 1} unread`}
+                // One colour for every bot: in the face's own hue it read as part of the face.
+                // Dray theme: green in light; red in dark, deeper than its own red, which is too pale under white text.
+                className="absolute -right-0.5 -bottom-0.5 flex size-4 items-center justify-center rounded-full bg-foreground text-[10px] leading-none font-semibold text-background tabular-nums [[data-theme=default][data-mode=light]_&]:bg-accent-add [[data-theme=default][data-mode=dark]_&]:bg-[oklch(0.55_0.2_25)] [[data-theme=default]_&]:text-white"
+              >
+                {preview?.replies || ""}
               </span>
-            ) : status === "in_progress" && !asking ? (
-              <span className="mr-0.5 shrink-0">
+            )}
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="flex items-baseline gap-2">
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate text-ui text-sidebar-foreground",
+                  unread && "font-medium",
+                )}
+              >
+                {bot.name}
+              </span>
+              {/* While the jump modifier is held, the row's digit takes the time's
+                  place; a bot whose server is offline shows the offline mark there. */}
+              {digit ? (
+                <Kbd>{digit}</Kbd>
+              ) : offline ? (
+                <span className="flex shrink-0 self-center" title={offline}>
+                  <SignalSlashIcon className="size-3.5 text-muted-foreground" aria-label={offline} />
+                </span>
+              ) : (
+                modified && (
+                  <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
+                    {relativeTime(modified)}
+                  </span>
+                )
+              )}
+            </span>
+            {/* A messenger's typing dots stand in for the last message while it works. */}
+            {status === "in_progress" && !asking ? (
+              <span className="flex h-[1lh] items-center text-ui">
                 <TypingDots small />
               </span>
             ) : (
-              modified && (
-                <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">{inboxTime(modified)}</span>
-              )
+              glimpse && <span className="truncate text-ui text-foreground/70">{glimpse}</span>
             )}
-          </button>
-        </ContextMenuTrigger>
-        <ContextMenuContent className="w-44">
-          <ContextMenuItem className="text-ui text-destructive" onSelect={onDelete}>
-            Delete bot…
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
-    );
-  }
-  return (
-    <ContextMenu>
-    <ContextMenuTrigger asChild>
-    <button
-      type="button"
-      onClick={onOpen}
-      onPointerEnter={() => setHovered(true)}
-      onPointerLeave={() => setHovered(false)}
-      className={cn(
-        "group relative flex w-full cursor-pointer items-center gap-1 rounded-md py-[5px] pr-1.5 pl-0.5 text-left",
-        "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
-        active
-          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
-      )}
-    >
-      {/* One badge slot on the face's lower right, a messenger's: a question
-          while it waits on the reader, typing dots while it works, the count
-          of replies since the reader last wrote once it is done and unread. */}
-      <span className="relative shrink-0">
-        <span className="block size-10" style={badge ? { maskImage: badge.mask, WebkitMaskImage: badge.mask, maskRepeat: "no-repeat", WebkitMaskRepeat: "no-repeat" } : undefined}>
-          {/* Scaled as Blobatar's own agent list does: the body sits inside a margin
-              of its box, which read as a wide gap before the name. */}
-          <BotAvatar seed={bot.id} avatar={bot.avatar} follow={hovered} className="block size-10 scale-[1.18]" />
-        </span>
-        {badge?.kind === "asking" && (
-          <span
-            role="img"
-            aria-label="Waiting for you"
-            className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full bg-accent-command"
-          />
-        )}
-        {badge?.kind === "working" && (
-          <span className="absolute -right-0.5 -bottom-0.5 flex h-3.5 w-6 items-center justify-center rounded-full bg-sidebar-accent">
-            <TypingDots small />
           </span>
-        )}
-        {badge?.kind === "unread" && (
-          <span
-            role="img"
-            aria-label={`${preview?.replies || 1} unread`}
-            // One colour for every bot: in the face's own hue it read as part of the face.
-            className="absolute -right-0.5 -bottom-0.5 flex size-4 items-center justify-center rounded-full bg-foreground text-[10px] leading-none font-semibold text-background tabular-nums"
-          >
-            {preview?.replies || ""}
-          </span>
-        )}
-      </span>
-      {/* An inbox row: who, when, and the last thing they said. */}
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="flex items-baseline gap-2">
-          <span
-            className={cn(
-              "min-w-0 flex-1 truncate text-ui text-sidebar-foreground",
-              status === "completed" && "font-medium",
-            )}
-          >
-            {bot.name}
-          </span>
-          {/* While the jump modifier is held, the row's digit takes the time's place. */}
-          {digit ? (
-            <Kbd>{digit}</Kbd>
-          ) : (
-            modified && (
-              <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
-                {inboxTime(modified)}
-              </span>
-            )
-          )}
-        </span>
-        {preview?.text && (
-          <span className="truncate text-ui text-muted-foreground/60">{previewLine(preview.text)}</span>
-        )}
-      </span>
-    </button>
-    </ContextMenuTrigger>
-    <ContextMenuContent className="w-44">
-      <ContextMenuItem className="text-ui text-destructive" onSelect={onDelete}>
-        Delete bot…
-      </ContextMenuItem>
-    </ContextMenuContent>
+        </button>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-44">
+        <ContextMenuItem className="text-ui text-destructive" onSelect={onDelete}>
+          Delete bot…
+        </ContextMenuItem>
+      </ContextMenuContent>
     </ContextMenu>
   );
-}
-
-/// A messenger's time: the clock today, the day this week, the date before.
-function inboxTime(iso: string): string {
-  const at = new Date(iso);
-  const days = (Date.now() - at.getTime()) / 86_400_000;
-  if (isToday(iso)) return at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-  if (days < 7) return at.toLocaleDateString([], { weekday: "short" });
-  return at.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 function HeadingRow({
@@ -3008,11 +2911,7 @@ function SessionRow({
                 <SignalSlashIcon className="size-3.5" aria-label={offline} />
               </span>
             ) : marksLive && pr?.checksState === "RUNNING" ? (
-              <CircleDashed
-                className="mr-[3px] size-3.5 animate-spin text-accent-command [animation-duration:3s]"
-                strokeWidth={1.5}
-                aria-label="Checks running"
-              />
+              <ChecksRunningIcon className="mr-[3px]" />
             ) : status === "in_progress" ? (
               <Orb state="working" label="Working" />
             ) : (

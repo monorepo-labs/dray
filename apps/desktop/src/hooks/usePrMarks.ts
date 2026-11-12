@@ -25,6 +25,12 @@ const FRESH_MS = 120_000;
 /// minute late costs nothing, where a merge button showing stale checks does.
 const OPEN_POLL_MS = 30_000;
 
+/// The background poll's gap, for repos whose marks drive something off
+/// screen: a bot's stalled tasks, judged every minute against a 15-minute
+/// stall. Slow, since every `gh` here spends the same hourly budget as the
+/// agents' own.
+const BACKGROUND_POLL_MS = 5 * 60_000;
+
 /// How long to wait before the single retry a failed post-write read gets — see
 /// `refreshAfterWrite`. Long enough for a `gh` blip or a rate-limit pause to
 /// pass, short enough that the reader has not moved on.
@@ -34,6 +40,9 @@ const WRITE_RETRY_MS = 4_000;
 /// switching projects changes the argument, and a project flipped away from and
 /// back to should draw its marks immediately rather than blank and refill.
 const cache = new Map<string, Map<string, PrMark>>();
+/// Every mark a repo read answered, by number, unnarrowed: a merge card names
+/// its own PR, which the per-branch pick may not be.
+const numbered = new Map<string, Map<number, PrMark>>();
 const fetchedAt = new Map<string, number>();
 
 /// The read currently running for a repo, so two effects landing in the same
@@ -99,7 +108,12 @@ function marksByBranch(prs: PrMark[]): Map<string, PrMark> {
 /// report and nothing for the reader to do. It also changes nothing: a read
 /// that fails leaves the entry exactly as it was, neither blanking the repo nor
 /// claiming its old answer is current. See the catch in `load`.
-export function usePrMarks(repoPaths: string[]) {
+export function usePrMarks(
+  repoPaths: string[],
+  /// Of `repoPaths`, the ones still read while the window is in the background,
+  /// every `BACKGROUND_POLL_MS`, since what they decide is not on screen.
+  backgroundPaths: readonly string[] = [],
+) {
   // The effect depends on the *set*, not on the array identity a caller mints
   // fresh every render. The paths themselves are read off a ref rather than out
   // of this string, since a repo path can hold whatever separator we picked.
@@ -173,8 +187,10 @@ export function usePrMarks(repoPaths: string[]) {
 
       const attempt = (async () => {
         let answer: Map<string, PrMark>;
+        let all: PrMark[];
         try {
-          answer = marksByBranch(await invoke<PrMark[]>("pr_marks", { cwd: path }));
+          all = await invoke<PrMark[]>("pr_marks", { cwd: path });
+          answer = marksByBranch(all);
         } catch {
           // A failed read changes nothing at all — it neither writes rows nor
           // stamps, and both halves of that are load-bearing.
@@ -209,6 +225,7 @@ export function usePrMarks(repoPaths: string[]) {
 
         const before = cache.get(path);
         cache.set(path, answer);
+        numbered.set(path, new Map(all.map((pr) => [pr.number, pr])));
         fetchedAt.set(path, Date.now());
 
         // Tell the panel which branches moved, so its own cache for them is
@@ -309,6 +326,15 @@ export function usePrMarks(repoPaths: string[]) {
     return () => clearInterval(id);
   }, [openKey, focused, load]);
 
+  // A bot's stalls are judged and announced while the window is away, so its
+  // tasks' repos holding an open PR keep reading then, slowly.
+  const backgroundKey = openRepos.filter((path) => backgroundPaths.includes(path)).join("\n");
+  useEffect(() => {
+    if (focused || !backgroundKey) return;
+    const id = setInterval(() => void load(true, backgroundKey.split("\n")), BACKGROUND_POLL_MS);
+    return () => clearInterval(id);
+  }, [backgroundKey, focused, load]);
+
   return {
     /// The pull request a session's row is marked with, or nothing. Takes the
     /// repo *and* the branch, since a branch name says nothing about which
@@ -317,6 +343,17 @@ export function usePrMarks(repoPaths: string[]) {
     prFor: useCallback(
       (repoPath: string, branch: string | null): PrMark | undefined =>
         branch ? (byRepo.get(repoPath) ?? EMPTY).get(branch) : undefined,
+      [byRepo],
+    ),
+    /// One pull request by number: `undefined` until the repo has been read,
+    /// `null` where the read holds no such PR — closed, or merged long enough
+    /// ago to fall out of the newest hundred.
+    prNumbered: useCallback(
+      (repoPath: string, number: number): PrMark | null | undefined => {
+        void byRepo; // re-made on every read, so a caller re-renders on one
+        const marks = numbered.get(repoPath);
+        return marks ? (marks.get(number) ?? null) : undefined;
+      },
       [byRepo],
     ),
     /// Re-reads every repo currently on screen. Called when a turn ends — that

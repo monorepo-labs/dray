@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botItems, botRows, chatItems, chatTime, firstUnread, sentMessages, startsTimeRun } from "@/lib/botTranscript";
+import { botItems, botRows, chatItems, chatTime, firstUnread, sentMessages, startsTimeRun, taskContext } from "@/lib/botTranscript";
 import type { AgentEvent, AgentEventPayload } from "@/types/events";
 
 let seq = 0;
@@ -66,25 +66,60 @@ describe("botItems", () => {
   });
 
   it("reads a sent message out of each shell quoting", () => {
-    expect(sentMessages(`dray send abc 'it'\\''s done'`)).toEqual([{ target: "abc", text: "it's done" }]);
-    expect(sentMessages(`dray session send abc "$(cat <<'EOF'\nline one\nline two\nEOF\n)"`)).toEqual([
-      { target: "abc", text: "line one\nline two" },
+    expect(sentMessages(`dray send abc12345 'it'\\''s done'`)).toEqual([{ target: "abc12345", text: "it's done" }]);
+    expect(sentMessages(`dray session send abc12345 "$(cat <<'EOF'\nline one\nline two\nEOF\n)"`)).toEqual([
+      { target: "abc12345", text: "line one\nline two" },
     ]);
     expect(sentMessages("dray session ls")).toEqual([]);
   });
 
   it("reads every send out of one command", () => {
-    expect(sentMessages(`dray session send aaa "hello" && dray session send bbb 'hello'`)).toEqual([
-      { target: "aaa", text: "hello" },
-      { target: "bbb", text: "hello" },
+    expect(sentMessages(`dray session send aaaa1111 "hello" && dray session send bbbb2222 'hello'`)).toEqual([
+      { target: "aaaa1111", text: "hello" },
+      { target: "bbbb2222", text: "hello" },
     ]);
+  });
+
+  it("reads a send to a bot, its name quoted or bare", () => {
+    expect(sentMessages(`dray bot send "Release Ops" "ship it" && dray bot send Research 'look'`)).toEqual([
+      { target: "Release Ops", text: "ship it", bot: true },
+      { target: "Research", text: "look", bot: true },
+    ]);
+    expect(sentMessages("dray bot send Ops")).toEqual([]);
+    // A send spelled out in a message is text, not a second send.
+    expect(sentMessages(`dray bot send Ops 'Reply with dray bot send Research "done"' && dray bot send Keeper hi`)).toEqual([
+      { target: "Ops", text: 'Reply with dray bot send Research "done"', bot: true },
+      { target: "Keeper", text: "hi", bot: true },
+    ]);
+    expect(sentMessages("dray bot ls")).toEqual([]);
+  });
+
+  it("draws messages to and from other bots, and never folds them", () => {
+    const incoming = ev({
+      type: "user_message", text: "[message from the Dray bot \"Ops\" (s1)]\n\nhi", images: [], issues: [],
+      baseline: null, queued: false, from: { sessionId: "s1", title: "Ops", machine: null, botId: "b1" },
+      cwd: null, kickoff: false,
+    } as unknown as AgentEventPayload);
+    const items = botItems([
+      incoming,
+      // A bot made in the same command prints an id too, and is not the one
+      // the message went to.
+      call("a", `dray bot new Scout && dray bot send Ops "thanks, on it"`),
+      result("a", `01a1cf3a-0000-7000-8000-000000000000\nMade "Scout".\nSent to bot "Ops" (${ID}).`),
+      call("b", `dray session send ${ID} "one"`),
+      result("b", "sent"),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["botMessage", "botSent", "sent"]);
+    expect(items[0]).toMatchObject({ botId: "b1", title: "Ops" });
+    expect(items[1]).toMatchObject({ bot: "Ops", botId: ID, text: "thanks, on it" });
+    expect(botRows(items).map((r) => r.kind)).toEqual(["botMessage", "botSent", "talk"]);
   });
 
   it("folds a run of messages with tasks into one row, broken by anything else", () => {
     const items = botItems([
       call("a", `dray session send ${ID} "one"`),
       result("a", "sent"),
-      call("b", `dray session send other-id "two"`),
+      call("b", `dray session send 01a1d052 "two"`),
       result("b", "sent"),
       said("Sent both."),
       call("c", `dray session send ${ID} "three"`),
@@ -119,6 +154,62 @@ describe("botItems", () => {
     expect(items.map((i) => i.kind)).toEqual(["user", "notice", "notice"]);
   });
 
+  it("keeps a task and a send made in one command", () => {
+    const bot = "01a1cf3a-0000-7000-8000-000000000000";
+    const items = botItems([
+      call("c", `dray bot send Ops "starting" && dray session new --project /repo "Investigate"`),
+      result("c", `Sent to bot "Ops" (${bot}).\n${ID}\nStarted "Investigate"`),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["task", "botSent"]);
+    expect(items[0]).toMatchObject({ sessionId: ID });
+    expect(items[1]).toMatchObject({ botId: bot });
+  });
+
+  it("reads no send out of a new task's brief that names one", () => {
+    const sent = "01a1d052-e620-74d4-8ef2-aa9965929e13";
+    const started = "01a1d06c-7868-719b-b026-8ad0a260666b";
+    const cmd = `D=/private/tmp/images; dray session send ${sent} "User feedback on the sidebar bot rows, screenshot at $D/8.png: make bot rows line up."
+dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot prompt: relay feedback without adding steps" "Edit the Dray bot system prompt. Problem: when a bot passes the user's feedback to one of its tasks with 'dray session send', it adds instructions the user never gave, like 'push to the PR'."`;
+    const items = botItems([
+      call("c", cmd),
+      result("c", `Delivered.\n${started}\nStarted "Bot prompt: relay feedback without adding steps" in worktree gentle-ochre-meadow`),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["task", "sent"]);
+    expect(items[0]).toMatchObject({ sessionId: started });
+    expect(items[1]).toMatchObject({ target: sent, text: expect.stringContaining("$D/8.png") });
+  });
+
+  it("skips a session send whose target is no session id", () => {
+    expect(sentMessages(`dray session send ', it adds' 'push'`)).toEqual([]);
+    expect(sentMessages(`for id in aaa bbb; do dray session send "$id" "hello"; done`)).toEqual([]);
+    expect(sentMessages(`dray session send $ID hi && dray session send abc12345 'yo'`)).toEqual([
+      { target: "abc12345", text: "yo" },
+    ]);
+  });
+
+  it("reads past a heredoc that spells a send", () => {
+    expect(sentMessages(`dray session send aaaa1111 "$(cat <<'EOF'\nthen run dray session send bbbb2222 "x"\nEOF\n)" && dray session send cccc3333 ok`)).toEqual([
+      { target: "aaaa1111", text: `then run dray session send bbbb2222 "x"` },
+      { target: "cccc3333", text: "ok" },
+    ]);
+    // The rest of a heredoc's opening line is still commands.
+    expect(sentMessages(`cat <<'EOF' >/tmp/brief; dray session send aaaa1111 hi\nsay dray session send bbbb2222 no\nEOF\ndray session send cccc3333 ok`)).toEqual([
+      { target: "aaaa1111", text: "hi" },
+      { target: "cccc3333", text: "ok" },
+    ]);
+    // A herestring opens no body; a delimiter may carry a dash.
+    expect(sentMessages(`cat <<< "hello"\ndray session send aaaa1111 hi`)).toEqual([{ target: "aaaa1111", text: "hi" }]);
+    expect(sentMessages(`cat <<END-TEXT\ndray session send bbbb2222 no\nEND-TEXT\ndray session send cccc3333 ok`)).toEqual([
+      { target: "cccc3333", text: "ok" },
+    ]);
+    expect(sentMessages(`printf '' <<EOF\ndray session send aaaa1111 "example only"`)).toEqual([]);
+    // A `<<` inside quotes is text, and opens no heredoc to swallow what follows.
+    expect(sentMessages(`dray send aaaa1111 "Explain <<EOF\nsyntax"; dray send bbbb2222 hi\ncat <<EOF\nbody\nEOF`)).toEqual([
+      { target: "aaaa1111", text: "Explain <<EOF\nsyntax" },
+      { target: "bbbb2222", text: "hi" },
+    ]);
+  });
+
   it("draws no task for a create that failed", () => {
     const items = botItems([call("c", "dray session new x"), result("c", `no project ${ID}`, true)]);
     expect(items).toEqual([]);
@@ -145,5 +236,34 @@ describe("chatItems", () => {
   it("draws no line between two sessions on the same agent", () => {
     const items = chatItems([segment("a", "codex", [said("one")]), segment("b", "codex", [said("two")])]);
     expect(items.map((i) => i.kind)).toEqual(["assistant", "assistant"]);
+  });
+});
+
+describe("taskContext", () => {
+  const from = (text: string, sessionId = ID) =>
+    ev({
+      type: "user_message", text, images: [], issues: [], baseline: null, queued: false,
+      from: { sessionId, title: "Pricing page", machine: null }, cwd: null, kickoff: false,
+    } as unknown as AgentEventPayload);
+
+  it("finds the task's last report and the bot's words after it, past a stall nudge", () => {
+    const report = from("PR is up");
+    const reply = said("Pricing is up as #908.");
+    const items = botItems([
+      from("first try"),
+      said("noted"),
+      report,
+      reply,
+      from("Stall nudge: this task has sat idle for 20m, waiting on the user."),
+      said("Need line written."),
+      user("next thing"),
+    ]);
+    expect([...taskContext(items, ID)]).toEqual([reply.id]);
+  });
+
+  it("falls back to the line that started a task with no reply to point at", () => {
+    const start = [call("c1", `dray session new "Pricing"`), result("c1", `${ID}\nStarted`)];
+    expect([...taskContext(botItems(start), ID)]).toEqual(["c1"]);
+    expect([...taskContext(botItems([...start, from("done")]), ID)]).toEqual(["c1"]);
   });
 });

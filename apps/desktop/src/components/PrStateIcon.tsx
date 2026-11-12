@@ -1,4 +1,5 @@
 import {
+  CircleDashed,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
@@ -60,6 +61,18 @@ function isFailing(pr: PrStateOf): boolean {
 export function prStateLabel(pr: PrStateOf): string {
   const label = STATES[keyOf(pr)].label;
   return isFailing(pr) ? `${label}, checks failing` : label;
+}
+
+/// CI still going on a pull request: the sidebar's and the Tasks tab's mark,
+/// drawn in place of the PR glyph while it lasts.
+export function ChecksRunningIcon({ className }: { className?: string }) {
+  return (
+    <CircleDashed
+      className={cn("size-3.5 shrink-0 animate-spin text-accent-command [animation-duration:3s]", className)}
+      strokeWidth={1.5}
+      aria-label="Checks running"
+    />
+  );
 }
 
 export default function PrStateIcon({

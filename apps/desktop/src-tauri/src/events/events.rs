@@ -418,6 +418,20 @@ pub enum AgentEventPayload {
         model: Option<crate::models::ModelId>,
     },
 
+    /// A task's pull request, posted by the agent with `dray session merge-card`
+    /// so the reader can land it from the chat. The PR's live state is read by
+    /// the frontend; these fields are what the card still names once the task
+    /// is settled and gone from the index.
+    MergeCard {
+        task_id: String,
+        title: String,
+        /// The repo root, what the sidebar's PR marks are keyed by.
+        project_path: String,
+        branch: String,
+        number: u64,
+        url: String,
+    },
+
     /// The agent moved the checkout's git state or a pull request mid-turn —
     /// Claude Code's `vcs_state_changed` and `code_change_published`. Tells the
     /// handoff row, and with `pull_request` the PR tab and sidebar marks, to
@@ -740,6 +754,11 @@ pub struct MessageSender {
     /// the forwarding app, so it names the machine it came from.
     #[serde(default)]
     pub machine: Option<String>,
+    /// The bot whose chat sent it, where one did. `title` is then the bot's
+    /// name, and the chat draws the bot's own face.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub bot_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

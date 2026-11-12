@@ -18,7 +18,7 @@ use crate::{
     models::{find_model, resolve_effort, runs_on, Effort, Model, ModelId},
     store::{
         append_session_event, append_session_index_item, clear_fork_from, copy_session_log,
-        delete_session, get_session_index_item, link_session_issue, list_session_events,
+        delete_session, get_session_index_item, link_session_issue, list_session_events, next_seq_by_session_id,
         relocate_session_to_project, resolve_unclaimed_worktree_name, set_session_status,
         touch_session_index_item, worktree_path, SessionIndexItem, SessionSnapshot, SessionStatus,
     },
@@ -113,11 +113,15 @@ pub struct QueueChangedEvent {
 /// sender, so without this a prompt queued from the island or `dray session
 /// send` showed nowhere until its flush. Emitted under the lock, so two
 /// changes racing each other can never arrive in the wrong order.
+///
+/// A relayed message — a task's report, another bot's or session's send — is
+/// left out: it is for the agent, and every client drew it as the reader's own
+/// bubble until its flush.
 pub async fn publish_queue(session_id: &str, queued: &QueuedMessages, app: &Sink) {
     let held = queued.lock().await;
     let event = QueueChangedEvent {
         session_id: session_id.to_string(),
-        queued: held.clone(),
+        queued: held.iter().filter(|m| m.from.is_none()).cloned().collect(),
     };
     if let Err(e) = app.emit("queue_changed", &event) {
         eprintln!("[queue emit err] {e}");
@@ -1888,6 +1892,22 @@ impl SessionManager {
         Ok((relocated, existed))
     }
 
+    /// Logs and emits an event Dray writes into a session's chat itself. Numbered
+    /// through the live child's counter where one runs — the agent posting a card
+    /// is mid-turn — and off the log otherwise, under the slot's lock either way
+    /// so a spawn cannot take the same `seq`.
+    pub async fn post_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<()> {
+        let slot = self.slot(session_id).await;
+        let guard = slot.lock().await;
+        let (harness, seq) = match guard.as_ref() {
+            Some(s) => (s.harness, s.seq.fetch_add(1, Relaxed)),
+            None => (harness, next_seq_by_session_id(session_id).await?),
+        };
+        let event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
+        app.emit("agent_event", &event)?;
+        append_session_event(session_id, event).await
+    }
+
     /// The agent process's pid, for finding what it started (a dev server is a
     /// descendant). `None` while no child is running.
     pub async fn child_pid(&self, session_id: &str) -> Option<u32> {
@@ -2446,9 +2466,14 @@ impl Session {
     ///
     /// `None` means the flush won the race, which needs no handling beyond
     /// leaving the composer alone: the prompt is on its way and the frontend
-    /// learns so from the `user_message` that follows.
+    /// learns so from the `user_message` that follows. A relayed message is
+    /// skipped: the reader never saw it, so Esc must not drop a task's report.
     pub async fn cancel_queued(&self, app: &Sink) -> Option<QueuedMessage> {
-        let cancelled = self.queued.lock().await.pop();
+        let cancelled = {
+            let mut held = self.queued.lock().await;
+            let newest = held.iter().rposition(|m| m.from.is_none());
+            newest.map(|i| held.remove(i))
+        };
         if cancelled.is_some() {
             publish_queue(&self.id, &self.queued, app).await;
         }
@@ -3441,6 +3466,9 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                 let last = LAST_REPLY.lock().unwrap().remove(ctx.session_id);
                 let said = final_text.as_deref().filter(|t| !t.trim().is_empty()).or(last.as_deref());
                 report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
+                // Awaited, not spawned: the queued flush below would start the
+                // next turn, which could overwrite this one's notes unsaved.
+                crate::bots::commit_turn(ctx.session_cwd).await;
             }
             _ => {}
         }
@@ -4228,6 +4256,33 @@ mod tests {
             queued: Default::default(),
         });
         slot
+    }
+
+    /// A task's report waits in the bot's queue unseen: no client draws it,
+    /// and Esc takes back the reader's own prompt from under it.
+    #[tokio::test]
+    async fn a_relayed_message_is_held_but_never_shown_or_cancelled() {
+        let manager = SessionManager::default();
+        let slot = child_with(&manager, "bot", StatusTracker::default()).await;
+        let shown = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let sink = {
+            let shown = shown.clone();
+            Sink::new(move |_, payload| shown.lock().unwrap().push(payload["queued"].clone()))
+        };
+        let guard = slot.lock().await;
+        let session = guard.as_ref().unwrap();
+        let report = MessageSender { session_id: "t".into(), title: "T".into(), machine: None, bot_id: None };
+        session.queue_msg("mine", &[], &[], None, &sink).await;
+        session.queue_msg("done", &[], &[], Some(report), &sink).await;
+
+        let last = shown.lock().unwrap().last().unwrap().clone();
+        assert_eq!(last.as_array().unwrap().len(), 1);
+        assert_eq!(last[0]["text"], "mine");
+
+        assert_eq!(session.cancel_queued(&sink).await.unwrap().text, "mine");
+        assert!(session.cancel_queued(&sink).await.is_none());
+        assert_eq!(session.queued.lock().await[0].text, "done", "the report still reaches the bot");
+        assert_eq!(shown.lock().unwrap().last().unwrap(), &serde_json::json!([]));
     }
 
     /// Only a child with nothing running and nothing waiting on it is stopped,

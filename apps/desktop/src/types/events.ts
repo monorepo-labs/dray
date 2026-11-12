@@ -360,7 +360,11 @@ automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUse
  * notice says it did. The session layer records it, so the composer
  * stops naming the model the CLI left.
  */
-model: ModelId | null, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+model: ModelId | null, } | { "type": "merge_card", taskId: string, title: string, 
+/**
+ * The repo root, what the sidebar's PR marks are keyed by.
+ */
+projectPath: string, branch: string, number: number, url: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.
@@ -1275,7 +1279,12 @@ export type MessageSender = { sessionId: string, title: string,
  * The machine the sender runs on, where that is not this one. Stamped by
  * the forwarding app, so it names the machine it came from.
  */
-machine: string | null, };
+machine: string | null, 
+/**
+ * The bot whose chat sent it, where one did. `title` is then the bot's
+ * name, and the chat draws the bot's own face.
+ */
+botId?: string, };
 
 export type Model = { 
 /**
@@ -1526,7 +1535,12 @@ headRefName: string, isDraft: boolean, state: PrMarkState, checksState: PrChecks
  * `None` on the merged half, where they are not asked for. The frontend
  * reads that as *unknown* rather than as ready — see `mergeVerdict`.
  */
-mergeable: string | null, mergeStateStatus: string | null, };
+mergeable: string | null, mergeStateStatus: string | null, 
+/**
+ * `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `None` where the
+ * repo asks for no review, and on the merged half.
+ */
+reviewDecision: string | null, };
 
 /**
  * Which of the two connections a mark came from.
@@ -1960,7 +1974,13 @@ continueAt?: string,
  * The reader cancelled the continue above. Kept beside it rather than
  * clearing it, so they can turn it back on until the time passes.
  */
-continueOff: boolean, };
+continueOff: boolean, 
+/**
+ * What a bot's stalled task needs from the reader, one line the bot wrote
+ * with `dray session need`. Drawn only while `at` is no older than
+ * `modified`, so the task moving clears it without a write.
+ */
+need?: TaskNeed, };
 
 /**
  * Session-level facts, known at startup.
@@ -2117,7 +2137,13 @@ continueAt?: string,
  * The reader cancelled the continue above. Kept beside it rather than
  * clearing it, so they can turn it back on until the time passes.
  */
-continueOff: boolean, };
+continueOff: boolean, 
+/**
+ * What a bot's stalled task needs from the reader, one line the bot wrote
+ * with `dray session need`. Drawn only while `at` is no older than
+ * `modified`, so the task moving clears it without a write.
+ */
+need?: TaskNeed, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`
@@ -2236,6 +2262,15 @@ distinctId: string,
  * work.
  */
 personProperties: Record<string, string | number | boolean>, };
+
+/**
+ * See [`SessionIndexItem::need`].
+ */
+export type TaskNeed = { text: string, 
+/**
+ * RFC3339, when the bot wrote it.
+ */
+at: string, };
 
 /**
  * A tool `dray setup --install` takes, as a server has it.

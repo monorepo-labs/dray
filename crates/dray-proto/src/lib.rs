@@ -44,8 +44,15 @@ use std::path::PathBuf;
 /// request here, a create meant for a VPS starting on the Mac as if it had
 /// gone where it was sent. v13 added `add_video`, which an older app reads as a
 /// broken CLI rather than as an app to update. v14 added `share_machines`, and
-/// v15 the assistant verbs, and v16 `dray login` and `dray logout`.
-pub const PROTOCOL_VERSION: u32 = 16;
+/// v15 the assistant verbs, v16 `dray login` and `dray logout`, v17 the
+/// bot verbs, v18 `merge_card`, and v19 `set_need`.
+pub const PROTOCOL_VERSION: u32 = 19;
+
+/// Remote MCP (#863), held out of release builds until Dray accounts (#874)
+/// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
+/// verbs; `REMOTE_MCP` in ServersSettings.tsx is its UI twin. MCP-HELD.md
+/// says what else comes back with it.
+pub const REMOTE_MCP: bool = cfg!(debug_assertions);
 
 /// The oldest envelope the app still answers. Rises only when a shape is
 /// *renamed*, never for an addition: v4 renamed `LinkIssues.identifiers` to
@@ -117,6 +124,13 @@ impl Request {
             Request::ShareMachines(_) => 14,
             Request::PairAssistant(_) | Request::ListAssistants | Request::RevokeAssistant(_) => 15,
             Request::Login | Request::LinkStatus | Request::Logout => 16,
+            Request::CreateBot(_)
+            | Request::ListBots
+            | Request::RenameBot(_)
+            | Request::RemoveBot(_)
+            | Request::SendToBot(_) => 17,
+            Request::MergeCard(_) => 18,
+            Request::SetNeed(_) => 19,
         }
     }
 }
@@ -155,6 +169,90 @@ pub enum Request {
     Login,
     LinkStatus,
     Logout,
+    CreateBot(CreateBot),
+    ListBots,
+    RenameBot(RenameBot),
+    RemoveBot(BotRef),
+    SendToBot(SendToBot),
+    MergeCard(MergeCard),
+    SetNeed(SetNeed),
+}
+
+/// A merge card for a task's open pull request, posted into `session_id`'s
+/// chat for the reader to land from there.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeCard {
+    /// The chat the card goes in: the calling session.
+    pub session_id: String,
+    /// The session whose branch carries the pull request.
+    pub task_session_id: String,
+}
+
+/// What a bot's stalled task needs from the reader, one line drawn in the
+/// bot's "Waiting on you" card. An empty `need` clears it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetNeed {
+    pub session_id: String,
+    pub need: String,
+}
+
+/// A new bot. Shape and hue are picked at random where absent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBot {
+    pub name: String,
+    /// One of the app's Blobatar shape names: `round`, `cloud`, `sun`…
+    #[serde(default)]
+    pub shape: Option<String>,
+    /// Hue in degrees, 0–360.
+    #[serde(default)]
+    pub hue: Option<f64>,
+}
+
+/// A bot by its name, matched without regard to case, or by its id.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotRef {
+    pub bot: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameBot {
+    pub bot: String,
+    pub name: String,
+}
+
+/// A message into a bot's chat, starting one where it has none. Nothing comes
+/// back on its own: the bot replies, if it wants to, with a send of its own.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendToBot {
+    pub bot: String,
+    pub prompt: String,
+    /// The calling session, from `DRAY_SESSION_ID`, as [`SendMessage`] has it.
+    #[serde(default)]
+    pub from_session_id: Option<String>,
+}
+
+/// What the CLI is told about a bot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotSummary {
+    pub id: String,
+    pub name: String,
+    /// Its folder, where its chat runs.
+    pub path: String,
+    /// Its chat's current session, which `dray session send` also reaches.
+    /// `None` until anyone has written to it.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub shape: Option<String>,
+    #[serde(default)]
+    pub hue: Option<f64>,
 }
 
 /// A pairing code for an assistant to sign in to this server's `/mcp` with.
@@ -775,6 +873,8 @@ pub enum Response {
     Browser { output: String, data: serde_json::Value },
     /// Where a video landed, the path the chat plays.
     Video { path: String },
+    /// The pull request a merge card was posted for, and the task's title.
+    MergeCard { number: u64, url: String, title: String },
     /// The session's live links after the change, whichever verb asked.
     Shared { shares: Vec<SharedPort> },
     /// The session a verb acted on, as it stands after.
@@ -802,6 +902,13 @@ pub enum Response {
     LinkStatus { linked: Option<LinkedOrg>, pending: bool, error: Option<String> },
     /// `warning` is set where drayhq.com couldn't be told.
     Unlinked { org: LinkedOrg, warning: Option<String> },
+    /// The bot a verb acted on, as it stands after — or as it stood, for one
+    /// removed.
+    Bot { bot: BotSummary },
+    Bots { bots: Vec<BotSummary> },
+    /// A message into a bot's chat, naming the bot it reached: the sender
+    /// may have used a name the bot has since dropped.
+    BotSent { bot: BotSummary, queued: bool },
     Error { message: String },
 }
 
@@ -1130,6 +1237,20 @@ mod tests {
         for request in &link {
             assert_eq!(Envelope::new(request.clone()).v, 16, "{request:?}");
         }
+        let bots = [
+            Request::CreateBot(Default::default()),
+            Request::ListBots,
+            Request::RenameBot(Default::default()),
+            Request::RemoveBot(Default::default()),
+            Request::SendToBot(Default::default()),
+        ];
+        for request in &bots {
+            assert_eq!(Envelope::new(request.clone()).v, 17, "{request:?}");
+        }
+        let card = Request::MergeCard(Default::default());
+        assert_eq!(Envelope::new(card.clone()).v, 18);
+        let need = Request::SetNeed(Default::default());
+        assert_eq!(Envelope::new(need.clone()).v, 19);
         let newest = old
             .iter()
             .chain(&drafts)
@@ -1139,6 +1260,8 @@ mod tests {
             .chain([&remote, &elsewhere, &video, &sharing])
             .chain(&assistants)
             .chain(&link)
+            .chain(&bots)
+            .chain([&card, &need])
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));

@@ -3,6 +3,7 @@ import Reasoning from "@/components/chat/Reasoning";
 import ToolCall from "@/components/chat/ToolCall";
 import UserMessage from "@/components/chat/UserMessage";
 import FileEdits from "@/components/chat/FileEdits";
+import MergeCard from "@/components/chat/MergeCard";
 import { compactTokens, resetTime } from "@/lib/format";
 import { drawsFailure } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
@@ -149,6 +150,9 @@ export default function EventRow({
           {payload.finalText?.trim() || "Turn failed"}
         </Notice>
       );
+
+    case "merge_card":
+      return <MergeCard event={event} />;
 
     // The harness's own sentence — a refusal, a safeguard notice — as written.
     case "notice":
