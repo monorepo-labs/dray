@@ -119,9 +119,9 @@ function StalledRow({
             className="ml-auto flex shrink-0 items-center gap-2"
           >
             <Button
-              variant="outline"
+              variant="ghost"
               size="xs"
-              className="opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+              className="text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
               onClick={(e) => {
                 e.stopPropagation();
                 onOpen(id, isModClick(e));
