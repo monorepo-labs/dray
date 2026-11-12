@@ -37,16 +37,18 @@ export const MergeCardChatContext = createContext<{ after: Map<string, number>; 
   bot: false,
 });
 
+/// Empty where something else already says it: the PR glyph for a draft, the
+/// Merge button for ready.
 const VERDICT_WORDS: Record<ReturnType<typeof mergeVerdict>, string> = {
   merged: "Merged",
   closed: "Closed without merging",
   conflict: "Conflicts with base",
   unknown: "Checking mergeability…",
-  draft: "Draft",
+  draft: "",
   behind: "Behind base",
   blocked: "Blocked",
   unstable: "Checks not passing",
-  ready: "Ready to merge",
+  ready: "",
 };
 
 // Running checks draw `ChecksRunningIcon` in place of words.
@@ -79,7 +81,8 @@ function statusLine(pr: PrMark | undefined): string {
   if (!pr) return "Reading status…";
   const verdict = VERDICT_WORDS[mergeVerdict(pr)];
   const checks = pr.state === "OPEN" ? CHECK_WORDS[pr.checksState] : null;
-  return checks && verdict !== "Checks not passing" ? `${checks} · ${verdict}` : verdict;
+  if (!checks || verdict === "Checks not passing") return verdict;
+  return verdict ? `${checks} · ${verdict}` : checks;
 }
 
 /// A task's pull request, posted into the chat by `dray session merge-card`.
@@ -99,6 +102,8 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
   const title = host?.titleOf(card.taskId) ?? card.title;
   const mergeable = pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
   const conflicted = pr?.state === "OPEN" && mergeVerdict(pr) === "conflict";
+  const running = pr?.state === "OPEN" && pr.checksState === "RUNNING";
+  const status = statusLine(pr);
   // `null` is a PR no longer among the open or recently merged: nothing left
   // to land, so it draws one line without claiming which way it went.
   const compact = merged || found === null || (chat.after.get(event.id) ?? 0) >= FULL_FOR;
@@ -152,9 +157,9 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
             >
               #{card.number}
             </button>
-            <span aria-hidden>·</span>
-            {pr?.state === "OPEN" && pr.checksState === "RUNNING" && <ChecksRunningIcon />}
-            <span className={cn("truncate", statusTone(pr))}>{statusLine(pr)}</span>
+            {(running || status) && <span aria-hidden>·</span>}
+            {running && <ChecksRunningIcon />}
+            {status && <span className={cn("truncate", statusTone(pr))}>{status}</span>}
           </p>
         </div>
         {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} named />}
