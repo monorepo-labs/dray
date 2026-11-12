@@ -544,6 +544,18 @@ pub async fn bot_at(cwd: &str) -> Option<Bot> {
     bots.into_iter().find(|b| same_dir(&b.path, cwd))
 }
 
+/// The bot whose folder is `path` or holds it. Inside counts: git finds the
+/// bot's history from any folder under it.
+pub async fn bot_holding(path: &str) -> Option<Bot> {
+    let bots = read_list().await.ok()?;
+    bots.into_iter().find(|b| holds(&b.path, path))
+}
+
+/// Component-wise, so `bots/bb` is not inside `bots/b`.
+fn holds(dir: &str, path: &str) -> bool {
+    Path::new(path).starts_with(dir)
+}
+
 fn same_dir(a: &str, b: &str) -> bool {
     a.trim_end_matches('/') == b.trim_end_matches('/')
 }
@@ -681,11 +693,7 @@ async fn start_history(bot: &Bot) -> Result<()> {
         return Ok(());
     }
     git(dir, &["init", "-q", "-b", "main"]).await?;
-    // The bot's own name, so its history needs no global identity and reads as
-    // its own.
-    git(dir, &["config", "user.name", &bot.name]).await?;
-    git(dir, &["config", "user.email", &format!("{}@bots.dray.local", bot.id)]).await?;
-    commit_all(dir, Some("Start history")).await
+    commit_all(bot, Some("Start history")).await
 }
 
 /// Commits what a turn of the bot at `cwd` changed in its folder, where `cwd`
@@ -697,14 +705,15 @@ pub async fn commit_turn(cwd: &str) {
         return;
     }
     let _guard = HISTORY_LOCK.lock().await;
-    if let Err(e) = commit_all(Path::new(&bot.path), None).await {
+    if let Err(e) = commit_all(&bot, None).await {
         eprintln!("[bot history] {e:#}");
     }
 }
 
 /// Stages everything and commits it, where anything changed. `None` names the
 /// files changed instead.
-async fn commit_all(dir: &Path, message: Option<&str>) -> Result<()> {
+async fn commit_all(bot: &Bot, message: Option<&str>) -> Result<()> {
+    let dir = Path::new(&bot.path);
     git(dir, &["add", "-A"]).await?;
     let changed = git(dir, &["diff", "--cached", "--name-only", "-z"]).await?;
     let files: Vec<&str> = changed.split('\0').filter(|f| !f.is_empty()).collect();
@@ -712,7 +721,12 @@ async fn commit_all(dir: &Path, message: Option<&str>) -> Result<()> {
         return Ok(());
     }
     let message = message.map_or_else(|| turn_message(&files), str::to_string);
-    git(dir, &["commit", "-q", "-m", &message]).await.map(drop)
+    // The bot's own name on every commit, so its history needs no global
+    // identity and reads as its own. Given each time rather than written to
+    // the repo's config once, which a setup cut off after `init` would skip.
+    let name = format!("user.name={}", bot.name);
+    let email = format!("user.email={}@bots.dray.local", bot.id);
+    git(dir, &["-c", &name, "-c", &email, "commit", "-q", "-m", &message]).await.map(drop)
 }
 
 fn turn_message(files: &[&str]) -> String {
@@ -736,7 +750,7 @@ async fn git(dir: &Path, args: &[&str]) -> Result<String> {
         .await
         .context("could not run git")?;
     if !out.status.success() {
-        anyhow::bail!("git {}: {}", args[0], String::from_utf8_lossy(&out.stderr).trim());
+        anyhow::bail!("git: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -888,12 +902,12 @@ mod tests {
         start_history(&bot).await.unwrap();
         assert_eq!(log().await, "Ops|Start history\n");
 
-        commit_all(&dir, None).await.unwrap();
+        commit_all(&bot, None).await.unwrap();
         assert_eq!(log().await.lines().count(), 1);
 
         tokio::fs::create_dir_all(dir.join(MEMORY)).await.unwrap();
         tokio::fs::write(dir.join(MEMORY).join("tea.md"), "likes tea").await.unwrap();
-        commit_all(&dir, None).await.unwrap();
+        commit_all(&bot, None).await.unwrap();
         assert_eq!(log().await.lines().next(), Some("Ops|Update memory/tea.md"));
         tokio::fs::remove_dir_all(&dir).await.ok();
     }
@@ -901,6 +915,13 @@ mod tests {
     #[test]
     fn a_turn_message_names_three_files_at_most() {
         assert_eq!(turn_message(&["a", "b", "c", "d", "e"]), "Update a, b, c and 2 more");
+    }
+
+    #[test]
+    fn a_folder_inside_a_bot_is_the_bots() {
+        assert!(holds("/h/bots/b", "/h/bots/b/memory"));
+        assert!(holds("/h/bots/b", "/h/bots/b/"));
+        assert!(!holds("/h/bots/b", "/h/bots/bb"));
     }
 
     #[test]

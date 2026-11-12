@@ -1295,7 +1295,7 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
     let project_path = resolve_project(&create, parent.as_ref())?;
     // A bot's folder is its own notes, not a project to work in. Its history
     // makes it a repository, so a task there would start in a worktree of it.
-    if crate::bots::bot_at(&project_path).await.is_some() {
+    if crate::bots::bot_holding(&project_path).await.is_some() {
         bail!("a bot's folder is not a project — pass --project <repo path>");
     }
 
