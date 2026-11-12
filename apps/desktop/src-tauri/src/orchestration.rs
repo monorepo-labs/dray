@@ -869,19 +869,12 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             crate::set_session_flags(&aside.session_id, None, None, None, Some(aside.aside), app.clone()).await?;
             answer_session(&aside.session_id).await
         }
-        on_screen => {
+        mut on_screen => {
             // Resolved here, where the index lives, before the step goes to
-            // the app's CEF or a headless Chromium. The caller rides along as
-            // `driver`, so two tasks sharing the tabs never drive one page.
-            let on_screen = match on_screen {
-                Request::Browser(mut step) => {
-                    let owner = crate::bots::browser_owner(&step.session_id).await;                    if owner != step.session_id {
-                        step.driver = Some(std::mem::replace(&mut step.session_id, owner));
-                    }
-                    Request::Browser(step)
-                }
-                other => other,
-            };
+            // the app's CEF or a headless Chromium.
+            if let Request::Browser(step) = &mut on_screen {
+                step.session_id = crate::bots::browser_owner(&step.session_id).await;
+            }
             #[cfg(feature = "desktop")]
             if crate::is_server() {
                 return ask_app(on_screen).await;
@@ -1173,9 +1166,9 @@ async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
     };
     #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
     if !crate::is_server() {
-        return Ok(answered(crate::cef::automation::run(&request.session_id, request.driver, request.action).await));
+        return Ok(answered(crate::cef::automation::run(&request.session_id, request.action).await));
     }
-    Ok(answered(crate::headless::automation::run(&request.session_id, request.driver, request.action).await))
+    Ok(answered(crate::headless::automation::run(&request.session_id, request.action).await))
 }
 
 /// Files a video for a session's chat. The folder is worked out here because

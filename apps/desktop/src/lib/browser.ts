@@ -66,6 +66,10 @@ function start() {
     }
     tabsBySession.set(sessionId, tabs);
     fetched.add(sessionId);
+    // The reader moving on or off a recorded tab moves the cover with them.
+    // Here rather than at the click: the Rust side has switched by now, so
+    // the still is taken of the tab that is really on screen.
+    if (recording.has(sessionId)) present();
     notify();
   });
   void listen<{ sessionId: string; element: PickedElement | null }>("browser_pick", (e) => {
@@ -109,7 +113,8 @@ function start() {
     // hide and nothing to wait for. Answered before `present`, which in
     // that case does no work and would leave the shot waiting on a hide
     // that is never going to happen.
-    if (on && (!shown || winner?.sessionId !== sessionId)) shutterReady(shot);
+    // Nor where a recording is under way on a tab the reader is not on.
+    if (on && (!shown || winner?.sessionId !== sessionId || !hiding())) shutterReady(shot);
     present();
     notify();
   });
@@ -143,9 +148,10 @@ function start() {
     }
     notify();
   });
-  void listen<{ sessionId: string; recording: boolean }>("browser_recording", (e) => {
-    if (e.payload.recording) recording.add(e.payload.sessionId);
-    else recording.delete(e.payload.sessionId);
+  void listen<{ sessionId: string; tab: number | null }>("browser_recording", (e) => {
+    const { sessionId, tab } = e.payload;
+    if (tab !== null) recording.set(sessionId, tab);
+    else recording.delete(sessionId);
     notify();
   });
   // Whether Chromium is on disk yet. The first read fails in a build without
@@ -336,11 +342,13 @@ export function setPickHandler(fn: typeof pickHandler) {
   pickHandler = fn;
 }
 
-/// Sessions `dray browser record` is recording, as `browser_recording` says.
-const recording = new Set<string>();
+/// The tab `dray browser record` is recording in each session, as
+/// `browser_recording` says. That tab alone is covered and kept from being
+/// closed; the reader goes on using the rest.
+const recording = new Map<string, number>();
 
-export function useRecording(sessionId: string): boolean {
-  return useSyncExternalStore(subscribe, () => recording.has(sessionId));
+export function useRecordedTab(sessionId: string): number | null {
+  return useSyncExternalStore(subscribe, () => recording.get(sessionId) ?? null);
 }
 
 /// Tabs a `dray browser` verb touched within `DRIVEN_HOLD`, keyed by tab id,
@@ -401,8 +409,8 @@ export function useDriven(tab: number | undefined): string | null {
 }
 
 /// Read at a keypress, where a hook's copy would be the last render's.
-export function isRecording(sessionId: string): boolean {
-  return recording.has(sessionId);
+export function recordedTab(sessionId: string): number | null {
+  return recording.get(sessionId) ?? null;
 }
 
 export function usePicking(sessionId: string): boolean {
@@ -782,7 +790,11 @@ export function browserHistory(sessionId: string): Promise<BrowserVisit[]> {
 function hiding(): boolean {
   if (occluded || suggesting) return true;
   const winner = presenter();
-  return !!winner && shooting.has(winner.sessionId);
+  if (!winner || !shooting.has(winner.sessionId)) return false;
+  // A recording holds the shutter for its whole length, but only its own tab
+  // is laid out at the recording's size; any other tab is live.
+  const recorded = recording.get(winner.sessionId);
+  return recorded === undefined || tabsBySession.get(winner.sessionId)?.find((t) => t.active)?.id === recorded;
 }
 
 export function useBrowserSnapshot(sessionId: string): Snapshot | null {

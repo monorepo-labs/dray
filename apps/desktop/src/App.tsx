@@ -39,7 +39,7 @@ import {
   clearOpenError,
   closeTab,
   describePick,
-  isRecording,
+  recordedTab,
   navigate,
   openInBrowser,
   reachableUrl,
@@ -1479,16 +1479,11 @@ function App() {
 
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
 
-  // Whose browser the selection shows: a bot and its tasks share the bot
-  // chat's, as the server routes their agents' `dray browser` steps (#881).
-  // A settled task is on no loaded index, so its walk starts at its parent,
-  // off the held transcript, as the server's does off the whole index.
-  const heldParent = selectedSession?.parentSessionId;
-  const browserSession = selectedSessionId
-    ? (botBrowser(bots, sessionIndexItems, rowOf(selectedSessionId)) ??
-      (heldParent ? botBrowser(bots, sessionIndexItems, heldParent) : undefined) ??
-      rowOf(selectedSessionId))
-    : null;
+  // Every session browses in its own browser, a bot's tasks included. A bot
+  // chat is the exception only in name: an agent switch makes it several
+  // sessions, and its pages live on the oldest, as the server routes them.
+  const browserOf = (id: string) => botBrowser(bots, sessionIndexItems, id) ?? id;
+  const browserSession = selectedSessionId ? browserOf(selectedSessionId) : null;
   const browserTabs = useBrowserTabs(browserSession);
   const blankTabs = useBlankTabs(browserSession ?? "");
   const pendingBrowserTab = blankTabs.active !== null;
@@ -1501,14 +1496,9 @@ function App() {
     if (!browserWanted) return;
     if (browserWanted !== selectedSessionId) return setBrowserWanted(null);
     if (!browserTabs?.some((tab) => tab.active)) return;
-    // A task lit in its bot's row has no pages of its own in that row: the
-    // page is the bot's, so the bot's Browser view is where it shows.
-    const row = rowOf(browserWanted);
-    setViewTabs((prev) => ({ ...prev, [row]: "browser" }));
-    if (row !== browserWanted) void handleSelectSessionIndexItem(row);
+    setViewTabs((prev) => ({ ...prev, [browserWanted]: "browser" }));
     setBrowserWanted(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browserWanted, browserTabs, selectedSessionId, rowOf]);
+  }, [browserWanted, browserTabs, selectedSessionId]);
   // The main column's Browser view is the panel's browser expanded. Arriving
   // on it closes the pane, whatever tab the pane was on: the reader came for
   // the full width. ⌘E brings it back beside the page, and leaving gives back
@@ -2167,25 +2157,30 @@ function App() {
     return () => setIssueOpener(null);
   }, []);
 
-  // A link in the transcript opens as a new tab in the session's browser and
-  // flips the main column to the Browser view, leaving the side panel alone.
-  // ⌘-click, or no session to hold one, goes to the system browser.
+  // A link in the transcript opens as a new tab in the browser of the chat it
+  // was clicked in and flips the main column to the Browser view, leaving the
+  // side panel alone. In a bot's row the main column is the row's, so there
+  // it opens in the side panel instead, beside that chat — the bot's or the
+  // lit task's. ⌘-click, or no session to hold one, goes to the system browser.
   useEffect(() => {
     setLinkOpener((url, { external }) => {
-      if (!selectedSessionId) {
+      if (!selectedSessionId || !browserSession) {
         void openUrl(url).catch(console.error);
         return;
       }
       // The session is named outright: the read lands after an await, and by
       // then the reader may be on another session whose pane must stay put.
       const sessionId = selectedSessionId;
+      const browser = browserSession;
+      const inBotRow = !!selectedBotId || rowOf(sessionId) !== sessionId;
       const gen = navGen.current;
       void reachableUrl(sessionId, url).then(
         (reached) => {
           if (external) return void openUrl(reached).catch(console.error);
-          void openInBrowser(browserSession ?? sessionId, reached, true)
+          void openInBrowser(browser, reached, true)
             .then(() => {
-              setBrowserWanted(sessionId);
+              if (inBotRow) showPanel("browser", sessionId);
+              else setBrowserWanted(sessionId);
               trackBrowserOpen(reached);
             })
             .catch(() => {
@@ -2202,7 +2197,7 @@ function App() {
       );
     });
     return () => setLinkOpener(null);
-  }, [selectedSessionId, navGen, setError]);
+  }, [selectedSessionId, browserSession, selectedBotId, rowOf, showPanel, navGen, setError]);
 
   // An element picked in the page lands in that session's draft, and the
   // composer is brought on screen to show it — off the full view and onto
@@ -2723,12 +2718,12 @@ function App() {
   // arbitration — bar the last arm, which is the reader on Chat with the
   // browser beside it in the panel and no grid to close a pane out of.
   const closeBrowserTab = () => {
-    if (!browserSession || isRecording(browserSession)) return;
+    if (!browserSession) return;
     // A blank tab has no browser behind it, so it is dropped rather than
     // closed — and it is what the reader is looking at while it is up.
     if (blankTabs.active !== null) return closeBlankTab(browserSession, blankTabs.active);
     const open = browserTabs?.find((tab) => tab.active);
-    if (open) void closeTab(browserSession, open.id);
+    if (open && open.id !== recordedTab(browserSession)) void closeTab(browserSession, open.id);
   };
   // `viewTab` is per session and the issues page does not clear it, so a
   // reader who opened Issues from the Files view still has `activeFile`
@@ -2814,7 +2809,7 @@ function App() {
   // ⌘⇧← / ⌘⇧→ step the browser's strip, clamped like every other subtab row.
   // The pending tab sits at the end of it, which is where the strip draws it.
   const stepBrowserTab = (delta: number) => {
-    if (!browserSession || !browserTabs || isRecording(browserSession)) return;
+    if (!browserSession || !browserTabs) return;
     const from = pendingBrowserTab ? browserTabs.length : browserTabs.findIndex((tab) => tab.active);
     const next = browserTabs[from + delta];
     if (!next) return;
@@ -3371,7 +3366,7 @@ function App() {
               // With a task tab lit, still the bot's row: its chat, pages and
               // files, the task tabs after them.
               sessionId={rowSession.sessionId}
-              browserId={browserSession ?? rowSession.sessionId}
+              browserId={browserOf(rowSession.sessionId)}
               // The group's name over a grid, for the reason the header gave:
               // each pane already names its own session. The project is left
               // off where the sidebar is already filtered down to it.

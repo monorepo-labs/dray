@@ -164,7 +164,7 @@ fn set_paused(session: &str, paused: bool) {
 /// writer.
 pub(super) fn drop_recording(session: &str) {
     if let Some(rec) = RECORDING.lock().unwrap().remove(session) {
-        emit_recording(session, false);
+        emit_recording(session, None);
         emit_shooting(session, false, rec.shot);
         std::thread::spawn(move || rec.recorder.discard());
     }
@@ -334,7 +334,7 @@ pub(super) fn forget(tab: i32) {
         (s.clone(), r.shot)
     });
     if let Some((session, shot)) = closed {
-        emit_recording(&session, false);
+        emit_recording(&session, None);
         emit_shooting(&session, false, shot);
     }
 }
@@ -474,39 +474,27 @@ struct Driven {
     closed: bool,
 }
 
-tokio::task_local! {
-    /// The session whose agent runs this step, where `session` names a browser
-    /// it shares — a bot's task on its bot chat's (#881). `DRIVEN` is keyed by
-    /// it, so two tasks sharing the tabs each keep a page of their own.
-    static DRIVER: String;
-}
-
-/// Whose entry in `DRIVEN` this step reads: the agent's own session.
-fn driver(session: &str) -> String {
-    DRIVER.try_with(Clone::clone).unwrap_or_else(|_| session.to_string())
-}
-
 fn drive(session: &str, tab: i32) {
     let url = tab_state(tab).map(|(url, _, _)| url).unwrap_or_default();
-    DRIVEN.lock().unwrap().insert(driver(session), Driven { tab, url, closed: false });
+    DRIVEN.lock().unwrap().insert(session.into(), Driven { tab, url, closed: false });
 }
 
 fn closed_by_agent(session: &str, tab: i32) {
-    if let Some(d) = DRIVEN.lock().unwrap().get_mut(&driver(session)).filter(|d| d.tab == tab) {
+    if let Some(d) = DRIVEN.lock().unwrap().get_mut(session).filter(|d| d.tab == tab) {
         d.closed = true;
     }
 }
 
 /// The agent's tab, while open.
 fn driven_id(session: &str) -> Option<i32> {
-    let tab = DRIVEN.lock().unwrap().get(&driver(session)).filter(|d| !d.closed)?.tab;
+    let tab = DRIVEN.lock().unwrap().get(session).filter(|d| !d.closed)?.tab;
     tabs_of(session).iter().any(|t| t.id == tab).then_some(tab)
 }
 
 /// The tab a verb acts on: the agent's, or the reader's active tab before
 /// the agent has driven any — the reader handing a page over.
 fn current(session: &str) -> Option<i32> {
-    if DRIVEN.lock().unwrap().contains_key(&driver(session)) {
+    if DRIVEN.lock().unwrap().contains_key(session) {
         driven_id(session)
     } else {
         active_id(session)
@@ -526,7 +514,7 @@ async fn resolve(session: &str) -> Result<(), String> {
     if current(session).is_some() {
         return Ok(());
     }
-    let Some(url) = DRIVEN.lock().unwrap().get(&driver(session)).filter(|d| !d.closed).map(|d| d.url.clone()) else {
+    let Some(url) = DRIVEN.lock().unwrap().get(session).filter(|d| !d.closed).map(|d| d.url.clone()) else {
         return Ok(());
     };
     let tabs = tabs_of(session);
@@ -558,12 +546,8 @@ fn page(tab: i32) -> (String, Value) {
     }
 }
 
-/// Opens `url` in a new tab and answers its id. Listing, opening and finding
-/// the new tab run under one lock: a bot's tasks share a browser (#881), and
-/// two opens interleaved would both find the first new tab and drive one page.
+/// Opens `url` in a new tab and answers its id.
 async fn open_new(session: &str, url: String) -> Result<i32, String> {
-    static OPENING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    let _one_at_a_time = OPENING.lock().await;
     let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
     open_url(session, url, None).await?;
     new_tab(session, &before).await
@@ -672,15 +656,11 @@ async fn set_checked(tab: i32, at: &Locator, on: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// The whole of `dray browser`: one action on the agent's tab, in `session`'s
-/// browser. `driver` is the agent's own session where that browser is shared.
-pub async fn run(session: &str, driver: Option<String>, action: BrowserAction) -> Answer {
-    DRIVER.scope(driver.unwrap_or_else(|| session.to_string()), run_step(session, action)).await
-}
-
+/// The whole of `dray browser`: one action on the agent's tab.
+///
 /// An input verb first brings the tab's view out of hiding, off-screen —
 /// see `reveal` — and the layout is put back after, whatever the outcome.
-async fn run_step(session: &str, action: BrowserAction) -> Answer {
+pub async fn run(session: &str, action: BrowserAction) -> Answer {
     let input = matches!(
         action,
         BrowserAction::Click { .. }
@@ -1166,9 +1146,10 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             // page is laid out at w×h throughout, and the pane keeps its still
             // up rather than show that layout squeezed into itself. Its number
             // is also the recording's own, which `film` checks it is still for.
+            // Named first, so a pane on another tab answers at once and stays live.
+            emit_recording(session, Some(tab));
             let shot = cover(session).await;
             RECORDING.lock().unwrap().insert(session.into(), Recording { tab, size: (w, h), shot, paused: false, layout: 0, closed: false, recorder });
-            emit_recording(session, true);
             let started = async {
                 relayout()?;
                 cdp(tab, "Emulation.setDeviceMetricsOverride", metrics(w, h)).await?;
@@ -1269,16 +1250,17 @@ async fn end_recording(session: &str, tab: i32, shot: u64) {
     let _ = cdp(tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
     let _ = relayout();
     tokio::time::sleep(SETTLE).await;
-    emit_recording(session, false);
+    emit_recording(session, None);
     emit_shooting(session, false, shot);
 }
 
-/// Tells the pane a session is recording, so it can say so over the still it
-/// holds meanwhile. Its own event rather than a reading of `browser_shooting`:
-/// a screenshot holds the same shutter for a moment, and a notice flashing
-/// up for every screenshot is the flash `Snapshot` exists to avoid.
-fn emit_recording(session: &str, recording: bool) {
-    emit("browser_recording", json!({ "sessionId": session, "recording": recording }));
+/// Tells the pane which tab a session is recording, so it covers that tab
+/// alone and says so over its still. Its own event rather than a reading of
+/// `browser_shooting`: a screenshot holds the same shutter for a moment, and
+/// a notice flashing up for every screenshot is the flash `Snapshot` exists
+/// to avoid.
+fn emit_recording(session: &str, tab: Option<i32>) {
+    emit("browser_recording", json!({ "sessionId": session, "recording": tab.is_some(), "tab": tab }));
 }
 
 /// The PNG of the page laid out at `w`×`h`. The widget is the pane's size,

@@ -687,6 +687,23 @@ pub async fn bot_holding(path: &str) -> Option<Bot> {
     bots.into_iter().find(|b| holds(&b.path, path))
 }
 
+/// The session whose browser a `dray browser` step from `session_id` drives.
+/// A bot chat is every session in its folder, and an agent switch starts a
+/// newer one, so its pages live on the oldest (#878); `botBrowser` in the
+/// frontend picks the same. Anything else, a bot's tasks included, its own.
+pub async fn browser_owner(session_id: &str) -> String {
+    let Some(item) = crate::store::get_session_index_item(session_id).await.ok().flatten() else {
+        return session_id.to_string();
+    };
+    if bot_at(&item.cwd).await.is_none() {
+        return session_id.to_string();
+    }
+    match chat_sessions(&item.cwd).await.ok().and_then(|c| c.into_iter().next()) {
+        Some(oldest) => oldest.session_id,
+        None => session_id.to_string(),
+    }
+}
+
 /// Component-wise, so `bots/bb` is not inside `bots/b`.
 fn holds(dir: &str, path: &str) -> bool {
     Path::new(path).starts_with(dir)
@@ -724,22 +741,6 @@ async fn bot_chat_of(item: &SessionIndexItem) -> Option<SessionIndexItem> {
         };
     }
     None
-}
-
-/// The session whose browser a `dray browser` step from `session_id` drives:
-/// a bot and everything under it share the bot chat's pages (#881), so a
-/// task's agent opens them where the reader, on any of the bot's tabs, sees them.
-/// The chat's oldest session, since an agent switch adds a newer one and the
-/// pages must outlive it; `botBrowser` in the frontend picks the same.
-pub async fn browser_owner(session_id: &str) -> String {
-    let Some(item) = crate::store::get_session_index_item(session_id).await.ok().flatten() else {
-        return session_id.to_string();
-    };
-    let Some(chat) = bot_chat_of(&item).await else { return session_id.to_string() };
-    match chat_sessions(&chat.cwd).await.ok().and_then(|c| c.into_iter().next()) {
-        Some(oldest) => oldest.session_id,
-        None => chat.session_id,
-    }
 }
 
 /// `base` with the bot's own block added where `cwd` is a bot's folder, or the

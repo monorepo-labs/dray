@@ -909,8 +909,12 @@ fn shown_tab() -> Option<i32> {
 /// hides every other tab's view, waking that tab first if it was discarded.
 /// AppKit's y runs up from the bottom and the frontend's down from the top,
 /// so the rect is flipped against the parent's height. Main thread only.
+///
+/// A recorded tab stays parked even when active: the reader may switch tabs
+/// mid-recording, and the pane's cover can land a frame after the switch,
+/// which would put the recording's layout squeezed into the pane.
 fn apply_layout() {
-    let shown = shown_tab();
+    let shown = shown_tab().filter(|&id| automation::parked(id).is_none());
     if let Some(id) = shown {
         touch(id);
         wake(id);
@@ -2374,6 +2378,8 @@ pub(crate) fn activate(session_id: String, id: i32, focus: bool) -> Result<(), S
         let focus = focus || browser_holds_focus(&session_id);
         set_active(&session_id, Some(id));
         apply_layout();
+        // Never into a recorded tab, or the reader's keys land in the film.
+        let focus = focus && automation::parked(id).is_none();
         if let Some(host) = browser_of(id).and_then(|b| b.host()).filter(|_| focus) {
             host.set_focus(1);
         }
