@@ -1,23 +1,23 @@
 {
-  "version": "0.30.0",
-  "notes": "### New\n\n- **Bots.** A bot is one long-running chat with its own instructions\n  and memory. It starts tasks for you and hears back when each one\n  finishes. Find them at the top of the sidebar, starting with Dray Bot.\n- **Tasks open as tabs.** Click a task in a bot's Tasks list and it\n  opens as a tab beside the bot's chat. Add Diff and Files tabs with +.\n- **Switch a bot's agent.** Pick another agent mid-chat and the\n  conversation carries over.\n- **Bots message each other.** `dray bot send` reaches another bot by\n  name, and `dray bot new|ls|rename|rm` manage them from the terminal.\n- A bot's folder keeps its own git history, so lost notes can come back.\n\n### Improved\n\n- A server that drops keeps its sessions in the sidebar, faded, with\n  the reason on hover.\n- Idle agents stop after 15 minutes to free memory, and pick up where\n  they left off on your next message.\n- pi signs in and out from Settings → Accounts without opening its TUI.\n\n### Fixed\n\n- Break reminders count time spent outside Dray, and the window comes\n  forward when one is due.\n- Recordings from a remote server play at once instead of sitting at\n  0:00.",
-  "pub_date": "2026-11-12T12:29:58.599Z",
+  "version": "0.30.1",
+  "notes": "### New\n\n- **Bots on any server.** Make a bot on a remote server and its tasks run\n  there too.\n- **Merge from the chat.** A bot's chat shows a card for each task's PR,\n  with Merge when it's ready and Fix conflicts when it isn't.\n- **Stalled tasks.** A task that sits idle for 15 minutes shows in its\n  bot's chat with what it needs from you.\n- **Squats break card.** Settings → Breaks picks which cards a break\n  shows, and I'm back waits 30 seconds.\n- In a bot's chat, @ lists other bots.\n\n### Improved\n\n- Bot rows in the sidebar read like an inbox, with an unread count.\n- The Tasks tab shows each task's PR state and groups tasks by status.\n- Each task gets its own browser, and a recording locks only its tab.\n- Bots keep replies short and stick to what you asked.\n- Hidden tasks no longer raise Done and ready-to-merge alerts.\n- A row with a background task still running no longer reads as done.\n- The Island draws bots with their face.\n\n### Fixed\n\n- The chat stays pinned to the bottom after scrolling an image or menu.\n- The browser's recording timer survives a tab switch.\n- A task's brief that quotes `dray session send` no longer draws a\n  message that was never sent.",
+  "pub_date": "2026-11-12T18:37:58.883Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNVVnF5WVE2OUZ5WlNodkYxSEVWNkZmWFp4NHljbURrQ0dTajJDeVVmMDR1c1phZk5IZkYwMXpMbzZjUUN0MjZQdW5kOGxRV1MwbkdyaFNycGFwNlFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDg2NTg2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4wCm52MFBFNU8yY1h0Q0NIZkxyY0RGampCTVZZS2JxZ0RaVmVwdDVrbnNVazdCZWZOQzY0VDlMZjVGZ2wxckZsRXlOQno0NjRkVyt0NGdlM3ZwaFZzU0RBPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWltaXdUVHVQS2J5WFcreGdPd0JZMHpoNmZXb3pMaHQ3M2gzcmIyUlloaFZJVFYwRVc4enZIenEvcDBrYUVBQUp6c0FvY3dHdFphZk1udjVyRlhUb1FzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTA4NjY4CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4xCkZ5ZStJZEVaZUE0ZUhwUG83RXIrRHp0Q0RUZE5uOTFBL1gvUHpWa1dHWUpwY0JhQzhndU45OEdRTFFKYWFHOVM2b3VZNjBIZDRheGZMTmo3SUtHbkFRPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.1/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNVVnF5WVE2OUZ5WlNodkYxSEVWNkZmWFp4NHljbURrQ0dTajJDeVVmMDR1c1phZk5IZkYwMXpMbzZjUUN0MjZQdW5kOGxRV1MwbkdyaFNycGFwNlFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDg2NTg2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4wCm52MFBFNU8yY1h0Q0NIZkxyY0RGampCTVZZS2JxZ0RaVmVwdDVrbnNVazdCZWZOQzY0VDlMZjVGZ2wxckZsRXlOQno0NjRkVyt0NGdlM3ZwaFZzU0RBPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWltaXdUVHVQS2J5WFcreGdPd0JZMHpoNmZXb3pMaHQ3M2gzcmIyUlloaFZJVFYwRVc4enZIenEvcDBrYUVBQUp6c0FvY3dHdFphZk1udjVyRlhUb1FzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTA4NjY4CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4xCkZ5ZStJZEVaZUE0ZUhwUG83RXIrRHp0Q0RUZE5uOTFBL1gvUHpWa1dHWUpwY0JhQzhndU45OEdRTFFKYWFHOVM2b3VZNjBIZDRheGZMTmo3SUtHbkFRPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.1/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNVVnF5WVE2OUZ5WlNodkYxSEVWNkZmWFp4NHljbURrQ0dTajJDeVVmMDR1c1phZk5IZkYwMXpMbzZjUUN0MjZQdW5kOGxRV1MwbkdyaFNycGFwNlFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDg2NTg2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4wCm52MFBFNU8yY1h0Q0NIZkxyY0RGampCTVZZS2JxZ0RaVmVwdDVrbnNVazdCZWZOQzY0VDlMZjVGZ2wxckZsRXlOQno0NjRkVyt0NGdlM3ZwaFZzU0RBPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWltaXdUVHVQS2J5WFcreGdPd0JZMHpoNmZXb3pMaHQ3M2gzcmIyUlloaFZJVFYwRVc4enZIenEvcDBrYUVBQUp6c0FvY3dHdFphZk1udjVyRlhUb1FzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTA4NjY4CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4xCkZ5ZStJZEVaZUE0ZUhwUG83RXIrRHp0Q0RUZE5uOTFBL1gvUHpWa1dHWUpwY0JhQzhndU45OEdRTFFKYWFHOVM2b3VZNjBIZDRheGZMTmo3SUtHbkFRPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.1/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNVVnF5WVE2OUZ5WlNodkYxSEVWNkZmWFp4NHljbURrQ0dTajJDeVVmMDR1c1phZk5IZkYwMXpMbzZjUUN0MjZQdW5kOGxRV1MwbkdyaFNycGFwNlFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDg2NTg2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4wCm52MFBFNU8yY1h0Q0NIZkxyY0RGampCTVZZS2JxZ0RaVmVwdDVrbnNVazdCZWZOQzY0VDlMZjVGZ2wxckZsRXlOQno0NjRkVyt0NGdlM3ZwaFZzU0RBPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.0/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWltaXdUVHVQS2J5WFcreGdPd0JZMHpoNmZXb3pMaHQ3M2gzcmIyUlloaFZJVFYwRVc4enZIenEvcDBrYUVBQUp6c0FvY3dHdFphZk1udjVyRlhUb1FzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTA4NjY4CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4xCkZ5ZStJZEVaZUE0ZUhwUG83RXIrRHp0Q0RUZE5uOTFBL1gvUHpWa1dHWUpwY0JhQzhndU45OEdRTFFKYWFHOVM2b3VZNjBIZDRheGZMTmo3SUtHbkFRPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.1/Dray_universal.app.tar.gz"
     }
   }
 }
