@@ -403,6 +403,10 @@ async fn make_bot(name: String, avatar: Option<BotAvatar>, welcome: Option<Strin
     let mut bots = read_list().await?;
     bots.push(bot.clone());
     save_list(&bots).await?;
+    // A bot without history still works, so this failing fails nothing.
+    if let Err(e) = start_history(&bot).await {
+        eprintln!("[bot history] {e:#}");
+    }
     Ok(bot)
 }
 
@@ -540,6 +544,18 @@ pub async fn bot_at(cwd: &str) -> Option<Bot> {
     bots.into_iter().find(|b| same_dir(&b.path, cwd))
 }
 
+/// The bot whose folder is `path` or holds it. Inside counts: git finds the
+/// bot's history from any folder under it.
+pub async fn bot_holding(path: &str) -> Option<Bot> {
+    let bots = read_list().await.ok()?;
+    bots.into_iter().find(|b| holds(&b.path, path))
+}
+
+/// Component-wise, so `bots/bb` is not inside `bots/b`.
+fn holds(dir: &str, path: &str) -> bool {
+    Path::new(path).starts_with(dir)
+}
+
 fn same_dir(a: &str, b: &str) -> bool {
     a.trim_end_matches('/') == b.trim_end_matches('/')
 }
@@ -605,6 +621,11 @@ pub async fn system_prompt(base: &str, session_id: &str, cwd: &str) -> String {
             base.to_string()
         };
     };
+    // Every bot's spawn passes here, so a bot made before there was history
+    // gets it on first use, and the prompt below is true from its first turn.
+    if let Err(e) = start_history(&bot).await {
+        eprintln!("[bot history] {e:#}");
+    }
     let dir = Path::new(&bot.path);
     // A bot made before memory was a folder has none, and the prompt sends it
     // straight to one. Its old `MEMORY.md` is left alone: bots had no users yet.
@@ -656,6 +677,82 @@ async fn reports_to_parent(session_id: &str) -> bool {
         Ok(Some(item)) => item.parent_session_id.is_some() && in_bot_tree(&item).await,
         _ => false,
     }
+}
+
+/// One bot's folder at a time: a first-use init and a turn's commit must not
+/// both run `git add` in it.
+static HISTORY_LOCK: Mutex<()> = Mutex::const_new(());
+
+/// Makes the bot's folder a git repository with a first commit, where it is
+/// not one yet. `.git` is looked for rather than asked of git, which would
+/// answer for a repository the home happens to sit inside.
+async fn start_history(bot: &Bot) -> Result<()> {
+    let _guard = HISTORY_LOCK.lock().await;
+    let dir = Path::new(&bot.path);
+    if dir.join(".git").exists() {
+        return Ok(());
+    }
+    git(dir, &["init", "-q", "-b", "main"]).await?;
+    commit_all(bot, Some("Start history")).await
+}
+
+/// Commits what a turn of the bot at `cwd` changed in its folder, where `cwd`
+/// is a bot's. Dray does it rather than the bot, which could forget.
+pub async fn commit_turn(cwd: &str) {
+    let Some(bot) = bot_at(cwd).await else { return };
+    if let Err(e) = start_history(&bot).await {
+        eprintln!("[bot history] {e:#}");
+        return;
+    }
+    let _guard = HISTORY_LOCK.lock().await;
+    if let Err(e) = commit_all(&bot, None).await {
+        eprintln!("[bot history] {e:#}");
+    }
+}
+
+/// Stages everything and commits it, where anything changed. `None` names the
+/// files changed instead.
+async fn commit_all(bot: &Bot, message: Option<&str>) -> Result<()> {
+    let dir = Path::new(&bot.path);
+    git(dir, &["add", "-A"]).await?;
+    let changed = git(dir, &["diff", "--cached", "--name-only", "-z"]).await?;
+    let files: Vec<&str> = changed.split('\0').filter(|f| !f.is_empty()).collect();
+    if files.is_empty() {
+        return Ok(());
+    }
+    let message = message.map_or_else(|| turn_message(&files), str::to_string);
+    // The bot's own name on every commit, so its history needs no global
+    // identity and reads as its own. Given each time rather than written to
+    // the repo's config once, which a setup cut off after `init` would skip.
+    let name = format!("user.name={}", bot.name);
+    let email = format!("user.email={}@bots.dray.local", bot.id);
+    git(dir, &["-c", &name, "-c", &email, "commit", "-q", "-m", &message]).await.map(drop)
+}
+
+fn turn_message(files: &[&str]) -> String {
+    let shown = files.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+    match files.len() {
+        n if n > 3 => format!("Update {shown} and {} more", n - 3),
+        _ => format!("Update {shown}"),
+    }
+}
+
+/// Runs git in a bot's folder, cut off from the reader's global setup: their
+/// hooks would run against the notes and could fail or hang a commit, their
+/// ignore rules could leave the bot's notes untracked, and a signing key would
+/// prompt on every turn.
+async fn git(dir: &Path, args: &[&str]) -> Result<String> {
+    let out = tokio::process::Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null", "-c", "core.excludesFile=/dev/null", "-c", "commit.gpgsign=false"])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .await
+        .context("could not run git")?;
+    if !out.status.success() {
+        anyhow::bail!("git: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 fn capped(text: String) -> String {
@@ -791,6 +888,40 @@ mod tests {
         let text = "é".repeat(FILE_CAP);
         let cut = capped(text);
         assert!(cut.contains("[cut at"));
+    }
+
+    #[tokio::test]
+    async fn history_starts_once_and_commits_only_a_change() {
+        let dir = std::env::temp_dir().join(format!("dray-bot-{}", uuid::Uuid::now_v7()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(dir.join(INSTRUCTIONS), "").await.unwrap();
+        let bot = Bot { path: dir.to_string_lossy().into_owned(), ..bot() };
+        let log = || async { git(&dir, &["log", "--format=%an|%s"]).await.unwrap() };
+
+        start_history(&bot).await.unwrap();
+        start_history(&bot).await.unwrap();
+        assert_eq!(log().await, "Ops|Start history\n");
+
+        commit_all(&bot, None).await.unwrap();
+        assert_eq!(log().await.lines().count(), 1);
+
+        tokio::fs::create_dir_all(dir.join(MEMORY)).await.unwrap();
+        tokio::fs::write(dir.join(MEMORY).join("tea.md"), "likes tea").await.unwrap();
+        commit_all(&bot, None).await.unwrap();
+        assert_eq!(log().await.lines().next(), Some("Ops|Update memory/tea.md"));
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[test]
+    fn a_turn_message_names_three_files_at_most() {
+        assert_eq!(turn_message(&["a", "b", "c", "d", "e"]), "Update a, b, c and 2 more");
+    }
+
+    #[test]
+    fn a_folder_inside_a_bot_is_the_bots() {
+        assert!(holds("/h/bots/b", "/h/bots/b/memory"));
+        assert!(holds("/h/bots/b", "/h/bots/b/"));
+        assert!(!holds("/h/bots/b", "/h/bots/bb"));
     }
 
     #[test]
