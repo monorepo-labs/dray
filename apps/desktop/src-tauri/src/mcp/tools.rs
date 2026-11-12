@@ -400,10 +400,10 @@ async fn find_bot(key: &str) -> Result<Bot, String> {
     bots::find_bot(key).await.map_err(|e| format!("{e:#}"))
 }
 
-/// The cards holding a bot up: its chat's and those of every task under it, at
-/// any depth, each naming the session `answer_card` takes. Its tasks run
-/// hidden, so this is the only place an assistant sees them.
-async fn bot_cards(bot: &Bot) -> Vec<Value> {
+/// Every open card in a bot's tree, its chat's or any task's under it at any
+/// depth, keyed by bot id and naming the session `answer_card` takes. A bot's
+/// tasks run hidden, so this is the only place an assistant sees them.
+async fn bots_cards() -> Vec<(String, Value)> {
     let asks = serve::open_asks();
     let mut ids: Vec<&str> = asks.iter().filter_map(|a| a["sessionId"].as_str()).collect();
     ids.sort_unstable();
@@ -412,24 +412,31 @@ async fn bot_cards(bot: &Bot) -> Vec<Value> {
     for id in ids {
         let Ok(Some(item)) = store::get_session_index_item(id).await else { continue };
         let Some(chat) = bots::bot_chat_of(&item).await else { continue };
-        if bots::bot_at(&chat.cwd).await.is_none_or(|b| b.id != bot.id) {
-            continue;
-        }
+        let Some(bot) = bots::bot_at(&chat.cwd).await else { continue };
         for mut card in cards(&asks, id) {
             card["session_id"] = json!(id);
             card["session_title"] = json!(item.title);
-            found.push(card);
+            found.push((bot.id.clone(), card));
         }
     }
     found
 }
 
+fn cards_of(all: &[(String, Value)], bot: &Bot) -> Vec<Value> {
+    all.iter().filter(|(id, _)| *id == bot.id).map(|(_, card)| card.clone()).collect()
+}
+
+async fn bot_cards(bot: &Bot) -> Vec<Value> {
+    cards_of(&bots_cards().await, bot)
+}
+
 async fn list_bots() -> Result<Value, String> {
     let all = bots::list_bots().await.map_err(|e| format!("{:#}", anyhow::Error::from(e)))?;
+    let every_card = bots_cards().await;
     let mut listed = Vec::new();
     for bot in all {
         let chat = bots::chat_of(&bot).await;
-        let cards = bot_cards(&bot).await;
+        let cards = cards_of(&every_card, &bot);
         listed.push(json!({
             "bot_id": bot.id,
             "name": bot.name,

@@ -295,7 +295,7 @@ if (botName && taskProject) {
     if (!card) await new Promise((r) => setTimeout(r, 2000));
   }
   if (!card) fail("the task's card never showed under its bot");
-  const listedCard = (await call("list_bots")).bots.find((b) => b.name === botName);
+  const listedCard = (await call("list_bots")).bots.find((b) => b.name.toLowerCase() === botName.toLowerCase());
   if (!listedCard.waiting || !listedCard.open_cards.length) fail("list_bots did not mark the bot waiting");
   step("task card under the bot", { session: card.session_title, questions: card.questions });
   const answers = Object.fromEntries(card.questions.map((q) => [q.question, q.options.at(-1)]));
