@@ -202,6 +202,7 @@ dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot pro
     expect(sentMessages(`cat <<END-TEXT\ndray session send bbbb2222 no\nEND-TEXT\ndray session send cccc3333 ok`)).toEqual([
       { target: "cccc3333", text: "ok" },
     ]);
+    expect(sentMessages(`printf '' <<EOF\ndray session send aaaa1111 "example only"`)).toEqual([]);
     // A `<<` inside quotes is text, and opens no heredoc to swallow what follows.
     expect(sentMessages(`dray send aaaa1111 "Explain <<EOF\nsyntax"; dray send bbbb2222 hi\ncat <<EOF\nbody\nEOF`)).toEqual([
       { target: "aaaa1111", text: "Explain <<EOF\nsyntax" },

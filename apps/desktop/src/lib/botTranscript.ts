@@ -179,8 +179,8 @@ function unquoted(cmd: string): string {
       for (const word of bodies.splice(0)) {
         const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const close = new RegExp(`^[ \\t]*${escaped}[ \\t]*$\\n?`, "m").exec(cmd.slice(i));
-        // Unclosed, it is no heredoc this can read: leave what follows as commands.
-        if (close) blank(i + close.index + close[0].length);
+        // Unclosed, bash reads the body to the end of input and runs none of it.
+        blank(close ? i + close.index + close[0].length : cmd.length);
       }
     } else if (c === "\\") blank(Math.min(i + 2, cmd.length));
     else if (c === "'") {
