@@ -3296,8 +3296,9 @@ function App() {
                     : withProject(rowSession, botAt(bots, rowSession.projectPath)?.name ?? basename(rowSession.projectPath))
               }
               machine={mainGroup ? undefined : serverOfPath(rowSession.projectPath)}
+              // A bot chat's header is the bot's name, renamed with the bot.
               rename={
-                mainGroup
+                mainGroup || botAt(bots, rowSession.cwd)
                   ? undefined
                   : {
                       title: rowSession.title,
