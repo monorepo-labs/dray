@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 const CHIP_ACCENT: Partial<Record<Placed["segment"]["kind"], string>> = {
   mention: "bg-accent-mention/12 text-accent-mention dark:bg-accent-mention dark:text-background",
   session: "bg-accent-session/12 text-accent-session dark:bg-accent-session dark:text-background",
+  bot: "bg-accent-session/12 text-accent-session dark:bg-accent-session dark:text-background",
   issue: "bg-accent-issue/12 text-accent-issue dark:bg-accent-issue dark:text-background",
 };
 

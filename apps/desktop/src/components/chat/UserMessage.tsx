@@ -1,6 +1,7 @@
 import { Image } from "lucide-react";
 import type { CSSProperties } from "react";
 
+import BotAvatar from "@/components/BotAvatar";
 import SessionAvatar from "@/components/SessionAvatar";
 import ClampedBody from "@/components/chat/ClampedBody";
 import FileLink from "@/components/chat/FileLink";
@@ -18,13 +19,14 @@ import {
   withLineBreaks,
   withPaths,
 } from "@/lib/highlight";
+import { useBots } from "@/lib/bots";
 import { openIssue, parseIdentifier } from "@/lib/issue";
 import { openLink } from "@/lib/openLink";
 import { commandBrand } from "@/lib/pluginBrand";
 import { stripSenderPrefix } from "@/lib/relay";
 import { useSendProgress } from "@/lib/uploads";
 import { cn } from "@/lib/utils";
-import type { ImageRef, IssueRef, MessageSender } from "@/types/events";
+import type { Bot, ImageRef, IssueRef, MessageSender } from "@/types/events";
 
 /// The user's own text, echoed from the event log rather than local state — the
 /// backend synthesizes and persists it, so this renders the same live or replayed.
@@ -67,6 +69,7 @@ export default function UserMessage({
   from = null,
   cwd: writtenIn = null,
   onOpenSession,
+  onOpenBot,
 }: {
   /// The event drawn, which is how a send still waiting on its uploads finds
   /// its bubble.
@@ -87,6 +90,8 @@ export default function UserMessage({
   /// Opens the sending session. Absent where nothing can navigate, which draws
   /// the attribution as a plain line rather than hiding it.
   onOpenSession?: (sessionId: string) => void;
+  /// Opens a tagged bot's chat.
+  onOpenBot?: (bot: Bot) => void;
 }) {
   // The recorded one wins where there is one. A fork carries its parent's
   // conversation into a different tree, so a mention resolved against the
@@ -94,6 +99,7 @@ export default function UserMessage({
   // the one this message named.
   const { cwd: sessionCwd } = useChatSession();
   const cwd = writtenIn ?? sessionCwd;
+  const bots = useBots();
   const body = withLineBreaks(stripSenderPrefix(text, from));
   // The prompt's own links are what bound an issue tag's title, and they are
   // persisted — so a message replayed after a restart reads exactly as it did
@@ -299,6 +305,35 @@ export default function UserMessage({
                       className="mr-0.5 inline-block size-4 align-text-bottom"
                     />
                     {title}
+                  </button>
+                );
+              }
+
+              // A bot tag, drawn as the bot's face and its name now, since a
+              // rename leaves the old name behind in the text.
+              if (segment.kind === "bot" && segment.inner) {
+                const bot = bots.find((b) => b.id === segment.botId);
+                const name = bot?.name ?? segment.inner.slice(1);
+                if (!bot || !onOpenBot) {
+                  return (
+                    <span key={i} className={SEGMENT_COLOR.bot}>
+                      {name}
+                    </span>
+                  );
+                }
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    className={cn(SEGMENT_COLOR.bot, "cursor-pointer hover:underline")}
+                    onClick={() => onOpenBot(bot)}
+                  >
+                    <BotAvatar
+                      seed={bot.id}
+                      avatar={bot.avatar}
+                      className="mr-0.5 inline-block size-4 align-text-bottom"
+                    />
+                    {name}
                   </button>
                 );
               }

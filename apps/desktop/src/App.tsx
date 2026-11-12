@@ -2990,6 +2990,12 @@ function App() {
   // A bot whose empty chat opens on a welcome (Dray Bot) draws as a chat
   // already under way: the welcome in the transcript, the composer below it.
   const welcomeBot = newBot?.welcome ? newBot : undefined;
+  // In a bot's chat `@` lists the other bots instead of files.
+  const composerBot = selectedBot ?? newBot;
+  const composerBots = useMemo(
+    () => (composerBot ? bots.filter((b) => b.id !== composerBot.id) : undefined),
+    [bots, composerBot],
+  );
   // Its agent is the reader's own where that one is installed, else the first
   // installed in the picker's order, Claude Code first.
   useEffect(() => {
@@ -3760,6 +3766,7 @@ function App() {
           issuesConnected={issuesConnected}
           issueTrackers={integrations.connected}
           sessions={composerSessions}
+          bots={composerBots}
           onSessionPickerOpen={refreshReachableSessions}
           modelTakesImages={modelTakesImages}
           error={error}

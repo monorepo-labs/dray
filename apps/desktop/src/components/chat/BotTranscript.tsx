@@ -134,10 +134,20 @@ export default function BotTranscript({
               // Replies in a row sit close, as a messenger stacks them; a new
               // turn after the reader's message keeps the full gap.
               <BotBubble tight={!time && rows[i - 1]?.kind === "assistant"}>
-                <EventRow event={item.event} resultByCallId={NO_RESULTS} onOpenSession={onOpenSession} />
+                <EventRow
+                event={item.event}
+                resultByCallId={NO_RESULTS}
+                onOpenSession={onOpenSession}
+                onOpenBot={onOpenBot}
+              />
               </BotBubble>
             ) : (
-              <EventRow event={item.event} resultByCallId={NO_RESULTS} onOpenSession={onOpenSession} />
+              <EventRow
+                event={item.event}
+                resultByCallId={NO_RESULTS}
+                onOpenSession={onOpenSession}
+                onOpenBot={onOpenBot}
+              />
             )}
           </Fragment>
         );
