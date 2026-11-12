@@ -12,7 +12,7 @@ import {
   useBreakDue,
   useBreakSettings,
 } from "@/lib/breaks";
-import { BREAK_CARDS } from "@/components/breakScenes";
+import { BREAK_CARDS, StillScenes } from "@/components/breakScenes";
 import { isWindowFocused } from "@/lib/focus";
 import { invoke } from "@/lib/transport";
 
@@ -136,8 +136,9 @@ function PickedCard() {
 
 const LOCK_MS = 30_000;
 
-/// The way out, held shut for the break's first 30 seconds and saying how long
-/// is left, so the break is at least half taken before it can be skipped.
+/// The way out, held shut for the break's first 30 seconds, so the break is at
+/// least half taken before it can be skipped. The minute's own countdown above
+/// says time is running; a second number here read as a timer to wait out.
 function BackButton({ onClick }: { onClick: () => void }) {
   const left = useSecondsLeft(LOCK_MS);
   return (
@@ -145,10 +146,28 @@ function BackButton({ onClick }: { onClick: () => void }) {
       type="button"
       onClick={onClick}
       disabled={left > 0}
-      className="rounded-sm text-sm text-muted-foreground tabular-nums underline underline-offset-4 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:no-underline disabled:opacity-60 disabled:hover:text-muted-foreground"
+      className="rounded-sm text-sm text-muted-foreground underline underline-offset-4 outline-none enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
     >
-      {left > 0 ? `I'm back in ${left}s` : "I'm back"}
+      I'm back
     </button>
+  );
+}
+
+// 2px stripes every 6px, the site's own pitch.
+const FACE =
+  "overflow-hidden bg-(--break-card,var(--surface-card)) bg-[repeating-linear-gradient(90deg,var(--break-stripe,#00000012)_0_2px,transparent_2px_6px)] text-left text-(--break-ink,var(--foreground))";
+
+/// A card shrunk for Settings' picker: flat, and its drawing held still.
+export function BreakTile({ text, Scene }: { text: string; Scene: () => ReactNode }) {
+  return (
+    <div className={`${FACE} h-full rounded-lg shadow-[0_0_0_1px_#0000000F]`}>
+      <div className="flex h-20 items-end justify-center pt-2 [&_svg]:h-18">
+        <StillScenes.Provider value>
+          <Scene />
+        </StillScenes.Provider>
+      </div>
+      <p className="px-3 pt-2 pb-3 text-[13px] leading-[1.2] tracking-[-0.02em] text-balance">{text}</p>
+    </div>
   );
 }
 
@@ -186,10 +205,9 @@ export function BreakCard({
 
   return (
     <div className="shrink-0 [perspective:900px]" onPointerMove={tilt} onPointerLeave={rest}>
-      {/* 2px stripes every 6px, the site's own pitch. */}
       <div
         ref={card}
-        className="w-72 overflow-hidden rounded-xl bg-(--break-card,var(--surface-card)) bg-[repeating-linear-gradient(90deg,var(--break-stripe,#00000012)_0_2px,transparent_2px_6px)] text-left text-(--break-ink,var(--foreground)) shadow-[0_0_0_1px_#0000000F,0_10px_24px_-12px_#00000040] [transform:rotateX(6deg)_rotateY(-8deg)_rotateZ(1deg)]"
+        className={`${FACE} w-72 rounded-xl shadow-[0_0_0_1px_#0000000F,0_10px_24px_-12px_#00000040] [transform:rotateX(6deg)_rotateY(-8deg)_rotateZ(1deg)]`}
       >
         <div className="flex h-36 items-end justify-center pt-4">
           <Scene />

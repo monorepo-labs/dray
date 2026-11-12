@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, createContext, useContext, useEffect, useState } from "react";
 
 type Pt = [number, number];
 type V3 = [number, number, number];
@@ -88,11 +88,17 @@ function Figure({ pose }: { pose: Pose }) {
 
 const REDUCED = "(prefers-reduced-motion: reduce)";
 
+/// Holds every scene inside it on its best pose, as reduced motion does: a
+/// page of previews would otherwise re-render each one every frame.
+export const StillScenes = createContext(false);
+
 /// Seconds since the scene mounted, one render a frame; null under reduced
 /// motion, where each scene holds its best pose instead. Follows the setting
 /// live, so turning it on mid-break stops the figure.
 function useClock(): number | null {
-  const [still, setStill] = useState(() => matchMedia(REDUCED).matches);
+  const held = useContext(StillScenes);
+  const [reduced, setStill] = useState(() => matchMedia(REDUCED).matches);
+  const still = held || reduced;
   const [t, setT] = useState(0);
   useEffect(() => {
     const mq = matchMedia(REDUCED);
@@ -330,32 +336,24 @@ function PushUp() {
   );
 }
 
-/// Squats, side on, in front of the chair the reader just left: hips back and
-/// down until they nearly sit, chest over the knees, arms out front for
-/// balance, feet flat. Down slow, a beat at the bottom, up.
+/// Squats, side on: hips back and down until the thighs are level, knees over
+/// the toes, chest leaning in and arms raised straight out front to balance.
+/// Down slow, a beat at the bottom, up quicker, a breath at the top.
 function Squat() {
-  const t = useClock() ?? 1.3;
-  const c = (t % 2.6) / 2.6;
-  const down = c < 0.12 ? 0 : c < 0.5 ? ease((c - 0.12) / 0.38) : c < 0.6 ? 1 : 1 - ease((c - 0.6) / 0.32);
-  const feet: Pt = [86, 101];
+  const t = useClock() ?? 1.35;
+  const c = (t % 2.4) / 2.4;
+  const down = c < 0.12 ? 0 : c < 0.5 ? ease((c - 0.12) / 0.38) : c < 0.62 ? 1 : 1 - ease((c - 0.62) / 0.3);
+  const feet: Pt = [86, 102];
+  const spine = lerp(2, 38, down);
+  // Side on, so each pair is drawn as one: two lines a hair apart read as a smudge.
+  const arm: Limb = { fk: [lerp(162, 92, down), lerp(-24, 0, down)] };
+  const leg: Limb = { ik: feet, flip: -1 };
   return (
     <Scene>
-      <path d="M36 54 L36 101 M36 82 L58 82 L58 101" strokeWidth={3} />
-      <Figure
-        pose={{
-          hip: [lerp(84, 64, down), lerp(67, 78, down)],
-          spine: lerp(4, 38, down),
-          look: 0.7,
-          nod: lerp(-4, -30, down),
-          arms: [{ fk: [lerp(170, 82, down), lerp(-10, 0, down)] }, { fk: [lerp(176, 88, down), lerp(-14, 0, down)] }],
-          legs: [
-            { ik: feet, flip: -1 },
-            { ik: [feet[0] + 4, feet[1]], flip: -1 },
-          ],
-        }}
-      />
-      <Sparkle x={126} y={38} t={t} />
-      <Sparkle x={138} y={62} r={4} t={t} phase={0.5} />
+      <path d="M40 104 L132 104" strokeWidth={2.5} />
+      <Figure pose={{ hip: [lerp(85, 72, down), lerp(68, 84, down)], spine, look: 0.7, nod: 4 - spine, arms: [arm, arm], legs: [leg, leg] }} />
+      <Sparkle x={42} y={44} t={t} />
+      <Sparkle x={130} y={30} r={4} t={t} phase={0.5} />
     </Scene>
   );
 }
@@ -367,6 +365,6 @@ export const BREAK_CARDS: { name: string; text: string; Scene: () => ReactNode }
   { name: "Pull-ups", text: "Your agents can wait. Your spine can't.", Scene: PullUp },
   { name: "Side bend", text: "Stretch, you gorgeous workaholic.", Scene: SideBend },
   { name: "Walk", text: "Legs exist. Go use them.", Scene: Strut },
-  { name: "Squats", text: "Ten squats. Your chair will keep.", Scene: Squat },
+  { name: "Squats", text: "Micro-dose squats. Ten an hour, no prescription.", Scene: Squat },
   { name: "Push-ups", text: "Give me ten push\u2011ups. Right now.", Scene: PushUp },
 ];
