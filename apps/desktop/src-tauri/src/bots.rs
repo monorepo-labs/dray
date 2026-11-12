@@ -159,7 +159,9 @@ pub async fn mark_welcome_if_unlogged(session_id: &str, cwd: &str) {
     }
     let Ok(dir) = crate::store::get_sessions_dir().await else { return };
     let log = tokio::fs::read_to_string(dir.join(format!("{session_id}.jsonl"))).await.unwrap_or_default();
-    if !log.contains("\"user_message\"") {
+    // Neither a prompt nor the welcome itself: a stop between saving the two
+    // must not have it written twice.
+    if !log.contains("\"user_message\"") && !log.contains("\"assistant_text\"") {
         WELCOMES.lock().unwrap().push((session_id.to_string(), welcome));
     }
 }
