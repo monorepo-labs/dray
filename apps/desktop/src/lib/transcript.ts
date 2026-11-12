@@ -97,7 +97,7 @@ export function isToolGroup(item: WorkItem): item is ToolGroup {
 /// under the agent's activity. That exemption is also why it is subtracted from
 /// `rows`: that count is what the toggle promises to reveal, and a row already
 /// visible is not part of the promise.
-function isQueuedPrompt(item: WorkItem): boolean {
+export function isQueuedPrompt(item: WorkItem): boolean {
   return !isToolGroup(item) && item.payload.type === "user_message";
 }
 

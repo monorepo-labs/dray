@@ -7,7 +7,7 @@ import MediaRow from "@/components/chat/MediaRow";
 import SubagentRow from "@/components/chat/SubagentRow";
 import ToolGroupRow from "@/components/chat/ToolGroupRow";
 import UserMessage from "@/components/chat/UserMessage";
-import { drawsSameTurn, GROUP_MIN, isToolGroup, rendersRow, segmentMedia, segmentWork, type SubagentRun, type Turn, type TurnSegment, type WorkItem } from "@/lib/transcript";
+import { drawsSameTurn, GROUP_MIN, isQueuedPrompt, isToolGroup, rendersRow, segmentMedia, segmentWork, type SubagentRun, type Turn, type TurnSegment, type WorkItem } from "@/lib/transcript";
 import type { FileEdit, ToolResult } from "@/types/events";
 import { cn } from "@/lib/utils";
 
@@ -134,6 +134,19 @@ export default memo(function TurnBlock({
     );
   };
 
+  // Cards sit outside the folds but keep their place against queued prompts:
+  // each draws ahead of the first prompt typed after it. Consumed in render
+  // order, which is log order.
+  let nextCard = 0;
+  const cardsBefore = (seq: number) => {
+    const out: ReactNode[] = [];
+    for (; nextCard < turn.cards.length && turn.cards[nextCard].seq < seq; nextCard++) {
+      const card = turn.cards[nextCard];
+      out.push(<EventRow key={card.id} event={card} resultByCallId={resultByCallId} />);
+    }
+    return out;
+  };
+
   return (
     <div className="flex flex-col gap-3">
       {/* A bot's kickoff is Dray's own prompt: its chat opens on the reply. */}
@@ -144,7 +157,16 @@ export default memo(function TurnBlock({
           would bunch them all together at the end, and *when* the reader said
           something is part of what they said. */}
       {segments.length === 0
-        ? turn.work.map(renderItem)
+        ? turn.work.map((item) =>
+            !isToolGroup(item) && isQueuedPrompt(item) ? (
+              <Fragment key={item.id}>
+                {cardsBefore(item.seq)}
+                {renderItem(item)}
+              </Fragment>
+            ) : (
+              renderItem(item)
+            ),
+          )
         : segments.map((seg, i) => {
             const open = !!openSegments[i];
             const toggle = () => setOpenSegments((prev) => ({ ...prev, [i]: !prev[i] }));
@@ -163,6 +185,7 @@ export default memo(function TurnBlock({
                 {seg.rows > 0 && !seg.running && <SummaryToggle label={segmentLabel(seg)} open={open} onToggle={toggle} />}
                 {media && media.length > 0 && <MediaRow media={media} />}
                 {(open || seg.running) && seg.items.map(renderItem)}
+                {seg.prompt && cardsBefore(seg.prompt.seq)}
                 {seg.prompt && renderItem(seg.prompt)}
               </Fragment>
             );
@@ -171,9 +194,7 @@ export default memo(function TurnBlock({
       {/* Collapsed, this stands in for the turn's last message; with the last
           segment open, that message already rendered above, so it would be a
           duplicate. */}
-      {turn.cards.map((card) => (
-        <EventRow key={card.id} event={card} resultByCallId={resultByCallId} />
-      ))}
+      {cardsBefore(Infinity)}
 
       {!lastOpen && collapsible && turn.finalText && <AssistantMessage text={turn.finalText} />}
 
