@@ -1,10 +1,8 @@
-import { ExternalLink } from "lucide-react";
 import { createContext, useContext } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
 import PrStateIcon from "@/components/PrStateIcon";
 import { MergeControl } from "@/components/TasksPanel";
-import { Button } from "@/components/ui/button";
 import { seededAvatar } from "@/lib/botAvatar";
 import { FULL_FOR, type MergeCardPayload } from "@/lib/mergeCard";
 import { openLink } from "@/lib/openLink";
@@ -48,6 +46,27 @@ const VERDICT_WORDS: Record<ReturnType<typeof mergeVerdict>, string> = {
 };
 
 const CHECK_WORDS = { RUNNING: "Checks running", FAILING: "Checks failing", CLEAR: null } as const;
+
+/// The PR panel's colours for the same verdicts: yellow while something is
+/// still in the way or not passing, red for a conflict, green when it can land.
+const VERDICT_TONE: Record<ReturnType<typeof mergeVerdict>, string> = {
+  merged: "text-muted-foreground",
+  closed: "text-muted-foreground",
+  draft: "text-muted-foreground",
+  conflict: "text-destructive",
+  unknown: "text-accent-command",
+  behind: "text-accent-command",
+  blocked: "text-accent-command",
+  unstable: "text-accent-command",
+  ready: "text-accent-add",
+};
+
+function statusTone(pr: PrMark | undefined): string {
+  if (!pr) return "text-muted-foreground";
+  const verdict = mergeVerdict(pr);
+  if (verdict === "ready" && pr.checksState !== "CLEAR") return "text-accent-command";
+  return VERDICT_TONE[verdict];
+}
 
 /// The PR's state in words: the checks where they say something, then what
 /// GitHub says about merging.
@@ -103,7 +122,7 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
   }
 
   return (
-    <div className="w-full max-w-md self-start rounded-2xl border border-border bg-card p-3.5 shadow-(--shadow-card)">
+    <div className="w-full max-w-lg self-start rounded-2xl border border-border bg-card p-3.5 shadow-(--shadow-card)">
       <div className="flex items-center gap-2.5">
         <button type="button" onClick={open} className="size-7 shrink-0 cursor-pointer" aria-label={`Open ${title}`}>
           {face}
@@ -118,20 +137,19 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
           </button>
           <p className="flex items-center gap-1.5 text-ui text-muted-foreground">
             <PrStateIcon pr={pr ?? { state: "OPEN", isDraft: false }} strokeWidth={1.5} />
-            <span className="shrink-0 tabular-nums">#{card.number}</span>
+            {/* Dray's browser on a click, the system's on ⌘-click. */}
+            <button
+              type="button"
+              className="shrink-0 cursor-pointer tabular-nums underline-offset-2 hover:text-foreground hover:underline"
+              onClick={(e) => openLink(card.url, e)}
+            >
+              #{card.number}
+            </button>
             <span aria-hidden>·</span>
-            <span className={cn("truncate", pr?.checksState === "FAILING" && pr.state === "OPEN" && "text-destructive")}>
-              {statusLine(pr)}
-            </span>
+            <span className={cn("truncate", statusTone(pr))}>{statusLine(pr)}</span>
           </p>
         </div>
-      </div>
-      <div className="mt-3 flex items-center justify-end gap-1.5">
-        <Button variant="ghost" size="xs" onClick={(e) => openLink(card.url, e)}>
-          Open on GitHub
-          <ExternalLink />
-        </Button>
-        {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} />}
+        {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} named />}
       </div>
     </div>
   );

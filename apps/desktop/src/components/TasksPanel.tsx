@@ -242,8 +242,17 @@ function setRun(key: string, run: MergeRun) {
 
 /// The PR panel's merge, cut to a row: a split button naming the method, and
 /// a confirm step, since a merge is the one thing here that cannot be undone.
-/// `keep` names the merge across remounts.
-export function MergeControl({ onMerge, keep }: { onMerge: (method: MergeMethod) => Promise<void>; keep?: string }) {
+/// `keep` names the merge across remounts; `named` spells the method out on
+/// the button, as the PR panel's does, where there is room for it.
+export function MergeControl({
+  onMerge,
+  keep,
+  named = false,
+}: {
+  onMerge: (method: MergeMethod) => Promise<void>;
+  keep?: string;
+  named?: boolean;
+}) {
   const own = useId();
   const key = keep ?? own;
   const [method, setMethod] = useState<MergeMethod>("squash");
@@ -275,7 +284,7 @@ export function MergeControl({ onMerge, keep }: { onMerge: (method: MergeMethod)
             Cancel
           </Button>
           <Button size="xs" className={cn(MERGE_FILL, "shadow-(--shadow-button)")} onClick={() => void merge()}>
-            Confirm
+            {named ? `Confirm ${METHOD_LABEL[method].toLowerCase()}` : "Confirm"}
           </Button>
         </>
       ) : (
@@ -284,10 +293,10 @@ export function MergeControl({ onMerge, keep }: { onMerge: (method: MergeMethod)
             size="xs"
             className={cn(MERGE_FILL, "rounded-r-none disabled:opacity-100")}
             disabled={merging}
-            title={METHOD_LABEL[method]}
+            title={named ? undefined : METHOD_LABEL[method]}
             onClick={() => setConfirming(true)}
           >
-            {merging ? "Merging…" : "Merge"}
+            {merging ? "Merging…" : named ? METHOD_LABEL[method] : "Merge"}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
