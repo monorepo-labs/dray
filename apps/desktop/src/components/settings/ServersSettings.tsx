@@ -25,7 +25,7 @@ import { Input } from "@/components/ui/input";
 import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { useCopied } from "@/hooks/useCopied";
-import { AUTO_EXTEND_MINUTES, boatAsleep, resumeBoat, setBoatPrefs, useBoatPrefs } from "@/lib/boat";
+import { boatAsleep, resumeBoat } from "@/lib/boat";
 import { relativeTime } from "@/lib/format";
 import { MACHINE } from "@/lib/platform";
 import { serverName, useLocalServer, useServers } from "@/lib/servers";
@@ -204,7 +204,6 @@ export default function ServersSettings() {
           </div>
         ))}
         {servers.length > 0 && <ShareMachinesRow />}
-        {servers.some((s) => s.boat) && <AutoExtendRow />}
       </div>
 
       <AddServerDialog
@@ -281,23 +280,6 @@ function ShareMachinesRow() {
         </span>
       </div>
       <Switch aria-label="Share these servers" checked={on} onCheckedChange={toggle} />
-    </div>
-  );
-}
-
-/// Off by default, offered once after the first Extend; this is where it goes
-/// back off. Drawn only once a boat sandbox is on the list.
-function AutoExtendRow() {
-  const { auto } = useBoatPrefs();
-  return (
-    <div className="flex min-h-7 items-center gap-3 py-1.5 pl-4.5">
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-ui font-medium">Keep busy sandboxes running</span>
-        <span className="text-ui text-muted-foreground">
-          Adds {AUTO_EXTEND_MINUTES} minutes when a boat sandbox is about to stop with a turn or background task running.
-        </span>
-      </div>
-      <Switch aria-label="Keep busy sandboxes running" checked={auto} onCheckedChange={(on) => setBoatPrefs({ auto: on, offered: true })} />
     </div>
   );
 }

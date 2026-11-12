@@ -111,6 +111,16 @@ dray session unset-aside <id>
 
 These are the same as the sidebar's buttons. Settling a session also settles the hidden sessions it started.
 
+## Merge card
+
+```bash
+dray session merge-card <task-id>
+```
+
+Run from inside a session, this posts a card in that session's chat for the open pull request on another session's branch, usually a task it started. The card shows the task, the PR number, its live status, a **Merge** button and an **Open on GitHub** link, so you can merge without opening the task or the side panel. It is refused when the branch has no open pull request.
+
+In a bot's chat, Merge also settles the task and deletes its worktree when that holds nothing the merge did not take. In any other chat it only merges. The card shrinks to one line once the PR is merged, or after you have sent three more messages.
+
 ## Limits
 
 - No flag sets the permission mode, the worktree name, or turns the worktree off.

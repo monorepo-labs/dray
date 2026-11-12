@@ -1,5 +1,5 @@
 import { Check, ChevronDown, Ellipsis } from "lucide-react";
-import { useState } from "react";
+import { useId, useState, useSyncExternalStore } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
 import Orb from "@/components/Orb";
@@ -269,24 +269,50 @@ function TaskRow({
   );
 }
 
+type MergeRun = { merging: boolean; error: string | null };
+const IDLE: MergeRun = { merging: false, error: null };
+/// Merges in flight and their failures, outside the component: a merge card
+/// can remount mid-merge when a queued prompt regroups its turn, and a merge
+/// already sent must not offer its button again or lose its error.
+const runs = new Map<string, MergeRun>();
+const listeners = new Set<() => void>();
+const subscribe = (listener: () => void) => {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+};
+function setRun(key: string, run: MergeRun) {
+  if (run === IDLE) runs.delete(key);
+  else runs.set(key, run);
+  listeners.forEach((l) => l());
+}
+
 /// The PR panel's merge, cut to a row: a split button naming the method, and
 /// a confirm step, since a merge is the one thing here that cannot be undone.
-function MergeControl({ onMerge }: { onMerge: (method: MergeMethod) => Promise<void> }) {
+/// `keep` names the merge across remounts; `named` spells the method out on
+/// the button, as the PR panel's does, where there is room for it.
+export function MergeControl({
+  onMerge,
+  keep,
+  named = false,
+}: {
+  onMerge: (method: MergeMethod) => Promise<void>;
+  keep?: string;
+  named?: boolean;
+}) {
+  const own = useId();
+  const key = keep ?? own;
   const [method, setMethod] = useState<MergeMethod>("squash");
   const [confirming, setConfirming] = useState(false);
-  const [merging, setMerging] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { merging, error } = useSyncExternalStore(subscribe, () => runs.get(key) ?? IDLE);
 
   const merge = async () => {
     setConfirming(false);
-    setMerging(true);
-    setError(null);
+    setRun(key, { merging: true, error: null });
     try {
       await onMerge(method);
+      setRun(key, IDLE);
     } catch (e) {
-      setError(String(e));
-    } finally {
-      setMerging(false);
+      setRun(key, { merging: false, error: String(e) });
     }
   };
 
@@ -304,7 +330,7 @@ function MergeControl({ onMerge }: { onMerge: (method: MergeMethod) => Promise<v
             Cancel
           </Button>
           <Button size="xs" className={cn(MERGE_FILL, "shadow-(--shadow-button)")} onClick={() => void merge()}>
-            Confirm
+            {named ? `Confirm ${METHOD_LABEL[method].toLowerCase()}` : "Confirm"}
           </Button>
         </>
       ) : (
@@ -313,10 +339,10 @@ function MergeControl({ onMerge }: { onMerge: (method: MergeMethod) => Promise<v
             size="xs"
             className={cn(MERGE_FILL, "rounded-r-none disabled:opacity-100")}
             disabled={merging}
-            title={METHOD_LABEL[method]}
+            title={named ? undefined : METHOD_LABEL[method]}
             onClick={() => setConfirming(true)}
           >
-            {merging ? "Merging…" : "Merge"}
+            {merging ? "Merging…" : named ? METHOD_LABEL[method] : "Merge"}
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
