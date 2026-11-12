@@ -1830,7 +1830,8 @@ function BotRow({
                 role="img"
                 aria-label={`${preview?.replies || 1} unread`}
                 // One colour for every bot: in the face's own hue it read as part of the face.
-                className="absolute -right-0.5 -bottom-0.5 flex size-4 items-center justify-center rounded-full bg-foreground text-[10px] leading-none font-semibold text-background tabular-nums"
+                // Green on the Dray theme, in both modes.
+                className="absolute -right-0.5 -bottom-0.5 flex size-4 items-center justify-center rounded-full bg-foreground text-[10px] leading-none font-semibold text-background tabular-nums [[data-theme=default]_&]:bg-accent-add [[data-theme=default]_&]:text-white"
               >
                 {preview?.replies || ""}
               </span>
