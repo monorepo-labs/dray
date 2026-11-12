@@ -197,6 +197,11 @@ dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot pro
       { target: "aaaa1111", text: "hi" },
       { target: "cccc3333", text: "ok" },
     ]);
+    // A herestring opens no body; a delimiter may carry a dash.
+    expect(sentMessages(`cat <<< "hello"\ndray session send aaaa1111 hi`)).toEqual([{ target: "aaaa1111", text: "hi" }]);
+    expect(sentMessages(`cat <<END-TEXT\ndray session send bbbb2222 no\nEND-TEXT\ndray session send cccc3333 ok`)).toEqual([
+      { target: "cccc3333", text: "ok" },
+    ]);
     // A `<<` inside quotes is text, and opens no heredoc to swallow what follows.
     expect(sentMessages(`dray send aaaa1111 "Explain <<EOF\nsyntax"; dray send bbbb2222 hi\ncat <<EOF\nbody\nEOF`)).toEqual([
       { target: "aaaa1111", text: "Explain <<EOF\nsyntax" },

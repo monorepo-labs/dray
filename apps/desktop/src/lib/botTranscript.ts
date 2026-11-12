@@ -144,8 +144,8 @@ const HEREDOC = /<<-?[ \t]*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[ \t]*(?:\
 /// A `$(cat ` that may open a heredoc inside double quotes, sticky as above.
 const SUBSHELL = /\$\(\s*\w+\s+/y;
 /// A heredoc's `<<WORD` alone: its body starts at the next newline, and the
-/// rest of its own line is still commands.
-const OPENER = /<<-?[ \t]*(['"]?)(\w+)\1/y;
+/// rest of its own line is still commands. Never a `<<<` herestring.
+const OPENER = /(?<!<)<<(?!<)-?[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|([^\s'"<>;&|()]+))/y;
 
 /// The length of the match of sticky `re` at `at`, or 0.
 function stuck(re: RegExp, cmd: string, at: number): number {
@@ -172,13 +172,15 @@ function unquoted(cmd: string): string {
     OPENER.lastIndex = i;
     const open = c === "<" ? OPENER.exec(cmd) : null;
     if (open) {
-      bodies.push(open[2]);
+      bodies.push(open[1] ?? open[2] ?? open[3]);
       blank(i + open[0].length);
     } else if (c === "\n" && bodies.length > 0) {
       out += cmd[i++];
       for (const word of bodies.splice(0)) {
-        const close = new RegExp(`^[ \\t]*${word}[ \\t]*$\\n?`, "m").exec(cmd.slice(i));
-        blank(close ? i + close.index + close[0].length : cmd.length);
+        const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const close = new RegExp(`^[ \\t]*${escaped}[ \\t]*$\\n?`, "m").exec(cmd.slice(i));
+        // Unclosed, it is no heredoc this can read: leave what follows as commands.
+        if (close) blank(i + close.index + close[0].length);
       }
     } else if (c === "\\") blank(Math.min(i + 2, cmd.length));
     else if (c === "'") {
