@@ -3064,17 +3064,24 @@ function App() {
   const mergeCardHost: MergeCardHost = {
     prNumbered: prMarks.prNumbered,
     titleOf: (id) => sessionIndexItems.find((i) => i.sessionId === id)?.title,
-    merge: (card, method, settle) => {
-      const item = settle ? sessionIndexItems.find((i) => i.sessionId === card.taskId) : undefined;
+    merge: async (card, method, settle) => {
+      const item = settle
+        ? (sessionIndexItems.find((i) => i.sessionId === card.taskId) ??
+          (await invoke<SessionIndexItem | null>("session_index_item", { sessionId: card.taskId }).catch(() => null)))
+        : null;
       const busy = (statusBySession[card.taskId] ?? item?.status) === "in_progress";
-      return mergeTask(card.projectPath, card.number, method, item ? { item, busy } : null);
+      return mergeTask(card.projectPath, card.number, method, item && !item.archived ? { item, busy } : null);
     },
     open: (id, alone) => paneChat.onOpenSession(id, alone),
     // Into the task's own session on its own settings, as `dray session send`
     // relays: a message must not move the model or stance it runs on.
     fixConflicts: async (card) => {
-      const task = sessionIndexItems.find((i) => i.sessionId === card.taskId);
-      if (!task) throw new Error("This task is settled. Unsettle it to send it work.");
+      // The loaded list is one side of the sidebar; the settled side may be up.
+      const task =
+        sessionIndexItems.find((i) => i.sessionId === card.taskId) ??
+        (await invoke<SessionIndexItem | null>("session_index_item", { sessionId: card.taskId }));
+      if (!task) throw new Error("This task is gone.");
+      if (task.archived) throw new Error("This task is settled. Unsettle it to send it work.");
       await invoke("send_msg", {
         sessionId: task.sessionId,
         prompt: `PR #${card.number} has merge conflicts with its base branch. Fix them and push.`,
