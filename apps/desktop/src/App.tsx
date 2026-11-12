@@ -3023,7 +3023,7 @@ function App() {
     // A settled task is in no crew, so it is asked for and its parents walked
     // up to the bot's folder — any of its chat's sessions, since a task
     // started before an agent switch names the old one. Its chat still names
-    // it, and settling is not what closes a tab. Bounded like `inBotTree`.
+    // it, so a settled task opens as a tab again. Bounded like `inBotTree`.
     const indexItem = (sid: string) =>
       sessionIndexItems.find((i) => i.sessionId === sid) ??
       invoke<SessionIndexItem | null>("session_index_item", { sessionId: sid }).catch(() => null);
@@ -3065,10 +3065,13 @@ function App() {
   const dropPicksOnRef = useRef(dropPicksOn);
   dropPicksOnRef.current = dropPicksOn;
   // Settling leaves a task's work to review but nothing to open, so its Files
-  // picks close; deleting its worktree leaves no diff either. Read off the
-  // index event, since the bot settles tasks itself as often as the reader.
+  // picks close; deleting its worktree leaves no diff either. Its tab in the
+  // bot's row closes too: done work is reopened from a card, not kept open.
+  // Read off the index event, since the bot settles tasks itself as often as
+  // the reader, and every settle, Merge's included, announces one.
   useEffect(() => {
     const un = listen<SessionIndexItem>("session_changed", ({ payload }) => {
+      if (payload.archived) setTaskTabs((prev) => closeTaskTab(prev, payload.sessionId));
       if (payload.worktreeRemoved) dropPicksOnRef.current(payload.sessionId);
       else if (payload.archived) dropPicksOnRef.current(payload.sessionId, "files");
     });
