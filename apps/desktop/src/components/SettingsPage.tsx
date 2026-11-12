@@ -819,7 +819,7 @@ export function BreakRows() {
                 aria-label={name}
                 className={cn(
                   "relative rounded-lg outline-none transition-[opacity,filter] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-                  "disabled:cursor-not-allowed",
+                  "cursor-pointer disabled:cursor-not-allowed",
                   !on && "opacity-35 grayscale hover:opacity-55",
                 )}
               >
