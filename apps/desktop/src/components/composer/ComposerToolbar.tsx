@@ -242,7 +242,7 @@ export default function ComposerToolbar({
 
       {/* `ml-auto` rather than a spacer, so a long branch name still gets the
           whole middle of the row and this stays pinned to the right edge. */}
-      {contextUsage && (
+      {contextUsage && !(bot || agentSwitch) && (
         <div className="ml-auto">
           <ContextMeter used={contextUsage.used} max={contextUsage.max} />
         </div>
