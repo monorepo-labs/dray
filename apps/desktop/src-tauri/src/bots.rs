@@ -34,6 +34,11 @@ pub struct Bot {
     /// was a pick, which then draws the face its id seeds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<BotAvatar>,
+    /// What its chat opens on before any session exists, drawn by the app,
+    /// and written to the log as the chat's first message when one starts.
+    /// Dray Bot's alone; a bot made with New bot greets with a real turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub welcome: Option<String>,
 }
 
 /// A Blobatar face: which silhouette and which hue. Strings and degrees rather
@@ -64,16 +69,120 @@ async fn list_path() -> Result<PathBuf> {
     Ok(get_home_app_dir().await?.join("bots.json"))
 }
 
-/// Every bot on this server, oldest first.
+/// Every bot on this server, oldest first. Dray Bot is made here the first
+/// time anything asks, so every user starts with one.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_bots() -> Result<Vec<Bot>, Fail> {
+    if let Err(e) = ensure_dray_bot().await {
+        eprintln!("[dray bot] {e:#}");
+    }
+    read_list().await
+}
+
+async fn read_list() -> Result<Vec<Bot>, Fail> {
     Ok(read_json(&list_path().await?).await?)
+}
+
+/// The default bot's name, face and the welcome its chat opens on.
+pub const DRAY_BOT: &str = "Dray Bot";
+/// Dray Bot's welcome, by the reader's first name where one can be found:
+/// who it is and what it does, as Grok Bot's opens.
+async fn dray_bot_welcome() -> String {
+    let hello = match first_name().await {
+        Some(name) => format!("Hi {name}!"),
+        None => "Hi!".to_string(),
+    };
+    format!(
+        "{hello} I'm Dray Bot, your new assistant for everything you build. \
+I can start and keep track of work across your projects."
+    )
+}
+
+/// The reader's first name: git's `user.name`, else the Mac account's full
+/// name. `None` where neither says, and the welcome greets without one.
+async fn first_name() -> Option<String> {
+    let read = |program: &'static str, args: &'static [&'static str]| async move {
+        let out = tokio::process::Command::new(program).args(args).output().await.ok()?;
+        let full = String::from_utf8(out.stdout).ok()?;
+        full.split_whitespace().next().map(str::to_string)
+    };
+    match read("git", &["config", "--global", "user.name"]).await {
+        Some(name) => Some(name),
+        None if cfg!(target_os = "macos") => read("id", &["-F"]).await,
+        None => None,
+    }
+}
+
+/// Makes Dray Bot once per home. A marker file rather than a look at the
+/// list, so a reader who deletes it is not handed it back on the next read.
+async fn ensure_dray_bot() -> Result<()> {
+    let marker = bots_dir().await?.join(".dray-bot-made");
+    if tokio::fs::try_exists(&marker).await.unwrap_or(false) {
+        return Ok(());
+    }
+    let _guard = BOTS_LOCK.lock().await;
+    // Again under the lock: two first reads at once must not make two.
+    if tokio::fs::try_exists(&marker).await.unwrap_or(false) {
+        return Ok(());
+    }
+    // A Dray Bot already in the list is one made before its marker could be
+    // written — a stop between the two writes. Only it carries a welcome.
+    if !read_list().await?.iter().any(|b| b.welcome.is_some()) {
+        let avatar = BotAvatar { shape: "cloud".into(), hue: 80.0 };
+        make_bot(DRAY_BOT.into(), Some(avatar), Some(dray_bot_welcome().await)).await?;
+    }
+    tokio::fs::create_dir_all(bots_dir().await?).await?;
+    write_atomic(&marker, "").await?;
+    Ok(())
+}
+
+/// New chats whose first prompt is to be logged after their bot's welcome.
+/// Marked at creation rather than read off the event counter: a harness can
+/// log a startup error before the first prompt, which moved the counter on
+/// and lost the welcome.
+static WELCOMES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// Marks a new chat in `cwd` for its bot's welcome, where it has one.
+pub async fn mark_welcome(session_id: &str, cwd: &str) {
+    if let Some(welcome) = bot_at(cwd).await.and_then(|b| b.welcome) {
+        WELCOMES.lock().unwrap().push((session_id.to_string(), welcome));
+    }
+}
+
+/// Marks a chat being resumed whose log holds no prompt yet: its first send
+/// failed before the welcome was written, and a restart lost the mark made at
+/// creation. Reads the log only for a bot that has a welcome.
+pub async fn mark_welcome_if_unlogged(session_id: &str, cwd: &str) {
+    let Some(welcome) = bot_at(cwd).await.and_then(|b| b.welcome) else { return };
+    if WELCOMES.lock().unwrap().iter().any(|(id, _)| id == session_id) {
+        return;
+    }
+    let Ok(dir) = crate::store::get_sessions_dir().await else { return };
+    let log = tokio::fs::read_to_string(dir.join(format!("{session_id}.jsonl"))).await.unwrap_or_default();
+    // Neither a prompt nor the welcome itself: a stop between saving the two
+    // must not have it written twice.
+    if !log.contains("\"user_message\"") && !log.contains("\"assistant_text\"") {
+        WELCOMES.lock().unwrap().push((session_id.to_string(), welcome));
+    }
+}
+
+/// The welcome to log ahead of `session_id`'s first prompt, taken once.
+pub fn take_welcome(session_id: &str) -> Option<String> {
+    let mut welcomes = WELCOMES.lock().unwrap();
+    let at = welcomes.iter().position(|(id, _)| id == session_id)?;
+    Some(welcomes.remove(at).1)
 }
 
 /// Makes the folder, both files and the list entry. Both files start empty: the
 /// bot is told its job in its first message and writes it down itself.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_bot(name: String, avatar: Option<BotAvatar>) -> Result<Bot, Fail> {
+    let _guard = BOTS_LOCK.lock().await;
+    make_bot(name, avatar, None).await
+}
+
+/// The folder, both files and the list entry. Takes no lock: callers hold it.
+async fn make_bot(name: String, avatar: Option<BotAvatar>, welcome: Option<String>) -> Result<Bot, Fail> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err(anyhow::anyhow!("a bot needs a name").into());
@@ -90,9 +199,9 @@ pub async fn create_bot(name: String, avatar: Option<BotAvatar>) -> Result<Bot, 
         path: dir.to_string_lossy().into_owned(),
         created: chrono::Utc::now().to_rfc3339(),
         avatar,
+        welcome,
     };
-    let _guard = BOTS_LOCK.lock().await;
-    let mut bots = list_bots().await?;
+    let mut bots = read_list().await?;
     bots.push(bot.clone());
     save_list(&bots).await?;
     Ok(bot)
@@ -103,7 +212,7 @@ pub async fn create_bot(name: String, avatar: Option<BotAvatar>) -> Result<Bot, 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_bot(id: String, sink: Sink) -> Result<(), Fail> {
     let _guard = BOTS_LOCK.lock().await;
-    let mut bots = list_bots().await?;
+    let mut bots = read_list().await?;
     let Some(at) = bots.iter().position(|b| b.id == id) else {
         return Ok(());
     };
@@ -235,7 +344,7 @@ async fn read_file(path: &Path) -> String {
 
 /// The bot whose session runs in `cwd`, if any.
 pub async fn bot_at(cwd: &str) -> Option<Bot> {
-    let bots = list_bots().await.ok()?;
+    let bots = read_list().await.ok()?;
     bots.into_iter().find(|b| same_dir(&b.path, cwd))
 }
 
@@ -248,7 +357,7 @@ fn same_dir(a: &str, b: &str) -> bool {
 /// Everything under a bot runs hidden and reports back after every turn, and a
 /// grandchild belongs to that arrangement as much as a child does.
 pub async fn in_bot_tree(item: &SessionIndexItem) -> bool {
-    let Ok(bots) = list_bots().await else { return false };
+    let Ok(bots) = read_list().await else { return false };
     if bots.is_empty() {
         return false;
     }
@@ -348,7 +457,7 @@ mod tests {
     use super::*;
 
     fn bot() -> Bot {
-        Bot { id: "b".into(), name: "Ops".into(), path: "/h/bots/b".into(), created: String::new(), avatar: None }
+        Bot { id: "b".into(), name: "Ops".into(), path: "/h/bots/b".into(), created: String::new(), avatar: None, welcome: None }
     }
 
     #[test]

@@ -88,8 +88,6 @@ type SidebarProps = {
   /// The Bots section: every bot with its ongoing chat, if it has one.
   bots?: BotEntry[];
   onOpenBot?: (bot: Bot) => void;
-  /// Settles the bot's chat, so its next message starts a new one.
-  onStartBotFresh?: (bot: Bot) => void;
   onDeleteBot?: (bot: Bot) => void;
   onNewBot?: () => void;
   // The live search query. Owned by the caller, because the list it narrows is
@@ -973,7 +971,6 @@ export default function Sidebar({
   items,
   bots = [],
   onOpenBot,
-  onStartBotFresh,
   onDeleteBot,
   onNewBot,
   search,
@@ -1348,14 +1345,15 @@ export default function Sidebar({
             asking={!!session && askingSessions.has(session.sessionId)}
             active={!!session && session.sessionId === selectedSessionId}
             onOpen={() => onOpenBot?.(bot)}
-            onStartFresh={session ? () => onStartBotFresh?.(bot) : undefined}
             onDelete={() => onDeleteBot?.(bot)}
           />
         ))}
       </div>}
       */}
 
-      {bots.length > 0 && <div className="mt-4 flex flex-col gap-px px-2">
+      {/* One bot (Dray Bot alone) reads as part of the list above; several
+          make a group of their own, set apart. */}
+      {bots.length > 0 && <div className={cn("flex flex-col gap-px px-2", bots.length === 1 ? "mt-px" : "mt-6 mb-2")}>
         {bots.map(({ bot, session, preview }) => (
           <BotRow
             key={bot.id}
@@ -1368,7 +1366,6 @@ export default function Sidebar({
             asking={!!session && askingSessions.has(session.sessionId)}
             active={!!session && session.sessionId === selectedSessionId}
             onOpen={() => onOpenBot?.(bot)}
-            onStartFresh={session ? () => onStartBotFresh?.(bot) : undefined}
             onDelete={() => onDeleteBot?.(bot)}
           />
         ))}
@@ -1782,7 +1779,6 @@ function BotRow({
   asking,
   active,
   onOpen,
-  onStartFresh,
   onDelete,
 }: {
   bot: Bot;
@@ -1798,8 +1794,6 @@ function BotRow({
   asking: boolean;
   active: boolean;
   onOpen: () => void;
-  /// Absent while the bot has no chat to settle.
-  onStartFresh?: () => void;
   onDelete: () => void;
 }) {
   const digit = useJumpDigit(sessionId ?? "");
@@ -1821,7 +1815,7 @@ function BotRow({
             onPointerEnter={() => setHovered(true)}
             onPointerLeave={() => setHovered(false)}
             className={cn(
-              "group relative flex h-8 w-full cursor-pointer items-center gap-2 rounded-md pr-1.5 pl-1.5 text-left",
+              "group relative flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pr-1.5 pl-1.5 text-left",
               "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
               active
                 ? "bg-sidebar-accent text-sidebar-accent-foreground"
@@ -1882,9 +1876,6 @@ function BotRow({
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-44">
-          <ContextMenuItem className="text-ui" disabled={!onStartFresh} onSelect={onStartFresh}>
-            Start fresh
-          </ContextMenuItem>
           <ContextMenuItem className="text-ui text-destructive" onSelect={onDelete}>
             Delete bot…
           </ContextMenuItem>
@@ -1969,9 +1960,6 @@ function BotRow({
     </button>
     </ContextMenuTrigger>
     <ContextMenuContent className="w-44">
-      <ContextMenuItem className="text-ui" disabled={!onStartFresh} onSelect={onStartFresh}>
-        Start fresh
-      </ContextMenuItem>
       <ContextMenuItem className="text-ui text-destructive" onSelect={onDelete}>
         Delete bot…
       </ContextMenuItem>

@@ -902,6 +902,9 @@ impl SessionManager {
                 );
             }
             require_dir(cwd, "The project folder").await?;
+            // A bot whose chat opens on a welcome has it logged ahead of this
+            // first prompt; marked here, where "first" is known for certain.
+            crate::bots::mark_welcome(session_id, cwd).await;
 
             // Only Claude Code's `-w` makes its own tree. For everything else
             // the tree has to be one Dray makes — the same route `--from`
@@ -1447,6 +1450,10 @@ impl SessionManager {
         let cli_fork = fork_from
             .as_deref()
             .filter(|_| harness.caps().fork_needs_cli);
+
+        // A bot chat whose first send failed before its welcome was written
+        // comes back here, not through creation, after a restart.
+        crate::bots::mark_welcome_if_unlogged(session_id, &session_cwd).await;
 
         let mut session = Session::init(
             session_id,
@@ -3064,8 +3071,6 @@ async fn deliver_prompt(
     transport: &Transport,
     app: &Sink,
 ) -> Result<(String, bool)> {
-    let seq = seq.fetch_add(1, Relaxed);
-
     // Ahead of the event, because it is what decides the event's own text:
     // a non-image attachment becomes an `@path` mention on the prompt, and
     // the transcript has to show what the model was actually given.
@@ -3087,6 +3092,24 @@ async fn deliver_prompt(
         }
         _ => None,
     };
+
+    // A bot whose chat opens on a welcome (Dray Bot) has it written down as
+    // the chat's first message, ahead of the prompt that started the session,
+    // so the chat reads after a restart as it did before the first send. Only
+    // logged: the agent is not given it.
+    if let Some(welcome) = crate::bots::take_welcome(session_id) {
+        let event = AgentEvent::mint(
+            session_id.to_string(),
+            harness,
+            seq.fetch_add(1, Relaxed),
+            None,
+            None,
+            AgentEventPayload::AssistantText { block: None, text: welcome },
+        );
+        app.emit("agent_event", &event)?;
+        append_session_event(session_id, event).await?;
+    }
+    let seq = seq.fetch_add(1, Relaxed);
 
     let payload = AgentEventPayload::UserMessage {
         text: text.clone(),
