@@ -32,7 +32,9 @@ export default function RecordingNotice({ since }: { since?: number }) {
 /// when this app heard of the recording, so an app opened mid-recording starts
 /// at 0:00; carry the start on `browser_recording` if that ever misleads.
 function Elapsed({ since }: { since?: number }) {
-  const [start] = useState(() => since ?? Date.now());
+  // Read each render: the pane stays mounted across a session switch.
+  const [mounted] = useState(Date.now);
+  const start = since ?? mounted;
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
