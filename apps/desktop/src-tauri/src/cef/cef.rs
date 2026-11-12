@@ -2235,13 +2235,13 @@ const SHUTTER: Duration = Duration::from_millis(700);
 
 /// Opens the pane's shutter and waits until the page is covered, answering
 /// the shot's number.
-async fn cover(session: &str) -> u64 {
+async fn cover(session: &str, tab: i32) -> u64 {
     // Numbered before the event goes out, so an ack cannot name a shot that
     // does not exist yet; `await_shutter` reads the mark before it waits, so
     // one arriving early is not missed either.
     let shot = SHUTTER_SHOT.fetch_add(1, Ordering::AcqRel) + 1;
     SHUTTER_OPEN.store(true, Ordering::Release);
-    automation::emit_shooting(session, true, shot);
+    automation::emit_shooting(session, true, shot, Some(tab));
     await_shutter(shot).await;
     // The hide has run, but a hidden view leaves the window on its next frame
     // — so the page is given one before it is asked to reflow into a widget
@@ -2261,7 +2261,7 @@ async fn cover(session: &str) -> u64 {
 /// so this costs nothing anybody can see.
 async fn uncover(session: &str, shot: u64) {
     tokio::time::sleep(automation::SETTLE).await;
-    automation::emit_shooting(session, false, shot);
+    automation::emit_shooting(session, false, shot, None);
 }
 
 /// Lets the shot numbered `shot` through. See `browser_shutter_ready`.

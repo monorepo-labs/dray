@@ -165,7 +165,7 @@ fn set_paused(session: &str, paused: bool) {
 pub(super) fn drop_recording(session: &str) {
     if let Some(rec) = RECORDING.lock().unwrap().remove(session) {
         emit_recording(session, None);
-        emit_shooting(session, false, rec.shot);
+        emit_shooting(session, false, rec.shot, None);
         std::thread::spawn(move || rec.recorder.discard());
     }
 }
@@ -335,7 +335,7 @@ pub(super) fn forget(tab: i32) {
     });
     if let Some((session, shot)) = closed {
         emit_recording(&session, None);
-        emit_shooting(&session, false, shot);
+        emit_shooting(&session, false, shot, None);
     }
 }
 
@@ -546,8 +546,12 @@ fn page(tab: i32) -> (String, Value) {
     }
 }
 
-/// Opens `url` in a new tab and answers its id.
+/// Opens `url` in a new tab and answers its id. Listing, opening and finding
+/// the new tab run under one lock: two opens interleaved, from one agent's
+/// parallel calls, would both find the first new tab and drive one page.
 async fn open_new(session: &str, url: String) -> Result<i32, String> {
+    static OPENING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one_at_a_time = OPENING.lock().await;
     let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
     open_url(session, url, None).await?;
     new_tab(session, &before).await
@@ -1047,15 +1051,14 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let tab = driven_tab(session)?;
             let (w, h) = screenshot_size(session);
             let held = CAPTURING.lock().await;
-            // A recording already holds this session's shutter open, so the
-            // pane is covered: opening it again adds nothing, and closing it
-            // would uncover the page mid-recording.
-            let recording = recording_of(session);
-            let shot = if recording.is_some() { None } else { Some(cover(session).await) };
+            // A recording already holds its tab's shutter open, so that tab is
+            // covered: opening it again adds nothing. Any other tab is live
+            // and gets a shutter of its own.
             // The screenshot's size may not be the recording's — a phone shot
             // of a desktop recording — so the video holds its last frame for
             // the length of the capture rather than show the page reflowing.
-            let recorded = recording.filter(|(rec_tab, _)| *rec_tab == tab);
+            let recorded = recording_of(session).filter(|(rec_tab, _)| *rec_tab == tab);
+            let shot = if recorded.is_some() { None } else { Some(cover(session, tab).await) };
             if recorded.is_some() {
                 set_paused(session, true);
             }
@@ -1146,10 +1149,9 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             // page is laid out at w×h throughout, and the pane keeps its still
             // up rather than show that layout squeezed into itself. Its number
             // is also the recording's own, which `film` checks it is still for.
-            // Named first, so a pane on another tab answers at once and stays live.
-            emit_recording(session, Some(tab));
-            let shot = cover(session).await;
+            let shot = cover(session, tab).await;
             RECORDING.lock().unwrap().insert(session.into(), Recording { tab, size: (w, h), shot, paused: false, layout: 0, closed: false, recorder });
+            emit_recording(session, Some(tab));
             let started = async {
                 relayout()?;
                 cdp(tab, "Emulation.setDeviceMetricsOverride", metrics(w, h)).await?;
@@ -1251,7 +1253,7 @@ async fn end_recording(session: &str, tab: i32, shot: u64) {
     let _ = relayout();
     tokio::time::sleep(SETTLE).await;
     emit_recording(session, None);
-    emit_shooting(session, false, shot);
+    emit_shooting(session, false, shot, None);
 }
 
 /// Tells the pane which tab a session is recording, so it covers that tab
@@ -1296,9 +1298,10 @@ async fn capture(tab: i32, w: u32, h: u32, full: bool) -> Result<Vec<u8>, String
 /// doing it — so the pane hides the view behind a still of the page for the
 /// length of the shot, rather than showing a page reflowing to a size
 /// nobody asked to look at. `shot` names it, so the pane's ack can name it
-/// back; see the Mac's `cover`.
-pub(super) fn emit_shooting(session: &str, shooting: bool, shot: u64) {
-    emit("browser_shooting", json!({ "sessionId": session, "shooting": shooting, "shot": shot }));
+/// back; see the Mac's `cover`. `tab` is the page being laid out, on open:
+/// the pane covers only while that tab is the one on screen.
+pub(super) fn emit_shooting(session: &str, shooting: bool, shot: u64, tab: Option<i32>) {
+    emit("browser_shooting", json!({ "sessionId": session, "shooting": shooting, "shot": shot, "tab": tab }));
 }
 
 /// Truncating write that refuses a symlink at the leaf, so a link planted

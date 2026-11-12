@@ -66,10 +66,10 @@ function start() {
     }
     tabsBySession.set(sessionId, tabs);
     fetched.add(sessionId);
-    // The reader moving on or off a recorded tab moves the cover with them.
+    // The reader moving on or off a tab under a shot moves the cover with them.
     // Here rather than at the click: the Rust side has switched by now, so
     // the still is taken of the tab that is really on screen.
-    if (recording.has(sessionId)) present();
+    if ([...shooting.values()].some((s) => s.sessionId === sessionId)) present();
     notify();
   });
   void listen<{ sessionId: string; element: PickedElement | null }>("browser_pick", (e) => {
@@ -103,17 +103,17 @@ function start() {
   // reflow the capture needs happens where nobody is looking. Nothing is
   // drawn on top of that still: it is the page pixel for pixel, so the
   // whole shot is invisible, which is the point.
-  void listen<{ sessionId: string; shooting: boolean; shot: number }>("browser_shooting", (e) => {
-    const { sessionId, shooting: on } = e.payload;
-    if (on) shooting.add(sessionId);
-    else shooting.delete(sessionId);
+  void listen<{ sessionId: string; shooting: boolean; shot: number; tab?: number | null }>("browser_shooting", (e) => {
+    const { sessionId, shooting: on, tab = null } = e.payload;
+    if (on) shooting.set(e.payload.shot, { sessionId, tab });
+    else shooting.delete(e.payload.shot);
     shot = e.payload.shot;
     const winner = presenter();
     // Nothing of this session's page is on screen, so there is no reflow to
     // hide and nothing to wait for. Answered before `present`, which in
     // that case does no work and would leave the shot waiting on a hide
     // that is never going to happen.
-    // Nor where a recording is under way on a tab the reader is not on.
+    // Nor where the shot is of a tab the reader is not on.
     if (on && (!shown || winner?.sessionId !== sessionId || !hiding())) shutterReady(shot);
     present();
     notify();
@@ -758,10 +758,11 @@ let capturing = false;
 /// watching — so the view hides and the page's own still is drawn in its
 /// place. The still is what makes it a cover rather than a hole: the shutter
 /// opens *before* the override lands, so what is photographed is the page as
-/// the reader last saw it, and the swap is invisible. A set, since a
-/// recording holds its session's shutter open for its whole length and
-/// another session's screenshot must not close it.
-const shooting = new Set<string>();
+/// the reader last saw it, and the swap is invisible. Keyed by shot, since a
+/// recording holds its shutter open for its whole length and a screenshot of
+/// another tab or session must not close it. Each names the tab it lays out,
+/// and only that tab is covered; `null` covers the whole session.
+const shooting = new Map<number, { sessionId: string; tab: number | null }>();
 /// The newest shot, as `browser_shooting` numbered it.
 let shot = 0;
 
@@ -790,11 +791,9 @@ export function browserHistory(sessionId: string): Promise<BrowserVisit[]> {
 function hiding(): boolean {
   if (occluded || suggesting) return true;
   const winner = presenter();
-  if (!winner || !shooting.has(winner.sessionId)) return false;
-  // A recording holds the shutter for its whole length, but only its own tab
-  // is laid out at the recording's size; any other tab is live.
-  const recorded = recording.get(winner.sessionId);
-  return recorded === undefined || tabsBySession.get(winner.sessionId)?.find((t) => t.active)?.id === recorded;
+  if (!winner) return false;
+  const active = tabsBySession.get(winner.sessionId)?.find((t) => t.active)?.id;
+  return [...shooting.values()].some((s) => s.sessionId === winner.sessionId && (s.tab === null || s.tab === active));
 }
 
 export function useBrowserSnapshot(sessionId: string): Snapshot | null {

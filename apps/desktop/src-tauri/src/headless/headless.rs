@@ -313,7 +313,7 @@ fn relayout() -> Result<(), String> {
 
 /// No pane to cover. Still numbered, since a recording's number is what
 /// `film` checks it is still running for.
-async fn cover(_session: &str) -> u64 {
+async fn cover(_session: &str, _tab: i32) -> u64 {
     static SHOT: AtomicU64 = AtomicU64::new(0);
     SHOT.fetch_add(1, Ordering::Relaxed) + 1
 }
