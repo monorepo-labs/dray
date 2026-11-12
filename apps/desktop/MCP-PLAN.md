@@ -38,7 +38,7 @@ access the tunnel ends TLS in this process and passes the public `Host`
 through, and OAuth's `resource` must equal the URL the reader pasted. Loopback
 hosts read as `http`, everything else as `https`.
 
-## Auth: OAuth with a pairing code
+## Auth: OAuth, signed in at drayhq.com or with a pairing code
 
 What each client can send decided this:
 
@@ -87,6 +87,40 @@ code — and [auth.rs](src-tauri/src/mcp/auth.rs) copies it:
   `<home>/mcp.json`, `0600`. One process owns a home, so a process mutex is the
   only lock. An unreadable file reads as empty: every assistant signs in again,
   which beats `/mcp` failing outright.
+
+## Signing in through drayhq.com
+
+#874 stage 3, [account.rs](src-tauri/src/mcp/account.rs). The server keeps
+its own OAuth; drayhq.com only answers "who is this, and may they".
+
+- **Linked servers only.** An unlinked server's sign-in page says how to
+  link, a code is refused there too, and `/mcp` answers 401 for every grant,
+  pairing ones included. The pairing code stays as a fallback under **Use a
+  pairing code** (a `<details>`, since the page runs no script).
+- **The server pushes the flow before the browser goes.** Continue posts the
+  return address (`<origin>/oauth/dray`), a nonce, the client's name and its
+  redirect host to `/api/mcp/sign-in` under the server's link credential,
+  and gets back `/connect/<id>`. The site never takes a return address from
+  the browser, which is what keeps an assertion for this server from being
+  sent anywhere else.
+- **`/connect/<id>`** signs the reader in with Google, checks
+  `server_access` joined to `member`, and shows Allow with Full or Read only.
+  Anyone else sees one sentence naming neither server nor org, and **Use
+  another account**. Cancel sends `error=access_denied` back, which the
+  server hands on to the assistant.
+- **The assertion is an Ed25519 JWT** from Better Auth's `jwt` plugin, keys in
+  the site's `jwks` table: `aud` the server's row id, `nonce` the pushed flow's,
+  `access`, `sub` the user, two minutes' life. The server checks it against
+  `<site>/api/auth/jwks` with `ring`, refetching on an unknown `kid` at most
+  every 30s, and pins `EdDSA`. `iss` is not read: the key came from the site
+  this server is linked to.
+- **Every `/mcp` call asks again** (`/api/mcp/access`), so removal from the
+  allow list or the org cuts an assistant off at once. Answers are cached 10s;
+  an unreachable site leans on the last yes for 10 minutes, then answers 503,
+  not 401, since a sign-in would need the site too. A refresh asks the same
+  question and deletes the grant on a no.
+- **A grant remembers the account** (`user` in `mcp.json`, its email on
+  `AssistantSummary`), so a pairing grant is the one with none.
 
 ## Making a code
 

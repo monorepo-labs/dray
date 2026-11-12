@@ -75,6 +75,9 @@ reqwest = { version = "0.13", default-features = false, features = [
 ] }
 # Only to install ring as the process's provider for `reqwest` (`http()`).
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# Ed25519, for the assertion drayhq.com signs at the end of an MCP sign-in.
+# Already built for rustls above, so naming it costs nothing.
+ring = "0.17"
 
 # Local speech-to-text. The engine is `transcribe-cpp` (MIT, "The transcribe.cpp
 # authors") — its own repo, not the Handy app's; `cpal` captures the microphone

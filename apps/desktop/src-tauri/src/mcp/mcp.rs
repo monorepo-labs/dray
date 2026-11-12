@@ -1,13 +1,16 @@
 //! Remote MCP: every Dray server answers the Model Context Protocol at
 //! `/mcp`, on the listener the app's WebSocket uses and so at Remote access's
 //! public address, letting Grok Bot, Claude or ChatGPT start and follow
-//! sessions here (#858). Sign-in is OAuth with a pairing code ([`auth`]); the
-//! tools are in [`tools`]. See MCP-PLAN.md.
+//! sessions here (#858). Sign-in is this server's own OAuth ([`auth`]), the
+//! reader proving who they are at drayhq.com ([`account`]) or with a pairing
+//! code, and only on a server linked to an org; the tools are in [`tools`].
+//! See MCP-PLAN.md.
 //!
 //! Streamable HTTP in its plainest form: each POST answered with one JSON
 //! body, no session id and no SSE stream, since nothing here is pushed and a
 //! stateless server survives a restart mid-conversation.
 
+mod account;
 mod auth;
 mod tools;
 
@@ -109,16 +112,18 @@ async fn handle(req: Request<hyper::body::Incoming>, sink: Sink) -> Answer {
         },
         (Method::GET, "/oauth/authorize") => {
             let (ask, _) = auth::AuthorizeAsk::from_pairs(form_urlencoded::parse(query.as_bytes()));
-            page(auth::authorize_page(&ask).await, &query)
+            page(auth::authorize_page(&ask, &sink).await, &query)
         }
         (Method::POST, "/oauth/authorize") => {
             let Some(bytes) = body(req).await else { return json_reply(413, &json!({ "error": "invalid_request" })) };
             let (ask, typed) = auth::AuthorizeAsk::from_pairs(form_urlencoded::parse(&bytes));
             let echoed: String = form_urlencoded::Serializer::new(String::new())
-                .extend_pairs(form_urlencoded::parse(&bytes).filter(|(k, _)| k != "pairing_code"))
+                .extend_pairs(form_urlencoded::parse(&bytes).filter(|(k, _)| !FORM_FIELDS.contains(&&**k)))
                 .finish();
-            page(auth::authorize(&ask, typed.as_deref().unwrap_or_default()).await, &echoed)
+            let typed = typed.unwrap_or(auth::Typed::Code(String::new()));
+            page(auth::authorize(&ask, typed, &base, &sink).await, &echoed)
         }
+        (Method::GET, "/oauth/dray") => page(auth::dray_return(&query, &sink).await, ""),
         (Method::POST, "/oauth/token") => match body(req).await {
             Some(bytes) => {
                 let (status, answer) = auth::token(&bytes, &sink).await;
@@ -127,14 +132,17 @@ async fn handle(req: Request<hyper::body::Incoming>, sink: Sink) -> Answer {
             None => json_reply(413, &json!({ "error": "invalid_request" })),
         },
         (Method::POST, "/mcp") => {
-            let Some(access) = bearer.as_deref().and_then(auth::check) else {
-                // The pointer is what starts sign-in: Claude ignores it on
-                // anything but a 401.
-                let mut answer = json_reply(401, &json!({ "error": "invalid_token" }));
-                let challenge = format!("Bearer resource_metadata=\"{base}/.well-known/oauth-protected-resource/mcp\"");
-                answer.headers_mut().insert(header::WWW_AUTHENTICATE, challenge.parse().expect("ascii header"));
-                return answer;
-            };
+            let Some((access, user)) = bearer.as_deref().and_then(auth::check) else { return unauthorized(&base) };
+            match account::admit(&sink, user.as_deref()).await {
+                account::Admit::Yes => {}
+                // Not a 401: that would send the assistant to sign in again,
+                // and a sign-in needs the site too.
+                account::Admit::Unreachable => {
+                    let why = "Can't reach drayhq.com to check this account's access. Try again in a minute.";
+                    return json_reply(503, &rpc_error(Value::Null, -32000, why));
+                }
+                account::Admit::Unlinked | account::Admit::Refused => return unauthorized(&base),
+            }
             match body(req).await {
                 Some(bytes) => rpc(&bytes, access, &sink).await,
                 None => json_reply(413, &rpc_error(Value::Null, -32600, "request too large")),
@@ -148,6 +156,18 @@ async fn handle(req: Request<hyper::body::Incoming>, sink: Sink) -> Answer {
         }
         _ => reply(404, "", ""),
     }
+}
+
+/// The sign-in page's own fields, never echoed back into its hidden inputs.
+const FORM_FIELDS: [&str; 2] = ["pairing_code", "via"];
+
+/// A `/mcp` call with no good token. The pointer is what starts sign-in:
+/// Claude ignores it on anything but a 401.
+fn unauthorized(base: &str) -> Answer {
+    let mut answer = json_reply(401, &json!({ "error": "invalid_token" }));
+    let challenge = format!("Bearer resource_metadata=\"{base}/.well-known/oauth-protected-resource/mcp\"");
+    answer.headers_mut().insert(header::WWW_AUTHENTICATE, challenge.parse().expect("ascii header"));
+    answer
 }
 
 fn rpc_error(id: Value, code: i64, message: &str) -> Value {
@@ -219,7 +239,11 @@ fn page(page: auth::Page, query: &str) -> Answer {
             }
         }
         auth::Page::Refused(why) => html(400, &refused(&why)),
-        auth::Page::Ask { client, redirect_host, error } => html(if error.is_some() { 401 } else { 200 }, &ask(&client, &redirect_host, error, query)),
+        auth::Page::Unlinked => html(403, &unlinked()),
+        auth::Page::Ask { client, redirect_host, site, error, pairing } => {
+            let status = if error.is_some() { 401 } else { 200 };
+            html(status, &ask(&client, &redirect_host, &site, error.as_deref(), pairing, query))
+        }
     }
 }
 
@@ -240,46 +264,81 @@ fn escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
+/// drayhq.com's account pages in plain CSS: hairlines, mono uppercase labels,
+/// one filled button. Inter where it is installed; nothing is fetched.
 const STYLE: &str = "\
-:root{color-scheme:light dark;--fg:#1a1a1a;--muted:#6b6b6b;--line:#e2e2e2;--bg:#fafafa;--card:#fff;--accent:#f5c518}\
-@media(prefers-color-scheme:dark){:root{--fg:#ededed;--muted:#9a9a9a;--line:#2e2e2e;--bg:#111;--card:#1a1a1a}}\
-*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);\
-font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}\
-main{width:min(380px,calc(100vw - 32px));background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px}\
-h1{font-size:16px;margin:0 0 6px}p{margin:0 0 14px;color:var(--muted)}b{color:var(--fg);font-weight:600}\
-input{width:100%;font:600 20px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;text-align:center;\
-padding:12px;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--fg);margin-bottom:12px}\
-button{width:100%;padding:10px;border:0;border-radius:10px;background:var(--accent);color:#1a1a1a;font:inherit;font-weight:600;cursor:pointer;\
-box-shadow:0 1px 2px rgba(0,0,0,.15)}.error{color:#d14343}.small{font-size:12px;margin:12px 0 0}";
+:root{color-scheme:dark;--fg:#fff;--bg:#000;--muted:#7C7C7C;--line:rgba(255,255,255,.2);--focus:rgba(255,255,255,.6);\
+--fill:#fff;--on-fill:#0B0B0F;--hover:rgba(255,255,255,.1)}\
+@media(prefers-color-scheme:light){:root{color-scheme:light;--fg:#0A0A0A;--bg:#F4F4F2;--muted:#8A8A8A;--line:rgba(0,0,0,.15);\
+--focus:rgba(0,0,0,.5);--fill:#0A0A0A;--on-fill:#fff;--hover:rgba(0,0,0,.05)}}\
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--fg);-webkit-font-smoothing:antialiased;\
+font:14px/1.5 Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}\
+main{max-width:604px;margin:0 auto;padding:40px 20px 120px}\
+.label,summary,.secondary{font:11px/14px ui-monospace,Menlo,monospace;letter-spacing:.06em;text-transform:uppercase}\
+.label{color:var(--muted);margin:0}\
+h1{margin:0;padding-top:64px;font-size:28px;line-height:32px;font-weight:400;letter-spacing:-.03em;text-wrap:balance}\
+@media(min-width:640px){h1{padding-top:101px;font-size:36px;line-height:40px}}\
+.lead{margin:16px 0 0;font-size:16px;line-height:24px;letter-spacing:-.01em;color:var(--muted)}\
+b,code{color:var(--fg);font-weight:500}code{font:13px ui-monospace,Menlo,monospace}\
+.primary{display:inline-flex;align-items:center;height:40px;padding:0 16px;border:0;border-radius:6px;background:var(--fill);\
+color:var(--on-fill);font-family:inherit;font-size:14px;line-height:20px;font-weight:500;cursor:pointer;box-shadow:inset 0 -1px 0 #4D4C4C,0 1px 2px #00000040}\
+.primary:hover{opacity:.9}\
+.secondary{height:40px;padding:0 16px;border:1px solid var(--line);background:transparent;color:var(--fg);cursor:pointer;flex-shrink:0}\
+.secondary:hover{background:var(--hover)}\
+.actions{margin-top:40px}\
+details{margin-top:32px;border-top:1px solid var(--line);padding-top:20px}\
+summary{color:var(--muted);cursor:pointer;width:max-content}summary:hover{color:var(--fg)}\
+.row{display:flex;gap:8px;max-width:360px;margin-top:16px}\
+input{height:40px;width:100%;padding:0 12px;border:1px solid var(--line);border-radius:0;background:transparent;color:var(--fg);outline:none;\
+font:14px ui-monospace,Menlo,monospace;letter-spacing:.12em;text-transform:uppercase}input:focus{border-color:var(--focus)}\
+input::placeholder{color:#5C5C5C}\
+.error{margin:16px 0 0;font-size:13px;color:#FF5A4E}\
+.small{margin:12px 0 0;font-size:13px;color:var(--muted)}.foot{margin-top:32px}";
 
-fn ask(client: &str, redirect_host: &str, error: Option<&str>, query: &str) -> String {
-    let machine = escape(&dray_proto::machine_name());
-    let hidden: String = form_urlencoded::parse(query.as_bytes())
-        .filter(|(k, _)| k != "pairing_code")
-        .map(|(k, v)| format!("<input type=\"hidden\" name=\"{}\" value=\"{}\">", escape(&k), escape(&v)))
-        .collect();
-    let error = error.map(|e| format!("<p class=\"error\">{}</p>", escape(e))).unwrap_or_default();
+fn document(body: &str) -> String {
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-         <title>Connect to Dray</title><style>{STYLE}</style></head><body><main>\
-         <h1>Connect {client} to Dray on {machine}</h1>\
-         <p>It will be able to list, start, message and stop coding sessions on this machine.</p>{error}\
-         <form method=\"post\" action=\"/oauth/authorize\">{hidden}\
-         <input name=\"pairing_code\" placeholder=\"ABCD-EFGH\" autocomplete=\"off\" autocapitalize=\"characters\" spellcheck=\"false\" autofocus required>\
-         <button type=\"submit\">Connect</button></form>\
-         <p class=\"small\">Get a code in Dray: Settings, Servers, Connect an assistant. Or run <b>dray server assistant add</b>. \
-         Sends you back to <b>{redirect}</b>.</p></main></body></html>",
-        client = escape(client),
-        redirect = escape(redirect_host),
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+         <title>Connect to Dray</title><style>{STYLE}</style></head><body><main><p class=\"label\">Dray</p>{body}</main></body></html>"
     )
 }
 
+fn ask(client: &str, redirect_host: &str, site: &str, error: Option<&str>, pairing: bool, query: &str) -> String {
+    let machine = escape(&dray_proto::machine_name());
+    let hidden: String = form_urlencoded::parse(query.as_bytes())
+        .filter(|(k, _)| !FORM_FIELDS.contains(&&**k))
+        .map(|(k, v)| format!("<input type=\"hidden\" name=\"{}\" value=\"{}\">", escape(&k), escape(&v)))
+        .collect();
+    let error = error.map(|e| format!("<p class=\"error\">{}</p>", escape(e))).unwrap_or_default();
+    let (open, focus) = if pairing { (" open", " autofocus") } else { ("", "") };
+    document(&format!(
+        "<h1>Connect {client} to Dray on {machine}.</h1>\
+         <p class=\"lead\">It will be able to list, start, message and stop coding sessions on this machine. \
+         Sign in with your Dray account to allow it.</p>{error}\
+         <form class=\"actions\" method=\"post\" action=\"/oauth/authorize\">{hidden}<input type=\"hidden\" name=\"via\" value=\"dray\">\
+         <button class=\"primary\" type=\"submit\">Continue with {site}</button></form>\
+         <details{open}><summary>Use a pairing code</summary>\
+         <form method=\"post\" action=\"/oauth/authorize\">{hidden}<div class=\"row\">\
+         <input name=\"pairing_code\" placeholder=\"ABCD-EFGH\" aria-label=\"Pairing code\" autocomplete=\"off\" autocapitalize=\"characters\" \
+         spellcheck=\"false\" maxlength=\"12\" required{focus}><button class=\"secondary\" type=\"submit\">Connect</button></div></form>\
+         <p class=\"small\">Get a code in Dray: Settings, Servers, Connect an assistant. Or run <code>dray server assistant add</code>.</p>\
+         </details>\
+         <p class=\"small foot\">Sends you back to <b>{redirect}</b>.</p>",
+        client = escape(client),
+        site = escape(site),
+        redirect = escape(redirect_host),
+    ))
+}
+
+fn unlinked() -> String {
+    document(&format!(
+        "<h1>{} isn't linked to a Dray account.</h1>\
+         <p class=\"lead\">Link it, then connect again: run <code>dray login</code> on it, or sign in from the Dray app.</p>",
+        escape(&dray_proto::machine_name())
+    ))
+}
+
 fn refused(why: &str) -> String {
-    format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-         <title>Connect to Dray</title><style>{STYLE}</style></head><body><main><h1>Can't connect</h1><p>{}</p></main></body></html>",
-        escape(why)
-    )
+    document(&format!("<h1>Can't connect.</h1><p class=\"lead\">{}</p>", escape(why)))
 }
 
 #[cfg(test)]

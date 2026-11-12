@@ -1,5 +1,7 @@
 //! Just enough OAuth 2.1 for Grok Bot, Claude and ChatGPT to sign in to
-//! `/mcp`, with a pairing code standing in for a password. OAuth because it is
+//! `/mcp`. Who is signing in is settled at drayhq.com ([`super::account`]), or
+//! by a pairing code standing in for a password; either only on a server
+//! linked to an org. OAuth because it is
 //! the one method all three take: Claude's static headers are a beta for org
 //! Owners, Grok Bot's connectors are OAuth only, and a token in the URL is
 //! forbidden by the spec and cannot be revoked per client.
@@ -22,7 +24,8 @@ use serde_json::{json, Value};
 use sha2::Digest;
 use ts_rs::TS;
 
-use crate::{sink::Sink, store};
+use super::account::{self, Admit, DrayUser};
+use crate::{org_link, sink::Sink, store};
 
 /// A pairing code is typed by hand, so it is short; this keeps a guess at it
 /// short-lived too.
@@ -73,6 +76,8 @@ pub struct AssistantSummary {
     pub created: String,
     /// Moves on each token refresh, so it is right to the hour.
     pub last_used: String,
+    /// The Dray account it signed in with at drayhq.com; none for a pairing code.
+    pub user: Option<String>,
 }
 
 /// A code waiting to be typed into an assistant's sign-in page.
@@ -110,6 +115,9 @@ struct Grant {
     /// The refresh token's hash, never the token.
     refresh: String,
     expires: String,
+    /// Who signed it in at drayhq.com, asked about again on every call.
+    #[serde(default)]
+    user: Option<DrayUser>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -125,6 +133,15 @@ struct Code {
     redirect_uri: String,
     challenge: String,
     access: Access,
+    user: Option<DrayUser>,
+    born: Instant,
+}
+
+/// An access token's grant, what it may do, and whose it is.
+struct Live {
+    grant: String,
+    access: Access,
+    user: Option<String>,
     born: Instant,
 }
 
@@ -134,7 +151,7 @@ struct Memory {
     failures: u32,
     /// Keyed by the code's hash, like everything a client holds.
     codes: HashMap<String, Code>,
-    access: HashMap<String, (String, Access, Instant)>,
+    access: HashMap<String, Live>,
     registrations: std::collections::VecDeque<Instant>,
 }
 
@@ -254,7 +271,14 @@ pub async fn assistants() -> Result<Vec<AssistantSummary>, String> {
         .grants
         .into_iter()
         .filter(|g| live(&g.expires, now))
-        .map(|g| AssistantSummary { id: g.id, name: g.name, access: g.access, created: g.created, last_used: g.last_used })
+        .map(|g| AssistantSummary {
+            id: g.id,
+            name: g.name,
+            access: g.access,
+            created: g.created,
+            last_used: g.last_used,
+            user: g.user.map(|u| u.email),
+        })
         .collect())
 }
 
@@ -270,7 +294,7 @@ pub async fn revoke(sink: Sink, id: String) -> Result<Vec<AssistantSummary>, Str
             return Err(format!("no assistant {id}"));
         }
         write_book(&book).await.map_err(|e| format!("{e:#}"))?;
-        memory().access.retain(|_, (grant, _, _)| *grant != id);
+        memory().access.retain(|_, live| live.grant != id);
     }
     let _ = sink.emit(CHANGED, ());
     assistants().await
@@ -280,11 +304,12 @@ fn live(expires: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
     chrono::DateTime::parse_from_rfc3339(expires).is_ok_and(|e| e > now)
 }
 
-/// What a bearer token on `/mcp` is good for, if anything.
-pub fn check(token: &str) -> Option<Access> {
+/// What a bearer token on `/mcp` is good for, if anything, and the Dray
+/// account behind it, which the caller asks [`account::admit`] about.
+pub fn check(token: &str) -> Option<(Access, Option<String>)> {
     let mut memory = memory();
-    memory.access.retain(|_, (_, _, born)| born.elapsed() < ACCESS_LIFE);
-    memory.access.get(&hash(token)).map(|(_, access, _)| *access)
+    memory.access.retain(|_, live| live.born.elapsed() < ACCESS_LIFE);
+    memory.access.get(&hash(token)).map(|live| (live.access, live.user.clone()))
 }
 
 pub fn resource_metadata(base: &str) -> Value {
@@ -419,9 +444,10 @@ pub struct AuthorizeAsk {
 }
 
 impl AuthorizeAsk {
-    pub fn from_pairs<'a>(pairs: impl Iterator<Item = (std::borrow::Cow<'a, str>, std::borrow::Cow<'a, str>)>) -> (Self, Option<String>) {
+    pub fn from_pairs<'a>(pairs: impl Iterator<Item = (std::borrow::Cow<'a, str>, std::borrow::Cow<'a, str>)>) -> (Self, Option<Typed>) {
         let mut ask = Self::default();
         let mut code = None;
+        let mut via = false;
         for (key, value) in pairs {
             let value = value.into_owned();
             match &*key {
@@ -432,18 +458,29 @@ impl AuthorizeAsk {
                 "code_challenge_method" => ask.method = value,
                 "response_type" => ask.response_type = value,
                 "pairing_code" => code = Some(value),
+                "via" => via = value == "dray",
                 _ => {}
             }
         }
-        (ask, code)
+        (ask, code.map(Typed::Code).or(via.then_some(Typed::Dray)))
     }
+}
+
+/// What the sign-in page's form posted: a pairing code, or Continue.
+pub enum Typed {
+    Code(String),
+    Dray,
 }
 
 /// What the page says to the reader, or why it cannot be shown. An unknown
 /// client or redirect is answered on the page and never redirected to, or this
 /// would be an open redirect.
 pub enum Page {
-    Ask { client: String, redirect_host: String, error: Option<&'static str> },
+    /// `site` is where Continue goes, `drayhq.com` outside testing. `pairing`
+    /// opens the pairing-code form, for an answer to a code typed there.
+    Ask { client: String, redirect_host: String, site: String, error: Option<String>, pairing: bool },
+    /// Nothing signs in to a server not linked to an org.
+    Unlinked,
     Refused(String),
     Redirect(String),
 }
@@ -473,28 +510,78 @@ fn client_label(client: &Client) -> String {
     client.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "An assistant".into())
 }
 
-/// `GET /oauth/authorize`.
-pub async fn authorize_page(ask: &AuthorizeAsk) -> Page {
-    match vet(ask).await {
-        Ok(client) => Page::Ask { client: client_label(&client), redirect_host: redirect_host(&ask.redirect_uri), error: None },
-        Err(why) => Page::Refused(why),
+fn ask_page(client: &Client, ask: &AuthorizeAsk, site: &str, error: Option<String>, pairing: bool) -> Page {
+    Page::Ask {
+        client: client_label(client),
+        redirect_host: redirect_host(&ask.redirect_uri),
+        site: account::site_host(site),
+        error,
+        pairing,
     }
 }
 
-/// `POST /oauth/authorize`: the pairing code typed in. A right one sends the
-/// browser back to the assistant with an authorization code.
-pub async fn authorize(ask: &AuthorizeAsk, typed: &str) -> Page {
+/// `GET /oauth/authorize`.
+pub async fn authorize_page(ask: &AuthorizeAsk, sink: &Sink) -> Page {
     let client = match vet(ask).await {
         Ok(client) => client,
         Err(why) => return Page::Refused(why),
     };
-    let Some(access) = redeem(typed) else {
-        return Page::Ask {
-            client: client_label(&client),
-            redirect_host: redirect_host(&ask.redirect_uri),
-            error: Some("That code is wrong or has expired. Make a new one in Dray."),
-        };
+    match org_link::credential(sink).await {
+        Some(cred) => ask_page(&client, ask, &cred.site, None, false),
+        None => Page::Unlinked,
+    }
+}
+
+/// `POST /oauth/authorize`: Continue, which hands the reader to drayhq.com,
+/// or a pairing code, which a right one turns into an authorization code at
+/// once.
+pub async fn authorize(ask: &AuthorizeAsk, typed: Typed, base: &str, sink: &Sink) -> Page {
+    let client = match vet(ask).await {
+        Ok(client) => client,
+        Err(why) => return Page::Refused(why),
     };
+    let Some(cred) = org_link::credential(sink).await else { return Page::Unlinked };
+    match typed {
+        Typed::Dray => {
+            let label = client_label(&client);
+            match account::begin(&cred, ask.clone(), base, &label, &redirect_host(&ask.redirect_uri)).await {
+                Ok(url) => Page::Redirect(url),
+                Err(why) => ask_page(&client, ask, &cred.site, Some(why), false),
+            }
+        }
+        Typed::Code(typed) => match redeem(&typed) {
+            Some(access) => send_code(client.id, ask, access, None),
+            None => {
+                let why = "That code is wrong or has expired. Make a new one in Dray.".to_string();
+                ask_page(&client, ask, &cred.site, Some(why), true)
+            }
+        },
+    }
+}
+
+/// `GET /oauth/dray`: back from drayhq.com. An assertion that checks out
+/// becomes an authorization code; a cancel goes back to the assistant as one.
+pub async fn dray_return(query: &str, sink: &Sink) -> Page {
+    let Some(cred) = org_link::credential(sink).await else { return Page::Unlinked };
+    let query: HashMap<String, String> = form_urlencoded::parse(query.as_bytes()).into_owned().collect();
+    let (ask, outcome) = match account::finish(&cred, &query).await {
+        Ok(account::Finished::Allowed { ask, access, user }) => (ask, Some((access, user))),
+        Ok(account::Finished::Cancelled(ask)) => (ask, None),
+        Err(why) => return Page::Refused(why.into()),
+    };
+    // Vetted again: the client may have been dropped while the reader was away.
+    let client = match vet(&ask).await {
+        Ok(client) => client,
+        Err(why) => return Page::Refused(why),
+    };
+    match outcome {
+        Some((access, user)) => send_code(client.id, &ask, access, Some(user)),
+        None => send_back(&ask, &[("error", "access_denied")]),
+    }
+}
+
+/// Mints an authorization code and sends the browser back to the assistant.
+fn send_code(client_id: String, ask: &AuthorizeAsk, access: Access, user: Option<DrayUser>) -> Page {
     let code = secret("");
     {
         let mut memory = memory();
@@ -502,18 +589,24 @@ pub async fn authorize(ask: &AuthorizeAsk, typed: &str) -> Page {
         memory.codes.insert(
             hash(&code),
             Code {
-                client_id: client.id,
+                client_id,
                 redirect_uri: ask.redirect_uri.clone(),
                 challenge: ask.challenge.clone(),
                 access,
+                user,
                 born: Instant::now(),
             },
         );
     }
+    send_back(ask, &[("code", &code)])
+}
+
+/// The assistant's redirect with `params` and its own `state` added.
+fn send_back(ask: &AuthorizeAsk, params: &[(&str, &str)]) -> Page {
     let mut target = ask.redirect_uri.clone();
     target.push(if target.contains('?') { '&' } else { '?' });
     let mut query = form_urlencoded::Serializer::new(String::new());
-    query.append_pair("code", &code);
+    query.extend_pairs(params);
     if let Some(state) = &ask.state {
         query.append_pair("state", state);
     }
@@ -533,7 +626,8 @@ fn issue(grant: &mut Grant) -> Value {
     grant.refresh = hash(&refresh);
     grant.last_used = now();
     grant.expires = (chrono::Utc::now() + chrono::Duration::days(REFRESH_DAYS)).to_rfc3339();
-    memory().access.insert(hash(&access), (grant.id.clone(), grant.access, Instant::now()));
+    let user = grant.user.as_ref().map(|u| u.id.clone());
+    memory().access.insert(hash(&access), Live { grant: grant.id.clone(), access: grant.access, user, born: Instant::now() });
     json!({
         "access_token": access,
         "token_type": "Bearer",
@@ -580,6 +674,7 @@ pub async fn token(body: &[u8], sink: &Sink) -> (u16, Value) {
                     last_used: now(),
                     refresh: String::new(),
                     expires: String::new(),
+                    user: code.user.clone(),
                 };
                 let answer = issue(&mut grant);
                 book.grants.push(grant);
@@ -596,10 +691,37 @@ pub async fn token(body: &[u8], sink: &Sink) -> (u16, Value) {
             }
         }
         "refresh_token" => {
+            let wanted = hash(&field("refresh_token"));
+            // Asked before the lock, since it may wait on the site.
+            let user = match read_book().await {
+                Ok(book) => book.grants.into_iter().find(|g| g.refresh == wanted).and_then(|g| g.user).map(|u| u.id),
+                Err(e) => return (500, json!({ "error": "server_error", "error_description": format!("{e:#}") })),
+            };
+            match account::admit(sink, user.as_deref()).await {
+                Admit::Yes => {}
+                Admit::Unlinked => return token_error("invalid_grant", "this server is not linked to a Dray account"),
+                Admit::Unreachable => {
+                    let why = "can't reach drayhq.com to check this account's access";
+                    return (503, json!({ "error": "temporarily_unavailable", "error_description": why }));
+                }
+                Admit::Refused => {
+                    // Gone for good: the assistant must sign in again, so the
+                    // list shouldn't show it.
+                    let dropped = async {
+                        let _held = BOOK.lock().await;
+                        let mut book = read_book().await?;
+                        book.grants.retain(|g| g.refresh != wanted);
+                        write_book(&book).await
+                    };
+                    if dropped.await.is_ok() {
+                        let _ = sink.emit(CHANGED, ());
+                    }
+                    return token_error("invalid_grant", "this account no longer has access to this server");
+                }
+            }
             let refreshed = async {
                 let _held = BOOK.lock().await;
                 let mut book = read_book().await?;
-                let wanted = hash(&field("refresh_token"));
                 let now = chrono::Utc::now();
                 let Some(grant) = book.grants.iter_mut().find(|g| {
                     g.refresh == wanted && live(&g.expires, now) && (field("client_id").is_empty() || g.client_id == field("client_id"))

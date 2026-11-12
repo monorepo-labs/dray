@@ -447,7 +447,11 @@ name: string, access: Access, created: string,
 /**
  * Moves on each token refresh, so it is right to the hour.
  */
-lastUsed: string, };
+lastUsed: string, 
+/**
+ * The Dray account it signed in with at drayhq.com; none for a pairing code.
+ */
+user: string | null, };
 
 /**
  * One thing the user attached, as the composer needs to draw it.
