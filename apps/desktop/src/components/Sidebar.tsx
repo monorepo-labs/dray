@@ -1747,32 +1747,16 @@ function DotTrack({
 /// everywhere but the hole, which is the badge's own box grown by `gap`.
 /// A mask rather than a ring in a fill, since the sidebar is glass and no fill
 /// matches what shows through. Badges hang 2px past the face's lower right.
-function cutout(width: number, height: number, face = 40, gap = 2, squircle = false): string {
+function cutout(width: number, height: number, face = 40, gap = 2): string {
   const [x, y] = [face + 2 - width - gap, face + 2 - height - gap];
   const [w, h, r] = [width + gap * 2, height + gap * 2, (height + gap * 2) / 2];
-  const hole = squircle
-    ? squirclePath(x, y, w)
-    : `M${x + r} ${y}H${x + w - r}A${r} ${r} 0 0 1 ${x + w - r} ${y + h}H${x + r}A${r} ${r} 0 0 1 ${x + r} ${y}Z`;
+  const hole = `M${x + r} ${y}H${x + w - r}A${r} ${r} 0 0 1 ${x + w - r} ${y + h}H${x + r}A${r} ${r} 0 0 1 ${x + r} ${y}Z`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${face}" height="${face}"><path fill-rule="evenodd" d="M0 0H${face}V${face}H0Z${hole}"/></svg>`;
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
-
-/// A squircle — superellipse, n = 3 — of side `size` at (x, y), as SVG path
-/// data. Drawn rather than styled: WebKit has no `corner-shape`.
-function squirclePath(x: number, y: number, size: number): string {
-  const r = size / 2;
-  const edge = (v: number) => r + r * Math.sign(v) * Math.abs(v) ** (2 / 3);
-  const points = Array.from({ length: 48 }, (_, i) => {
-    const t = (i / 48) * 2 * Math.PI;
-    return `${(x + edge(Math.cos(t))).toFixed(2)} ${(y + edge(Math.sin(t))).toFixed(2)}`;
-  });
-  return `M${points.join("L")}Z`;
-}
-
 // The inbox row's 32px face: a dot while it waits on the reader, the unread count after.
 const DOT_CUTOUT = cutout(10, 10, 32);
-const COUNT_CUTOUT = cutout(16, 16, 32, 2, true);
-const COUNT_CLIP = `path("${squirclePath(0, 0, 16)}")`;
+const COUNT_CUTOUT = cutout(16, 16, 32);
 
 function BotRow({
   bot,
@@ -1847,8 +1831,7 @@ function BotRow({
                 aria-label={`${preview?.replies || 1} unread`}
                 // One colour for every bot: in the face's own hue it read as part of the face.
                 // Dray theme: green in light; red in dark, deeper than its own red, which is too pale under white text.
-                style={{ clipPath: COUNT_CLIP }}
-                className="absolute -right-0.5 -bottom-0.5 flex size-4 items-center justify-center bg-foreground text-[10px] leading-none font-semibold text-background tabular-nums [[data-theme=default][data-mode=light]_&]:bg-accent-add [[data-theme=default][data-mode=dark]_&]:bg-[oklch(0.55_0.2_25)] [[data-theme=default]_&]:text-white"
+                className="absolute -right-0.5 -bottom-0.5 flex size-4 items-center justify-center rounded-full bg-foreground text-[10px] leading-none font-semibold text-background tabular-nums [[data-theme=default][data-mode=light]_&]:bg-accent-add [[data-theme=default][data-mode=dark]_&]:bg-[oklch(0.55_0.2_25)] [[data-theme=default]_&]:text-white"
               >
                 {preview?.replies || ""}
               </span>
