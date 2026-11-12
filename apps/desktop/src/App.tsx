@@ -1015,12 +1015,16 @@ function App() {
   // What the composer names as its target in a grid: the focused session's
   // title, with its project in front where the panes span projects and a
   // title alone could belong to either.
+  // A bot's chat is titled with the bot's name, so "<bot> / <title>" says it twice.
+  const withProject = (s: SessionIndexItem, project: string) =>
+    botAt(bots, s.cwd)?.name ?? `${project} / ${s.title}`;
+
   const splitTarget = (() => {
     if (!activeGroup || !selectedSession) return null;
     const projects = new Set(paneColumns.flat().map((i) => i.projectPath));
     const named =
       projects.size > 1
-        ? `${basename(selectedSession.projectPath)} / ${selectedSession.title}`
+        ? withProject(selectedSession, basename(selectedSession.projectPath))
         : selectedSession.title;
     const server = serverOfPath(selectedSession.projectPath);
     return server === LOCAL ? named : `${named} · ${serverName(server)}`;
@@ -1098,8 +1102,8 @@ function App() {
   // session, not the space's: a bot hands work to whichever project it likes,
   // in any space.
   const crew = useMemo(
-    () => crewRows(sessionIndexItems, selectedSessionId, { statusBySession, askingSessions }, earlierIds),
-    [sessionIndexItems, selectedSessionId, statusBySession, askingSessions, earlierIds],
+    () => crewRows(sessionIndexItems, selectedSessionId, { statusBySession, askingSessions, tasksBySession }, earlierIds),
+    [sessionIndexItems, selectedSessionId, statusBySession, askingSessions, tasksBySession, earlierIds],
   );
   const crewAsks = useMemo(() => crew.filter((r) => r.asking), [crew]);
   // A split has no crew column: it is already several conversations side by
@@ -3369,11 +3373,12 @@ function App() {
                   ? groupName(mainGroup)
                   : projectFilter
                     ? rowSession.title
-                    : `${botAt(bots, rowSession.projectPath)?.name ?? basename(rowSession.projectPath)} / ${rowSession.title}`
+                    : withProject(rowSession, botAt(bots, rowSession.projectPath)?.name ?? basename(rowSession.projectPath))
               }
               machine={mainGroup ? undefined : serverOfPath(rowSession.projectPath)}
+              // A bot chat's header is the bot's name, renamed with the bot.
               rename={
-                mainGroup
+                mainGroup || botAt(bots, rowSession.cwd)
                   ? undefined
                   : {
                       title: rowSession.title,

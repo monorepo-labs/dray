@@ -28,7 +28,7 @@ type Flags = { archived?: boolean; pinned?: boolean; aside?: boolean };
 /// of all, faded, as the sidebar sinks it. Pinned rows are drawn apart.
 function rank(row: CrewRow): number {
   if (row.item.aside) return 3;
-  return row.asking ? 0 : row.busy ? 1 : 2;
+  return row.asking ? 0 : row.busy || row.background ? 1 : 2;
 }
 
 /// A bot's Tasks tab: every session it handed work to, at any depth. They run
@@ -152,7 +152,9 @@ function TaskRow({
       >
         <span className="flex size-5 shrink-0 items-center justify-center">
           {working ? (
-            <Orb state="working" variant="gyro" size={18} label="Working" />
+            <Orb state="working" label="Working" />
+          ) : row.background ? (
+            <Orb state="background" variant="spiral" label="Background tasks running" />
           ) : (
             <BotAvatar seed={id} avatar={seededAvatar(id)} follow={hovered} className="block size-5 scale-[1.18]" />
           )}
