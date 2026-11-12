@@ -4,14 +4,15 @@ import BotAvatar from "@/components/BotAvatar";
 import EventRow from "@/components/chat/EventRow";
 import UserMessage from "@/components/chat/UserMessage";
 import { OrbLine } from "@/components/chat/WorkingIndicator";
-import { useStreamingKind } from "@/hooks/useStreamingBlock";
+import { useStreamingBlock, useStreamingKind } from "@/hooks/useStreamingBlock";
 import { seededAvatar } from "@/lib/botAvatar";
 import { botNamed, useBots } from "@/lib/bots";
 import { botRows, chatItems, chatTime, firstUnread, itemTime, startsTimeRun, type BotSegment, type TalkItem } from "@/lib/botTranscript";
 import { AGENT_LABELS } from "@/lib/model";
 import { isModClick } from "@/lib/platform";
 import { stripSenderPrefix } from "@/lib/relay";
-import { toolArgument, toolLabel } from "@/lib/tools";
+import { streamingCall } from "@/lib/streaming";
+import { streamingLabel, toolArgument, toolLabel } from "@/lib/tools";
 import { cn } from "@/lib/utils";
 import type { AgentEvent, Bot, BotAvatar as Avatar, Harness, ToolResult } from "@/types/events";
 
@@ -57,8 +58,9 @@ export default function BotTranscript({
   const [newFrom] = useState(() => (unread ? firstUnread(items) : null));
   const doing = useMemo(() => (busy && events ? currentTool(events) : null), [busy, events]);
   // Only reply text becomes a bubble. A tool call or a thought the model is
-  // still composing would read as a message; the orb line covers them.
-  const replying = useStreamingKind(segments.at(-1)?.sessionId ?? null) === "text";
+  // still composing would read as a message, so the orb line names it instead.
+  const sessionId = segments.at(-1)?.sessionId ?? null;
+  const streaming = useStreamingKind(sessionId);
 
   return (
     <>
@@ -119,10 +121,13 @@ export default function BotTranscript({
         );
       })}
       {busy &&
-        (preview && replying ? (
+        (preview && streaming === "text" ? (
           <BotBubble tight={rows[rows.length - 1]?.kind === "assistant"}>{preview}</BotBubble>
         ) : (
-          <OrbLine state="working" label={doing ?? "Working"} />
+          <OrbLine
+            state="working"
+            label={sessionId && streaming ? <StreamingActivity sessionId={sessionId} /> : (doing ?? "Working")}
+          />
         ))}
     </>
   );
@@ -322,6 +327,17 @@ function currentTool(events: readonly AgentEvent[]): string | null {
     }
   }
   return null;
+}
+
+/// The open streaming block as the orb line's label: the tool being composed,
+/// said as its preview row says it, or "Thinking". Its own component, since it
+/// is the one that re-renders as the block grows.
+function StreamingActivity({ sessionId }: { sessionId: string }) {
+  const block = useStreamingBlock(sessionId);
+  if (block?.type !== "tool_use" || !block.name) return "Thinking";
+  const { target, added } = streamingCall(block.name, block.text);
+  if (!target) return streamingLabel(block.name);
+  return `${toolLabel(block.name, true)} ${target}${added ? ` +${added}` : ""}`;
 }
 
 /// A task the bot started, said the way its messages are: a line naming it,

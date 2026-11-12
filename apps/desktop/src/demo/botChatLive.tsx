@@ -97,7 +97,7 @@ function Demo() {
         <div className="flex flex-col gap-1">
           <h1 className="text-lg font-medium">Bot chat while it works</h1>
           <p className="text-ui text-muted-foreground">
-            Only reply text should draw as a bubble. A tool call or a thought shows as the orb line.
+            Only reply text draws a bubble. A tool call or a thought being composed is named on the orb line.
           </p>
         </div>
         <div className="flex gap-2">
