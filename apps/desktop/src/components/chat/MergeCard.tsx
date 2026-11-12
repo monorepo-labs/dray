@@ -97,7 +97,7 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
           <span className="size-4 shrink-0">{face}</span>
           <span className="truncate">{title}</span>
         </button>
-        {mergeable && merge && <MergeControl onMerge={merge} />}
+        {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} />}
       </div>
     );
   }
@@ -131,7 +131,7 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
           Open on GitHub
           <ExternalLink />
         </Button>
-        {mergeable && merge && <MergeControl onMerge={merge} />}
+        {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} />}
       </div>
     </div>
   );
