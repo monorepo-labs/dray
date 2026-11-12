@@ -38,6 +38,7 @@ use std::{
         atomic::{AtomicU64, Ordering::Relaxed},
         Arc,
     },
+    time::{Duration, Instant},
 };
 use crate::sink::Sink;
 use tokio::{
@@ -209,6 +210,9 @@ pub struct StatusTracker {
     /// Moves on every turn opening or closing. What Stop's watchdog compares,
     /// so it closes only a turn nothing has moved since the interrupt.
     epoch: u64,
+    /// When a turn last opened or closed or the task set last moved: what the
+    /// idle sweep counts from. `None` until the first send.
+    quiet_since: Option<Instant>,
 }
 
 impl StatusTracker {
@@ -216,6 +220,7 @@ impl StatusTracker {
     pub fn on_send(&mut self) -> Option<SessionStatus> {
         self.model_call_open = true;
         self.epoch += 1;
+        self.quiet_since = Some(Instant::now());
         self.set(SessionStatus::InProgress)
     }
 
@@ -235,6 +240,7 @@ impl StatusTracker {
             AgentEventPayload::TurnStarted(_) => {
                 self.model_call_open = true;
                 self.epoch += 1;
+                self.quiet_since = Some(Instant::now());
                 self.limit_reset = None;
                 self.set(SessionStatus::InProgress)
             }
@@ -254,6 +260,7 @@ impl StatusTracker {
             AgentEventPayload::TurnCompleted { auth_failed, .. } => {
                 self.model_call_open = false;
                 self.epoch += 1;
+                self.quiet_since = Some(Instant::now());
                 self.auth_failed = *auth_failed;
                 self.set(SessionStatus::Completed)
             }
@@ -261,6 +268,7 @@ impl StatusTracker {
             // and its own per-task Stop.
             AgentEventPayload::BackgroundTasksChanged { tasks } => {
                 self.background_tasks = tasks.iter().map(|t| t.task_id.clone()).collect();
+                self.quiet_since = Some(Instant::now());
                 None
             }
             _ => None,
@@ -295,6 +303,15 @@ impl StatusTracker {
     /// whole wait.
     pub fn turn_in_flight(&self) -> bool {
         self.model_call_open
+    }
+
+    /// How long nothing has run, or `None` while anything does — background
+    /// tasks included, since stopping the child would take them with it.
+    pub fn idle_for(&self, now: Instant) -> Option<Duration> {
+        if self.has_outstanding_work() {
+            return None;
+        }
+        Some(now.saturating_duration_since(self.quiet_since?))
     }
 
     /// When the usage limit that stopped the turn just completed resets, once.
@@ -600,6 +617,25 @@ pub async fn settle_dead_child(
     }
 }
 
+/// How long a child may sit with nothing running before [`SessionManager::reap_idle`]
+/// stops it.
+const IDLE_LIMIT: Duration = Duration::from_secs(15 * 60);
+
+/// Starts the idle sweep once, with the first child, so only a process that
+/// hosts sessions runs one.
+fn start_idle_sweep() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        tokio::spawn(async {
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                manager().reap_idle(Instant::now()).await;
+            }
+        });
+    });
+}
+
 /// One session's child, or `None` while it has none. The lock is what orders
 /// that session's own sends, stops and replies against each other.
 type Slot = Arc<Mutex<Option<Session>>>;
@@ -728,6 +764,23 @@ impl SessionManager {
             }
         }
         false
+    }
+
+    /// Stops every child idle past [`IDLE_LIMIT`]. Each holds ~250MB doing
+    /// nothing, and the next send resumes it as it does after a restart. A slot
+    /// or tracker locked right now is busy by definition, so it is skipped.
+    async fn reap_idle(&self, now: Instant) {
+        let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
+        for slot in slots {
+            let Ok(mut guard) = slot.try_lock() else { continue };
+            if !guard.as_ref().is_some_and(|s| s.idle_past(now, IDLE_LIMIT)) {
+                continue;
+            }
+            // Plain `kill`, as a respawn does: the next send stands in for one.
+            if let Some(session) = guard.take() {
+                let _ = session.kill().await;
+            }
+        }
     }
 
     /// Takes the live child out, leaving the slot empty for the next send.
@@ -2108,6 +2161,7 @@ impl Session {
         fork_from: Option<&str>,
         app: &Sink,
     ) -> Result<Session> {
+        start_idle_sweep();
         match harness {
             Harness::ClaudeCode => {
                 claude_code::init(
@@ -2954,6 +3008,15 @@ impl Session {
 
         let _ = self.child.kill().await?;
         Ok(())
+    }
+
+    /// Whether nothing has run for `limit` and nothing waits on this child: no
+    /// card up, which only it can answer, and no prompt queued for it.
+    fn idle_past(&self, now: Instant, limit: Duration) -> bool {
+        let Ok(tracker) = self.status.try_lock() else { return false };
+        tracker.idle_for(now).is_some_and(|idle| idle >= limit)
+            && self.pending_permissions.try_lock().is_ok_and(|p| p.is_empty())
+            && self.queued.try_lock().is_ok_and(|q| q.is_empty())
     }
 
     /// [`kill`](Self::kill), then everything the child had started — a
@@ -4094,6 +4157,115 @@ mod tests {
 
         let same = tokio::time::timeout(Duration::from_millis(50), manager.stop_task("busy", "t")).await;
         assert!(same.is_err(), "ran over its own session's send");
+    }
+
+    /// A live child over `cat`, its tracker as given.
+    async fn child_with(manager: &SessionManager, id: &str, tracker: StatusTracker) -> Slot {
+        let mut child = tokio::process::Command::new("cat")
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let slot = manager.slot(id).await;
+        *slot.lock().await = Some(Session {
+            id: id.to_string(),
+            child,
+            stdin: Transport::Lines(Arc::new(Mutex::new(stdin))),
+            harness: Harness::ClaudeCode,
+            model: ModelId::new("m"),
+            effort: None,
+            permission_mode: ApprovalPolicy::default(),
+            fast: false,
+            seq: Default::default(),
+            status: Arc::new(Mutex::new(tracker)),
+            pending_permissions: Default::default(),
+            queued: Default::default(),
+        });
+        slot
+    }
+
+    /// Only a child with nothing running and nothing waiting on it is stopped,
+    /// and its slot left empty for the next send to resume into.
+    #[tokio::test]
+    async fn the_idle_sweep_stops_only_a_quiet_child() {
+        let manager = SessionManager::default();
+        let done = || {
+            let mut tracker = StatusTracker::default();
+            tracker.on_send();
+            tracker.on_event(&turn_completed());
+            tracker
+        };
+        let idle = child_with(&manager, "idle", done()).await;
+        let mut with_task = done();
+        with_task.on_event(&AgentEventPayload::BackgroundTasksChanged {
+            tasks: vec![crate::events::BackgroundTask {
+                task_id: "b1".to_string(),
+                task_type: "local_bash".to_string(),
+                description: "pnpm dev".to_string(),
+            }],
+        });
+        let tasked = child_with(&manager, "tasked", with_task).await;
+        let mut running = StatusTracker::default();
+        running.on_send();
+        let running = child_with(&manager, "running", running).await;
+        let sending = child_with(&manager, "sending", done()).await;
+        let _held = sending.try_lock().unwrap();
+        let carded = child_with(&manager, "carded", done()).await;
+        carded.lock().await.as_ref().unwrap().pending_permissions.lock().unwrap().insert(
+            "r1".to_string(),
+            crate::harness::claude_code::permissions::PendingRequest {
+                tool_use_id: "t1".to_string(),
+                tool_name: "Write".to_string(),
+                input: serde_json::Value::Null,
+                options: HashMap::new(),
+                reply: crate::harness::claude_code::permissions::Reply::Control,
+            },
+        );
+        let queued = child_with(&manager, "queued", done()).await;
+        queued.lock().await.as_ref().unwrap().queued.lock().await.push(QueuedMessage {
+            id: "q1".to_string(),
+            session_id: "queued".to_string(),
+            text: "next".to_string(),
+            attachment_paths: vec![],
+            from: None,
+            issues: vec![],
+        });
+
+        manager.reap_idle(Instant::now()).await;
+        assert!(idle.lock().await.is_some(), "not idle long enough yet");
+
+        manager.reap_idle(Instant::now() + IDLE_LIMIT).await;
+        assert!(idle.lock().await.is_none());
+        assert!(tasked.lock().await.is_some(), "a dev server keeps its child");
+        assert!(running.lock().await.is_some(), "a turn in flight keeps its child");
+        assert!(carded.lock().await.is_some(), "an open card keeps the only child that can answer it");
+        assert!(queued.lock().await.is_some(), "a queued prompt keeps its child");
+        drop(_held);
+        assert!(sending.lock().await.is_some(), "a send holding the slot keeps its child");
+    }
+
+    /// The clock restarts when the task set drains, so a session is not stopped
+    /// the moment its last background task ends.
+    #[test]
+    fn idle_counts_from_the_last_thing_that_ran() {
+        let mut tracker = StatusTracker::default();
+        assert_eq!(tracker.idle_for(Instant::now()), None, "never sent to");
+        tracker.on_send();
+        assert_eq!(tracker.idle_for(Instant::now()), None, "turn running");
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged {
+            tasks: vec![crate::events::BackgroundTask {
+                task_id: "b1".to_string(),
+                task_type: "local_bash".to_string(),
+                description: "sleep 300".to_string(),
+            }],
+        });
+        tracker.on_event(&turn_completed());
+        assert_eq!(tracker.idle_for(Instant::now()), None, "task running");
+        let drained = Instant::now();
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![] });
+        let idle = tracker.idle_for(drained + Duration::from_secs(60)).unwrap();
+        assert!(idle <= Duration::from_secs(60));
     }
 
     /// Drives the real capture through the counter that decides whether a
