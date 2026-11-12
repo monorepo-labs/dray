@@ -86,7 +86,7 @@ async fn read_list() -> Result<Vec<Bot>, Fail> {
 /// The default bot's name, face and the welcome its chat opens on.
 pub const DRAY_BOT: &str = "Dray Bot";
 /// Dray Bot's welcome, by the reader's first name where one can be found:
-/// who it is and what it takes off their plate, as Grok Bot's opens.
+/// who it is and what it does, as Grok Bot's opens.
 async fn dray_bot_welcome() -> String {
     let hello = match first_name().await {
         Some(name) => format!("Hi {name}!"),
@@ -94,7 +94,7 @@ async fn dray_bot_welcome() -> String {
     };
     format!(
         "{hello} I'm Dray Bot, your new assistant for everything you build. \
-I can start and keep track of work across your projects, and take the busywork off your plate."
+I can start and keep track of work across your projects."
     )
 }
 
