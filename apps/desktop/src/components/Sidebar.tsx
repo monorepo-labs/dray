@@ -1806,7 +1806,6 @@ function BotRow({
         : null;
   const [hovered, setHovered] = useState(false);
   const server = serverOfPath(bot.path);
-  const remote = server === LOCAL ? null : serverName(server);
   const offline = offlineLine(server);
   if (compact) {
     return (
@@ -1862,8 +1861,6 @@ function BotRow({
               )}
             >
               {bot.name}
-              {/* A remote bot carries its server as a remote project does. */}
-              {remote && <span className="font-normal text-muted-foreground/40">-{remote}</span>}
             </span>
             {/* The trailing slot a session row keeps its time in: the digit
                 while the jump modifier is held, the offline mark, typing dots
