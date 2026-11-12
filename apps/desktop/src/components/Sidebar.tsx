@@ -1830,8 +1830,8 @@ function BotRow({
                 role="img"
                 aria-label={`${preview?.replies || 1} unread`}
                 // One colour for every bot: in the face's own hue it read as part of the face.
-                // Red on the Dray theme: light mode's red in both, since dark's is too pale under white text.
-                className="absolute -right-0.5 -bottom-0.5 flex size-4 items-center justify-center rounded-full bg-foreground text-[10px] leading-none font-semibold text-background tabular-nums [[data-theme=default]_&]:bg-[oklch(0.55_0.2_25)] [[data-theme=default]_&]:text-white"
+                // Dray theme: green in light; red in dark, deeper than its own red, which is too pale under white text.
+                className="absolute -right-0.5 -bottom-0.5 flex size-4 items-center justify-center rounded-full bg-foreground text-[10px] leading-none font-semibold text-background tabular-nums [[data-theme=default][data-mode=light]_&]:bg-accent-add [[data-theme=default][data-mode=dark]_&]:bg-[oklch(0.55_0.2_25)] [[data-theme=default]_&]:text-white"
               >
                 {preview?.replies || ""}
               </span>
