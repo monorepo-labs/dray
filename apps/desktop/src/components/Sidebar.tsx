@@ -1351,7 +1351,7 @@ export default function Sidebar({
       </div>}
       */}
 
-      {bots.length > 0 && <div className="mt-4 flex flex-col gap-px px-2">
+      {bots.length > 0 && <div className="mt-px flex flex-col gap-px px-2">
         {bots.map(({ bot, session, preview }) => (
           <BotRow
             key={bot.id}
