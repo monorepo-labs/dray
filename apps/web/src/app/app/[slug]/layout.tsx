@@ -1,5 +1,5 @@
-import { AppNav, OrgTabs } from "@/components/account/AppNav";
-import { PAGE } from "@/components/account/styles";
+import { OrgTabs } from "@/components/account/AppNav";
+import { AppShell } from "@/components/account/AppShell";
 import { pool } from "@/lib/db";
 import { listOrgs, loadOrg } from "@/lib/session";
 
@@ -25,20 +25,9 @@ export default async function OrgLayout({
     ]);
 
   return (
-    <div data-home className={PAGE}>
-      <main className="px-5 pb-[120px] sm:px-8">
-        <div className="mx-auto w-full max-w-[960px]">
-          <AppNav
-            org={{ id: org.id, name: org.name, slug: org.slug }}
-            orgs={orgs.map((o) => ({ id: o.id, name: o.name, slug: o.slug }))}
-            user={session.user}
-          />
-          <div className="mt-16 lg:ml-[102px] lg:max-w-[756px]">
-            <OrgTabs slug={org.slug} />
-            {children}
-          </div>
-        </div>
-      </main>
-    </div>
+    <AppShell org={org} orgs={orgs} user={session.user}>
+      <OrgTabs slug={org.slug} />
+      {children}
+    </AppShell>
   );
 }

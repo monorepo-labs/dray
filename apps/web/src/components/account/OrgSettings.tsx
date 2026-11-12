@@ -11,8 +11,9 @@ import { BOX, DANGER, ERROR, INPUT, MUTED } from "./styles";
 type Org = { id: string; name: string; slug: string };
 
 /// The org's settings: name and URL for owners and admins, Leave for anyone
-/// but an owner, Delete for the owner alone. Better Auth enforces each of
-/// these again on its side; the page only hides what would be refused.
+/// but an owner, Delete for the owner alone and never on their only org.
+/// Better Auth enforces each of these again; the page only hides what would
+/// be refused.
 export function OrgSettings({
   org,
   isOwner,
@@ -41,7 +42,7 @@ export function OrgSettings({
         {!canManage && <p className={`mt-3 text-[13px] ${MUTED}`}>Only owners and admins can change these.</p>}
       </section>
       {!isOwner && <LeaveOrg org={org} />}
-      {isOwner && <DeleteOrg org={org} onlyOrg={onlyOrg} />}
+      {isOwner && !onlyOrg && <DeleteOrg org={org} />}
     </div>
   );
 }
@@ -71,7 +72,7 @@ function LeaveOrg({ org }: { org: Org }) {
   );
 }
 
-function DeleteOrg({ org, onlyOrg }: { org: Org; onlyOrg: boolean }) {
+function DeleteOrg({ org }: { org: Org }) {
   const router = useRouter();
   const [typed, setTyped] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -91,27 +92,21 @@ function DeleteOrg({ org, onlyOrg }: { org: Org; onlyOrg: boolean }) {
   return (
     <section className={`border border-[#FF5A4E]/40 flex flex-col gap-3 p-4`}>
       <h2 className="text-[15px]">Delete {org.name}</h2>
-      {onlyOrg ? (
-        <p className={`text-[13px] ${MUTED}`}>This is your only org, so it can't be deleted.</p>
-      ) : (
-        <>
-          <p className={`text-[13px] ${MUTED}`}>
-            Unlinks every server in it and removes its members. Type <strong>{org.name}</strong> to confirm.
-          </p>
-          <input
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            aria-label="Org name to confirm"
-            className={INPUT}
-          />
-          {error && <p className={ERROR}>{error}</p>}
-          <div>
-            <button type="button" onClick={remove} disabled={busy || typed !== org.name} className={DANGER}>
-              Delete org
-            </button>
-          </div>
-        </>
-      )}
+      <p className={`text-[13px] ${MUTED}`}>
+        Unlinks every server in it and removes its members. Type <strong>{org.name}</strong> to confirm.
+      </p>
+      <input
+        value={typed}
+        onChange={(e) => setTyped(e.target.value)}
+        aria-label="Org name to confirm"
+        className={INPUT}
+      />
+      {error && <p className={ERROR}>{error}</p>}
+      <div>
+        <button type="button" onClick={remove} disabled={busy || typed !== org.name} className={DANGER}>
+          Delete org
+        </button>
+      </div>
     </section>
   );
 }

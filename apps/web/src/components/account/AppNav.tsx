@@ -60,6 +60,9 @@ export function AppNav({ org, orgs, user }: { org: Org; orgs: Org[]; user: User 
             <p className={`truncate text-[13px] ${MUTED}`}>{user.email}</p>
           </div>
           <div className="my-1 border-t border-white/20 light:border-black/15" />
+          <Link href="/app/account" className={MENU_ITEM}>
+            Account settings
+          </Link>
           <button type="button" onClick={signOut} className={MENU_ITEM}>
             Sign out
           </button>

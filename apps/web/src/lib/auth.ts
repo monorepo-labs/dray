@@ -5,7 +5,7 @@ import { organization } from "better-auth/plugins/organization";
 
 import { pool } from "./db";
 import { drayTables } from "./schema";
-import { slugify, slugProblem } from "./slug";
+import { slugify, slugProblem, usernameFrom, usernameProblem } from "./slug";
 
 function checkSlug(slug: string | undefined) {
   const problem = slug === undefined ? null : slugProblem(slug);
@@ -16,6 +16,13 @@ function checkSlug(slug: string | undefined) {
 /// `nextCookies` lets a server action that signs in or out set its cookie.
 export const auth = betterAuth({
   database: pool,
+  user: {
+    additionalFields: {
+      // Written only by `setUsername`, which checks the format and reports a
+      // taken one; `input: false` keeps `updateUser` from going around it.
+      username: { type: "string", required: false, unique: true, input: false },
+    },
+  },
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID!,
@@ -28,6 +35,7 @@ export const auth = betterAuth({
       create: {
         after: async (user) => {
           await createPersonalOrg(user);
+          await assignUsername(user);
         },
       },
     },
@@ -65,27 +73,49 @@ export async function createPersonalOrg(user: {
   const local = user.email.split("@")[0];
   const name = user.name.trim().split(/\s+/)[0] || local;
   const base = slugify(local);
-  const root = slugProblem(base) ? "org" : base;
-  // Try and retry rather than look first: two sign-ups as sam@a and sam@b can
-  // both find `sam` free, and the loser must move on to `sam-2`, not fail.
-  // Past a few small numbers the suffix turns random, so a prefix as common
-  // as `admin` never runs out of room or walks a long line of taken slugs.
-  for (let n = 1; n <= 20; n++) {
-    const suffix = n <= 5 ? n : 10_000 + Math.floor(Math.random() * 90_000);
-    const slug = n === 1 ? root : `${root.slice(0, 34)}-${suffix}`;
-    try {
-      await auth.api.createOrganization({ body: { name, slug, userId: user.id } });
-      return { slug };
-    } catch (e) {
-      if (!slugTaken(e)) throw e;
-    }
-  }
-  throw new Error(`No free slug for ${root}`);
+  const slug = await claimFree(slugProblem(base) ? "org" : base, 40, "-", async (slug) => {
+    await auth.api.createOrganization({ body: { name, slug, userId: user.id } });
+  });
+  return { slug };
 }
 
-/// Better Auth's own "already exists", or Postgres refusing the unique slug
-/// when two creations pass that check together.
-function slugTaken(e: unknown): boolean {
+/// Gives a new account a username from its email, a number appended where
+/// that one is taken. Called on sign-up and again by `/app` for an account
+/// made before usernames existed. The reader can change it in account settings.
+export async function assignUsername(user: { id: string; email: string }): Promise<void> {
+  const base = usernameFrom(user.email.split("@")[0]);
+  await claimFree(usernameProblem(base) ? "user" : base, 20, "_", async (username) => {
+    await pool.query(`update "user" set username = $1 where id = $2`, [username, user.id]);
+  });
+}
+
+/// Hands `claim` the root, then root plus 2–5, then random five-digit
+/// suffixes, until one isn't taken. Try and retry rather than look first: two
+/// sign-ups as sam@a and sam@b can both find `sam` free, and the loser must
+/// move on, not fail. The random tail keeps a prefix as common as `admin`
+/// from running out of room or walking a long line of taken names.
+async function claimFree(
+  root: string,
+  maxLength: number,
+  separator: string,
+  claim: (candidate: string) => Promise<void>,
+): Promise<string> {
+  for (let n = 1; n <= 20; n++) {
+    const suffix = n <= 5 ? n : 10_000 + Math.floor(Math.random() * 90_000);
+    const candidate = n === 1 ? root : `${root.slice(0, maxLength - 6)}${separator}${suffix}`;
+    try {
+      await claim(candidate);
+      return candidate;
+    } catch (e) {
+      if (!isTaken(e)) throw e;
+    }
+  }
+  throw new Error(`Nothing free near ${root}`);
+}
+
+/// Better Auth's own "already exists", or Postgres refusing a unique value
+/// when two writes pass the first check together.
+export function isTaken(e: unknown): boolean {
   const err = e as { message?: string; code?: string; cause?: { code?: string } };
   return (
     err.message === "Organization already exists" ||

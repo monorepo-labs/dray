@@ -30,8 +30,8 @@ export default async function ServersPage({ params }: { params: Promise<{ slug: 
       <div className="mt-8">
         {rows.length === 0 ? (
           <div className={`${BOX} px-4 py-10 text-center text-[14px] ${MUTED}`}>
-            No servers yet. Run <code className="font-mono text-white light:text-[#0A0A0A]">dray login</code> on a
-            server to link it.
+            No servers yet. Choose Sign in to Dray in the desktop app, or run{" "}
+            <code className="font-mono text-white light:text-[#0A0A0A]">dray login</code> on a server.
           </div>
         ) : (
           <ul className={ROWS}>
