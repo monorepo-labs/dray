@@ -85,8 +85,7 @@ export function previewLine(text: string): string {
     .trim();
 }
 
-/// The bot's chat: its newest session not settled. One ongoing conversation,
-/// so "Start fresh" is settling it and the next send making another.
+/// The bot's chat: its newest session not settled. One ongoing conversation.
 export function botSession(
   items: readonly SessionIndexItem[],
   bot: Bot,

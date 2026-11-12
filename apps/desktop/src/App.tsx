@@ -2792,11 +2792,6 @@ function App() {
             setNewBotOpen(true);
           }}
           onDeleteBot={setBotToDelete}
-          onStartBotFresh={(bot) => {
-            const chat = botList.find((b) => b.bot.id === bot.id)?.session;
-            // Settling carries the bot's hidden children with it.
-            if (chat) void setSessionFlags(chat.sessionId, { archived: true });
-          }}
           search={search}
           onSearchChange={setSearch}
           searchOpen={searchOpen}

@@ -88,8 +88,6 @@ type SidebarProps = {
   /// The Bots section: every bot with its ongoing chat, if it has one.
   bots?: BotEntry[];
   onOpenBot?: (bot: Bot) => void;
-  /// Settles the bot's chat, so its next message starts a new one.
-  onStartBotFresh?: (bot: Bot) => void;
   onDeleteBot?: (bot: Bot) => void;
   onNewBot?: () => void;
   // The live search query. Owned by the caller, because the list it narrows is
@@ -973,7 +971,6 @@ export default function Sidebar({
   items,
   bots = [],
   onOpenBot,
-  onStartBotFresh,
   onDeleteBot,
   onNewBot,
   search,
@@ -1348,7 +1345,6 @@ export default function Sidebar({
             asking={!!session && askingSessions.has(session.sessionId)}
             active={!!session && session.sessionId === selectedSessionId}
             onOpen={() => onOpenBot?.(bot)}
-            onStartFresh={session ? () => onStartBotFresh?.(bot) : undefined}
             onDelete={() => onDeleteBot?.(bot)}
           />
         ))}
@@ -1368,7 +1364,6 @@ export default function Sidebar({
             asking={!!session && askingSessions.has(session.sessionId)}
             active={!!session && session.sessionId === selectedSessionId}
             onOpen={() => onOpenBot?.(bot)}
-            onStartFresh={session ? () => onStartBotFresh?.(bot) : undefined}
             onDelete={() => onDeleteBot?.(bot)}
           />
         ))}
@@ -1782,7 +1777,6 @@ function BotRow({
   asking,
   active,
   onOpen,
-  onStartFresh,
   onDelete,
 }: {
   bot: Bot;
@@ -1798,8 +1792,6 @@ function BotRow({
   asking: boolean;
   active: boolean;
   onOpen: () => void;
-  /// Absent while the bot has no chat to settle.
-  onStartFresh?: () => void;
   onDelete: () => void;
 }) {
   const digit = useJumpDigit(sessionId ?? "");
@@ -1882,9 +1874,6 @@ function BotRow({
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-44">
-          <ContextMenuItem className="text-ui" disabled={!onStartFresh} onSelect={onStartFresh}>
-            Start fresh
-          </ContextMenuItem>
           <ContextMenuItem className="text-ui text-destructive" onSelect={onDelete}>
             Delete bot…
           </ContextMenuItem>
@@ -1969,9 +1958,6 @@ function BotRow({
     </button>
     </ContextMenuTrigger>
     <ContextMenuContent className="w-44">
-      <ContextMenuItem className="text-ui" disabled={!onStartFresh} onSelect={onStartFresh}>
-        Start fresh
-      </ContextMenuItem>
       <ContextMenuItem className="text-ui text-destructive" onSelect={onDelete}>
         Delete bot…
       </ContextMenuItem>
