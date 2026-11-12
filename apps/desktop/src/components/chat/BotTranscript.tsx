@@ -65,6 +65,12 @@ export default function BotTranscript({
                 party={{ sessionId: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? "Task" }}
                 onOpen={() => onOpenSession(item.sessionId)}
               />
+            ) : item.kind === "assistant" ? (
+              // Replies in a row sit close, as a messenger stacks them; a new
+              // turn after the reader's message keeps the full gap.
+              <BotBubble tight={!time && rows[i - 1]?.kind === "assistant"}>
+                <EventRow event={item.event} resultByCallId={NO_RESULTS} onOpenSession={onOpenSession} />
+              </BotBubble>
             ) : (
               <EventRow event={item.event} resultByCallId={NO_RESULTS} onOpenSession={onOpenSession} />
             )}
@@ -72,7 +78,9 @@ export default function BotTranscript({
         );
       })}
       {busy &&
-        (preview ?? (
+        (preview ? (
+          <BotBubble tight={rows[rows.length - 1]?.kind === "assistant"}>{preview}</BotBubble>
+        ) : (
           <OrbLine state="working" label={doing ?? "Working"} />
         ))}
     </>
@@ -225,6 +233,21 @@ function partyColours(sessionId: string): CSSProperties {
 /// The time a run of messages began, centred and quiet, as a messenger draws it.
 function TimeLabel({ at }: { at: string }) {
   return <p className="self-center pt-2 text-[12px] text-muted-foreground/70">{chatTime(at)}</p>;
+}
+
+/// A bot's reply as a messenger draws the other side: a bubble on the left,
+/// quieter than the reader's own card.
+export function BotBubble({ tight = false, children }: { tight?: boolean; children: ReactNode }) {
+  return (
+    <div
+      className={cn(
+        "max-w-[85%] self-start rounded-xl border border-border/60 bg-muted/50 px-3 py-2",
+        tight && "-mt-2.5",
+      )}
+    >
+      {children}
+    </div>
+  );
 }
 
 /// Where the replies the reader has not seen begin, as a messenger marks it.

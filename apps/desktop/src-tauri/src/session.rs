@@ -1451,6 +1451,10 @@ impl SessionManager {
             .as_deref()
             .filter(|_| harness.caps().fork_needs_cli);
 
+        // A bot chat whose first send failed before its welcome was written
+        // comes back here, not through creation, after a restart.
+        crate::bots::mark_welcome_if_unlogged(session_id, &session_cwd).await;
+
         let mut session = Session::init(
             session_id,
             harness,

@@ -85,7 +85,33 @@ async fn read_list() -> Result<Vec<Bot>, Fail> {
 
 /// The default bot's name, face and the welcome its chat opens on.
 pub const DRAY_BOT: &str = "Dray Bot";
-const DRAY_BOT_WELCOME: &str = "Hi, I'm Dray Bot. What are you working on? I'll start the tasks and keep track of them for you.";
+/// Dray Bot's welcome, by the reader's first name where one can be found:
+/// who it is and what it takes off their plate, as Grok Bot's opens.
+async fn dray_bot_welcome() -> String {
+    let hello = match first_name().await {
+        Some(name) => format!("Hi {name}!"),
+        None => "Hi!".to_string(),
+    };
+    format!(
+        "{hello} I'm Dray Bot, your new assistant for everything you build. \
+I can start and keep track of work across your projects, and take the busywork off your plate."
+    )
+}
+
+/// The reader's first name: git's `user.name`, else the Mac account's full
+/// name. `None` where neither says, and the welcome greets without one.
+async fn first_name() -> Option<String> {
+    let read = |program: &'static str, args: &'static [&'static str]| async move {
+        let out = tokio::process::Command::new(program).args(args).output().await.ok()?;
+        let full = String::from_utf8(out.stdout).ok()?;
+        full.split_whitespace().next().map(str::to_string)
+    };
+    match read("git", &["config", "--global", "user.name"]).await {
+        Some(name) => Some(name),
+        None if cfg!(target_os = "macos") => read("id", &["-F"]).await,
+        None => None,
+    }
+}
 
 /// Makes Dray Bot once per home. A marker file rather than a look at the
 /// list, so a reader who deletes it is not handed it back on the next read.
@@ -103,7 +129,7 @@ async fn ensure_dray_bot() -> Result<()> {
     // written — a stop between the two writes. Only it carries a welcome.
     if !read_list().await?.iter().any(|b| b.welcome.is_some()) {
         let avatar = BotAvatar { shape: "cloud".into(), hue: 80.0 };
-        make_bot(DRAY_BOT.into(), Some(avatar), Some(DRAY_BOT_WELCOME.into())).await?;
+        make_bot(DRAY_BOT.into(), Some(avatar), Some(dray_bot_welcome().await)).await?;
     }
     tokio::fs::create_dir_all(bots_dir().await?).await?;
     write_atomic(&marker, "").await?;
@@ -119,6 +145,21 @@ static WELCOMES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new
 /// Marks a new chat in `cwd` for its bot's welcome, where it has one.
 pub async fn mark_welcome(session_id: &str, cwd: &str) {
     if let Some(welcome) = bot_at(cwd).await.and_then(|b| b.welcome) {
+        WELCOMES.lock().unwrap().push((session_id.to_string(), welcome));
+    }
+}
+
+/// Marks a chat being resumed whose log holds no prompt yet: its first send
+/// failed before the welcome was written, and a restart lost the mark made at
+/// creation. Reads the log only for a bot that has a welcome.
+pub async fn mark_welcome_if_unlogged(session_id: &str, cwd: &str) {
+    let Some(welcome) = bot_at(cwd).await.and_then(|b| b.welcome) else { return };
+    if WELCOMES.lock().unwrap().iter().any(|(id, _)| id == session_id) {
+        return;
+    }
+    let Ok(dir) = crate::store::get_sessions_dir().await else { return };
+    let log = tokio::fs::read_to_string(dir.join(format!("{session_id}.jsonl"))).await.unwrap_or_default();
+    if !log.contains("\"user_message\"") {
         WELCOMES.lock().unwrap().push((session_id.to_string(), welcome));
     }
 }
