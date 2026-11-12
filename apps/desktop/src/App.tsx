@@ -2608,9 +2608,9 @@ function App() {
       if (pickedIssue) return pickedIssueData.refresh();
       return issuesRefreshRef.current?.();
     }
-    if (browserShown && selectedSessionId) {
+    if (browserShown && browserSession) {
       if (!pendingBrowserTab && browserTabs?.some((tab) => tab.active)) {
-        void navigate(selectedSessionId, "reload");
+        void navigate(browserSession, "reload");
       }
       return;
     }

@@ -49,6 +49,7 @@ import { tabLabels } from "@/lib/fileTree";
 import {
   markClosedSlot,
   moveKey,
+  moveLastClosed,
   popClosedTab,
   pushClosedTab,
   reconcile,
@@ -250,7 +251,10 @@ export default function ViewTabs({
         setPendingTab(browserId, false);
         if (!page.active) void activateTab(browserId, page.id);
       },
-      close: () => void closeTab(browserId, page.id),
+      close: () => {
+        void closeTab(browserId, page.id);
+        moveLastClosed(browserId, sessionId);
+      },
       duplicate: page.url
         ? () => {
             onChange("browser");
@@ -269,7 +273,10 @@ export default function ViewTabs({
         onChange("browser");
         activateBlankTab(browserId, id);
       },
-      close: () => closeBlankTab(browserId, id),
+      close: () => {
+        closeBlankTab(browserId, id);
+        moveLastClosed(browserId, sessionId);
+      },
     })),
     ...(files.length === 0 && shown.files
       ? [

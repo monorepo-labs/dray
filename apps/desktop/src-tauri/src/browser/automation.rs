@@ -474,27 +474,39 @@ struct Driven {
     closed: bool,
 }
 
+tokio::task_local! {
+    /// The session whose agent runs this step, where `session` names a browser
+    /// it shares — a bot's task on its bot chat's (#881). `DRIVEN` is keyed by
+    /// it, so two tasks sharing the tabs each keep a page of their own.
+    static DRIVER: String;
+}
+
+/// Whose entry in `DRIVEN` this step reads: the agent's own session.
+fn driver(session: &str) -> String {
+    DRIVER.try_with(Clone::clone).unwrap_or_else(|_| session.to_string())
+}
+
 fn drive(session: &str, tab: i32) {
     let url = tab_state(tab).map(|(url, _, _)| url).unwrap_or_default();
-    DRIVEN.lock().unwrap().insert(session.into(), Driven { tab, url, closed: false });
+    DRIVEN.lock().unwrap().insert(driver(session), Driven { tab, url, closed: false });
 }
 
 fn closed_by_agent(session: &str, tab: i32) {
-    if let Some(d) = DRIVEN.lock().unwrap().get_mut(session).filter(|d| d.tab == tab) {
+    if let Some(d) = DRIVEN.lock().unwrap().get_mut(&driver(session)).filter(|d| d.tab == tab) {
         d.closed = true;
     }
 }
 
 /// The agent's tab, while open.
 fn driven_id(session: &str) -> Option<i32> {
-    let tab = DRIVEN.lock().unwrap().get(session).filter(|d| !d.closed)?.tab;
+    let tab = DRIVEN.lock().unwrap().get(&driver(session)).filter(|d| !d.closed)?.tab;
     tabs_of(session).iter().any(|t| t.id == tab).then_some(tab)
 }
 
 /// The tab a verb acts on: the agent's, or the reader's active tab before
 /// the agent has driven any — the reader handing a page over.
 fn current(session: &str) -> Option<i32> {
-    if DRIVEN.lock().unwrap().contains_key(session) {
+    if DRIVEN.lock().unwrap().contains_key(&driver(session)) {
         driven_id(session)
     } else {
         active_id(session)
@@ -514,7 +526,7 @@ async fn resolve(session: &str) -> Result<(), String> {
     if current(session).is_some() {
         return Ok(());
     }
-    let Some(url) = DRIVEN.lock().unwrap().get(session).filter(|d| !d.closed).map(|d| d.url.clone()) else {
+    let Some(url) = DRIVEN.lock().unwrap().get(&driver(session)).filter(|d| !d.closed).map(|d| d.url.clone()) else {
         return Ok(());
     };
     let tabs = tabs_of(session);
@@ -651,11 +663,15 @@ async fn set_checked(tab: i32, at: &Locator, on: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// The whole of `dray browser`: one action on the agent's tab.
-///
+/// The whole of `dray browser`: one action on the agent's tab, in `session`'s
+/// browser. `driver` is the agent's own session where that browser is shared.
+pub async fn run(session: &str, driver: Option<String>, action: BrowserAction) -> Answer {
+    DRIVER.scope(driver.unwrap_or_else(|| session.to_string()), run_step(session, action)).await
+}
+
 /// An input verb first brings the tab's view out of hiding, off-screen —
 /// see `reveal` — and the layout is put back after, whatever the outcome.
-pub async fn run(session: &str, action: BrowserAction) -> Answer {
+async fn run_step(session: &str, action: BrowserAction) -> Answer {
     let input = matches!(
         action,
         BrowserAction::Click { .. }
