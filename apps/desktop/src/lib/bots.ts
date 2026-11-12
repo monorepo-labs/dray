@@ -1,27 +1,62 @@
 import { useSyncExternalStore } from "react";
 
-import { invoke, listen, LOCAL } from "@/lib/transport";
+import { remoteServers, subscribeServers } from "@/lib/servers";
+import { invoke, listen, LOCAL, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import type { Bot, BotPreview, SessionIndexItem } from "@/types/events";
 
-/// The bots on this Mac's server, held once for the app. Settings writes and
-/// the sidebar reads, so both go through here rather than each fetching.
+/// Every server's bots, held once for the app: This Mac's first, then each
+/// remote's in the server list's order. A remote's paths come back qualified,
+/// so a bot's server is `serverOfPath(bot.path)`.
 let bots: Bot[] = [];
+const byServer = new Map<ServerId, Bot[]>();
+const answered = new Set<ServerId>();
 const listeners = new Set<() => void>();
+let watching = false;
 
-/// Reads the list again, after a write or on launch.
-export async function refreshBots(): Promise<void> {
-  try {
-    bots = await invoke<Bot[]>("list_bots");
-  } catch {
-    // An older server answers `unknown command`: it has no bots to list.
-    bots = [];
-  }
+/// The flat list again, from each shown server's last answer. A remote that is
+/// on but unreachable keeps its bots, drawn offline; one turned off or removed
+/// takes them with it, as it does its projects.
+function rebuild() {
+  const next = [
+    ...(byServer.get(LOCAL) ?? []),
+    ...remoteServers().flatMap((s) => (s.on ? (byServer.get(s.id) ?? []) : [])),
+  ];
+  if (next.length === bots.length && next.every((b, i) => b === bots[i])) return;
+  bots = next;
   listeners.forEach((l) => l());
 }
+
+/// Reads `server`'s list again, after a write or on its connect.
+export async function refreshBots(server: ServerId = LOCAL): Promise<void> {
+  try {
+    byServer.set(server, await invoke<Bot[]>("list_bots", {}, server));
+    answered.add(server);
+  } catch (e) {
+    // An older server answers `unknown command`: it has no bots to list. A
+    // remote that cannot be reached keeps what it last said.
+    if (server === LOCAL || String(e).includes("unknown command")) byServer.set(server, []);
+  }
+  rebuild();
+}
+
+/// A remote's bots as last kept on disk, standing in until it answers.
+export function keepBots(server: ServerId, list: Bot[]): void {
+  if (answered.has(server)) return;
+  byServer.set(server, list);
+  rebuild();
+}
+
+/// What `server` last said, this run or kept from an earlier one, for the
+/// cache that outlives a restart.
+export const botsOf = (server: ServerId): Bot[] | undefined => byServer.get(server);
 
 export function useBots(): Bot[] {
   return useSyncExternalStore(
     (l) => {
+      if (!watching) {
+        watching = true;
+        subscribeServers(rebuild);
+      }
       listeners.add(l);
       return () => listeners.delete(l);
     },
@@ -29,18 +64,30 @@ export function useBots(): Bot[] {
   );
 }
 
-/// Keeps the list current while `dray bot` changes it from outside the app,
-/// and reads it again on This Mac's every connect, since a change made while
-/// the socket was down sent its `bots_changed` to nobody.
+/// The server a bot runs on.
+export const serverOfBot = (bot: Bot): ServerId => serverOfPath(bot.path);
+
+/// Each chat's inbox row, asked of the server that chat runs on.
+export async function readPreviews(sessionIds: string[]): Promise<Record<string, BotPreview>> {
+  const by = new Map<ServerId, string[]>();
+  for (const id of sessionIds) {
+    const server = serverOfSession(id);
+    by.set(server, [...(by.get(server) ?? []), id]);
+  }
+  const answers = await Promise.all(
+    [...by].map(([server, ids]) =>
+      invoke<Record<string, BotPreview>>("bot_previews", { sessionIds: ids }, server).catch(() => ({})),
+    ),
+  );
+  return Object.assign({}, ...answers);
+}
+
+/// Keeps each server's list current while `dray bot` changes it from outside
+/// the app. A connect needs nothing here: `readServer` reads every server's
+/// bots on its `live_state`, which covers a change made while it was down.
 export function listenForBots(): () => void {
-  const changed = listen("bots_changed", () => void refreshBots());
-  const connected = listen("live_state", ({ server }) => {
-    if (server === LOCAL) void refreshBots();
-  });
-  return () => {
-    void changed.then((off) => off());
-    void connected.then((off) => off());
-  };
+  const changed = listen("bots_changed", ({ server }) => void refreshBots(server));
+  return () => void changed.then((off) => off());
 }
 
 /// The bot `key` names, the way `dray bot send` reads it: its id, else its

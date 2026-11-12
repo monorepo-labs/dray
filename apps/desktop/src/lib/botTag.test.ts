@@ -9,6 +9,7 @@ const OTHER = "019a3f2c-7b41-7d3e-9f80-12ab34cd56aa";
 vi.mock("@/lib/transport", () => ({
   LOCAL: "local",
   serverOfPath: () => "local",
+  serverOfSession: () => "local",
   listen: async () => () => {},
   invoke: async (cmd: string): Promise<Bot[]> =>
     cmd === "list_bots" ? [{ id: ID, name: "Research Bot", path: "/bots/r", created: "" }] : [],
@@ -18,7 +19,7 @@ const { refreshBots } = await import("@/lib/bots");
 const { highlightSegments } = await import("@/lib/highlight");
 const { applyBot, botTag } = await import("@/lib/sessionTag");
 
-beforeAll(refreshBots);
+beforeAll(() => refreshBots());
 
 describe("bot tags", () => {
   it("writes the name and id over the @ token", () => {
