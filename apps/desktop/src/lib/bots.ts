@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-import { invoke, listen } from "@/lib/transport";
+import { invoke, listen, LOCAL } from "@/lib/transport";
 import type { Bot, BotPreview, SessionIndexItem } from "@/types/events";
 
 /// The bots on this Mac's server, held once for the app. Settings writes and
@@ -29,10 +29,18 @@ export function useBots(): Bot[] {
   );
 }
 
-/// Keeps the list current while `dray bot` changes it from outside the app.
+/// Keeps the list current while `dray bot` changes it from outside the app,
+/// and reads it again on This Mac's every connect, since a change made while
+/// the socket was down sent its `bots_changed` to nobody.
 export function listenForBots(): () => void {
-  const un = listen("bots_changed", () => void refreshBots());
-  return () => void un.then((off) => off());
+  const changed = listen("bots_changed", () => void refreshBots());
+  const connected = listen("live_state", ({ server }) => {
+    if (server === LOCAL) void refreshBots();
+  });
+  return () => {
+    void changed.then((off) => off());
+    void connected.then((off) => off());
+  };
 }
 
 /// The bot `key` names, the way `dray bot send` reads it: its id, else its
