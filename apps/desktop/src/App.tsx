@@ -3253,14 +3253,17 @@ function App() {
                   )
               : undefined
           }
+          // None in a bot's chat: its folder holds notes, not work to hand off.
           handoff={
-            <HandoffRow
-              actions={handoffActions(workStatus, sessionHasPr, !!selectedSessionId, handoffConfig)}
-              // Straight out as a prompt, exactly as if it had been typed. A
-              // turn already running queues it, like any other send.
-              onSend={(prompt) => void handleSendMsg(prompt)}
-              disabled={!selectedSessionId || !!sendHeld}
-            />
+            inBotFolder ? null : (
+              <HandoffRow
+                actions={handoffActions(workStatus, sessionHasPr, !!selectedSessionId, handoffConfig)}
+                // Straight out as a prompt, exactly as if it had been typed. A
+                // turn already running queues it, like any other send.
+                onSend={(prompt) => void handleSendMsg(prompt)}
+                disabled={!selectedSessionId || !!sendHeld}
+              />
+            )
           }
           // Only on a new task. An agent is fixed at creation, so a live
           // session cannot be pointed at one that is missing — and a session
