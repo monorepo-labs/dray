@@ -1303,15 +1303,20 @@ function App() {
   // A bot's tasks run hidden, so their repos are added while their Tasks tab
   // can be on screen: that tab draws their marks.
   // A merge card's task may be settled and out of every list, so the repos the
-  // open chat's cards name are read too.
+  // cards on screen name are read too: the open chat's, and every split pane's.
   const cardRepoKey = useMemo(
     () =>
       cardRepos(
         sessions
-          .filter((s) => s.sessionId === selectedSessionId || earlierIds.includes(s.sessionId))
+          .filter(
+            (s) =>
+              s.sessionId === selectedSessionId ||
+              earlierIds.includes(s.sessionId) ||
+              memberKey.split("\n").includes(s.sessionId),
+          )
           .flatMap((s) => s.events),
       ).join("\n"),
-    [sessions, selectedSessionId, earlierIds],
+    [sessions, selectedSessionId, earlierIds, memberKey],
   );
   // Whichever sidebar list is up: a card on screen is still being read.
   const repoPaths = useMemo(

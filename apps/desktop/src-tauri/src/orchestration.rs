@@ -1202,7 +1202,16 @@ async fn post_merge_card(card: dray_proto::MergeCard, app: &Sink) -> Result<Resp
         .await?
         .with_context(|| format!("no session {}", card.session_id))?;
     let task_id = &card.task_session_id;
-    let task = store::get_session_index_item(task_id).await?.with_context(|| format!("no session {task_id}"))?;
+    let Some(task) = store::get_session_index_item(task_id).await? else {
+        // ponytail: a card reads and merges on the chat's machine, so a task on
+        // another one is refused by name. Carrying the task's machine on the
+        // event is the upgrade, if tasks spread across machines.
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        if let Some(machine) = elsewhere::locate(task_id).await {
+            bail!("session {task_id} runs on {machine}; a merge card needs the task on the same machine as this chat");
+        }
+        bail!("no session {task_id}");
+    };
     // The frontend's `sessionBranch`: git's own HEAD while the tree exists,
     // since an agent may have pushed from a branch it named itself.
     let observed = match task.worktree_removed {
