@@ -66,17 +66,17 @@ describe("botItems", () => {
   });
 
   it("reads a sent message out of each shell quoting", () => {
-    expect(sentMessages(`dray send abc 'it'\\''s done'`)).toEqual([{ target: "abc", text: "it's done" }]);
-    expect(sentMessages(`dray session send abc "$(cat <<'EOF'\nline one\nline two\nEOF\n)"`)).toEqual([
-      { target: "abc", text: "line one\nline two" },
+    expect(sentMessages(`dray send abc12345 'it'\\''s done'`)).toEqual([{ target: "abc12345", text: "it's done" }]);
+    expect(sentMessages(`dray session send abc12345 "$(cat <<'EOF'\nline one\nline two\nEOF\n)"`)).toEqual([
+      { target: "abc12345", text: "line one\nline two" },
     ]);
     expect(sentMessages("dray session ls")).toEqual([]);
   });
 
   it("reads every send out of one command", () => {
-    expect(sentMessages(`dray session send aaa "hello" && dray session send bbb 'hello'`)).toEqual([
-      { target: "aaa", text: "hello" },
-      { target: "bbb", text: "hello" },
+    expect(sentMessages(`dray session send aaaa1111 "hello" && dray session send bbbb2222 'hello'`)).toEqual([
+      { target: "aaaa1111", text: "hello" },
+      { target: "bbbb2222", text: "hello" },
     ]);
   });
 
@@ -119,7 +119,7 @@ describe("botItems", () => {
     const items = botItems([
       call("a", `dray session send ${ID} "one"`),
       result("a", "sent"),
-      call("b", `dray session send other-id "two"`),
+      call("b", `dray session send 01a1d052 "two"`),
       result("b", "sent"),
       said("Sent both."),
       call("c", `dray session send ${ID} "three"`),
@@ -163,6 +163,51 @@ describe("botItems", () => {
     expect(items.map((i) => i.kind)).toEqual(["task", "botSent"]);
     expect(items[0]).toMatchObject({ sessionId: ID });
     expect(items[1]).toMatchObject({ botId: bot });
+  });
+
+  it("reads no send out of a new task's brief that names one", () => {
+    const sent = "01a1d052-e620-74d4-8ef2-aa9965929e13";
+    const started = "01a1d06c-7868-719b-b026-8ad0a260666b";
+    const cmd = `D=/private/tmp/images; dray session send ${sent} "User feedback on the sidebar bot rows, screenshot at $D/8.png: make bot rows line up."
+dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot prompt: relay feedback without adding steps" "Edit the Dray bot system prompt. Problem: when a bot passes the user's feedback to one of its tasks with 'dray session send', it adds instructions the user never gave, like 'push to the PR'."`;
+    const items = botItems([
+      call("c", cmd),
+      result("c", `Delivered.\n${started}\nStarted "Bot prompt: relay feedback without adding steps" in worktree gentle-ochre-meadow`),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["task", "sent"]);
+    expect(items[0]).toMatchObject({ sessionId: started });
+    expect(items[1]).toMatchObject({ target: sent, text: expect.stringContaining("$D/8.png") });
+  });
+
+  it("skips a session send whose target is no session id", () => {
+    expect(sentMessages(`dray session send ', it adds' 'push'`)).toEqual([]);
+    expect(sentMessages(`for id in aaa bbb; do dray session send "$id" "hello"; done`)).toEqual([]);
+    expect(sentMessages(`dray session send $ID hi && dray session send abc12345 'yo'`)).toEqual([
+      { target: "abc12345", text: "yo" },
+    ]);
+  });
+
+  it("reads past a heredoc that spells a send", () => {
+    expect(sentMessages(`dray session send aaaa1111 "$(cat <<'EOF'\nthen run dray session send bbbb2222 "x"\nEOF\n)" && dray session send cccc3333 ok`)).toEqual([
+      { target: "aaaa1111", text: `then run dray session send bbbb2222 "x"` },
+      { target: "cccc3333", text: "ok" },
+    ]);
+    // The rest of a heredoc's opening line is still commands.
+    expect(sentMessages(`cat <<'EOF' >/tmp/brief; dray session send aaaa1111 hi\nsay dray session send bbbb2222 no\nEOF\ndray session send cccc3333 ok`)).toEqual([
+      { target: "aaaa1111", text: "hi" },
+      { target: "cccc3333", text: "ok" },
+    ]);
+    // A herestring opens no body; a delimiter may carry a dash.
+    expect(sentMessages(`cat <<< "hello"\ndray session send aaaa1111 hi`)).toEqual([{ target: "aaaa1111", text: "hi" }]);
+    expect(sentMessages(`cat <<END-TEXT\ndray session send bbbb2222 no\nEND-TEXT\ndray session send cccc3333 ok`)).toEqual([
+      { target: "cccc3333", text: "ok" },
+    ]);
+    expect(sentMessages(`printf '' <<EOF\ndray session send aaaa1111 "example only"`)).toEqual([]);
+    // A `<<` inside quotes is text, and opens no heredoc to swallow what follows.
+    expect(sentMessages(`dray send aaaa1111 "Explain <<EOF\nsyntax"; dray send bbbb2222 hi\ncat <<EOF\nbody\nEOF`)).toEqual([
+      { target: "aaaa1111", text: "Explain <<EOF\nsyntax" },
+      { target: "bbbb2222", text: "hi" },
+    ]);
   });
 
   it("draws no task for a create that failed", () => {

@@ -309,7 +309,7 @@ export function PartyChip({
           </span>
         ))}
       </span>
-      <span className="truncate">{single ? single.title : `${parties.length} bots`}</span>
+      <span className="truncate">{single ? single.title : `${parties.length} tasks`}</span>
     </button>
   );
 }
