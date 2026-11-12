@@ -127,7 +127,7 @@ function StalledRow({
         </span>
         <span className="flex items-start gap-3">
           {preview && (
-            <span className="line-clamp-2 min-w-0 flex-1 text-ui text-muted-foreground/60">{previewLine(preview)}</span>
+            <span className="line-clamp-2 min-w-0 flex-1 text-ui text-muted-foreground">{previewLine(preview)}</span>
           )}
           {mergeable && (
             <span className="ml-auto pt-0.5">
