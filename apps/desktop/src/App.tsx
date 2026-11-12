@@ -3064,7 +3064,7 @@ function App() {
   };
 
   const mergeCardHost: MergeCardHost = {
-    prFor: prMarks.prFor,
+    prNumbered: prMarks.prNumbered,
     titleOf: (id) => sessionIndexItems.find((i) => i.sessionId === id)?.title,
     merge: (card, method, settle) => {
       const item = settle ? sessionIndexItems.find((i) => i.sessionId === card.taskId) : undefined;

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { seededAvatar } from "@/lib/botAvatar";
 import { FULL_FOR, type MergeCardPayload } from "@/lib/mergeCard";
 import { openLink } from "@/lib/openLink";
+import { qualify, serverOfSession } from "@/lib/transport";
 import { isModClick } from "@/lib/platform";
 import { mergeVerdict, readyToMerge } from "@/lib/pr";
 import { cn } from "@/lib/utils";
@@ -16,7 +17,8 @@ import type { AgentEvent, MergeMethod, PrMark } from "@/types/events";
 /// What a card needs from the app: the sidebar's PR marks for live status,
 /// the task's current title, and the Tasks tab's merge.
 export type MergeCardHost = {
-  prFor: (repo: string, branch: string) => PrMark | undefined;
+  /// `undefined` until the repo is read, `null` where it holds no such PR.
+  prNumbered: (repo: string, number: number) => PrMark | null | undefined;
   titleOf: (taskId: string) => string | undefined;
   /// `settle`: a bot's chat, where landed work is the bot's to tidy, so the
   /// task is settled and its worktree deleted after the merge.
@@ -63,16 +65,18 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
   const host = useContext(MergeCardHostContext);
   const chat = useContext(MergeCardChatContext);
   if (event.payload.type !== "merge_card") return null;
-  const card = event.payload;
+  // The server wrote its own bare path; qualified, a remote chat's card reads
+  // and merges on that server rather than on a local checkout of the same path.
+  const card = { ...event.payload, projectPath: qualify(event.payload.projectPath, serverOfSession(event.sessionId)) };
 
-  const mark = host?.prFor(card.projectPath, card.branch);
-  // The branch's mark may be a later PR from the same branch; this card is
-  // about its own.
-  const pr = mark?.number === card.number ? mark : undefined;
+  const found = host?.prNumbered(card.projectPath, card.number);
+  const pr = found ?? undefined;
   const merged = pr?.state === "MERGED";
   const title = host?.titleOf(card.taskId) ?? card.title;
   const mergeable = pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
-  const compact = merged || (chat.after.get(event.id) ?? 0) >= FULL_FOR;
+  // `null` is a PR no longer among the open or recently merged: nothing left
+  // to land, so it draws one line without claiming which way it went.
+  const compact = merged || found === null || (chat.after.get(event.id) ?? 0) >= FULL_FOR;
   const merge = host && ((method: MergeMethod) => host.merge(card, method, chat.bot));
   const open = (e: React.MouseEvent) => host?.open(card.taskId, isModClick(e));
   const face = <BotAvatar seed={card.taskId} avatar={seededAvatar(card.taskId)} className="block size-full scale-[1.18]" />;

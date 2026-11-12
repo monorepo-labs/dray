@@ -74,7 +74,7 @@ function Demo() {
   const [marks, setMarks] = useState(MARKS);
   const chat = useMemo(() => ({ after: readerMessagesAfter(events), bot: true }), [events]);
   const host: MergeCardHost = {
-    prFor: (_repo, branch) => marks.find((m) => m.headRefName === branch),
+    prNumbered: (_repo, number) => marks.find((m) => m.number === number),
     titleOf: () => undefined,
     merge: async (c) => {
       await new Promise((done) => setTimeout(done, 1000));

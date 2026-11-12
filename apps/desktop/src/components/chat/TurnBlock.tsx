@@ -171,6 +171,10 @@ export default memo(function TurnBlock({
       {/* Collapsed, this stands in for the turn's last message; with the last
           segment open, that message already rendered above, so it would be a
           duplicate. */}
+      {turn.cards.map((card) => (
+        <EventRow key={card.id} event={card} resultByCallId={resultByCallId} />
+      ))}
+
       {!lastOpen && collapsible && turn.finalText && <AssistantMessage text={turn.finalText} />}
 
       {footer}

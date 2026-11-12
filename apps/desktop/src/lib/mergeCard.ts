@@ -1,3 +1,4 @@
+import { qualify, serverOfSession } from "@/lib/transport";
 import type { AgentEvent } from "@/types/events";
 
 export type MergeCardPayload = Extract<AgentEvent["payload"], { type: "merge_card" }>;
@@ -21,9 +22,12 @@ export function readerMessagesAfter(events: readonly AgentEvent[]): Map<string, 
 }
 
 /// The repos the cards in a chat name, so their pull requests are read even
-/// once the task is settled and no sidebar row asks for them.
+/// once the task is settled and no sidebar row asks for them. Qualified with
+/// the chat's server, as the card reads them.
 export function cardRepos(events: readonly AgentEvent[]): string[] {
   const repos = new Set<string>();
-  for (const { payload } of events) if (payload.type === "merge_card") repos.add(payload.projectPath);
+  for (const { sessionId, payload } of events) {
+    if (payload.type === "merge_card") repos.add(qualify(payload.projectPath, serverOfSession(sessionId)));
+  }
   return [...repos];
 }
