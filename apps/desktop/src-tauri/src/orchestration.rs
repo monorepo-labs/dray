@@ -836,6 +836,15 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             answer_session(&aside.session_id).await
         }
         on_screen => {
+            // Resolved here, where the index lives, before the step goes to
+            // the app's CEF or a headless Chromium.
+            let on_screen = match on_screen {
+                Request::Browser(mut step) => {
+                    step.session_id = crate::bots::browser_owner(&step.session_id).await;
+                    Request::Browser(step)
+                }
+                other => other,
+            };
             #[cfg(feature = "desktop")]
             if crate::is_server() {
                 return ask_app(on_screen).await;

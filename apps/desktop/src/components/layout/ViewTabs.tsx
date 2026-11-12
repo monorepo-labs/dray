@@ -136,6 +136,7 @@ type Item = {
 /// stays one click away.
 export default function ViewTabs({
   sessionId,
+  browserId = sessionId,
   title,
   tab,
   onChange,
@@ -147,6 +148,8 @@ export default function ViewTabs({
   working = false,
   tasks,
 }: {
+  /// Whose browser pages the row lists: a bot's tasks share the bot chat's.
+  browserId?: string;
   /// A bot chat's open tasks, after everything else in its row.
   tasks?: TaskTabsProps;
   /// Mid-turn: off Chat, the chat tab's icon says so, since the transcript
@@ -172,14 +175,14 @@ export default function ViewTabs({
   // Read for the re-render alone: a server renamed moves the name in the tab.
   useServers();
   const server = machine && machine !== LOCAL ? serverName(machine) : null;
-  const loadedPages = useBrowserTabs(sessionId);
+  const loadedPages = useBrowserTabs(browserId);
   const pages = loadedPages ?? [];
-  const pending = usePendingTab(sessionId);
-  const blanks = useBlankTabs(sessionId);
-  const parkedPages = useParkedTabs(sessionId);
+  const pending = usePendingTab(browserId);
+  const blanks = useBlankTabs(browserId);
+  const parkedPages = useParkedTabs(browserId);
   // The agent's next verb goes to whichever page is active, so the reader
   // cannot move it mid-recording — the panel strip's own rule.
-  const recording = useRecording(sessionId);
+  const recording = useRecording(browserId);
   const { open: files, active: activeFile } = useOpenFiles(sessionId);
   const [, bump] = useReducer((n: number) => n + 1, 0);
   const fileLabels = tabLabels(files.map((f) => f.path));
@@ -203,7 +206,7 @@ export default function ViewTabs({
   const newTab = () => {
     if (recording) return;
     onChange("browser");
-    setPendingTab(sessionId, true);
+    setPendingTab(browserId, true);
   };
   // From anywhere, whatever else is open: the chord every browser gives it.
   useHotkey("browser.newTab", newTab);
@@ -244,15 +247,15 @@ export default function ViewTabs({
       locked: recording,
       pick: () => {
         onChange("browser");
-        setPendingTab(sessionId, false);
-        if (!page.active) void activateTab(sessionId, page.id);
+        setPendingTab(browserId, false);
+        if (!page.active) void activateTab(browserId, page.id);
       },
-      close: () => void closeTab(sessionId, page.id),
+      close: () => void closeTab(browserId, page.id),
       duplicate: page.url
         ? () => {
             onChange("browser");
-            setPendingTab(sessionId, false);
-            void openInBrowser(sessionId, page.url, true).catch(() => undefined);
+            setPendingTab(browserId, false);
+            void openInBrowser(browserId, page.url, true).catch(() => undefined);
           }
         : undefined,
     })),
@@ -264,9 +267,9 @@ export default function ViewTabs({
       locked: recording,
       pick: () => {
         onChange("browser");
-        activateBlankTab(sessionId, id);
+        activateBlankTab(browserId, id);
       },
-      close: () => closeBlankTab(sessionId, id),
+      close: () => closeBlankTab(browserId, id),
     })),
     ...(files.length === 0 && shown.files
       ? [
@@ -389,7 +392,7 @@ export default function ViewTabs({
     if (key === "changes" || key === "files") setShown(key, true);
     else if (key.startsWith("file:")) reopenFile(sessionId, key.slice("file:".length));
     else if (key.startsWith("task:")) tasks?.onReopen(key.slice("task:".length));
-    else key = `blank:${addBlankTab(sessionId, entry.page)}`;
+    else key = `blank:${addBlankTab(browserId, entry.page)}`;
     if (entry.at !== undefined) {
       orders.set(sessionId, moveKey(orders.get(sessionId) ?? order, key, entry.at));
     }

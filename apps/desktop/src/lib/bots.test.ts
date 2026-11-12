@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botAt, botSession, inBotTree, previewLine } from "@/lib/bots";
+import { botAt, botChatOf, botSession, inBotTree, previewLine } from "@/lib/bots";
 import type { Bot, SessionIndexItem } from "@/types/events";
 
 const bot: Bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
@@ -39,6 +39,10 @@ describe("inBotTree", () => {
     ];
     expect(inBotTree([bot], items, "grand")).toBe(true);
     expect(inBotTree([bot], items, "other")).toBe(false);
+    // The browser a task shares is its bot chat's.
+    expect(botChatOf([bot], items, "grand")).toBe("chat");
+    expect(botChatOf([bot], items, "chat")).toBe("chat");
+    expect(botChatOf([bot], items, "other")).toBeUndefined();
   });
 });
 

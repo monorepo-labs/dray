@@ -181,7 +181,7 @@ import { changeRange, lastToolResult } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { botAt, botEntries, inBotTree, refreshBots, useBots } from "@/lib/bots";
+import { botAt, botChatOf, botEntries, inBotTree, refreshBots, useBots } from "@/lib/bots";
 import NewBotDialog from "@/components/NewBotDialog";
 import ModelSelector from "@/components/composer/ModelSelector";
 import { stanceFor } from "@/lib/permission";
@@ -914,12 +914,21 @@ function App() {
   // `activeTab`.
   const [panelOpens, setPanelOpens] = useState<Record<string, boolean>>({});
   const [panelTabs, setPanelTabs] = useState<Record<string, PanelTab | null>>({});
+  // A bot's row is one arrangement too (#881): its chat and every task open
+  // in it share one pane, open flag and tab pick alike, so the pane stays put
+  // across the row and shows whatever tab is lit. A pick the lit session does
+  // not draw falls back to its default, as anywhere — see `activeTab`.
+  const rowOf = useCallback(
+    (id: string) =>
+      taskTabVia && taskTabs[taskTabVia]?.some((t) => t.sessionId === id) ? taskTabVia : id,
+    [taskTabs, taskTabVia],
+  );
   const openKey = useCallback(
     (id: string) => {
       const group = groupOf(spaceGroups, id);
-      return group ? `group:${group.id}` : id;
+      return group ? `group:${group.id}` : rowOf(id);
     },
-    [spaceGroups],
+    [spaceGroups, rowOf],
   );
   useEffect(() => {
     if (!activeGroup || !selectedSessionId) return;
@@ -928,14 +937,14 @@ function App() {
       key in prev ? prev : { ...prev, [key]: prev[selectedSessionId] ?? false },
     );
   }, [activeGroup, selectedSessionId]);
-  const panelTab = selectedSessionId ? (panelTabs[selectedSessionId] ?? null) : null;
+  const panelTab = selectedSessionId ? (panelTabs[rowOf(selectedSessionId)] ?? null) : null;
   // Both take the session because one caller opens a session and its pane in
   // the same breath, before the selection has moved.
   const setPanelTab = useCallback(
     (tab: PanelTab | null, id = selectedSessionId) => {
-      if (id) setPanelTabs((prev) => ({ ...prev, [id]: tab }));
+      if (id) setPanelTabs((prev) => ({ ...prev, [rowOf(id)]: tab }));
     },
-    [selectedSessionId],
+    [selectedSessionId, rowOf],
   );
 
   const memberKey = activeGroup ? members(activeGroup).join("\n") : "";
@@ -1373,8 +1382,13 @@ function App() {
 
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
 
-  const browserTabs = useBrowserTabs(selectedSessionId);
-  const blankTabs = useBlankTabs(selectedSessionId ?? "");
+  // Whose browser the selection shows: a bot and its tasks share the bot
+  // chat's, as the server routes their agents' `dray browser` steps (#881).
+  const browserSession = selectedSessionId
+    ? (botChatOf(bots, sessionIndexItems, rowOf(selectedSessionId)) ?? rowOf(selectedSessionId))
+    : null;
+  const browserTabs = useBrowserTabs(browserSession);
+  const blankTabs = useBlankTabs(browserSession ?? "");
   const pendingBrowserTab = blankTabs.active !== null;
   const hasBrowserTabs = browserTabs && browserTabs.length > 0;
   // A link's tab is answered for before the strip lists it, and the Browser
@@ -1385,9 +1399,14 @@ function App() {
     if (!browserWanted) return;
     if (browserWanted !== selectedSessionId) return setBrowserWanted(null);
     if (!browserTabs?.some((tab) => tab.active)) return;
-    setViewTabs((prev) => ({ ...prev, [browserWanted]: "browser" }));
+    // A task lit in its bot's row has no pages of its own in that row: the
+    // page is the bot's, so the bot's Browser view is where it shows.
+    const row = rowOf(browserWanted);
+    setViewTabs((prev) => ({ ...prev, [row]: "browser" }));
+    if (row !== browserWanted) void handleSelectSessionIndexItem(row);
     setBrowserWanted(null);
-  }, [browserWanted, browserTabs, selectedSessionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browserWanted, browserTabs, selectedSessionId, rowOf]);
   // The main column's Browser view is the panel's browser expanded. Arriving
   // on it closes the pane, whatever tab the pane was on: the reader came for
   // the full width. ⌘E brings it back beside the page, and leaving gives back
@@ -1974,7 +1993,7 @@ function App() {
       void reachableUrl(sessionId, url).then(
         (reached) => {
           if (external) return void openUrl(reached).catch(console.error);
-          void openInBrowser(sessionId, reached, true)
+          void openInBrowser(browserSession ?? sessionId, reached, true)
             .then(() => {
               setBrowserWanted(sessionId);
               trackBrowserOpen(reached);
@@ -2514,12 +2533,12 @@ function App() {
   // arbitration — bar the last arm, which is the reader on Chat with the
   // browser beside it in the panel and no grid to close a pane out of.
   const closeBrowserTab = () => {
-    if (!selectedSessionId || isRecording(selectedSessionId)) return;
+    if (!browserSession || isRecording(browserSession)) return;
     // A blank tab has no browser behind it, so it is dropped rather than
     // closed — and it is what the reader is looking at while it is up.
-    if (blankTabs.active !== null) return closeBlankTab(selectedSessionId, blankTabs.active);
+    if (blankTabs.active !== null) return closeBlankTab(browserSession, blankTabs.active);
     const open = browserTabs?.find((tab) => tab.active);
-    if (open) void closeTab(selectedSessionId, open.id);
+    if (open) void closeTab(browserSession, open.id);
   };
   // `viewTab` is per session and the issues page does not clear it, so a
   // reader who opened Issues from the Files view still has `activeFile`
@@ -2600,12 +2619,12 @@ function App() {
   // ⌘⇧← / ⌘⇧→ step the browser's strip, clamped like every other subtab row.
   // The pending tab sits at the end of it, which is where the strip draws it.
   const stepBrowserTab = (delta: number) => {
-    if (!selectedSessionId || !browserTabs || isRecording(selectedSessionId)) return;
+    if (!browserSession || !browserTabs || isRecording(browserSession)) return;
     const from = pendingBrowserTab ? browserTabs.length : browserTabs.findIndex((tab) => tab.active);
     const next = browserTabs[from + delta];
     if (!next) return;
-    if (pendingBrowserTab) setPendingTab(selectedSessionId, false);
-    if (!next.active) void activateTab(selectedSessionId, next.id);
+    if (pendingBrowserTab) setPendingTab(browserSession, false);
+    if (!next.active) void activateTab(browserSession, next.id);
   };
   // The Diff view and an open file step their own strip on this chord, and the
   // main column's row wins over a browser sitting beside it in the panel.
@@ -2998,6 +3017,7 @@ function App() {
               // With a task tab lit, still the bot's row: its chat, pages and
               // files, the task tabs after them.
               sessionId={rowSession.sessionId}
+              browserId={browserSession ?? rowSession.sessionId}
               // The group's name over a grid, for the reason the header gave:
               // each pane already names its own session. The project is left
               // off where the sidebar is already filtered down to it.
@@ -3178,7 +3198,7 @@ function App() {
             <TabBody active={activeTab === "browser"}>
               <MountOnce when={panelShown && activeTab === "browser"}>
               <BrowserPane
-                sessionId={shownSession.sessionId}
+                sessionId={browserSession ?? shownSession.sessionId}
                 active={panelShown && activeTab === "browser"}
                 mode="panel"
                 fullOpen={fullBrowserOpen}
@@ -3537,7 +3557,7 @@ function App() {
         <TabBody active={!issuesOpen && viewTab === "browser"}>
           <MountOnce when={fullBrowserOpen}>
           <BrowserPane
-            sessionId={selectedSession.sessionId}
+            sessionId={browserSession ?? selectedSession.sessionId}
             active={fullBrowserOpen}
             mode="full"
             onCollapse={collapseBrowser}

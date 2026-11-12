@@ -357,24 +357,39 @@ fn same_dir(a: &str, b: &str) -> bool {
 /// Everything under a bot runs hidden and reports back after every turn, and a
 /// grandchild belongs to that arrangement as much as a child does.
 pub async fn in_bot_tree(item: &SessionIndexItem) -> bool {
-    let Ok(bots) = read_list().await else { return false };
+    bot_chat_of(item).await.is_some()
+}
+
+/// The bot chat `item` is, or the one it descends from.
+async fn bot_chat_of(item: &SessionIndexItem) -> Option<String> {
+    let bots = read_list().await.ok()?;
     if bots.is_empty() {
-        return false;
+        return None;
     }
     let mut at = Some(item.clone());
     // Bounded: an index that points a session at its own ancestor must cost a
     // wrong answer, never a hung turn.
     for _ in 0..8 {
-        let Some(item) = at else { return false };
+        let item = at?;
         if bots.iter().any(|b| same_dir(&b.path, &item.cwd)) {
-            return true;
+            return Some(item.session_id);
         }
         at = match item.parent_session_id {
             Some(id) => crate::store::get_session_index_item(&id).await.ok().flatten(),
             None => None,
         };
     }
-    false
+    None
+}
+
+/// The session whose browser a `dray browser` step from `session_id` drives:
+/// a bot and everything under it share the bot chat's pages (#881), so a
+/// task's agent opens them where the reader, on any of the bot's tabs, sees them.
+pub async fn browser_owner(session_id: &str) -> String {
+    match crate::store::get_session_index_item(session_id).await.ok().flatten() {
+        Some(item) => bot_chat_of(&item).await.unwrap_or_else(|| session_id.to_string()),
+        None => session_id.to_string(),
+    }
 }
 
 /// `base` with the bot's own block added, where `cwd` is a bot's folder.

@@ -51,14 +51,24 @@ export function inBotTree(
   items: readonly SessionIndexItem[],
   sessionId: string,
 ): boolean {
-  if (list.length === 0) return false;
+  return botChatOf(list, items, sessionId) !== undefined;
+}
+
+/// The bot chat `sessionId` is or descends from — whose browser it shares,
+/// as the server's `bots::browser_owner` resolves it (#881).
+export function botChatOf(
+  list: readonly Bot[],
+  items: readonly SessionIndexItem[],
+  sessionId: string,
+): string | undefined {
+  if (list.length === 0) return undefined;
   const byId = new Map(items.map((i) => [i.sessionId, i]));
   let at = byId.get(sessionId);
   for (let hops = 0; at && hops < 8; hops++) {
-    if (botAt(list, at.cwd)) return true;
+    if (botAt(list, at.cwd)) return at.sessionId;
     at = at.parentSessionId ? byId.get(at.parentSessionId) : undefined;
   }
-  return false;
+  return undefined;
 }
 
 /// A bot, its ongoing chat, and the chat's inbox row, for the sidebar.
