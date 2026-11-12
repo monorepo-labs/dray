@@ -1,6 +1,7 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useState } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
+import { Button } from "@/components/ui/button";
 import PrStateIcon from "@/components/PrStateIcon";
 import { MergeControl } from "@/components/TasksPanel";
 import { seededAvatar } from "@/lib/botAvatar";
@@ -22,6 +23,8 @@ export type MergeCardHost = {
   /// task is settled and its worktree deleted after the merge.
   merge: (card: MergeCardPayload, method: MergeMethod, settle: boolean) => Promise<void>;
   open: (taskId: string, alone: boolean) => void;
+  /// Asks the task's agent to resolve the PR's conflicts and push.
+  fixConflicts: (card: MergeCardPayload) => Promise<void>;
 };
 
 export const MergeCardHostContext = createContext<MergeCardHost | null>(null);
@@ -93,6 +96,7 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
   const merged = pr?.state === "MERGED";
   const title = host?.titleOf(card.taskId) ?? card.title;
   const mergeable = pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
+  const conflicted = pr?.state === "OPEN" && mergeVerdict(pr) === "conflict";
   // `null` is a PR no longer among the open or recently merged: nothing left
   // to land, so it draws one line without claiming which way it went.
   const compact = merged || found === null || (chat.after.get(event.id) ?? 0) >= FULL_FOR;
@@ -117,6 +121,7 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
           <span className="truncate">{title}</span>
         </button>
         {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} />}
+        {conflicted && host && <FixConflicts onFix={() => host.fixConflicts(card)} />}
       </div>
     );
   }
@@ -150,7 +155,38 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
           </p>
         </div>
         {mergeable && merge && <MergeControl onMerge={merge} keep={event.id} named />}
+        {conflicted && host && <FixConflicts onFix={() => host.fixConflicts(card)} />}
       </div>
     </div>
+  );
+}
+
+/// Merge's stand-in while the PR conflicts with its base: hands the fix to the
+/// task's own agent, which holds the branch.
+function FixConflicts({ onFix }: { onFix: () => Promise<void> }) {
+  const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const fix = async () => {
+    setState("sending");
+    setError(null);
+    try {
+      await onFix();
+      setState("sent");
+    } catch (e) {
+      setState("idle");
+      setError(String(e));
+    }
+  };
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      {error && (
+        <span className="text-[12px] text-destructive" title={error}>
+          Failed
+        </span>
+      )}
+      <Button variant="outline" size="xs" disabled={state !== "idle"} onClick={() => void fix()}>
+        {state === "sent" ? "Asked the task" : state === "sending" ? "Sending…" : "Fix conflicts"}
+      </Button>
+    </span>
   );
 }

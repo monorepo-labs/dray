@@ -81,6 +81,7 @@ function Demo() {
       setMarks((all) => all.map((m) => (m.number === c.number ? { ...m, state: "MERGED" } : m)));
     },
     open: () => {},
+    fixConflicts: () => new Promise((done) => setTimeout(done, 600)),
   };
 
   return (
