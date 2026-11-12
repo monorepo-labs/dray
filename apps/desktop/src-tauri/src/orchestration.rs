@@ -760,6 +760,11 @@ fn assistants(list: Result<Vec<crate::mcp::AssistantSummary>, String>) -> Result
 }
 
 async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
+    if !dray_proto::REMOTE_MCP
+        && matches!(request, Request::PairAssistant(_) | Request::ListAssistants | Request::RevokeAssistant(_))
+    {
+        anyhow::bail!("Assistants are not available in this build yet.");
+    }
     match request {
         Request::CreateSession(create) => create_session(create, None, app).await,
         Request::ListSessions(list) => list_sessions(list).await,

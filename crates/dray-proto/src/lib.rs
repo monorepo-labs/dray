@@ -47,6 +47,12 @@ use std::path::PathBuf;
 /// v15 the assistant verbs, and v16 `dray login` and `dray logout`.
 pub const PROTOCOL_VERSION: u32 = 16;
 
+/// Remote MCP (#863), held out of release builds until Dray accounts (#874)
+/// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
+/// verbs; `REMOTE_MCP` in ServersSettings.tsx is its UI twin. MCP-HELD.md
+/// says what else comes back with it.
+pub const REMOTE_MCP: bool = cfg!(debug_assertions);
+
 /// The oldest envelope the app still answers. Rises only when a shape is
 /// *renamed*, never for an addition: v4 renamed `LinkIssues.identifiers` to
 /// `issues`, so a v3 line parses on a newer app as "link nothing" — the silent
