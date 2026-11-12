@@ -112,13 +112,14 @@ function linkDetail(link: OrgLink, detail: ReactNode): ReactNode {
 /// Link on an unlinked row, Cancel while a code waits. Nothing for a server
 /// too old to link, which answered no state.
 function LinkAction({ link }: { link: OrgLink }) {
-  if (!link.state || link.state.linked) return null;
-  if (link.state.pending)
+  // Pending first: a linked server relinking or signing in still waits on a code.
+  if (link.state?.pending)
     return (
       <Button variant="ghost" size="sm" onClick={link.cancel}>
         Cancel
       </Button>
     );
+  if (!link.state || link.state.linked) return null;
   return (
     <Button variant="secondary" size="sm" onClick={() => void link.start()}>
       <Link2 className="size-3.5" />

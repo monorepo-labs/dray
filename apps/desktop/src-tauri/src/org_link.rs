@@ -346,9 +346,17 @@ async fn poll(sink: Sink, site: String, generation: u64, mut interval: Duration)
         let current = memory().pending.as_ref().is_some_and(|p| p.generation == generation);
         let error = match outcome {
             Poll::Linked(held, account) if !current => {
-                // Cancelled while the claim was in flight: the site already
-                // made the link, so take it back rather than drop the credential.
-                revoke(&held).await;
+                // Cancelled while the claim was in flight. A new row is taken
+                // back. An existing row already holds this credential in place
+                // of the old one, so revoking would delete the link it had:
+                // keep it instead.
+                if read().await.is_some() {
+                    if write(Some(&held)).await.is_ok() {
+                        let _ = sink.emit(CHANGED, ());
+                    }
+                } else {
+                    revoke(&held).await;
+                }
                 if let Some(account) = account {
                     crate::dray_account::revoke(&account).await;
                 }
