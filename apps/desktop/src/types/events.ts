@@ -1974,7 +1974,13 @@ continueAt?: string,
  * The reader cancelled the continue above. Kept beside it rather than
  * clearing it, so they can turn it back on until the time passes.
  */
-continueOff: boolean, };
+continueOff: boolean, 
+/**
+ * What a bot's stalled task needs from the reader, one line the bot wrote
+ * with `dray session need`. Drawn only while `at` is no older than
+ * `modified`, so the task moving clears it without a write.
+ */
+need?: TaskNeed, };
 
 /**
  * Session-level facts, known at startup.
@@ -2131,7 +2137,13 @@ continueAt?: string,
  * The reader cancelled the continue above. Kept beside it rather than
  * clearing it, so they can turn it back on until the time passes.
  */
-continueOff: boolean, };
+continueOff: boolean, 
+/**
+ * What a bot's stalled task needs from the reader, one line the bot wrote
+ * with `dray session need`. Drawn only while `at` is no older than
+ * `modified`, so the task moving clears it without a write.
+ */
+need?: TaskNeed, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`
@@ -2250,6 +2262,15 @@ distinctId: string,
  * work.
  */
 personProperties: Record<string, string | number | boolean>, };
+
+/**
+ * See [`SessionIndexItem::need`].
+ */
+export type TaskNeed = { text: string, 
+/**
+ * RFC3339, when the bot wrote it.
+ */
+at: string, };
 
 /**
  * A tool `dray setup --install` takes, as a server has it.

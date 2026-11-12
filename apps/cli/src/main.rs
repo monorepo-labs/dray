@@ -18,7 +18,7 @@ use draft::DraftCommand;
 use dray_proto::{
     encode_line, AddVideo, BrowserAction, MergeCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
     LinkIssues, ListSessions, Locator, OnMachine, RenameSession, Request, Response, SendMessage, SessionRef,
-    SessionSummary, SetAside, SettleSession, ShareAction, ShareRequest,
+    SessionSummary, SetAside, SetNeed, SettleSession, ShareAction, ShareRequest,
 };
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
@@ -140,12 +140,24 @@ enum SessionCommand {
     /// Post a card in this session's chat for a task's open pull request, so
     /// the user can merge it from the chat.
     MergeCard(SessionArg),
+    /// Say in one line what a stalled task needs from the user, for the "Waiting
+    /// on you" card in this bot's chat. Cleared when the task moves; no text
+    /// clears it now.
+    Need(Need),
 }
 
 #[derive(Args)]
 struct SessionArg {
     /// The session, as printed by `dray session ls`.
     session_id: String,
+}
+
+#[derive(Args)]
+struct Need {
+    /// The task, as printed by `dray session ls`.
+    session_id: String,
+    /// What it needs, imperative and short: "Pick: keep or drop the rename button".
+    need: Option<String>,
 }
 
 #[derive(Args)]
@@ -490,6 +502,11 @@ fn session(command: SessionCommand) -> Result<(), String> {
         ),
         SessionCommand::SetAside(args) => {
             (Request::SetAside(SetAside { session_id: args.session_id, aside: true }), "Set aside")
+        }
+        SessionCommand::Need(args) => {
+            let need = args.need.unwrap_or_default();
+            let said = if need.trim().is_empty() { "Cleared the need line on" } else { "Set the need line on" };
+            (Request::SetNeed(SetNeed { session_id: args.session_id, need }), said)
         }
         SessionCommand::UnsetAside(args) => {
             (Request::SetAside(SetAside { session_id: args.session_id, aside: false }), "Brought back")
@@ -1616,6 +1633,8 @@ mod tests {
             &["dray", "session", "new", "x", "--base", "main", "--title", "T"][..],
             &["dray", "session", "settle", SESSION, "--delete-worktree"],
             &["dray", "session", "set-aside", SESSION],
+            &["dray", "session", "need", SESSION, "Pick: keep or drop the rename button"],
+            &["dray", "session", "need", SESSION],
             &["dray", "session", "rename", SESSION, "New name"],
             &["dray", "share", "start", "5173"],
             &["dray", "share", "ls", "--all", "--json"],

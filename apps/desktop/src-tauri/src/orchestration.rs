@@ -448,6 +448,7 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::Share(r) => Some(&r.session_id),
         Request::Browser(r) => Some(&r.session_id),
         Request::MergeCard(r) => Some(&r.session_id),
+        Request::SetNeed(r) => Some(&r.session_id),
         // Never `AddVideo`: its path is this machine's, and forwarded it would
         // name a file the other machine does not have, or a different one.
         _ => None,
@@ -778,6 +779,14 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::StartDraft(start) => start_draft(start, None, app).await,
         Request::AddVideo(video) => add_video(video).await,
         Request::MergeCard(card) => post_merge_card(card, app).await,
+        Request::SetNeed(need) => {
+            let text = Some(need.need.trim().to_string()).filter(|t| !t.is_empty());
+            crate::store::set_session_need(&need.session_id, text)
+                .await?
+                .with_context(|| format!("no session {}", need.session_id))?;
+            announce_change(std::slice::from_ref(&need.session_id), app).await;
+            answer_session(&need.session_id).await
+        }
         Request::Share(share) => share_port(share).await,
         Request::ListShares(list) => list_shares(list).await,
         Request::RenameSession(rename) => {
@@ -1909,6 +1918,50 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
     let item = outcome.snapshot.map(|s| s.index_item).context("the bot's chat started but returned no index entry")?;
     app.emit(SESSION_CREATED, &item).ok();
     Ok(Response::BotSent { bot: bots::summary(bot).await, queued: false })
+}
+
+/// How much of a task's last message a stall nudge carries; the tail, where an
+/// agent puts its question.
+const NUDGE_TAIL: usize = 4000;
+
+/// Wakes the bot a stalled task belongs to, once per stall, as the app judges
+/// it (`stalledTasks`). Sent from the task, the way its reports are, so the
+/// bot's queue view and transcript treat it as one and the reader never sees
+/// it. `problem` is what stands in the bot's way to fix through the task (a
+/// conflict, failing checks); without one the task waits on the reader, and
+/// its last message rides along, since the bot has no way to read it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn nudge_bot(session_id: String, problem: Option<String>, sink: Sink) -> Result<(), crate::Fail> {
+    let task = store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
+    let Some(chat) = bots::bot_chat_of(&task).await else { return Ok(()) };
+    if task.archived || chat.archived || chat.session_id == task.session_id {
+        return Ok(());
+    }
+    let idle = idle_since(&task.modified);
+    let prompt = match problem {
+        Some(problem) => format!("Stall nudge: this task has sat untouched for {idle}. {problem}"),
+        None => {
+            let last = store::last_reply(&session_id).await?.0.unwrap_or_else(|| "(it wrote none)".into());
+            let chars: Vec<char> = last.chars().collect();
+            let tail: String = chars[chars.len().saturating_sub(NUDGE_TAIL)..].iter().collect();
+            format!("Stall nudge: this task has sat idle for {idle}, waiting on the user. Its last message:\n\n{tail}")
+        }
+    };
+    let send = SendMessage { session_id: chat.session_id, prompt, from_session_id: Some(session_id) };
+    send_message(send, None, &sink).await?;
+    Ok(())
+}
+
+/// "45m", "2h", "3d" since an RFC3339 time; the app's `compactAge`.
+fn idle_since(at: &str) -> String {
+    let min = chrono::DateTime::parse_from_rfc3339(at)
+        .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_minutes().max(1))
+        .unwrap_or(1);
+    match min {
+        ..60 => format!("{min}m"),
+        60..1440 => format!("{}h", min / 60),
+        _ => format!("{}d", min / 1440),
+    }
 }
 
 /// Sends what a bot's child closed its turn with to the session that started it.

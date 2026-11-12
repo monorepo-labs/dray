@@ -1,3 +1,4 @@
+import { stripSenderPrefix } from "@/lib/relay";
 import { drawsFailure } from "@/lib/transcript";
 import type { AgentEvent, Harness } from "@/types/events";
 import type { JsonValue } from "@/types/serde_json/JsonValue";
@@ -334,3 +335,37 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
   }
   return items;
 }
+
+/// What a stalled task's row in the "Waiting on you" card scrolls the chat to,
+/// by item key: the bot's reply to the task's last report, everything it did
+/// before the next message came in. The report itself stays folded, since the
+/// reply already says what it held. A stall nudge is Dray's, not the task's, so
+/// it is skipped. With no reply to point at, the line that started the task.
+export function taskContext(items: readonly BotItem[], sessionId: string): Set<string> {
+  let at = items.length - 1;
+  for (; at >= 0; at--) {
+    const i = items[at];
+    if (
+      i.kind === "report" &&
+      i.sessionId === sessionId &&
+      i.event.payload.type === "user_message" &&
+      !stripSenderPrefix(i.event.payload.text, i.event.payload.from).startsWith(NUDGE)
+    ) {
+      break;
+    }
+  }
+  const keys = new Set<string>();
+  for (const item of at < 0 ? [] : items.slice(at + 1)) {
+    if (item.kind === "user" || item.kind === "report" || item.kind === "botMessage") break;
+    keys.add(itemKey(item));
+  }
+  if (keys.size > 0) return keys;
+  const started = items.find((i) => i.kind === "task" && i.sessionId === sessionId);
+  return new Set(started ? [itemKey(started)] : []);
+}
+
+/// An item's React key, as the chat draws it.
+export const itemKey = (item: BotItem): string => ("key" in item ? item.key : item.event.id);
+
+/// How `nudge_bot` opens every nudge it sends.
+const NUDGE = "Stall nudge:";

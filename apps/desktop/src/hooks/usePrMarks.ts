@@ -25,6 +25,12 @@ const FRESH_MS = 120_000;
 /// minute late costs nothing, where a merge button showing stale checks does.
 const OPEN_POLL_MS = 30_000;
 
+/// The background poll's gap, for repos whose marks drive something off
+/// screen: a bot's stalled tasks, judged every minute against a 15-minute
+/// stall. Slow, since every `gh` here spends the same hourly budget as the
+/// agents' own.
+const BACKGROUND_POLL_MS = 5 * 60_000;
+
 /// How long to wait before the single retry a failed post-write read gets — see
 /// `refreshAfterWrite`. Long enough for a `gh` blip or a rate-limit pause to
 /// pass, short enough that the reader has not moved on.
@@ -102,7 +108,12 @@ function marksByBranch(prs: PrMark[]): Map<string, PrMark> {
 /// report and nothing for the reader to do. It also changes nothing: a read
 /// that fails leaves the entry exactly as it was, neither blanking the repo nor
 /// claiming its old answer is current. See the catch in `load`.
-export function usePrMarks(repoPaths: string[]) {
+export function usePrMarks(
+  repoPaths: string[],
+  /// Of `repoPaths`, the ones still read while the window is in the background,
+  /// every `BACKGROUND_POLL_MS`, since what they decide is not on screen.
+  backgroundPaths: readonly string[] = [],
+) {
   // The effect depends on the *set*, not on the array identity a caller mints
   // fresh every render. The paths themselves are read off a ref rather than out
   // of this string, since a repo path can hold whatever separator we picked.
@@ -314,6 +325,15 @@ export function usePrMarks(repoPaths: string[]) {
     const id = setInterval(() => void load(true, targets), OPEN_POLL_MS);
     return () => clearInterval(id);
   }, [openKey, focused, load]);
+
+  // A bot's stalls are judged and announced while the window is away, so its
+  // tasks' repos holding an open PR keep reading then, slowly.
+  const backgroundKey = openRepos.filter((path) => backgroundPaths.includes(path)).join("\n");
+  useEffect(() => {
+    if (focused || !backgroundKey) return;
+    const id = setInterval(() => void load(true, backgroundKey.split("\n")), BACKGROUND_POLL_MS);
+    return () => clearInterval(id);
+  }, [backgroundKey, focused, load]);
 
   return {
     /// The pull request a session's row is marked with, or nothing. Takes the

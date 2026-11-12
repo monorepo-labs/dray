@@ -45,8 +45,8 @@ use std::path::PathBuf;
 /// gone where it was sent. v13 added `add_video`, which an older app reads as a
 /// broken CLI rather than as an app to update. v14 added `share_machines`, and
 /// v15 the assistant verbs, v16 `dray login` and `dray logout`, v17 the
-/// bot verbs, and v18 `merge_card`.
-pub const PROTOCOL_VERSION: u32 = 18;
+/// bot verbs, v18 `merge_card`, and v19 `set_need`.
+pub const PROTOCOL_VERSION: u32 = 19;
 
 /// Remote MCP (#863), held out of release builds until Dray accounts (#874)
 /// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
@@ -130,6 +130,7 @@ impl Request {
             | Request::RemoveBot(_)
             | Request::SendToBot(_) => 17,
             Request::MergeCard(_) => 18,
+            Request::SetNeed(_) => 19,
         }
     }
 }
@@ -174,6 +175,7 @@ pub enum Request {
     RemoveBot(BotRef),
     SendToBot(SendToBot),
     MergeCard(MergeCard),
+    SetNeed(SetNeed),
 }
 
 /// A merge card for a task's open pull request, posted into `session_id`'s
@@ -185,6 +187,15 @@ pub struct MergeCard {
     pub session_id: String,
     /// The session whose branch carries the pull request.
     pub task_session_id: String,
+}
+
+/// What a bot's stalled task needs from the reader, one line drawn in the
+/// bot's "Waiting on you" card. An empty `need` clears it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetNeed {
+    pub session_id: String,
+    pub need: String,
 }
 
 /// A new bot. Shape and hue are picked at random where absent.
@@ -1244,6 +1255,8 @@ mod tests {
         }
         let card = Request::MergeCard(Default::default());
         assert_eq!(Envelope::new(card.clone()).v, 18);
+        let need = Request::SetNeed(Default::default());
+        assert_eq!(Envelope::new(need.clone()).v, 19);
         let newest = old
             .iter()
             .chain(&drafts)
@@ -1254,7 +1267,7 @@ mod tests {
             .chain(&assistants)
             .chain(&link)
             .chain(&bots)
-            .chain([&card])
+            .chain([&card, &need])
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));
