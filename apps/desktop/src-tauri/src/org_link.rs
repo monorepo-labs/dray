@@ -97,6 +97,8 @@ struct Pending {
     deadline: Instant,
     /// Tells a poll loop it has been replaced or cancelled.
     generation: u64,
+    /// The site row whose credential this flow sent, which approving re-keys.
+    replaces: Option<String>,
 }
 
 #[derive(Default)]
@@ -265,6 +267,7 @@ pub async fn start(sink: Sink, sign_in: bool) -> Result<PendingLink, String> {
             shown: shown.clone(),
             deadline: Instant::now() + Duration::from_secs(shown.expires_in_secs),
             generation: memory.generation,
+            replaces: held.filter(|h| h.site == site).map(|h| h.server_id),
         });
         memory.generation
     };
@@ -323,10 +326,12 @@ async fn poll_once(site: &str, device_code: &str) -> Poll {
 async fn poll(sink: Sink, site: String, generation: u64, mut interval: Duration) {
     loop {
         tokio::time::sleep(interval).await;
-        let (device_code, deadline, sign_in) = {
+        let (device_code, deadline, sign_in, replaces) = {
             let memory = memory();
             match memory.pending.as_ref() {
-                Some(p) if p.generation == generation => (p.device_code.clone(), p.deadline, p.shown.sign_in),
+                Some(p) if p.generation == generation => {
+                    (p.device_code.clone(), p.deadline, p.shown.sign_in, p.replaces.clone())
+                }
                 _ => return,
             }
         };
@@ -346,11 +351,12 @@ async fn poll(sink: Sink, site: String, generation: u64, mut interval: Duration)
         let current = memory().pending.as_ref().is_some_and(|p| p.generation == generation);
         let error = match outcome {
             Poll::Linked(held, account) if !current => {
-                // Cancelled while the claim was in flight. A new row is taken
-                // back. An existing row already holds this credential in place
-                // of the old one, so revoking would delete the link it had:
-                // keep it instead.
-                if read().await.is_some() {
+                // Cancelled while the claim was in flight. Where it re-keyed
+                // the row still on disk, revoking would delete the link this
+                // machine had, so keep it. Anything else is taken back: a new
+                // row, or one a newer flow has since moved this machine off.
+                let held_now = read().await.map(|h| h.server_id);
+                if replaces.as_ref() == Some(&held.server_id) && held_now == replaces {
                     if write(Some(&held)).await.is_ok() {
                         let _ = sink.emit(CHANGED, ());
                     }
