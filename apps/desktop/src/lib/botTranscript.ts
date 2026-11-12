@@ -138,11 +138,14 @@ function shellWord(text: string): { value: string; length: number } {
   return { value: bare, length: bare.length };
 }
 
-/// A heredoc from its `<<` through its closing word, sticky so it is tried only
-/// where the scan stands.
+/// A heredoc from its `<<` through its closing word, as `$(cat <<EOF …)` puts
+/// one inside a quoted word. Sticky, so it is tried only where the scan stands.
 const HEREDOC = /<<-?[ \t]*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[ \t]*(?:\n|\)|$))/y;
 /// A `$(cat ` that may open a heredoc inside double quotes, sticky as above.
 const SUBSHELL = /\$\(\s*\w+\s+/y;
+/// A heredoc's `<<WORD` alone: its body starts at the next newline, and the
+/// rest of its own line is still commands.
+const OPENER = /<<-?[ \t]*(['"]?)(\w+)\1/y;
 
 /// The length of the match of sticky `re` at `at`, or 0.
 function stuck(re: RegExp, cmd: string, at: number): number {
@@ -162,11 +165,22 @@ function unquoted(cmd: string): string {
     out += cmd.slice(i, end).replace(/[^\n]/g, " ");
     i = end;
   };
+  /// Heredocs opened on the current line, whose bodies follow it in order.
+  const bodies: string[] = [];
   while (i < cmd.length) {
     const c = cmd[i];
-    const doc = c === "<" ? stuck(HEREDOC, cmd, i) : 0;
-    if (doc) blank(i + doc);
-    else if (c === "\\") blank(Math.min(i + 2, cmd.length));
+    OPENER.lastIndex = i;
+    const open = c === "<" ? OPENER.exec(cmd) : null;
+    if (open) {
+      bodies.push(open[2]);
+      blank(i + open[0].length);
+    } else if (c === "\n" && bodies.length > 0) {
+      out += cmd[i++];
+      for (const word of bodies.splice(0)) {
+        const close = new RegExp(`^[ \\t]*${word}[ \\t]*$\\n?`, "m").exec(cmd.slice(i));
+        blank(close ? i + close.index + close[0].length : cmd.length);
+      }
+    } else if (c === "\\") blank(Math.min(i + 2, cmd.length));
     else if (c === "'") {
       const end = cmd.indexOf("'", i + 1);
       blank(end < 0 ? cmd.length : end + 1);

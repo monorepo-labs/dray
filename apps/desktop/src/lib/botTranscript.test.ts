@@ -192,6 +192,11 @@ dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot pro
       { target: "aaaa1111", text: `then run dray session send bbbb2222 "x"` },
       { target: "cccc3333", text: "ok" },
     ]);
+    // The rest of a heredoc's opening line is still commands.
+    expect(sentMessages(`cat <<'EOF' >/tmp/brief; dray session send aaaa1111 hi\nsay dray session send bbbb2222 no\nEOF\ndray session send cccc3333 ok`)).toEqual([
+      { target: "aaaa1111", text: "hi" },
+      { target: "cccc3333", text: "ok" },
+    ]);
     // A `<<` inside quotes is text, and opens no heredoc to swallow what follows.
     expect(sentMessages(`dray send aaaa1111 "Explain <<EOF\nsyntax"; dray send bbbb2222 hi\ncat <<EOF\nbody\nEOF`)).toEqual([
       { target: "aaaa1111", text: "Explain <<EOF\nsyntax" },
