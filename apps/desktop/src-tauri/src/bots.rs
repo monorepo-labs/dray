@@ -69,12 +69,15 @@ async fn list_path() -> Result<PathBuf> {
     Ok(get_home_app_dir().await?.join("bots.json"))
 }
 
-/// Every bot on this server, oldest first. Dray Bot is made here the first
-/// time anything asks, so every user starts with one.
+/// Every bot on this server, oldest first. The app's own server makes Dray Bot
+/// the first time anything asks, so every user starts with one; a `dray-serve`
+/// makes none, or each remote added would put another in the sidebar.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_bots() -> Result<Vec<Bot>, Fail> {
-    if let Err(e) = ensure_dray_bot().await {
-        eprintln!("[dray bot] {e:#}");
+    if cfg!(feature = "desktop") {
+        if let Err(e) = ensure_dray_bot().await {
+            eprintln!("[dray bot] {e:#}");
+        }
     }
     read_list().await
 }
@@ -622,6 +625,7 @@ You are a long-lived bot the user talks to in one ongoing chat. You run in your 
 - `{MEMORY}`: what you remember across restarts. Keep facts worth knowing next time (people, preferences, decisions, where things live), not a log of work. Keep it short and remove what stops being true.
 
 Your folder is not a repository. Hand work off with `dray session new --project <repo path> \"<brief>\"` (the `dray` skill has the details); every session you start runs hidden from the sidebar. After each of its turns, its final message is sent to you automatically, so never ask one to report back with `dray session send`. Message one with `dray session send <id>` when it needs more from you. Its permission and question cards reach the user without you.
+Sessions start on this machine. `--machine <name>` starts one on another machine instead, but that one is not hidden and never reports back, so check on it with `dray session ls --machine <name>`.
 
 Settling finished sessions is your job, never the user's. Once a session's work has landed (its pull request merged) or it finished with nothing to land, run `dray session settle <id> --delete-worktree`. That deletes its worktree and branch with whatever they hold, so never settle one whose work is unmerged or unpushed and still wanted.
 

@@ -1805,6 +1805,9 @@ function BotRow({
         ? { kind: "unread" as const, mask: ROUND_CUTOUT }
         : null;
   const [hovered, setHovered] = useState(false);
+  const server = serverOfPath(bot.path);
+  const remote = server === LOCAL ? null : serverName(server);
+  const offline = offlineLine(server);
   if (compact) {
     return (
       <ContextMenu>
@@ -1820,6 +1823,7 @@ function BotRow({
               active
                 ? "bg-sidebar-accent text-sidebar-accent-foreground"
                 : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
+              offline && "opacity-50",
             )}
           >
             {/* State on the face as a dot: orange while it waits on the reader,
@@ -1858,12 +1862,18 @@ function BotRow({
               )}
             >
               {bot.name}
+              {/* A remote bot carries its server as a remote project does. */}
+              {remote && <span className="font-normal text-muted-foreground/40">-{remote}</span>}
             </span>
             {/* The trailing slot a session row keeps its time in: the digit
-                while the jump modifier is held, typing dots while it works,
-                else when. */}
+                while the jump modifier is held, the offline mark, typing dots
+                while it works, else when. */}
             {digit ? (
               <Kbd>{digit}</Kbd>
+            ) : offline ? (
+              <span className="mr-0.5 flex shrink-0" title={offline}>
+                <SignalSlashIcon className="size-3.5 text-muted-foreground" aria-label={offline} />
+              </span>
             ) : status === "in_progress" && !asking ? (
               <span className="mr-0.5 shrink-0">
                 <TypingDots small />

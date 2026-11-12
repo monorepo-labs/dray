@@ -96,6 +96,9 @@ const QUALIFIED = new Set([
   "fork_session",
   "send_msg",
   "read_file",
+  "list_bots",
+  "create_bot",
+  "start_bot",
 ]);
 
 /// Events whose payload names paths, and how to qualify it.

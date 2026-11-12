@@ -1,6 +1,6 @@
 import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
-import { isBotPath } from "@/lib/bots";
+import { botsOf, isBotPath, keepBots, refreshBots } from "@/lib/bots";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
 import { indexRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
 import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
@@ -312,6 +312,8 @@ export function useSessions() {
     // resting value and every refresh bumps it, which is what re-arms the
     // effect below without a second copy of the read beside it.
     const [modelsGeneration, setModelsGeneration] = useState(0);
+    // Bumped as each remote's bot list lands, so the cache below files it.
+    const [botsRead, setBotsRead] = useState(0);
     const [loadingModels, setLoadingModels] = useState(false);
     // Seeded once from prefs, then free to diverge: selecting a session overwrites
     // these with what that session was started with, which must not feed back.
@@ -338,11 +340,14 @@ export function useSessions() {
     // has uncommitted changes. Null when nothing is pending.
     const [pendingBranch, setPendingBranch] = useState<string | null>(null);
     const [useWorktree, setUseWorktreeState] = useState(() => prefs.useWorktree);
+    // The server New bot makes its bot on, while the dialog is open. It shares
+    // the composer's picker, so the models offered must be that server's.
+    const [botServer, setBotServer] = useState<ServerId | null>(null);
     // The server the composer talks to: the open session's, else the picked
     // project's. Models and agent availability are read from it.
     const activeServer: ServerId = selectedSessionId
       ? serverOfSession(selectedSessionId)
-      : serverOfPath(projectPath ?? "");
+      : (botServer ?? serverOfPath(projectPath ?? ""));
     // Per-session, not global: sessions run concurrently and all of their events
     // arrive on the same channel, so a single value would clear on another's
     // turn. The backend drives this via `session_status`, and this map is the
@@ -2005,6 +2010,9 @@ const readServer = (server: ServerId) => {
       if (server === LOCAL) setProjectPath((path) => path ?? lastSelected(list)?.path ?? null);
     })
     .catch(() => {});
+  void refreshBots(server).then(() => {
+    if (server !== LOCAL) setBotsRead((n) => n + 1);
+  });
 };
 
 // A server taken off the list or turned off takes its rows with it; one that
@@ -2024,6 +2032,7 @@ useEffect(() => {
     for (const [id, cache] of Object.entries(caches)) {
       // A read that already landed this run is newer.
       if (!lastProjects.has(id) && cache.projects) lastProjects.set(id, cache.projects);
+      if (cache.bots) keepBots(id, cache.bots);
       for (const [side, items] of [[false, cache.sessions], [true, cache.archived]] as const) {
         if (!items || lastIndex.has(`${id}:${side}`)) continue;
         // Routes a click on a kept row to its server, as a read would have.
@@ -2063,11 +2072,12 @@ useEffect(() => {
         sessions: lastIndex.get(`${id}:false`),
         archived: lastIndex.get(`${id}:true`),
         projects: lastProjects.get(id),
+        bots: botsOf(id),
       });
     }
   }, 1000);
   return () => clearTimeout(timer);
-}, [sessionIndexItems, projects, indexSide])
+}, [sessionIndexItems, projects, indexSide, botsRead])
 
 // Refetched per project rather than cached: branches change outside the app.
 // The guard matters because switching projects quickly would otherwise let a
@@ -3374,6 +3384,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer, botServer, setBotServer};
 
 }
