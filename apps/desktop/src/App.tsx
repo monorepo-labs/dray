@@ -1096,8 +1096,8 @@ function App() {
   // session, not the space's: a bot hands work to whichever project it likes,
   // in any space.
   const crew = useMemo(
-    () => crewRows(sessionIndexItems, selectedSessionId, { statusBySession, askingSessions }, earlierIds),
-    [sessionIndexItems, selectedSessionId, statusBySession, askingSessions, earlierIds],
+    () => crewRows(sessionIndexItems, selectedSessionId, { statusBySession, askingSessions, tasksBySession }, earlierIds),
+    [sessionIndexItems, selectedSessionId, statusBySession, askingSessions, tasksBySession, earlierIds],
   );
   const crewAsks = useMemo(() => crew.filter((r) => r.asking), [crew]);
   // A split has no crew column: it is already several conversations side by
