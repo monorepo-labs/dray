@@ -97,8 +97,10 @@ describe("botItems", () => {
     } as unknown as AgentEventPayload);
     const items = botItems([
       incoming,
-      call("a", `dray bot send Ops "thanks, on it"`),
-      result("a", `${ID}\nDelivered to "Ops".`),
+      // A bot made in the same command prints an id too, and is not the one
+      // the message went to.
+      call("a", `dray bot new Scout && dray bot send Ops "thanks, on it"`),
+      result("a", `01a1cf3a-0000-7000-8000-000000000000\nMade "Scout".\nSent to bot "Ops" (${ID}).`),
       call("b", `dray session send ${ID} "one"`),
       result("b", "sent"),
     ]);

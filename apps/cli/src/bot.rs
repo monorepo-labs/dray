@@ -107,14 +107,14 @@ pub fn run(command: BotCommand) -> Result<(), String> {
             });
             match send(request)? {
                 Response::BotSent { bot, queued } => {
-                    // The id alone on stdout: the chat reads it back to name the
-                    // bot, which a name typed here stops doing once renamed.
-                    println!("{}", bot.id);
-                    eprintln!(
-                        "{} \"{}\".",
-                        if queued { "Queued — mid-turn, it will pick it up:" } else { "Delivered to" },
-                        bot.name
-                    );
+                    // The app's chat reads this line back for the id, which
+                    // still names the bot once the name typed here no longer
+                    // does: keep the shape in step with `botTranscript.ts`.
+                    let verb = if queued { "Queued for" } else { "Sent to" };
+                    println!("{verb} bot \"{}\" ({}).", bot.name, bot.id);
+                    if queued {
+                        eprintln!("It is mid-turn and will pick it up.");
+                    }
                     Ok(())
                 }
                 Response::Error { message } => Err(message),

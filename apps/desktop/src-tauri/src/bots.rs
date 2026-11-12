@@ -374,6 +374,11 @@ fn replay(events: &[crate::events::AgentEvent]) -> Vec<String> {
 /// bot is told its job in its first message and writes it down itself.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_bot(name: String, avatar: Option<BotAvatar>) -> Result<Bot, Fail> {
+    // Dray Bot first, so a new bot taking its name is refused here rather
+    // than Dray Bot being made beside it on the next read.
+    if let Err(e) = ensure_dray_bot().await {
+        eprintln!("[dray bot] {e:#}");
+    }
     let _guard = BOTS_LOCK.lock().await;
     name_free(&read_list().await?, &name, None)?;
     make_bot(name, avatar, None).await
@@ -460,6 +465,9 @@ pub async fn rename_bot(key: &str, name: &str, sink: &Sink) -> Result<Bot> {
     }
     Ok(bot)
 }
+
+/// Held by `dray bot send` from finding a bot has no chat until it has one.
+pub static FIRST_CHAT: Mutex<()> = Mutex::const_new(());
 
 /// The session a message to `bot` lands in: its chat's newest.
 pub async fn chat_of(bot: &Bot) -> Option<SessionIndexItem> {

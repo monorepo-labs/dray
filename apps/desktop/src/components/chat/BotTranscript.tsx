@@ -89,7 +89,7 @@ export default function BotTranscript({
             ) : item.kind === "botSent" ? (
               <BotLine
                 verb="Messaged"
-                bot={bots.find((b) => b.id === item.botId) ?? botNamed(bots, item.bot)}
+                bot={item.botId ? bots.find((b) => b.id === item.botId) : botNamed(bots, item.bot)}
                 fallback={{ id: item.bot, title: item.bot }}
                 onOpenBot={onOpenBot}
               />

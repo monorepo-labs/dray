@@ -1804,7 +1804,11 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
     if from.as_ref().is_some_and(|f| f.bot_id.as_deref() == Some(&bot.id)) {
         bail!("a bot cannot message itself");
     }
+    // Held from the lookup until a new chat is on the index, or two first
+    // messages would each start an agent in the one folder.
+    let first = bots::FIRST_CHAT.lock().await;
     if let Some(chat) = bots::chat_of(&bot).await {
+        drop(first);
         let send = SendMessage { session_id: chat.session_id, prompt: send.prompt, from_session_id: send.from_session_id };
         let queued = matches!(send_message(send, None, app).await?, Response::Sent { queued: true });
         return Ok(Response::BotSent { bot: bots::summary(bot).await, queued });
@@ -1814,11 +1818,15 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
         Some(id) => store::get_session_index_item(id).await?,
         None => None,
     };
-    let like = bots::last_session_of(&bot).await.or(calling);
+    let own = bots::last_session_of(&bot).await;
+    let like = own.clone().or(calling);
     let harness = like.as_ref().map_or(Harness::ClaudeCode, |l| l.harness);
     let model = resolve_model(None, like.as_ref(), harness).await?;
     let effort = resolve_effort(None, like.as_ref(), harness)?;
-    let permission_mode = like.as_ref().map_or_else(ApprovalPolicy::default, |l| l.permission_mode);
+    // The bot's own stance, never the sender's: a bot chat runs on Auto and
+    // its toolbar has no picker, so a Plan or bypass sender would leave it
+    // on a stance nobody could see.
+    let permission_mode = own.map_or(ApprovalPolicy::Auto, |o| o.permission_mode);
     let fast = resolve_fast(None, like.as_ref(), harness);
     let prompt = attribute(&send.prompt, from.as_ref());
     let session_id = uuid::Uuid::now_v7().to_string();

@@ -76,6 +76,8 @@ export function chatTime(iso: string, now = new Date()): string {
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const STARTS_SESSION = /\bdray\s+(session\s+new|new)\b/;
 const SENDS = /\bdray\s+(?:(session|bot)\s+)?send\b/g;
+/// What `dray bot send` prints, in `apps/cli/src/bot.rs`.
+const BOT_SENT = new RegExp(`^(?:Sent to|Queued for) bot ".*" \\((${UUID.source})\\)\\.$`, "gim");
 
 /// The first shell word of `text` and its length: quoted, which a bot's name
 /// with a space needs, or bare.
@@ -223,10 +225,10 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       const sent = cmd ? sentMessages(cmd) : [];
       if (sent.length > 0) sends.set(p.callId, sent);
     } else if (p.type === "tool_call_completed" && sends.has(p.callId) && !p.result.isError) {
-      // `dray bot send` prints the id of the bot it reached, one per send in
-      // order, which still names the bot after a rename; a send to a session
-      // prints none.
-      const ids = [...p.result.text.matchAll(new RegExp(UUID, "gi"))].map((m) => m[0]);
+      // `dray bot send` names the bot it reached on a line of its own, one per
+      // send in order; its id still names the bot after a rename. Matched on
+      // that line alone, since anything else in the command may print ids.
+      const ids = [...p.result.text.matchAll(BOT_SENT)].map((m) => m[1]);
       sends.get(p.callId)!.forEach(({ bot, target, text }, i) => {
         const key = `${p.callId}:${i}`;
         items.push(
