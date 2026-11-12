@@ -4,6 +4,7 @@ import BotAvatar from "@/components/BotAvatar";
 import EventRow from "@/components/chat/EventRow";
 import UserMessage from "@/components/chat/UserMessage";
 import { OrbLine } from "@/components/chat/WorkingIndicator";
+import { useStreamingKind } from "@/hooks/useStreamingBlock";
 import { seededAvatar } from "@/lib/botAvatar";
 import { botNamed, useBots } from "@/lib/bots";
 import { botRows, chatItems, chatTime, firstUnread, itemTime, startsTimeRun, type BotSegment, type TalkItem } from "@/lib/botTranscript";
@@ -39,7 +40,7 @@ export default function BotTranscript({
   /// Every session of the chat, oldest first; the last is the one running.
   segments: readonly BotSegment[];
   busy: boolean;
-  /// The reply streaming in, which takes the live line's place.
+  /// The open streaming block. Drawn only while it is reply text.
   preview?: ReactNode;
   taskOf?: (sessionId: string) => BotTask | undefined;
   /// `alone`: a ⌘-click, which switches to a task rather than opening its tab.
@@ -55,6 +56,9 @@ export default function BotTranscript({
   const rows = useMemo(() => botRows(items.filter((i) => i.kind !== "report")), [items]);
   const [newFrom] = useState(() => (unread ? firstUnread(items) : null));
   const doing = useMemo(() => (busy && events ? currentTool(events) : null), [busy, events]);
+  // Only reply text becomes a bubble. A tool call or a thought the model is
+  // still composing would read as a message; the orb line covers them.
+  const replying = useStreamingKind(segments.at(-1)?.sessionId ?? null) === "text";
 
   return (
     <>
@@ -115,7 +119,7 @@ export default function BotTranscript({
         );
       })}
       {busy &&
-        (preview ? (
+        (preview && replying ? (
           <BotBubble tight={rows[rows.length - 1]?.kind === "assistant"}>{preview}</BotBubble>
         ) : (
           <OrbLine state="working" label={doing ?? "Working"} />

@@ -889,7 +889,7 @@ export default function Chat({
 ///
 /// Told apart by the type `block_start` declared, not by content — thinking
 /// deltas are plain text on the wire. Only one block streams at a time.
-function StreamingPreview({ sessionId }: { sessionId: string }) {
+export function StreamingPreview({ sessionId }: { sessionId: string }) {
   const block = useStreamingBlock(sessionId);
   if (!block) return null;
 
