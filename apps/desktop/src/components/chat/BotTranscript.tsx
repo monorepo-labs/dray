@@ -5,12 +5,13 @@ import EventRow from "@/components/chat/EventRow";
 import UserMessage from "@/components/chat/UserMessage";
 import { OrbLine } from "@/components/chat/WorkingIndicator";
 import { seededAvatar } from "@/lib/botAvatar";
+import { botNamed, useBots } from "@/lib/bots";
 import { botRows, chatItems, chatTime, firstUnread, itemTime, startsTimeRun, type BotSegment, type TalkItem } from "@/lib/botTranscript";
 import { AGENT_LABELS } from "@/lib/model";
 import { stripSenderPrefix } from "@/lib/relay";
 import { toolArgument, toolLabel } from "@/lib/tools";
 import { cn } from "@/lib/utils";
-import type { AgentEvent, Harness, ToolResult } from "@/types/events";
+import type { AgentEvent, Bot, BotAvatar as Avatar, Harness, ToolResult } from "@/types/events";
 
 /// A task a bot started, as its card names it.
 /// A task as its chat draws it. `sessionId` is the full id, since the bot may
@@ -29,6 +30,7 @@ export default function BotTranscript({
   unread,
   taskOf,
   onOpenSession,
+  onOpenBot,
 }: {
   /// The chat had unread replies when opened. Read once: opening it clears
   /// the state, and the divider has to stay where it was.
@@ -40,7 +42,9 @@ export default function BotTranscript({
   preview?: ReactNode;
   taskOf?: (sessionId: string) => BotTask | undefined;
   onOpenSession: (sessionId: string) => void;
+  onOpenBot?: (bot: Bot) => void;
 }) {
+  const bots = useBots();
   const items = useMemo(() => chatItems(segments), [segments]);
   const events = segments.at(-1)?.events;
   // "From" rows, a task's messages to the bot, are hidden for now: the bot's
@@ -63,11 +67,37 @@ export default function BotTranscript({
             {time}
             {item.kind === "switch" ? (
               <SwitchLine harness={item.harness} />
+            ) : item.kind === "botMessage" ? (
+              <>
+                <BotLine
+                  verb="Message from"
+                  incoming
+                  bot={bots.find((b) => b.id === item.botId)}
+                  fallback={{ id: item.botId, title: item.title }}
+                  onOpenBot={onOpenBot}
+                />
+                {item.event.payload.type === "user_message" && (
+                  <UserMessage
+                    eventId={item.event.id}
+                    text={stripSenderPrefix(item.event.payload.text, item.event.payload.from)}
+                    images={item.event.payload.images}
+                    issues={item.event.payload.issues}
+                    onOpenSession={onOpenSession}
+                  />
+                )}
+              </>
+            ) : item.kind === "botSent" ? (
+              <BotLine
+                verb="Messaged"
+                bot={bots.find((b) => b.id === item.botId) ?? botNamed(bots, item.bot)}
+                fallback={{ id: item.bot, title: item.bot }}
+                onOpenBot={onOpenBot}
+              />
             ) : item.kind === "talk" ? (
               <TalkLine items={item.items} taskOf={taskOf} onOpenSession={onOpenSession} />
             ) : item.kind === "task" ? (
               <StartedLine
-                party={{ sessionId: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? "Task" }}
+                party={{ id: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? "Task" }}
                 onOpen={() => onOpenSession(item.sessionId)}
               />
             ) : item.kind === "assistant" ? (
@@ -92,16 +122,17 @@ export default function BotTranscript({
   );
 }
 
-type Party = { sessionId: string; title: string };
+/// Who a line names: a task, by its session id, or a bot, with its own face.
+type Party = { id: string; title: string; avatar?: Avatar | null };
 
 /// The task a message went to or came from. A send may name its task by an id
 /// prefix, which `taskOf` resolves.
 function partyOf(item: TalkItem, taskOf: TaskOf | undefined): Party {
   if (item.kind === "report") {
-    return { sessionId: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? item.title };
+    return { id: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? item.title };
   }
   const task = taskOf?.(item.target);
-  return { sessionId: task?.sessionId ?? item.target, title: task?.title ?? "a task" };
+  return { id: task?.sessionId ?? item.target, title: task?.title ?? "a task" };
 }
 
 /// A run of messages between the bot and its tasks, folded to one line naming
@@ -123,7 +154,7 @@ function TalkLine({
   onOpenSession: (sessionId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const parties = [...new Map(items.map((i) => partyOf(i, taskOf)).map((p) => [p.sessionId, p])).values()];
+  const parties = [...new Map(items.map((i) => partyOf(i, taskOf)).map((p) => [p.id, p])).values()];
   const from = items.filter((i) => i.kind === "report").length;
   const verb = from === 0 ? "Messaged" : from < items.length ? `${items.length} messages with` : "From";
   const side = from > 0 ? "self-end" : "self-start";
@@ -136,7 +167,7 @@ function TalkLine({
             is in its own chat. Several open to their rows, and a task's own
             message opens to its text. */}
         {from === 0 && parties.length === 1 ? (
-          <PartyChip parties={parties} onClick={() => onOpenSession(parties[0].sessionId)} />
+          <PartyChip parties={parties} onClick={() => onOpenSession(parties[0].id)} />
         ) : (
           <PartyChip parties={parties} expanded={open} onClick={() => setOpen((o) => !o)} />
         )}
@@ -210,12 +241,12 @@ function PartyChip({
       aria-expanded={expanded}
       onClick={onClick}
       className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded-full py-0.5 pr-1.5 pl-1 transition-colors hover:bg-(--party-wash) hover:text-(--party-ink)"
-      style={single ? partyColours(single.sessionId) : NEUTRAL}
+      style={single ? partyColours(single) : NEUTRAL}
     >
       <span className="flex shrink-0 -space-x-2">
         {parties.slice(0, 3).map((p) => (
-          <span key={p.sessionId} className="size-5">
-            <BotAvatar seed={p.sessionId} avatar={seededAvatar(p.sessionId)} className="block size-5 scale-[1.18]" />
+          <span key={p.id} className="size-5">
+            <BotAvatar seed={p.id} avatar={p.avatar ?? seededAvatar(p.id)} className="block size-5 scale-[1.18]" />
           </span>
         ))}
       </span>
@@ -226,9 +257,9 @@ function PartyChip({
 
 const NEUTRAL = { "--party-wash": "var(--muted)", "--party-ink": "var(--foreground)" } as CSSProperties;
 
-/// A task's name, on hover, in a pill of its own face's colour.
-function partyColours(sessionId: string): CSSProperties {
-  const { hue } = seededAvatar(sessionId);
+/// A party's name, on hover, in a pill of its own face's colour.
+function partyColours(party: Party): CSSProperties {
+  const { hue } = party.avatar ?? seededAvatar(party.id);
   return {
     "--party-wash": `oklch(0.7 0.12 ${hue} / 0.16)`,
     "--party-ink": `oklch(0.78 0.12 ${hue})`,
@@ -294,6 +325,38 @@ function StartedLine({ party, onOpen }: { party: Party; onOpen: () => void }) {
     <div className="flex max-w-full items-center gap-0.5 self-start text-ui text-muted-foreground">
       <span className="shrink-0">Started a new task</span>
       <PartyChip parties={[party]} onClick={onOpen} />
+    </div>
+  );
+}
+
+/// A message between this bot and another: "Message from" on the side a
+/// relayed message lands, "Messaged" on the bot's own. The name opens the
+/// other bot's chat; one since deleted or renamed draws the name it was sent
+/// under, with nothing to open.
+function BotLine({
+  verb,
+  incoming = false,
+  bot,
+  fallback,
+  onOpenBot,
+}: {
+  verb: string;
+  incoming?: boolean;
+  bot: Bot | undefined;
+  fallback: Party;
+  onOpenBot?: (bot: Bot) => void;
+}) {
+  // Seeded off the bot's id, as the sidebar's face is.
+  const party = bot ? { id: bot.id, title: bot.name, avatar: bot.avatar ?? seededAvatar(bot.id) } : fallback;
+  return (
+    <div
+      className={cn(
+        "flex max-w-full items-center gap-0.5 text-ui text-muted-foreground",
+        incoming ? "self-end" : "self-start",
+      )}
+    >
+      <span className="shrink-0">{verb}</span>
+      <PartyChip parties={[party]} onClick={() => bot && onOpenBot?.(bot)} />
     </div>
   );
 }

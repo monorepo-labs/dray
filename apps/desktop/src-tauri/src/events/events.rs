@@ -740,6 +740,11 @@ pub struct MessageSender {
     /// the forwarding app, so it names the machine it came from.
     #[serde(default)]
     pub machine: Option<String>,
+    /// The bot whose chat sent it, where one did. `title` is then the bot's
+    /// name, and the chat draws the bot's own face.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub bot_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

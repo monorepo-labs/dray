@@ -313,6 +313,31 @@ starts in the project checkout, and the line `start` prints says so.
 
 Start or remove only drafts the user named. The list is theirs.
 
+## Bots
+
+```bash
+dray bot new "Ops" --shape sun --colour teal   # prints the bot id; shape and colour optional
+dray bot ls                                    # id, chat session id, name; --json
+dray bot send "Ops" "<message>"                # by name or id
+dray bot rename "Ops" "Release Ops"
+dray bot rm "Ops"                              # settles its chat, deletes its folder
+```
+
+A bot is one long-lived chat with instructions and memory of its own, listed
+at the top of the user's sidebar. A bot is named by its name, in any case, or
+by its id; two bots cannot share a name.
+
+`dray bot send` lands in the bot's chat, signed as you, and starts its turn
+(or queues behind the one running). A bot nobody has written to yet starts its
+chat with your message. **Nothing comes back on its own**: the bot answers
+only if it chooses to, with `dray bot send` of its own, and its answer arrives
+in your chat as a new message. Say so when you want one.
+
+Shapes: round, organic, boxy, capsule, nub, cloud, hexagon, sun, triangle.
+Colours: red, orange, amber, green, teal, blue, purple, pink, or a hue in
+degrees. Make, rename or delete a bot only when the user asks: the list is
+theirs, and `rm` deletes the bot's instructions and memory with it.
+
 ## Driving the browser
 
 Every session has its own browser, drawn in the app beside the chat. `dray

@@ -80,6 +80,34 @@ describe("botItems", () => {
     ]);
   });
 
+  it("reads a send to a bot, its name quoted or bare", () => {
+    expect(sentMessages(`dray bot send "Release Ops" "ship it" && dray bot send Research 'look'`)).toEqual([
+      { target: "Release Ops", text: "ship it", bot: true },
+      { target: "Research", text: "look", bot: true },
+    ]);
+    expect(sentMessages("dray bot send Ops")).toEqual([]);
+    expect(sentMessages("dray bot ls")).toEqual([]);
+  });
+
+  it("draws messages to and from other bots, and never folds them", () => {
+    const incoming = ev({
+      type: "user_message", text: "[message from the Dray bot \"Ops\" (s1)]\n\nhi", images: [], issues: [],
+      baseline: null, queued: false, from: { sessionId: "s1", title: "Ops", machine: null, botId: "b1" },
+      cwd: null, kickoff: false,
+    } as unknown as AgentEventPayload);
+    const items = botItems([
+      incoming,
+      call("a", `dray bot send Ops "thanks, on it"`),
+      result("a", `${ID}\nDelivered to "Ops".`),
+      call("b", `dray session send ${ID} "one"`),
+      result("b", "sent"),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["botMessage", "botSent", "sent"]);
+    expect(items[0]).toMatchObject({ botId: "b1", title: "Ops" });
+    expect(items[1]).toMatchObject({ bot: "Ops", botId: ID, text: "thanks, on it" });
+    expect(botRows(items).map((r) => r.kind)).toEqual(["botMessage", "botSent", "talk"]);
+  });
+
   it("folds a run of messages with tasks into one row, broken by anything else", () => {
     const items = botItems([
       call("a", `dray session send ${ID} "one"`),

@@ -181,7 +181,7 @@ import { changeRange, lastToolResult } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { botAt, botChat, botEntries, inBotTree, refreshBots, useBots } from "@/lib/bots";
+import { botAt, botChat, botEntries, inBotTree, listenForBots, refreshBots, useBots } from "@/lib/bots";
 import { loadOlder } from "@/lib/olderPages";
 import NewBotDialog from "@/components/NewBotDialog";
 import AgentIcon from "@/components/AgentIcon";
@@ -1143,7 +1143,10 @@ function App() {
   // the sidebar, since ⌘F has to open it from a collapsed one, which is not
   // mounted at all.
   const [searchOpen, setSearchOpen] = useState(false);
-  useEffect(() => void refreshBots(), []);
+  useEffect(() => {
+    void refreshBots();
+    return listenForBots();
+  }, []);
   const searchedSessions = useMemo(
     () => filterSessions(inSidebar(visibleSessions, bots), search),
     [visibleSessions, bots, search],
@@ -3452,6 +3455,7 @@ function App() {
             bot={!!selectedBot}
             earlier={earlier}
             taskOf={taskOf}
+            onOpenBot={openBot}
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
             crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
             // Its own chords only while the chat tab is on screen.

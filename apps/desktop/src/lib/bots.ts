@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-import { invoke } from "@/lib/transport";
+import { invoke, listen } from "@/lib/transport";
 import type { Bot, BotPreview, SessionIndexItem } from "@/types/events";
 
 /// The bots on this Mac's server, held once for the app. Settings writes and
@@ -27,6 +27,22 @@ export function useBots(): Bot[] {
     },
     () => bots,
   );
+}
+
+/// Keeps the list current while `dray bot` changes it from outside the app.
+export function listenForBots(): () => void {
+  const un = listen("bots_changed", () => void refreshBots());
+  return () => void un.then((off) => off());
+}
+
+/// The bot `key` names, the way `dray bot send` reads it: its id, else its
+/// name in any case, where only one bot has it.
+export function botNamed(list: readonly Bot[], key: string): Bot | undefined {
+  const byId = list.find((b) => b.id === key);
+  if (byId) return byId;
+  const name = key.trim().toLowerCase();
+  const matches = list.filter((b) => b.name.trim().toLowerCase() === name);
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 const trimmed = (path: string) => path.replace(/\/+$/, "");

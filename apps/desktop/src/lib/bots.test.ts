@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botAt, botChat, botSession, inBotTree, previewLine } from "@/lib/bots";
+import { botAt, botChat, botNamed, botSession, inBotTree, previewLine } from "@/lib/bots";
 import type { Bot, SessionIndexItem } from "@/types/events";
 
 const bot: Bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
@@ -13,6 +13,21 @@ const item = (sessionId: string, extra: Partial<SessionIndexItem> = {}) =>
     created: "2026-11-01T00:00:00Z",
     ...extra,
   }) as SessionIndexItem;
+
+describe("botNamed", () => {
+  const twin = (id: string, name: string): Bot => ({ ...bot, id, name });
+  const list = [bot, twin("r", "Research"), twin("t1", "Twin"), twin("t2", "twin")];
+
+  it("finds a bot by id or by its name in any case, as `dray bot send` does", () => {
+    expect(botNamed(list, "ops")).toBe(bot);
+    expect(botNamed(list, "r")?.name).toBe("Research");
+    expect(botNamed(list, "nobody")).toBeUndefined();
+  });
+
+  it("names no bot where two share the name", () => {
+    expect(botNamed(list, "Twin")).toBeUndefined();
+  });
+});
 
 describe("botAt", () => {
   it("matches the bot's folder with or without a trailing slash", () => {

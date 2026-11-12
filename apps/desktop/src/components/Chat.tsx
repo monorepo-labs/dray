@@ -30,7 +30,7 @@ import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
 import { loadOlder } from "@/lib/olderPages";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
-import type { SessionSnapshot } from "@/types/events";
+import type { Bot, SessionSnapshot } from "@/types/events";
 
 type ChatProps = {
   session: SessionSnapshot | null;
@@ -98,6 +98,8 @@ type ChatProps = {
   earlier?: SessionSnapshot[];
   /// Names a task the bot started, for its card.
   taskOf?: (sessionId: string) => BotTask | undefined;
+  /// Opens another bot's chat, from a message between it and this one.
+  onOpenBot?: (bot: Bot) => void;
   /// The session had unread replies, for a bot chat's NEW divider.
   unread?: boolean;
 };
@@ -205,6 +207,7 @@ export default function Chat({
   bot = false,
   earlier = NO_EARLIER,
   taskOf,
+  onOpenBot,
   unread = false,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -723,6 +726,7 @@ export default function Chat({
                 preview={previewShown ? <StreamingPreview sessionId={session.sessionId} /> : undefined}
                 taskOf={taskOf}
                 onOpenSession={openSession}
+                onOpenBot={onOpenBot}
               />
             ) : shownTurns.map((turn, i) => (
               // The wrapper is what the rail measures and scrolls to. It carries
