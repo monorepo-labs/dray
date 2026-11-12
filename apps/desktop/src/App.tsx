@@ -1348,7 +1348,8 @@ function App() {
     ],
     [archivedShown, visibleSessions, crew, cardRepoKey, botRepoKey],
   );
-  const prMarks = usePrMarks(repoPaths);
+  const botRepos = useMemo(() => (botRepoKey ? botRepoKey.split("\n") : []), [botRepoKey]);
+  const prMarks = usePrMarks(repoPaths, botRepos);
 
   // "This can land now" — raised off the sidebar's marks rather than the
   // panel's own read, which is the only way it can be noticed at all: the
