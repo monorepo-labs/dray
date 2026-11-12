@@ -19,6 +19,37 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.1 · 2026-11-13 · notify
+
+### New
+
+- **Bots on any server.** Make a bot on a remote server and its tasks run
+  there too.
+- **Merge from the chat.** A bot's chat shows a card for each task's PR,
+  with Merge when it's ready and Fix conflicts when it isn't.
+- **Stalled tasks.** A task that sits idle for 15 minutes shows in its
+  bot's chat with what it needs from you.
+- **Squats break card.** Settings → Breaks picks which cards a break
+  shows, and I'm back waits 30 seconds.
+- In a bot's chat, @ lists other bots.
+
+### Improved
+
+- Bot rows in the sidebar read like an inbox, with an unread count.
+- The Tasks tab shows each task's PR state and groups tasks by status.
+- Each task gets its own browser, and a recording locks only its tab.
+- Bots keep replies short and stick to what you asked.
+- Hidden tasks no longer raise Done and ready-to-merge alerts.
+- A row with a background task still running no longer reads as done.
+- The Island draws bots with their face.
+
+### Fixed
+
+- The chat stays pinned to the bottom after scrolling an image or menu.
+- The browser's recording timer survives a tab switch.
+- A task's brief that quotes `dray session send` no longer draws a
+  message that was never sent.
+
 ## 0.30.0 · 2026-11-12 · notify
 
 ### New
