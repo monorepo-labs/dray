@@ -182,7 +182,7 @@ function PullUp() {
     <Scene>
       {/* Drawn larger than the box and scaled in, so the chin over the bar and the hang both fit. */}
       <g transform="translate(12 4.85) scale(0.85)" strokeWidth={4.1}>
-        <path d={`M34 ${bar} L126 ${bar} M40 -10 L40 ${bar} M120 -10 L120 ${bar}`} strokeWidth={4.6} />
+        <path d={`M34 ${bar} L126 ${bar} M40 0 L40 ${bar} M120 0 L120 ${bar}`} strokeWidth={4.6} />
         <Figure
           pose={{
             hip: [80, lerp(bar + 28.5, bar + 1, up) + SHOULDER],
@@ -256,8 +256,9 @@ function SideBend() {
   const draw = (arm: Arm) => line(arm.map(([x, y]) => [shoulder[0] + x, shoulder[1] + y]));
   return (
     <Scene>
-      {/* Every other bend is the first one mirrored; at the hand-over both drawings are the same. */}
-      <g transform={Math.floor(t / 3) % 2 ? "matrix(-1 0 0 1 160 0)" : undefined}>
+      {/* Every other bend is the first one mirrored; at the hand-over both drawings are the same.
+          Scaled to 0.9 about the feet, stroke kept, or the arm over the head leaves the box. */}
+      <g transform={`${Math.floor(t / 3) % 2 ? "matrix(-1 0 0 1 160 0) " : ""}translate(8 10.1) scale(0.9)`} strokeWidth={3.9}>
         <Head c={at(neck, bend, 10)} look={-0.6 * w} />
         <path
           d={[
@@ -365,6 +366,6 @@ export const BREAK_CARDS: { name: string; text: string; Scene: () => ReactNode }
   { name: "Pull-ups", text: "Your agents can wait. Your spine can't.", Scene: PullUp },
   { name: "Side bend", text: "Stretch, you gorgeous workaholic.", Scene: SideBend },
   { name: "Walk", text: "Legs exist. Go use them.", Scene: Strut },
-  { name: "Squats", text: "Micro-dose squats. Ten an hour, no prescription.", Scene: Squat },
+  { name: "Squats", text: "Micro-dose ten squats. No prescription.", Scene: Squat },
   { name: "Push-ups", text: "Give me ten push\u2011ups. Right now.", Scene: PushUp },
 ];

@@ -157,12 +157,18 @@ function BackButton({ onClick }: { onClick: () => void }) {
 const FACE =
   "overflow-hidden bg-(--break-card,var(--surface-card)) bg-[repeating-linear-gradient(90deg,var(--break-stripe,#00000012)_0_2px,transparent_2px_6px)] text-left text-(--break-ink,var(--foreground))";
 
-/// A card shrunk for Settings' picker: flat, and its drawing held still.
+/// A card shrunk for Settings' picker: flat, its drawing held still until the
+/// pointer is over it.
 export function BreakTile({ text, Scene }: { text: string; Scene: () => ReactNode }) {
+  const [playing, setPlaying] = useState(false);
   return (
-    <div className={`${FACE} h-full rounded-lg shadow-[0_0_0_1px_#0000000F]`}>
+    <div
+      className={`${FACE} h-full rounded-lg shadow-[0_0_0_1px_#0000000F]`}
+      onPointerEnter={() => setPlaying(true)}
+      onPointerLeave={() => setPlaying(false)}
+    >
       <div className="flex h-20 items-end justify-center pt-2 [&_svg]:h-18">
-        <StillScenes.Provider value>
+        <StillScenes.Provider value={!playing}>
           <Scene />
         </StillScenes.Provider>
       </div>
