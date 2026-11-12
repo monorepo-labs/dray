@@ -1,4 +1,5 @@
 import { botAt } from "@/lib/bots";
+import type { NoticeKind } from "@/hooks/useNotices";
 import type { Bot, SessionIndexItem, SessionStatus } from "@/types/events";
 
 /// One session the selected one started, and what it is doing.
@@ -139,6 +140,17 @@ export function withHiddenAsks(
     }
   }
   return out;
+}
+
+/// Whether a session's news of this kind is left to the session that started
+/// it. A hidden one is a bot's task or a reviewer, and its parent already
+/// reports on it, so its finishing and its PR turning ready raise nothing here.
+/// A card is the exception: only the reader can answer it.
+export function leftToParent(
+  item: Pick<SessionIndexItem, "hidden"> | undefined,
+  kind: NoticeKind | undefined,
+): boolean {
+  return !!item?.hidden && (kind === "completed" || kind === "pr");
 }
 
 /// The hidden sessions `parentId` started directly. Settle, delete and worktree

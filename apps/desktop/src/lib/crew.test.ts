@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { crewRows, crewSeen, hiddenChildren, inSidebar, withHiddenAsks } from "@/lib/crew";
+import { crewRows, crewSeen, hiddenChildren, inSidebar, leftToParent, withHiddenAsks } from "@/lib/crew";
 import type { SessionIndexItem, SessionStatus } from "@/types/events";
 
 const item = (
@@ -186,5 +186,17 @@ describe("hidden sessions", () => {
 
   it("names only the hidden children for a cascade", () => {
     expect(hiddenChildren(items, "a").map((i) => i.sessionId)).toEqual(["review"]);
+  });
+});
+
+describe("leftToParent", () => {
+  it("quiets a hidden session's done and ready-to-merge, never its cards", () => {
+    const hidden = item("h", "p", { hidden: true });
+    expect(leftToParent(hidden, "completed")).toBe(true);
+    expect(leftToParent(hidden, "pr")).toBe(true);
+    expect(leftToParent(hidden, "asking")).toBe(false);
+    expect(leftToParent(hidden, undefined)).toBe(false);
+    expect(leftToParent(item("v", "p"), "completed")).toBe(false);
+    expect(leftToParent(undefined, "completed")).toBe(false);
   });
 });
