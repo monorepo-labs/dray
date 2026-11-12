@@ -575,10 +575,11 @@
   /* Keycaps and inline code ride on cards, so this stays a step above them. */
   --muted: oklch(0.36 0 0);
 
-  /* Filled blue as in light mode, a step deeper so white prose holds on it
-     against a near-black page. The tag colours are the light block's, for its
-     reason: on a saturated fill the palette's own accents sink. */
-  .user-bubble {
+  /* In a bot chat, where the bot's replies are bubbles too, the reader's is
+     filled blue as in light mode, a step deeper so white prose holds on a
+     near-black page. The tag colours are the light block's, for its reason: on
+     a saturated fill the palette's own accents sink. */
+  [data-bot-chat] .user-bubble {
     background: oklch(0.58 0.17 252);
     color: oklch(0.99 0 0);
     box-shadow: none;
@@ -593,7 +594,7 @@
 
   /* The light block's reason: a palette-scoped fill outweighs the shared
      branded rule, so the brand takes its fill and ink back here. */
-  .user-bubble[data-brand] {
+  [data-bot-chat] .user-bubble[data-brand] {
     background: var(--brand);
     color: var(--brand-ink);
   }
@@ -919,6 +920,20 @@
    blue. Set on the palette selectors because an alias resolves where it is
    declared. Stripes are faint by default, since dark ink on a pale card cuts
    into the line; the two deep cards take them stronger. */
+/* A bot chat's bubbles, in every other dark palette: both sides would be grey
+   cards there, so the reader's takes the palette's signature colour — the one
+   its break card wears — with that card's ink. The fill is light and the ink
+   dark, so the tags inside take deep tones of their usual hues. */
+[data-mode="dark"]:not([data-theme="default"]) [data-bot-chat] .user-bubble:not([data-brand]) {
+  background: var(--break-card);
+  color: var(--break-ink);
+  box-shadow: none;
+  --accent-command: oklch(0.42 0.13 60);
+  --accent-mention: oklch(0.38 0.16 255);
+  --accent-issue: oklch(0.4 0.18 330);
+  --accent-session: oklch(0.4 0.13 150);
+}
+
 [data-theme="default"] {
   --break-card: #1612f8;
   --break-ink: #fff;

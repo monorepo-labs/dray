@@ -700,6 +700,9 @@ export default function Chat({
           <div
             ref={contentRef}
             className="mx-auto flex max-w-3xl flex-col gap-4 px-6 pt-[calc(1.5rem+var(--snap,0px))] pb-6"
+            // A bot chat draws both sides as bubbles, so the reader's takes a
+            // fill of its own there — see `[data-bot-chat]` in App.css.
+            data-bot-chat={bot || undefined}
           >
             {bot ? (
               <BotTranscript
