@@ -63,7 +63,7 @@ struct TitleRow: View {
     /// Beside the title rather than in it, since a long title is cut and this must not be.
     var machine: String? = nil
     let marks: Marks
-    /// A bot's chat: its face leads, and typing dots say it works.
+    /// A bot's chat: its face leads the name.
     var bot: Bot? = nil
     let close: String
     let list: () -> Void
@@ -87,8 +87,7 @@ struct TitleRow: View {
                     Text(bot?.name ?? title).lineLimit(1)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white.opacity(hovered ? 1 : 0.7))
-                        .shimmer(marks.busy && bot == nil, period: 1.4)
-                    if bot != nil, marks.busy { TypingDots() }
+                        .shimmer(marks.busy, period: 1.4)
                     if let machine {
                         Text(machine).font(.system(size: 13)).foregroundStyle(.white.opacity(0.4)).lineLimit(1).fixedSize()
                     }

@@ -132,7 +132,7 @@ private let sections: [(String, [Case])] = [
         Case(name: "Working on a PR", note: "Working outranks the PR glyph.", open: true, items: [workingPr], prs: pr("OPEN", "CLEAR"), pinned: workingPr.sessionId),
         Case(name: "Task list open", open: true, listShown: true, items: [s1, working, s4, s5, withPr], prs: pr("OPEN", "FAILING"), pinned: working.sessionId),
         Case(name: "Bot", open: true, items: [botChat], pinned: botChat.sessionId, bots: bots),
-        Case(name: "Bot working", note: "Typing dots, as the sidebar's bot row.", open: true, items: [opsChat], pinned: opsChat.sessionId, bots: bots),
+        Case(name: "Bot working", note: "The title shimmers, as a task's does; dots are the list's.", open: true, items: [opsChat], pinned: opsChat.sessionId, bots: bots),
         Case(name: "Task list with bots", note: "Face and name; no folder id.", open: true, listShown: true,
              items: [s1, botChat, opsChat, working, s5], pinned: botChat.sessionId, bots: bots),
     ]),
