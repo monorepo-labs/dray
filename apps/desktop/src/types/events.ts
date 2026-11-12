@@ -1462,6 +1462,10 @@ replies: Array<PrComment>, };
  */
 export type PrMark = { number: number, 
 /**
+ * Where the mark opens it. A scalar, so asking costs no rate-limit points.
+ */
+url: string, 
+/**
  * The branch it was opened from — what the caller matches a session by.
  */
 headRefName: string, isDraft: boolean, state: PrMarkState, checksState: PrChecksState, 

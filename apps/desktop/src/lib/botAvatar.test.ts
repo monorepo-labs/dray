@@ -25,6 +25,11 @@ describe("SHAPES", () => {
     }
   });
 
+  it("gives ids differing only at the end different colours", () => {
+    const hues = new Set(Array.from({ length: 9 }, (_, i) => seededAvatar(`01a1d000-0000-7000-8000-00000000000${i}`).hue));
+    expect(hues.size).toBeGreaterThan(3);
+  });
+
   it("never offers the droplet, picked or seeded", () => {
     expect(SHAPES.map((s) => s.name)).not.toContain("droplet");
     for (let i = 0; i < 200; i++) expect(seededAvatar(`seed-${i}`).shape).not.toBe("droplet");

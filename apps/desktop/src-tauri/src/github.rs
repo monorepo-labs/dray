@@ -238,11 +238,11 @@ const QUERY_MARKS: &str = r#"
 query($owner:String!,$repo:String!){
  repository(owner:$owner,name:$repo){
   open: pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
-   number headRefName isDraft mergeable mergeStateStatus
+   number url headRefName isDraft mergeable mergeStateStatus
    commits(last:1){nodes{commit{statusCheckRollup{state}}}}
   }}
   merged: pullRequests(states:MERGED,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
-   number headRefName isDraft
+   number url headRefName isDraft
   }}
  }}
 "#;
@@ -948,6 +948,8 @@ pub enum PrMarkState {
 #[serde(rename_all = "camelCase")]
 pub struct PrMark {
     pub number: u64,
+    /// Where the mark opens it. A scalar, so asking costs no rate-limit points.
+    pub url: String,
     /// The branch it was opened from — what the caller matches a session by.
     pub head_ref_name: String,
     pub is_draft: bool,
@@ -1011,6 +1013,8 @@ impl PrChecksState {
 #[serde(rename_all = "camelCase")]
 struct RawPrMark {
     number: u64,
+    #[serde(default)]
+    url: String,
     #[serde(default)]
     head_ref_name: String,
     /// Always false on a merged one — GitHub clears the flag on merge — so this
@@ -1084,6 +1088,7 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
         .chain(merged.into_iter().map(|pr| (PrMarkState::Merged, pr)))
         .map(|(state, mut pr)| PrMark {
             number: pr.number,
+            url: pr.url,
             checks_state: read_checks(pr.commits.take()),
             head_ref_name: pr.head_ref_name,
             is_draft: pr.is_draft,

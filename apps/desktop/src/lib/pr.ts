@@ -105,6 +105,7 @@ export function markDisagrees(mark: PrMark | undefined, prs: PullRequest[]): boo
   const pick = pickPrMark(
     seen.map((pr) => ({
       number: pr.number,
+      url: pr.url,
       headRefName: pr.headRefName,
       isDraft: pr.isDraft,
       state: pr.state as PrMark["state"],

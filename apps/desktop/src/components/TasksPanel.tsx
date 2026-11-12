@@ -16,6 +16,7 @@ import {
 import { seededAvatar } from "@/lib/botAvatar";
 import { burstConfetti } from "@/lib/confetti";
 import type { CrewRow } from "@/lib/crew";
+import { openLink } from "@/lib/openLink";
 import { readyToMerge } from "@/lib/pr";
 import { cn } from "@/lib/utils";
 import type { MergeMethod, PrMark } from "@/types/events";
@@ -154,51 +155,67 @@ function TaskRow({
             <BotAvatar seed={id} avatar={seededAvatar(id)} follow={hovered} className="block size-5 scale-[1.18]" />
           )}
         </span>
-        <span className={cn("min-w-0 flex-1 truncate", row.asking && "text-accent-command")}>{item.title}</span>
-        {row.asking && <span className="sr-only">Waiting for you</span>}
-
-        {pr && (
+        {/* ⋯ and Settle float over the title's tail, which fades out under
+            them, rather than taking room of their own: taking it pushed the
+            pull request and Merge along under the cursor on every hover. */}
+        <span className="relative flex min-w-0 flex-1 items-center">
           <span
-            className="flex shrink-0 items-center gap-1 text-[12px] tabular-nums"
+            className={cn(
+              "min-w-0 truncate row-reached:[mask-image:linear-gradient(to_left,transparent_52px,black_76px)]",
+              row.asking && "text-accent-command",
+            )}
+          >
+            {item.title}
+          </span>
+          {row.asking && <span className="sr-only">Waiting for you</span>}
+          <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 opacity-0 row-reached:pointer-events-auto row-reached:opacity-100">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="More"
+              className="text-muted-foreground"
+              onClick={(e) => {
+                e.stopPropagation();
+                const r = e.currentTarget.getBoundingClientRect();
+                e.currentTarget.dispatchEvent(
+                  new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left, clientY: r.bottom + 4 }),
+                );
+              }}
+            >
+              <Ellipsis />
+            </Button>
+            {/* No Settle mid-turn: settling kills the child. */}
+            {!row.busy && (
+              <RowAction
+                label="Settle"
+                active={false}
+                onClick={(e) => {
+                  burstConfetti(e.currentTarget);
+                  void onSetFlags(id, { archived: true });
+                }}
+              >
+                <Check />
+              </RowAction>
+            )}
+          </span>
+        </span>
+
+        {/* Opens the pull request in Dray's browser; ⌘-click, the system's. */}
+        {pr && (
+          <button
+            type="button"
+            className="flex shrink-0 cursor-pointer items-center gap-1 rounded px-0.5 text-[12px] text-muted-foreground tabular-nums hover:text-foreground"
             title={`Pull request #${pr.number} · ${prStateLabel(pr).toLowerCase()}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (pr.url) openLink(pr.url, e);
+            }}
           >
             <PrStateIcon pr={pr} strokeWidth={1.5} />#{pr.number}
-          </span>
+          </button>
         )}
 
         {mergeable && pr && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />}
-
-        {/* The sidebar row's two, shown on hover or with its menu open. */}
-        <span className="hidden shrink-0 items-center gap-0.5 row-reached:flex">
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="More"
-            className="text-muted-foreground"
-            onClick={(e) => {
-              e.stopPropagation();
-              const r = e.currentTarget.getBoundingClientRect();
-              e.currentTarget.dispatchEvent(
-                new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left, clientY: r.bottom + 4 }),
-              );
-            }}
-          >
-            <Ellipsis />
-          </Button>
-          {/* No Settle mid-turn: settling kills the child. */}
-          {!row.busy && (
-            <RowAction
-              label="Settle"
-              active={false}
-              onClick={(e) => {
-                burstConfetti(e.currentTarget);
-                void onSetFlags(id, { archived: true });
-              }}
-            >
-              <Check />
-            </RowAction>
-          )}
-        </span>
       </div>
     </RowMenu>
   );

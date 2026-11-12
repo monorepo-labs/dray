@@ -61,6 +61,10 @@ export function swatch(hue: number): string {
 /// the library's own seeding lands on a pale swatch that vanishes on a chip.
 export function seededAvatar(seed: string): BotAvatar {
   let hash = 0;
-  for (const ch of seed) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  for (const ch of seed) hash = (Math.imul(hash, 31) + ch.charCodeAt(0)) >>> 0;
+  // Mixed before use: ids that differ only at the end move the low bits
+  // alone, and unmixed every one of them drew the same colour.
+  hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b) >>> 0;
+  hash = (hash ^ (hash >>> 16)) >>> 0;
   return { shape: SHAPES[hash % SHAPES.length].name, hue: HUES[(hash >>> 8) % HUES.length].hue };
 }
