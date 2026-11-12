@@ -40,7 +40,8 @@ function Elapsed({ since }: { since?: number }) {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
-  const s = Math.floor((now - start) / 1000);
+  // A newer `since` can land between ticks, ahead of `now`.
+  const s = Math.max(0, Math.floor((now - start) / 1000));
   return (
     <span className="text-xs text-muted-foreground tabular-nums">
       {Math.floor(s / 60)}:{String(s % 60).padStart(2, "0")}
