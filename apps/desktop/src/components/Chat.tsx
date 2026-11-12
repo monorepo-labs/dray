@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDown } from "lucide-react";
 
 import AssistantMessage from "@/components/chat/AssistantMessage";
@@ -103,6 +103,8 @@ type ChatProps = {
   onOpenBot?: (bot: Bot) => void;
   /// The session had unread replies, for a bot chat's NEW divider.
   unread?: boolean;
+  /// Drawn under a bot chat's conversation: its stalled tasks.
+  botFooter?: ReactNode;
 };
 
 const NO_EARLIER: SessionSnapshot[] = [];
@@ -210,6 +212,7 @@ export default function Chat({
   taskOf,
   onOpenBot,
   unread = false,
+  botFooter,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -722,17 +725,20 @@ export default function Chat({
             data-bot-chat={bot || undefined}
           >
             {bot ? (
-              <BotTranscript
-                key={session.sessionId}
-                unread={unread}
-                segments={segments}
-                busy={busy}
-                preview={previewShown ? <StreamingPreview sessionId={session.sessionId} /> : undefined}
-                taskOf={taskOf}
-                onOpenSession={openSession}
-                onOpenBot={onOpenBot}
-              />
-            ) : shownTurns.map((turn, i) => (
+              <>
+                <BotTranscript
+                  key={session.sessionId}
+                  unread={unread}
+                  segments={segments}
+                  busy={busy}
+                  preview={previewShown ? <StreamingPreview sessionId={session.sessionId} /> : undefined}
+                  taskOf={taskOf}
+                  onOpenSession={openSession}
+                  onOpenBot={onOpenBot}
+                />
+                {botFooter}
+              </>
+            ) :shownTurns.map((turn, i) => (
               // The wrapper is what the rail measures and scrolls to. It carries
               // no styles of its own — it stands in for the block as the flex item.
               <div

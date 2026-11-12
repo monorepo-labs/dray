@@ -226,7 +226,7 @@ function TalkLine({
 
 /// Who a line is about: one task's face and name, or several faces stacked
 /// and a count.
-function PartyChip({
+export function PartyChip({
   parties,
   expanded,
   onClick,

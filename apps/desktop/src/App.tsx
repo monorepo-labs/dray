@@ -91,6 +91,7 @@ import { useChord } from "@/hooks/useShortcuts";
 import { type Chord, formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_BESIDE, CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import TasksPanel from "@/components/TasksPanel";
+import StalledTasks from "@/components/chat/StalledTasks";
 import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
@@ -177,7 +178,7 @@ import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
-import type { Attachment, Bot, BotPreview, Harness, IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/events";
+import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, PrMark, SessionIndexItem, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -207,7 +208,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { crewRows, crewSeen, inSidebar, withHiddenAsks } from "@/lib/crew";
+import { crewRows, crewSeen, inSidebar, withHiddenAsks, type CrewRow } from "@/lib/crew";
+import { stalledTasks } from "@/lib/stalled";
 import {
   addPickTab,
   closePickTab,
@@ -1310,6 +1312,25 @@ function App() {
   // panel's poll is gated on its tab being on screen, and a tab on screen is
   // exactly the case with nothing to announce.
   usePrReady({ sessions: visibleSessions, prFor: prMarks.prFor });
+
+  // A bot's chat says which of its tasks have sat untouched (`stalledTasks`),
+  // re-read once a minute while one is open, since nothing else moves then.
+  const taskPr = useCallback(
+    (row: CrewRow) => prMarks.prFor(row.item.projectPath, sessionBranch(row.item)),
+    [prMarks.prFor],
+  );
+  const [stallNow, setStallNow] = useState(Date.now);
+  useEffect(() => {
+    if (!selectedBot) return;
+    setStallNow(Date.now());
+    const tick = setInterval(() => setStallNow(Date.now()), 60_000);
+    return () => clearInterval(tick);
+  }, [selectedBot]);
+  const readySince = useRef(new Map<string, number>());
+  const stalls = useMemo(
+    () => (selectedBot ? stalledTasks(crew, taskPr, readySince.current, stallNow) : []),
+    [selectedBot, crew, taskPr, stallNow],
+  );
 
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it
@@ -2990,6 +3011,28 @@ function App() {
     pickTaskTab(bot.id, id);
   };
 
+  /// Lands a bot task's pull request, from its Tasks row or its chat's stalled
+  /// card, then settles the task and tidies its worktree.
+  const mergeTask = async (row: CrewRow, pr: PrMark, method: MergeMethod) => {
+    // From the repo root: a task's worktree may already be gone.
+    await invoke("merge_pr", { cwd: row.item.projectPath, number: pr.number, method });
+    prMarks.refreshAfterWrite();
+    // Landed, so the task is done — unless it is still working, which
+    // settling would kill mid-turn.
+    const { item } = row;
+    if (row.busy || !(await setSessionFlags(item.sessionId, { archived: true }))) return;
+    if (!item.worktreeName || item.worktreeRemoved) return;
+    // The tree goes without a word only where it holds nothing the merge did
+    // not take; anything else is the settle notice's question, never a silent
+    // delete.
+    const left = await invoke<WorktreeDisposition>("worktree_disposition", { sessionId: item.sessionId }).catch(() => null);
+    if (left && (!left.exists || (left.changedFiles === 0 && left.unpushedCommits === 0))) {
+      removeWorktree(item.sessionId, "tidy");
+    } else {
+      void askAboutWorktree(item.sessionId, item.worktreeName, item.title, "notice");
+    }
+  };
+
   /// Closes the picks on `target` — every kind, or only `kind` — and frees
   /// the file stores they and any other pick held for it.
   const dropPicksOn = (target: string, kind?: PickTab["kind"]) => {
@@ -3520,27 +3563,7 @@ function App() {
                 onFork={forkSession}
                 onDelete={deleteTask}
                 onDetach={detachSession}
-                onMerge={async (row, pr, method) => {
-                  // From the repo root: a task's worktree may already be gone.
-                  await invoke("merge_pr", { cwd: row.item.projectPath, number: pr.number, method });
-                  prMarks.refreshAfterWrite();
-                  // Landed, so the task is done — unless it is still working,
-                  // which settling would kill mid-turn.
-                  const { item } = row;
-                  if (row.busy || !(await setSessionFlags(item.sessionId, { archived: true }))) return;
-                  if (!item.worktreeName || item.worktreeRemoved) return;
-                  // The tree goes without a word only where it holds nothing
-                  // the merge did not take; anything else is the settle notice's
-                  // question, never a silent delete.
-                  const left = await invoke<WorktreeDisposition>("worktree_disposition", { sessionId: item.sessionId }).catch(
-                    () => null,
-                  );
-                  if (left && (!left.exists || (left.changedFiles === 0 && left.unpushedCommits === 0))) {
-                    removeWorktree(item.sessionId, "tidy");
-                  } else {
-                    void askAboutWorktree(item.sessionId, item.worktreeName, item.title, "notice");
-                  }
-                }}
+                onMerge={mergeTask}
               />
             </TabBody>
             <TabBody active={activeTab === "more"}>
@@ -3842,6 +3865,7 @@ function App() {
             earlier={earlier}
             taskOf={taskOf}
             onOpenBot={openBot}
+            botFooter={<StalledTasks stalls={stalls} now={stallNow} onOpen={(id, alone) => void openTask(id, alone)} onMerge={mergeTask} />}
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
             crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
             // Its own chords only while the chat tab is on screen.
