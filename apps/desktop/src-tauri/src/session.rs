@@ -4211,6 +4211,26 @@ mod tests {
         let running = child_with(&manager, "running", running).await;
         let sending = child_with(&manager, "sending", done()).await;
         let _held = sending.try_lock().unwrap();
+        let carded = child_with(&manager, "carded", done()).await;
+        carded.lock().await.as_ref().unwrap().pending_permissions.lock().unwrap().insert(
+            "r1".to_string(),
+            crate::harness::claude_code::permissions::PendingRequest {
+                tool_use_id: "t1".to_string(),
+                tool_name: "Write".to_string(),
+                input: serde_json::Value::Null,
+                options: HashMap::new(),
+                reply: crate::harness::claude_code::permissions::Reply::Control,
+            },
+        );
+        let queued = child_with(&manager, "queued", done()).await;
+        queued.lock().await.as_ref().unwrap().queued.lock().await.push(QueuedMessage {
+            id: "q1".to_string(),
+            session_id: "queued".to_string(),
+            text: "next".to_string(),
+            attachment_paths: vec![],
+            from: None,
+            issues: vec![],
+        });
 
         manager.reap_idle(Instant::now()).await;
         assert!(idle.lock().await.is_some(), "not idle long enough yet");
@@ -4219,6 +4239,8 @@ mod tests {
         assert!(idle.lock().await.is_none());
         assert!(tasked.lock().await.is_some(), "a dev server keeps its child");
         assert!(running.lock().await.is_some(), "a turn in flight keeps its child");
+        assert!(carded.lock().await.is_some(), "an open card keeps the only child that can answer it");
+        assert!(queued.lock().await.is_some(), "a queued prompt keeps its child");
         drop(_held);
         assert!(sending.lock().await.is_some(), "a send holding the slot keeps its child");
     }
