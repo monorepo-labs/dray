@@ -67,13 +67,13 @@ export function repickTab(tabs: PickTabs, owner: string, id: string, target: str
   return { ...tabs, [owner]: (tabs[owner] ?? []).map((t) => (t.id === id ? { ...t, target } : t)) };
 }
 
-/// Closes every tab showing `target`, which a deleted task needs: its folder
-/// may be gone and nothing of it is left to show.
-export function closePicksOn(tabs: PickTabs, target: string): PickTabs {
+/// Closes the tabs showing `target`, every kind or only `kind`: a deleted
+/// task or worktree leaves nothing to show, a settled task no files to open.
+export function closePicksOn(tabs: PickTabs, target: string, kind?: PickTab["kind"]): PickTabs {
   let changed = false;
   const next: PickTabs = {};
   for (const [owner, row] of Object.entries(tabs)) {
-    const kept = row.filter((t) => t.target !== target);
+    const kept = row.filter((t) => t.target !== target || (!!kind && t.kind !== kind));
     if (kept.length !== row.length) changed = true;
     if (kept.length > 0) next[owner] = kept;
   }

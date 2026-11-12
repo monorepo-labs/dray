@@ -67,6 +67,9 @@ describe("pick tabs", () => {
     const tabs: PickTabs = { bot: [d, f], other: [{ ...d, id: "9" }] };
     expect(closePicksOn(tabs, "a")).toEqual({ bot: [f] });
     expect(closePicksOn(tabs, "zzz")).toBe(tabs);
+    const both: PickTabs = { bot: [d, { ...f, target: "a" }] };
+    expect(closePicksOn(both, "a", "files")).toEqual({ bot: [d] });
+    expect(closePicksOn({ bot: [d] }, "a", "files")).toEqual({ bot: [d] });
   });
 
   it("keys a Files pick's store by tab and target", () => {

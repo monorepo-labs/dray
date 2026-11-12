@@ -216,6 +216,7 @@ import {
   pickFilesKey,
   repickTab,
   stripOf,
+  type PickTab,
   type PickTabs,
   type TaskTabs,
 } from "@/lib/taskTabs";
@@ -2912,15 +2913,35 @@ function App() {
     pickTaskTab(owner, id);
   };
 
+  /// Closes the picks on `target` — every kind, or only `kind` — and frees
+  /// the file stores they and any other pick held for it.
+  const dropPicksOn = (target: string, kind?: PickTab["kind"]) => {
+    for (const t of Object.values(pickTabsRef.current).flat()) {
+      if (t.target === target && (!kind || t.kind === kind)) forgetOpenFilesUnder(`pick:${t.id}:`);
+      else forgetOpenFiles(pickFilesKey({ ...t, target }));
+    }
+    if (!kind) pickSeen.current.delete(target);
+    setPickTabs((prev) => closePicksOn(prev, target, kind));
+  };
+  const pickTabsRef = useRef(pickTabs);
+  pickTabsRef.current = pickTabs;
+  const dropPicksOnRef = useRef(dropPicksOn);
+  dropPicksOnRef.current = dropPicksOn;
+  // Settling leaves a task's work to review but nothing to open, so its Files
+  // picks close; deleting its worktree leaves no diff either. Read off the
+  // index event, since the bot settles tasks itself as often as the reader.
+  useEffect(() => {
+    const un = listen<SessionIndexItem>("session_changed", ({ payload }) => {
+      if (payload.worktreeRemoved) dropPicksOnRef.current(payload.sessionId);
+      else if (payload.archived) dropPicksOnRef.current(payload.sessionId, "files");
+    });
+    return () => void un.then((off) => off());
+  }, []);
+
   const deleteTask = async (id: string) => {
     if (await deleteSession(id)) {
       setTaskTabs((prev) => closeTaskTab(prev, id));
-      for (const t of Object.values(pickTabs).flat()) {
-        if (t.target === id) forgetOpenFilesUnder(`pick:${t.id}:`);
-        else forgetOpenFiles(pickFilesKey({ ...t, target: id }));
-      }
-      pickSeen.current.delete(id);
-      setPickTabs((prev) => closePicksOn(prev, id));
+      dropPicksOn(id);
     }
   };
 
