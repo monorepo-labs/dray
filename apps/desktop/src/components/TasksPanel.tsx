@@ -39,6 +39,25 @@ const SHARED_BREAKS: TaskState[][] = [["asking", "busy"]];
 const taskState = (rows: CrewRow[]): TaskState =>
   rows.some((r) => r.asking) ? "asking" : rows.some((r) => r.busy) ? "busy" : "idle";
 
+/// The Pinned rows, then the runs drawn under them with a break between each.
+/// Sorted by state first, since a short list draws as one run and would
+/// otherwise keep newest-first, an idle task above one waiting on the reader.
+export function taskRuns(rows: CrewRow[]): { pinned: CrewRow[]; runs: CrewRow[][] } {
+  const rank = (r: CrewRow) => TASK_STATES.indexOf(taskState([r]));
+  const sorted = [...rows].sort((a, b) => rank(a) - rank(b));
+  // Pinned under its own heading, as the sidebar draws it. Setting aside
+  // unpins, so the two never meet.
+  const pinned = sorted.filter((r) => r.item.pinned && !r.item.aside);
+  const aside = sorted.filter((r) => r.item.aside);
+  const byState = stageRuns(
+    sorted.filter((r) => !r.item.aside && !pinned.includes(r)).map((r) => [r]),
+    taskState,
+    SHARED_BREAKS,
+  );
+  const runs = [...TASK_STATES.map((s) => byState.get(s) ?? []), aside].filter((run) => run.length);
+  return { pinned, runs };
+}
+
 /// A bot's Tasks tab: every session it handed work to, at any depth. They run
 /// hidden from the sidebar, so this is where they are found and handled: each
 /// row takes the sidebar row's menu and Settle, and lands its pull request
@@ -73,18 +92,7 @@ export default function TasksPanel({
     );
   }
 
-  // Pinned under its own heading, as the sidebar draws it. Setting aside
-  // unpins, so the two never meet.
-  const pinned = rows
-    .filter((r) => r.item.pinned && !r.item.aside)
-    .sort((a, b) => TASK_STATES.indexOf(taskState([a])) - TASK_STATES.indexOf(taskState([b])));
-  const aside = rows.filter((r) => r.item.aside);
-  const byState = stageRuns(
-    rows.filter((r) => !r.item.aside && !pinned.includes(r)).map((r) => [r]),
-    taskState,
-    SHARED_BREAKS,
-  );
-  const runs = [...TASK_STATES.map((s) => byState.get(s) ?? []), aside].filter((run) => run.length);
+  const { pinned, runs } = taskRuns(rows);
   const draw = (row: CrewRow) => (
     <TaskRow
       key={row.item.sessionId}
