@@ -534,8 +534,9 @@ pub async fn authorize_page(ask: &AuthorizeAsk, sink: &Sink) -> Page {
 
 /// `POST /oauth/authorize`: Continue, which hands the reader to drayhq.com,
 /// or a pairing code, which a right one turns into an authorization code at
-/// once.
-pub async fn authorize(ask: &AuthorizeAsk, typed: Typed, base: &str, sink: &Sink) -> Page {
+/// once. `base` is where the site may send the reader back to, none where
+/// the page was reached at an address that isn't this server's own.
+pub async fn authorize(ask: &AuthorizeAsk, typed: Typed, base: Option<&str>, sink: &Sink) -> Page {
     let client = match vet(ask).await {
         Ok(client) => client,
         Err(why) => return Page::Refused(why),
@@ -543,6 +544,10 @@ pub async fn authorize(ask: &AuthorizeAsk, typed: Typed, base: &str, sink: &Sink
     let Some(cred) = org_link::credential(sink).await else { return Page::Unlinked };
     match typed {
         Typed::Dray => {
+            let Some(base) = base else {
+                let why = "Open this sign-in at the server's Remote access address.".to_string();
+                return ask_page(&client, ask, &cred.site, Some(why), false);
+            };
             let label = client_label(&client);
             match account::begin(&cred, ask.clone(), base, &label, &redirect_host(&ask.redirect_uri)).await {
                 Ok(url) => Page::Redirect(url),

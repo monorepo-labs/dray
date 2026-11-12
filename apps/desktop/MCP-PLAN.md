@@ -102,7 +102,12 @@ its own OAuth; drayhq.com only answers "who is this, and may they".
   redirect host to `/api/mcp/sign-in` under the server's link credential,
   and gets back `/connect/<id>`. The site never takes a return address from
   the browser, which is what keeps an assertion for this server from being
-  sent anywhere else.
+  sent anywhere else. **Nor does the server take it from `Host`**: the return
+  address is Remote access's own, or loopback on the port this listener is
+  really on, and anything else is refused. A spoofed `Host` would send the
+  assertion to an attacker who replays it here and reads the code off the
+  302. Continue is held to ten a minute, and the site keeps fifty waiting a
+  server, dropping the oldest, so a flood can't lock anyone out.
 - **`/connect/<id>`** signs the reader in with Google, checks
   `server_access` joined to `member`, and shows Allow with Full or Read only.
   Anyone else sees one sentence naming neither server nor org, and **Use
@@ -115,7 +120,8 @@ its own OAuth; drayhq.com only answers "who is this, and may they".
   every 30s, and pins `EdDSA`. `iss` is not read: the key came from the site
   this server is linked to.
 - **Every `/mcp` call asks again** (`/api/mcp/access`), so removal from the
-  allow list or the org cuts an assistant off at once. Answers are cached 10s;
+  allow list or the org cuts an assistant off at once. Answers are cached 10s,
+  keyed by the link credential as well as the user, so none outlives a relink;
   an unreachable site leans on the last yes for 10 minutes, then answers 503,
   not 401, since a sign-in would need the site too. A refresh asks the same
   question and deletes the grant on a no.

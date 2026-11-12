@@ -4,8 +4,8 @@ import { pool } from "./db";
 /// it ends in is good for. The assertion only has to survive one redirect.
 export const SIGN_IN_LIFE_SECS = 10 * 60;
 export const ASSERTION_LIFE_SECS = 2 * 60;
-/// Sign-ins one server may have waiting at once. Only a linked server can
-/// push one, so this bounds a misbehaving box, not the public.
+/// Sign-ins one server may have waiting at once, the oldest dropped to make
+/// room for a new one.
 export const MAX_WAITING = 50;
 
 /// Whether `userId` may connect an assistant to `serverId`: on its allow list

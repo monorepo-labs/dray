@@ -27,11 +27,16 @@ export async function POST(req: Request) {
     return refuse("invalid_request");
 
   await pool.query(`delete from mcp_sign_in where "expiresAt" < now()`);
-  const { rows } = await pool.query<{ n: number }>(
-    `select count(*)::int as n from mcp_sign_in where "serverId" = $1`,
-    [server.id],
+  // The oldest make room rather than the newest being refused: Continue is
+  // open to anyone who reaches the server, and a full list must not lock
+  // its own people out. The server holds Continue to a few a minute, so a
+  // sign-in in progress outlives a flood.
+  await pool.query(
+    `delete from mcp_sign_in where id in (
+       select id from mcp_sign_in where "serverId" = $1
+        order by "expiresAt" desc offset $2)`,
+    [server.id, MAX_WAITING - 1],
   );
-  if (rows[0].n >= MAX_WAITING) return refuse("slow_down", 429);
 
   const id = crypto.randomUUID();
   await pool.query(

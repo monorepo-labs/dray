@@ -34,6 +34,10 @@ const FLOW_LIFE: Duration = Duration::from_secs(10 * 60);
 /// Flows begun and never finished. Each costs a call to the site under this
 /// server's credential, so the bound is on the site's side too.
 const MAX_FLOWS: usize = 100;
+/// Continue is open to anyone who reaches the page, and the site keeps only
+/// so many waiting sign-ins a server, the oldest making room. Held under
+/// that, a flood can't push out a sign-in someone is in the middle of.
+const BEGINS_PER_MINUTE: usize = 10;
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// How long an answer about someone's access is trusted. Short, so removal is
 /// felt at once, but long enough that a burst of tool calls asks once.
@@ -74,6 +78,9 @@ struct Keys {
 #[derive(Default)]
 struct Memory {
     flows: HashMap<String, Flow>,
+    begins: std::collections::VecDeque<Instant>,
+    /// Keyed by [`seen_key`], so an answer never outlives the link it was
+    /// given under.
     access: HashMap<String, Seen>,
     keys: HashMap<String, Keys>,
 }
@@ -82,6 +89,14 @@ static MEMORY: LazyLock<Mutex<Memory>> = LazyLock::new(Default::default);
 
 fn memory() -> std::sync::MutexGuard<'static, Memory> {
     MEMORY.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The credential's hash with the user. Every link mints a new credential,
+/// so unlinking and linking again, or moving to another org, starts clean.
+fn seen_key(cred: &Credential, user: &str) -> String {
+    use sha2::Digest;
+    let link: String = sha2::Sha256::digest(cred.token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    format!("{link}:{user}")
 }
 
 /// `drayhq.com` for `https://www.drayhq.com`, as the page's button names it.
@@ -94,6 +109,15 @@ const UNLINKED: &str = "This server is no longer linked to a Dray account. Link 
 
 /// Pushes a sign-in to the site and answers where to send the browser.
 pub async fn begin(cred: &Credential, ask: AuthorizeAsk, base: &str, client: &str, redirect_host: &str) -> Result<String, String> {
+    {
+        let mut memory = memory();
+        let window = Instant::now().checked_sub(Duration::from_secs(60));
+        memory.begins.retain(|at| window.is_none_or(|w| *at > w));
+        if memory.begins.len() >= BEGINS_PER_MINUTE {
+            return Err("Too many sign-ins at once. Try again in a minute.".into());
+        }
+        memory.begins.push_back(Instant::now());
+    }
     let state = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
     let site = site_host(&cred.site);
     let answer = crate::http()
@@ -153,7 +177,7 @@ pub async fn finish(cred: &Credential, query: &HashMap<String, String>) -> Resul
     let user = DrayUser { id: claims.sub, email: claims.email, name: claims.name };
     // A sign-in that just said yes needn't be asked about again for a while.
     memory().access.insert(
-        user.id.clone(),
+        seen_key(cred, &user.id),
         Seen { allowed: true, checked: Instant::now(), last_yes: Some(Instant::now()) },
     );
     Ok(Finished::Allowed { ask, access, user })
@@ -270,9 +294,10 @@ pub enum Admit {
 pub async fn admit(sink: &Sink, user: Option<&str>) -> Admit {
     let Some(cred) = org_link::credential(sink).await else { return Admit::Unlinked };
     let Some(user) = user else { return Admit::Yes };
+    let key = seen_key(&cred, user);
     {
         let memory = memory();
-        if let Some(seen) = memory.access.get(user).filter(|s| s.checked.elapsed() < ACCESS_FRESH) {
+        if let Some(seen) = memory.access.get(&key).filter(|s| s.checked.elapsed() < ACCESS_FRESH) {
             return if seen.allowed { Admit::Yes } else { Admit::Refused };
         }
     }
@@ -292,11 +317,11 @@ pub async fn admit(sink: &Sink, user: Option<&str>) -> Admit {
         _ => None,
     };
     let mut memory = memory();
-    let last_yes = memory.access.get(user).and_then(|s| s.last_yes);
+    let last_yes = memory.access.get(&key).and_then(|s| s.last_yes);
     match told {
         Some(allowed) => {
             let last_yes = if allowed { Some(Instant::now()) } else { None };
-            memory.access.insert(user.to_string(), Seen { allowed, checked: Instant::now(), last_yes });
+            memory.access.insert(key, Seen { allowed, checked: Instant::now(), last_yes });
             if allowed { Admit::Yes } else { Admit::Refused }
         }
         None if last_yes.is_some_and(|at| at.elapsed() < ACCESS_GRACE) => Admit::Yes,

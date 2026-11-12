@@ -43,9 +43,10 @@ pub fn routes(line: &str) -> bool {
 /// Serves one connection. Not kept alive: each request is a fresh connect, so
 /// an idle client holds no task in the listener's set.
 pub async fn serve(stream: TcpStream, sink: Sink) -> anyhow::Result<()> {
+    let port = stream.local_addr()?.port();
     let service = hyper::service::service_fn(move |req| {
         let sink = sink.clone();
-        async move { Ok::<_, Infallible>(handle(req, sink).await) }
+        async move { Ok::<_, Infallible>(handle(req, sink, port).await) }
     });
     let connection = hyper::server::conn::http1::Builder::new()
         .keep_alive(false)
@@ -82,11 +83,31 @@ fn base_url(req: &Request<hyper::body::Incoming>) -> String {
     format!("{}://{host}", if local { "http" } else { "https" })
 }
 
+/// Where drayhq.com may send the browser back to: this server as it really
+/// is, never as `Host` claims. A spoofed `Host` would otherwise send a signed
+/// assertion to someone else's address, to be replayed here. Loopback keeps
+/// its host but takes the port this listener is on; anything else must be
+/// Remote access's own address.
+fn return_base(base: &str, port: u16) -> Option<String> {
+    if let Some(authority) = base.strip_prefix("http://") {
+        // `base_url` writes `http` for loopback hosts alone.
+        let host = if authority.starts_with('[') {
+            authority.split_inclusive(']').next()?
+        } else {
+            authority.split(':').next()?
+        };
+        return Some(format!("http://{host}:{port}"));
+    }
+    let public = crate::remote_access::get_remote_access().address?.replacen("wss://", "https://", 1);
+    let public = public.trim_end_matches('/');
+    (base == public).then(|| public.to_string())
+}
+
 async fn body(req: Request<hyper::body::Incoming>) -> Option<Bytes> {
     Limited::new(req.into_body(), BODY_LIMIT).collect().await.ok().map(|b| b.to_bytes())
 }
 
-async fn handle(req: Request<hyper::body::Incoming>, sink: Sink) -> Answer {
+async fn handle(req: Request<hyper::body::Incoming>, sink: Sink, port: u16) -> Answer {
     let base = base_url(&req);
     let path = req.uri().path().to_string();
     let query = req.uri().query().unwrap_or_default().to_string();
@@ -121,7 +142,7 @@ async fn handle(req: Request<hyper::body::Incoming>, sink: Sink) -> Answer {
                 .extend_pairs(form_urlencoded::parse(&bytes).filter(|(k, _)| !FORM_FIELDS.contains(&&**k)))
                 .finish();
             let typed = typed.unwrap_or(auth::Typed::Code(String::new()));
-            page(auth::authorize(&ask, typed, &base, &sink).await, &echoed)
+            page(auth::authorize(&ask, typed, return_base(&base, port).as_deref(), &sink).await, &echoed)
         }
         (Method::GET, "/oauth/dray") => page(auth::dray_return(&query, &sink).await, ""),
         (Method::POST, "/oauth/token") => match body(req).await {
@@ -353,6 +374,14 @@ mod tests {
         assert!(!routes("GET / HTTP/1.1"), "the WebSocket upgrade");
         assert!(!routes("GET /mcpx HTTP/1.1"));
         assert!(!routes("GET /file?path=%2Fmcp HTTP/1.1"));
+    }
+
+    #[test]
+    fn the_return_address_is_this_server_not_what_host_says() {
+        assert_eq!(return_base("http://127.0.0.1:9999", 47811).as_deref(), Some("http://127.0.0.1:47811"));
+        assert_eq!(return_base("http://[::1]:1", 47811).as_deref(), Some("http://[::1]:47811"));
+        assert_eq!(return_base("http://localhost", 47811).as_deref(), Some("http://localhost:47811"));
+        assert_eq!(return_base("https://evil.test", 47811), None, "not Remote access's address");
     }
 
     #[test]
