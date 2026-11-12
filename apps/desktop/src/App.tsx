@@ -14,6 +14,7 @@ import DiffWorkerPool from "@/components/DiffWorkerPool";
 import NoticeStack from "@/components/NoticeStack";
 import BreakOverlay from "@/components/BreakOverlay";
 import { useBreakDue } from "@/lib/breaks";
+import { askToFixConflicts } from "@/lib/fixConflicts";
 import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
 import type { SettingsTab } from "@/components/SettingsPage";
@@ -3525,6 +3526,7 @@ function App() {
                 onFork={forkSession}
                 onDelete={deleteTask}
                 onDetach={detachSession}
+                onFixConflicts={(row, pr) => askToFixConflicts(row.item, pr.number)}
                 onMerge={async (row, pr, method) => {
                   // From the repo root: a task's worktree may already be gone.
                   await invoke("merge_pr", { cwd: row.item.projectPath, number: pr.number, method });

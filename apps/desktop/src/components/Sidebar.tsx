@@ -23,7 +23,7 @@ import BotAvatar from "@/components/BotAvatar";
 import { TypingDots } from "@/components/chat/BotTranscript";
 import { previewLine, type BotEntry } from "@/lib/bots";
 
-import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
+import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
 import PanelLeftIcon from "@/components/icons/PanelLeftIcon";
 import { Button } from "@/components/ui/button";
@@ -3011,11 +3011,7 @@ function SessionRow({
                 <SignalSlashIcon className="size-3.5" aria-label={offline} />
               </span>
             ) : marksLive && pr?.checksState === "RUNNING" ? (
-              <CircleDashed
-                className="mr-[3px] size-3.5 animate-spin text-accent-command [animation-duration:3s]"
-                strokeWidth={1.5}
-                aria-label="Checks running"
-              />
+              <ChecksRunningIcon className="mr-[3px]" />
             ) : status === "in_progress" ? (
               <Orb state="working" label="Working" />
             ) : (
