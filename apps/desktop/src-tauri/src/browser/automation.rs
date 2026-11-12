@@ -533,9 +533,7 @@ async fn resolve(session: &str) -> Result<(), String> {
     let tab = match tabs.iter().filter(|t| same_origin(&t.url, &url)).max_by_key(|t| t.active) {
         Some(t) => t.id,
         None if web_url(&url).is_ok() => {
-            let before: Vec<i32> = tabs.iter().map(|t| t.id).collect();
-            open_url(session, url, None).await?;
-            let tab = new_tab(session, &before).await?;
+            let tab = open_new(session, url).await?;
             wait_loaded(tab).await?;
             tab
         }
@@ -558,6 +556,17 @@ fn page(tab: i32) -> (String, Value) {
         }
         None => ("no tab".into(), json!({})),
     }
+}
+
+/// Opens `url` in a new tab and answers its id. Listing, opening and finding
+/// the new tab run under one lock: a bot's tasks share a browser (#881), and
+/// two opens interleaved would both find the first new tab and drive one page.
+async fn open_new(session: &str, url: String) -> Result<i32, String> {
+    static OPENING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one_at_a_time = OPENING.lock().await;
+    let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
+    open_url(session, url, None).await?;
+    new_tab(session, &before).await
 }
 
 /// Waits for a tab that was not there when `before` was read.
@@ -798,9 +807,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                     tab
                 }
                 None => {
-                    let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
-                    open_url(session, url, None).await?;
-                    let tab = new_tab(session, &before).await?;
+                    let tab = open_new(session, url).await?;
                     drive(session, tab);
                     // Marked before it loads: `run` had no tab to mark.
                     emit_driven(session, Some(tab), Some("open"));
@@ -852,9 +859,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         BrowserAction::TabNew { url } => {
             let url = url.unwrap_or_else(|| "about:blank".into());
             web_url(&url)?;
-            let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
-            open_url(session, url, None).await?;
-            let tab = new_tab(session, &before).await?;
+            let tab = open_new(session, url).await?;
             drive(session, tab);
             // Marked before it loads: `run` marked the tab it was opened from.
             emit_driven(session, Some(tab), Some("tab_new"));
