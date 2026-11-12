@@ -1523,14 +1523,34 @@ function App() {
     [strip?.owner, sessionIndexItems, statusBySession, askingSessions],
   );
   // The index lists one side of the sidebar, so a task settled under a pick
-  // leaves it while its folder is still there to show. Each target's entry is
-  // kept as last seen; deleting a task closes its picks, which ends the need.
+  // leaves it while its folder may still be there to show. Each target's
+  // entry is kept as last seen, and the lit one is asked for again on every
+  // index change, since settling can delete the worktree after it leaves.
   for (const t of Object.values(pickTabs).flat()) {
     const live = sessionIndexItems.find((i) => i.sessionId === t.target);
     if (live) pickSeen.current.set(t.target, live);
   }
+  const [pickAsked, setPickAsked] = useState<SessionIndexItem | null>(null);
+  const unlistedPick =
+    litPick && !sessionIndexItems.some((i) => i.sessionId === litPick.target) ? litPick.target : null;
+  useEffect(() => {
+    if (!unlistedPick) return;
+    let live = true;
+    void invoke<SessionIndexItem | null>("session_index_item", { sessionId: unlistedPick })
+      .catch(() => null)
+      .then((item) => {
+        if (!live || !item) return;
+        pickSeen.current.set(unlistedPick, item);
+        setPickAsked(item);
+      });
+    return () => {
+      live = false;
+    };
+  }, [unlistedPick, sessionIndexItems]);
   const pickItem = (target: string) =>
-    sessionIndexItems.find((i) => i.sessionId === target) ?? pickSeen.current.get(target);
+    sessionIndexItems.find((i) => i.sessionId === target) ??
+    (pickAsked?.sessionId === target ? pickAsked : undefined) ??
+    pickSeen.current.get(target);
   const pickTitle = (target: string) =>
     target === strip?.owner ? (stripBot?.name ?? "Bot") : (pickItem(target)?.title ?? "Task gone");
   const pickFace = (target: string) =>
@@ -2932,12 +2952,14 @@ function App() {
       />
     );
     const item = pickItem(tab.target);
-    if (!item) {
+    // A deleted worktree leaves `cwd` on the project root, whose tree is not
+    // this task's work.
+    if (!item || item.worktreeRemoved) {
       return (
         <div className="flex min-h-0 flex-1">
           <div className="flex w-72 shrink-0 flex-col border-r border-border">{picker}</div>
           <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-ui text-muted-foreground">
-            This task is gone. Pick another.
+            {item ? "This task's worktree was deleted." : "This task is gone."} Pick another.
           </div>
         </div>
       );
