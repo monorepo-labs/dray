@@ -9,6 +9,10 @@
 // --card starts one that asks a question, answers the card it stops on, then
 //   sends it a follow-up. Make the code with full access.
 // --stop starts a long one, stops it, and expects the turn to read "stopped".
+// --bot lists bots, messages the named one as the user and waits for its
+//   answer; on a read-only code, checks send_to_bot is refused instead.
+//   With --bot-card <project>, has the bot start a task that asks a question,
+//   finds the card under the bot and answers it.
 // --missing expects a project whose folder is gone to be refused by name.
 // --send messages an existing session — an unstarted worktree fork, say — and
 //   expects it to answer.
@@ -245,6 +249,60 @@ if (sendTo) {
   const after = await follow(sendTo);
   if (!/forked/i.test(after.reply)) fail(`the session did not answer: ${after.reply}`);
   step("an existing session answered", after.reply);
+}
+
+const botName = flag("--bot");
+if (botName) {
+  const listed = (await call("list_bots")).bots;
+  step("bots", listed.map((b) => `${b.name} · working=${b.working} waiting=${b.waiting}`));
+  if (!listed.some((b) => b.name.toLowerCase() === botName.toLowerCase())) fail(`no bot ${botName} in list_bots`);
+  if (!tools.some((t) => t.name === "send_to_bot")) {
+    const refused = await rpc("tools/call", { name: "send_to_bot", arguments: { bot: botName, message: "x" } });
+    if (!refused.isError) fail("a read-only grant messaged a bot");
+    step("read-only: send_to_bot refused", refused.content[0].text);
+  } else {
+    const sent = await call("send_to_bot", { bot: botName, message: "Reply with the single word: beep. Do not use any tools." });
+    step("sent to bot", sent);
+    let now;
+    for (let round = 0; round < 10; round++) {
+      now = await call("wait_for_bot", { bot: botName, seconds: 50 });
+      step(`bot wait ${round + 1}`, { status: now.status, timed_out: now.timed_out, reply: now.reply?.slice(-120), cards: now.open_cards });
+      if (!now.timed_out) break;
+    }
+    if (!/beep/i.test(now.reply ?? "")) fail(`the bot did not answer: ${now.reply}`);
+    if (!/beep/i.test(now.last_prompt ?? "")) fail(`the message did not land as the user's: ${now.last_prompt}`);
+    step("bot answered", { last_prompt: now.last_prompt, reply: now.reply });
+  }
+  const unknown = await rpc("tools/call", { name: "read_bot", arguments: { bot: "no-such-bot" } });
+  if (!unknown.isError) fail("an unknown bot read without error");
+  step("an unknown bot is an isError result", unknown.content[0].text);
+}
+
+const taskProject = flag("--bot-card");
+if (botName && taskProject) {
+  await call("send_to_bot", {
+    bot: botName,
+    message:
+      `Start one task with \`dray session new --project ${taskProject} "<prompt>"\`, where the prompt tells it: ` +
+      "use your AskUserQuestion tool to ask one question, 'Which colour?', with the options Red and Blue, then reply with exactly the colour picked. " +
+      "Then reply to me with the single word: started.",
+  });
+  let card;
+  for (let round = 0; round < 30 && !card; round++) {
+    const now = await call("wait_for_bot", { bot: botName, seconds: 50 });
+    card = now.open_cards.find((c) => c.kind === "questions" && c.session_id);
+    step(`bot card wait ${round + 1}`, { status: now.status, timed_out: now.timed_out, cards: now.open_cards.length });
+    if (!card) await new Promise((r) => setTimeout(r, 2000));
+  }
+  if (!card) fail("the task's card never showed under its bot");
+  const listedCard = (await call("list_bots")).bots.find((b) => b.name === botName);
+  if (!listedCard.waiting || !listedCard.open_cards.length) fail("list_bots did not mark the bot waiting");
+  step("task card under the bot", { session: card.session_title, questions: card.questions });
+  const answers = Object.fromEntries(card.questions.map((q) => [q.question, q.options.at(-1)]));
+  await call("answer_card", { session_id: card.session_id, request_id: card.request_id, answers });
+  const task = await follow(card.session_id);
+  if (!/blue/i.test(task.reply)) fail(`the task did not get the answer: ${task.reply}`);
+  step("the task answered", task.reply);
 }
 
 const missing = flag("--missing");

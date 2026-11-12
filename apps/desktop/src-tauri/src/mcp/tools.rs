@@ -5,10 +5,11 @@
 
 use std::time::{Duration, Instant};
 
-use dray_proto::{CreateSession, Request, Response, SendMessage, SessionRef};
+use dray_proto::{CreateSession, Request, Response, SendMessage, SendToBot, SessionRef};
 use serde_json::{json, Value};
 
 use super::auth::Access;
+use crate::bots::{self, Bot};
 use crate::{orchestration, serve, sink::Sink, store};
 
 /// Under the ~100s at which edges and clients drop a request that has sent
@@ -24,6 +25,7 @@ fn catalog() -> Vec<(bool, Value)> {
     let read = json!({ "readOnlyHint": true, "openWorldHint": false });
     let write = json!({ "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false });
     let session_id = json!({ "type": "string", "description": "The session's id, from list_sessions or start_session." });
+    let bot = json!({ "type": "string", "description": "The bot's name or id, from list_bots." });
     vec![
         (true, json!({
             "name": "list_projects",
@@ -101,6 +103,40 @@ fn catalog() -> Vec<(bool, Value)> {
             }, "required": ["session_id", "request_id"] },
             "annotations": write,
         })),
+        (true, json!({
+            "name": "list_bots",
+            "title": "List bots",
+            "description": "The bots on this machine. A bot is one ongoing chat with instructions and memory of its own; the tasks it starts run hidden and report back to it. working=true means its chat is mid-turn. waiting=true means it or one of its tasks is blocked on the user, and open_cards says on what, each card naming the session answer_card takes.",
+            "inputSchema": { "type": "object", "properties": {} },
+            "annotations": read,
+        })),
+        (true, json!({
+            "name": "read_bot",
+            "title": "Read a bot",
+            "description": "Where a bot's chat stands, as read_session tells it: the latest message into the chat (yours, or a task's report), what the bot has said since, and any open card in its chat or its tasks.",
+            "inputSchema": { "type": "object", "properties": { "bot": bot }, "required": ["bot"] },
+            "annotations": read,
+        })),
+        (true, json!({
+            "name": "wait_for_bot",
+            "title": "Wait for a bot",
+            "description": "Waits up to 50 seconds for a bot to finish its turn or to need the user, then answers what read_bot does. timed_out=true means it is still working: call again to keep waiting.",
+            "inputSchema": { "type": "object", "properties": {
+                "bot": bot,
+                "seconds": { "type": "integer", "minimum": 1, "maximum": MAX_WAIT, "description": "How long to wait, 45 by default." },
+            }, "required": ["bot"] },
+            "annotations": read,
+        })),
+        (false, json!({
+            "name": "send_to_bot",
+            "title": "Message a bot",
+            "description": "Sends a message into a bot's chat as the user, starting its chat if it has none. Starts a turn when it is idle; queued until the current turn ends when it is running. Follow it with wait_for_bot.",
+            "inputSchema": { "type": "object", "properties": {
+                "bot": bot,
+                "message": { "type": "string" },
+            }, "required": ["bot", "message"] },
+            "annotations": write,
+        })),
     ]
 }
 
@@ -118,7 +154,7 @@ pub async fn call(params: &Value, access: Access, sink: &Sink) -> Value {
         return failed(format!("no tool {name}"));
     };
     if !read && access != Access::Full {
-        return failed("This assistant was connected read-only. Connect it again with full access to change sessions.".into());
+        return failed("This assistant was connected read-only. Connect it again with full access to change sessions or message bots.".into());
     }
     match run(name, args, sink).await {
         Ok(value) => json!({
@@ -139,6 +175,10 @@ async fn run(name: &str, args: &Value, sink: &Sink) -> Result<Value, String> {
         "send_message" => send_message(text(args, "session_id")?, text(args, "message")?, sink).await,
         "stop_session" => stop_session(text(args, "session_id")?, sink).await,
         "answer_card" => answer_card(args, sink).await,
+        "list_bots" => list_bots().await,
+        "read_bot" => read_bot(&find_bot(text(args, "bot")?).await?).await,
+        "wait_for_bot" => wait_for_bot(&find_bot(text(args, "bot")?).await?, args["seconds"].as_u64()).await,
+        "send_to_bot" => send_to_bot(text(args, "bot")?, text(args, "message")?, sink).await,
         _ => Err(format!("no tool {name}")),
     }
 }
@@ -322,7 +362,10 @@ fn turn_outcome(turn: &Value) -> Value {
     json!({ "outcome": "finished" })
 }
 
-async fn wait_for_session(session_id: &str, seconds: Option<u64>) -> Result<Value, String> {
+/// Polls until the session's turn is over or it needs the user, answering
+/// whether the wait ran out first. For a bot, a card on any of its tasks
+/// counts as needing the user too.
+async fn wait_on(session_id: &str, seconds: Option<u64>, bot: Option<&Bot>) -> Result<bool, String> {
     let limit = Duration::from_secs(seconds.unwrap_or(45).clamp(1, MAX_WAIT));
     let started = Instant::now();
     loop {
@@ -332,19 +375,110 @@ async fn wait_for_session(session_id: &str, seconds: Option<u64>) -> Result<Valu
             .ok_or_else(|| format!("no session {session_id} on this machine"))?;
         // A send moments ago can still read idle; give it a beat to start.
         let settled = status_of(&item) != "in_progress" && started.elapsed() > Duration::from_secs(3);
-        if settled || waiting(&serve::open_asks(), session_id) {
-            break;
+        let blocked = match bot {
+            Some(bot) => !bot_cards(bot).await.is_empty(),
+            None => waiting(&serve::open_asks(), session_id),
+        };
+        if settled || blocked {
+            return Ok(false);
         }
         if started.elapsed() >= limit {
-            let mut answer = read_session(session_id).await?;
-            answer["timed_out"] = json!(true);
-            return Ok(answer);
+            return Ok(true);
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
+}
+
+async fn wait_for_session(session_id: &str, seconds: Option<u64>) -> Result<Value, String> {
+    let timed_out = wait_on(session_id, seconds, None).await?;
     let mut answer = read_session(session_id).await?;
-    answer["timed_out"] = json!(false);
+    answer["timed_out"] = json!(timed_out);
     Ok(answer)
+}
+
+async fn find_bot(key: &str) -> Result<Bot, String> {
+    bots::find_bot(key).await.map_err(|e| format!("{e:#}"))
+}
+
+/// The cards holding a bot up: its chat's and those of every task under it, at
+/// any depth, each naming the session `answer_card` takes. Its tasks run
+/// hidden, so this is the only place an assistant sees them.
+async fn bot_cards(bot: &Bot) -> Vec<Value> {
+    let asks = serve::open_asks();
+    let mut ids: Vec<&str> = asks.iter().filter_map(|a| a["sessionId"].as_str()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut found = Vec::new();
+    for id in ids {
+        let Ok(Some(item)) = store::get_session_index_item(id).await else { continue };
+        let Some(chat) = bots::bot_chat_of(&item).await else { continue };
+        if bots::bot_at(&chat.cwd).await.is_none_or(|b| b.id != bot.id) {
+            continue;
+        }
+        for mut card in cards(&asks, id) {
+            card["session_id"] = json!(id);
+            card["session_title"] = json!(item.title);
+            found.push(card);
+        }
+    }
+    found
+}
+
+async fn list_bots() -> Result<Value, String> {
+    let all = bots::list_bots().await.map_err(|e| format!("{:#}", anyhow::Error::from(e)))?;
+    let mut listed = Vec::new();
+    for bot in all {
+        let chat = bots::chat_of(&bot).await;
+        let cards = bot_cards(&bot).await;
+        listed.push(json!({
+            "bot_id": bot.id,
+            "name": bot.name,
+            "session_id": chat.as_ref().map(|c| &c.session_id),
+            "working": chat.as_ref().is_some_and(|c| status_of(c) == "in_progress"),
+            "waiting": !cards.is_empty(),
+            "modified": chat.as_ref().map(|c| &c.modified),
+            "open_cards": cards,
+        }));
+    }
+    Ok(json!({ "bots": listed }))
+}
+
+/// A bot's chat is an ordinary session in its folder, so this is
+/// `read_session` on its newest, with the tasks' cards added.
+async fn read_bot(bot: &Bot) -> Result<Value, String> {
+    let mut answer = match bots::chat_of(bot).await {
+        Some(chat) => read_session(&chat.session_id).await?,
+        None => json!({ "status": "idle", "reply": null, "note": "No chat yet: send_to_bot starts one." }),
+    };
+    if let Some(fields) = answer.as_object_mut() {
+        // The bot's folder and no branch: neither is a project.
+        fields.remove("project");
+        fields.remove("branch");
+    }
+    answer["bot_id"] = json!(bot.id);
+    answer["name"] = json!(bot.name);
+    answer["open_cards"] = json!(bot_cards(bot).await);
+    Ok(answer)
+}
+
+async fn wait_for_bot(bot: &Bot, seconds: Option<u64>) -> Result<Value, String> {
+    let timed_out = match bots::chat_of(bot).await {
+        Some(chat) => wait_on(&chat.session_id, seconds, Some(bot)).await?,
+        None => false,
+    };
+    let mut answer = read_bot(bot).await?;
+    answer["timed_out"] = json!(timed_out);
+    Ok(answer)
+}
+
+/// `dray bot send` with no sender, so it lands as the user's own message, the
+/// way the app's composer sends one, and starts the bot's chat where it has none.
+async fn send_to_bot(bot: &str, message: &str, sink: &Sink) -> Result<Value, String> {
+    let send = SendToBot { bot: bot.into(), prompt: message.into(), from_session_id: None };
+    match orchestrate(Request::SendToBot(send), sink).await? {
+        Response::BotSent { bot, queued } => Ok(json!({ "sent": true, "queued": queued, "session_id": bot.session_id })),
+        other => Err(format!("unexpected answer: {other:?}")),
+    }
 }
 
 async fn orchestrate(request: Request, sink: &Sink) -> Result<Response, String> {
@@ -419,6 +553,15 @@ mod tests {
         assert_eq!(turn_outcome(&codex)["outcome"], "stopped");
         let fx_or_grok = json!({ "type": "turn_completed", "status": "success", "stopReason": "cancelled" });
         assert_eq!(turn_outcome(&fx_or_grok)["outcome"], "stopped");
+    }
+
+    #[test]
+    fn a_read_only_grant_reads_bots_but_never_messages_one() {
+        let names = |access| list(access).iter().map(|t| t["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let read = names(Access::Read);
+        assert!(["list_bots", "read_bot", "wait_for_bot"].iter().all(|t| read.contains(&t.to_string())));
+        assert!(!read.contains(&"send_to_bot".to_string()));
+        assert!(names(Access::Full).contains(&"send_to_bot".to_string()));
     }
 
     #[test]
