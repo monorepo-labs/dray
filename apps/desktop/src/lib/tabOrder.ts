@@ -90,5 +90,7 @@ export function popClosedTab(sessionId: string): ClosedTab | undefined {
 export function forgetClosedTabs(sessionId: string) {
   closed.delete(sessionId);
   const key = `task:${sessionId}`;
-  for (const [owner, tabs] of closed) closed.set(owner, tabs.filter((t) => t.key !== key));
+  for (const [owner, tabs] of closed) {
+    closed.set(owner, tabs.filter((t) => t.key !== key && t.pick?.target !== sessionId));
+  }
 }

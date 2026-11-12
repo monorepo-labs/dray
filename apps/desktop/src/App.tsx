@@ -1589,6 +1589,14 @@ function App() {
     if (live) pickSeen.current.set(t.target, live);
   }
   const [pickAsked, setPickAsked] = useState<SessionIndexItem | null>(null);
+  const [pickTick, setPickTick] = useState(0);
+  const litPickBusy =
+    litPick?.kind === "changes" && statusBySession[litPick.target] === "in_progress" && !issuesOpen;
+  useEffect(() => {
+    if (!litPickBusy) return;
+    const t = setInterval(() => setPickTick((n) => n + 1), 15_000);
+    return () => clearInterval(t);
+  }, [litPickBusy]);
   const unlistedPick =
     litPick && litPick.target !== selectedBotId && !sessionIndexItems.some((i) => i.sessionId === litPick.target)
       ? litPick.target
@@ -3048,9 +3056,11 @@ function App() {
       );
     }
     // The task's turns are what move its tree; its transcript is not loaded
-    // here, so its index entry's activity stamp and status stand in.
+    // here, so its index entry's activity stamp and status stand in, and a
+    // tick moves the working tree's reads mid-turn, at `useChanges`'s own gap.
     const status = statusBySession[tab.target] ?? item.status;
     const revision = `${item.modified}:${status}`;
+    const writeRevision = `${revision}:${pickTick}`;
     const key = `${tab.id}:${tab.target}`;
     return tab.kind === "changes" ? (
       <ChangesView
@@ -3058,7 +3068,7 @@ function App() {
         cwd={item.cwd}
         active={!issuesOpen}
         revision={revision}
-        writeRevision={revision}
+        writeRevision={writeRevision}
         busy={status === "in_progress"}
         picker={picker}
       />

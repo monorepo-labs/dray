@@ -10,6 +10,14 @@ describe("forgetClosedTabs", () => {
     expect(popClosedTab("bot")?.key).toBe("task:t1");
     expect(popClosedTab("bot")).toBeUndefined();
   });
+
+  it("drops a closed pick on a deleted task, keeping others", () => {
+    pushClosedTab("bot", { key: "pick:1", pick: { kind: "changes", target: "t1" } });
+    pushClosedTab("bot", { key: "pick:2", pick: { kind: "files", target: "t2" } });
+    forgetClosedTabs("t2");
+    expect(popClosedTab("bot")?.key).toBe("pick:1");
+    expect(popClosedTab("bot")).toBeUndefined();
+  });
 });
 
 describe("reconcile", () => {
