@@ -50,15 +50,16 @@ export function stalledTasks(
       else if (was === -1) readySince.set(id, now);
     }
     if (row.busy || row.asking || item.aside || item.continueAt) continue;
+    // Unknown is held, not drawn: a merge elsewhere drops every open PR there
+    // to unknown for a poll, and a waiting row in that gap would be a new stall.
+    if (ready === null || (open && pr.checksState === "RUNNING")) continue;
 
     const touched = Date.parse(item.modified) || now;
-    const readyAt = readySince.get(id) ?? -1;
-    if (open && readyAt >= 0) {
-      const since = Math.max(readyAt, touched);
+    if (ready === true) {
+      const since = Math.max(readySince.get(id) ?? 0, touched);
       if (now - since >= STALL_MS) stalls.push({ row, pr, kind: "ready", since, key: `${id}:ready:${pr.number}:${item.modified}` });
       continue;
     }
-    if (open && pr.checksState === "RUNNING") continue;
     if (now - touched >= STALL_MS) stalls.push({ row, pr, kind: "waiting", since: touched, key: `${id}:waiting:${item.modified}` });
   }
   return stalls.sort((a, b) => a.since - b.since);

@@ -61,6 +61,13 @@ describe("stalledTasks", () => {
     expect(s.since).toBe(turned);
   });
 
+  it("draws nothing for a ready PR while GitHub recomputes it", () => {
+    const seen = new Map<string, number>();
+    expect(stalledTasks([row("a")], () => pr(), seen, T0 + STALL_MS)[0].kind).toBe("ready");
+    expect(stalledTasks([row("a")], () => pr({ mergeable: "UNKNOWN" }), seen, T0 + STALL_MS)).toEqual([]);
+    expect(stalledTasks([row("a")], () => pr(), seen, T0 + STALL_MS)[0].since).toBe(T0);
+  });
+
   it("leaves a task whose checks are still running alone", () => {
     const running = () => pr({ checksState: "RUNNING", mergeStateStatus: "BLOCKED" });
     expect(stalledTasks([row("a")], running, new Map(), T0 + 2 * STALL_MS)).toEqual([]);
