@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 import { invoke } from "@/lib/transport";
-import type { Bot, SessionIndexItem } from "@/types/events";
+import type { Bot, BotPreview, SessionIndexItem } from "@/types/events";
 
 /// The bots on this Mac's server, held once for the app. Settings writes and
 /// the sidebar reads, so both go through here rather than each fetching.
@@ -61,11 +61,28 @@ export function inBotTree(
   return false;
 }
 
-/// A bot and its ongoing chat, for the sidebar's Bots section.
-export type BotEntry = { bot: Bot; session: SessionIndexItem | undefined };
+/// A bot, its ongoing chat, and the chat's inbox row, for the sidebar.
+export type BotEntry = { bot: Bot; session: SessionIndexItem | undefined; preview?: BotPreview };
 
-export function botEntries(list: readonly Bot[], items: readonly SessionIndexItem[]): BotEntry[] {
-  return list.map((bot) => ({ bot, session: botSession(items, bot) }));
+export function botEntries(
+  list: readonly Bot[],
+  items: readonly SessionIndexItem[],
+  previews: Readonly<Record<string, BotPreview>> = {},
+): BotEntry[] {
+  return list.map((bot) => {
+    const session = botSession(items, bot);
+    return { bot, session, preview: session && previews[session.sessionId] };
+  });
+}
+
+/// One line of a reply for an inbox row: markdown marks and line breaks out.
+export function previewLine(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[*_`#>]+/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /// The bot's chat: its newest session not settled. One ongoing conversation,

@@ -1,11 +1,15 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use ts_rs::TS;
 
 use crate::{
+    events::ApprovalPolicy,
+    models::{Effort, ModelId},
+    session::{manager, Harness},
+    sink::Sink,
     store::{get_home_app_dir, read_json, write_atomic, SessionIndexItem},
     Fail,
 };
@@ -26,18 +30,21 @@ pub struct Bot {
     /// The bot's folder: its session's cwd. Absolute, on the server holding it.
     pub path: String,
     pub created: String,
+    /// The face picked when it was made. `None` for a bot made before there
+    /// was a pick, which then draws the face its id seeds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<BotAvatar>,
 }
 
-/// A bot with what its two files say, for Settings.
+/// A Blobatar face: which silhouette and which hue. Strings and degrees rather
+/// than the library's 0–1 trait positions, so a later generation of the
+/// library moving its cut points cannot change a face somebody picked.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export, export_to = "events.ts")]
-pub struct BotDetail {
-    #[serde(flatten)]
-    #[ts(flatten)]
-    pub bot: Bot,
-    pub instructions: String,
-    pub memory: String,
+pub struct BotAvatar {
+    pub shape: String,
+    pub hue: f64,
 }
 
 pub const INSTRUCTIONS: &str = "INSTRUCTIONS.md";
@@ -63,21 +70,10 @@ pub async fn list_bots() -> Result<Vec<Bot>, Fail> {
     Ok(read_json(&list_path().await?).await?)
 }
 
-/// A bot and its two files.
+/// Makes the folder, both files and the list entry. Both files start empty: the
+/// bot is told its job in its first message and writes it down itself.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn read_bot(id: String) -> Result<BotDetail, Fail> {
-    let bot = find(&id).await?;
-    let dir = Path::new(&bot.path);
-    Ok(BotDetail {
-        instructions: read_file(&dir.join(INSTRUCTIONS)).await,
-        memory: read_file(&dir.join(MEMORY)).await,
-        bot,
-    })
-}
-
-/// Makes the folder, both files and the list entry.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn create_bot(name: String, instructions: String) -> Result<Bot, Fail> {
+pub async fn create_bot(name: String, avatar: Option<BotAvatar>) -> Result<Bot, Fail> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err(anyhow::anyhow!("a bot needs a name").into());
@@ -85,7 +81,7 @@ pub async fn create_bot(name: String, instructions: String) -> Result<Bot, Fail>
     let id = uuid::Uuid::now_v7().to_string();
     let dir = bots_dir().await?.join(&id);
     tokio::fs::create_dir_all(&dir).await.context("could not make the bot's folder")?;
-    write_atomic(&dir.join(INSTRUCTIONS), instructions.trim()).await?;
+    write_atomic(&dir.join(INSTRUCTIONS), "").await?;
     write_atomic(&dir.join(MEMORY), "").await?;
 
     let bot = Bot {
@@ -93,39 +89,11 @@ pub async fn create_bot(name: String, instructions: String) -> Result<Bot, Fail>
         name,
         path: dir.to_string_lossy().into_owned(),
         created: chrono::Utc::now().to_rfc3339(),
+        avatar,
     };
     let _guard = BOTS_LOCK.lock().await;
     let mut bots = list_bots().await?;
     bots.push(bot.clone());
-    save_list(&bots).await?;
-    Ok(bot)
-}
-
-/// Writes whichever of the three is given. The files take effect the next time
-/// the bot's session starts; the bot edits them itself between turns too.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn update_bot(
-    id: String,
-    name: Option<String>,
-    instructions: Option<String>,
-    memory: Option<String>,
-) -> Result<Bot, Fail> {
-    let _guard = BOTS_LOCK.lock().await;
-    let mut bots = list_bots().await?;
-    let Some(bot) = bots.iter_mut().find(|b| b.id == id) else {
-        return Err(anyhow::anyhow!("no bot {id}").into());
-    };
-    if let Some(name) = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
-        bot.name = name;
-    }
-    let dir = PathBuf::from(&bot.path);
-    if let Some(text) = instructions {
-        write_atomic(&dir.join(INSTRUCTIONS), text.trim()).await?;
-    }
-    if let Some(text) = memory {
-        write_atomic(&dir.join(MEMORY), text.trim()).await?;
-    }
-    let bot = bot.clone();
     save_list(&bots).await?;
     Ok(bot)
 }
@@ -149,16 +117,103 @@ pub async fn delete_bot(id: String) -> Result<(), Fail> {
     Ok(())
 }
 
+/// A bot chat's inbox row: its last reply, and the replies since the reader
+/// last wrote.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "events.ts")]
+pub struct BotPreview {
+    pub text: Option<String>,
+    pub replies: u32,
+}
+
+/// Each bot chat's inbox row, keyed by session.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn bot_previews(
+    session_ids: Vec<String>,
+) -> Result<std::collections::HashMap<String, BotPreview>, Fail> {
+    let mut previews = std::collections::HashMap::new();
+    for id in session_ids {
+        let (text, replies) = crate::store::last_reply(&id).await?;
+        previews.insert(id, BotPreview { text, replies });
+    }
+    Ok(previews)
+}
+
+/// Sessions whose next prompt is a bot's kickoff, which the transcript draws no
+/// bubble for. Read where the prompt's event is built: threading a flag through
+/// `send_msg`'s twenty parameters for one caller would touch every other one.
+static KICKOFFS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether `session_id`'s prompt now being logged is a kickoff, and forgets it.
+pub fn take_kickoff(session_id: &str) -> bool {
+    let mut kickoffs = KICKOFFS.lock().unwrap();
+    let at = kickoffs.iter().position(|k| k == session_id);
+    at.map(|i| kickoffs.remove(i)).is_some()
+}
+
+/// Opens a bot's chat with the bot speaking first: a prompt the reader never
+/// sees asks it to introduce itself, so the chat starts on its greeting.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn start_bot(
+    id: String,
+    harness: Harness,
+    model: ModelId,
+    effort: Option<Effort>,
+    permission_mode: ApprovalPolicy,
+    fast: bool,
+    sink: Sink,
+) -> Result<SessionIndexItem, Fail> {
+    if !harness.names_a_cli() {
+        return Err(anyhow::anyhow!("invalid harness").into());
+    }
+    let bot = list_bots()
+        .await?
+        .into_iter()
+        .find(|b| b.id == id)
+        .ok_or_else(|| anyhow::anyhow!("no bot {id}"))?;
+    let session_id = uuid::Uuid::now_v7().to_string();
+    let prompt = kickoff_prompt(&bot).await;
+    KICKOFFS.lock().unwrap().push(session_id.clone());
+    let sent = manager()
+        .send_msg(
+            &session_id, &prompt, &[], &[], harness, model, effort, permission_mode, fast,
+            &bot.path, None, false, None, None, true, None, false, Some(&bot.name), None, None, &sink,
+        )
+        .await;
+    // A send that failed before logging the prompt left the mark behind.
+    take_kickoff(&session_id);
+    let item = sent?
+        .snapshot
+        .map(|s| s.index_item)
+        .ok_or_else(|| anyhow::anyhow!("the bot's chat started but returned no index entry"))?;
+    sink.emit(crate::orchestration::SESSION_CREATED, &item).ok();
+    Ok(item)
+}
+
+/// What the bot is asked before anyone has written to it. The projects ride
+/// along so its guess at a job has something to go on.
+async fn kickoff_prompt(bot: &Bot) -> String {
+    let projects: Vec<String> = crate::projects::list_projects()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| Path::new(&p.path).file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+    let projects = if projects.is_empty() { "none yet".to_string() } else { projects.join(", ") };
+    format!(
+        "[Dray: you were just created as \"{name}\". Nobody has written to you yet; open the conversation.]
+
+Greet the user by first name (`git config user.name`, else the Mac account's full name) and take one guess at what you are for from your name, then ask what they want from you. Their projects are {projects}; name one only where your name points at it.
+
+Two or three short sentences, plain prose. Do not list tools, CLIs or accounts: the user set you up, so those work. Mention a service only where your job plainly needs one you cannot reach, saying what is missing and how to connect it. Start no work, and don't mention this message.",
+        name = bot.name,
+    )
+}
+
 /// Caller holds `BOTS_LOCK`: the file is rewritten whole.
 async fn save_list(bots: &[Bot]) -> Result<()> {
     write_atomic(&list_path().await?, serde_json::to_string_pretty(bots)?).await
-}
-
-async fn find(id: &str) -> Result<Bot> {
-    match list_bots().await.map_err(|e| e.0)?.into_iter().find(|b| b.id == id) {
-        Some(bot) => Ok(bot),
-        None => bail!("no bot {id}"),
-    }
 }
 
 async fn read_file(path: &Path) -> String {
@@ -233,17 +288,23 @@ fn capped(text: String) -> String {
 fn bot_block(bot: &Bot, instructions: &str, memory: &str) -> String {
     let path = &bot.path;
     let name = &bot.name;
-    let instructions = if instructions.trim().is_empty() { "(none yet)" } else { instructions };
+    let instructions = if instructions.trim().is_empty() {
+        "(empty — your job is whatever the user tells you first; write it down)"
+    } else {
+        instructions
+    };
     let memory = if memory.trim().is_empty() { "(empty)" } else { memory };
     format!(
         "# You are a Dray bot: {name}
 
 You are a long-lived bot the user talks to in one ongoing chat. You run in your own folder, `{path}`, which holds two files:
 
-- `{INSTRUCTIONS}`: your job, written by the user. Edit it when the user asks you to change how you work, and say so in one line when you do.
+- `{INSTRUCTIONS}`: your job. It starts empty: write down what the user tells you that you are for, and update it when they change how you work. Say so in one line when you do.
 - `{MEMORY}`: what you remember across restarts. Keep facts worth knowing next time (people, preferences, decisions, where things live), not a log of work. Keep it short and remove what stops being true.
 
 Your folder is not a repository. Hand work off with `dray session new --project <repo path> \"<brief>\"` (the `dray` skill has the details); every session you start runs hidden from the sidebar. After each of its turns, its final message is sent to you automatically, so never ask one to report back with `dray session send`. Message one with `dray session send <id>` when it needs more from you. Its permission and question cards reach the user without you.
+
+Settling finished sessions is your job, never the user's. Once a session's work has landed (its pull request merged) or it finished with nothing to land, run `dray session settle <id> --delete-worktree`. That deletes its worktree and branch with whatever they hold, so never settle one whose work is unmerged or unpushed and still wanted.
 
 ## Instructions
 
@@ -274,7 +335,7 @@ mod tests {
     use super::*;
 
     fn bot() -> Bot {
-        Bot { id: "b".into(), name: "Ops".into(), path: "/h/bots/b".into(), created: String::new() }
+        Bot { id: "b".into(), name: "Ops".into(), path: "/h/bots/b".into(), created: String::new(), avatar: None }
     }
 
     #[test]
@@ -284,6 +345,7 @@ mod tests {
         assert!(block.contains("Prefers short replies."));
         assert!(block.contains("/h/bots/b"));
         assert!(block.contains("never ask one to report back"));
+        assert!(block.contains("dray session settle <id> --delete-worktree"));
     }
 
     #[test]

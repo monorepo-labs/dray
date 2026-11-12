@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botAt, botSession, inBotTree } from "@/lib/bots";
+import { botAt, botSession, inBotTree, previewLine } from "@/lib/bots";
 import type { Bot, SessionIndexItem } from "@/types/events";
 
 const bot: Bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
@@ -18,6 +18,14 @@ describe("botAt", () => {
   it("matches the bot's folder with or without a trailing slash", () => {
     expect(botAt([bot], "/h/bots/b/")).toBe(bot);
     expect(botAt([bot], "/h/bots/bb")).toBeUndefined();
+  });
+});
+
+describe("previewLine", () => {
+  it("flattens a reply to one plain line", () => {
+    expect(previewLine("**Done.** See [the PR](https://x/1).\n\n```sh\nls\n```\nNext?")).toBe(
+      "Done. See the PR. Next?",
+    );
   });
 });
 

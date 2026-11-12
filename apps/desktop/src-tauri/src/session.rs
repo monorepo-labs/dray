@@ -3106,6 +3106,7 @@ async fn deliver_prompt(
         // Absent means "this session's own cwd", which is the truth for every
         // message a session logs itself. Only a fork records one.
         cwd: None,
+        kickoff: crate::bots::take_kickoff(session_id),
     };
     // Nothing tracks turns yet; Claude Code opens one per `init`.
     let agent_event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
@@ -4005,6 +4006,7 @@ pub async fn strand_queue_on_exit(
                 queued: true,
                 from: message.from.clone(),
                 cwd: None,
+                kickoff: false,
             },
         );
         if let Err(err) = app.emit("agent_event", &bubble) {

@@ -54,7 +54,8 @@ export function OrbLine({
     <div className="flex items-center gap-2" aria-live="polite">
       <Orb state={state} />
 
-      <span className="shimmer-text text-chat">{label}</span>
+      {/* One line: a bot's chat puts a tool's argument here, which can run long. */}
+      <span className="shimmer-text min-w-0 truncate text-chat">{label}</span>
 
       {children}
     </div>

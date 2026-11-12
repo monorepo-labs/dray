@@ -4,7 +4,6 @@ import {
   ChatBubbleBottomCenterTextIcon,
   ClockIcon,
   ComputerDesktopIcon,
-  CpuChipIcon,
   InformationCircleIcon,
   MicrophoneIcon,
   PuzzlePieceIcon,
@@ -62,7 +61,6 @@ import WindowControls from "@/components/layout/WindowControls";
 import { SettingsHeaderSlot } from "@/components/settings/headerAction";
 import ServersSettings from "@/components/settings/ServersSettings";
 import HandoffSettings from "@/components/settings/HandoffSettings";
-import BotsSettings from "@/components/settings/BotsSettings";
 import SettingRow from "@/components/settings/SettingRow";
 import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
 import SpacesSettings from "@/components/settings/SpacesSettings";
@@ -208,7 +206,6 @@ export default function SettingsPage({
           </>
         ),
         composer: <HandoffSettings />,
-        bots: <BotsSettings />,
         breaks: (
           <Section>
             <BreakRows />
@@ -1411,7 +1408,6 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
 const ALL_TABS = [
   { id: "appearance", label: "Appearance", Icon: PaintBrushIcon },
   { id: "spaces", label: "Spaces", Icon: Square3Stack3DIcon },
-  { id: "bots", label: "Bots", Icon: CpuChipIcon },
   { id: "servers", label: "Servers", Icon: ServerStackIcon },
   { id: "accounts", label: "Accounts", Icon: KeyIcon },
   { id: "transcription", label: "Transcription", Icon: MicrophoneIcon },
@@ -1438,7 +1434,6 @@ const TAB_SUBTITLES: Partial<Record<SettingsTab, string>> = {
   accounts: "Manage each harness's sign-in. Switch one off to hide it from the model picker.",
   composer:
     "The buttons that rise out of the composer's top edge on hover. Each sends its prompt as if you had typed it.",
-  bots: "A bot is one ongoing chat with its own instructions and memory. What it starts runs out of the sidebar and reports back to it.",
   // Nothing on the island says it has a menu.
   island: "Right-click the island to change these from the island itself.",
 };

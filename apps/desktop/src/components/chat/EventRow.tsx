@@ -64,6 +64,7 @@ export default function EventRow({
 
   switch (payload.type) {
     case "user_message":
+      if (payload.kickoff) return null;
       return (
         <UserMessage
           eventId={event.id}

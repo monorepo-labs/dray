@@ -1,5 +1,6 @@
 import { Plus } from "lucide-react";
 
+import BotAvatar from "@/components/BotAvatar";
 import BranchSelector from "@/components/composer/BranchSelector";
 import BranchSwitchDialog from "@/components/composer/BranchSwitchDialog";
 import ContextMeter from "@/components/composer/ContextMeter";
@@ -17,6 +18,7 @@ import { lockedMidTurn } from "@/lib/liveControls";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type {
   ApprovalPolicy,
+  Bot,
   BranchList,
   Effort,
   Harness,
@@ -81,9 +83,9 @@ type ComposerToolbarProps = {
   /// Where the session runs is fixed at creation, so the last three controls
   /// only exist before one starts.
   isNewSession: boolean;
-  /// A bot's first chat: its name stands in for the project pickers, since it
-  /// runs in its own folder rather than in a repo.
-  botName?: string;
+  /// A bot's first chat: its face and name stand in for the project pickers,
+  /// since it runs in its own folder rather than in a repo.
+  bot?: Bot;
 
   /// Whether this session's turn is in flight. Only the fx provider switch
   /// reads it — it is the one control here that moves the child on the click
@@ -128,7 +130,7 @@ export default function ComposerToolbar({
   onAttach,
   contextUsage,
   isNewSession,
-  botName,
+  bot,
   busy,
 }: ComposerToolbarProps) {
   return (
@@ -173,11 +175,14 @@ export default function ComposerToolbar({
         loadingModels={loadingModels}
       />
 
-      {isNewSession && botName && (
-        <span className="truncate px-1.5 text-ui text-muted-foreground">{botName}</span>
+      {isNewSession && bot && (
+        <span className="flex min-w-0 items-center gap-1.5 px-1.5 text-ui text-muted-foreground">
+          <BotAvatar seed={bot.id} avatar={bot.avatar} className="size-4" />
+          <span className="truncate">{bot.name}</span>
+        </span>
       )}
 
-      {isNewSession && !botName && (
+      {isNewSession && !bot && (
         <>
           <ProjectSelector
             projects={projects}

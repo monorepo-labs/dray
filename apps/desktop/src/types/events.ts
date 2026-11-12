@@ -232,7 +232,13 @@ from: MessageSender | null,
  * Deliberately not overwritten on a fork of a fork: the first ancestor
  * to record one is the tree the message was actually written in.
  */
-cwd: string | null, } | { "type": "assistant_text", 
+cwd: string | null, 
+/**
+ * Dray's own prompt opening a new bot's chat, so the bot speaks first.
+ * The transcript draws no bubble for it; the log keeps it, being what
+ * the agent was actually given.
+ */
+kickoff?: boolean, } | { "type": "assistant_text", 
 /**
  * `Some` only when this content was also streamed, naming the preview
  * it supersedes. `None` — the common case, covering Claude Code
@@ -571,16 +577,25 @@ export type Bot = { id: string, name: string,
 /**
  * The bot's folder: its session's cwd. Absolute, on the server holding it.
  */
-path: string, created: string, };
+path: string, created: string, 
+/**
+ * The face picked when it was made. `None` for a bot made before there
+ * was a pick, which then draws the face its id seeds.
+ */
+avatar?: BotAvatar | null, };
 
 /**
- * A bot with what its two files say, for Settings.
+ * A Blobatar face: which silhouette and which hue. Strings and degrees rather
+ * than the library's 0–1 trait positions, so a later generation of the
+ * library moving its cut points cannot change a face somebody picked.
  */
-export type BotDetail = { instructions: string, memory: string, id: string, name: string, 
+export type BotAvatar = { shape: string, hue: number, };
+
 /**
- * The bot's folder: its session's cwd. Absolute, on the server holding it.
+ * A bot chat's inbox row: its last reply, and the replies since the reader
+ * last wrote.
  */
-path: string, created: string, };
+export type BotPreview = { text: string | null, replies: number, };
 
 /**
  * What the composer's branch picker needs to render and guard itself.

@@ -122,13 +122,14 @@ export function tabOrder({
   /// The agent has put a plan up in this session — see [plan](../lib/plan.ts).
   /// Absent otherwise, for the PR tab's reason: most sessions never plan.
   plan?: boolean;
-  /// The session is a bot's chat. Drawn even with nothing handed off yet.
+  /// The session is a bot's chat. Drawn even with nothing handed off yet, and
+  /// in place of PR and Changes: a bot's folder holds its notes, not work to
+  /// review or land. Its tasks' PRs show on their rows in the Tasks tab.
   tasks?: boolean;
 }): readonly PanelTab[] {
   // Browser always: with no page open its empty state is a URL bar, the
   // session's recent pages and its local servers — a place to start.
-  const tabs: PanelTab[] = pr ? ["pr", "changes"] : ["changes"];
-  if (tasks) tabs.push("tasks");
+  const tabs: PanelTab[] = tasks ? ["tasks"] : pr ? ["pr", "changes"] : ["changes"];
   tabs.push("browser");
   // After Changes, which is what keeps Issue immediately before More.
   if (docs) tabs.push("docs");

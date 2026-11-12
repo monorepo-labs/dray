@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ArrowDown } from "lucide-react";
 
 import AssistantMessage from "@/components/chat/AssistantMessage";
+import BotTranscript, { type BotTask } from "@/components/chat/BotTranscript";
 import BackgroundTasksIndicator from "@/components/chat/BackgroundTasksIndicator";
 import CheckpointRail, { type Checkpoint } from "@/components/chat/CheckpointRail";
 import ApiRetryIndicator from "@/components/chat/ApiRetryIndicator";
@@ -89,6 +90,13 @@ type ChatProps = {
   /// than unmounted when another view tab is picked, so ⌘↓ has to be told to
   /// stop listening — otherwise it scrolls a pane nobody can see.
   active?: boolean;
+  /// A bot's chat: messages and the tasks it started, tool calls only as the
+  /// live line while it works. See [BotTranscript].
+  bot?: boolean;
+  /// Names a task the bot started, for its card.
+  taskOf?: (sessionId: string) => BotTask | undefined;
+  /// The session had unread replies, for a bot chat's NEW divider.
+  unread?: boolean;
 };
 
 /// How long an answered permission card holds its place before going.
@@ -189,6 +197,9 @@ export default function Chat({
   crowded = false,
   rail = true,
   active = true,
+  bot = false,
+  taskOf,
+  unread = false,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -272,7 +283,8 @@ export default function Chat({
     [turns],
   );
 
-  const showRail = rail && checkpoints.length >= RAIL_MIN;
+  // A bot chat is a conversation, not turns of work to jump between.
+  const showRail = rail && !bot && checkpoints.length >= RAIL_MIN;
   const [activeTurn, setActiveTurn] = useState<string | null>(null);
 
   // Which kind of preview is open, not its text: the text grows on every
@@ -689,7 +701,17 @@ export default function Chat({
             ref={contentRef}
             className="mx-auto flex max-w-3xl flex-col gap-4 px-6 pt-[calc(1.5rem+var(--snap,0px))] pb-6"
           >
-            {shownTurns.map((turn, i) => (
+            {bot ? (
+              <BotTranscript
+                key={session.sessionId}
+                unread={unread}
+                events={session.events}
+                busy={busy}
+                preview={previewShown ? <StreamingPreview sessionId={session.sessionId} /> : undefined}
+                taskOf={taskOf}
+                onOpenSession={openSession}
+              />
+            ) : shownTurns.map((turn, i) => (
               // The wrapper is what the rail measures and scrolls to. It carries
               // no styles of its own — it stands in for the block as the flex item.
               <div
