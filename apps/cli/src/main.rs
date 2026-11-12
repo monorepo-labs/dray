@@ -80,6 +80,10 @@ enum Command {
     /// This machine's Dray server: install, start, stop, run in the foreground.
     #[command(subcommand, arg_required_else_help = true)]
     Server(setup::ServerCommand),
+    /// Link this machine's Dray server to an org at drayhq.com.
+    Login,
+    /// Unlink this machine's Dray server from its org.
+    Logout,
     /// Upgrade this binary to the newest release.
     Update(Update),
     /// Manage the skill that documents this CLI.
@@ -435,6 +439,8 @@ fn run() -> Result<(), String> {
         Command::Share(args) => share(args),
         Command::Machine(command) => machine::run(command),
         Command::Server(command) => setup::server(command),
+        Command::Login => setup::login(),
+        Command::Logout => setup::logout(),
         Command::Update(args) => update(args),
         Command::Skill(SkillCommand::Install) => install_skill(),
         Command::Completion { shell } => {

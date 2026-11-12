@@ -1175,6 +1175,30 @@ export type IssueUnavailable = { "kind": "not_connected" } | { "kind": "unauthor
 export type IssuesChangedEvent = { sessionId: string, issues: Array<IssueRef>, };
 
 /**
+ * Where this server stands, as the app and `dray login` read it.
+ */
+export type LinkState = { linked: Linked | null, pending: PendingLink | null, 
+/**
+ * Why the last link ended without linking: cancelled, expired, failed.
+ */
+error: string | null, };
+
+export type Linked = { 
+/**
+ * What the org calls this server.
+ */
+serverName: string, org: LinkedOrg, 
+/**
+ * The site that holds the link, `https://www.drayhq.com` outside testing.
+ */
+site: string, };
+
+/**
+ * The org a server is linked to.
+ */
+export type LinkedOrg = { id: string, name: string, slug: string, };
+
+/**
  * Shared with the harness parsers rather than duplicated — the wire shape
  * matches, so they deserialize straight into this.
  */
@@ -1322,6 +1346,23 @@ url: string,
  * `ABCD-EFGH`.
  */
 code: string, expiresInSecs: number, access: Access, };
+
+/**
+ * A code waiting for approval.
+ */
+export type PendingLink = { 
+/**
+ * The approve page with the code filled in.
+ */
+url: string, 
+/**
+ * The bare page, for typing the code on another device.
+ */
+shortUrl: string, 
+/**
+ * `ABCD-EFGH`.
+ */
+code: string, expiresInSecs: number, };
 
 export type PermissionBehavior = "allow" | "deny";
 
@@ -2304,6 +2345,16 @@ ready: boolean, };
  * captured.
  */
 export type TurnStatus = "success" | "error";
+
+/**
+ * What `dray logout` reports.
+ */
+export type Unlinked = { org: LinkedOrg, site: string, 
+/**
+ * Set when the site couldn't be told, so its Servers page still lists
+ * this server.
+ */
+warning: string | null, };
 
 export type Unreadable = "binary" | "too_large";
 

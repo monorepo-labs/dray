@@ -468,6 +468,9 @@ fn this_machine_only(request: &Request) -> bool {
             | Request::PairAssistant(_)
             | Request::ListAssistants
             | Request::RevokeAssistant(_)
+            | Request::Login
+            | Request::LinkStatus
+            | Request::Logout
     )
 }
 
@@ -736,6 +739,11 @@ pub async fn answer_here(request: Request, app: &Sink) -> Response {
 }
 
 #[cfg(any(feature = "serve", feature = "desktop"))]
+fn linked_org(org: crate::org_link::LinkedOrg, site: String) -> dray_proto::LinkedOrg {
+    dray_proto::LinkedOrg { name: org.name, slug: org.slug, site }
+}
+
+#[cfg(any(feature = "serve", feature = "desktop"))]
 fn assistants(list: Result<Vec<crate::mcp::AssistantSummary>, String>) -> Result<Response> {
     let assistants = list
         .map_err(anyhow::Error::msg)?
@@ -799,6 +807,30 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::ListAssistants => assistants(crate::mcp::assistants().await),
         #[cfg(any(feature = "serve", feature = "desktop"))]
         Request::RevokeAssistant(revoke) => assistants(crate::mcp::revoke(app.clone(), revoke.id).await),
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        Request::Login => {
+            let pending = crate::org_link::start(app.clone()).await.map_err(anyhow::Error::msg)?;
+            Ok(Response::LinkPending {
+                url: pending.url,
+                short_url: pending.short_url,
+                code: pending.code,
+                expires_in_secs: pending.expires_in_secs,
+            })
+        }
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        Request::LinkStatus => {
+            let state = crate::org_link::state(app).await;
+            Ok(Response::LinkStatus {
+                linked: state.linked.map(|l| linked_org(l.org, l.site)),
+                pending: state.pending.is_some(),
+                error: state.error,
+            })
+        }
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        Request::Logout => {
+            let done = crate::org_link::unlink(app.clone()).await.map_err(anyhow::Error::msg)?;
+            Ok(Response::Unlinked { org: linked_org(done.org, done.site), warning: done.warning })
+        }
         Request::SetAside(aside) => {
             crate::set_session_flags(&aside.session_id, None, None, None, Some(aside.aside), app.clone()).await?;
             answer_session(&aside.session_id).await

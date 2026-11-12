@@ -27,6 +27,38 @@ export const drayTables = {
           references: { model: "user", field: "id", onDelete: "set null" },
         },
         linkedAt: { type: "date", required: true, defaultValue: () => new Date() },
+        // The server's own credential, hashed. Lives on the row so deleting
+        // the row — unlinking — revokes it with nothing else to remember.
+        tokenHash: { type: "string", required: false, unique: true },
+      },
+    },
+    // A device-code link in flight: made by a server asking to be linked,
+    // approved at /link, claimed by the server's poll and then deleted.
+    serverLink: {
+      modelName: "server_link",
+      fields: {
+        deviceCodeHash: { type: "string", required: true, unique: true },
+        userCode: { type: "string", required: true, unique: true },
+        name: { type: "string", required: true },
+        // The row this server already holds, found by the credential it sent,
+        // so approving moves that row rather than making a second one.
+        serverId: {
+          type: "string",
+          required: false,
+          references: { model: "server", field: "id", onDelete: "set null" },
+        },
+        expiresAt: { type: "date", required: true },
+        organizationId: {
+          type: "string",
+          required: false,
+          references: { model: "organization", field: "id", onDelete: "cascade" },
+        },
+        approvedBy: {
+          type: "string",
+          required: false,
+          references: { model: "user", field: "id", onDelete: "cascade" },
+        },
+        denied: { type: "boolean", required: true, defaultValue: false },
       },
     },
     serverAccess: {

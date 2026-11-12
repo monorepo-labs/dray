@@ -27,6 +27,7 @@ dray server status
 | `stop` | Stops the server and removes it from the background. |
 | `status` | Says whether the server is running, and its public address if it has one. |
 | `tunnel on` / `tunnel off` | Puts a public address in front of the server, or takes it down. |
+| `dray login` / `dray logout` | Links this server to an org at drayhq.com, or unlinks it. See [Link to an org](#link-to-an-org). |
 | `assistant add` / `ls` / `revoke <id>` | Connects Grok, Claude or ChatGPT to the server, lists the ones connected, or signs one out. See [Connect an assistant](/reference/assistants). |
 
 ### Install
@@ -84,6 +85,21 @@ dray server assistant revoke <id>
 `add` prints the URL to add as a custom connector in Grok, Claude or ChatGPT, and a code the connector's sign-in asks for. The code works once, for 10 minutes. It turns on the public address first if it is off, and waits for it. `--read-only` makes an assistant that can list and read sessions but not change them.
 
 `ls` lists the assistants signed in, with their id, name, access and when each was last used. `revoke` signs one out at once. See [Connect an assistant](/reference/assistants).
+
+### Link to an org
+
+```bash
+dray login
+dray logout
+```
+
+`login` links this machine's server to an org on your Dray account at drayhq.com. It prints a page and a code, then waits. Open the page, check the code matches, pick the org and approve. On a phone or another computer, go to `drayhq.com/link` and type the code instead. The code works for 10 minutes. Only an org's owners and admins can link servers to it.
+
+The server gets its own credential for that one link, never your sign-in. You become the only person on its allow list.
+
+A server links to one org at a time. Running `login` again and approving in another org moves it there: the old org loses it, and the allow list starts again with you.
+
+`logout` unlinks the server, on drayhq.com too. If drayhq.com can't be reached, the server forgets the link anyway and says so; unlink it on the org's Servers page as well. Unlinking there also unlinks the server, which notices within a minute.
 
 ### On a Mac with the Dray app
 

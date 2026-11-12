@@ -44,8 +44,8 @@ use std::path::PathBuf;
 /// request here, a create meant for a VPS starting on the Mac as if it had
 /// gone where it was sent. v13 added `add_video`, which an older app reads as a
 /// broken CLI rather than as an app to update. v14 added `share_machines`, and
-/// v15 the assistant verbs.
-pub const PROTOCOL_VERSION: u32 = 15;
+/// v15 the assistant verbs, and v16 `dray login` and `dray logout`.
+pub const PROTOCOL_VERSION: u32 = 16;
 
 /// The oldest envelope the app still answers. Rises only when a shape is
 /// *renamed*, never for an addition: v4 renamed `LinkIssues.identifiers` to
@@ -116,6 +116,7 @@ impl Request {
             Request::AddVideo(_) => 13,
             Request::ShareMachines(_) => 14,
             Request::PairAssistant(_) | Request::ListAssistants | Request::RevokeAssistant(_) => 15,
+            Request::Login | Request::LinkStatus | Request::Logout => 16,
         }
     }
 }
@@ -150,6 +151,10 @@ pub enum Request {
     PairAssistant(PairAssistant),
     ListAssistants,
     RevokeAssistant(AssistantRef),
+    /// Starts linking this server to an org at drayhq.com.
+    Login,
+    LinkStatus,
+    Logout,
 }
 
 /// A pairing code for an assistant to sign in to this server's `/mcp` with.
@@ -165,6 +170,16 @@ pub struct PairAssistant {
 #[serde(rename_all = "camelCase")]
 pub struct AssistantRef {
     pub id: String,
+}
+
+/// The org a server is linked to at drayhq.com.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkedOrg {
+    pub name: String,
+    pub slug: String,
+    /// The site holding the link, drayhq.com outside testing.
+    pub site: String,
 }
 
 /// An assistant signed in to `/mcp`, as `dray server assistant ls` lists it.
@@ -780,6 +795,13 @@ pub enum Response {
     AssistantPairing { url: String, code: String, expires_in_secs: u64, read_only: bool },
     /// Every assistant signed in, after the change for a revoke.
     Assistants { assistants: Vec<AssistantSummary> },
+    /// A link code waiting for approval at `url`, or at `short_url` typed.
+    LinkPending { url: String, short_url: String, code: String, expires_in_secs: u64 },
+    /// Where the link stands. `pending` while a code waits; `error` says why
+    /// the last one ended without linking.
+    LinkStatus { linked: Option<LinkedOrg>, pending: bool, error: Option<String> },
+    /// `warning` is set where drayhq.com couldn't be told.
+    Unlinked { org: LinkedOrg, warning: Option<String> },
     Error { message: String },
 }
 
@@ -1104,6 +1126,10 @@ mod tests {
         for request in &assistants {
             assert_eq!(Envelope::new(request.clone()).v, 15, "{request:?}");
         }
+        let link = [Request::Login, Request::LinkStatus, Request::Logout];
+        for request in &link {
+            assert_eq!(Envelope::new(request.clone()).v, 16, "{request:?}");
+        }
         let newest = old
             .iter()
             .chain(&drafts)
@@ -1112,6 +1138,7 @@ mod tests {
             .chain(&sessions)
             .chain([&remote, &elsewhere, &video, &sharing])
             .chain(&assistants)
+            .chain(&link)
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));
