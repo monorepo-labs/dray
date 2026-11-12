@@ -63,6 +63,8 @@ let lastSaved = "";
 function persist() {
   const saved: Saved = {};
   for (const [sid, { open, active }] of bySession) {
+    // A bot row's pick tab is in memory, so the files opened in it are too.
+    if (sid.startsWith("pick:")) continue;
     if (open.length > 0) saved[sid] = { paths: open.map((file) => file.path), active };
   }
   const json = JSON.stringify(saved);
@@ -142,13 +144,14 @@ function patch(sid: string, path: string, next: (file: OpenFile) => OpenFile) {
 ///
 /// An already-open path is activated and revealed rather than re-read: its text
 /// is on screen and the file underneath is watched, so a second click is a
-/// request to *look* at it, not to fetch it again.
-export function openInFiles(sid: string | null, path: string, line?: number): void {
+/// request to *look* at it, not to fetch it again. `bring` false leaves
+/// `opened` alone, for a view already on screen that is not the session's own.
+export function openInFiles(sid: string | null, path: string, line?: number, bring = true): void {
   // Nothing to open a file *into*. The view belongs to a session, and the one
   // route here with none selected is the issues page, which draws no view.
   if (!sid) return;
 
-  opened += 1;
+  if (bring) opened += 1;
   const { open } = state(sid);
 
   if (open.some((file) => file.path === path)) {

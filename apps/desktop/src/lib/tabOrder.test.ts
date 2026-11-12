@@ -31,6 +31,16 @@ describe("reconcile", () => {
     expect(reconcile(["file:/a", "chat"], ["chat", "files"])).toEqual(["files", "chat"]);
   });
 
+  it("trades a pick's slot with its own files and no other pick's", () => {
+    expect(reconcile(["pick:1", "pick:2", "chat"], ["chat", "pick:2", "pickfile:1:/a:b"])).toEqual([
+      "pickfile:1:/a:b",
+      "pick:2",
+      "chat",
+    ]);
+    expect(reconcile(["pickfile:1:/a", "chat"], ["chat", "pick:1"])).toEqual(["pick:1", "chat"]);
+    expect(reconcile(["pick:1", "chat"], ["chat", "pickfile:2:/a"])).toEqual(["chat", "pickfile:2:/a"]);
+  });
+
   it("never lets one kind take another's slot", () => {
     expect(reconcile(["chat", "page:1"], ["chat", "file:/a"])).toEqual(["chat", "file:/a"]);
   });

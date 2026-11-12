@@ -29,7 +29,13 @@ import { useDragReorder } from "@/hooks/useDragReorder";
 import { serverName, useServers } from "@/lib/servers";
 import { LOCAL, type ServerId } from "@/lib/transport";
 import { useDigitHotkey, useHotkey } from "@/hooks/useHotkey";
-import { activateFile, closeFile, reopenFile, useOpenFiles } from "@/hooks/useOpenFiles";
+import {
+  activateFile,
+  closeFile,
+  openFilesFor,
+  reopenFile,
+  useOpenFiles,
+} from "@/hooks/useOpenFiles";
 import {
   activateBlankTab,
   activateTab,
@@ -60,7 +66,8 @@ import { cn } from "@/lib/utils";
 /// Which view fills the main column.
 export const VIEW_TABS = ["chat", "browser", "changes", "files"] as const;
 
-export type ViewTab = (typeof VIEW_TABS)[number];
+/// `pick` is a bot row's Diff or Files tab on a session it picked (#892).
+export type ViewTab = (typeof VIEW_TABS)[number] | "pick";
 
 /// The pointer crosses this row on its way to everything below it, so a
 /// tooltip waits for a hover that means it — the crew's own delay.
@@ -108,6 +115,29 @@ export type TaskTabsProps = {
   onReopen: (sessionId: string) => void;
 };
 
+/// A bot chat's Diff and Files tabs, each on the session its side column
+/// picked (#892). + offers both every time, so several of each can be open.
+export type PickTabsProps = {
+  items: {
+    id: string;
+    kind: "changes" | "files";
+    target: string;
+    /// The picked session's title.
+    title: string;
+    /// Where a Files pick's open files live (`pickFilesKey`).
+    filesKey: string;
+  }[];
+  /// The pick on screen, while the row's view is `pick`.
+  lit: string | null;
+  /// Diff has a task to show. Files always has the bot's own folder.
+  canDiff: boolean;
+  onPick: (id: string) => void;
+  onAdd: (kind: "changes" | "files") => void;
+  onClose: (id: string) => void;
+  /// ⌘⇧T: back in the row on the same session, unlit. Answers the new id.
+  onReopen: (kind: "changes" | "files", target: string) => string;
+};
+
 type Item = {
   key: TabKey;
   icon: React.ReactNode;
@@ -121,6 +151,9 @@ type Item = {
   fixed?: boolean;
   rename?: Rename;
   overlay?: React.ReactNode;
+  /// The last file of its view: closing it hands its slot back to the view's
+  /// stand-in, which stays lit, rather than moving to a neighbour.
+  keepsView?: boolean;
 };
 
 /// The titlebar as a browser's tab strip.
@@ -147,9 +180,12 @@ export default function ViewTabs({
   machine,
   working = false,
   tasks,
+  picks,
 }: {
   /// Whose browser pages the row lists: a bot's tasks share the bot chat's.
   browserId?: string;
+  /// A bot chat's Diff and Files picks.
+  picks?: PickTabsProps;
   /// A bot chat's open tasks, after everything else in its row.
   tasks?: TaskTabsProps;
   /// Mid-turn: off Chat, the chat tab's icon says so, since the transcript
@@ -294,7 +330,41 @@ export default function ViewTabs({
         activateFile(sessionId, file.path);
       },
       close: () => closeFile(sessionId, file.path),
+      keepsView: files.length === 1,
     })),
+    ...(picks?.items ?? []).flatMap((p): Item[] => {
+      const lit = own === "pick" && picks?.lit === p.id;
+      const pick = () => picks?.onPick(p.id);
+      const standIn: Item = {
+        key: `pick:${p.id}`,
+        icon: p.kind === "changes" ? <DocumentPlusIcon className={MARK} /> : FOLDER,
+        label: p.title,
+        active: lit,
+        pick,
+        close: () => {
+          pushClosedTab(sessionId, { key: `pick:${p.id}`, pick: { kind: p.kind, target: p.target } });
+          picks?.onClose(p.id);
+        },
+      };
+      if (p.kind === "changes") return [standIn];
+      // A Files pick is the Files tab over again: its files are tabs of the
+      // row, and the stand-in holds their place while none is open.
+      const { open, active } = openFilesFor(p.filesKey);
+      if (open.length === 0) return [standIn];
+      const labels = tabLabels(open.map((f) => f.path));
+      return open.map((file, i) => ({
+        key: `pickfile:${p.id}:${file.path}`,
+        icon: <FileIcon path={file.path} className="size-3.5 shrink-0" />,
+        label: labels[i],
+        active: lit && file.path === active,
+        pick: () => {
+          pick();
+          activateFile(p.filesKey, file.path);
+        },
+        close: () => closeFile(p.filesKey, file.path),
+        keepsView: open.length === 1,
+      }));
+    }),
     ...(tasks?.items ?? []).map((task) => ({
       key: `task:${task.sessionId}`,
       icon: task.working ? (
@@ -389,7 +459,10 @@ export default function ViewTabs({
     const entry = popClosedTab(sessionId);
     if (!entry) return;
     let key = entry.key;
-    if (key === "changes" || key === "files") setShown(key, true);
+    if (entry.pick) {
+      if (!picks) return;
+      key = `pick:${picks.onReopen(entry.pick.kind, entry.pick.target)}`;
+    } else if (key === "changes" || key === "files") setShown(key, true);
     else if (key.startsWith("file:")) reopenFile(sessionId, key.slice("file:".length));
     else if (key.startsWith("task:")) tasks?.onReopen(key.slice("task:".length));
     else key = `blank:${addBlankTab(browserId, entry.page)}`;
@@ -406,7 +479,7 @@ export default function ViewTabs({
   // reader stays in that view. A browser tab simply goes.
   const closeAt = (i: number) => {
     const item = drag.shown[i];
-    const last = item.key.startsWith("file:") && files.length === 1;
+    const last = !!item.keepsView;
     // A neighbour, but never a page a recording holds: moving the active page
     // would send the agent's next verb somewhere else. The chat is never
     // locked, so the scan always lands.
@@ -433,7 +506,20 @@ export default function ViewTabs({
 
   // What + can still add. With Diff and Files both in the row it is a plain
   // new-tab button, the one thing left to offer.
-  const offer = [
+  // A bot's row offers Diff and Files every time, each a new pick; its own
+  // folder is no repository, so it has no Diff of its own to offer.
+  const offer = picks
+    ? [
+        {
+          key: "changes",
+          icon: <DocumentPlusIcon className={MARK} />,
+          label: "Diff",
+          add: () => picks.onAdd("changes"),
+          disabled: !picks.canDiff,
+        },
+        { key: "files", icon: FOLDER, label: "Files", add: () => picks.onAdd("files"), disabled: false },
+      ]
+    : [
     !shown.changes && {
       key: "changes",
       icon: <DocumentPlusIcon className={MARK} />,
@@ -442,6 +528,7 @@ export default function ViewTabs({
         setShown("changes", true);
         onChange("changes");
       },
+      disabled: false,
     },
     !shown.files &&
       files.length === 0 && {
@@ -452,6 +539,7 @@ export default function ViewTabs({
           setShown("files", true);
           onChange("files");
         },
+        disabled: false,
       },
   ].filter((o) => !!o);
   const plusClass =
@@ -504,7 +592,7 @@ export default function ViewTabs({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-auto min-w-40">
             {offer.map((o) => (
-              <DropdownMenuItem key={o.key} onSelect={o.add}>
+              <DropdownMenuItem key={o.key} disabled={o.disabled} onSelect={o.add}>
                 {o.icon}
                 {o.label}
               </DropdownMenuItem>

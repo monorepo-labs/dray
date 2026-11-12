@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { closeTaskTab, openTaskTab, stripOf, type TaskTabs } from "./taskTabs";
+import {
+  addPickTab,
+  closePickTab,
+  closePicksOn,
+  closeTaskTab,
+  newestSession,
+  openTaskTab,
+  pickFilesKey,
+  repickTab,
+  stripOf,
+  type PickTabs,
+  type TaskTabs,
+} from "./taskTabs";
 
 const a = { sessionId: "a", title: "A" };
 const b = { sessionId: "b", title: "B" };
@@ -30,5 +42,46 @@ describe("task tabs", () => {
     // A session the row does not hold.
     expect(stripOf(tabs, "b", false, "bot")).toBeNull();
     expect(stripOf(tabs, null, false, "bot")).toBeNull();
+  });
+});
+
+describe("pick tabs", () => {
+  const d = { id: "1", kind: "changes" as const, target: "a" };
+  const f = { id: "2", kind: "files" as const, target: "bot" };
+
+  it("adds several of one kind, repicks one, closes one", () => {
+    let tabs: PickTabs = {};
+    tabs = addPickTab(tabs, "bot", d);
+    tabs = addPickTab(tabs, "bot", { ...d, id: "3" });
+    tabs = addPickTab(tabs, "bot", f);
+    expect(tabs.bot.map((t) => t.id)).toEqual(["1", "3", "2"]);
+    tabs = repickTab(tabs, "bot", "3", "b");
+    expect(tabs.bot[1]).toEqual({ id: "3", kind: "changes", target: "b" });
+    expect(tabs.bot[0].target).toBe("a");
+    tabs = closePickTab(tabs, "bot", "1");
+    expect(tabs.bot.map((t) => t.id)).toEqual(["3", "2"]);
+    expect(closePickTab({ bot: [d] }, "bot", "1")).toEqual({});
+  });
+
+  it("closes every tab on a deleted task", () => {
+    const tabs: PickTabs = { bot: [d, f], other: [{ ...d, id: "9" }] };
+    expect(closePicksOn(tabs, "a")).toEqual({ bot: [f] });
+    expect(closePicksOn(tabs, "zzz")).toBe(tabs);
+  });
+
+  it("keys a Files pick's store by tab and target", () => {
+    expect(pickFilesKey(f)).toBe("pick:2:bot");
+    expect(pickFilesKey({ ...f, target: "a" })).not.toBe(pickFilesKey(f));
+  });
+
+  it("finds the most recently active session", () => {
+    expect(newestSession([])).toBeNull();
+    expect(
+      newestSession([
+        { sessionId: "a", modified: "2026-11-01T10:00:00Z" },
+        { sessionId: "b", modified: "2026-11-02T10:00:00Z" },
+        { sessionId: "c", modified: "2026-10-30T10:00:00Z" },
+      ]),
+    ).toBe("b");
   });
 });

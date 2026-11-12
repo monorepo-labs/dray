@@ -123,7 +123,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { attachmentKey, clearAttachments, pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
-import { closeFile, useOpenFiles } from "@/hooks/useOpenFiles";
+import { closeFile, openFilesFor, useOpenFiles } from "@/hooks/useOpenFiles";
+import BotAvatar from "@/components/BotAvatar";
+import Orb from "@/components/Orb";
+import PickTarget, { type PickOption } from "@/components/PickTarget";
+import { seededAvatar } from "@/lib/botAvatar";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
@@ -196,7 +200,19 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { crewRows, crewSeen, inSidebar, withHiddenAsks } from "@/lib/crew";
-import { closeTaskTab, openTaskTab, stripOf, type TaskTabs } from "@/lib/taskTabs";
+import {
+  addPickTab,
+  closePickTab,
+  closePicksOn,
+  closeTaskTab,
+  newestSession,
+  openTaskTab,
+  pickFilesKey,
+  repickTab,
+  stripOf,
+  type PickTabs,
+  type TaskTabs,
+} from "@/lib/taskTabs";
 import { panelMove } from "@/lib/sidebarAuto";
 import { playCelebration, playNotification } from "@/lib/sound";
 import {
@@ -607,6 +623,10 @@ function App() {
   // last picked from — see `stripOf`. In memory, like `viewTabs`.
   const [taskTabs, setTaskTabs] = useState<TaskTabs>({});
   const [taskTabVia, setTaskTabVia] = useState<string | null>(null);
+  // A bot chat's Diff and Files tabs, each on a session it picked (#892), and
+  // which one is on screen while the chat's view is `pick`.
+  const [pickTabs, setPickTabs] = useState<PickTabs>({});
+  const [pickLit, setPickLit] = useState<Record<string, string>>({});
   // Whether the issues page is what the main column is showing. Not a session
   // and not a per-session tab, so it is neither in `viewTabs` nor in the
   // selection: it is a place the reader goes and comes back from, and the
@@ -629,7 +649,13 @@ function App() {
   /// on it.
   const [pickedIssue, setPickedIssue] = useState<IssueRef | null>(null);
 
-  const viewTab: ViewTab = selectedSessionId ? viewTabs[selectedSessionId] ?? "chat" : "chat";
+  const storedViewTab: ViewTab = selectedSessionId ? viewTabs[selectedSessionId] ?? "chat" : "chat";
+  const litPick =
+    storedViewTab === "pick" && selectedSessionId
+      ? pickTabs[selectedSessionId]?.find((t) => t.id === pickLit[selectedSessionId])
+      : undefined;
+  // A pick closed while it was on screen leaves its session on Chat.
+  const viewTab: ViewTab = storedViewTab === "pick" && !litPick ? "chat" : storedViewTab;
 
   /// The picked issue as the one-element list the panel reads.
   ///
@@ -1473,6 +1499,40 @@ function App() {
   const stripOwner = strip && strip.owner !== selectedSessionId
     ? sessionIndexItems.find((i) => i.sessionId === strip.owner)
     : undefined;
+
+  // What a bot row's Diff and Files picks choose from: the bot's tasks as the
+  // Tasks tab lists them, read off the row's owner rather than the selection,
+  // which is a task while a task tab is lit.
+  const stripBot = strip
+    ? botAt(bots, sessionIndexItems.find((i) => i.sessionId === strip.owner)?.cwd ?? "")
+    : undefined;
+  const botTasks = useMemo(
+    () =>
+      strip
+        ? crewRows(sessionIndexItems, strip.owner, { statusBySession, askingSessions })
+            .map((r) => r.item)
+            .sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified))
+        : [],
+    [strip?.owner, sessionIndexItems, statusBySession, askingSessions],
+  );
+  const pickTitle = (target: string) =>
+    target === strip?.owner
+      ? (stripBot?.name ?? "Bot")
+      : (sessionIndexItems.find((i) => i.sessionId === target)?.title ?? "Task gone");
+  const pickFace = (target: string) =>
+    target === strip?.owner ? (
+      <BotAvatar seed={stripBot?.id ?? target} avatar={stripBot?.avatar} className="block size-4 shrink-0" />
+    ) : statusBySession[target] === "in_progress" ? (
+      <Orb state="working" label="Working" size={16} />
+    ) : (
+      <BotAvatar seed={target} avatar={seededAvatar(target)} className="block size-4 shrink-0 scale-[1.18]" />
+    );
+  /// Puts a pick on screen in its bot's row, stepping out of a lit task tab.
+  const showPick = (owner: string, id: string) => {
+    setPickLit((prev) => ({ ...prev, [owner]: id }));
+    setViewTabs((prev) => ({ ...prev, [owner]: "pick" }));
+    if (selectedSessionId !== owner) void handleSelectSessionIndexItem(owner);
+  };
 
   const tabs = tabOrder({
     pr: hasPrTab,
@@ -2547,10 +2607,15 @@ function App() {
   // `gridShown` both hold `!issuesOpen`, and `panelShown` is the pane the
   // page hides.
   const fileShown = !issuesOpen && viewTab === "files" && !!activeFile;
+  const litPickFile = (() => {
+    if (issuesOpen || litPick?.kind !== "files") return undefined;
+    const { open, active } = openFilesFor(pickFilesKey(litPick));
+    return open.find((f) => f.path === active);
+  })();
   const rowTabOnScreen =
     !issuesOpen &&
     !!selectedSessionId &&
-    (viewTab === "files" || viewTab === "changes" || fullBrowserOpen || !!strip?.lit);
+    (viewTab === "files" || viewTab === "changes" || viewTab === "pick" || fullBrowserOpen || !!strip?.lit);
   const closeTabOrPane = () => {
     if (!selectedSessionId) return;
     // The row's own close, so the chord lands where the cross would — and
@@ -2814,7 +2879,10 @@ function App() {
   };
 
   const deleteTask = async (id: string) => {
-    if (await deleteSession(id)) setTaskTabs((prev) => closeTaskTab(prev, id));
+    if (await deleteSession(id)) {
+      setTaskTabs((prev) => closeTaskTab(prev, id));
+      setPickTabs((prev) => closePicksOn(prev, id));
+    }
   };
 
   const paneChat: PaneChat = {
@@ -2826,6 +2894,60 @@ function App() {
     onRespondPermission: handleRespondPermission,
     onAnswerQuestions: handleAnswerQuestions,
     onSendNow: handleInterrupt,
+  };
+
+  /// A lit Diff or Files pick: the view on the picked session, its side
+  /// column led by the picker. Keyed on tab and target, so a repick or another
+  /// pick of the same kind opens fresh rather than on the last one's place.
+  const pickBody = (tab: (typeof litPick) & object, owner: string) => {
+    const options: PickOption[] = [
+      ...(tab.kind === "files" ? [owner] : []),
+      ...botTasks.map((t) => t.sessionId),
+    ].map((sessionId) => ({ sessionId, title: pickTitle(sessionId), face: pickFace(sessionId) }));
+    const picker = (
+      <PickTarget
+        options={options}
+        value={tab.target}
+        current={{ sessionId: tab.target, title: pickTitle(tab.target), face: pickFace(tab.target) }}
+        onPick={(target) => setPickTabs((prev) => repickTab(prev, owner, tab.id, target))}
+      />
+    );
+    const item = sessionIndexItems.find((i) => i.sessionId === tab.target);
+    if (!item) {
+      return (
+        <div className="flex min-h-0 flex-1">
+          <div className="flex w-72 shrink-0 flex-col border-r border-border">{picker}</div>
+          <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-ui text-muted-foreground">
+            This task is gone. Pick another.
+          </div>
+        </div>
+      );
+    }
+    // The task's turns are what move its tree; its transcript is not loaded
+    // here, so its index entry's activity stamp and status stand in.
+    const status = statusBySession[tab.target] ?? item.status;
+    const revision = `${item.modified}:${status}`;
+    const key = `${tab.id}:${tab.target}`;
+    return tab.kind === "changes" ? (
+      <ChangesView
+        key={key}
+        cwd={item.cwd}
+        active={!issuesOpen}
+        revision={revision}
+        writeRevision={revision}
+        busy={status === "in_progress"}
+        picker={picker}
+      />
+    ) : (
+      <FilesView
+        key={key}
+        sessionId={pickFilesKey(tab)}
+        cwd={item.cwd}
+        active={!issuesOpen}
+        revision={revision}
+        picker={picker}
+      />
+    );
   };
 
   // Pages with no tabs for the strip: the sheet reaches up behind the header.
@@ -3073,6 +3195,35 @@ function App() {
                     }
                   : undefined
               }
+              picks={
+                strip
+                  ? {
+                      items: (pickTabs[strip.owner] ?? []).map((t) => ({
+                        ...t,
+                        title: pickTitle(t.target),
+                        filesKey: pickFilesKey(t),
+                      })),
+                      lit: pickLit[strip.owner] ?? null,
+                      canDiff: botTasks.length > 0,
+                      onPick: (id) => showPick(strip.owner, id),
+                      onAdd: (kind) => {
+                        // The task last at work, which is most often the one
+                        // the reader came to look at.
+                        const target = newestSession(botTasks) ?? (kind === "files" ? strip.owner : null);
+                        if (!target) return;
+                        const id = crypto.randomUUID();
+                        setPickTabs((prev) => addPickTab(prev, strip.owner, { id, kind, target }));
+                        showPick(strip.owner, id);
+                      },
+                      onClose: (id) => setPickTabs((prev) => closePickTab(prev, strip.owner, id)),
+                      onReopen: (kind, target) => {
+                        const id = crypto.randomUUID();
+                        setPickTabs((prev) => addPickTab(prev, strip.owner, { id, kind, target }));
+                        return id;
+                      },
+                    }
+                  : undefined
+              }
               // Not past a parent's breadcrumb, whose width the lead leaves out.
               alignX={crumb ? 0 : sidebarDrawn}
             />
@@ -3093,8 +3244,17 @@ function App() {
                   <PanelActions
                     // In the Files view alone: the file on screen, or the
                     // session's directory where no file is open.
-                    cwd={viewTab === "files" ? shownSession.cwd : null}
-                    file={fileShown ? openFiles.find((f) => f.path === activeFile) : undefined}
+                    cwd={
+                      viewTab === "files"
+                        ? shownSession.cwd
+                        : litPick?.kind === "files"
+                          ? (sessionIndexItems.find((i) => i.sessionId === litPick.target)?.cwd ?? null)
+                          : null
+                    }
+                    file={
+                      fileShown
+                        ? openFiles.find((f) => f.path === activeFile)
+                        : litPickFile}
                   />
                   {/* A pull request, open or merged, stands in for the toggle and opens
                       the pane on itself; the pane's own tabs are inside it. */}
@@ -3580,6 +3740,11 @@ function App() {
             revision={turnRevision}
           />
           </MountOnce>
+        </TabBody>
+      )}
+      {litPick && selectedSessionId && (
+        <TabBody active={!issuesOpen}>
+          <MountOnce when>{pickBody(litPick, selectedSessionId)}</MountOnce>
         </TabBody>
       )}
     </AppShell>
