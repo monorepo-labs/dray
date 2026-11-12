@@ -21,7 +21,7 @@ import {
   pushNotice,
   type NoticeKind,
 } from "@/hooks/useNotices";
-import { hiddenChildren } from "@/lib/crew";
+import { hiddenChildren, leftToParent } from "@/lib/crew";
 import { repoChanged } from "@/lib/prSync";
 import { dropHeld, dropHeldAsks, heldFor, holdEarlyEvent, isAsk } from "@/lib/earlyEvents";
 import { fastFor, fastNotice } from "@/lib/fastMode";
@@ -2933,6 +2933,12 @@ const markSessionUnread = (sessionId: string) => {
   void invoke("mark_session_read", { sessionId, read: false }).catch(() => {});
 };
 
+/// A session as `canAnnounce` and `announce` both read it: the index's row,
+/// else the loaded copy, since the index holds one side of the archived split.
+const announcedItem = (sessionId: string) =>
+  sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId) ??
+  sessionsRef.current.find((s) => s.sessionId === sessionId);
+
 /// Whether a session may say anything at all right now — the space rule, asked
 /// once for every channel.
 ///
@@ -2946,18 +2952,19 @@ const markSessionUnread = (sessionId: string) => {
 /// Both lists, since the index holds one side of the archived split at a time.
 /// `allowedInSpace` is what refuses a session neither can name — see its own
 /// note for why that direction.
-const canAnnounce = (sessionId: string): boolean => {
+///
+/// `kind` adds the hidden rule, `leftToParent`: a hidden session's done and
+/// ready-to-merge are its parent's to report, on every channel at once.
+const canAnnounce = (sessionId: string, kind?: NoticeKind): boolean => {
+  const item = announcedItem(sessionId);
+  if (leftToParent(item, kind)) return false;
+
   const space = activeSpace(
     projectsRef.current,
     readLocalStorage<string | null>(SPACE_KEY, null),
     readLocalStorage<string[]>(SPACE_LIST_KEY, []),
   );
-  const projectPath =
-    sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId)?.projectPath ??
-    sessionsRef.current.find((s) => s.sessionId === sessionId)?.projectPath ??
-    null;
-
-  return allowedInSpace(projectsRef.current, space, projectPath);
+  return allowedInSpace(projectsRef.current, space, item?.projectPath ?? null);
 };
 
 /// Tell the reader about something that happened in a session, on exactly one
@@ -2977,12 +2984,15 @@ const canAnnounce = (sessionId: string): boolean => {
 /// nothing; the in-app card is the only card on screen next to a sidebar
 /// already marking the row, so it needs the verb and nothing else.
 const announce = (sessionId: string, kind: NoticeKind, label: string): boolean => {
-  const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
+  const item = announcedItem(sessionId);
 
   // A session in another space keeps running; it just has no channel here.
   // Both channels name the session out loud, and naming a personal one over a
   // shared screen is the thing spaces exist to stop.
-  if (!canAnnounce(sessionId)) return false;
+  //
+  // A hidden session's finish is read rather than withheld: left unread, it
+  // would hold the dock badge up with no row of its own to clear it from.
+  if (!canAnnounce(sessionId, kind)) return leftToParent(item, kind);
 
   if (!isWindowFocused()) {
     // A card is the island's to raise while it runs: its pill counts what waits

@@ -1313,7 +1313,7 @@ function App() {
   // panel's own read, which is the only way it can be noticed at all: the
   // panel's poll is gated on its tab being on screen, and a tab on screen is
   // exactly the case with nothing to announce.
-  usePrReady({ sessions: visibleSessions, prFor: prMarks.prFor });
+  usePrReady({ sessions: visibleSessions, prFor: prMarks.prFor, canAnnounce });
 
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it

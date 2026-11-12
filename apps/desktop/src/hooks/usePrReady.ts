@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import { pushNotice } from "@/hooks/useNotices";
+import { type NoticeKind, pushNotice } from "@/hooks/useNotices";
 import { readyToMerge, readyTransitions, sessionBranch } from "@/lib/pr";
 import { playNotification } from "@/lib/sound";
 import type { PrMark, SessionIndexItem } from "@/types/events";
@@ -12,6 +12,8 @@ type Args = {
   sessions: SessionIndexItem[];
   /// The sidebar's own per-repo read, keyed the way its rows are.
   prFor: (repoPath: string, branch: string | null) => PrMark | undefined;
+  /// `useSessions`' gate, which is what keeps a hidden session's PR quiet.
+  canAnnounce: (sessionId: string, kind: NoticeKind) => boolean;
 };
 
 /// Tells the reader when a pull request becomes ready to merge.
@@ -39,7 +41,7 @@ type Args = {
 /// Its own countdown is what retires it. Nothing marks it read, because nothing
 /// here is: the pull request stays ready, and this is a nudge toward it rather
 /// than a record of it.
-export function usePrReady({ sessions, prFor }: Args) {
+export function usePrReady({ sessions, prFor, canAnnounce }: Args) {
   /// What each session's pull request last said, and the whole of the
   /// transition test. An entry appearing for the first time is *seeded*, never
   /// announced, and a reading GitHub has not worked out is *held* rather than
@@ -65,6 +67,7 @@ export function usePrReady({ sessions, prFor }: Args) {
     wasReady.current = next;
 
     for (const sessionId of became) {
+      if (!canAnnounce(sessionId, "pr")) continue;
       // The sound is the half that carries when the reader's eyes are on the
       // middle of the window, or on another app entirely.
       playNotification();
