@@ -1353,7 +1353,7 @@ export default function Sidebar({
 
       {/* One bot (Dray Bot alone) reads as part of the list above; several
           make a group of their own, set apart. */}
-      {bots.length > 0 && <div className={cn("flex flex-col gap-px px-2", bots.length === 1 ? "mt-px" : "mt-4")}>
+      {bots.length > 0 && <div className={cn("flex flex-col gap-px px-2", bots.length === 1 ? "mt-px" : "mt-4 mb-2")}>
         {bots.map(({ bot, session, preview }) => (
           <BotRow
             key={bot.id}
