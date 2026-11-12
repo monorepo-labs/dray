@@ -5,11 +5,12 @@ import EventRow from "@/components/chat/EventRow";
 import UserMessage from "@/components/chat/UserMessage";
 import { OrbLine } from "@/components/chat/WorkingIndicator";
 import { seededAvatar } from "@/lib/botAvatar";
-import { botItems, botRows, chatTime, firstUnread, itemTime, startsTimeRun, type TalkItem } from "@/lib/botTranscript";
+import { botRows, chatItems, chatTime, firstUnread, itemTime, startsTimeRun, type BotSegment, type TalkItem } from "@/lib/botTranscript";
+import { AGENT_LABELS } from "@/lib/model";
 import { stripSenderPrefix } from "@/lib/relay";
 import { toolArgument, toolLabel } from "@/lib/tools";
 import { cn } from "@/lib/utils";
-import type { AgentEvent, ToolResult } from "@/types/events";
+import type { AgentEvent, Harness, ToolResult } from "@/types/events";
 
 /// A task a bot started, as its card names it.
 /// A task as its chat draws it. `sessionId` is the full id, since the bot may
@@ -22,7 +23,7 @@ const NO_RESULTS = new Map<string, ToolResult>();
 /// A bot's chat: the conversation and the tasks it started, and while it works
 /// one line naming what it is doing — the only place its tool calls show.
 export default function BotTranscript({
-  events,
+  segments,
   busy,
   preview,
   unread,
@@ -32,33 +33,37 @@ export default function BotTranscript({
   /// The chat had unread replies when opened. Read once: opening it clears
   /// the state, and the divider has to stay where it was.
   unread: boolean;
-  events: AgentEvent[];
+  /// Every session of the chat, oldest first; the last is the one running.
+  segments: readonly BotSegment[];
   busy: boolean;
   /// The reply streaming in, which takes the live line's place.
   preview?: ReactNode;
   taskOf?: (sessionId: string) => BotTask | undefined;
   onOpenSession: (sessionId: string) => void;
 }) {
-  const items = useMemo(() => botItems(events), [events]);
+  const items = useMemo(() => chatItems(segments), [segments]);
+  const events = segments.at(-1)?.events;
   // "From" rows, a task's messages to the bot, are hidden for now: the bot's
   // reply already says what came in. To draw them again, swap these back.
   // const rows = useMemo(() => botRows(items), [items]);
   const rows = useMemo(() => botRows(items.filter((i) => i.kind !== "report")), [items]);
   const [newFrom] = useState(() => (unread ? firstUnread(items) : null));
-  const doing = useMemo(() => (busy ? currentTool(events) : null), [busy, events]);
+  const doing = useMemo(() => (busy && events ? currentTool(events) : null), [busy, events]);
 
   return (
     <>
       {rows.map((item, i) => {
-        const key = item.kind === "talk" || item.kind === "task" ? item.key : item.event.id;
+        const key = "key" in item ? item.key : item.event.id;
         // A time label opens the chat and follows every pause, as a messenger's.
         const at = itemTime(item);
         const time = startsTimeRun(i === 0 ? null : itemTime(rows[i - 1]), at) && <TimeLabel at={at} />;
         return (
           <Fragment key={key}>
-            {item.kind !== "talk" && item.kind !== "task" && item.event.id === newFrom && <NewDivider />}
+            {"event" in item && item.event.id === newFrom && <NewDivider />}
             {time}
-            {item.kind === "talk" ? (
+            {item.kind === "switch" ? (
+              <SwitchLine harness={item.harness} />
+            ) : item.kind === "talk" ? (
               <TalkLine items={item.items} taskOf={taskOf} onOpenSession={onOpenSession} />
             ) : item.kind === "task" ? (
               <StartedLine
@@ -250,6 +255,11 @@ export function BotBubble({ tight = false, children }: { tight?: boolean; childr
   );
 }
 
+/// Where the chat moved to another agent, said as quietly as a time label.
+function SwitchLine({ harness }: { harness: Harness }) {
+  return <p className="self-center text-[12px] text-muted-foreground/70">Switched to {AGENT_LABELS[harness]}</p>;
+}
+
 /// Where the replies the reader has not seen begin, as a messenger marks it.
 function NewDivider() {
   return (
@@ -262,7 +272,7 @@ function NewDivider() {
 }
 
 /// What the bot is running now: the newest call of this turn with no result.
-function currentTool(events: AgentEvent[]): string | null {
+function currentTool(events: readonly AgentEvent[]): string | null {
   const done = new Set<string>();
   for (let i = events.length - 1; i >= 0; i--) {
     const { payload, subagent } = events[i];

@@ -90,8 +90,15 @@ export function botSession(
   items: readonly SessionIndexItem[],
   bot: Bot,
 ): SessionIndexItem | undefined {
+  return botChat(items, bot).at(-1);
+}
+
+/// Every session of the bot's one conversation, oldest first. Switching agent
+/// starts a new session, since each CLI resumes only its own, so the chat the
+/// reader sees spans all of them.
+export function botChat(items: readonly SessionIndexItem[], bot: Bot): SessionIndexItem[] {
   const at = trimmed(bot.path);
   return items
     .filter((i) => !i.archived && trimmed(i.cwd) === at)
-    .sort((a, b) => Date.parse(b.created) - Date.parse(a.created))[0];
+    .sort((a, b) => Date.parse(a.created) - Date.parse(b.created));
 }

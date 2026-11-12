@@ -1715,6 +1715,7 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
     let target = store::get_session_index_item(&send.session_id)
         .await?
         .with_context(|| format!("no session {}", send.session_id))?;
+    let target = crate::bots::current_chat(target).await;
 
     if target.session_id == send.from_session_id.clone().unwrap_or_default() {
         bail!("a session cannot send a message to itself");

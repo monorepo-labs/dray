@@ -788,6 +788,14 @@ impl SessionManager {
         self.existing(id).await?.lock().await.take()
     }
 
+    /// Stops a session's child the way the idle reaper does, leaving the
+    /// session as one that resumes on its next send.
+    pub async fn stop(&self, id: &str) {
+        if let Some(session) = self.take(id).await {
+            let _ = session.kill().await;
+        }
+    }
+
     /// Routes a prompt to a session: spawns a new child, reuses a live one, or
     /// respawns via `--resume` when the id is known but its process is gone.
     pub async fn send_msg(
@@ -957,7 +965,8 @@ impl SessionManager {
             require_dir(cwd, "The project folder").await?;
             // A bot whose chat opens on a welcome has it logged ahead of this
             // first prompt; marked here, where "first" is known for certain.
-            crate::bots::mark_welcome(session_id, cwd).await;
+            // An agent switch is marked here too, for the hand-over.
+            crate::bots::mark_new_chat(session_id, cwd, harness).await;
 
             // Only Claude Code's `-w` makes its own tree. For everything else
             // the tree has to be one Dray makes — the same route `--from`
@@ -3139,6 +3148,13 @@ async fn deliver_prompt(
     // the transcript has to show what the model was actually given.
     let prepared = attachments::prepare(session_id, prompt, attachment_paths, harness).await?;
     let text = prepared.text;
+    // A bot chat taking over from another agent: the conversation so far goes
+    // ahead of the first prompt, sent and never logged, so the chat draws only
+    // what the reader typed.
+    let given = match crate::bots::take_handover(session_id) {
+        Some(handover) => format!("{handover}{text}"),
+        None => text.clone(),
+    };
 
     // Ahead of the event for a second reason, and this one is about failure
     // rather than content. Codex resolves a leading `/skill` by asking its own
@@ -3150,7 +3166,7 @@ async fn deliver_prompt(
         Transport::Rpc(thread) if send => {
             Some((
                 thread,
-                crate::harness::codex::turn_input(thread, &text, &prepared.images).await?,
+                crate::harness::codex::turn_input(thread, &given, &prepared.images).await?,
             ))
         }
         _ => None,
@@ -3214,7 +3230,7 @@ async fn deliver_prompt(
 
     // Logged, not sent: the caller holds the text and opens the turn itself.
     if !send {
-        return Ok((text, true));
+        return Ok((given, true));
     }
 
     // Codex takes a prompt as a request that opens a turn, so the write is the
@@ -3223,30 +3239,30 @@ async fn deliver_prompt(
     // a no-op.
     if let Some((thread, input)) = codex {
         crate::harness::codex::start_turn(thread, input).await?;
-        return Ok((text, true));
+        return Ok((given, true));
     }
     // pi takes a prompt as a command whose answer says it was accepted, so the
     // write is the send rather than a line the child picks up on its own
     // schedule.
     if let Transport::Pi(client) = transport {
-        let runs = crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images)
+        let runs = crate::harness::pi::send_prompt(client, &given, delivery, &prepared.images)
             .await
             .context(Undelivered)?;
-        return Ok((text, runs));
+        return Ok((given, runs));
     }
     // grok takes a prompt into the running turn through a method of its own;
     // a second `session/prompt` would take over the id the turn settles on.
     if let (Transport::Grok(session), crate::harness::pi::Delivery::Steer) = (transport, delivery) {
-        crate::harness::grok::interject(session, &text, &prepared.images)
+        crate::harness::grok::interject(session, &given, &prepared.images)
             .await
             .context(Undelivered)?;
-        return Ok((text, true));
+        return Ok((given, true));
     }
     // fx and grok take a prompt as a request that blocks for the turn, so the
     // write is the send and the reader settles the answer.
-    if let Some(sent) = transport.open_turn(&text, &prepared.images).await {
+    if let Some(sent) = transport.open_turn(&given, &prepared.images).await {
         sent?;
-        return Ok((text, true));
+        return Ok((given, true));
     }
     let stdin = transport.lines()?;
 
@@ -3254,11 +3270,11 @@ async fn deliver_prompt(
     // shape every fixture captures, kept rather than always sending the
     // one-element block array it is sugar for.
     let content = if prepared.images.is_empty() {
-        json!(text)
+        json!(given)
     } else {
         let mut blocks = Vec::new();
-        if !text.is_empty() {
-            blocks.push(json!({"type": "text", "text": text}));
+        if !given.is_empty() {
+            blocks.push(json!({"type": "text", "text": given}));
         }
         for image in &prepared.images {
             blocks.push(json!({
@@ -3275,7 +3291,7 @@ async fn deliver_prompt(
 
     let line = json!({"type":"user","message":{"role":"user","content": content}});
     write_line(stdin, &line).await?;
-    Ok((text, true))
+    Ok((given, true))
 }
 
 /// The handles a read loop needs once its harness has stopped being relevant.

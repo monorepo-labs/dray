@@ -115,7 +115,7 @@ import WindowControls from "@/components/layout/WindowControls";
 import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { nextEffort } from "@/components/composer/ModelSelector";
-import { HARNESS_ORDER, nextHarness } from "@/lib/model";
+import { AGENT_LABELS, HARNESS_ORDER, nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { closeActiveTab, ItemTab, type ViewTab } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
@@ -181,10 +181,12 @@ import { changeRange, lastToolResult } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { botAt, botEntries, inBotTree, refreshBots, useBots } from "@/lib/bots";
+import { botAt, botChat, botEntries, inBotTree, refreshBots, useBots } from "@/lib/bots";
+import { loadOlder } from "@/lib/olderPages";
 import NewBotDialog from "@/components/NewBotDialog";
+import AgentIcon from "@/components/AgentIcon";
 import ModelSelector from "@/components/composer/ModelSelector";
-import { stanceFor } from "@/lib/permission";
+import { botStance } from "@/lib/permission";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1003,13 +1005,34 @@ function App() {
   /// preference is kept, so coming back restores the pane exactly as it was;
   /// everything that draws or reads reads this instead.
   const panelShown = panelOpen && !issuesOpen;
+
+  const bots = useBots();
+  const selectedBot = useMemo(() => {
+    // The held transcript answers too: a session an agent switch just started
+    // reaches the index only once the send returns, and the chat must stay a
+    // bot's chat for that while.
+    const cwd = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.cwd ?? selectedSession?.cwd;
+    return cwd ? botAt(bots, cwd) : undefined;
+  }, [bots, sessionIndexItems, selectedSessionId, selectedSession?.cwd]);
+
+  // A bot chat's sessions from before the selected one: each agent switch
+  // started a new one, and the chat draws them all as one conversation. A
+  // selected session not on the index yet is the newest, just started.
+  const earlierIds = useMemo(() => {
+    if (!selectedBot) return [];
+    const chat = botChat(sessionIndexItems, selectedBot).map((i) => i.sessionId);
+    const at = chat.indexOf(selectedSessionId ?? "");
+    return at >= 0 ? chat.slice(0, at) : chat;
+  }, [selectedBot, sessionIndexItems, selectedSessionId]);
+
   // Every session the selected one started, at any depth. The crew column
   // draws only the ones holding a card, and only while one is; a bot's Tasks
-  // tab lists them all. Off every held session, not the space's: a bot hands
-  // work to whichever project it likes, in any space.
+  // tab lists them all, its earlier sessions' tasks included. Off every held
+  // session, not the space's: a bot hands work to whichever project it likes,
+  // in any space.
   const crew = useMemo(
-    () => crewRows(sessionIndexItems, selectedSessionId, { statusBySession, askingSessions }),
-    [sessionIndexItems, selectedSessionId, statusBySession, askingSessions],
+    () => crewRows(sessionIndexItems, selectedSessionId, { statusBySession, askingSessions }, earlierIds),
+    [sessionIndexItems, selectedSessionId, statusBySession, askingSessions, earlierIds],
   );
   const crewAsks = useMemo(() => crew.filter((r) => r.asking), [crew]);
   // A split has no crew column: it is already several conversations side by
@@ -1119,7 +1142,6 @@ function App() {
   // the sidebar, since ⌘F has to open it from a collapsed one, which is not
   // mounted at all.
   const [searchOpen, setSearchOpen] = useState(false);
-  const bots = useBots();
   useEffect(() => void refreshBots(), []);
   const searchedSessions = useMemo(
     () => filterSessions(inSidebar(visibleSessions, bots), search),
@@ -1439,10 +1461,23 @@ function App() {
     [crew, sessionIndexItems],
   );
 
-  const selectedBot = useMemo(() => {
-    const cwd = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.cwd;
-    return cwd ? botAt(bots, cwd) : undefined;
-  }, [bots, sessionIndexItems, selectedSessionId]);
+  const earlierLoaded = sessions.filter((s) => earlierIds.includes(s.sessionId));
+  const earlierKey = earlierLoaded.map((s) => `${s.sessionId}:${s.olderBefore}:${s.events.length}`).join();
+  // Loaded whole, page by page as the chat's own log is, and loaded again if
+  // the eviction sweep took one back.
+  useEffect(() => {
+    for (const id of earlierIds) {
+      const held = earlierLoaded.find((s) => s.sessionId === id);
+      if (!held) void ensureLoaded(id);
+      else if (held.olderBefore != null) loadOlder(id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [earlierIds.join(), earlierKey]);
+  const earlier = useMemo(
+    () => earlierIds.flatMap((id) => earlierLoaded.find((s) => s.sessionId === id) ?? []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [earlierIds.join(), earlierKey],
+  );
 
   const tabs = tabOrder({
     pr: hasPrTab,
@@ -3278,6 +3313,15 @@ function App() {
           pending={
             sleepingBoat ? (
               <BoatNotice server={sleepingBoat} />
+            ) : selectedBot && selectedSession && harness !== selectedSession.harness ? (
+              // A bot chat picked onto another agent: the send moves it there.
+              <div className="mb-2 flex min-h-7 items-center gap-2 px-1">
+                <AgentIcon harness={harness} brand className="size-3.5 shrink-0" />
+                <p className="min-w-0 flex-1 truncate text-ui text-foreground">
+                  Moving to {AGENT_LABELS[harness]}
+                  <span className="text-muted-foreground"> · Your next message goes to it, with this conversation.</span>
+                </p>
+              </div>
             ) : selectedItem?.continueAt && (
               <AutoContinueNotice
                 at={selectedItem.continueAt}
@@ -3343,6 +3387,7 @@ function App() {
               onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
               contextUsage={contextUsage}
               isNewSession={!selectedSessionId}
+              agentSwitch={!!selectedBot}
               bot={newBot}
               busy={busy}
             />
@@ -3406,6 +3451,7 @@ function App() {
             {...paneState(selectedSessionId ?? "")}
             {...paneChat}
             bot={!!selectedBot}
+            earlier={earlier}
             taskOf={taskOf}
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
             crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
@@ -3577,7 +3623,7 @@ function App() {
         harness,
         model: modelId,
         effort,
-        permissionMode: stanceFor(harness, permissionMode),
+        permissionMode: botStance(harness, permissionMode),
         fast,
       }}
       onStarted={(chat) => goToSession(() => void handleSelectSessionIndexItem(chat.sessionId))}
