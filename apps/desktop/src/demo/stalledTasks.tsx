@@ -12,8 +12,9 @@ import "../App.css";
 /// The stalled-tasks card at the foot of a bot's chat, run through the real
 /// `stalledTasks` on made-up tasks: a PR ready to merge, one failing checks,
 /// one in conflict, a task idle with no PR, and three it must leave out —
-/// working, checks running, and idle only ten minutes. One line or two of each
-/// task's last message, toggled. Dismiss is stored for real; Reset clears it.
+/// working, checks running, and idle only ten minutes. Each row shows the
+/// task's last message, clamped to two lines. Dismiss is stored for real;
+/// Reset clears it.
 const NOW = Date.now();
 const ago = (min: number) => new Date(NOW - min * 60_000).toISOString();
 
@@ -47,21 +48,21 @@ const ROWS: { row: CrewRow; pr?: PrMark; said: string }[] = [
   {
     row: row("1", "Fix the pricing page copy", 40),
     pr: pr(908),
-    said: "Opened **#908** with the new copy on the pricing page. Checks pass and it is ready to merge; I left the FAQ alone since it was out of scope.",
+    said: "Opened **#908** with the new copy on the pricing page: the three tier names, the annual discount line and the footnote about seats all match the brief now. Checks pass and it is ready to merge. I left the FAQ alone since it was out of scope, but two of its answers still quote the old prices, so it may want its own task before launch.",
   },
   {
     row: row("2", "Ask which launch date to use", 125),
-    said: "Two dates in the brief disagree: the deck says March 3, the doc says March 10. Which one should the countdown use?",
+    said: "Two dates in the brief disagree: the deck says March 3 and the planning doc says March 10, and the press embargo in the email thread assumes the 10th. The countdown, the banner and the changelog draft all need one date. Which should I use? I have paused until you pick, since changing it later touches all three.",
   },
   {
     row: row("6", "Bump the Shiki version", 75),
     pr: pr(919, { checksState: "FAILING", mergeStateStatus: "BLOCKED" }),
-    said: "The bump to Shiki 3 broke two snapshot tests in `code-render`. Want me to update the snapshots, or pin the old version?",
+    said: "The bump to Shiki 3 broke two snapshot tests in `code-render`: the new grammar splits template literals into more tokens, so the colours are right but the spans differ. I can update the snapshots, which is what upstream recommends, or pin Shiki 2 until the diff renderer is moved over. Which do you want?",
   },
   {
     row: row("7", "Rename the CLI flags", 50 * 60),
     pr: pr(917, { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }),
-    said: "#917 conflicts with main after the flags refactor landed. I can rebase it if you want, but it rewrites the branch.",
+    said: "#917 conflicts with main after the flags refactor landed.",
   },
   { row: row("3", "Audit the landing page", 90, true), said: "" },
   { row: row("4", "Add dark mode to docs", 60), pr: pr(916, { checksState: "RUNNING", mergeStateStatus: "BLOCKED" }), said: "" },
@@ -70,7 +71,6 @@ const ROWS: { row: CrewRow; pr?: PrMark; said: string }[] = [
 
 function Demo() {
   const [rows, setRows] = useState(ROWS);
-  const [lines, setLines] = useState<1 | 2>(1);
   const [shown, setShown] = useState(0);
   const readySince = useRef(new Map<string, number>());
   const prs = new Map(rows.map((r) => [r.row.item.sessionId, r.pr]));
@@ -88,12 +88,6 @@ function Demo() {
           Dismiss hides these stalls until the task changes.
         </p>
         <div className="flex items-center gap-4 text-ui">
-          {([1, 2] as const).map((n) => (
-            <label key={n} className="flex items-center gap-1.5">
-              <input type="radio" checked={lines === n} onChange={() => setLines(n)} />
-              {n === 1 ? "One line" : "Two lines"}
-            </label>
-          ))}
           <button
             type="button"
             className="underline"
@@ -116,7 +110,6 @@ function Demo() {
             stalls={stalls}
             previews={previews}
             now={NOW}
-            lines={lines}
             onOpen={() => {}}
             onMerge={async (r) => {
               await new Promise((done) => setTimeout(done, 1000));

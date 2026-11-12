@@ -14,8 +14,9 @@ import type { BackgroundTask, Bot, BotPreview, PrMark, SessionIndexItem, Session
 /// Read for every bot rather than the one on screen, since the banner is for a
 /// bot the reader is not looking at: once new stalls land while the window is
 /// in the background, one banner per bot says how many tasks wait on the
-/// reader, and a click opens its chat. The first read after launch is taken in
-/// silence, or every stall already standing would raise one. PR marks are only
+/// reader, and a click opens its chat. Each bot's first read, once its chat is
+/// found, is taken in silence, or every stall already standing would raise one.
+/// PR marks are only
 /// polled for the open bot's repos, so another bot's ready PR shows as idle
 /// until its chat is opened; `stalledTasks` explains why that is safe.
 export function useStalledTasks({
@@ -54,14 +55,17 @@ export function useStalledTasks({
     return out;
   }, [bots, items, statusBySession, askingSessions, tasksBySession, prOf, now]);
 
-  const seen = useRef<Set<string> | null>(null);
+  const seen = useRef(new Set<string>());
+  // Seeded per bot, the first time its chat is found: the bot list and the
+  // index load after mount, so a single first pass would see nothing yet.
+  const seeded = useRef(new Set<string>());
   useEffect(() => {
-    const first = !seen.current;
-    seen.current ??= new Set();
     for (const bot of bots) {
       const entry = byBot.get(bot.id);
       if (!entry) continue;
       const fresh = freshStalls(seen.current, entry.stalls);
+      const first = !seeded.current.has(bot.id);
+      seeded.current.add(bot.id);
       if (first || fresh.length === 0 || isWindowFocused()) continue;
       const n = entry.stalls.length;
       notifyOS(entry.chatId, "asking", bot.name, `${n} ${n === 1 ? "task" : "tasks"} waiting on you`);
@@ -75,9 +79,14 @@ export function useStalledTasks({
   const previewKey = stalled.map((i) => `${i.sessionId}:${i.modified}`).join("|");
   useEffect(() => {
     if (stalled.length === 0) return;
+    // A read overtaken by a newer one must not land over it.
+    let stale = false;
     invoke<Record<string, BotPreview>>("bot_previews", { sessionIds: stalled.map((i) => i.sessionId) })
-      .then(setPreviews)
+      .then((p) => stale || setPreviews(p))
       .catch(() => {});
+    return () => {
+      stale = true;
+    };
     // The key carries everything that moves a preview.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewKey]);

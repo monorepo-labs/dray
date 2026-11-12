@@ -31,7 +31,6 @@ export default function StalledTasks({
   stalls,
   previews,
   now,
-  lines = 1,
   onOpen,
   onMerge,
 }: {
@@ -39,8 +38,6 @@ export default function StalledTasks({
   /// Each task's last message, by session id.
   previews: Readonly<Record<string, BotPreview>>;
   now: number;
-  /// How much of the last message a row shows.
-  lines?: 1 | 2;
   /// `alone`: a ⌘-click, which switches to the task rather than opening its tab.
   onOpen: (sessionId: string, alone: boolean) => void;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
@@ -69,7 +66,6 @@ export default function StalledTasks({
           stall={stall}
           preview={previews[stall.row.item.sessionId]?.text}
           now={now}
-          lines={lines}
           onOpen={onOpen}
           onMerge={onMerge}
         />
@@ -84,14 +80,12 @@ function StalledRow({
   stall,
   preview,
   now,
-  lines,
   onOpen,
   onMerge,
 }: {
   stall: Stall;
   preview: string | null | undefined;
   now: number;
-  lines: 1 | 2;
   onOpen: (sessionId: string, alone: boolean) => void;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
 }) {
@@ -115,6 +109,8 @@ function StalledRow({
     >
       <BotAvatar seed={id} avatar={seededAvatar(id)} follow={hovered} className="block size-8 shrink-0 scale-[1.18]" />
       <span className="flex min-w-0 flex-1 flex-col">
+        {/* The time ends the title line on every row; Merge sits under it,
+            beside the message, so it never moves the time. */}
         <span className="flex items-baseline gap-2">
           <span className="min-w-0 truncate text-ui text-foreground">{item.title}</span>
           {pr && (
@@ -129,13 +125,17 @@ function StalledRow({
             {compactAge(item.modified, now)}
           </span>
         </span>
-        {preview && (
-          <span className={cn("text-ui text-muted-foreground", lines === 1 ? "truncate" : "line-clamp-2")}>
-            {previewLine(preview)}
-          </span>
-        )}
+        <span className="flex items-start gap-3">
+          {preview && (
+            <span className="line-clamp-2 min-w-0 flex-1 text-ui text-muted-foreground/60">{previewLine(preview)}</span>
+          )}
+          {mergeable && (
+            <span className="ml-auto pt-0.5">
+              <MergeControl onMerge={(method) => onMerge(row, pr, method)} />
+            </span>
+          )}
+        </span>
       </span>
-      {mergeable && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />}
     </div>
   );
 }
