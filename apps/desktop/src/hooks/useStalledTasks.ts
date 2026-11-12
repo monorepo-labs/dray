@@ -91,5 +91,39 @@ export function useStalledTasks({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewKey]);
 
-  return { byBot, previews, now };
+  // What each waiting task needs from the reader, written from its last message
+  // by the cheap title model (`task_need`). Asked once per message: a failure
+  // leaves the row on the message itself until the task says something new.
+  const [needByMessage, setNeedByMessage] = useState<Record<string, string>>({});
+  const waiting = [...byBot.values()].flatMap((b) => b.stalls.filter((s) => s.kind === "waiting"));
+  const needs = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const s of waiting) {
+      const id = s.row.item.sessionId;
+      const need = needByMessage[needKey(id, previews[id]?.text)];
+      if (need) out[id] = need;
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [byBot, previews, needByMessage]);
+  useEffect(() => {
+    for (const s of waiting) {
+      const id = s.row.item.sessionId;
+      const text = previews[id]?.text;
+      const key = needKey(id, text);
+      if (!text || ASKED.has(key)) continue;
+      ASKED.add(key);
+      invoke<string>("task_need", { sessionId: id, text })
+        .then((need) => setNeedByMessage((n) => ({ ...n, [key]: need })))
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [byBot, previews]);
+
+  return { byBot, previews, needs, now };
 }
+
+/// Messages already sent to `task_need`, so a re-render asks nothing twice.
+const ASKED = new Set<string>();
+
+const needKey = (sessionId: string, text: string | null | undefined) => `${sessionId}\n${text ?? ""}`;

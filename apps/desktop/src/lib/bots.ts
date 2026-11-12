@@ -127,7 +127,8 @@ export function previewLine(text: string): string {
     .replace(/```[\s\S]*?```/g, " ")
     // Headings and quotes by their line-start marks alone: `#908` mid-line is a PR.
     .replace(/^\s*(?:#{1,6}\s+|>\s?)+/gm, "")
-    .replace(/[*_`]+/g, "")
+    // Underscores stay: `parse_args` is a name, and agents bold with `*`.
+    .replace(/[*`]+/g, "")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\s+/g, " ")
     .trim();

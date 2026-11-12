@@ -3873,6 +3873,7 @@ function App() {
               <StalledTasks
                 stalls={stalls}
                 previews={stalled.previews}
+                needs={stalled.needs}
                 now={stalled.now}
                 onOpen={(id, alone) => void openTask(id, alone)}
                 onMerge={mergeTask}
