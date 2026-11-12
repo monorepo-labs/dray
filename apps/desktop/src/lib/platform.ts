@@ -16,3 +16,8 @@ export const HAS_DICTATION = IS_MAC || IS_LINUX;
 /// What copy calls the machine the app runs on: "this Mac" on a Mac, "this
 /// machine" anywhere else. One noun, so every sentence reads the same per platform.
 export const MACHINE = IS_MAC ? "Mac" : "machine";
+
+/// A click or key with ⌘ held, or Ctrl off a Mac — the app's one modifier.
+export function isModClick(e: { metaKey: boolean; ctrlKey: boolean }): boolean {
+  return IS_MAC ? e.metaKey : e.metaKey || e.ctrlKey;
+}

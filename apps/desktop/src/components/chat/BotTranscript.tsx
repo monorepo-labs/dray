@@ -5,6 +5,7 @@ import EventRow from "@/components/chat/EventRow";
 import UserMessage from "@/components/chat/UserMessage";
 import { OrbLine } from "@/components/chat/WorkingIndicator";
 import { seededAvatar } from "@/lib/botAvatar";
+import { isModClick } from "@/lib/platform";
 import { botItems, botRows, chatTime, firstUnread, itemTime, startsTimeRun, type TalkItem } from "@/lib/botTranscript";
 import { stripSenderPrefix } from "@/lib/relay";
 import { toolArgument, toolLabel } from "@/lib/tools";
@@ -37,7 +38,8 @@ export default function BotTranscript({
   /// The reply streaming in, which takes the live line's place.
   preview?: ReactNode;
   taskOf?: (sessionId: string) => BotTask | undefined;
-  onOpenSession: (sessionId: string) => void;
+  /// `alone`: a ⌘-click, which switches to a task rather than opening its tab.
+  onOpenSession: (sessionId: string, alone?: boolean) => void;
 }) {
   const items = useMemo(() => botItems(events), [events]);
   // "From" rows, a task's messages to the bot, are hidden for now: the bot's
@@ -63,7 +65,7 @@ export default function BotTranscript({
             ) : item.kind === "task" ? (
               <StartedLine
                 party={{ sessionId: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? "Task" }}
-                onOpen={() => onOpenSession(item.sessionId)}
+                onOpen={(alone) => onOpenSession(item.sessionId, alone)}
               />
             ) : item.kind === "assistant" ? (
               // Replies in a row sit close, as a messenger stacks them; a new
@@ -115,7 +117,7 @@ function TalkLine({
   /// Inside an opened run, whose line already says which way: no verb.
   bare?: boolean;
   taskOf: TaskOf | undefined;
-  onOpenSession: (sessionId: string) => void;
+  onOpenSession: (sessionId: string, alone?: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const parties = [...new Map(items.map((i) => partyOf(i, taskOf)).map((p) => [p.sessionId, p])).values()];
@@ -131,7 +133,7 @@ function TalkLine({
             is in its own chat. Several open to their rows, and a task's own
             message opens to its text. */}
         {from === 0 && parties.length === 1 ? (
-          <PartyChip parties={parties} onClick={() => onOpenSession(parties[0].sessionId)} />
+          <PartyChip parties={parties} onClick={(e) => onOpenSession(parties[0].sessionId, isModClick(e))} />
         ) : (
           <PartyChip parties={parties} expanded={open} onClick={() => setOpen((o) => !o)} />
         )}
@@ -196,7 +198,7 @@ function PartyChip({
   parties: Party[];
   /// Set where the chip opens messages rather than a task.
   expanded?: boolean;
-  onClick: () => void;
+  onClick: (e: React.MouseEvent) => void;
 }) {
   const single = parties.length === 1 ? parties[0] : null;
   return (
@@ -279,11 +281,11 @@ function currentTool(events: AgentEvent[]): string | null {
 
 /// A task the bot started, said the way its messages are: a line naming it,
 /// which opens it. Whether it is still working is the Tasks tab's to say.
-function StartedLine({ party, onOpen }: { party: Party; onOpen: () => void }) {
+function StartedLine({ party, onOpen }: { party: Party; onOpen: (alone: boolean) => void }) {
   return (
     <div className="flex max-w-full items-center gap-0.5 self-start text-ui text-muted-foreground">
       <span className="shrink-0">Started a new task</span>
-      <PartyChip parties={[party]} onClick={onOpen} />
+      <PartyChip parties={[party]} onClick={(e) => onOpen(isModClick(e))} />
     </div>
   );
 }

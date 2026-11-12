@@ -37,8 +37,9 @@ type ChatProps = {
   onOpenSubagent: (id: string) => void;
   /// Opens the session that relayed a prompt into this one, for the avatar a
   /// `dray send` message draws. Selecting the session is all it does — the same
-  /// thing clicking its sidebar row does.
-  onOpenSession: (sessionId: string) => void;
+  /// thing clicking its sidebar row does. `alone` is a bot chat's ⌘-click on a
+  /// task, which opens it in place of the chat rather than as a tab beside it.
+  onOpenSession: (sessionId: string, alone?: boolean) => void;
   /// Opens the subagent panel on no particular run — what the background-task
   /// notice needs, since it stands for the whole set rather than for one of them.
   onOpenSubagentPanel: () => void;
@@ -672,7 +673,10 @@ export default function Chat({
   const callbacks = useRef({ onOpenSubagent, onOpenSession });
   callbacks.current = { onOpenSubagent, onOpenSession };
   const openSubagent = useCallback((id: string) => callbacks.current.onOpenSubagent(id), []);
-  const openSession = useCallback((id: string) => callbacks.current.onOpenSession(id), []);
+  const openSession = useCallback(
+    (id: string, alone?: boolean) => callbacks.current.onOpenSession(id, alone),
+    [],
+  );
 
   // With no session there is no transcript to draw; AppShell centers the
   // composer and skips this pane entirely. A session still being read draws the
