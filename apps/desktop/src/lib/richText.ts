@@ -35,7 +35,7 @@ export const TAG_ATTR = "data-tag";
 /// character on every render.
 export const FILLER_ATTR = "data-filler";
 
-/// The three runs drawn as chips.
+/// The runs drawn as chips.
 ///
 /// `command` is deliberately absent: `/caveman` is already the short form of
 /// itself, so a chip there would buy only whole-token deletion and cost the
@@ -43,7 +43,7 @@ export const FILLER_ATTR = "data-filler";
 /// bare paths and inline markdown marks are absent for a plainer reason — the
 /// reader typed those as prose rather than picking them off a menu, and there is
 /// nothing hidden behind them to stand for.
-const CHIP_KINDS = new Set<Segment["kind"]>(["mention", "session", "issue"]);
+const CHIP_KINDS = new Set<Segment["kind"]>(["mention", "session", "bot", "issue"]);
 
 /// How much of an issue's title a chip shows before it gives up and elides.
 ///
@@ -71,7 +71,7 @@ function elide(text: string, max: number): string {
 ///
 /// - a mention keeps its filename and drops the `@` — the file glyph beside it
 ///   says it is a file, and says which kind, which the sigil never did;
-/// - a session tag keeps its title, dropping the uuid that made it addressable —
+/// - a session or bot tag keeps its title, dropping the uuid that made it addressable —
 ///   the reader picked a row off a menu and never wanted to read an address;
 /// - an issue tag keeps the `#` and swaps the identifier for the **title**,
 ///   elided. `DRA-269` is the half a reader cannot read anything off; the words
@@ -87,6 +87,7 @@ export function chipLabel(segment: Segment): string | null {
     // is made once by whoever built the segment rather than the parser being
     // asked for a third spelling of the same tag.
     case "session":
+    case "bot":
       return elide(segment.inner ? segment.inner.slice(1) : segment.text.slice(1), LABEL_MAX);
     default:
       return elide(issueFace(segment), ISSUE_LABEL_MAX + 1);

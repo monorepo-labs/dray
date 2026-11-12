@@ -109,6 +109,12 @@ export function botAt(list: readonly Bot[], cwd: string): Bot | undefined {
   return list.find((b) => trimmed(b.path) === at);
 }
 
+/// Whether `id` names a bot, for code outside React. What tells a bot tag from
+/// a file mention followed by some id in parentheses.
+export function isBotId(id: string): boolean {
+  return bots.some((b) => b.id === id);
+}
+
 /// Whether `cwd` is a bot's folder, for code outside React.
 export function isBotPath(cwd: string | null | undefined): boolean {
   return !!cwd && !!botAt(bots, cwd);

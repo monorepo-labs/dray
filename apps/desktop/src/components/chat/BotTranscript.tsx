@@ -113,6 +113,7 @@ export default function BotTranscript({
                     images={item.event.payload.images}
                     issues={item.event.payload.issues}
                     onOpenSession={onOpenSession}
+                    onOpenBot={onOpenBot}
                   />
                 )}
               </>
@@ -124,7 +125,7 @@ export default function BotTranscript({
                 onOpenBot={onOpenBot}
               />
             ) : item.kind === "talk" ? (
-              <TalkLine items={item.items} taskOf={taskOf} onOpenSession={onOpenSession} />
+              <TalkLine items={item.items} taskOf={taskOf} onOpenSession={onOpenSession} onOpenBot={onOpenBot} />
             ) : item.kind === "task" ? (
               <StartedLine
                 party={{ id: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? "Task" }}
@@ -134,10 +135,20 @@ export default function BotTranscript({
               // Replies in a row sit close, as a messenger stacks them; a new
               // turn after the reader's message keeps the full gap.
               <BotBubble tight={!time && rows[i - 1]?.kind === "assistant"}>
-                <EventRow event={item.event} resultByCallId={NO_RESULTS} onOpenSession={onOpenSession} />
+                <EventRow
+                event={item.event}
+                resultByCallId={NO_RESULTS}
+                onOpenSession={onOpenSession}
+                onOpenBot={onOpenBot}
+              />
               </BotBubble>
             ) : (
-              <EventRow event={item.event} resultByCallId={NO_RESULTS} onOpenSession={onOpenSession} />
+              <EventRow
+                event={item.event}
+                resultByCallId={NO_RESULTS}
+                onOpenSession={onOpenSession}
+                onOpenBot={onOpenBot}
+              />
             )}
           </Fragment>
         );
@@ -205,12 +216,14 @@ function TalkLine({
   bare = false,
   taskOf,
   onOpenSession,
+  onOpenBot,
 }: {
   items: TalkItem[];
   /// Inside an opened run, whose line already says which way: no verb.
   bare?: boolean;
   taskOf: TaskOf | undefined;
   onOpenSession: (sessionId: string, alone?: boolean) => void;
+  onOpenBot?: (bot: Bot) => void;
 }) {
   const [open, setOpen] = useState(false);
   const parties = [...new Map(items.map((i) => partyOf(i, taskOf)).map((p) => [p.id, p])).values()];
@@ -250,6 +263,7 @@ function TalkLine({
                 bare
                 taskOf={taskOf}
                 onOpenSession={onOpenSession}
+                onOpenBot={onOpenBot}
               />
             ))}
           </div>
@@ -265,6 +279,7 @@ function TalkLine({
                     images={item.event.payload.images}
                     issues={item.event.payload.issues}
                     onOpenSession={onOpenSession}
+                    onOpenBot={onOpenBot}
                   />
                 )
               ) : (
