@@ -433,6 +433,11 @@ pub struct DraftSummary {
 pub struct BrowserRequest {
     pub session_id: String,
     pub action: BrowserAction,
+    /// The session whose agent sent the step, where `session_id` names a
+    /// browser it shares — a bot's task on its bot chat's. Its own page is
+    /// kept apart within the shared tabs. Filled by the server, never by the CLI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver: Option<String>,
 }
 
 /// How an element is named. `Target` is what the line carries — `@e12` from
@@ -1066,6 +1071,7 @@ mod tests {
         let browser = BrowserRequest {
             session_id: "s".into(),
             action: BrowserAction::Back,
+            driver: None,
         };
         let old = [
             Request::CreateSession(Default::default()),

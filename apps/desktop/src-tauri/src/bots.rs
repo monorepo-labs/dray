@@ -549,24 +549,45 @@ fn same_dir(a: &str, b: &str) -> bool {
 /// Everything under a bot runs hidden and reports back after every turn, and a
 /// grandchild belongs to that arrangement as much as a child does.
 pub async fn in_bot_tree(item: &SessionIndexItem) -> bool {
-    let Ok(bots) = read_list().await else { return false };
+    bot_chat_of(item).await.is_some()
+}
+
+/// The bot chat session `item` is, or the one it descends from.
+async fn bot_chat_of(item: &SessionIndexItem) -> Option<SessionIndexItem> {
+    let bots = read_list().await.ok()?;
     if bots.is_empty() {
-        return false;
+        return None;
     }
     let mut at = Some(item.clone());
     // Bounded: an index that points a session at its own ancestor must cost a
     // wrong answer, never a hung turn.
     for _ in 0..8 {
-        let Some(item) = at else { return false };
+        let item = at?;
         if bots.iter().any(|b| same_dir(&b.path, &item.cwd)) {
-            return true;
+            return Some(item);
         }
         at = match item.parent_session_id {
             Some(id) => crate::store::get_session_index_item(&id).await.ok().flatten(),
             None => None,
         };
     }
-    false
+    None
+}
+
+/// The session whose browser a `dray browser` step from `session_id` drives:
+/// a bot and everything under it share the bot chat's pages (#881), so a
+/// task's agent opens them where the reader, on any of the bot's tabs, sees them.
+/// The chat's oldest session, since an agent switch adds a newer one and the
+/// pages must outlive it; `botBrowser` in the frontend picks the same.
+pub async fn browser_owner(session_id: &str) -> String {
+    let Some(item) = crate::store::get_session_index_item(session_id).await.ok().flatten() else {
+        return session_id.to_string();
+    };
+    let Some(chat) = bot_chat_of(&item).await else { return session_id.to_string() };
+    match chat_sessions(&chat.cwd).await.ok().and_then(|c| c.into_iter().next()) {
+        Some(oldest) => oldest.session_id,
+        None => chat.session_id,
+    }
 }
 
 /// `base` with the bot's own block added where `cwd` is a bot's folder, or the

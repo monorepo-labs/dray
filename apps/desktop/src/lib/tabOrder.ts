@@ -66,11 +66,22 @@ export function markClosedSlot(sessionId: string, key: TabKey, at: number) {
   if (top?.key === key) top.at = at;
 }
 
+/// Moves the newest close from one session's history to another's: a page
+/// closed from a row showing a shared browser goes back into that row (#881).
+export function moveLastClosed(from: string, to: string) {
+  if (from === to) return;
+  const tab = closed.get(from)?.pop();
+  if (tab) pushClosedTab(to, tab);
+}
+
 export function popClosedTab(sessionId: string): ClosedTab | undefined {
   return closed.get(sessionId)?.pop();
 }
 
-/// Drops a deleted session's closed tabs.
+/// Drops a deleted session's closed tabs, and its own tab wherever a bot's
+/// row closed it, or ⌘⇧T would reopen a task that is gone.
 export function forgetClosedTabs(sessionId: string) {
   closed.delete(sessionId);
+  const key = `task:${sessionId}`;
+  for (const [owner, tabs] of closed) closed.set(owner, tabs.filter((t) => t.key !== key));
 }
