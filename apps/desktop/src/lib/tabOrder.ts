@@ -1,6 +1,7 @@
 /// One entry in the titlebar's row: `chat`, `changes`, the `files` stand-in
 /// drawn while no file is open, `blank:<n>` for a new browser tab awaiting its
-/// URL, `page:<id>` and `file:<path>`.
+/// URL, `page:<id>` and `file:<path>`; in a bot's row, `pick:<id>` for a Diff
+/// or Files pick (#892) and `pickfile:<id>:<path>` for a file one opened.
 export type TabKey = string;
 
 /// What a key stands for, so an entry arriving can take the slot of one of
@@ -8,6 +9,8 @@ export type TabKey = string;
 function kindOf(key: TabKey): string {
   if (key.startsWith("blank:") || key.startsWith("page:")) return "browser";
   if (key === "files" || key.startsWith("file:")) return "files";
+  // A pick's files take its slot and give it back, as Files does.
+  if (key.startsWith("pickfile:")) return `pick:${key.slice(9, key.indexOf(":", 9))}`;
   return key;
 }
 
@@ -46,6 +49,10 @@ export function moveKey(order: readonly TabKey[], key: TabKey, to: number): TabK
 export type ClosedTab = {
   key: TabKey;
   page?: { url: string; title: string; favicon: string };
+  /// A pick tab's kind and target; its id is minted again on reopen.
+  pick?: { kind: "changes" | "files"; target: string };
+  /// A file a pick opened: the store it lives in, since the row's own is not.
+  file?: { store: string; path: string };
   at?: number;
 };
 
@@ -83,5 +90,7 @@ export function popClosedTab(sessionId: string): ClosedTab | undefined {
 export function forgetClosedTabs(sessionId: string) {
   closed.delete(sessionId);
   const key = `task:${sessionId}`;
-  for (const [owner, tabs] of closed) closed.set(owner, tabs.filter((t) => t.key !== key));
+  for (const [owner, tabs] of closed) {
+    closed.set(owner, tabs.filter((t) => t.key !== key && t.pick?.target !== sessionId));
+  }
 }

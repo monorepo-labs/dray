@@ -60,7 +60,12 @@ export default function FilesView({
   cwd,
   active,
   revision,
+  picker,
 }: {
+  /// A bot-row tab's choice of session, the list's first row (#892). Such a
+  /// tab is not its session's own Files view, so opening a file here must not
+  /// flip that session's view to it.
+  picker?: React.ReactNode;
   sessionId: string;
   cwd: string;
   /// False while another view is showing. The component stays mounted so its
@@ -70,7 +75,7 @@ export default function FilesView({
   revision: string;
 }) {
   const { open, active: activePath } = useOpenFiles(sessionId);
-  useOpenFilesWatcher(sessionId);
+  useOpenFilesWatcher(sessionId, picker ? "pick" : "files");
 
   const [side, setSide] = useLocalStorage<Side>(SIDE_KEY, DEFAULT_SIDE);
   const [shown, setShown] = useLocalStorage<boolean>(SHOWN_KEY, true);
@@ -108,9 +113,10 @@ export default function FilesView({
   // Stable, because the tree's rows are memoized against this view re-rendering
   // on every session event and a fresh function here would defeat all of it one
   // prop down.
+  const bring = !picker;
   const openRelative = useCallback(
-    (path: string) => openInFiles(sessionId, `${cwd}/${path}`),
-    [sessionId, cwd],
+    (path: string) => openInFiles(sessionId, `${cwd}/${path}`, undefined, bring),
+    [sessionId, cwd, bring],
   );
   const selected = activePath?.startsWith(`${cwd}/`)
     ? activePath.slice(cwd.length + 1)
@@ -159,6 +165,7 @@ export default function FilesView({
       )}
       style={style}
     >
+      {picker}
       <Filter
         box={box}
         query={query}
