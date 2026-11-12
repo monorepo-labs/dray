@@ -125,12 +125,12 @@ function StalledRow({
             {compactAge(item.modified, now)}
           </span>
         </span>
-        <span className="flex items-start gap-3">
+        <span className="flex items-center gap-3">
           {preview && (
-            <span className="line-clamp-2 min-w-0 flex-1 text-ui text-muted-foreground">{previewLine(preview)}</span>
+            <span className="min-w-0 flex-1 truncate text-ui text-foreground/70">{previewLine(preview)}</span>
           )}
           {mergeable && (
-            <span className="ml-auto pt-0.5">
+            <span className="ml-auto">
               <MergeControl onMerge={(method) => onMerge(row, pr, method)} />
             </span>
           )}

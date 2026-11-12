@@ -13,7 +13,7 @@ import "../App.css";
 /// `stalledTasks` on made-up tasks: a PR ready to merge, one failing checks,
 /// one in conflict, a task idle with no PR, and three it must leave out —
 /// working, checks running, and idle only ten minutes. Each row shows the
-/// task's last message, clamped to two lines. Dismiss is stored for real;
+/// task's last message on one line. Dismiss is stored for real;
 /// Reset clears it.
 const NOW = Date.now();
 const ago = (min: number) => new Date(NOW - min * 60_000).toISOString();
