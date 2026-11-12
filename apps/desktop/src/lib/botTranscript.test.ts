@@ -109,6 +109,16 @@ describe("botItems", () => {
     expect(chatTime(new Date(2025, 10, 1, 18, 21).toISOString(), now)).toMatch(/2025.*18:21$/);
   });
 
+  it("keeps errors and a failed turn, dropping the text the failure repeats", () => {
+    const failed = ev({
+      type: "turn_completed", status: "error", stopReason: "stop_sequence", finalText: "Not logged in",
+      usage: null, durationMs: null,
+    } as unknown as AgentEventPayload);
+    const error = ev({ type: "error", source: "harness", message: "boom", fatal: false } as unknown as AgentEventPayload);
+    const items = botItems([user("hi"), said("Not logged in"), failed, error]);
+    expect(items.map((i) => i.kind)).toEqual(["user", "notice", "notice"]);
+  });
+
   it("draws no task for a create that failed", () => {
     const items = botItems([call("c", "dray session new x"), result("c", `no project ${ID}`, true)]);
     expect(items).toEqual([]);

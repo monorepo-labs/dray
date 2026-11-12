@@ -47,6 +47,9 @@ export default function NewBotDialog({
   const [avatar, setAvatar] = useState<Avatar>(DEFAULT_AVATAR);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A bot already made whose first chat failed to start: a retry starts it
+  // again rather than making a second bot beside it.
+  const [made, setMade] = useState<Bot | null>(null);
 
   const close = (next: boolean) => {
     onOpenChange(next);
@@ -54,6 +57,7 @@ export default function NewBotDialog({
       setName("");
       setAvatar(DEFAULT_AVATAR);
       setError(null);
+      setMade(null);
     }
   };
 
@@ -61,8 +65,12 @@ export default function NewBotDialog({
     if (!name.trim() || busy) return;
     setBusy(true);
     try {
-      const bot = await invoke<Bot>("create_bot", { name: name.trim(), avatar });
-      await refreshBots();
+      let bot = made;
+      if (!bot) {
+        bot = await invoke<Bot>("create_bot", { name: name.trim(), avatar });
+        setMade(bot);
+        await refreshBots();
+      }
       const chat = await invoke<SessionIndexItem>("start_bot", { id: bot.id, ...pick });
       close(false);
       onStarted(chat);

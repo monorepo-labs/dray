@@ -3095,10 +3095,22 @@ function App() {
                   // From the repo root: a task's worktree may already be gone.
                   await invoke("merge_pr", { cwd: row.item.projectPath, number: pr.number, method });
                   prMarks.refreshAfterWrite();
-                  // Landed, so the task is done: settled, its worktree removed,
-                  // with nobody asked to tidy up after it.
-                  await setSessionFlags(row.item.sessionId, { archived: true });
-                  if (row.item.worktreeName && !row.item.worktreeRemoved) removeWorktree(row.item.sessionId, "tidy");
+                  // Landed, so the task is done — unless it is still working,
+                  // which settling would kill mid-turn.
+                  const { item } = row;
+                  if (row.busy || !(await setSessionFlags(item.sessionId, { archived: true }))) return;
+                  if (!item.worktreeName || item.worktreeRemoved) return;
+                  // The tree goes without a word only where it holds nothing
+                  // the merge did not take; anything else is the settle notice's
+                  // question, never a silent delete.
+                  const left = await invoke<WorktreeDisposition>("worktree_disposition", { sessionId: item.sessionId }).catch(
+                    () => null,
+                  );
+                  if (left && (!left.exists || (left.changedFiles === 0 && left.unpushedCommits === 0))) {
+                    removeWorktree(item.sessionId, "tidy");
+                  } else {
+                    void askAboutWorktree(item.sessionId, item.worktreeName, item.title, "notice");
+                  }
                 }}
               />
             </TabBody>
@@ -3574,11 +3586,9 @@ function App() {
             onClick={() => {
               const bot = botToDelete;
               if (!bot) return;
-              const chat = botList.find((b) => b.bot.id === bot.id)?.session;
               void (async () => {
-                // Settled first: once the folder is gone, nothing marks the
-                // chat as a bot's and it would land in the session list.
-                if (chat) await setSessionFlags(chat.sessionId, { archived: true });
+                // `delete_bot` settles the bot's open chat itself: with the
+                // settled list up, the open one is not held here to settle.
                 await invoke("delete_bot", { id: bot.id }).catch((e) => setError(String(e)));
                 await refreshBots();
               })();

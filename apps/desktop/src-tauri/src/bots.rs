@@ -101,12 +101,25 @@ pub async fn create_bot(name: String, avatar: Option<BotAvatar>) -> Result<Bot, 
 /// Drops the list entry and the folder. The bot's sessions stay in the index,
 /// as any session does once its project is gone; delete those on their own.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn delete_bot(id: String) -> Result<(), Fail> {
+pub async fn delete_bot(id: String, sink: Sink) -> Result<(), Fail> {
     let _guard = BOTS_LOCK.lock().await;
     let mut bots = list_bots().await?;
     let Some(at) = bots.iter().position(|b| b.id == id) else {
         return Ok(());
     };
+    // Every chat still open in its folder is settled first, here rather than
+    // by the caller: the frontend holds one side of the index and, with the
+    // settled list up, cannot see the open chat. Settling stops it and its
+    // hidden children; once the folder is gone nothing marks it a bot's.
+    let open: Vec<String> = crate::store::read_index()
+        .await?
+        .into_iter()
+        .filter(|s| !s.archived && Path::new(&s.cwd) == Path::new(&bots[at].path))
+        .map(|s| s.session_id)
+        .collect();
+    for session_id in open {
+        crate::set_session_flags(&session_id, Some(true), None, None, None, sink.clone()).await?;
+    }
     let bot = bots.remove(at);
     save_list(&bots).await?;
     // Only a folder this module made: a list entry edited by hand must not

@@ -1,3 +1,4 @@
+import { drawsFailure } from "@/lib/transcript";
 import type { AgentEvent } from "@/types/events";
 import type { JsonValue } from "@/types/serde_json/JsonValue";
 
@@ -6,6 +7,9 @@ import type { JsonValue } from "@/types/serde_json/JsonValue";
 export type BotItem =
   | { kind: "user"; event: AgentEvent }
   | { kind: "assistant"; event: AgentEvent }
+  /// An error, or a turn that failed: drawn as the transcript draws them, since
+  /// a bot turn that fails before answering otherwise ends with no word why.
+  | { kind: "notice"; event: AgentEvent }
   | { kind: "task"; key: string; sessionId: string; ts: string }
   | { kind: "report"; event: AgentEvent; sessionId: string; title: string }
   | { kind: "sent"; key: string; target: string; text: string; ts: string };
@@ -157,6 +161,22 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       else if (!p.kickoff) items.push({ kind: "user", event });
     } else if (p.type === "assistant_text") {
       if (p.text.trim()) items.push({ kind: "assistant", event });
+    } else if (p.type === "error") {
+      items.push({ kind: "notice", event });
+    } else if (p.type === "turn_completed" && drawsFailure(p)) {
+      // The harness says the failure twice, as text and on the turn; the red
+      // row wins, as in the transcript.
+      const last = items[items.length - 1];
+      const sentence = p.finalText?.trim();
+      if (
+        sentence &&
+        last?.kind === "assistant" &&
+        last.event.payload.type === "assistant_text" &&
+        last.event.payload.text.trim() === sentence
+      ) {
+        items.pop();
+      }
+      items.push({ kind: "notice", event });
     } else if (p.type === "tool_call_started") {
       const cmd = command(p.input);
       if (cmd && STARTS_SESSION.test(cmd)) starts.add(p.callId);
