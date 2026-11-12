@@ -1,12 +1,13 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 
+import BotTranscript from "@/components/chat/BotTranscript";
 import StalledTasks from "@/components/chat/StalledTasks";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
 import type { CrewRow } from "@/lib/crew";
-import { compactAge, onCard, stalledTasks } from "@/lib/stalled";
-import type { PrMark, SessionIndexItem } from "@/types/events";
+import { compactAge, needLine, onCard, stalledTasks } from "@/lib/stalled";
+import type { AgentEvent, PrMark, SessionIndexItem } from "@/types/events";
 import "../App.css";
 
 /// The stalled-tasks card at the foot of a bot's chat, run through the real
@@ -49,7 +50,7 @@ const pr = (number: number, more: Partial<PrMark> = {}): PrMark => ({
   ...more,
 });
 
-const ROWS: { row: CrewRow; pr?: PrMark; need?: string }[] = [
+const ROWS: { row: CrewRow; pr?: PrMark; need?: string; answered?: boolean }[] = [
   { row: row("1", "Add a rename button to the session header", 50), need: "Pick: keep the button or drop it" },
   { row: row("2", "Move the session index to SQLite", 125), need: "Approve the SQLite migration plan as written" },
   { row: row("3", "Fix the pricing page copy", 40), pr: pr(908) },
@@ -59,7 +60,7 @@ const ROWS: { row: CrewRow; pr?: PrMark; need?: string }[] = [
     need: "Review #921: it reorders search results",
   },
   // Idle on a question the bot can answer from what the reader already said.
-  { row: row("0", "Write the release notes", 45) },
+  { row: row("0", "Write the release notes", 45), answered: true },
   { row: row("6", "Bump the Shiki version", 75), pr: pr(919, { checksState: "FAILING", mergeStateStatus: "UNSTABLE" }) },
   { row: row("7", "Rename the CLI flags", 50 * 60), pr: pr(917, { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }) },
   { row: row("8", "Audit the landing page", 90, true) },
@@ -67,19 +68,100 @@ const ROWS: { row: CrewRow; pr?: PrMark; need?: string }[] = [
   { row: row("5", "Draft the onboarding email", 10) },
 ];
 
+const BOT = "01a1cfc8-demo-stalled-bot";
+let seq = 0;
+const event = (payload: AgentEvent["payload"], minutes: number): AgentEvent => ({
+  id: `e${seq}`,
+  sessionId: BOT,
+  harness: "claude_code",
+  seq: seq++,
+  ts: ago(minutes),
+  turnId: null,
+  subagent: null,
+  payload,
+});
+const message = (text: string, minutes: number, from: string | null = null, image = false) =>
+  event(
+    {
+      type: "user_message",
+      text,
+      images: image ? [{ path: null, url: SHOT, mimeType: "image/svg+xml" }] : [],
+      issues: [],
+      baseline: null,
+      queued: false,
+      from: from && { sessionId: from, title: ROWS.find((r) => r.row.item.sessionId === from)!.row.item.title, machine: null },
+      cwd: null,
+    } as AgentEvent["payload"],
+    minutes,
+  );
+const say = (text: string, minutes: number) => event({ type: "assistant_text", block: null, text }, minutes);
+const task = (id: string) => `01a1d000-0000-7000-8000-00000000000${id}`;
+
+/// The header the rename task screenshotted, cramped at the narrowest width.
+const SHOT = `data:image/svg+xml,${encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="120"><rect width="1200" height="120" fill="#1b1b1b"/><text x="30" y="72" font-family="sans-serif" font-size="34" fill="#eee">Add a rena…</text><rect x="560" y="34" width="200" height="52" rx="12" fill="#2b2b2b"/><text x="590" y="70" font-family="monospace" font-size="26" fill="#999">main</text><rect x="790" y="34" width="150" height="52" rx="12" fill="#3a7bd5"/><text x="815" y="70" font-family="sans-serif" font-size="26" fill="#fff">Rename</text><rect x="970" y="34" width="190" height="52" rx="12" fill="#a33"/><text x="1020" y="70" font-family="sans-serif" font-size="26" fill="#fff">Stop</text></svg>`,
+)}`;
+
+const EVENTS: AgentEvent[] = [
+  message("Five things for today: rename button in the header, SQLite for the session index, pricing copy, docs search ranking, release notes.", 180),
+  say("On it. I started five tasks for that.", 179),
+  message(
+    "Here is the migration plan before I touch anything. 1. Add `rusqlite` behind the existing `store` API so no caller changes. 2. On first start, read `index.json` into a new `sessions.db`, keeping the JSON as a backup for one release. 3. Switch reads over, then drop the JSON writer. Should I go ahead with this plan as written?",
+    125,
+    task("2"),
+  ),
+  say("The SQLite task wants your go-ahead on its migration plan: three steps, JSON kept as a backup for one release. Say the word and it starts.", 124),
+  message("Opened #921: search now ranks title matches above body matches. It changes the order of results, so it wants a review.", 95, task("9")),
+  say("Docs search is up as #921. It reorders results, so it's waiting on your review.", 94),
+  message(
+    "I added the rename button and wired it to `rename_session`. At the narrowest width the title now truncates to eight characters (screenshot). Keep the button and hide the branch chip below 900px, or drop it and rely on double-clicking the title?",
+    50,
+    task("1"),
+    true,
+  ),
+  say("The rename button works but crowds the header at narrow widths. Keep it and hide the branch chip, or drop it for double-click? Its screenshot shows the squeeze.", 49),
+  message("Opened #908 with the new pricing copy. Checks pass and it's ready to merge.", 40, task("3")),
+  say("Pricing copy is in #908 and ready to merge.", 39),
+  message("Also, what does the release notes task need from me?", 30),
+  say("Nothing yet, it's still drafting. I'll tell you when it has something.", 29),
+];
+
 function Demo() {
   const [rows, setRows] = useState(ROWS);
   const [shown, setShown] = useState(0);
+  const [focus, setFocus] = useState<{ sessionId: string; at: number } | null>(null);
+  const [opened, setOpened] = useState<string | null>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  // What `Chat` does with a pick: the lit block at the top of the pane.
+  useEffect(() => {
+    if (!focus) return;
+    const frame = requestAnimationFrame(() => {
+      const pane = scroller.current;
+      const node = pane?.querySelector<HTMLElement>("[data-bot-focus]");
+      if (!pane || !node) return;
+      const top = node.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
+      pane.scrollTo({ top: Math.max(top - 12, 0), behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focus]);
+  useEffect(() => {
+    const pane = scroller.current;
+    if (pane) pane.scrollTop = pane.scrollHeight;
+  }, [shown]);
   const readySince = useRef(new Map<string, number>());
   const prs = new Map(rows.map((r) => [r.row.item.sessionId, r.pr]));
   const stalls = stalledTasks(rows.map((r) => r.row), (r) => prs.get(r.item.sessionId), readySince.current, NOW);
   const card = stalls.filter(onCard);
-  const nudges = stalls.filter((s) => s.kind !== "ready" && !onCard(s));
+  const nudges = stalls.filter((s) => s.kind !== "ready" && !needLine(s));
 
   const writeNeeds = () =>
     setRows((all) =>
       all.map((r) =>
-        r.need ? { ...r, row: { ...r.row, item: { ...r.row.item, need: { text: r.need, at: new Date().toISOString() } } } } : r,
+        r.answered
+          ? { ...r, row: { ...r.row, busy: true } }
+          : r.need
+            ? { ...r, row: { ...r.row, item: { ...r.row.item, need: { text: r.need, at: new Date().toISOString() } } } }
+            : r,
       ),
     );
 
@@ -88,8 +170,9 @@ function Demo() {
       <div className="flex flex-col gap-4 p-10">
         <h1 className="text-lg font-medium">Stalled tasks in a bot's chat</h1>
         <p className="max-w-xl text-ui text-muted-foreground">
-          Ten tasks, seven stalled. Only a ready PR and a need the bot wrote reach the card; the rest go to the bot. A
-          row opens its task; Merge waits a second and takes it away, as settling does.
+          Ten tasks, seven stalled. A ready PR and a task idle on you reach the card; the rest go to the bot. A row
+          scrolls the chat to the task's last report and the bot's reply; Open, on hover, opens the task. Merge waits a
+          second and takes the row away, as settling does.
         </p>
         <div className="flex items-center gap-4 text-ui">
           <button type="button" className="underline" onClick={writeNeeds}>
@@ -107,22 +190,34 @@ function Demo() {
             Reset
           </button>
         </div>
-        {/* The chat column's width and gap. */}
-        <div className="flex max-w-3xl flex-col gap-4 rounded-xl border border-border px-6 py-6" data-bot-chat>
-          <div className="max-w-[85%] self-start rounded-xl bg-muted/50 px-3 py-2 text-chat">
-            On it. I started five tasks for that.
-          </div>
-          <StalledTasks
-            key={shown}
-            stalls={card}
-            now={NOW}
-            onOpen={() => {}}
+        {/* The chat column's width and gap, scrolling as the pane does. */}
+        <div ref={scroller} className="h-[560px] max-w-3xl overflow-y-auto rounded-xl border border-border">
+          <div className="flex flex-col gap-4 px-6 py-6" data-bot-chat>
+            <BotTranscript
+              unread={false}
+              segments={[{ sessionId: BOT, harness: "claude_code", created: EVENTS[0].ts, events: EVENTS }]}
+              busy={false}
+              taskOf={(id) => {
+                const r = ROWS.find((x) => x.row.item.sessionId === id);
+                return r && { sessionId: id, title: r.row.item.title };
+              }}
+              onOpenSession={() => {}}
+              focus={focus}
+            />
+            <StalledTasks
+              key={shown}
+              stalls={card}
+              now={NOW}
+              onFocus={(sessionId) => setFocus({ sessionId, at: Date.now() })}
+              onOpen={(id) => setOpened(ROWS.find((x) => x.row.item.sessionId === id)?.row.item.title ?? id)}
             onMerge={async (r) => {
               await new Promise((done) => setTimeout(done, 1000));
               setRows((all) => all.filter((x) => x.row.item.sessionId !== r.item.sessionId));
             }}
-          />
+            />
+          </div>
         </div>
+        {opened && <span className="text-ui text-muted-foreground">Open → would open “{opened}”</span>}
         <div className="flex max-w-3xl flex-col gap-1 text-ui">
           <span className="text-muted-foreground">Nudges sent to the bot, hidden from the reader</span>
           {nudges.map((s) => (

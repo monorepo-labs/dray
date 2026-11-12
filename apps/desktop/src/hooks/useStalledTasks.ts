@@ -4,7 +4,7 @@ import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import type { CrewRow } from "@/lib/crew";
 import { isWindowFocused } from "@/lib/focus";
 import { notifyOS } from "@/lib/notify";
-import { botCrews, freshStalls, onCard, stalledTasks, type Stall } from "@/lib/stalled";
+import { botCrews, freshStalls, needLine, onCard, stalledTasks, type Stall } from "@/lib/stalled";
 import { invoke } from "@/lib/transport";
 import type { BackgroundTask, Bot, PrMark, SessionIndexItem, SessionStatus } from "@/types/events";
 
@@ -69,7 +69,7 @@ export function useStalledTasks({
     const nudged = new Set(readLocalStorage<string[]>(NUDGED_KEY, []));
     const due = [...byBot.values()]
       .flatMap((b) => b.stalls)
-      .filter((s) => s.kind !== "ready" && !onCard(s) && !nudged.has(s.key));
+      .filter((s) => s.kind !== "ready" && !needLine(s) && !nudged.has(s.key));
     if (due.length === 0) return;
     for (const s of due) {
       nudged.add(s.key);

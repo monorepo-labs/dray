@@ -107,6 +107,8 @@ type ChatProps = {
   unread?: boolean;
   /// Drawn under a bot chat's conversation: its stalled tasks.
   botFooter?: ReactNode;
+  /// A task picked from that card, scrolled to. See [BotTranscript]'s `focus`.
+  botFocus?: { sessionId: string; at: number } | null;
 };
 
 const NO_EARLIER: SessionSnapshot[] = [];
@@ -215,6 +217,7 @@ export default function Chat({
   onOpenBot,
   unread = false,
   botFooter,
+  botFocus,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -565,6 +568,22 @@ export default function Chat({
     scroller.scrollTo({ top: Math.max(top, 0), behavior: "smooth" });
   };
 
+  // A task picked from the bot's "Waiting on you" card: its report and the
+  // bot's reply, at the top of the pane. A frame late, since the report opens
+  // in an effect of its own; the pin drops as a jump to a turn's does.
+  useEffect(() => {
+    if (!botFocus) return;
+    const frame = requestAnimationFrame(() => {
+      const scroller = scrollRef.current;
+      const node = contentRef.current?.querySelector<HTMLElement>("[data-bot-focus]");
+      if (!scroller || !node) return;
+      const top = node.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      followRef.current = false;
+      scroller.scrollTo({ top: Math.max(top - JUMP_PAD_PX, 0), behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [botFocus]);
+
   useEffect(() => () => cancelAnimationFrame(spyFrame.current), []);
 
   // The rail overlays the scroller as a sibling rather than sitting inside it,
@@ -742,6 +761,7 @@ export default function Chat({
                   taskOf={taskOf}
                   onOpenSession={openSession}
                   onOpenBot={onOpenBot}
+                  focus={botFocus}
                 />
                 {botFooter}
               </>

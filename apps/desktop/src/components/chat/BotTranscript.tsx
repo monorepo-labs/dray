@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
 import EventRow from "@/components/chat/EventRow";
@@ -7,7 +7,18 @@ import { OrbLine } from "@/components/chat/WorkingIndicator";
 import { useStreamingBlock, useStreamingKind } from "@/hooks/useStreamingBlock";
 import { seededAvatar } from "@/lib/botAvatar";
 import { botNamed, useBots } from "@/lib/bots";
-import { botRows, chatItems, chatTime, firstUnread, itemTime, startsTimeRun, type BotSegment, type TalkItem } from "@/lib/botTranscript";
+import {
+  botRows,
+  chatItems,
+  chatTime,
+  firstUnread,
+  itemKey,
+  itemTime,
+  startsTimeRun,
+  taskContext,
+  type BotSegment,
+  type TalkItem,
+} from "@/lib/botTranscript";
 import { AGENT_LABELS } from "@/lib/model";
 import { isModClick } from "@/lib/platform";
 import { stripSenderPrefix } from "@/lib/relay";
@@ -34,6 +45,7 @@ export default function BotTranscript({
   taskOf,
   onOpenSession,
   onOpenBot,
+  focus,
 }: {
   /// The chat had unread replies when opened. Read once: opening it clears
   /// the state, and the divider has to stay where it was.
@@ -47,6 +59,10 @@ export default function BotTranscript({
   /// `alone`: a ⌘-click, which switches to a task rather than opening its tab.
   onOpenSession: (sessionId: string, alone?: boolean) => void;
   onOpenBot?: (bot: Bot) => void;
+  /// A task picked from the "Waiting on you" card: its last report is drawn
+  /// open and, with the bot's reply, lit for a moment under `data-bot-focus`,
+  /// which the chat scrolls to. `at` tells a second pick of the same task apart.
+  focus?: { sessionId: string; at: number } | null;
 }) {
   const bots = useBots();
   const items = useMemo(() => chatItems(segments), [segments]);
@@ -54,7 +70,20 @@ export default function BotTranscript({
   // "From" rows, a task's messages to the bot, are hidden for now: the bot's
   // reply already says what came in. To draw them again, swap these back.
   // const rows = useMemo(() => botRows(items), [items]);
-  const rows = useMemo(() => botRows(items.filter((i) => i.kind !== "report")), [items]);
+  // A picked task's report is the one drawn, since it is what the reader asked to see.
+  const context = useMemo(() => (focus ? taskContext(items, focus.sessionId) : null), [items, focus]);
+  const rows = useMemo(
+    () => botRows(items.filter((i) => i.kind !== "report" || itemKey(i) === context?.report)),
+    [items, context?.report],
+  );
+  const reveal = context?.report && focus ? { key: context.report, at: focus.at } : undefined;
+  const [lit, setLit] = useState(false);
+  useEffect(() => {
+    if (!focus) return;
+    setLit(true);
+    const off = setTimeout(() => setLit(false), 1600);
+    return () => clearTimeout(off);
+  }, [focus]);
   const [newFrom] = useState(() => (unread ? firstUnread(items) : null));
   const doing = useMemo(() => (busy && events ? currentTool(events) : null), [busy, events]);
   // Only reply text becomes a bubble. A tool call or a thought the model is
@@ -62,9 +91,7 @@ export default function BotTranscript({
   const sessionId = segments.at(-1)?.sessionId ?? null;
   const streaming = useStreamingKind(sessionId);
 
-  return (
-    <>
-      {rows.map((item, i) => {
+  const drawn = rows.map((item, i) => {
         const key = "key" in item ? item.key : item.event.id;
         // A time label opens the chat and follows every pause, as a messenger's.
         const at = itemTime(item);
@@ -102,7 +129,7 @@ export default function BotTranscript({
                 onOpenBot={onOpenBot}
               />
             ) : item.kind === "talk" ? (
-              <TalkLine items={item.items} taskOf={taskOf} onOpenSession={onOpenSession} />
+              <TalkLine items={item.items} taskOf={taskOf} onOpenSession={onOpenSession} reveal={reveal} />
             ) : item.kind === "task" ? (
               <StartedLine
                 party={{ id: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? "Task" }}
@@ -119,7 +146,33 @@ export default function BotTranscript({
             )}
           </Fragment>
         );
-      })}
+  });
+  // The picked task's rows sit in one block, so they light and scroll as one.
+  const inContext = rows.map((row) =>
+    row.kind === "talk" ? row.items.some((t) => context?.keys.has(itemKey(t))) : !!context?.keys.has(itemKey(row)),
+  );
+  const first = inContext.indexOf(true);
+  const last = inContext.lastIndexOf(true);
+
+  return (
+    <>
+      {first < 0 ? (
+        drawn
+      ) : (
+        <>
+          {drawn.slice(0, first)}
+          <div
+            data-bot-focus
+            className={cn(
+              "-mx-3 -my-2 flex flex-col gap-4 rounded-xl px-3 py-2 transition-colors duration-700",
+              lit ? "bg-accent-command/12" : "bg-transparent",
+            )}
+          >
+            {drawn.slice(first, last + 1)}
+          </div>
+          {drawn.slice(last + 1)}
+        </>
+      )}
       {busy &&
         (preview && streaming === "text" ? (
           <BotBubble tight={rows[rows.length - 1]?.kind === "assistant"}>{preview}</BotBubble>
@@ -157,14 +210,21 @@ function TalkLine({
   bare = false,
   taskOf,
   onOpenSession,
+  reveal,
 }: {
   items: TalkItem[];
   /// Inside an opened run, whose line already says which way: no verb.
   bare?: boolean;
   taskOf: TaskOf | undefined;
   onOpenSession: (sessionId: string, alone?: boolean) => void;
+  /// A report to open to, picked from the "Waiting on you" card.
+  reveal?: { key: string; at: number };
 }) {
-  const [open, setOpen] = useState(false);
+  const holds = !!reveal && items.some((i) => itemKey(i) === reveal.key);
+  const [open, setOpen] = useState(holds);
+  useEffect(() => {
+    if (holds) setOpen(true);
+  }, [holds, reveal?.at]);
   const parties = [...new Map(items.map((i) => partyOf(i, taskOf)).map((p) => [p.id, p])).values()];
   const from = items.filter((i) => i.kind === "report").length;
   const verb = from === 0 ? "Messaged" : from < items.length ? `${items.length} messages with` : "From";
@@ -202,6 +262,7 @@ function TalkLine({
                 bare
                 taskOf={taskOf}
                 onOpenSession={onOpenSession}
+                reveal={reveal}
               />
             ))}
           </div>

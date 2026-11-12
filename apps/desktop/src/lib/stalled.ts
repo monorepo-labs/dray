@@ -4,7 +4,7 @@ import { prStatus, type PrStatusKey } from "@/lib/pr";
 import type { BackgroundTask, Bot, PrMark, SessionIndexItem, SessionStatus } from "@/types/events";
 
 /// How long a bot's task sits untouched before anyone hears of it.
-export const STALL_MS = 30 * 60_000;
+export const STALL_MS = 15 * 60_000;
 
 /// A task of a bot's that has sat untouched for [STALL_MS]. `ready`: its pull
 /// request can land, and the reader merges it from the card. `fix`: something
@@ -84,12 +84,14 @@ export function stalledTasks(
 }
 
 /// Whether a stall belongs in the bot's card: a PR ready to merge, or a task
-/// whose bot has written what it needs since it last moved. A waiting task the
-/// bot has not judged yet draws nothing, since the bot may answer it itself.
-export function onCard(stall: Stall): boolean {
-  if (stall.kind === "ready") return true;
+/// idle on the reader. The rest are the bot's alone.
+export const onCard = (stall: Stall): boolean => stall.kind !== "fix";
+
+/// What a waiting task needs from the reader, as its bot wrote it since the
+/// task last moved; nothing while the bot is still on it.
+export function needLine(stall: Stall): string | undefined {
   const { need, modified } = stall.row.item;
-  return stall.kind === "waiting" && !!need && Date.parse(need.at) >= Date.parse(modified);
+  return stall.kind === "waiting" && need && Date.parse(need.at) >= Date.parse(modified) ? need.text : undefined;
 }
 
 /// Each bot that has a chat: the chat's session id and the bot's tasks.

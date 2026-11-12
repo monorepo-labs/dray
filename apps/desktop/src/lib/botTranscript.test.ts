@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botItems, botRows, chatItems, chatTime, firstUnread, sentMessages, startsTimeRun } from "@/lib/botTranscript";
+import { botItems, botRows, chatItems, chatTime, firstUnread, sentMessages, startsTimeRun, taskContext } from "@/lib/botTranscript";
 import type { AgentEvent, AgentEventPayload } from "@/types/events";
 
 let seq = 0;
@@ -191,5 +191,35 @@ describe("chatItems", () => {
   it("draws no line between two sessions on the same agent", () => {
     const items = chatItems([segment("a", "codex", [said("one")]), segment("b", "codex", [said("two")])]);
     expect(items.map((i) => i.kind)).toEqual(["assistant", "assistant"]);
+  });
+});
+
+describe("taskContext", () => {
+  const from = (text: string, sessionId = ID) =>
+    ev({
+      type: "user_message", text, images: [], issues: [], baseline: null, queued: false,
+      from: { sessionId, title: "Pricing page", machine: null }, cwd: null, kickoff: false,
+    } as unknown as AgentEventPayload);
+
+  it("finds the task's last report and the bot's words after it, past a stall nudge", () => {
+    const report = from("PR is up");
+    const reply = said("Pricing is up as #908.");
+    const items = botItems([
+      from("first try"),
+      said("noted"),
+      report,
+      reply,
+      from("Stall nudge: this task has sat idle for 20m, waiting on the user."),
+      said("Need line written."),
+      user("next thing"),
+    ]);
+    const ctx = taskContext(items, ID);
+    expect(ctx.report).toBe(report.id);
+    expect([...ctx.keys]).toEqual([report.id, reply.id]);
+  });
+
+  it("falls back to the line that started a task that never reported", () => {
+    const items = botItems([call("c1", `dray session new "Pricing"`), result("c1", `${ID}\nStarted`)]);
+    expect(taskContext(items, ID)).toEqual({ keys: new Set(["c1"]) });
   });
 });

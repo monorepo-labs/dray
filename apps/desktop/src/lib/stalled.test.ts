@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { CrewRow } from "@/lib/crew";
-import { STALL_MS, compactAge, freshStalls, onCard, stalledTasks } from "@/lib/stalled";
+import { STALL_MS, compactAge, freshStalls, needLine, onCard, stalledTasks } from "@/lib/stalled";
 import type { PrMark, SessionIndexItem } from "@/types/events";
 
 const T0 = Date.parse("2026-11-12T10:00:00Z");
@@ -91,12 +91,13 @@ describe("stalledTasks", () => {
     expect(stalledTasks([row("a")], () => pr({ reviewDecision: "REVIEW_REQUIRED", mergeStateStatus: "BLOCKED" }), new Map(), at)[0].kind).toBe("waiting");
   });
 
-  it("puts a waiting task on the card only once its bot wrote a need since it moved", () => {
+  it("reads a need only where the bot wrote it since the task moved", () => {
     const stall = (need?: { text: string; at: string }) =>
       stalledTasks([row("a", {}, { need })], () => undefined, new Map(), T0 + STALL_MS)[0];
-    expect(onCard(stall())).toBe(false);
-    expect(onCard(stall({ text: "Pick one", at: new Date(T0 + 1000).toISOString() }))).toBe(true);
-    expect(onCard(stall({ text: "Pick one", at: new Date(T0 - 1000).toISOString() }))).toBe(false);
+    expect(onCard(stall())).toBe(true);
+    expect(needLine(stall())).toBeUndefined();
+    expect(needLine(stall({ text: "Pick one", at: new Date(T0 + 1000).toISOString() }))).toBe("Pick one");
+    expect(needLine(stall({ text: "Pick one", at: new Date(T0 - 1000).toISOString() }))).toBeUndefined();
     expect(onCard(stalledTasks([row("a")], () => pr(), new Map(), T0 + STALL_MS)[0])).toBe(true);
     expect(onCard(stalledTasks([row("a")], () => pr({ mergeable: "CONFLICTING" }), new Map(), T0 + STALL_MS)[0])).toBe(false);
   });
