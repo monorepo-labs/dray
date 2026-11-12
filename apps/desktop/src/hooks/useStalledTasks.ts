@@ -64,18 +64,26 @@ export function useStalledTasks({
   }, [bots, items, statusBySession, askingSessions, tasksBySession, prOf, now]);
 
   const mountedAt = useRef(Date.now());
+  // Sent and not yet answered. A key is stored only once its nudge landed, so
+  // a dropped connection or a bot that failed to start is tried again on the
+  // next minute's tick rather than never.
+  const sending = useRef(new Set<string>());
   useEffect(() => {
     if (now - mountedAt.current < NUDGE_HOLD_MS) return;
     const nudged = new Set(readLocalStorage<string[]>(NUDGED_KEY, []));
     const due = [...byBot.values()]
       .flatMap((b) => b.stalls)
-      .filter((s) => s.kind !== "ready" && !needLine(s) && !nudged.has(s.key));
-    if (due.length === 0) return;
+      .filter((s) => s.kind !== "ready" && !needLine(s) && !nudged.has(s.key) && !sending.current.has(s.key));
     for (const s of due) {
-      nudged.add(s.key);
-      invoke("nudge_bot", { sessionId: s.row.item.sessionId, problem: s.problem ?? null }).catch(() => {});
+      sending.current.add(s.key);
+      invoke("nudge_bot", { sessionId: s.row.item.sessionId, problem: s.problem ?? null })
+        .then(() => {
+          const stored = readLocalStorage<string[]>(NUDGED_KEY, []);
+          writeLocalStorage(NUDGED_KEY, [...stored, s.key].slice(-NUDGED_CAP));
+        })
+        .catch(() => {})
+        .finally(() => sending.current.delete(s.key));
     }
-    writeLocalStorage(NUDGED_KEY, [...nudged].slice(-NUDGED_CAP));
   }, [byBot, now]);
 
   const seen = useRef(new Set<string>());
