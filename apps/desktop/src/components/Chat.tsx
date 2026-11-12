@@ -632,8 +632,19 @@ export default function Chat({
   // scrolls land at the bottom and pinning writes land at the bottom, so
   // position alone re-confirms the pin — but a wheel-up during streaming must
   // win instantly, before the next delta's pin can yank the view back down.
+  //
+  // Only a wheel that will move *this* scroller, though: React bubbles wheels
+  // from portals (the image viewer, menus) and from nested scrollers, none of
+  // which move the chat, and with no scroll event after them nothing re-armed
+  // the pin — the chat sat at the bottom unpinned, and whatever landed next,
+  // seen or behind another tab, was left below the view.
   const onWheel = (e: React.WheelEvent) => {
-    if (e.deltaY < 0) followRef.current = false;
+    const el = scrollRef.current;
+    if (!el || e.deltaY >= 0 || el.scrollTop <= 0) return;
+    for (let n = e.target as Element | null; n !== el; n = n.parentElement) {
+      if (!n || n.scrollTop > 0) return;
+    }
+    followRef.current = false;
   };
 
   const onScroll = () => {
