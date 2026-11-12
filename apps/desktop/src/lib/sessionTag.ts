@@ -126,9 +126,10 @@ export function applySession(
 /// A bot tag, the session tag's shape behind `@`: in a bot's composer `@` names
 /// bots, not files. The id is in the text for the reason a session's is —
 /// `dray bot send` matches it exactly, where a name stops naming the bot once
-/// it is renamed. No `@` or `&` in the name, which is what bounds a tag below.
+/// it is renamed. The name loses any `@`, `&`, newline or parenthesised id of
+/// its own, since each would end or misdirect the tag `BOT_TAG` reads back.
 export function botTag(name: string, id: string): string {
-  return `@${name.replace(/[@&]/g, "")} (${id})`;
+  return `@${name.replace(INNER_ID, "").replace(/[@&]/g, "").replace(/\s+/g, " ").trim()} (${id})`;
 }
 
 /// `[^@&]` rather than `.`, so a file mention earlier in the sentence is never

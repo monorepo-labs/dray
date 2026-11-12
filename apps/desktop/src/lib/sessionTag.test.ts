@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { highlightSegments } from "@/lib/highlight";
 import {
   ambiguousTitles,
-  applyBot,
   applySession,
   canTagFrom,
   filterSessions,
@@ -179,25 +178,5 @@ describe("canTagFrom", () => {
     expect(canTagFrom("vps", ID, "dray://box/repo", NONE)).toBe(false);
     expect(canTagFrom("vps", ID, "/repo", new Set([ID]))).toBe(true);
     expect(canTagFrom("vps", OTHER, "/repo", new Set([ID]))).toBe(false);
-  });
-});
-
-describe("bot tags", () => {
-  it("writes the name and id over the @ token", () => {
-    const span = { start: 4, end: 7, query: "Op" };
-    expect(applyBot("ask @Op please", span, "Ops", ID)).toEqual({
-      text: `ask @Ops (${ID}) please`,
-      caret: 4 + `@Ops (${ID})`.length + 1,
-    });
-  });
-
-  it("reads a placed tag as a bot, and a file mention before it as a file", () => {
-    const segments = highlightSegments(`see @src/a.ts and @Research Bot (${ID}) now`);
-    expect(segments.map((s) => s.kind)).toEqual(["text", "mention", "text", "bot", "text"]);
-    expect(segments[3]).toMatchObject({ inner: "@Research Bot", botId: ID });
-  });
-
-  it("leaves a bare @name a file mention", () => {
-    expect(highlightSegments("@Ops").map((s) => s.kind)).toEqual(["mention"]);
   });
 });

@@ -15,6 +15,7 @@
 /// text echoed back into the transcript. Colouring a word while typing that goes
 /// plain once sent — or the reverse — reads as a bug in whichever surface the
 /// reader noticed second.
+import { isBotId } from "@/lib/bots";
 import { findPromptPaths } from "@/lib/filePath";
 import { OPENERS, parseIdentifier } from "@/lib/issue";
 import { parseBotTag, parseSessionTag } from "@/lib/sessionTag";
@@ -550,10 +551,11 @@ export function highlightSegments(text: string): Segment[] {
     }
 
     // A bot tag is the same shape behind `@`, so it is tried before the `@`
-    // falls through to being read as a file mention.
+    // falls through to being read as a file mention. Only a known bot's id
+    // counts, or `@README.md (some id)` in a task's chat would lose its file.
     if (opener === "@" && (i === 0 || SPACE.test(text[i - 1]))) {
       const tag = parseBotTag(text, i);
-      if (tag) {
+      if (tag && isBotId(tag.id)) {
         if (i > plainFrom) segments.push({ kind: "text", text: text.slice(plainFrom, i) });
         segments.push({ kind: "bot", text: tag.text, inner: tag.head, botId: tag.id });
         plainFrom = i + tag.text.length;
