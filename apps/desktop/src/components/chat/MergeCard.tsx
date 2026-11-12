@@ -2,6 +2,7 @@ import { createContext, useContext, useState } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
 import { Button } from "@/components/ui/button";
+import { ChecksRunningIcon } from "@/components/PrPanel";
 import PrStateIcon from "@/components/PrStateIcon";
 import { MergeControl } from "@/components/TasksPanel";
 import { seededAvatar } from "@/lib/botAvatar";
@@ -48,7 +49,8 @@ const VERDICT_WORDS: Record<ReturnType<typeof mergeVerdict>, string> = {
   ready: "Ready to merge",
 };
 
-const CHECK_WORDS = { RUNNING: "Checks running", FAILING: "Checks failing", CLEAR: null } as const;
+// Running checks draw `ChecksRunningIcon` in place of words.
+const CHECK_WORDS = { RUNNING: null, FAILING: "Checks failing", CLEAR: null } as const;
 
 /// The PR panel's colours for the same verdicts: yellow while something is
 /// still in the way or not passing, red for a conflict, green when it can land.
@@ -151,6 +153,7 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
               #{card.number}
             </button>
             <span aria-hidden>·</span>
+            {pr?.state === "OPEN" && pr.checksState === "RUNNING" && <ChecksRunningIcon />}
             <span className={cn("truncate", statusTone(pr))}>{statusLine(pr)}</span>
           </p>
         </div>

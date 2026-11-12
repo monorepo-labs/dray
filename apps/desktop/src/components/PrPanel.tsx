@@ -751,6 +751,13 @@ const CHECK_ICON: Record<PrCheck["state"], { Icon: typeof Check; tone: string }>
   neutral: { Icon: MinusCircle, tone: "text-muted-foreground" },
 };
 
+/// A running check's glyph alone, for a row or card that says "checks
+/// running" without the words.
+export function ChecksRunningIcon({ className }: { className?: string }) {
+  const { Icon, tone } = CHECK_ICON.pending;
+  return <Icon role="img" aria-label="Checks running" className={cn("size-3.5 shrink-0", tone, className)} />;
+}
+
 function CheckRow({ check }: { check: PrCheck }) {
   const { Icon, tone } = CHECK_ICON[check.state];
 
