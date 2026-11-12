@@ -1320,12 +1320,10 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
     let hidden = create.hidden || in_bot_tree;
 
     let project_path = resolve_project(&create, parent.as_ref())?;
-    // A bot's folder is not a repository, so inheriting it as the project
-    // would fail at the worktree with git's own words instead of these.
-    if parent.as_ref().is_some_and(|p| p.cwd == project_path)
-        && crate::bots::bot_at(&project_path).await.is_some()
-    {
-        bail!("a bot's folder is not a repository — pass --project <repo path>");
+    // A bot's folder is its own notes, not a project to work in. Its history
+    // makes it a repository, so a task there would start in a worktree of it.
+    if crate::bots::bot_holding(&project_path).await.is_some() {
+        bail!("a bot's folder is not a project — pass --project <repo path>");
     }
 
     // The project is deliberately *not* attached here. The sidebar's filter

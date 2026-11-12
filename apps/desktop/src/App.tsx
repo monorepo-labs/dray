@@ -870,11 +870,15 @@ function App() {
     [selectedSession?.events, busy, liveTaskIds],
   );
 
+  // A bot's folder is a git repository only for its own history, which Dray
+  // commits — so no Commit button, no branch and no pull request lookup.
+  const inBotFolder = !!selectedSession && !!botAt(bots, selectedSession.cwd);
+
   // What the composer's handoff row draws itself from, and — one line down —
   // which branch the pull requests are looked up by. Read on the same falling
   // edge as those, since a turn is what moves all of it.
   const { status: workStatus, refresh: refreshWorkStatus } = useWorkStatus(
-    selectedSession?.cwd ?? "",
+    inBotFolder ? "" : selectedSession?.cwd ?? "",
     busy,
   );
   const handoffConfig = useHandoffConfig();
@@ -1314,7 +1318,7 @@ function App() {
   // `workStatus.branch` is git's own reading of HEAD and outranks the name the
   // index carries, which is only ever a guess made at creation — see
   // `sessionBranch`. It lands a frame late and the fallback covers that frame.
-  const prBranch = selectedSession
+  const prBranch = selectedSession && !inBotFolder
     ? sessionBranch(selectedSession, workStatus?.branch)
     : null;
   // The header's way back from a hidden session, which has no sidebar row. The
@@ -3665,14 +3669,17 @@ function App() {
                   )
               : undefined
           }
+          // None in a bot's chat: its folder holds notes, not work to hand off.
           handoff={
-            <HandoffRow
-              actions={handoffActions(workStatus, sessionHasPr, !!selectedSessionId, handoffConfig)}
-              // Straight out as a prompt, exactly as if it had been typed. A
-              // turn already running queues it, like any other send.
-              onSend={(prompt) => void handleSendMsg(prompt)}
-              disabled={!selectedSessionId || !!sendHeld}
-            />
+            inBotFolder ? null : (
+              <HandoffRow
+                actions={handoffActions(workStatus, sessionHasPr, !!selectedSessionId, handoffConfig)}
+                // Straight out as a prompt, exactly as if it had been typed. A
+                // turn already running queues it, like any other send.
+                onSend={(prompt) => void handleSendMsg(prompt)}
+                disabled={!selectedSessionId || !!sendHeld}
+              />
+            )
           }
           // Only on a new task. An agent is fixed at creation, so a live
           // session cannot be pointed at one that is missing — and a session
