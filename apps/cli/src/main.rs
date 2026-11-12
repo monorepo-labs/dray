@@ -10,6 +10,7 @@
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
 
+mod bot;
 mod draft;
 mod machine;
 mod setup;
@@ -65,6 +66,9 @@ enum Command {
     /// Save tasks for later, list them, and start or remove them.
     #[command(subcommand, arg_required_else_help = true)]
     Draft(DraftCommand),
+    /// Make, list, message, rename and delete bots.
+    #[command(subcommand, arg_required_else_help = true)]
+    Bot(bot::BotCommand),
     /// Drive this session's browser: open pages, read them, click and type.
     Browser(BrowserCommand),
     /// Put a video where this session's chat plays it.
@@ -434,6 +438,7 @@ fn run() -> Result<(), String> {
         Command::Issue(IssueCommand::Link(args)) => link_issues(args, false),
         Command::Issue(IssueCommand::Unlink(args)) => link_issues(args, true),
         Command::Draft(command) => draft::run(command),
+        Command::Bot(command) => bot::run(command),
         Command::Browser(args) => browser(args),
         Command::Video(VideoCommand::Add(args)) => add_video(args),
         Command::Share(args) => share(args),

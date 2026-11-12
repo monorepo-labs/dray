@@ -10,7 +10,8 @@ import type { MessageSender } from "@/types/events";
 /// only fail the safe way: no match, nothing stripped, the line stays drawn.
 export function senderPrefix(from: MessageSender, wording = ""): string {
   const where = from.machine ? ` on ${from.machine}${wording}` : "";
-  return `[message from the Dray session "${from.title}" (${from.sessionId})${where}]\n\n`;
+  const kind = from.botId ? "bot" : "session";
+  return `[message from the Dray ${kind} "${from.title}" (${from.sessionId})${where}]\n\n`;
 }
 
 /// What a remote sender's line said before #760, when trust ran one way.

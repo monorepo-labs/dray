@@ -14,6 +14,7 @@
 //! [`serve`](serve) for why the socket's own mode cannot be the boundary.
 
 use crate::{
+    bots,
     events::{ApprovalPolicy, MessageSender},
     issues::{self, IssueRef, IssueTracker},
     models::{default_model_for, id_for_arg, models_for, runs_on, Effort, ModelId},
@@ -25,7 +26,7 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use dray_proto::{
     encode_line, CreateDraft, CreateSession, DraftSummary, Envelope, StartDraft, IssueInput, IssueLink, LinkIssues, ListSessions, Request,
-    Response, SendMessage, SessionSummary, MAX_LINE, OLDEST_SPOKEN, PROTOCOL_VERSION,
+    Response, SendMessage, SendToBot, SessionSummary, MAX_LINE, OLDEST_SPOKEN, PROTOCOL_VERSION,
 };
 use std::path::Path;
 use tokio::{
@@ -662,7 +663,7 @@ mod elsewhere {
                 forward.caller = caller(parent_of(start.parent_session_id.as_deref()).await?.as_ref()).await?;
             }
             Request::SendMessage(send) => {
-                if let Some(from) = sender(send).await {
+                if let Some(from) = sender(send.from_session_id.as_deref()).await {
                     forward.sender = Some(MessageSender { machine: Some(this_machine().await), ..from });
                 }
             }
@@ -786,6 +787,32 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             answer_session(&stop.session_id).await
         }
         Request::SettleSession(settle) => settle_session(settle, app).await,
+        Request::CreateBot(create) => {
+            let avatar = bots::face(create.shape.as_deref(), create.hue)?;
+            let bot = bots::create_bot(create.name, Some(avatar)).await?;
+            app.emit(bots::BOTS_CHANGED, ()).ok();
+            Ok(Response::Bot { bot: bots::summary(bot).await })
+        }
+        Request::ListBots => {
+            let mut summaries = Vec::new();
+            for bot in bots::list_bots().await? {
+                summaries.push(bots::summary(bot).await);
+            }
+            Ok(Response::Bots { bots: summaries })
+        }
+        Request::RenameBot(rename) => {
+            let bot = bots::rename_bot(&rename.bot, &rename.name, app).await?;
+            app.emit(bots::BOTS_CHANGED, ()).ok();
+            Ok(Response::Bot { bot: bots::summary(bot).await })
+        }
+        Request::RemoveBot(remove) => {
+            let bot = bots::find_bot(&remove.bot).await?;
+            let summary = bots::summary(bot.clone()).await;
+            bots::delete_bot(bot.id, app.clone()).await?;
+            app.emit(bots::BOTS_CHANGED, ()).ok();
+            Ok(Response::Bot { bot: summary })
+        }
+        Request::SendToBot(send) => send_to_bot(send, app).await,
         #[cfg(any(feature = "serve", feature = "desktop"))]
         Request::SetRemoteAccess(set) => {
             let now = crate::remote_access::set_remote_access(app.clone(), set.on).await.map_err(anyhow::Error::msg)?;
@@ -1738,7 +1765,7 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
 
     let from = match carried {
         Some(from) => Some(from),
-        None => sender(&send).await,
+        None => sender(send.from_session_id.as_deref()).await,
     };
     let prompt = attribute(&send.prompt, from.as_ref());
 
@@ -1776,6 +1803,63 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
     Ok(Response::Sent {
         queued: outcome.queued.is_some(),
     })
+}
+
+/// `dray bot send`: a message into a bot's chat, by the bot's name.
+///
+/// Nothing reports back, unlike a task's turns: the bot answers, if it wants
+/// to, with a send of its own. A bot nobody has written to yet has no chat, so
+/// the message opens one, on the agent its last chat ran — else the sender's.
+async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
+    if send.prompt.trim().is_empty() {
+        bail!("a message needs some text");
+    }
+    let bot = bots::find_bot(&send.bot).await?;
+    let from = sender(send.from_session_id.as_deref()).await;
+    if from.as_ref().is_some_and(|f| f.bot_id.as_deref() == Some(&bot.id)) {
+        bail!("a bot cannot message itself");
+    }
+    // Held from the lookup until a new chat is on the index, or two first
+    // messages would each start an agent in the one folder.
+    let lock = bots::first_chat_lock(&bot.id);
+    let first = lock.lock().await;
+    // Deleted while this waited: its folder is gone, and a chat started there
+    // would outlive the bot.
+    if !bots::list_bots().await?.iter().any(|b| b.id == bot.id) {
+        bail!("bot {:?} was just deleted", bot.name);
+    }
+    if let Some(chat) = bots::chat_of(&bot).await {
+        drop(first);
+        let send = SendMessage { session_id: chat.session_id, prompt: send.prompt, from_session_id: send.from_session_id };
+        let queued = matches!(send_message(send, None, app).await?, Response::Sent { queued: true });
+        return Ok(Response::BotSent { bot: bots::summary(bot).await, queued });
+    }
+
+    let calling = match send.from_session_id.as_deref() {
+        Some(id) => store::get_session_index_item(id).await?,
+        None => None,
+    };
+    let own = bots::last_session_of(&bot).await;
+    let like = own.clone().or(calling);
+    let harness = like.as_ref().map_or(Harness::ClaudeCode, |l| l.harness);
+    let model = resolve_model(None, like.as_ref(), harness).await?;
+    let effort = resolve_effort(None, like.as_ref(), harness)?;
+    // The bot's own stance, never the sender's: a bot chat runs on Auto and
+    // its toolbar has no picker, so a Plan or bypass sender would leave it
+    // on a stance nobody could see.
+    let permission_mode = own.map_or(ApprovalPolicy::Auto, |o| o.permission_mode);
+    let fast = resolve_fast(None, like.as_ref(), harness);
+    let prompt = attribute(&send.prompt, from.as_ref());
+    let session_id = uuid::Uuid::now_v7().to_string();
+    let outcome = manager()
+        .send_msg(
+            &session_id, &prompt, &[], &[], harness, model, effort, permission_mode, fast, &bot.path, None, false,
+            None, None, true, None, false, Some(&bot.name), from, None, app,
+        )
+        .await?;
+    let item = outcome.snapshot.map(|s| s.index_item).context("the bot's chat started but returned no index entry")?;
+    app.emit(SESSION_CREATED, &item).ok();
+    Ok(Response::BotSent { bot: bots::summary(bot).await, queued: false })
 }
 
 /// Sends what a bot's child closed its turn with to the session that started it.
@@ -1852,15 +1936,12 @@ pub fn report_to_parent(
 /// A sender on another machine is named with it. `dray session send <id>`
 /// finds that machine where this one holds a token for it.
 fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
-    match from {
-        Some(MessageSender { session_id, title, machine: None }) => {
-            format!("[message from the Dray session \"{title}\" ({session_id})]\n\n{prompt}")
-        }
-        Some(MessageSender { session_id, title, machine: Some(machine) }) => {
-            format!("[message from the Dray session \"{title}\" ({session_id}) on {machine}]\n\n{prompt}")
-        }
-        None => prompt.to_string(),
-    }
+    let Some(MessageSender { session_id, title, machine, bot_id }) = from else {
+        return prompt.to_string();
+    };
+    let kind = if bot_id.is_some() { "bot" } else { "session" };
+    let on = machine.as_deref().map(|m| format!(" on {m}")).unwrap_or_default();
+    format!("[message from the Dray {kind} \"{title}\" ({session_id}){on}]\n\n{prompt}")
 }
 
 /// Who this message is from, as data the transcript can draw.
@@ -1869,18 +1950,18 @@ fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
 /// it — and for one whose sender has since been deleted. One lookup answers for
 /// both readers, so neither the prefix nor the card claims a session the index
 /// can no longer name.
-async fn sender(send: &SendMessage) -> Option<MessageSender> {
-    let from = send.from_session_id.as_deref()?;
-
-    store::get_session_index_item(from)
-        .await
-        .ok()
-        .flatten()
-        .map(|item| MessageSender {
-            session_id: item.session_id,
-            title: item.title,
-            machine: None,
-        })
+async fn sender(from_session_id: Option<&str>) -> Option<MessageSender> {
+    let from = from_session_id?;
+    let item = store::get_session_index_item(from).await.ok().flatten()?;
+    // A bot is named as the bot rather than by its chat's title, so the reader
+    // and the receiving agent both know which bot wrote.
+    let bot = crate::bots::bot_at(&item.cwd).await;
+    Some(MessageSender {
+        session_id: item.session_id,
+        title: bot.as_ref().map_or(item.title, |b| b.name.clone()),
+        machine: None,
+        bot_id: bot.map(|b| b.id),
+    })
 }
 
 /// The caller's pick, else the parent's, else Claude Code.
@@ -2067,6 +2148,7 @@ mod tests {
             session_id: "abc-123".into(),
             title: "Fix the login redirect".into(),
             machine: None,
+            bot_id: None,
         };
         let prompt = attribute("review is done", Some(&from));
 
@@ -2084,11 +2166,25 @@ mod tests {
             session_id: "abc-123".into(),
             title: "Fan out".into(),
             machine: Some("Yogesh's Mac".into()),
+            bot_id: None,
         };
         assert_eq!(
             attribute("go", Some(&from)),
             "[message from the Dray session \"Fan out\" (abc-123) on Yogesh's Mac]\n\ngo"
         );
+    }
+
+    /// A bot is named as one, so the receiving agent knows a bot wrote rather
+    /// than one of its tasks.
+    #[test]
+    fn a_bot_sender_is_named_as_a_bot() {
+        let from = MessageSender {
+            session_id: "abc-123".into(),
+            title: "Ops".into(),
+            machine: None,
+            bot_id: Some("b1".into()),
+        };
+        assert_eq!(attribute("hi", Some(&from)), "[message from the Dray bot \"Ops\" (abc-123)]\n\nhi");
     }
 
     /// A prompt from the user's own terminal has no sender, and must reach the

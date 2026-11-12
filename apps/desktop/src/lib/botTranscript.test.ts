@@ -80,6 +80,41 @@ describe("botItems", () => {
     ]);
   });
 
+  it("reads a send to a bot, its name quoted or bare", () => {
+    expect(sentMessages(`dray bot send "Release Ops" "ship it" && dray bot send Research 'look'`)).toEqual([
+      { target: "Release Ops", text: "ship it", bot: true },
+      { target: "Research", text: "look", bot: true },
+    ]);
+    expect(sentMessages("dray bot send Ops")).toEqual([]);
+    // A send spelled out in a message is text, not a second send.
+    expect(sentMessages(`dray bot send Ops 'Reply with dray bot send Research "done"' && dray bot send Keeper hi`)).toEqual([
+      { target: "Ops", text: 'Reply with dray bot send Research "done"', bot: true },
+      { target: "Keeper", text: "hi", bot: true },
+    ]);
+    expect(sentMessages("dray bot ls")).toEqual([]);
+  });
+
+  it("draws messages to and from other bots, and never folds them", () => {
+    const incoming = ev({
+      type: "user_message", text: "[message from the Dray bot \"Ops\" (s1)]\n\nhi", images: [], issues: [],
+      baseline: null, queued: false, from: { sessionId: "s1", title: "Ops", machine: null, botId: "b1" },
+      cwd: null, kickoff: false,
+    } as unknown as AgentEventPayload);
+    const items = botItems([
+      incoming,
+      // A bot made in the same command prints an id too, and is not the one
+      // the message went to.
+      call("a", `dray bot new Scout && dray bot send Ops "thanks, on it"`),
+      result("a", `01a1cf3a-0000-7000-8000-000000000000\nMade "Scout".\nSent to bot "Ops" (${ID}).`),
+      call("b", `dray session send ${ID} "one"`),
+      result("b", "sent"),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["botMessage", "botSent", "sent"]);
+    expect(items[0]).toMatchObject({ botId: "b1", title: "Ops" });
+    expect(items[1]).toMatchObject({ bot: "Ops", botId: ID, text: "thanks, on it" });
+    expect(botRows(items).map((r) => r.kind)).toEqual(["botMessage", "botSent", "talk"]);
+  });
+
   it("folds a run of messages with tasks into one row, broken by anything else", () => {
     const items = botItems([
       call("a", `dray session send ${ID} "one"`),
@@ -117,6 +152,17 @@ describe("botItems", () => {
     const error = ev({ type: "error", source: "harness", message: "boom", fatal: false } as unknown as AgentEventPayload);
     const items = botItems([user("hi"), said("Not logged in"), failed, error]);
     expect(items.map((i) => i.kind)).toEqual(["user", "notice", "notice"]);
+  });
+
+  it("keeps a task and a send made in one command", () => {
+    const bot = "01a1cf3a-0000-7000-8000-000000000000";
+    const items = botItems([
+      call("c", `dray bot send Ops "starting" && dray session new --project /repo "Investigate"`),
+      result("c", `Sent to bot "Ops" (${bot}).\n${ID}\nStarted "Investigate"`),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["task", "botSent"]);
+    expect(items[0]).toMatchObject({ sessionId: ID });
+    expect(items[1]).toMatchObject({ botId: bot });
   });
 
   it("draws no task for a create that failed", () => {

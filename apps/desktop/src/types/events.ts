@@ -1275,7 +1275,12 @@ export type MessageSender = { sessionId: string, title: string,
  * The machine the sender runs on, where that is not this one. Stamped by
  * the forwarding app, so it names the machine it came from.
  */
-machine: string | null, };
+machine: string | null, 
+/**
+ * The bot whose chat sent it, where one did. `title` is then the bot's
+ * name, and the chat draws the bot's own face.
+ */
+botId?: string, };
 
 export type Model = { 
 /**
