@@ -91,6 +91,7 @@ import { useChord } from "@/hooks/useShortcuts";
 import { type Chord, formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_BESIDE, CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import TasksPanel from "@/components/TasksPanel";
+import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
@@ -114,7 +115,7 @@ import WindowControls from "@/components/layout/WindowControls";
 import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { nextEffort } from "@/components/composer/ModelSelector";
-import { nextHarness } from "@/lib/model";
+import { HARNESS_ORDER, nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { closeActiveTab, ItemTab, type ViewTab } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
@@ -2718,6 +2719,19 @@ function App() {
   const selectedItem = sessionIndexItems.find((i) => i.sessionId === selectedSessionId);
   // The empty composer is a bot's first chat when it is aimed at the bot's folder.
   const newBot = !shownSession && projectPath ? botAt(bots, projectPath) : undefined;
+  // A bot whose empty chat opens on a welcome (Dray Bot) draws as a chat
+  // already under way: the welcome in the transcript, the composer below it.
+  const welcomeBot = newBot?.welcome ? newBot : undefined;
+  // Its agent is the reader's own where that one is installed, else the first
+  // installed in the picker's order, Claude Code first.
+  useEffect(() => {
+    if (!welcomeBot || !agents) return;
+    if (agents.find((a) => a.harness === harness)?.available) return;
+    const installed = HARNESS_ORDER.find((h) => agents.find((a) => a.harness === h)?.available);
+    if (installed) setHarness(installed);
+    // Once per open bot and per availability answer, never on the reader's own pick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [welcomeBot?.id, agents]);
 
   // What every transcript on screen reports back through: the main column, a
   // split pane and a crew card alike.
@@ -2746,7 +2760,7 @@ function App() {
       tall={tallSheet}
       // The issues page fills the column, so the centred empty-composer state
       // is wrong there even with no session selected.
-      centered={!shownSession && !issuesOpen}
+      centered={!shownSession && !issuesOpen && !welcomeBot}
       panelLeft={panelSide === "left"}
       panelOpen={issuesOpen ? !!pickedIssue : !!shownSession && panelShown}
       overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
@@ -3215,7 +3229,7 @@ function App() {
           queuedCount={queuedMessages.length}
           busy={busy}
           sessionId={composerKey}
-          isNewTask={!shownSession}
+          isNewTask={!shownSession && !welcomeBot}
           target={composerTarget}
           issuesConnected={issuesConnected}
           issueTrackers={integrations.connected}
@@ -3390,6 +3404,8 @@ function App() {
             loads it. One already loaded keeps drawing what it has. */}
         {offlineServer && !selectedSession ? (
           <TranscriptSkeleton still={offlineServer.status !== "connecting"} />
+        ) : welcomeBot?.welcome && !selectedSessionId ? (
+          <BotWelcome text={welcomeBot.welcome} />
         ) : (
           <Chat
             {...paneState(selectedSessionId ?? "")}

@@ -3064,8 +3064,6 @@ async fn deliver_prompt(
     transport: &Transport,
     app: &Sink,
 ) -> Result<(String, bool)> {
-    let seq = seq.fetch_add(1, Relaxed);
-
     // Ahead of the event, because it is what decides the event's own text:
     // a non-image attachment becomes an `@path` mention on the prompt, and
     // the transcript has to show what the model was actually given.
@@ -3087,6 +3085,28 @@ async fn deliver_prompt(
         }
         _ => None,
     };
+
+    let counter = seq;
+    let mut seq = counter.fetch_add(1, Relaxed);
+    // A bot whose chat opens on a welcome (Dray Bot) has it written down as
+    // the chat's first message, ahead of the prompt that started the session,
+    // so the chat reads after a restart as it did before the first send. Only
+    // logged: the agent is not given it.
+    if seq == 0 {
+        if let Some(welcome) = crate::bots::welcome_for_session(session_id).await {
+            let event = AgentEvent::mint(
+                session_id.to_string(),
+                harness,
+                seq,
+                None,
+                None,
+                AgentEventPayload::AssistantText { block: None, text: welcome },
+            );
+            app.emit("agent_event", &event)?;
+            append_session_event(session_id, event).await?;
+            seq = counter.fetch_add(1, Relaxed);
+        }
+    }
 
     let payload = AgentEventPayload::UserMessage {
         text: text.clone(),

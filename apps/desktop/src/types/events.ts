@@ -582,7 +582,13 @@ path: string, created: string,
  * The face picked when it was made. `None` for a bot made before there
  * was a pick, which then draws the face its id seeds.
  */
-avatar?: BotAvatar | null, };
+avatar?: BotAvatar | null, 
+/**
+ * What its chat opens on before any session exists, drawn by the app,
+ * and written to the log as the chat's first message when one starts.
+ * Dray Bot's alone; a bot made with New bot greets with a real turn.
+ */
+welcome?: string | null, };
 
 /**
  * A Blobatar face: which silhouette and which hue. Strings and degrees rather
