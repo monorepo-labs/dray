@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botAt, botSession, inBotTree, previewLine } from "@/lib/bots";
+import { botAt, botChat, botSession, inBotTree, previewLine } from "@/lib/bots";
 import type { Bot, SessionIndexItem } from "@/types/events";
 
 const bot: Bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
@@ -55,5 +55,17 @@ describe("botSession", () => {
 
   it("is nothing for a bot whose chat was started fresh", () => {
     expect(botSession([item("gone", { archived: true })], bot)).toBeUndefined();
+  });
+});
+
+describe("botChat", () => {
+  it("is every unsettled session in the bot's folder, oldest first", () => {
+    const items = [
+      item("codex", { created: "2026-11-02T00:00:00Z" }),
+      item("claude", { created: "2026-11-01T00:00:00Z" }),
+      item("settled", { created: "2026-10-01T00:00:00Z", archived: true }),
+      item("elsewhere", { cwd: "/repo" }),
+    ];
+    expect(botChat(items, bot).map((i) => i.sessionId)).toEqual(["claude", "codex"]);
   });
 });

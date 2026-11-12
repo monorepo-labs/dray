@@ -142,10 +142,50 @@ async fn ensure_dray_bot() -> Result<()> {
 /// and lost the welcome.
 static WELCOMES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
-/// Marks a new chat in `cwd` for its bot's welcome, where it has one.
-pub async fn mark_welcome(session_id: &str, cwd: &str) {
-    if let Some(welcome) = bot_at(cwd).await.and_then(|b| b.welcome) {
-        WELCOMES.lock().unwrap().push((session_id.to_string(), welcome));
+/// Marks a new chat in `cwd`: for the conversation so far where the bot has
+/// talked before, which is an agent switch, else for its welcome.
+pub async fn mark_new_chat(session_id: &str, cwd: &str, harness: Harness) {
+    let Some(bot) = bot_at(cwd).await else { return };
+    let earlier: Vec<SessionIndexItem> = chat_sessions(&bot.path)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|i| i.session_id != session_id)
+        .collect();
+    if earlier.is_empty() {
+        if let Some(welcome) = bot.welcome {
+            WELCOMES.lock().unwrap().push((session_id.to_string(), welcome));
+        }
+        return;
+    }
+    // The chat moves to the new agent, so the old one has nothing left to do.
+    for item in &earlier {
+        manager().stop(&item.session_id).await;
+    }
+    let text = handover_prompt(&earlier, harness).await;
+    restore_handover(session_id, text);
+}
+
+/// Marks a chat being resumed that took over from an earlier agent and has no
+/// reply yet: its first send failed, or a restart lost the mark made at
+/// creation, and the agent may never have been handed the conversation. A
+/// second copy after a reply that never landed costs nothing.
+pub async fn mark_handover_if_unanswered(session_id: &str, cwd: &str, harness: Harness) {
+    if bot_at(cwd).await.is_none() || HANDOVERS.lock().unwrap().iter().any(|(id, _)| id == session_id) {
+        return;
+    }
+    let chats = chat_sessions(cwd).await.unwrap_or_default();
+    let Some(at) = chats.iter().position(|i| i.session_id == session_id) else { return };
+    if at == 0 {
+        return;
+    }
+    let events = crate::store::list_session_events(session_id).await.unwrap_or_default();
+    let answered = events
+        .iter()
+        .any(|e| e.subagent.is_none() && matches!(e.payload, crate::events::AgentEventPayload::AssistantText { .. }));
+    if !answered {
+        let text = handover_prompt(&chats[..at], harness).await;
+        restore_handover(session_id, text);
     }
 }
 
@@ -153,7 +193,14 @@ pub async fn mark_welcome(session_id: &str, cwd: &str) {
 /// failed before the welcome was written, and a restart lost the mark made at
 /// creation. Reads the log only for a bot that has a welcome.
 pub async fn mark_welcome_if_unlogged(session_id: &str, cwd: &str) {
-    let Some(welcome) = bot_at(cwd).await.and_then(|b| b.welcome) else { return };
+    let Some(bot) = bot_at(cwd).await else { return };
+    let Some(welcome) = bot.welcome.clone() else { return };
+    // A chat that took over from an earlier one: the welcome sits at the start
+    // of that one.
+    let chats = chat_sessions(&bot.path).await.unwrap_or_default();
+    if chats.first().is_some_and(|first| first.session_id != session_id) {
+        return;
+    }
     if WELCOMES.lock().unwrap().iter().any(|(id, _)| id == session_id) {
         return;
     }
@@ -171,6 +218,156 @@ pub fn take_welcome(session_id: &str) -> Option<String> {
     let mut welcomes = WELCOMES.lock().unwrap();
     let at = welcomes.iter().position(|(id, _)| id == session_id)?;
     Some(welcomes.remove(at).1)
+}
+
+/// New chats taking over from an earlier agent, with the hand-over each sends
+/// ahead of its first prompt. Never logged: the earlier logs already hold the
+/// conversation, and a copy would be a second record that can drift.
+static HANDOVERS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// The hand-over to send ahead of `session_id`'s first prompt, taken once.
+pub fn take_handover(session_id: &str) -> Option<String> {
+    let mut handovers = HANDOVERS.lock().unwrap();
+    let at = handovers.iter().position(|(id, _)| id == session_id)?;
+    Some(handovers.remove(at).1)
+}
+
+/// Queues a hand-over, or puts one back after a send that failed, so the
+/// retry still carries the conversation.
+pub fn restore_handover(session_id: &str, text: String) {
+    let mut handovers = HANDOVERS.lock().unwrap();
+    if !handovers.iter().any(|(id, _)| id == session_id) {
+        handovers.push((session_id.to_string(), text));
+    }
+}
+
+/// The other sessions of the bot chat `item` belongs to, unsettled. A switch
+/// leaves the earlier ones open, so settling the chat has to settle them all,
+/// or the previous agent's session becomes the bot's chat again.
+pub async fn rest_of_chat(item: &SessionIndexItem) -> Vec<String> {
+    if bot_at(&item.cwd).await.is_none() {
+        return Vec::new();
+    }
+    chat_sessions(&item.cwd)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|i| i.session_id != item.session_id)
+        .map(|i| i.session_id)
+        .collect()
+}
+
+/// A bot's chat, oldest first: every unsettled session run in its folder. An
+/// agent switch starts a new session, so one conversation spans several.
+async fn chat_sessions(path: &str) -> Result<Vec<SessionIndexItem>> {
+    let mut items: Vec<SessionIndexItem> = crate::store::list_session_index_items(false)
+        .await?
+        .into_iter()
+        .filter(|i| same_dir(&i.cwd, path))
+        .collect();
+    items.sort_by_key(|i| chrono::DateTime::parse_from_rfc3339(&i.created).ok());
+    Ok(items)
+}
+
+/// Where a message for `target` belongs: the newest session of the bot chat it
+/// is part of. A task started before an agent switch still names the old
+/// session as its parent, and a report sent there would wake the old agent.
+pub async fn current_chat(target: SessionIndexItem) -> SessionIndexItem {
+    if target.archived || bot_at(&target.cwd).await.is_none() {
+        return target;
+    }
+    match chat_sessions(&target.cwd).await.ok().and_then(|mut c| c.pop()) {
+        Some(newest) => newest,
+        None => target,
+    }
+}
+
+/// How much of the conversation is replayed to the new agent, newest kept.
+const HANDOVER_CAP: usize = 30_000;
+
+/// The hidden note a new agent reads ahead of the reader's first message: the
+/// conversation so far, replayed from every earlier log rather than
+/// summarised, so no turn is spent and a broken old agent cannot block it.
+async fn handover_prompt(earlier: &[SessionIndexItem], harness: Harness) -> String {
+    let mut entries: Vec<String> = Vec::new();
+    for item in earlier {
+        entries.push(format!("[on {}]", item.harness.label()));
+        let events = crate::store::list_session_events(&item.session_id).await.unwrap_or_default();
+        entries.extend(replay(&events));
+    }
+    let (kept, cut) = newest_within(&entries, HANDOVER_CAP);
+    let conversation = escape(&kept.join("\n\n"), "conversation");
+
+    let mut logs = Vec::new();
+    for item in earlier {
+        if let Ok(path) = crate::store::get_session_path(&item.session_id).await {
+            logs.push(format!("- {}", path.display()));
+        }
+    }
+    let ids: Vec<&str> = earlier.iter().map(|i| i.session_id.as_str()).collect();
+    let tasks: Vec<String> = crate::store::list_session_index_items(false)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|i| i.parent_session_id.as_deref().is_some_and(|p| ids.contains(&p)))
+        .map(|i| format!("- \"{}\" ({})", i.title, i.session_id))
+        .collect();
+    let tasks = if tasks.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nTasks you started that are still open:\n{}", tasks.join("\n"))
+    };
+    let older = if cut { "Older messages are left out. " } else { "" };
+
+    format!(
+        "[Dray: the user just moved you, this bot, to {agent}. You are the same bot, with the same instructions and memory; only the agent running you changed. Below is the conversation so far, oldest first, text only. {older}The full logs, one JSON event per line, are:\n{logs}{tasks}\n\nCarry on as if you had been here all along, and don't mention this note.]\n\n<conversation>\n{conversation}\n</conversation>\n\nThe user's new message:\n\n",
+        agent = harness.label(),
+        logs = logs.join("\n"),
+    )
+}
+
+/// The newest entries that fit in `cap` bytes, in order, and whether any were
+/// cut. The entry on the boundary keeps its tail, so one long paste cannot
+/// leave the new agent with nothing.
+fn newest_within(entries: &[String], cap: usize) -> (Vec<String>, bool) {
+    let mut kept = Vec::new();
+    let mut used = 0;
+    for entry in entries.iter().rev() {
+        if used + entry.len() <= cap {
+            used += entry.len();
+            kept.push(entry.clone());
+            continue;
+        }
+        let mut start = entry.len() - (cap - used);
+        while !entry.is_char_boundary(start) {
+            start += 1;
+        }
+        if start < entry.len() {
+            kept.push(format!("…{}", &entry[start..]));
+        }
+        kept.reverse();
+        return (kept, true);
+    }
+    kept.reverse();
+    (kept, false)
+}
+
+/// One session's conversation as the reader saw it: their messages, the bot's
+/// replies and its tasks' reports. Tool calls are left out.
+fn replay(events: &[crate::events::AgentEvent]) -> Vec<String> {
+    use crate::events::AgentEventPayload as P;
+    events
+        .iter()
+        .filter(|e| e.subagent.is_none())
+        .filter_map(|e| match &e.payload {
+            P::UserMessage { kickoff: true, .. } => None,
+            // Already prefixed with who sent it, as the bot first read it.
+            P::UserMessage { text, from: Some(_), .. } => Some(text.trim().to_string()),
+            P::UserMessage { text, .. } => Some(format!("User: {}", text.trim())),
+            P::AssistantText { text, .. } if !text.trim().is_empty() => Some(format!("You: {}", text.trim())),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Makes the folder, both files and the list entry. Both files start empty: the
@@ -468,6 +665,59 @@ mod tests {
         assert!(block.contains("/h/bots/b"));
         assert!(block.contains("never ask one to report back"));
         assert!(block.contains("dray session settle <id> --delete-worktree"));
+    }
+
+    fn event(payload: serde_json::Value, subagent: bool) -> crate::events::AgentEvent {
+        let mut event = crate::events::AgentEvent::mint(
+            "s".into(),
+            Harness::ClaudeCode,
+            0,
+            None,
+            None,
+            serde_json::from_value(payload).unwrap(),
+        );
+        if subagent {
+            event.subagent = Some(crate::events::Subagent { id: "a".into(), label: None });
+        }
+        event
+    }
+
+    #[test]
+    fn replay_keeps_the_conversation_and_drops_the_rest() {
+        use serde_json::json;
+        let prompt = |text: &str, kickoff: bool, from: serde_json::Value| {
+            json!({"type": "user_message", "text": text, "images": [], "issues": [], "kickoff": kickoff, "from": from})
+        };
+        let said = |text: &str| json!({"type": "assistant_text", "block": null, "text": text});
+        let events = vec![
+            event(prompt("[Dray: greet]", true, json!(null)), false),
+            event(said("Hi Yogesh"), false),
+            event(prompt("ship it", false, json!(null)), false),
+            event(said("subagent chatter"), true),
+            event(json!({"type": "error", "source": "harness", "message": "boom", "fatal": false}), false),
+            event(said("  "), false),
+            event(prompt("[message from the Dray session \"T\" (x)]\n\ndone", false, json!({"sessionId": "x", "title": "T"})), false),
+            event(said("It landed."), false),
+        ];
+        assert_eq!(
+            replay(&events),
+            vec![
+                "You: Hi Yogesh",
+                "User: ship it",
+                "[message from the Dray session \"T\" (x)]\n\ndone",
+                "You: It landed.",
+            ]
+        );
+    }
+
+    #[test]
+    fn replay_keeps_the_tail_of_a_message_too_long_to_fit() {
+        let entries = vec!["old".to_string(), format!("You: {}", "é".repeat(20)), "User: hi".to_string()];
+        let (kept, cut) = newest_within(&entries, 20);
+        assert!(cut);
+        assert_eq!(kept.last().unwrap(), "User: hi");
+        assert!(kept[0].starts_with('…') && kept[0].ends_with('é'));
+        assert_eq!(newest_within(&entries, 1000), (entries.clone(), false));
     }
 
     #[test]

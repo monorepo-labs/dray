@@ -93,11 +93,16 @@ type ChatProps = {
   /// A bot's chat: messages and the tasks it started, tool calls only as the
   /// live line while it works. See [BotTranscript].
   bot?: boolean;
+  /// A bot chat's earlier sessions, oldest first, from before it switched
+  /// agent. Drawn above this one as one conversation.
+  earlier?: SessionSnapshot[];
   /// Names a task the bot started, for its card.
   taskOf?: (sessionId: string) => BotTask | undefined;
   /// The session had unread replies, for a bot chat's NEW divider.
   unread?: boolean;
 };
+
+const NO_EARLIER: SessionSnapshot[] = [];
 
 /// How long an answered permission card holds its place before going.
 ///
@@ -198,6 +203,7 @@ export default function Chat({
   rail = true,
   active = true,
   bot = false,
+  earlier = NO_EARLIER,
   taskOf,
   unread = false,
 }: ChatProps) {
@@ -678,6 +684,10 @@ export default function Chat({
   // composer and skips this pane entirely. A session still being read draws the
   // same nothing, but inside the arrangement it is about to fill — see
   // `shownSession` in App.
+  // Held across renders: a fresh array would rebuild the bot chat's rows on
+  // every event.
+  const segments = useMemo(() => (session ? [...earlier, session] : earlier), [earlier, session]);
+
   if (!session) return null;
 
   return (
@@ -708,7 +718,7 @@ export default function Chat({
               <BotTranscript
                 key={session.sessionId}
                 unread={unread}
-                events={session.events}
+                segments={segments}
                 busy={busy}
                 preview={previewShown ? <StreamingPreview sessionId={session.sessionId} /> : undefined}
                 taskOf={taskOf}
