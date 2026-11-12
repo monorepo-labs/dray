@@ -1757,11 +1757,11 @@ function cutout(width: number, height: number, face = 40, gap = 2, squircle = fa
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
 
-/// A squircle — superellipse, n = 4 — of side `size` at (x, y), as SVG path
+/// A squircle — superellipse, n = 3 — of side `size` at (x, y), as SVG path
 /// data. Drawn rather than styled: WebKit has no `corner-shape`.
 function squirclePath(x: number, y: number, size: number): string {
   const r = size / 2;
-  const edge = (v: number) => r + r * Math.sign(v) * Math.abs(v) ** 0.5;
+  const edge = (v: number) => r + r * Math.sign(v) * Math.abs(v) ** (2 / 3);
   const points = Array.from({ length: 48 }, (_, i) => {
     const t = (i / 48) * 2 * Math.PI;
     return `${(x + edge(Math.cos(t))).toFixed(2)} ${(y + edge(Math.sin(t))).toFixed(2)}`;
