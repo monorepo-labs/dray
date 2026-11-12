@@ -1309,16 +1309,14 @@ function App() {
       ).join("\n"),
     [sessions, selectedSessionId, earlierIds],
   );
+  // Whichever sidebar list is up: a card on screen is still being read.
   const repoPaths = useMemo(
-    () =>
-      archivedShown
-        ? []
-        : [
-            ...new Set([
-              ...[...visibleSessions, ...crew.map((r) => r.item)].map((i) => i.projectPath),
-              ...(cardRepoKey ? cardRepoKey.split("\n") : []),
-            ]),
-          ],
+    () => [
+      ...new Set([
+        ...(archivedShown ? [] : [...visibleSessions, ...crew.map((r) => r.item)].map((i) => i.projectPath)),
+        ...(cardRepoKey ? cardRepoKey.split("\n") : []),
+      ]),
+    ],
     [archivedShown, visibleSessions, crew, cardRepoKey],
   );
   const prMarks = usePrMarks(repoPaths);
