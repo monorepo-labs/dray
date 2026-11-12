@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { moveKey, reconcile } from "./tabOrder";
+import { forgetClosedTabs, moveKey, popClosedTab, pushClosedTab, reconcile } from "./tabOrder";
+
+describe("forgetClosedTabs", () => {
+  it("drops a deleted task's tab from its bot's closed list", () => {
+    pushClosedTab("bot", { key: "task:t1" });
+    pushClosedTab("bot", { key: "task:t2" });
+    forgetClosedTabs("t2");
+    expect(popClosedTab("bot")?.key).toBe("task:t1");
+    expect(popClosedTab("bot")).toBeUndefined();
+  });
+});
 
 describe("reconcile", () => {
   it("keeps the reader's order and appends what is new", () => {

@@ -2306,8 +2306,11 @@ function App() {
       sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.projectPath;
     // A bot's chat and its tasks belong to every space: a bot hands work to any
     // project, and a task opened from its Tasks tab must not be closed again.
+    // A settled task lit in its bot's row is in no loaded index, so the row
+    // says what `inBotTree` cannot.
     if (
       openPath &&
+      !strip?.lit &&
       !inBotTree(bots, sessionIndexItems, selectedSessionId) &&
       !sessionInSpace(projects, space, openPath)
     ) {
@@ -2317,7 +2320,7 @@ function App() {
     // `handleNewSession` are rebuilt every render, so listing them would run
     // this on every one.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [space, projects, spaceProjects, projectPath, selectedSessionId, selectedSession, sessionIndexItems, bots]);
+  }, [space, projects, spaceProjects, projectPath, selectedSessionId, selectedSession, sessionIndexItems, bots, strip?.lit]);
 
   /// The sidebar's own "New space", which is a request for the field rather
   /// than for a space — naming it is Settings' job, so this only opens the tab.
@@ -2764,15 +2767,24 @@ function App() {
   /// switches to it alone, the way it always did.
   const openTask = async (id: string, alone = false) => {
     const owner = selectedBot ? selectedSessionId : null;
-    // A settled task is in no crew, so the bot's own child is asked for: its
-    // chat still names it, and settling is not what closes a tab.
-    const task =
-      crew.find((r) => r.item.sessionId === id)?.item ??
-      (owner && !alone
-        ? await invoke<SessionIndexItem | null>("session_index_item", { sessionId: id })
-            .then((item) => (item?.parentSessionId === owner ? item : null))
-            .catch(() => null)
-        : null);
+    // A settled task is in no crew, so it is asked for and its parents walked
+    // up to the bot: its chat still names it, and settling is not what closes
+    // a tab. Bounded like `inBotTree`.
+    const indexItem = (sid: string) =>
+      sessionIndexItems.find((i) => i.sessionId === sid) ??
+      invoke<SessionIndexItem | null>("session_index_item", { sessionId: sid }).catch(() => null);
+    let task = crew.find((r) => r.item.sessionId === id)?.item;
+    if (!task && owner && !alone) {
+      const found = await indexItem(id);
+      let at = found;
+      for (let hops = 0; at && at.parentSessionId && hops < 8; hops++) {
+        if (at.parentSessionId === owner) {
+          task = found ?? undefined;
+          break;
+        }
+        at = await indexItem(at.parentSessionId);
+      }
+    }
     if (alone || !owner || !task) {
       setTaskTabVia(null);
       void handleSelectSessionIndexItem(id);
@@ -2783,8 +2795,7 @@ function App() {
   };
 
   const deleteTask = async (id: string) => {
-    setTaskTabs((prev) => closeTaskTab(prev, id));
-    await deleteSession(id);
+    if (await deleteSession(id)) setTaskTabs((prev) => closeTaskTab(prev, id));
   };
 
   const paneChat: PaneChat = {

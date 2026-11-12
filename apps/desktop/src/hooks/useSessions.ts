@@ -1788,7 +1788,8 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
 // Deleting the open one falls back to the empty composer rather than to a
 // neighbour — the next session is not a guess worth making, and `handleNewSession`
 // is the one path that also restores the user's own defaults.
-const deleteSession = async (sessionId: string) => {
+/// Deletes a session and every hidden child; false where the server refused.
+const deleteSession = async (sessionId: string): Promise<boolean> => {
   const fail = failUnlessLeft();
   // Marked before the call, not after it. Deleting a session mid-turn kills
   // its child, and the status that publishes lands while this is still
@@ -1808,7 +1809,7 @@ const deleteSession = async (sessionId: string) => {
       .then((item) => item && applyIndexItem(item))
       .catch((err) => console.error("could not reread", sessionId, err));
     fail(e);
-    return;
+    return false;
   }
 
   // Read before the row goes. A hidden child has no row of its own to be
@@ -1833,6 +1834,7 @@ const deleteSession = async (sessionId: string) => {
     handleNewSession();
   }
   await Promise.all(children.map((c) => deleteSession(c.sessionId)));
+  return true;
 };
 
 // Refetched on every toggle rather than filtered from one cached list: the two
