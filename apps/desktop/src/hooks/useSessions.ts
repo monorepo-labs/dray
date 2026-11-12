@@ -2933,6 +2933,12 @@ const markSessionUnread = (sessionId: string) => {
   void invoke("mark_session_read", { sessionId, read: false }).catch(() => {});
 };
 
+/// A session as `canAnnounce` and `announce` both read it: the index's row,
+/// else the loaded copy, since the index holds one side of the archived split.
+const announcedItem = (sessionId: string) =>
+  sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId) ??
+  sessionsRef.current.find((s) => s.sessionId === sessionId);
+
 /// Whether a session may say anything at all right now — the space rule, asked
 /// once for every channel.
 ///
@@ -2950,9 +2956,7 @@ const markSessionUnread = (sessionId: string) => {
 /// `kind` adds the hidden rule, `leftToParent`: a hidden session's done and
 /// ready-to-merge are its parent's to report, on every channel at once.
 const canAnnounce = (sessionId: string, kind?: NoticeKind): boolean => {
-  const item =
-    sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId) ??
-    sessionsRef.current.find((s) => s.sessionId === sessionId);
+  const item = announcedItem(sessionId);
   if (leftToParent(item, kind)) return false;
 
   const space = activeSpace(
@@ -2980,7 +2984,7 @@ const canAnnounce = (sessionId: string, kind?: NoticeKind): boolean => {
 /// nothing; the in-app card is the only card on screen next to a sidebar
 /// already marking the row, so it needs the verb and nothing else.
 const announce = (sessionId: string, kind: NoticeKind, label: string): boolean => {
-  const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
+  const item = announcedItem(sessionId);
 
   // A session in another space keeps running; it just has no channel here.
   // Both channels name the session out loud, and naming a personal one over a
