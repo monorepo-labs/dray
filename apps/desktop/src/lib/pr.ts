@@ -1,5 +1,5 @@
 import { basename } from "@/lib/format";
-import type { PrCheck, PrMark, PullRequest } from "@/types/events";
+import type { PrCheck, PrChecksState, PrMark, PullRequest } from "@/types/events";
 
 /// The branch a session's work lands on, for the PR lookup and the header.
 ///
@@ -77,7 +77,8 @@ export function sameMark(a: PrMark | undefined, b: PrMark | undefined): boolean 
     a.isDraft === b.isDraft &&
     a.checksState === b.checksState &&
     a.mergeable === b.mergeable &&
-    a.mergeStateStatus === b.mergeStateStatus
+    a.mergeStateStatus === b.mergeStateStatus &&
+    a.reviewDecision === b.reviewDecision
   );
 }
 
@@ -112,6 +113,7 @@ export function markDisagrees(mark: PrMark | undefined, prs: PullRequest[]): boo
       checksState: "CLEAR",
       mergeable: pr.state === "OPEN" ? pr.mergeable : null,
       mergeStateStatus: pr.state === "OPEN" ? pr.mergeStateStatus : null,
+      reviewDecision: pr.state === "OPEN" ? pr.reviewDecision : null,
     })),
   );
 
@@ -344,6 +346,37 @@ export function mergeReadiness(pr: PullRequest): Readiness {
         label: "Checks not passing",
         detail: "Merging is allowed, but something is red.",
       };
+    case "ready":
+      return { tone: "ready", label: "Ready to merge" };
+  }
+}
+
+/// A pull request's state in a word or two, for a row or a card that has no
+/// room for the panel's sentence. What is in the way comes first, then what is
+/// still running, then what review says, then GitHub's own verdict — so a PR
+/// that is both conflicting and red says conflicts, the thing to fix first.
+///
+/// Off the sidebar's mark rather than the panel's whole pull request, since
+/// that is the read every row and card already has.
+export function prStatus(pr: MergeState & { checksState: PrChecksState; reviewDecision: string | null }): Readiness {
+  const verdict = mergeVerdict(pr);
+  if (verdict === "merged") return { tone: "neutral", label: "Merged" };
+  if (verdict === "closed") return { tone: "neutral", label: "Closed" };
+  if (verdict === "conflict") return { tone: "conflict", label: "Conflicts" };
+  if (pr.checksState === "FAILING") return { tone: "pending", label: "Checks failing" };
+  if (pr.checksState === "RUNNING") return { tone: "pending", label: "Checks running" };
+  if (verdict === "draft") return { tone: "neutral", label: "Draft" };
+  if (pr.reviewDecision === "CHANGES_REQUESTED") return { tone: "blocked", label: "Changes requested" };
+  if (pr.reviewDecision === "REVIEW_REQUIRED") return { tone: "blocked", label: "Needs review" };
+  switch (verdict) {
+    case "behind":
+      return { tone: "blocked", label: "Behind base" };
+    case "blocked":
+      return { tone: "blocked", label: "Blocked" };
+    case "unstable":
+      return { tone: "pending", label: "Checks failing" };
+    case "unknown":
+      return { tone: "neutral", label: "Checking…" };
     case "ready":
       return { tone: "ready", label: "Ready to merge" };
   }

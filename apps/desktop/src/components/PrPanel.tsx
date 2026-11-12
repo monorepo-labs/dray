@@ -63,7 +63,7 @@ type PrPanelProps = PrData & {
   cwd: string;
 };
 
-const TONE_TEXT: Record<Tone, string> = {
+export const TONE_TEXT: Record<Tone, string> = {
   ready: "text-accent-add",
   blocked: "text-accent-command",
   conflict: "text-destructive",

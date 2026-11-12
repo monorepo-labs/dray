@@ -238,7 +238,7 @@ const QUERY_MARKS: &str = r#"
 query($owner:String!,$repo:String!){
  repository(owner:$owner,name:$repo){
   open: pullRequests(states:OPEN,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
-   number url headRefName isDraft mergeable mergeStateStatus
+   number url headRefName isDraft mergeable mergeStateStatus reviewDecision
    commits(last:1){nodes{commit{statusCheckRollup{state}}}}
   }}
   merged: pullRequests(states:MERGED,first:100,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
@@ -965,6 +965,9 @@ pub struct PrMark {
     /// reads that as *unknown* rather than as ready — see `mergeVerdict`.
     pub mergeable: Option<String>,
     pub merge_state_status: Option<String>,
+    /// `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `None` where the
+    /// repo asks for no review, and on the merged half.
+    pub review_decision: Option<String>,
 }
 
 /// What CI on the tip commit has to say, cut to the two things a row can show.
@@ -1032,6 +1035,7 @@ struct RawPrMark {
     /// answer a question nobody asks.
     mergeable: Option<String>,
     merge_state_status: Option<String>,
+    review_decision: Option<String>,
 }
 
 /// The tip commit's rollup, read into what the row draws.
@@ -1095,6 +1099,7 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
             state,
             mergeable: pr.mergeable,
             merge_state_status: pr.merge_state_status,
+            review_decision: pr.review_decision.filter(|d| !d.is_empty()),
         })
         .collect())
 }
@@ -1631,10 +1636,12 @@ mod tests {
         let out = r#"{"data":{"repository":{
             "open":{"nodes":[
               {"number":9,"headRefName":"fix/live","isDraft":false,
-               "mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}]},
+               "mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"CHANGES_REQUESTED"}]},
             "merged":{"nodes":[{"number":4,"headRefName":"fix/landed","isDraft":false}]}}}}"#;
         let prs = read_pr_marks(out).expect("pr marks parse");
         assert_eq!(prs[0].mergeable.as_deref(), Some("MERGEABLE"));
+        assert_eq!(prs[0].review_decision.as_deref(), Some("CHANGES_REQUESTED"));
+        assert_eq!(prs[1].review_decision, None);
         assert_eq!(prs[0].merge_state_status.as_deref(), Some("CLEAN"));
         assert_eq!(prs[1].mergeable, None);
         assert_eq!(prs[1].merge_state_status, None);

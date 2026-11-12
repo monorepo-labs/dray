@@ -3,7 +3,7 @@ import { useState } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
 import Orb from "@/components/Orb";
-import { MERGE_FILL, METHOD_DETAIL, METHOD_LABEL } from "@/components/PrPanel";
+import { MERGE_FILL, METHOD_DETAIL, METHOD_LABEL, TONE_TEXT } from "@/components/PrPanel";
 import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
 import { RowAction, RowMenu } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ import { burstConfetti } from "@/lib/confetti";
 import type { CrewRow } from "@/lib/crew";
 import { openLink } from "@/lib/openLink";
 import { isModClick } from "@/lib/platform";
-import { readyToMerge } from "@/lib/pr";
+import { prStatus, readyToMerge } from "@/lib/pr";
 import { cn } from "@/lib/utils";
 import type { MergeMethod, PrMark } from "@/types/events";
 
@@ -122,6 +122,9 @@ function TaskRow({
   const id = item.sessionId;
   const working = row.busy && !row.asking;
   const mergeable = pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
+  // Ready to merge is said by the Merge button itself.
+  const status = pr && prStatus(pr);
+  const showStatus = status && status.tone !== "ready";
 
   return (
     <RowMenu
@@ -201,6 +204,10 @@ function TaskRow({
             )}
           </span>
         </span>
+
+        {showStatus && (
+          <span className={cn("shrink-0 text-[12px]", TONE_TEXT[status.tone])}>{status.label}</span>
+        )}
 
         {/* Opens the pull request in Dray's browser; ⌘-click, the system's. */}
         {pr && (

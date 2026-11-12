@@ -10,6 +10,7 @@ import {
   mergeVerdict,
   pickPrMark,
   prBadgeCount,
+  prStatus,
   readyToMerge,
   sessionBranch,
   stripBotMarkers,
@@ -166,6 +167,7 @@ describe("readyToMerge", () => {
     checksState: "CLEAR",
     mergeable: "MERGEABLE",
     mergeStateStatus: "CLEAN",
+    reviewDecision: null,
     ...over,
   });
 
@@ -456,6 +458,7 @@ describe("pickPrMark", () => {
     checksState: "CLEAR",
     mergeable: null,
     mergeStateStatus: null,
+    reviewDecision: null,
     ...over,
   });
 
@@ -510,6 +513,7 @@ describe("markDisagrees", () => {
     checksState: "CLEAR",
     mergeable: "MERGEABLE",
     mergeStateStatus: "CLEAN",
+    reviewDecision: null,
     ...over,
   });
 
@@ -574,6 +578,7 @@ describe("sameMark", () => {
     checksState: "CLEAR",
     mergeable: "MERGEABLE",
     mergeStateStatus: "CLEAN",
+    reviewDecision: null,
     ...over,
   });
 
@@ -581,7 +586,52 @@ describe("sameMark", () => {
     expect(sameMark(mark(), mark())).toBe(true);
     expect(sameMark(mark(), mark({ checksState: "RUNNING" }))).toBe(false);
     expect(sameMark(mark(), mark({ mergeStateStatus: "BLOCKED" }))).toBe(false);
+    expect(sameMark(mark(), mark({ reviewDecision: "CHANGES_REQUESTED" }))).toBe(false);
     expect(sameMark(mark(), undefined)).toBe(false);
     expect(sameMark(undefined, undefined)).toBe(true);
+  });
+});
+
+describe("prStatus", () => {
+  const mark = (over: Partial<PrMark> = {}): PrMark => ({
+    number: 1,
+    url: "",
+    headRefName: "feature",
+    isDraft: false,
+    state: "OPEN",
+    checksState: "CLEAR",
+    mergeable: "MERGEABLE",
+    mergeStateStatus: "CLEAN",
+    reviewDecision: null,
+    ...over,
+  });
+  const label = (over: Partial<PrMark>) => prStatus(mark(over)).label;
+
+  it("names each state a row draws", () => {
+    expect(prStatus(mark())).toEqual({ tone: "ready", label: "Ready to merge" });
+    expect(label({ state: "MERGED", mergeable: null, mergeStateStatus: null })).toBe("Merged");
+    expect(label({ mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" })).toBe("Conflicts");
+    expect(label({ checksState: "RUNNING", mergeStateStatus: "BLOCKED" })).toBe("Checks running");
+    expect(label({ checksState: "FAILING", mergeStateStatus: "UNSTABLE" })).toBe("Checks failing");
+    expect(label({ mergeStateStatus: "BLOCKED", reviewDecision: "REVIEW_REQUIRED" })).toBe("Needs review");
+    expect(label({ mergeStateStatus: "BLOCKED", reviewDecision: "CHANGES_REQUESTED" })).toBe("Changes requested");
+    expect(label({ isDraft: true, mergeStateStatus: "DRAFT" })).toBe("Draft");
+    expect(label({ mergeable: "UNKNOWN" })).toBe("Checking…");
+  });
+
+  // The thing to fix first wins: a conflict before red checks, red checks
+  // before a review, and a merged PR's leftover fields say nothing.
+  it("orders what is in the way before what is running", () => {
+    expect(label({ mergeable: "CONFLICTING", checksState: "FAILING" })).toBe("Conflicts");
+    expect(label({ checksState: "FAILING", reviewDecision: "CHANGES_REQUESTED", mergeStateStatus: "BLOCKED" })).toBe(
+      "Checks failing",
+    );
+    expect(label({ state: "MERGED", checksState: "FAILING", reviewDecision: "CHANGES_REQUESTED" })).toBe("Merged");
+  });
+
+  it("uses the PR panel's yellow for checks and review", () => {
+    expect(prStatus(mark({ checksState: "RUNNING" })).tone).toBe("pending");
+    expect(prStatus(mark({ checksState: "FAILING" })).tone).toBe("pending");
+    expect(prStatus(mark({ mergeStateStatus: "BLOCKED", reviewDecision: "REVIEW_REQUIRED" })).tone).toBe("blocked");
   });
 });
