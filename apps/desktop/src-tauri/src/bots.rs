@@ -545,6 +545,11 @@ async fn make_bot(name: String, avatar: Option<BotAvatar>, welcome: Option<Strin
 /// as any session does once its project is gone; delete those on their own.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn delete_bot(id: String, sink: Sink) -> Result<(), Fail> {
+    // A first message opening the bot's chat holds this until the chat is on
+    // the index, so the settle below sees it rather than leaving it open on a
+    // folder that is about to go. Taken before `BOTS_LOCK`, as the send does.
+    let first = first_chat_lock(&id);
+    let _first = first.lock().await;
     let _guard = BOTS_LOCK.lock().await;
     let mut bots = read_list().await?;
     let Some(at) = bots.iter().position(|b| b.id == id) else {

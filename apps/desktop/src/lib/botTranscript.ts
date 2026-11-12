@@ -75,6 +75,7 @@ export function chatTime(iso: string, now = new Date()): string {
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const STARTS_SESSION = /\bdray\s+(session\s+new|new)\b/;
+const TASK_ID = new RegExp(`^\\s*(${UUID.source})\\s*$`, "im");
 const SENDS = /\bdray\s+(?:(session|bot)\s+)?send\b/g;
 /// What `dray bot send` prints, in `apps/cli/src/bot.rs`.
 const BOT_SENT = new RegExp(`^(?:Sent to|Queued for) bot ".*" \\((${UUID.source})\\)\\.$`, "gim");
@@ -95,48 +96,69 @@ function firstWord(text: string): { word: string; length: number } | null {
 /// a single- or double-quoted string, or a bare word. Best effort, since it is
 /// only ever drawn: a shape it misreads shows the raw text, never a wrong task.
 export function shellMessage(word: string): string {
-  const heredoc = word.match(/^"?\$\(cat\s+<<-?\s*['"]?(\w+)['"]?\n([\s\S]*?)\n\s*\1\s*\n?\s*\)/);
-  if (heredoc) return heredoc[2];
-  if (word.startsWith("'")) {
+  return shellWord(word).value;
+}
+
+/// The shell word `text` starts with, and how much of `text` it took.
+function shellWord(text: string): { value: string; length: number } {
+  const heredoc = text.match(/^"?\$\(cat\s+<<-?\s*['"]?(\w+)['"]?\n([\s\S]*?)\n\s*\1\s*\n?\s*\)/);
+  if (heredoc) {
+    const closed = text.startsWith('"') && text[heredoc[0].length] === '"';
+    return { value: heredoc[2], length: heredoc[0].length + (closed ? 1 : 0) };
+  }
+  if (text.startsWith("'")) {
     let out = "";
     let i = 1;
-    while (i < word.length) {
-      if (word.startsWith("'\\''", i)) {
+    while (i < text.length) {
+      if (text.startsWith("'\\''", i)) {
         out += "'";
         i += 4;
-      } else if (word[i] === "'") {
-        return out;
+      } else if (text[i] === "'") {
+        return { value: out, length: i + 1 };
       } else {
-        out += word[i++];
+        out += text[i++];
       }
     }
-    return out;
+    return { value: out, length: text.length };
   }
-  if (word.startsWith('"')) {
+  if (text.startsWith('"')) {
     let out = "";
-    for (let i = 1; i < word.length; i++) {
-      if (word[i] === "\\" && i + 1 < word.length) out += word[++i];
-      else if (word[i] === '"') return out;
-      else out += word[i];
+    for (let i = 1; i < text.length; i++) {
+      if (text[i] === "\\" && i + 1 < text.length) out += text[++i];
+      else if (text[i] === '"') return { value: out, length: i + 1 };
+      else out += text[i];
     }
-    return out;
+    return { value: out, length: text.length };
   }
-  return word.split(/\s/)[0];
+  const bare = text.match(/^\S*/)![0];
+  return { value: bare, length: bare.length };
 }
 
 /// Every `dray session send` and `dray bot send` in one command the bot ran —
 /// one command often carries several, joined by `&&` — each with who to, what
-/// it said, and whether it went to a bot.
+/// it said, and whether it went to a bot. A send spelled out inside another's
+/// message is that message's text, so the search resumes after each message.
 export function sentMessages(cmd: string): { target: string; text: string; bot?: true }[] {
-  const sends = [...cmd.matchAll(SENDS)];
-  return sends.flatMap((m, i) => {
-    const rest = cmd.slice(m.index + m[0].length, sends[i + 1]?.index).trimStart();
-    const target = firstWord(rest);
-    const message = target && rest.slice(target.length).trim();
-    if (!target || !message) return [];
-    const sent = { target: target.word, text: shellMessage(message) };
-    return [m[1] === "bot" ? { ...sent, bot: true as const } : sent];
-  });
+  const out: { target: string; text: string; bot?: true }[] = [];
+  let cursor = 0;
+  for (const m of cmd.matchAll(SENDS)) {
+    if (m.index < cursor) continue;
+    let at = m.index + m[0].length;
+    const skipSpace = () => {
+      while (at < cmd.length && /\s/.test(cmd[at])) at++;
+    };
+    skipSpace();
+    const target = firstWord(cmd.slice(at));
+    if (!target) continue;
+    at += target.length;
+    skipSpace();
+    const message = shellWord(cmd.slice(at));
+    if (message.length === 0) continue;
+    cursor = at + message.length;
+    const sent = { target: target.word, text: message.value };
+    out.push(m[1] === "bot" ? { ...sent, bot: true as const } : sent);
+  }
+  return out;
 }
 
 function command(input: JsonValue): string | null {
@@ -224,12 +246,18 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       if (cmd && STARTS_SESSION.test(cmd)) starts.add(p.callId);
       const sent = cmd ? sentMessages(cmd) : [];
       if (sent.length > 0) sends.set(p.callId, sent);
-    } else if (p.type === "tool_call_completed" && sends.has(p.callId) && !p.result.isError) {
+    } else if (p.type === "tool_call_completed" && !p.result.isError) {
+      // One command can both start a task and send, so each is read on its own.
+      if (starts.has(p.callId)) {
+        // `dray session new` prints the id alone on its line, unlike a send's.
+        const id = p.result.text.match(TASK_ID)?.[1];
+        if (id) items.push({ kind: "task", key: p.callId, sessionId: id, ts: event.ts });
+      }
       // `dray bot send` names the bot it reached on a line of its own, one per
       // send in order; its id still names the bot after a rename. Matched on
       // that line alone, since anything else in the command may print ids.
       const ids = [...p.result.text.matchAll(BOT_SENT)].map((m) => m[1]);
-      sends.get(p.callId)!.forEach(({ bot, target, text }, i) => {
+      sends.get(p.callId)?.forEach(({ bot, target, text }, i) => {
         const key = `${p.callId}:${i}`;
         items.push(
           bot
@@ -237,9 +265,6 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
             : { kind: "sent", key, target, text, ts: event.ts },
         );
       });
-    } else if (p.type === "tool_call_completed" && starts.has(p.callId) && !p.result.isError) {
-      const id = p.result.text.match(UUID)?.[0];
-      if (id) items.push({ kind: "task", key: p.callId, sessionId: id, ts: event.ts });
     }
   }
   return items;

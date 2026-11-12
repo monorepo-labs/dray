@@ -1823,6 +1823,11 @@ async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
     // messages would each start an agent in the one folder.
     let lock = bots::first_chat_lock(&bot.id);
     let first = lock.lock().await;
+    // Deleted while this waited: its folder is gone, and a chat started there
+    // would outlive the bot.
+    if !bots::list_bots().await?.iter().any(|b| b.id == bot.id) {
+        bail!("bot {:?} was just deleted", bot.name);
+    }
     if let Some(chat) = bots::chat_of(&bot).await {
         drop(first);
         let send = SendMessage { session_id: chat.session_id, prompt: send.prompt, from_session_id: send.from_session_id };
