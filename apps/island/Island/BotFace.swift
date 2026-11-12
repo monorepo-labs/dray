@@ -40,13 +40,14 @@ struct BotFace: View {
 /// The app's `TypingDots`: what a bot shows while it works, in place of the task orb.
 struct TypingDots: View {
     @Environment(\.motionPaused) private var hidden
+    @Environment(\.accessibilityReduceMotion) private var still
 
     var body: some View {
-        TimelineView(.animation(paused: hidden)) { context in
+        TimelineView(.animation(paused: hidden || still)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             HStack(spacing: 2) {
                 ForEach(0..<3) { i in
-                    let k = Self.lift(t - Double(i) * 0.16)
+                    let k = still ? 0 : Self.lift(t - Double(i) * 0.16)
                     Circle().fill(.white.opacity(0.5))
                         .frame(width: 4, height: 4)
                         .opacity(0.35 + 0.65 * k)
