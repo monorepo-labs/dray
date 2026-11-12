@@ -1778,7 +1778,12 @@ function BotRow({
 }) {
   const digit = useJumpDigit(sessionId ?? "");
   const [hovered, setHovered] = useState(false);
-  const badge = asking ? "asking" : status === "completed" ? "unread" : null;
+  // Unread holds through a turn the bot starts on its own, so the count stays
+  // beside the typing dots; only reading the chat (back to idle) clears it.
+  const [unread, setUnread] = useState(status === "completed");
+  if (status === "completed" && !unread) setUnread(true);
+  if (status === "idle" && unread) setUnread(false);
+  const badge = asking ? "asking" : unread ? "unread" : null;
   const mask = badge === "asking" ? DOT_CUTOUT : badge === "unread" ? COUNT_CUTOUT : undefined;
   const glimpse = preview?.text && previewLine(preview.text);
 
@@ -1833,7 +1838,7 @@ function BotRow({
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-ui text-sidebar-foreground",
-                  status === "completed" && "font-medium",
+                  unread && "font-medium",
                 )}
               >
                 {bot.name}

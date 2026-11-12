@@ -1,7 +1,7 @@
 // The whole app with three bots and a few tasks, to look at the sidebar's bot
-// rows beside the task rows. Ops works for 4s, then finishes with one unread
-// reply, then works again, so the typing dots and the glimpse that replaces
-// them both get seen. Tauri's IPC is mocked as in the new-task demo.
+// rows beside the task rows. Ops works for 4s, then finishes with one more
+// unread reply, then works again with the count still on its face, so the
+// typing dots and the glimpse that replaces them both get seen. Tauri's IPC is mocked as in the new-task demo.
 
 import { emit } from "@tauri-apps/api/event";
 import { mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
@@ -113,7 +113,7 @@ const status = (sessionId: string, s: SessionStatus) =>
   emit("session_status", { sessionId, status: s, modified: s === "in_progress" ? null : new Date().toISOString() });
 setInterval(() => {
   if (turn % 2 === 0) {
-    previews[OPS.sessionId] = { text: replies[(turn / 2) % replies.length], replies: 1 };
+    previews[OPS.sessionId] = { text: replies[(turn / 2) % replies.length], replies: turn / 2 + 1 };
     void status(OPS.sessionId, "completed");
   } else void status(OPS.sessionId, "in_progress");
   turn++;
