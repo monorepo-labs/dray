@@ -902,6 +902,9 @@ impl SessionManager {
                 );
             }
             require_dir(cwd, "The project folder").await?;
+            // A bot whose chat opens on a welcome has it logged ahead of this
+            // first prompt; marked here, where "first" is known for certain.
+            crate::bots::mark_welcome(session_id, cwd).await;
 
             // Only Claude Code's `-w` makes its own tree. For everything else
             // the tree has to be one Dray makes — the same route `--from`
@@ -3086,27 +3089,23 @@ async fn deliver_prompt(
         _ => None,
     };
 
-    let counter = seq;
-    let mut seq = counter.fetch_add(1, Relaxed);
     // A bot whose chat opens on a welcome (Dray Bot) has it written down as
     // the chat's first message, ahead of the prompt that started the session,
     // so the chat reads after a restart as it did before the first send. Only
     // logged: the agent is not given it.
-    if seq == 0 {
-        if let Some(welcome) = crate::bots::welcome_for_session(session_id).await {
-            let event = AgentEvent::mint(
-                session_id.to_string(),
-                harness,
-                seq,
-                None,
-                None,
-                AgentEventPayload::AssistantText { block: None, text: welcome },
-            );
-            app.emit("agent_event", &event)?;
-            append_session_event(session_id, event).await?;
-            seq = counter.fetch_add(1, Relaxed);
-        }
+    if let Some(welcome) = crate::bots::take_welcome(session_id) {
+        let event = AgentEvent::mint(
+            session_id.to_string(),
+            harness,
+            seq.fetch_add(1, Relaxed),
+            None,
+            None,
+            AgentEventPayload::AssistantText { block: None, text: welcome },
+        );
+        app.emit("agent_event", &event)?;
+        append_session_event(session_id, event).await?;
     }
+    let seq = seq.fetch_add(1, Relaxed);
 
     let payload = AgentEventPayload::UserMessage {
         text: text.clone(),

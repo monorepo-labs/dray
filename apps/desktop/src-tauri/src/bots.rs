@@ -99,18 +99,35 @@ async fn ensure_dray_bot() -> Result<()> {
     if tokio::fs::try_exists(&marker).await.unwrap_or(false) {
         return Ok(());
     }
-    let avatar = BotAvatar { shape: "cloud".into(), hue: 80.0 };
-    make_bot(DRAY_BOT.into(), Some(avatar), Some(DRAY_BOT_WELCOME.into())).await?;
+    // A Dray Bot already in the list is one made before its marker could be
+    // written — a stop between the two writes. Only it carries a welcome.
+    if !read_list().await?.iter().any(|b| b.welcome.is_some()) {
+        let avatar = BotAvatar { shape: "cloud".into(), hue: 80.0 };
+        make_bot(DRAY_BOT.into(), Some(avatar), Some(DRAY_BOT_WELCOME.into())).await?;
+    }
     tokio::fs::create_dir_all(bots_dir().await?).await?;
     write_atomic(&marker, "").await?;
     Ok(())
 }
 
-/// The welcome a new chat in `session_id` opens on, where it is a bot's that
-/// has one.
-pub async fn welcome_for_session(session_id: &str) -> Option<String> {
-    let item = crate::store::get_session_index_item(session_id).await.ok()??;
-    bot_at(&item.cwd).await?.welcome
+/// New chats whose first prompt is to be logged after their bot's welcome.
+/// Marked at creation rather than read off the event counter: a harness can
+/// log a startup error before the first prompt, which moved the counter on
+/// and lost the welcome.
+static WELCOMES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// Marks a new chat in `cwd` for its bot's welcome, where it has one.
+pub async fn mark_welcome(session_id: &str, cwd: &str) {
+    if let Some(welcome) = bot_at(cwd).await.and_then(|b| b.welcome) {
+        WELCOMES.lock().unwrap().push((session_id.to_string(), welcome));
+    }
+}
+
+/// The welcome to log ahead of `session_id`'s first prompt, taken once.
+pub fn take_welcome(session_id: &str) -> Option<String> {
+    let mut welcomes = WELCOMES.lock().unwrap();
+    let at = welcomes.iter().position(|(id, _)| id == session_id)?;
+    Some(welcomes.remove(at).1)
 }
 
 /// Makes the folder, both files and the list entry. Both files start empty: the
