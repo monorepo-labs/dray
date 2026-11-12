@@ -123,7 +123,13 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { attachmentKey, clearAttachments, pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
-import { closeFile, openFilesFor, useOpenFiles } from "@/hooks/useOpenFiles";
+import {
+  closeFile,
+  forgetOpenFiles,
+  forgetOpenFilesUnder,
+  openFilesFor,
+  useOpenFiles,
+} from "@/hooks/useOpenFiles";
 import BotAvatar from "@/components/BotAvatar";
 import Orb from "@/components/Orb";
 import PickTarget, { type PickOption } from "@/components/PickTarget";
@@ -627,6 +633,7 @@ function App() {
   // which one is on screen while the chat's view is `pick`.
   const [pickTabs, setPickTabs] = useState<PickTabs>({});
   const [pickLit, setPickLit] = useState<Record<string, string>>({});
+  const pickSeen = useRef(new Map<string, SessionIndexItem>());
   // Whether the issues page is what the main column is showing. Not a session
   // and not a per-session tab, so it is neither in `viewTabs` nor in the
   // selection: it is a place the reader goes and comes back from, and the
@@ -1515,10 +1522,17 @@ function App() {
         : [],
     [strip?.owner, sessionIndexItems, statusBySession, askingSessions],
   );
+  // The index lists one side of the sidebar, so a task settled under a pick
+  // leaves it while its folder is still there to show. Each target's entry is
+  // kept as last seen; deleting a task closes its picks, which ends the need.
+  for (const t of Object.values(pickTabs).flat()) {
+    const live = sessionIndexItems.find((i) => i.sessionId === t.target);
+    if (live) pickSeen.current.set(t.target, live);
+  }
+  const pickItem = (target: string) =>
+    sessionIndexItems.find((i) => i.sessionId === target) ?? pickSeen.current.get(target);
   const pickTitle = (target: string) =>
-    target === strip?.owner
-      ? (stripBot?.name ?? "Bot")
-      : (sessionIndexItems.find((i) => i.sessionId === target)?.title ?? "Task gone");
+    target === strip?.owner ? (stripBot?.name ?? "Bot") : (pickItem(target)?.title ?? "Task gone");
   const pickFace = (target: string) =>
     target === strip?.owner ? (
       <BotAvatar seed={stripBot?.id ?? target} avatar={stripBot?.avatar} className="block size-4 shrink-0" />
@@ -2881,6 +2895,11 @@ function App() {
   const deleteTask = async (id: string) => {
     if (await deleteSession(id)) {
       setTaskTabs((prev) => closeTaskTab(prev, id));
+      for (const t of Object.values(pickTabs).flat()) {
+        if (t.target === id) forgetOpenFilesUnder(`pick:${t.id}:`);
+        else forgetOpenFiles(pickFilesKey({ ...t, target: id }));
+      }
+      pickSeen.current.delete(id);
       setPickTabs((prev) => closePicksOn(prev, id));
     }
   };
@@ -2912,7 +2931,7 @@ function App() {
         onPick={(target) => setPickTabs((prev) => repickTab(prev, owner, tab.id, target))}
       />
     );
-    const item = sessionIndexItems.find((i) => i.sessionId === tab.target);
+    const item = pickItem(tab.target);
     if (!item) {
       return (
         <div className="flex min-h-0 flex-1">
@@ -3215,7 +3234,10 @@ function App() {
                         setPickTabs((prev) => addPickTab(prev, strip.owner, { id, kind, target }));
                         showPick(strip.owner, id);
                       },
-                      onClose: (id) => setPickTabs((prev) => closePickTab(prev, strip.owner, id)),
+                      onClose: (id) => {
+                        forgetOpenFilesUnder(`pick:${id}:`);
+                        setPickTabs((prev) => closePickTab(prev, strip.owner, id));
+                      },
                       onReopen: (kind, target) => {
                         const id = crypto.randomUUID();
                         setPickTabs((prev) => addPickTab(prev, strip.owner, { id, kind, target }));
@@ -3248,7 +3270,7 @@ function App() {
                       viewTab === "files"
                         ? shownSession.cwd
                         : litPick?.kind === "files"
-                          ? (sessionIndexItems.find((i) => i.sessionId === litPick.target)?.cwd ?? null)
+                          ? (pickItem(litPick.target)?.cwd ?? null)
                           : null
                     }
                     file={

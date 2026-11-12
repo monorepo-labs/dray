@@ -75,7 +75,7 @@ export default function FilesView({
   revision: string;
 }) {
   const { open, active: activePath } = useOpenFiles(sessionId);
-  useOpenFilesWatcher(sessionId);
+  useOpenFilesWatcher(sessionId, picker ? "pick" : "files");
 
   const [side, setSide] = useLocalStorage<Side>(SIDE_KEY, DEFAULT_SIDE);
   const [shown, setShown] = useLocalStorage<boolean>(SHOWN_KEY, true);

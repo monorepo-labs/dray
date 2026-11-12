@@ -51,6 +51,8 @@ export type ClosedTab = {
   page?: { url: string; title: string; favicon: string };
   /// A pick tab's kind and target; its id is minted again on reopen.
   pick?: { kind: "changes" | "files"; target: string };
+  /// A file a pick opened: the store it lives in, since the row's own is not.
+  file?: { store: string; path: string };
   at?: number;
 };
 

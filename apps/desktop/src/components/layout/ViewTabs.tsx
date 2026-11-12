@@ -361,7 +361,14 @@ export default function ViewTabs({
           pick();
           activateFile(p.filesKey, file.path);
         },
-        close: () => closeFile(p.filesKey, file.path),
+        close: () => {
+          closeFile(p.filesKey, file.path);
+          // On the row's own stack, where ⌘⇧T and the slot are read.
+          pushClosedTab(sessionId, {
+            key: `pickfile:${p.id}:${file.path}`,
+            file: { store: p.filesKey, path: file.path },
+          });
+        },
         keepsView: open.length === 1,
       }));
     }),
@@ -462,6 +469,12 @@ export default function ViewTabs({
     if (entry.pick) {
       if (!picks) return;
       key = `pick:${picks.onReopen(entry.pick.kind, entry.pick.target)}`;
+    } else if (entry.file) {
+      // Only into the pick still on that target, or it lands in a store
+      // nothing draws.
+      const store = entry.file.store;
+      if (!picks?.items.some((p) => p.filesKey === store)) return;
+      reopenFile(store, entry.file.path);
     } else if (key === "changes" || key === "files") setShown(key, true);
     else if (key.startsWith("file:")) reopenFile(sessionId, key.slice("file:".length));
     else if (key.startsWith("task:")) tasks?.onReopen(key.slice("task:".length));

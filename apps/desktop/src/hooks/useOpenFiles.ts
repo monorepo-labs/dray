@@ -122,6 +122,12 @@ function write(sid: string, next: Partial<SessionFiles>) {
   emit();
 }
 
+/// Drops every store whose key starts with `prefix`: a closed pick tab's, one
+/// per target it was on.
+export function forgetOpenFilesUnder(prefix: string) {
+  for (const sid of [...bySession.keys()]) if (sid.startsWith(prefix)) forgetOpenFiles(sid);
+}
+
 /// Drops what a deleted session held, text and all. A read still out finds
 /// neither its entry nor its number, so it lands nowhere.
 export function forgetOpenFiles(sid: string) {
@@ -254,27 +260,29 @@ export function useOpenFiles(sid: string | null): FilesSnapshot {
   return openFilesFor(sid);
 }
 
-/// Which watcher this view owns. The Docs panel holds `"docs"`, and a single
-/// watcher for both would mean whichever opened last silently took the other's
-/// watch away.
-const SCOPE = "files";
+/// Which watcher a view owns. The Docs panel holds `"docs"`, this view
+/// `"files"` and a bot row's Files pick `"pick"`: one watcher shared would
+/// mean whichever opened last silently took the other's watch away — and the
+/// Files view stays mounted beside a pick.
+export type FilesScope = "files" | "pick";
 
 /// Every `watch_docs` call for this scope, in the order it was made — the same
 /// chain [useDocWatcher](./useDocs.ts) keeps, and for the same reason: the
 /// command replaces the whole set for a scope, and two `invoke`s can land in
 /// either order. A failed call is swallowed so one cannot break the chain for
 /// the rest of the run.
-let watching: Promise<unknown> = Promise.resolve();
+const watching = new Map<FilesScope, Promise<unknown>>();
 
-function watch(paths: string[]): Promise<unknown> {
-  watching = watching
-    .then(() => watchDocs(SCOPE, paths))
+function watch(scope: FilesScope, paths: string[]): Promise<unknown> {
+  const next = (watching.get(scope) ?? Promise.resolve())
+    .then(() => watchDocs(scope, paths))
     .catch(() => {});
-  return watching;
+  watching.set(scope, next);
+  return next;
 }
 
 /// Keeps the open files current with the files underneath them.
-export function useOpenFilesWatcher(sid: string | null) {
+export function useOpenFilesWatcher(sid: string | null, scope: FilesScope = "files") {
   const { open } = useOpenFiles(sid);
   // A joined key rather than the array, so a render that rebuilds the list
   // without changing the set does not re-arm the watcher. Only ever a
@@ -289,13 +297,13 @@ export function useOpenFilesWatcher(sid: string | null) {
         if (!seqByPath.has(`${sid}\n${file.path}`)) read(sid, file.path);
       }
     }
-    void watch(openFilesFor(sid).open.map((file) => file.path));
+    void watch(scope, openFilesFor(sid).open.map((file) => file.path));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, sid]);
+  }, [key, sid, scope]);
 
   // The view unmounts when no session is selected, and a watcher left armed
   // there emits into nothing for the rest of the run.
-  useEffect(() => () => void watch([]), []);
+  useEffect(() => () => void watch(scope, []), [scope]);
 
   // Re-registered per session rather than held with `[]` deps and a ref: the
   // watch set is this session's files, so an event arriving under a listener
