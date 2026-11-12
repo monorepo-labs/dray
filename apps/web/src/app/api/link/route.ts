@@ -21,7 +21,8 @@ export async function POST(req: Request) {
   const body = (await req.json().catch(() => null)) as { name?: unknown; token?: unknown } | null;
   const name = typeof body?.name === "string" ? body.name.trim().slice(0, 80) : "";
   if (!name) return Response.json({ error: "invalid_request", error_description: "A server needs a name." }, { status: 400 });
-  const current = typeof body?.token === "string" ? await serverForToken(body.token) : null;
+  const token = typeof body?.token === "string" ? body.token : null;
+  const current = token ? await serverForToken(token) : null;
 
   await pool.query(`delete from server_link where "expiresAt" < now() - interval '1 hour'`);
   const { rows } = await pool.query<{ n: number }>(
@@ -38,9 +39,17 @@ export async function POST(req: Request) {
     const userCode = newUserCode();
     try {
       await pool.query(
-        `insert into server_link (id, "deviceCodeHash", "userCode", name, "serverId", "expiresAt", denied)
-         values ($1, $2, $3, $4, $5, now() + make_interval(secs => $6), false)`,
-        [crypto.randomUUID(), hashSecret(deviceCode), userCode, name, current?.id ?? null, LINK_LIFE_SECS],
+        `insert into server_link (id, "deviceCodeHash", "userCode", name, "serverId", "serverTokenHash", "expiresAt", denied)
+         values ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7), false)`,
+        [
+          crypto.randomUUID(),
+          hashSecret(deviceCode),
+          userCode,
+          name,
+          current?.id ?? null,
+          current && token ? hashSecret(token) : null,
+          LINK_LIFE_SECS,
+        ],
       );
     } catch (e) {
       if (isTaken(e)) continue;

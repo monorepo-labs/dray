@@ -210,6 +210,9 @@ async fn recheck(sink: &Sink) -> Option<Held> {
 /// server already linked sends its credential, so approving moves its row
 /// rather than adding a second.
 pub async fn start(sink: Sink) -> Result<PendingLink, String> {
+    // Held throughout, so the credential sent is the one on disk when the
+    // new flow is published, and a finishing poll can't land in between.
+    let _file = FILE.lock().await;
     {
         let memory = memory();
         if let Some(p) = memory.pending.as_ref().filter(|p| p.deadline > Instant::now() + REUSE_MIN) {
@@ -321,8 +324,9 @@ async fn poll(sink: Sink, site: String, generation: u64, mut interval: Duration)
             }
             done => done,
         };
-        // Under the file lock, so an unlink either finishes first and has
-        // cancelled this flow, or waits and unlinks what this writes.
+        // Under the file lock, which `start` and `unlink` hold too: either
+        // finished first and replaced or cancelled this flow, or waits and
+        // sees what this writes.
         let _file = FILE.lock().await;
         let current = memory().pending.as_ref().is_some_and(|p| p.generation == generation);
         let error = match outcome {
@@ -339,8 +343,10 @@ async fn poll(sink: Sink, site: String, generation: u64, mut interval: Duration)
         };
         {
             let mut memory = memory();
-            memory.pending = None;
-            memory.error = error;
+            if memory.pending.as_ref().is_some_and(|p| p.generation == generation) {
+                memory.pending = None;
+                memory.error = error;
+            }
             memory.checked = Some(Instant::now());
         }
         let _ = sink.emit(CHANGED, ());

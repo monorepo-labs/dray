@@ -47,6 +47,10 @@ export const drayTables = {
           required: false,
           references: { model: "server", field: "id", onDelete: "set null" },
         },
+        // The credential that row held when the code was made. A claim moves
+        // the row only while it still holds it, so a code minted under a
+        // credential since replaced can't move the server again.
+        serverTokenHash: { type: "string", required: false },
         expiresAt: { type: "date", required: true },
         organizationId: {
           type: "string",

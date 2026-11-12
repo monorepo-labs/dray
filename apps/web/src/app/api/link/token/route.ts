@@ -20,12 +20,13 @@ export async function POST(req: Request) {
       id: string;
       name: string;
       serverId: string | null;
+      serverTokenHash: string | null;
       organizationId: string | null;
       approvedBy: string | null;
       denied: boolean;
       expired: boolean;
     }>(
-      `select id, name, "serverId", "organizationId", "approvedBy", denied, "expiresAt" < now() as expired
+      `select id, name, "serverId", "serverTokenHash", "organizationId", "approvedBy", denied, "expiresAt" < now() as expired
          from server_link where "deviceCodeHash" = $1 for update`,
       [hashSecret(body.deviceCode)],
     );
@@ -46,12 +47,18 @@ export async function POST(req: Request) {
     const token = newSecret("drs_");
     const held = link.serverId
       ? (
-          await db.query<{ organizationId: string }>(
-            `select "organizationId" from server where id = $1 for update`,
+          await db.query<{ organizationId: string; tokenHash: string | null }>(
+            `select "organizationId", "tokenHash" from server where id = $1 for update`,
             [link.serverId],
           )
         ).rows[0]
       : undefined;
+    // Read under the row lock: another code's claim may have replaced the
+    // credential this code was made with, and then this one is stale.
+    if (held && held.tokenHash !== link.serverTokenHash) {
+      await db.query(`delete from server_link where id = $1`, [link.id]);
+      return await done(db, refuse("expired_token"));
+    }
     let serverId: string;
     if (held) {
       serverId = link.serverId!;
@@ -79,9 +86,7 @@ export async function POST(req: Request) {
        on conflict ("serverId", "userId") do nothing`,
       [crypto.randomUUID(), serverId, link.approvedBy],
     );
-    // Any other code for this server was minted under the credential just
-    // replaced, so none may move it again.
-    await db.query(`delete from server_link where id = $1 or "serverId" = $2`, [link.id, serverId]);
+    await db.query(`delete from server_link where id = $1`, [link.id]);
     const answer = await db.query<{ name: string; orgId: string; orgName: string; orgSlug: string }>(
       `select s.name, o.id as "orgId", o.name as "orgName", o.slug as "orgSlug"
          from server s join organization o on o.id = s."organizationId" where s.id = $1`,
