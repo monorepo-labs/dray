@@ -1802,7 +1802,7 @@ function BotRow({
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
           className={cn(
-            "group relative flex w-full cursor-pointer items-center gap-1.5 rounded-md py-1 pr-[5px] pl-1 text-left",
+            "group relative flex w-full cursor-pointer items-center gap-2 rounded-md py-1 pr-[5px] pl-1 text-left",
             "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
             active
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
