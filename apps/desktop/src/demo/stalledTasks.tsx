@@ -171,7 +171,7 @@ function Demo() {
         <h1 className="text-lg font-medium">Stalled tasks in a bot's chat</h1>
         <p className="max-w-xl text-ui text-muted-foreground">
           Ten tasks, seven stalled. A ready PR and a task idle on you reach the card; the rest go to the bot. A row
-          scrolls the chat to the bot's reply about the task; Open, on hover, opens the task. Merge waits a
+          scrolls the chat to the bot's reply about the task; Open task, on hover, opens it. Merge waits a
           second and takes the row away, as settling does.
         </p>
         <div className="flex items-center gap-4 text-ui">

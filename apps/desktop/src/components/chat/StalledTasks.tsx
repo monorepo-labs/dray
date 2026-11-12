@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { ArrowUpRight, X } from "lucide-react";
 import { useState } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
@@ -6,6 +6,7 @@ import { TONE_TEXT } from "@/components/PrPanel";
 import PrStateIcon from "@/components/PrStateIcon";
 import { MergeControl } from "@/components/TasksPanel";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { seededAvatar } from "@/lib/botAvatar";
 import type { CrewRow } from "@/lib/crew";
@@ -84,6 +85,7 @@ function StalledRow({
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
 }) {
   const [hovered, setHovered] = useState(false);
+  const [onAction, setOnAction] = useState(false);
   const { row, pr } = stall;
   const { item } = row;
   const id = item.sessionId;
@@ -91,53 +93,67 @@ function StalledRow({
   const need = needLine(stall);
 
   return (
-    // A div, since a button cannot hold Open and Merge inside it.
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={() => onFocus(id)}
-      onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onFocus(id)}
-      onPointerEnter={() => setHovered(true)}
-      onPointerLeave={() => setHovered(false)}
-      className="group flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <BotAvatar seed={id} avatar={seededAvatar(id)} follow={hovered} className="block size-8 shrink-0 scale-[1.18]" />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="flex items-center gap-2">
-          <span className="min-w-0 truncate text-ui text-foreground">{item.title}</span>
-          {pr && status && (
-            <span
-              className={cn("flex shrink-0 items-center gap-0.5 text-[12px] tabular-nums", TONE_TEXT[status.tone])}
-              title={`Pull request #${pr.number} · ${status.label.toLowerCase()}`}
-            >
-              <PrStateIcon pr={pr} strokeWidth={1.5} className="text-current" />#{pr.number}
+    // The row's own click stays in the chat, so the tooltip says so; it hides
+    // over the row's buttons, which do something else. A div, since a button
+    // cannot hold Open and Merge inside it.
+    <Tooltip open={hovered && !onAction}>
+      <TooltipTrigger asChild>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => onFocus(id)}
+          onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onFocus(id)}
+          onPointerEnter={() => setHovered(true)}
+          onPointerLeave={() => setHovered(false)}
+          className="group flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <BotAvatar seed={id} avatar={seededAvatar(id)} follow={hovered} className="block size-8 shrink-0 scale-[1.18]" />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="flex items-center gap-2">
+              <span className="min-w-0 truncate text-ui text-foreground">{item.title}</span>
+              {pr && status && (
+                <span
+                  className={cn("flex shrink-0 items-center gap-0.5 text-[12px] tabular-nums", TONE_TEXT[status.tone])}
+                  title={`Pull request #${pr.number} · ${status.label.toLowerCase()}`}
+                >
+                  <PrStateIcon pr={pr} strokeWidth={1.5} className="text-current" />#{pr.number}
+                </span>
+              )}
+              {/* Held in place while hidden, so showing it moves nothing. Merge
+                  sits before the time, so the time ends every row. */}
+              <span
+                className="ml-auto flex shrink-0 items-center gap-2"
+                onPointerEnter={() => setOnAction(true)}
+                onPointerLeave={() => setOnAction(false)}
+              >
+                <Button
+                  variant="outline"
+                  size="xs"
+                  className="opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpen(id, isModClick(e));
+                  }}
+                >
+                  Open task
+                  <ArrowUpRight data-icon="inline-end" />
+                </Button>
+                {stall.kind === "ready" && pr && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />}
+              </span>
+              <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
+                {compactAge(item.modified, now)}
+              </span>
             </span>
-          )}
-          {/* Held in place while hidden, so showing it moves nothing. Merge
-              sits before the time, so the time ends every row. */}
-          <Button
-            variant="ghost"
-            size="xs"
-            className="ml-auto text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpen(id, isModClick(e));
-            }}
-          >
-            Open
-          </Button>
-          {stall.kind === "ready" && pr && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />}
-          <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
-            {compactAge(item.modified, now)}
+            {need ? (
+              <span className="min-w-0 truncate text-ui text-foreground/70">{need}</span>
+            ) : (
+              // The bot is still reading the task; the slot holds its place.
+              stall.kind === "waiting" && <span className="my-1 h-3 w-48 animate-pulse rounded bg-muted-foreground/20" />
+            )}
           </span>
-        </span>
-        {need ? (
-          <span className="min-w-0 truncate text-ui text-foreground/70">{need}</span>
-        ) : (
-          // The bot is still reading the task; the slot holds its place.
-          stall.kind === "waiting" && <span className="my-1 h-3 w-48 animate-pulse rounded bg-muted-foreground/20" />
-        )}
-      </span>
-    </div>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="top">Show in chat</TooltipContent>
+    </Tooltip>
   );
 }
