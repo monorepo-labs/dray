@@ -64,7 +64,7 @@ describe("inBotTree", () => {
 });
 
 describe("botBrowser", () => {
-  it("is the chat's oldest session, for tasks and an agent switch alike", () => {
+  it("is the chat's oldest session across an agent switch, and never a task's", () => {
     const items = [
       item("chat", { created: "2026-11-01T00:00:00Z" }),
       // A switch to another agent: a newer session in the same folder.
@@ -72,7 +72,7 @@ describe("botBrowser", () => {
       item("task", { cwd: "/repo/wt", parentSessionId: "switched" }),
       item("other", { cwd: "/repo" }),
     ];
-    expect(botBrowser([bot], items, "task")).toBe("chat");
+    expect(botBrowser([bot], items, "task")).toBeUndefined();
     expect(botBrowser([bot], items, "switched")).toBe("chat");
     expect(botBrowser([bot], items, "other")).toBeUndefined();
   });

@@ -95,15 +95,17 @@ export function botOf(
   return undefined;
 }
 
-/// The session whose browser `sessionId` shares, as the server's
-/// `bots::browser_owner` resolves it (#881): its bot chat's oldest session,
-/// since an agent switch adds a newer one and the pages must outlive it.
+/// The session whose browser a bot chat's `sessionId` uses, as the server's
+/// `bots::browser_owner` resolves it: the chat's oldest session, since an
+/// agent switch adds a newer one and the pages must outlive it (#878). A
+/// bot's tasks have browsers of their own, so anything else is `undefined`.
 export function botBrowser(
   list: readonly Bot[],
   items: readonly SessionIndexItem[],
   sessionId: string,
 ): string | undefined {
-  const bot = botOf(list, items, sessionId);
+  const cwd = items.find((i) => i.sessionId === sessionId)?.cwd;
+  const bot = cwd === undefined ? undefined : botAt(list, cwd);
   return bot && botChat(items, bot)[0]?.sessionId;
 }
 

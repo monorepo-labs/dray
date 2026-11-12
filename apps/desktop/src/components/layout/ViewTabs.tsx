@@ -48,7 +48,7 @@ import {
   useBrowserTabs,
   useParkedTabs,
   usePendingTab,
-  useRecording,
+  useRecordedTab,
 } from "@/lib/browser";
 import { seededAvatar } from "@/lib/botAvatar";
 import { tabLabels } from "@/lib/fileTree";
@@ -217,9 +217,8 @@ export default function ViewTabs({
   const pending = usePendingTab(browserId);
   const blanks = useBlankTabs(browserId);
   const parkedPages = useParkedTabs(browserId);
-  // The agent's next verb goes to whichever page is active, so the reader
-  // cannot move it mid-recording — the panel strip's own rule.
-  const recording = useRecording(browserId);
+  // The page being recorded cannot be closed; every other tab stays the reader's.
+  const recorded = useRecordedTab(browserId);
   const { open: files, active: activeFile } = useOpenFiles(sessionId);
   const [, bump] = useReducer((n: number) => n + 1, 0);
   const fileLabels = tabLabels(files.map((f) => f.path));
@@ -241,7 +240,6 @@ export default function ViewTabs({
     bump();
   };
   const newTab = () => {
-    if (recording) return;
     onChange("browser");
     setPendingTab(browserId, true);
   };
@@ -281,7 +279,7 @@ export default function ViewTabs({
       label: page.error ? "Can't reach page" : page.title || hostOf(page.url),
       active: own === "browser" && page.active && !pending,
       overlay: <AgentBeam tab={page.id} />,
-      locked: recording,
+      locked: page.id === recorded,
       pick: () => {
         onChange("browser");
         setPendingTab(browserId, false);
@@ -304,7 +302,6 @@ export default function ViewTabs({
       icon: parkedPages[id] ? <Favicon tab={parkedPages[id]} /> : <GlobeFilledIcon className={MARK} />,
       label: parkedPages[id] ? parkedPages[id].title || hostOf(parkedPages[id].url) : "New tab",
       active: own === "browser" && blanks.active === id,
-      locked: recording,
       pick: () => {
         onChange("browser");
         activateBlankTab(browserId, id);
@@ -456,7 +453,7 @@ export default function ViewTabs({
   });
 
   // ⌘1–⌘8 by position and ⌘9 the last, every browser's numbering.
-  const pickAt = (i: number) => items[i] && !items[i].locked && items[i].pick();
+  const pickAt = (i: number) => items[i]?.pick();
   useDigitHotkey("tab.pick", (slot) => pickAt(slot === 8 ? items.length - 1 : slot));
   // ⌘⇧[ and ⌘⇧], wrapping at the ends the way a browser's do.
   const step = (delta: number) => {
@@ -500,13 +497,8 @@ export default function ViewTabs({
   const closeAt = (i: number) => {
     const item = drag.shown[i];
     const last = !!item.keepsView;
-    // A neighbour, but never a page a recording holds: moving the active page
-    // would send the agent's next verb somewhere else. The chat is never
-    // locked, so the scan always lands.
     if (item.active && !last) {
-      [drag.shown[i - 1], drag.shown[i + 1], ...drag.shown]
-        .find((t) => t && t !== item && !t.locked)
-        ?.pick();
+      [drag.shown[i - 1], drag.shown[i + 1], ...drag.shown].find((t) => t && t !== item)?.pick();
     }
     item.close?.();
     markClosedSlot(sessionId, item.key, i);
@@ -617,7 +609,7 @@ export default function ViewTabs({
                 {o.label}
               </DropdownMenuItem>
             ))}
-            <DropdownMenuItem disabled={recording} onSelect={newTab}>
+            <DropdownMenuItem onSelect={newTab}>
               <GlobeFilledIcon className={MARK} />
               Browser
               <ShortcutKeys ids={["browser.newTab"]} className="ml-auto shrink-0 pl-4" />
@@ -630,7 +622,6 @@ export default function ViewTabs({
             <button
               type="button"
               aria-label="New tab"
-              disabled={recording}
               onClick={newTab}
               className={plusClass}
             >
@@ -698,7 +689,7 @@ export function ItemTab({
   overlay?: React.ReactNode;
   label: string;
   active: boolean;
-  /// Neither picked nor closed, while a recording holds the strip.
+  /// Not closed, while a recording films it.
   locked?: boolean;
   onPick: () => void;
   /// Absent on the view tabs, which are never closed.
@@ -719,7 +710,7 @@ export function ItemTab({
   /// Double-click, or Enter on the active tab, edits this in place of the label.
   rename?: Rename;
 }) {
-  const pick = locked ? undefined : onPick;
+  const pick = onPick;
   const [renaming, setRenaming] = useState(false);
   const lastClick = useRef(-Infinity);
   // Closed by the tab going inactive, not only by blur: the drag hook cancels
@@ -732,8 +723,7 @@ export function ItemTab({
       role="tab"
       aria-selected={active}
       aria-label={label}
-      aria-disabled={locked || undefined}
-      tabIndex={locked ? -1 : 0}
+      tabIndex={0}
       onClick={(e) => {
         pick?.();
         // Counted here rather than on `dblclick`, which WebKit never fires
@@ -780,9 +770,7 @@ export function ItemTab({
           ? "text-foreground"
           : active || held
           ? "bg-surface-thumb text-foreground shadow-(--shadow-button) ring-1 ring-hairline dark:shadow-none"
-          : locked
-            ? "text-muted-foreground opacity-50"
-            : "text-muted-foreground hover:text-foreground",
+          : "text-muted-foreground hover:text-foreground",
         held && "z-10",
         gliding && "transition-[color,background-color,min-width,transform]",
       )}
