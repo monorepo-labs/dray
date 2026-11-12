@@ -360,7 +360,11 @@ automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUse
  * notice says it did. The session layer records it, so the composer
  * stops naming the model the CLI left.
  */
-model: ModelId | null, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+model: ModelId | null, } | { "type": "merge_card", taskId: string, title: string, 
+/**
+ * The repo root, what the sidebar's PR marks are keyed by.
+ */
+projectPath: string, branch: string, number: number, url: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.
@@ -1531,7 +1535,12 @@ headRefName: string, isDraft: boolean, state: PrMarkState, checksState: PrChecks
  * `None` on the merged half, where they are not asked for. The frontend
  * reads that as *unknown* rather than as ready — see `mergeVerdict`.
  */
-mergeable: string | null, mergeStateStatus: string | null, };
+mergeable: string | null, mergeStateStatus: string | null, 
+/**
+ * `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `None` where the
+ * repo asks for no review, and on the merged half.
+ */
+reviewDecision: string | null, };
 
 /**
  * Which of the two connections a mark came from.

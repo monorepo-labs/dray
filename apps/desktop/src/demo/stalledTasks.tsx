@@ -43,6 +43,7 @@ const pr = (number: number, more: Partial<PrMark> = {}): PrMark => ({
   checksState: "CLEAR",
   mergeable: "MERGEABLE",
   mergeStateStatus: "CLEAN",
+  reviewDecision: null,
   ...more,
 });
 

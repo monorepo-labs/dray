@@ -447,6 +447,7 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::SetAside(r) => Some(&r.session_id),
         Request::Share(r) => Some(&r.session_id),
         Request::Browser(r) => Some(&r.session_id),
+        Request::MergeCard(r) => Some(&r.session_id),
         // Never `AddVideo`: its path is this machine's, and forwarded it would
         // name a file the other machine does not have, or a different one.
         _ => None,
@@ -776,6 +777,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::RemoveDraft(draft) => remove_draft(&draft.id, app).await,
         Request::StartDraft(start) => start_draft(start, None, app).await,
         Request::AddVideo(video) => add_video(video).await,
+        Request::MergeCard(card) => post_merge_card(card, app).await,
         Request::Share(share) => share_port(share).await,
         Request::ListShares(list) => list_shares(list).await,
         Request::RenameSession(rename) => {
@@ -1190,6 +1192,53 @@ async fn add_video(request: dray_proto::AddVideo) -> Result<Response> {
         Ok(path) => Response::Video { path: path.to_string_lossy().into_owned() },
         Err(message) => Response::error(message),
     })
+}
+
+/// Posts a merge card for a task's open pull request into the calling chat.
+/// The PR is looked up now, so an agent posting too early is told so rather
+/// than leaving a card with nothing to merge.
+async fn post_merge_card(card: dray_proto::MergeCard, app: &Sink) -> Result<Response> {
+    let chat = store::get_session_index_item(&card.session_id)
+        .await?
+        .with_context(|| format!("no session {}", card.session_id))?;
+    let task_id = &card.task_session_id;
+    let Some(task) = store::get_session_index_item(task_id).await? else {
+        // ponytail: a card reads and merges on the chat's machine, so a task on
+        // another one is refused by name. Carrying the task's machine on the
+        // event is the upgrade, if tasks spread across machines.
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        if let Some(machine) = elsewhere::locate(task_id).await {
+            bail!("session {task_id} runs on {machine}; a merge card needs the task on the same machine as this chat");
+        }
+        bail!("no session {task_id}");
+    };
+    // The frontend's `sessionBranch`: git's own HEAD while the tree exists,
+    // since an agent may have pushed from a branch it named itself.
+    let observed = match task.worktree_removed {
+        true => None,
+        false => crate::git::current_branch(&task.cwd).await,
+    };
+    let branch = observed
+        .or_else(|| task.worktree_name.as_deref().map(crate::git::worktree_branch))
+        .or(task.branch.clone())
+        .with_context(|| format!("session {task_id} has no branch"))?;
+    let prs = crate::github::prs_for_branch(task.project_path.clone(), branch.clone())
+        .await
+        .map_err(|e| anyhow::anyhow!("could not read pull requests: {e:?}"))?;
+    let pr = prs
+        .into_iter()
+        .find(|pr| pr.state == "OPEN")
+        .with_context(|| format!("no open pull request on {branch}; open one first"))?;
+    let payload = crate::events::AgentEventPayload::MergeCard {
+        task_id: task_id.clone(),
+        title: task.title.clone(),
+        project_path: task.project_path,
+        branch,
+        number: pr.number,
+        url: pr.url.clone(),
+    };
+    manager().post_event(&card.session_id, chat.harness, payload, app).await?;
+    Ok(Response::MergeCard { number: pr.number, url: pr.url, title: task.title })
 }
 
 /// Tags a session that already exists, or untags it.

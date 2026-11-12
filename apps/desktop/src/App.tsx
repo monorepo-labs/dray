@@ -14,6 +14,7 @@ import DiffWorkerPool from "@/components/DiffWorkerPool";
 import NoticeStack from "@/components/NoticeStack";
 import BreakOverlay from "@/components/BreakOverlay";
 import { useBreakDue } from "@/lib/breaks";
+import { askToFixConflicts } from "@/lib/fixConflicts";
 import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
 import type { SettingsTab } from "@/components/SettingsPage";
@@ -92,6 +93,8 @@ import { type Chord, formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_BESIDE, CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import TasksPanel from "@/components/TasksPanel";
 import StalledTasks from "@/components/chat/StalledTasks";
+import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/MergeCard";
+import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
@@ -178,7 +181,7 @@ import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
-import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, PrMark, SessionIndexItem, WorktreeDisposition } from "@/types/events";
+import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, SessionIndexItem, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -1304,12 +1307,31 @@ function App() {
   // is dropped is the spending, not the answer.
   // A bot's tasks run hidden, so their repos are added while their Tasks tab
   // can be on screen: that tab draws their marks.
-  const repoPaths = useMemo(
+  // A merge card's task may be settled and out of every list, so the repos the
+  // cards on screen name are read too: the open chat's, and every split pane's.
+  const cardRepoKey = useMemo(
     () =>
-      archivedShown
-        ? []
-        : [...new Set([...visibleSessions, ...crew.map((r) => r.item)].map((i) => i.projectPath))],
-    [archivedShown, visibleSessions, crew],
+      cardRepos(
+        sessions
+          .filter(
+            (s) =>
+              s.sessionId === selectedSessionId ||
+              earlierIds.includes(s.sessionId) ||
+              memberKey.split("\n").includes(s.sessionId),
+          )
+          .flatMap((s) => s.events),
+      ).join("\n"),
+    [sessions, selectedSessionId, earlierIds, memberKey],
+  );
+  // Whichever sidebar list is up: a card on screen is still being read.
+  const repoPaths = useMemo(
+    () => [
+      ...new Set([
+        ...(archivedShown ? [] : [...visibleSessions, ...crew.map((r) => r.item)].map((i) => i.projectPath)),
+        ...(cardRepoKey ? cardRepoKey.split("\n") : []),
+      ]),
+    ],
+    [archivedShown, visibleSessions, crew, cardRepoKey],
   );
   const prMarks = usePrMarks(repoPaths);
 
@@ -1374,15 +1396,8 @@ function App() {
     selectedSession?.cwd ?? "",
     prBranch,
     panelShown && (panelTab === "pr" || panelTab === null),
-    // A pull request appearing is the moment the session stops being about the
-    // turn and starts being about landing, so the pane opens onto it rather
-    // than waiting to be asked. Fires at most once per PR — see `onOpened`.
-    //
-    // It moves the pick as well as opening the pane, and has to: `activeTab`
-    // honours a standing pick over the derived default, so opening alone lands
-    // on whichever tab the reader last chose.
-    // A fresh closure each render is fine: the hook holds it in a ref.
-    () => showPanel("pr"),
+    // No opening the pane when a PR appears: an agent posts a merge card in
+    // the chat for that (`dray session merge-card`), and the pane opens by hand.
     // A merge or a reopen changes what the sidebar's mark should say, and that
     // mark comes from a different read with a two-minute freshness window — so
     // without this the row keeps its open-PR glyph until the window expires or
@@ -3014,27 +3029,6 @@ function App() {
     pickTaskTab(bot.id, id);
   };
 
-  /// Lands a bot task's pull request, from its Tasks row or its chat's stalled
-  /// card, then settles the task and tidies its worktree.
-  const mergeTask = async (row: CrewRow, pr: PrMark, method: MergeMethod) => {
-    // From the repo root: a task's worktree may already be gone.
-    await invoke("merge_pr", { cwd: row.item.projectPath, number: pr.number, method });
-    prMarks.refreshAfterWrite();
-    // Landed, so the task is done — unless it is still working, which
-    // settling would kill mid-turn.
-    const { item } = row;
-    if (row.busy || !(await setSessionFlags(item.sessionId, { archived: true }))) return;
-    if (!item.worktreeName || item.worktreeRemoved) return;
-    // The tree goes without a word only where it holds nothing the merge did
-    // not take; anything else is the settle notice's question, never a silent
-    // delete.
-    const left = await invoke<WorktreeDisposition>("worktree_disposition", { sessionId: item.sessionId }).catch(() => null);
-    if (left && (!left.exists || (left.changedFiles === 0 && left.unpushedCommits === 0))) {
-      removeWorktree(item.sessionId, "tidy");
-    } else {
-      void askAboutWorktree(item.sessionId, item.worktreeName, item.title, "notice");
-    }
-  };
 
   /// Closes the picks on `target` — every kind, or only `kind` — and frees
   /// the file stores they and any other pick held for it.
@@ -3066,6 +3060,75 @@ function App() {
       setTaskTabs((prev) => closeTaskTab(prev, id));
       dropPicksOn(id);
     }
+  };
+
+  /// Merges a task's pull request, then settles the task where `task` is
+  /// given — the Tasks tab's Merge, and a merge card's in a bot's chat.
+  const mergeTask = async (
+    projectPath: string,
+    number: number,
+    method: MergeMethod,
+    task: { item: SessionIndexItem; busy: boolean } | null,
+  ) => {
+    // From the repo root: a task's worktree may already be gone.
+    await invoke("merge_pr", { cwd: projectPath, number, method });
+    prMarks.refreshAfterWrite();
+    // Landed, so the task is done — unless it is still working,
+    // which settling would kill mid-turn.
+    if (!task) return;
+    const { item } = task;
+    if (task.busy || !(await setSessionFlags(item.sessionId, { archived: true }))) return;
+    if (!item.worktreeName || item.worktreeRemoved) return;
+    // The tree goes without a word only where it holds nothing
+    // the merge did not take; anything else is the settle notice's
+    // question, never a silent delete.
+    const left = await invoke<WorktreeDisposition>("worktree_disposition", { sessionId: item.sessionId }).catch(
+      () => null,
+    );
+    if (left && (!left.exists || (left.changedFiles === 0 && left.unpushedCommits === 0))) {
+      removeWorktree(item.sessionId, "tidy");
+    } else {
+      void askAboutWorktree(item.sessionId, item.worktreeName, item.title, "notice");
+    }
+  };
+
+  const cardsReread = useRef(new Set<string>());
+  const rereadQueued = useRef(false);
+  const mergeCardHost: MergeCardHost = {
+    prNumbered: prMarks.prNumbered,
+    // Every card missing in one commit shares one read of the repos on screen:
+    // a long chat of old cards must not spend the `gh` budget once per card.
+    missing: (repo, number) => {
+      const key = `${repo}#${number}`;
+      if (cardsReread.current.has(key)) return;
+      cardsReread.current.add(key);
+      if (rereadQueued.current) return;
+      rereadQueued.current = true;
+      queueMicrotask(() => {
+        rereadQueued.current = false;
+        prMarks.refresh();
+      });
+    },
+    titleOf: (id) => sessionIndexItems.find((i) => i.sessionId === id)?.title,
+    merge: async (card, method, settle) => {
+      const item = settle
+        ? (sessionIndexItems.find((i) => i.sessionId === card.taskId) ??
+          (await invoke<SessionIndexItem | null>("session_index_item", { sessionId: card.taskId }).catch(() => null)))
+        : null;
+      const busy = (statusBySession[card.taskId] ?? item?.status) === "in_progress";
+      // A task moved off the card's branch holds work this merge did not land.
+      const landed = item && !item.archived && sessionBranch(item) === card.branch;
+      return mergeTask(card.projectPath, card.number, method, landed ? { item, busy } : null);
+    },
+    open: (id, alone) => paneChat.onOpenSession(id, alone),
+    fixConflicts: async (card) => {
+      // The loaded list is one side of the sidebar; the settled side may be up.
+      const task =
+        sessionIndexItems.find((i) => i.sessionId === card.taskId) ??
+        (await invoke<SessionIndexItem | null>("session_index_item", { sessionId: card.taskId }));
+      if (!task) throw new Error("This task is gone.");
+      await askToFixConflicts(task, card.number);
+    },
   };
 
   const paneChat: PaneChat = {
@@ -3142,6 +3205,7 @@ function App() {
 
   return (
     <TooltipProvider>
+    <MergeCardHostContext value={mergeCardHost}>
     <DiffWorkerPool pair={codeThemePair}>
     {/* Hidden, not unmounted, while settings take the window: transcripts,
         scroll pins and drafts wait here. `display: none` is also what takes
@@ -3567,7 +3631,8 @@ function App() {
                 onFork={forkSession}
                 onDelete={deleteTask}
                 onDetach={detachSession}
-                onMerge={mergeTask}
+                onFixConflicts={(row, pr) => askToFixConflicts(row.item, pr.number)}
+                onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
               />
             </TabBody>
             <TabBody active={activeTab === "more"}>
@@ -3876,7 +3941,7 @@ function App() {
                 needs={stalled.needs}
                 now={stalled.now}
                 onOpen={(id, alone) => void openTask(id, alone)}
-                onMerge={mergeTask}
+                onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
               />
             }
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
@@ -4088,6 +4153,7 @@ function App() {
       </AlertDialogContent>
     </AlertDialog>
     </DiffWorkerPool>
+    </MergeCardHostContext>
     </TooltipProvider>
   );
 }

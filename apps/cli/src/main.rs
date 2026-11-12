@@ -16,7 +16,7 @@ mod machine;
 mod setup;
 use draft::DraftCommand;
 use dray_proto::{
-    encode_line, AddVideo, BrowserAction, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
+    encode_line, AddVideo, BrowserAction, MergeCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
     LinkIssues, ListSessions, Locator, OnMachine, RenameSession, Request, Response, SendMessage, SessionRef,
     SessionSummary, SetAside, SettleSession, ShareAction, ShareRequest,
 };
@@ -137,6 +137,9 @@ enum SessionCommand {
     SetAside(SessionArg),
     /// Take a session out of set-aside.
     UnsetAside(SessionArg),
+    /// Post a card in this session's chat for a task's open pull request, so
+    /// the user can merge it from the chat.
+    MergeCard(SessionArg),
 }
 
 #[derive(Args)]
@@ -467,6 +470,7 @@ fn session(command: SessionCommand) -> Result<(), String> {
         SessionCommand::New(args) => return new(args),
         SessionCommand::Ls(args) => return ls(args),
         SessionCommand::Send(args) => return send_message(args),
+        SessionCommand::MergeCard(args) => return merge_card(args),
         SessionCommand::Rename(args) => (
             Request::RenameSession(RenameSession { session_id: args.session_id, title: args.title }),
             "Renamed it",
@@ -650,6 +654,19 @@ fn browser(args: BrowserCommand) -> Result<(), String> {
             } else {
                 println!("{output}");
             }
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
+    }
+}
+
+fn merge_card(args: SessionArg) -> Result<(), String> {
+    let session_id = parent_session_id().ok_or("run this from inside a Dray session: the card goes in its chat.")?;
+    let request = Request::MergeCard(MergeCard { session_id, task_session_id: args.session_id });
+    match send(request)? {
+        Response::MergeCard { number, url, title } => {
+            eprintln!("Posted a merge card for #{number} \"{title}\": {url}");
             Ok(())
         }
         Response::Error { message } => Err(message),

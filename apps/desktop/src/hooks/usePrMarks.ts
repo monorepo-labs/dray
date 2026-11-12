@@ -34,6 +34,9 @@ const WRITE_RETRY_MS = 4_000;
 /// switching projects changes the argument, and a project flipped away from and
 /// back to should draw its marks immediately rather than blank and refill.
 const cache = new Map<string, Map<string, PrMark>>();
+/// Every mark a repo read answered, by number, unnarrowed: a merge card names
+/// its own PR, which the per-branch pick may not be.
+const numbered = new Map<string, Map<number, PrMark>>();
 const fetchedAt = new Map<string, number>();
 
 /// The read currently running for a repo, so two effects landing in the same
@@ -173,8 +176,10 @@ export function usePrMarks(repoPaths: string[]) {
 
       const attempt = (async () => {
         let answer: Map<string, PrMark>;
+        let all: PrMark[];
         try {
-          answer = marksByBranch(await invoke<PrMark[]>("pr_marks", { cwd: path }));
+          all = await invoke<PrMark[]>("pr_marks", { cwd: path });
+          answer = marksByBranch(all);
         } catch {
           // A failed read changes nothing at all — it neither writes rows nor
           // stamps, and both halves of that are load-bearing.
@@ -209,6 +214,7 @@ export function usePrMarks(repoPaths: string[]) {
 
         const before = cache.get(path);
         cache.set(path, answer);
+        numbered.set(path, new Map(all.map((pr) => [pr.number, pr])));
         fetchedAt.set(path, Date.now());
 
         // Tell the panel which branches moved, so its own cache for them is
@@ -317,6 +323,17 @@ export function usePrMarks(repoPaths: string[]) {
     prFor: useCallback(
       (repoPath: string, branch: string | null): PrMark | undefined =>
         branch ? (byRepo.get(repoPath) ?? EMPTY).get(branch) : undefined,
+      [byRepo],
+    ),
+    /// One pull request by number: `undefined` until the repo has been read,
+    /// `null` where the read holds no such PR — closed, or merged long enough
+    /// ago to fall out of the newest hundred.
+    prNumbered: useCallback(
+      (repoPath: string, number: number): PrMark | null | undefined => {
+        void byRepo; // re-made on every read, so a caller re-renders on one
+        const marks = numbered.get(repoPath);
+        return marks ? (marks.get(number) ?? null) : undefined;
+      },
       [byRepo],
     ),
     /// Re-reads every repo currently on screen. Called when a turn ends — that

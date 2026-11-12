@@ -5,6 +5,7 @@ import AssistantMessage from "@/components/chat/AssistantMessage";
 import BotTranscript, { type BotTask } from "@/components/chat/BotTranscript";
 import BackgroundTasksIndicator from "@/components/chat/BackgroundTasksIndicator";
 import CheckpointRail, { type Checkpoint } from "@/components/chat/CheckpointRail";
+import { MergeCardChatContext } from "@/components/chat/MergeCard";
 import ApiRetryIndicator from "@/components/chat/ApiRetryIndicator";
 import PermissionRequest from "@/components/chat/PermissionRequest";
 import QueuedMessages from "@/components/chat/QueuedMessages";
@@ -28,6 +29,7 @@ import { RANK_OWN } from "@/lib/cardKeys";
 import { planAsked, setPlan } from "@/lib/plan";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
+import { readerMessagesAfter } from "@/lib/mergeCard";
 import { loadOlder } from "@/lib/olderPages";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
 import type { Bot, SessionSnapshot } from "@/types/events";
@@ -697,6 +699,10 @@ export default function Chat({
   // Held across renders: a fresh array would rebuild the bot chat's rows on
   // every event.
   const segments = useMemo(() => (session ? [...earlier, session] : earlier), [earlier, session]);
+  const cardChat = useMemo(
+    () => ({ after: readerMessagesAfter(segments.flatMap((s) => s.events)), bot: !!bot }),
+    [segments, bot],
+  );
 
   if (!session) return null;
 
@@ -709,6 +715,7 @@ export default function Chat({
     // The session rides a context because the things that read it are leaves — a
     // `@mention` and a file link, several components down. See `useChatSession`.
     <ChatSessionContext value={chatSession}>
+      <MergeCardChatContext value={cardChat}>
       <div className="relative h-full">
         <div
           ref={scrollRef}
@@ -886,6 +893,7 @@ export default function Chat({
           />
         )}
       </div>
+      </MergeCardChatContext>
     </ChatSessionContext>
   );
 }

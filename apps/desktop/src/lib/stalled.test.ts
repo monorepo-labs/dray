@@ -27,6 +27,7 @@ function pr(over: Partial<PrMark> = {}): PrMark {
     checksState: "CLEAR",
     mergeable: "MERGEABLE",
     mergeStateStatus: "CLEAN",
+    reviewDecision: null,
     ...over,
   };
 }
