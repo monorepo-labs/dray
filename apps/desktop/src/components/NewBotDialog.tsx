@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { DEFAULT_AVATAR, HUES, SHAPES, swatch } from "@/lib/botAvatar";
-import { refreshBots } from "@/lib/bots";
+import { refreshBots, serverOfBot } from "@/lib/bots";
 import { serverName, useServers } from "@/lib/servers";
 import { invoke, LOCAL, type ServerId } from "@/lib/transport";
 import { cn } from "@/lib/utils";
@@ -85,7 +85,7 @@ export default function NewBotDialog({
         setMade(bot);
         await refreshBots(server);
       }
-      const chat = await invoke<SessionIndexItem>("start_bot", { id: bot.id, ...pick }, server);
+      const chat = await invoke<SessionIndexItem>("start_bot", { id: bot.id, ...pick }, serverOfBot(bot));
       close(false);
       onStarted(chat);
     } catch (e) {
@@ -159,9 +159,9 @@ export default function NewBotDialog({
         </div>
 
         <div className="flex justify-center gap-1">
-          {/* Locked once the bot is made: a retry starts that bot, which lives
-              on the server it was made on. */}
-          <ServerPicker value={server} onChange={onServerChange} disabled={!!made} />
+          {/* Locked from Create on: the bot lives on the server it was made
+              on, and a retry starts that one. */}
+          <ServerPicker value={server} onChange={onServerChange} disabled={busy || !!made} />
           {picker}
         </div>
 

@@ -1,6 +1,6 @@
 import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
-import { botsOf, isBotPath, keepBots, refreshBots } from "@/lib/bots";
+import { botsOf, isBotPath, keepBots, refreshBots, useBots } from "@/lib/bots";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
 import { indexRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
 import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
@@ -312,8 +312,8 @@ export function useSessions() {
     // resting value and every refresh bumps it, which is what re-arms the
     // effect below without a second copy of the read beside it.
     const [modelsGeneration, setModelsGeneration] = useState(0);
-    // Bumped as each remote's bot list lands, so the cache below files it.
-    const [botsRead, setBotsRead] = useState(0);
+    // Every server's bots, so a change to any list reaches the cache below.
+    const bots = useBots();
     const [loadingModels, setLoadingModels] = useState(false);
     // Seeded once from prefs, then free to diverge: selecting a session overwrites
     // these with what that session was started with, which must not feed back.
@@ -2010,9 +2010,7 @@ const readServer = (server: ServerId) => {
       if (server === LOCAL) setProjectPath((path) => path ?? lastSelected(list)?.path ?? null);
     })
     .catch(() => {});
-  void refreshBots(server).then(() => {
-    if (server !== LOCAL) setBotsRead((n) => n + 1);
-  });
+  void refreshBots(server);
 };
 
 // A server taken off the list or turned off takes its rows with it; one that
@@ -2077,7 +2075,7 @@ useEffect(() => {
     }
   }, 1000);
   return () => clearTimeout(timer);
-}, [sessionIndexItems, projects, indexSide, botsRead])
+}, [sessionIndexItems, projects, indexSide, bots])
 
 // Refetched per project rather than cached: branches change outside the app.
 // The guard matters because switching projects quickly would otherwise let a
