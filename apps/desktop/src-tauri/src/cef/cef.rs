@@ -910,11 +910,11 @@ fn shown_tab() -> Option<i32> {
 /// AppKit's y runs up from the bottom and the frontend's down from the top,
 /// so the rect is flipped against the parent's height. Main thread only.
 ///
-/// A recorded tab stays parked even when active: the reader may switch tabs
-/// mid-recording, and the pane's cover can land a frame after the switch,
-/// which would put the recording's layout squeezed into the pane.
+/// A tab under a recording or a screenshot stays off the pane even when
+/// active: the reader may switch to it meanwhile, and the pane's cover can
+/// land after the switch, which would put that layout squeezed into the pane.
 fn apply_layout() {
-    let shown = shown_tab().filter(|&id| automation::parked(id).is_none());
+    let shown = shown_tab().filter(|&id| !automation::off_pane(id));
     if let Some(id) = shown {
         touch(id);
         wake(id);

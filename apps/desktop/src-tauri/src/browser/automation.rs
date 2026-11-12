@@ -63,6 +63,10 @@ pub(super) static CAPTURING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_
 /// The recordings under way, one per session at most.
 static RECORDING: Mutex<std::collections::BTreeMap<String, Recording>> =
     Mutex::new(std::collections::BTreeMap::new());
+/// The tab a screenshot is laying out at its own size, kept off the pane like
+/// a recorded tab: the reader may pick it mid-shot, before the pane's cover
+/// for it lands.
+static SHOT_TAB: Mutex<Option<i32>> = Mutex::new(None);
 
 struct Recording {
     tab: i32,
@@ -144,6 +148,13 @@ pub(super) fn capturing() -> bool {
 /// animates from script would film frozen. See `apply_layout`.
 pub(super) fn parked(tab: i32) -> Option<(u32, u32)> {
     RECORDING.lock().unwrap().values().find(|r| r.tab == tab).map(|r| r.size)
+}
+
+/// Whether `tab` must stay off the pane even while active: it is laid out at
+/// a recording's or a screenshot's size, not the pane's. See `apply_layout`.
+#[allow(dead_code)] // The headless copy of this module has no pane.
+pub(super) fn off_pane(tab: i32) -> bool {
+    parked(tab).is_some() || *SHOT_TAB.lock().unwrap() == Some(tab)
 }
 
 /// The tab a session is recording and the size it is laid out at.
@@ -1058,7 +1069,13 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             // of a desktop recording — so the video holds its last frame for
             // the length of the capture rather than show the page reflowing.
             let recorded = recording_of(session).filter(|(rec_tab, _)| *rec_tab == tab);
-            let shot = if recorded.is_some() { None } else { Some(cover(session, tab).await) };
+            let shot = if recorded.is_some() {
+                None
+            } else {
+                // One at a time, under `CAPTURING`.
+                *SHOT_TAB.lock().unwrap() = Some(tab);
+                Some(cover(session, tab).await)
+            };
             if recorded.is_some() {
                 set_paused(session, true);
             }
@@ -1077,6 +1094,10 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             }
             if let Some(shot) = shot {
                 uncover(session, shot).await;
+                *SHOT_TAB.lock().unwrap() = None;
+                // The reader may have picked it meanwhile, and the pane's
+                // layout call has already come and found it held off.
+                let _ = relayout();
             }
             drop(held);
             let bytes = bytes?;
