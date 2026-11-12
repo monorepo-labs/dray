@@ -4,7 +4,7 @@ import { useState } from "react";
 import BotAvatar from "@/components/BotAvatar";
 import Orb from "@/components/Orb";
 import { MERGE_FILL, METHOD_DETAIL, METHOD_LABEL, TONE_TEXT } from "@/components/PrPanel";
-import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
+import PrStateIcon, { ChecksRunningIcon } from "@/components/PrStateIcon";
 import { RowAction, RowMenu, stageRuns } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,7 +18,7 @@ import { burstConfetti } from "@/lib/confetti";
 import type { CrewRow } from "@/lib/crew";
 import { openLink } from "@/lib/openLink";
 import { isModClick } from "@/lib/platform";
-import { prStatus, readyToMerge } from "@/lib/pr";
+import { prStatus, readyToMerge, type PrStatusKey } from "@/lib/pr";
 import { cn } from "@/lib/utils";
 import type { MergeMethod, PrMark } from "@/types/events";
 
@@ -72,6 +72,7 @@ export default function TasksPanel({
   onDelete,
   onDetach,
   onMerge,
+  onFixConflicts,
 }: {
   rows: CrewRow[];
   /// The pull request a task's branch carries, for the mark the sidebar draws.
@@ -83,6 +84,8 @@ export default function TasksPanel({
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
+  /// Asks the task's own agent, which holds the branch, to resolve and push.
+  onFixConflicts: (row: CrewRow, pr: PrMark) => Promise<void>;
 }) {
   if (rows.length === 0) {
     return (
@@ -104,6 +107,7 @@ export default function TasksPanel({
       onDelete={onDelete}
       onDetach={onDetach}
       onMerge={onMerge}
+      onFixConflicts={onFixConflicts}
     />
   );
   return (
@@ -124,6 +128,11 @@ export default function TasksPanel({
   );
 }
 
+/// States a row says without words: the PR glyph carries merged, closed, draft
+/// and red checks, the spinner running ones, Merge and Fix conflicts the rest.
+/// `unknown` is a few seconds' recompute, not worth a flicker.
+const DRAWN = new Set<PrStatusKey>(["merged", "closed", "draft", "checksFailing", "checksRunning", "conflict", "ready", "unknown"]);
+
 function TaskRow({
   row,
   pr,
@@ -133,6 +142,7 @@ function TaskRow({
   onDelete,
   onDetach,
   onMerge,
+  onFixConflicts,
 }: {
   row: CrewRow;
   pr: PrMark | undefined;
@@ -142,15 +152,16 @@ function TaskRow({
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
+  onFixConflicts: (row: CrewRow, pr: PrMark) => Promise<void>;
 }) {
   const [hovered, setHovered] = useState(false);
   const { item } = row;
   const id = item.sessionId;
   const working = row.busy && !row.asking;
   const mergeable = pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
-  // Ready to merge is said by the Merge button itself.
   const status = pr && prStatus(pr);
-  const showStatus = status && status.tone !== "ready";
+  // Words only where the glyph, the spinner or a button cannot say it.
+  const words = status && !DRAWN.has(status.key) ? status : null;
 
   return (
     <RowMenu
@@ -233,26 +244,26 @@ function TaskRow({
           </span>
         </span>
 
-        {showStatus && (
-          <span className={cn("shrink-0 text-[12px]", TONE_TEXT[status.tone])}>{status.label}</span>
-        )}
+        {words && <span className={cn("shrink-0 text-[12px]", TONE_TEXT[words.tone])}>{words.label}</span>}
 
         {/* Opens the pull request in Dray's browser; ⌘-click, the system's. */}
-        {pr && (
+        {pr && status && (
           <button
             type="button"
             className="flex shrink-0 cursor-pointer items-center gap-1 rounded px-0.5 text-[12px] text-muted-foreground tabular-nums hover:text-foreground"
-            title={`Pull request #${pr.number} · ${prStateLabel(pr).toLowerCase()}`}
+            title={`Pull request #${pr.number} · ${status.label.toLowerCase()}`}
             onClick={(e) => {
               e.stopPropagation();
               if (pr.url) openLink(pr.url, e);
             }}
           >
-            <PrStateIcon pr={pr} strokeWidth={1.5} />#{pr.number}
+            {status.key === "checksRunning" ? <ChecksRunningIcon /> : <PrStateIcon pr={pr} strokeWidth={1.5} />}
+            <span>#{pr.number}</span>
           </button>
         )}
 
         {mergeable && pr && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />}
+        {status?.key === "conflict" && pr && <FixConflicts onFix={() => onFixConflicts(row, pr)} />}
       </div>
     </RowMenu>
   );
@@ -332,6 +343,37 @@ function MergeControl({ onMerge }: { onMerge: (method: MergeMethod) => Promise<v
           </DropdownMenu>
         </span>
       )}
+    </span>
+  );
+}
+
+/// Merge's stand-in while the PR conflicts with its base: hands the fix to the
+/// task's own agent, which holds the branch.
+export function FixConflicts({ onFix }: { onFix: () => Promise<void> }) {
+  const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const fix = async () => {
+    setState("sending");
+    setError(null);
+    try {
+      await onFix();
+      setState("sent");
+    } catch (e) {
+      setState("idle");
+      setError(String(e));
+    }
+  };
+  // Clicks stop here, so working the button never opens the task.
+  return (
+    <span className="flex shrink-0 items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+      {error && (
+        <span className="text-[12px] text-destructive" title={error}>
+          Failed
+        </span>
+      )}
+      <Button variant="outline" size="xs" disabled={state !== "idle"} onClick={() => void fix()}>
+        {state === "sent" ? "Asked the task" : state === "sending" ? "Sending…" : "Fix conflicts"}
+      </Button>
     </span>
   );
 }

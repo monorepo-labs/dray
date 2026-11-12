@@ -71,9 +71,10 @@ function Demo() {
       <div className="flex flex-col gap-4 p-10">
         <h1 className="text-lg font-medium">Bot Tasks tab</h1>
         <p className="max-w-xl text-ui text-muted-foreground">
-          #912 and #915 are ready, so they draw Merge; every other PR says its state. Merge here waits a second and
-          then settles the task, as the app does once the merge lands. Hover a row for ⋯ and Settle; right-click for
-          the menu.
+          #912 and #915 are ready, so they draw Merge; #917 conflicts, so it draws Fix conflicts. The PR glyph carries
+          draft, merged and failing checks, a spinner running ones; words only for review. Merge waits a second and
+          settles the task, as the app does once the merge lands. Hover a row for ⋯ and Settle; right-click for the
+          menu.
         </p>
         {/* The side panel's width at its default. */}
         <div className="flex flex-col rounded-xl border border-border bg-card" style={{ width: 420, height: 480 }}>
@@ -85,6 +86,7 @@ function Demo() {
             onFork={async () => {}}
             onDelete={async (id) => update(id, () => null)}
             onDetach={async (id) => update(id, () => null)}
+            onFixConflicts={() => new Promise((done) => setTimeout(done, 600))}
             onMerge={async (row) => {
               await new Promise((done) => setTimeout(done, 1000));
               update(row.item.sessionId, () => null);

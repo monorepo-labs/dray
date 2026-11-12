@@ -608,7 +608,7 @@ describe("prStatus", () => {
   const label = (over: Partial<PrMark>) => prStatus(mark(over)).label;
 
   it("names each state a row draws", () => {
-    expect(prStatus(mark())).toEqual({ tone: "ready", label: "Ready to merge" });
+    expect(prStatus(mark())).toEqual({ key: "ready", tone: "ready", label: "Ready to merge" });
     expect(label({ state: "MERGED", mergeable: null, mergeStateStatus: null })).toBe("Merged");
     expect(label({ mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" })).toBe("Conflicts");
     expect(label({ checksState: "RUNNING", mergeStateStatus: "BLOCKED" })).toBe("Checks running");
