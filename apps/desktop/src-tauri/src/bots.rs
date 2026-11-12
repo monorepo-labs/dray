@@ -71,8 +71,9 @@ async fn list_path() -> Result<PathBuf> {
     Ok(get_home_app_dir().await?.join("bots.json"))
 }
 
-/// Every bot on this server, oldest first. Dray Bot is made here the first
-/// time anything asks, so every user starts with one.
+/// Every bot on this server, oldest first. The app's own server makes Dray Bot
+/// the first time anything asks, so every user starts with one; a `dray-serve`
+/// makes none, or each remote added would put another in the sidebar.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_bots() -> Result<Vec<Bot>, Fail> {
     if let Err(e) = ensure_dray_bot().await {
@@ -115,9 +116,13 @@ async fn first_name() -> Option<String> {
     }
 }
 
-/// Makes Dray Bot once per home. A marker file rather than a look at the
-/// list, so a reader who deletes it is not handed it back on the next read.
+/// Makes Dray Bot once per home, on the app's own server alone. A marker file
+/// rather than a look at the list, so a reader who deletes it is not handed it
+/// back on the next read.
 async fn ensure_dray_bot() -> Result<()> {
+    if !cfg!(feature = "desktop") {
+        return Ok(());
+    }
     let marker = bots_dir().await?.join(".dray-bot-made");
     if tokio::fs::try_exists(&marker).await.unwrap_or(false) {
         return Ok(());

@@ -195,7 +195,7 @@ import { changeRange, lastToolResult } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { botAt, botBrowser, botChat, botEntries, botSession, inBotTree, listenForBots, refreshBots, useBots } from "@/lib/bots";
+import { botAt, botBrowser, botChat, botEntries, botSession, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
 import { loadOlder } from "@/lib/olderPages";
 import NewBotDialog from "@/components/NewBotDialog";
 import AgentIcon from "@/components/AgentIcon";
@@ -334,6 +334,8 @@ function App() {
     paneState,
     indexSide,
     activeServer,
+    botServer,
+    setBotServer,
     tasksBySession,
   } = useSessions();
 
@@ -1220,10 +1222,8 @@ function App() {
   // the sidebar, since ⌘F has to open it from a collapsed one, which is not
   // mounted at all.
   const [searchOpen, setSearchOpen] = useState(false);
-  useEffect(() => {
-    void refreshBots();
-    return listenForBots();
-  }, []);
+  // Every server's list is first read with its projects, in `readServer`.
+  useEffect(() => listenForBots(), []);
   const searchedSessions = useMemo(
     () => filterSessions(inSidebar(visibleSessions, bots), search),
     [visibleSessions, bots, search],
@@ -1245,9 +1245,7 @@ function App() {
   useEffect(() => {
     const sessionIds = botChats.map((c) => c.sessionId);
     if (sessionIds.length === 0) return;
-    invoke<Record<string, BotPreview>>("bot_previews", { sessionIds })
-      .then(setBotPreviews)
-      .catch(() => {});
+    void readPreviews(sessionIds).then(setBotPreviews);
     // The key carries everything that moves a preview.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewKey]);
@@ -3263,6 +3261,7 @@ function App() {
           // an open chat would change that chat's model instead.
           onNewBot={() => {
             goToSession(handleNewSession);
+            setBotServer(LOCAL);
             setNewBotOpen(true);
           }}
           onDeleteBot={setBotToDelete}
@@ -4115,7 +4114,12 @@ function App() {
     {serverUpdateDialog}
     <NewBotDialog
       open={newBotOpen}
-      onOpenChange={setNewBotOpen}
+      onOpenChange={(open) => {
+        setNewBotOpen(open);
+        if (!open) setBotServer(null);
+      }}
+      server={botServer ?? LOCAL}
+      onServerChange={setBotServer}
       picker={
         <ModelSelector
           server={activeServer}
@@ -4163,8 +4167,9 @@ function App() {
               void (async () => {
                 // `delete_bot` settles the bot's open chat itself: with the
                 // settled list up, the open one is not held here to settle.
-                await invoke("delete_bot", { id: bot.id }).catch((e) => setError(String(e)));
-                await refreshBots();
+                const server = serverOfBot(bot);
+                await invoke("delete_bot", { id: bot.id }, server).catch((e) => setError(String(e)));
+                await refreshBots(server);
               })();
             }}
           >

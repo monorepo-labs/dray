@@ -1791,6 +1791,7 @@ function BotRow({
   // Before its first chat, Dray Bot's welcome is what its chat opens on.
   const last = preview?.text || (!sessionId && bot.welcome);
   const glimpse = last && previewLine(last);
+  const offline = offlineLine(serverOfPath(bot.path));
 
   // StalledTasks' row layout, so a bot and its stalled tasks read alike.
   return (
@@ -1807,6 +1808,7 @@ function BotRow({
             active
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
               : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
+            offline && "opacity-50",
           )}
         >
           <span className="relative shrink-0">
@@ -1849,9 +1851,14 @@ function BotRow({
               >
                 {bot.name}
               </span>
-              {/* While the jump modifier is held, the row's digit takes the time's place. */}
+              {/* While the jump modifier is held, the row's digit takes the time's
+                  place; a bot whose server is offline shows the offline mark there. */}
               {digit ? (
                 <Kbd>{digit}</Kbd>
+              ) : offline ? (
+                <span className="flex shrink-0 self-center" title={offline}>
+                  <SignalSlashIcon className="size-3.5 text-muted-foreground" aria-label={offline} />
+                </span>
               ) : (
                 modified && (
                   <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
