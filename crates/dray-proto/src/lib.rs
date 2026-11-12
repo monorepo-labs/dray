@@ -44,9 +44,9 @@ use std::path::PathBuf;
 /// request here, a create meant for a VPS starting on the Mac as if it had
 /// gone where it was sent. v13 added `add_video`, which an older app reads as a
 /// broken CLI rather than as an app to update. v14 added `share_machines`, and
-/// v15 the assistant verbs, v16 `dray login` and `dray logout`, and v17 the
-/// bot verbs.
-pub const PROTOCOL_VERSION: u32 = 17;
+/// v15 the assistant verbs, v16 `dray login` and `dray logout`, v17 the
+/// bot verbs, and v18 `merge_card`.
+pub const PROTOCOL_VERSION: u32 = 18;
 
 /// Remote MCP (#863), held out of release builds until Dray accounts (#874)
 /// land (#900). Gates `/mcp`, the assistant commands and the CLI's `assistant`
@@ -129,6 +129,7 @@ impl Request {
             | Request::RenameBot(_)
             | Request::RemoveBot(_)
             | Request::SendToBot(_) => 17,
+            Request::MergeCard(_) => 18,
         }
     }
 }
@@ -172,6 +173,18 @@ pub enum Request {
     RenameBot(RenameBot),
     RemoveBot(BotRef),
     SendToBot(SendToBot),
+    MergeCard(MergeCard),
+}
+
+/// A merge card for a task's open pull request, posted into `session_id`'s
+/// chat for the reader to land from there.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeCard {
+    /// The chat the card goes in: the calling session.
+    pub session_id: String,
+    /// The session whose branch carries the pull request.
+    pub task_session_id: String,
 }
 
 /// A new bot. Shape and hue are picked at random where absent.
@@ -854,6 +867,8 @@ pub enum Response {
     Browser { output: String, data: serde_json::Value },
     /// Where a video landed, the path the chat plays.
     Video { path: String },
+    /// The pull request a merge card was posted for, and the task's title.
+    MergeCard { number: u64, url: String, title: String },
     /// The session's live links after the change, whichever verb asked.
     Shared { shares: Vec<SharedPort> },
     /// The session a verb acted on, as it stands after.
@@ -1227,6 +1242,8 @@ mod tests {
         for request in &bots {
             assert_eq!(Envelope::new(request.clone()).v, 17, "{request:?}");
         }
+        let card = Request::MergeCard(Default::default());
+        assert_eq!(Envelope::new(card.clone()).v, 18);
         let newest = old
             .iter()
             .chain(&drafts)
@@ -1237,6 +1254,7 @@ mod tests {
             .chain(&assistants)
             .chain(&link)
             .chain(&bots)
+            .chain([&card])
             .map(Request::version)
             .max();
         assert_eq!(newest, Some(PROTOCOL_VERSION));
