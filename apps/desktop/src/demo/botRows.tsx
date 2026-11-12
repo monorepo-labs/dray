@@ -106,6 +106,8 @@ mockIPC(
 );
 
 const { default: App } = await import("@/App");
+const { default: DemoThemeBar } = await import("@/demo/ThemeBar");
+const { TooltipProvider } = await import("@/components/ui/tooltip");
 
 const replies = ["Done: rotated the API keys and restarted the workers.", "Backups ran clean. Nothing needs you."];
 let turn = 0;
@@ -122,5 +124,8 @@ setInterval(() => {
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <App />
+    <TooltipProvider>
+      <DemoThemeBar />
+    </TooltipProvider>
   </React.StrictMode>,
 );

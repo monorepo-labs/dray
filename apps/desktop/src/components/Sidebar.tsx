@@ -105,6 +105,8 @@ type SidebarProps = {
   // The live status of every session the app has heard about this run. Wins over
   // the item's own field, which is only as fresh as the last list fetch.
   statusBySession: Record<string, SessionStatus>;
+  /// Sessions working again with replies still unread; a bot row keeps its count.
+  unreadWorking: ReadonlySet<string>;
   // Sessions standing still behind a permission request or a question. Kept
   // apart from `statusBySession` rather than folded into it: the backend's
   // status machine still reads these as `in_progress`, and it is right to —
@@ -988,6 +990,7 @@ export default function Sidebar({
   searchOpen,
   onSearchOpenChange,
   statusBySession,
+  unreadWorking,
   askingSessions,
   prFor,
   selectedSessionId,
@@ -1341,20 +1344,22 @@ export default function Sidebar({
           to any of them. No heading — the face on a row is what says it is a
           bot. New bot sits in the strip above, beside the other ways in. */}
       {bots.length > 0 && <div className="mt-4 flex flex-col gap-0.5 px-2">
-        {bots.map(({ bot, session, preview }) => (
-          <BotRow
+        {bots.map(({ bot, session, preview }) => {
+          const status = session ? (statusBySession[session.sessionId] ?? session.status) : "idle";
+          return <BotRow
             key={bot.id}
             bot={bot}
             preview={preview}
             sessionId={session?.sessionId}
             modified={session?.modified}
-            status={session ? (statusBySession[session.sessionId] ?? session.status) : "idle"}
+            status={status}
+            unread={status === "completed" || (!!session && unreadWorking.has(session.sessionId))}
             asking={!!session && askingSessions.has(session.sessionId)}
             active={!!session && session.sessionId === selectedSessionId}
             onOpen={() => onOpenBot?.(bot)}
             onDelete={() => onDeleteBot?.(bot)}
-          />
-        ))}
+          />;
+        })}
       </div>}
 
       {/* The filter is where project grouping went. */}
@@ -1759,6 +1764,7 @@ function BotRow({
   sessionId,
   modified,
   status,
+  unread,
   asking,
   active,
   onOpen,
@@ -1771,6 +1777,8 @@ function BotRow({
   sessionId?: string;
   modified?: string;
   status: SessionStatus;
+  /// Replies wait unread: `completed`, or a turn begun on top of them.
+  unread: boolean;
   asking: boolean;
   active: boolean;
   onOpen: () => void;
@@ -1778,11 +1786,6 @@ function BotRow({
 }) {
   const digit = useJumpDigit(sessionId ?? "");
   const [hovered, setHovered] = useState(false);
-  // Unread holds through a turn the bot starts on its own, so the count stays
-  // beside the typing dots; only reading the chat (back to idle) clears it.
-  const [unread, setUnread] = useState(status === "completed");
-  if (status === "completed" && !unread) setUnread(true);
-  if (status === "idle" && unread) setUnread(false);
   const badge = asking ? "asking" : unread ? "unread" : null;
   const mask = badge === "asking" ? DOT_CUTOUT : badge === "unread" ? COUNT_CUTOUT : undefined;
   const glimpse = preview?.text && previewLine(preview.text);
