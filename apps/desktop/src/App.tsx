@@ -3072,13 +3072,21 @@ function App() {
   };
 
   const cardsReread = useRef(new Set<string>());
+  const rereadQueued = useRef(false);
   const mergeCardHost: MergeCardHost = {
     prNumbered: prMarks.prNumbered,
+    // Every card missing in one commit shares one read of the repos on screen:
+    // a long chat of old cards must not spend the `gh` budget once per card.
     missing: (repo, number) => {
       const key = `${repo}#${number}`;
       if (cardsReread.current.has(key)) return;
       cardsReread.current.add(key);
-      prMarks.refreshAfterWrite();
+      if (rereadQueued.current) return;
+      rereadQueued.current = true;
+      queueMicrotask(() => {
+        rereadQueued.current = false;
+        prMarks.refresh();
+      });
     },
     titleOf: (id) => sessionIndexItems.find((i) => i.sessionId === id)?.title,
     merge: async (card, method, settle) => {
