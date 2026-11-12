@@ -27,6 +27,8 @@ const REUSE_MIN: Duration = Duration::from_secs(60);
 /// How long a credential is trusted between checks with the site.
 const RECHECK: Duration = Duration::from_secs(60);
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// Shorter: a status read waits on it, holding the file.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The org a server is linked to.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -145,13 +147,12 @@ fn pending_now() -> Option<PendingLink> {
     memory.pending.as_ref().filter(|p| p.deadline > Instant::now()).map(|p| p.shown.clone())
 }
 
-/// Where this server stands. A credential is checked with the site at most
-/// once a minute, so an unlink on the Servers page and an org renamed there
-/// both show up here; a 401 forgets it. An unreachable site leaves what is
-/// held as it was.
+/// Where this server stands. Asking checks the credential with the site, at
+/// most once a minute, so an unlink on the Servers page and an org renamed
+/// there show up on the next ask; a 401 forgets it. An unreachable site
+/// leaves what is held as it was.
 pub async fn state(sink: &Sink) -> LinkState {
-    let due = memory().checked.is_none_or(|at| at.elapsed() > RECHECK);
-    let held = if due { recheck(sink).await } else { read().await };
+    let held = recheck(sink).await;
     LinkState {
         linked: held.map(|h| Linked { server_name: h.server_name, org: h.org, site: h.site }),
         pending: pending_now(),
@@ -162,20 +163,30 @@ pub async fn state(sink: &Sink) -> LinkState {
 async fn recheck(sink: &Sink) -> Option<Held> {
     let _file = FILE.lock().await;
     let mut held = read().await?;
+    // Judged and stamped under the lock, before asking, so callers queued
+    // behind one check share it and an unreachable site is tried once a
+    // minute, not on every ask.
+    {
+        let mut memory = memory();
+        if memory.checked.is_some_and(|at| at.elapsed() < RECHECK) {
+            return Some(held);
+        }
+        memory.checked = Some(Instant::now());
+    }
     let answer = crate::http()
         .get(format!("{}/api/link/server", held.site))
         .bearer_auth(&held.token)
-        .timeout(TIMEOUT)
+        .timeout(CHECK_TIMEOUT)
         .send()
         .await;
     let Ok(answer) = answer else { return Some(held) };
-    memory().checked = Some(Instant::now());
     if answer.status() == reqwest::StatusCode::UNAUTHORIZED {
         // Unlinked on the site. Kept if a write fails, and checked again.
         if write(None).await.is_ok() {
             let _ = sink.emit(CHANGED, ());
             return None;
         }
+        memory().checked = None;
         return Some(held);
     }
     let Ok(now) = answer.json::<Value>().await else { return Some(held) };
@@ -310,25 +321,43 @@ async fn poll(sink: Sink, site: String, generation: u64, mut interval: Duration)
             }
             done => done,
         };
+        // Under the file lock, so an unlink either finishes first and has
+        // cancelled this flow, or waits and unlinks what this writes.
+        let _file = FILE.lock().await;
+        let current = memory().pending.as_ref().is_some_and(|p| p.generation == generation);
         let error = match outcome {
-            Poll::Linked(held) => {
-                let _file = FILE.lock().await;
-                write(Some(&held)).await.err()
+            Poll::Linked(held) if !current => {
+                // Cancelled while the claim was in flight: the site already
+                // made the link, so take it back rather than drop the credential.
+                revoke(&held).await;
+                return;
             }
+            Poll::Linked(held) => write(Some(&held)).await.err(),
+            Poll::Ended(_) if !current => return,
             Poll::Ended(why) => Some(why),
             Poll::Wait | Poll::SlowDown => unreachable!(),
         };
         {
             let mut memory = memory();
-            if memory.pending.as_ref().is_some_and(|p| p.generation == generation) {
-                memory.pending = None;
-                memory.error = error;
-                memory.checked = Some(Instant::now());
-            }
+            memory.pending = None;
+            memory.error = error;
+            memory.checked = Some(Instant::now());
         }
         let _ = sink.emit(CHANGED, ());
         return;
     }
+}
+
+/// Asks the site to delete this credential's row. True once the site has
+/// none, whether this call deleted it or someone already had.
+async fn revoke(held: &Held) -> bool {
+    let answer = crate::http()
+        .delete(format!("{}/api/link/server", held.site))
+        .bearer_auth(&held.token)
+        .timeout(TIMEOUT)
+        .send()
+        .await;
+    answer.is_ok_and(|a| a.status().is_success() || a.status() == reqwest::StatusCode::UNAUTHORIZED)
 }
 
 /// What `dray logout` reports.
@@ -354,13 +383,7 @@ pub async fn unlink(sink: Sink) -> Result<Unlinked, String> {
         memory.error = None;
     }
     let held = read().await.ok_or("This server isn't linked to an org.")?;
-    let answer = crate::http()
-        .delete(format!("{}/api/link/server", held.site))
-        .bearer_auth(&held.token)
-        .timeout(TIMEOUT)
-        .send()
-        .await;
-    let told = answer.is_ok_and(|a| a.status().is_success() || a.status() == reqwest::StatusCode::UNAUTHORIZED);
+    let told = revoke(&held).await;
     write(None).await?;
     let _ = sink.emit(CHANGED, ());
     Ok(Unlinked {

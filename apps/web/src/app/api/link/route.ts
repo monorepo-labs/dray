@@ -30,6 +30,9 @@ export async function POST(req: Request) {
   if (rows[0].n >= MAX_PENDING)
     return Response.json({ error: "slow_down", error_description: "Too many links waiting. Try again in a few minutes." }, { status: 503 });
 
+  // One live code per server: a new one replaces any it had waiting.
+  if (current) await pool.query(`delete from server_link where "serverId" = $1`, [current.id]);
+
   const deviceCode = newSecret("drl_");
   for (let tries = 0; tries < 5; tries++) {
     const userCode = newUserCode();

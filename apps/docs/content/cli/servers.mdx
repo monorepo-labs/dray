@@ -99,7 +99,7 @@ The server gets its own credential for that one link, never your sign-in. You be
 
 A server links to one org at a time. Running `login` again and approving in another org moves it there: the old org loses it, and the allow list starts again with you.
 
-`logout` unlinks the server, on drayhq.com too. If drayhq.com can't be reached, the server forgets the link anyway and says so; unlink it on the org's Servers page as well. Unlinking there also unlinks the server, which notices within a minute.
+`logout` unlinks the server, on drayhq.com too. If drayhq.com can't be reached, the server forgets the link anyway and says so; unlink it on the org's Servers page as well. Unlinking there also revokes the server's credential at once; the server itself forgets the link the next time it's asked where it stands.
 
 ### On a Mac with the Dray app
 

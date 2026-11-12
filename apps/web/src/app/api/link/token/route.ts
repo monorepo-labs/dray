@@ -35,11 +35,13 @@ export async function POST(req: Request) {
       await db.query(`delete from server_link where id = $1`, [link.id]);
       return await done(db, refuse("access_denied"));
     }
-    if (!link.organizationId || !link.approvedBy) {
-      if (!link.expired) return await done(db, refuse("authorization_pending"));
+    // Before the approved branch: a code changes nothing past its life,
+    // approved or not.
+    if (link.expired) {
       await db.query(`delete from server_link where id = $1`, [link.id]);
       return await done(db, refuse("expired_token"));
     }
+    if (!link.organizationId || !link.approvedBy) return await done(db, refuse("authorization_pending"));
 
     const token = newSecret("drs_");
     const held = link.serverId
@@ -77,7 +79,9 @@ export async function POST(req: Request) {
        on conflict ("serverId", "userId") do nothing`,
       [crypto.randomUUID(), serverId, link.approvedBy],
     );
-    await db.query(`delete from server_link where id = $1`, [link.id]);
+    // Any other code for this server was minted under the credential just
+    // replaced, so none may move it again.
+    await db.query(`delete from server_link where id = $1 or "serverId" = $2`, [link.id, serverId]);
     const answer = await db.query<{ name: string; orgId: string; orgName: string; orgSlug: string }>(
       `select s.name, o.id as "orgId", o.name as "orgName", o.slug as "orgSlug"
          from server s join organization o on o.id = s."organizationId" where s.id = $1`,
