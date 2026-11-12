@@ -37,7 +37,7 @@ const SHARED_BREAKS: TaskState[][] = [["asking", "busy"]];
 /// A run takes the strongest state in it, which only matters for the one run
 /// a short list draws.
 const taskState = (rows: CrewRow[]): TaskState =>
-  rows.some((r) => r.asking) ? "asking" : rows.some((r) => r.busy) ? "busy" : "idle";
+  rows.some((r) => r.asking) ? "asking" : rows.some((r) => r.busy || r.background) ? "busy" : "idle";
 
 /// The Pinned rows, then the runs drawn under them with a break between each.
 /// Sorted by state first, since a short list draws as one run and would
@@ -178,7 +178,9 @@ function TaskRow({
       >
         <span className="flex size-5 shrink-0 items-center justify-center">
           {working ? (
-            <Orb state="working" variant="gyro" size={18} label="Working" />
+            <Orb state="working" label="Working" />
+          ) : row.background ? (
+            <Orb state="background" variant="spiral" label="Background tasks running" />
           ) : (
             <BotAvatar seed={id} avatar={seededAvatar(id)} follow={hovered} className="block size-5 scale-[1.18]" />
           )}

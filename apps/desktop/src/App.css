@@ -934,6 +934,22 @@
   --accent-session: oklch(0.4 0.13 150);
 }
 
+/* A bot chat is a messenger, where a sent picture is shown whole at its own
+   shape. The 80px square crop a session draws left a wide screenshot a sliver.
+   Capped in `cqi`, not `%`: a percentage resolves against a button sized from
+   the picture's own width, which left it full-width and the picture on the left. */
+[data-bot-chat] {
+  container-type: inline-size;
+}
+
+[data-bot-chat] .sent-image {
+  width: auto;
+  height: auto;
+  max-width: min(20rem, 100cqi);
+  max-height: 15rem;
+  object-fit: contain;
+}
+
 [data-theme="default"] {
   --break-card: #1612f8;
   --break-ink: #fff;
