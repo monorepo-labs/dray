@@ -85,11 +85,7 @@ async fn read_list() -> Result<Vec<Bot>, Fail> {
 
 /// The default bot's name, face and the welcome its chat opens on.
 pub const DRAY_BOT: &str = "Dray Bot";
-const DRAY_BOT_WELCOME: &str = "Hi, I'm Dray Bot. Tell me what you're working on and I'll take it from there: \
-I can start tasks in your projects, keep an eye on them while they run, and bring back what they find. \
-I remember what you tell me, so you only have to say it once.
-
-What should we start with?";
+const DRAY_BOT_WELCOME: &str = "Hi, I'm Dray Bot. What are you working on? I'll start the tasks and keep track of them for you.";
 
 /// Makes Dray Bot once per home. A marker file rather than a look at the
 /// list, so a reader who deletes it is not handed it back on the next read.
