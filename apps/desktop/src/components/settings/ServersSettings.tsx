@@ -44,6 +44,10 @@ import type {
 
 type TrustHost = Extract<Fix, { kind: "trust_host" }>;
 
+/// Remote MCP's UI, dev builds only until Dray accounts land (#900).
+/// `dray_proto::REMOTE_MCP` is the server's half; flip both together.
+const REMOTE_MCP = import.meta.env.DEV;
+
 const STAGE_LABELS: Record<Stage, string> = {
   connecting: "Connecting…",
   finding: "Finding the server…",
@@ -190,12 +194,12 @@ export default function ServersSettings() {
               void invoke("remove_server", { id: server.id }, LOCAL).catch(console.error);
             }}
             onCheckUpdate={server.status === "connected" ? () => checkUpdate(server.id) : undefined}
-            onAssistant={server.status === "connected" ? () => setPairing(server) : undefined}
+            onAssistant={REMOTE_MCP && server.status === "connected" ? () => setPairing(server) : undefined}
           >
             {showsUpdate(server, updates[server.id] ?? {}) && (
               <UpdateLine server={server} state={updates[server.id] ?? {}} onChange={(next) => patchUpdate(server.id, next)} />
             )}
-            {server.status === "connected" && <Assistants server={server.id} />}
+            {REMOTE_MCP && server.status === "connected" && <Assistants server={server.id} />}
           </Row>
           </div>
         ))}
@@ -468,7 +472,7 @@ function ThisMacRow() {
           </Button>
         )
       }
-      onAssistant={down ? undefined : () => setPairing(true)}
+      onAssistant={REMOTE_MCP && !down ? () => setPairing(true) : undefined}
     >
       {pairing && <ConnectAssistantDialog server={LOCAL} name={serverName(LOCAL)} onClose={() => setPairing(false)} />}
       {remote.on && remote.address && (
@@ -492,7 +496,7 @@ function ThisMacRow() {
           <PairButton />
         </div>
       )}
-      {!down && <Assistants server={LOCAL} />}
+      {REMOTE_MCP && !down && <Assistants server={LOCAL} />}
     </Row>
   );
 }

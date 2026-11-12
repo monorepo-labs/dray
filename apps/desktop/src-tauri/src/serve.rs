@@ -607,7 +607,7 @@ pub async fn listen(
                 Some(line) if line.starts_with("POST /upload?") => upload(stream, &token).await,
                 // Its own sign-in, never the serve token: an assistant's cloud
                 // must not hold the key to every other door here.
-                Some(line) if crate::mcp::routes(&line) => crate::mcp::serve(stream, sink).await,
+                Some(line) if dray_proto::REMOTE_MCP && crate::mcp::routes(&line) =>crate::mcp::serve(stream, sink).await,
                 Some(_) => connection(stream, sink, hub, &token, &tunnel_file, hosts).await,
                 None => Ok(()),
             };
@@ -1689,6 +1689,9 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
 /// server's own desktop: opening apps and terminals, and the pasteboard.
 /// Mac-only modules are not compiled here.
 async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
+    if !dray_proto::REMOTE_MCP && cmd.starts_with("mcp_") {
+        return Err(json!(format!("unknown command {cmd}")));
+    }
     #[cfg(feature = "desktop")]
     if matches!(
         cmd,
