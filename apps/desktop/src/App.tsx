@@ -14,6 +14,7 @@ import DiffWorkerPool from "@/components/DiffWorkerPool";
 import NoticeStack from "@/components/NoticeStack";
 import BreakOverlay from "@/components/BreakOverlay";
 import { useBreakDue } from "@/lib/breaks";
+import { askToFixConflicts } from "@/lib/fixConflicts";
 import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
 import type { SettingsTab } from "@/components/SettingsPage";
@@ -1334,7 +1335,7 @@ function App() {
   // panel's own read, which is the only way it can be noticed at all: the
   // panel's poll is gated on its tab being on screen, and a tab on screen is
   // exactly the case with nothing to announce.
-  usePrReady({ sessions: visibleSessions, prFor: prMarks.prFor });
+  usePrReady({ sessions: visibleSessions, prFor: prMarks.prFor, canAnnounce });
 
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it
@@ -3082,31 +3083,13 @@ function App() {
       return mergeTask(card.projectPath, card.number, method, item && !item.archived ? { item, busy } : null);
     },
     open: (id, alone) => paneChat.onOpenSession(id, alone),
-    // Into the task's own session on its own settings, as `dray session send`
-    // relays: a message must not move the model or stance it runs on.
     fixConflicts: async (card) => {
       // The loaded list is one side of the sidebar; the settled side may be up.
       const task =
         sessionIndexItems.find((i) => i.sessionId === card.taskId) ??
         (await invoke<SessionIndexItem | null>("session_index_item", { sessionId: card.taskId }));
       if (!task) throw new Error("This task is gone.");
-      if (task.archived) throw new Error("This task is settled. Unsettle it to send it work.");
-      await invoke("send_msg", {
-        sessionId: task.sessionId,
-        prompt: `PR #${card.number} has merge conflicts with its base branch. Fix them and push.`,
-        attachmentPaths: [],
-        harness: task.harness,
-        model: task.model,
-        effort: task.effort,
-        permissionMode: task.permissionMode,
-        fast: task.fast,
-        cwd: task.cwd,
-        branch: null,
-        useWorktree: false,
-        worktreeName: null,
-        baseRef: null,
-        isNewSession: false,
-      });
+      await askToFixConflicts(task, card.number);
     },
   };
 
@@ -3610,6 +3593,7 @@ function App() {
                 onFork={forkSession}
                 onDelete={deleteTask}
                 onDetach={detachSession}
+                onFixConflicts={(row, pr) => askToFixConflicts(row.item, pr.number)}
                 onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
               />
             </TabBody>

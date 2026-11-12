@@ -1535,7 +1535,12 @@ headRefName: string, isDraft: boolean, state: PrMarkState, checksState: PrChecks
  * `None` on the merged half, where they are not asked for. The frontend
  * reads that as *unknown* rather than as ready — see `mergeVerdict`.
  */
-mergeable: string | null, mergeStateStatus: string | null, };
+mergeable: string | null, mergeStateStatus: string | null, 
+/**
+ * `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `None` where the
+ * repo asks for no review, and on the merged half.
+ */
+reviewDecision: string | null, };
 
 /**
  * Which of the two connections a mark came from.

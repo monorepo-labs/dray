@@ -3,9 +3,9 @@ import { useId, useState, useSyncExternalStore } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
 import Orb from "@/components/Orb";
-import { MERGE_FILL, METHOD_DETAIL, METHOD_LABEL } from "@/components/PrPanel";
-import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
-import { RowAction, RowMenu } from "@/components/Sidebar";
+import { MERGE_FILL, METHOD_DETAIL, METHOD_LABEL, TONE_TEXT } from "@/components/PrPanel";
+import PrStateIcon, { ChecksRunningIcon } from "@/components/PrStateIcon";
+import { RowAction, RowMenu, stageRuns } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -18,17 +18,44 @@ import { burstConfetti } from "@/lib/confetti";
 import type { CrewRow } from "@/lib/crew";
 import { openLink } from "@/lib/openLink";
 import { isModClick } from "@/lib/platform";
-import { readyToMerge } from "@/lib/pr";
+import { prStatus, readyToMerge, type PrStatusKey } from "@/lib/pr";
 import { cn } from "@/lib/utils";
 import type { MergeMethod, PrMark } from "@/types/events";
 
 type Flags = { archived?: boolean; pinned?: boolean; aside?: boolean };
 
-/// What wants the reader, then what works, then what is done; set aside last
-/// of all, faded, as the sidebar sinks it. Pinned rows are drawn apart.
-function rank(row: CrewRow): number {
-  if (row.item.aside) return 3;
-  return row.asking ? 0 : row.busy || row.background ? 1 : 2;
+type TaskState = "asking" | "busy" | "idle";
+
+/// What wants the reader, then what works, then what is done — also the order
+/// the runs are drawn in. Set aside sinks under all three, as in the sidebar.
+const TASK_STATES: TaskState[] = ["asking", "busy", "idle"];
+
+/// Needs you with working, as the sidebar pairs needs you with unread: each
+/// row's own mark, yellow title or orb, tells them apart.
+const SHARED_BREAKS: TaskState[][] = [["asking", "busy"]];
+
+/// A run takes the strongest state in it, which only matters for the one run
+/// a short list draws.
+const taskState = (rows: CrewRow[]): TaskState =>
+  rows.some((r) => r.asking) ? "asking" : rows.some((r) => r.busy || r.background) ? "busy" : "idle";
+
+/// The Pinned rows, then the runs drawn under them with a break between each.
+/// Sorted by state first, since a short list draws as one run and would
+/// otherwise keep newest-first, an idle task above one waiting on the reader.
+export function taskRuns(rows: CrewRow[]): { pinned: CrewRow[]; runs: CrewRow[][] } {
+  const rank = (r: CrewRow) => TASK_STATES.indexOf(taskState([r]));
+  const sorted = [...rows].sort((a, b) => rank(a) - rank(b));
+  // Pinned under its own heading, as the sidebar draws it. Setting aside
+  // unpins, so the two never meet.
+  const pinned = sorted.filter((r) => r.item.pinned && !r.item.aside);
+  const aside = sorted.filter((r) => r.item.aside);
+  const byState = stageRuns(
+    sorted.filter((r) => !r.item.aside && !pinned.includes(r)).map((r) => [r]),
+    taskState,
+    SHARED_BREAKS,
+  );
+  const runs = [...TASK_STATES.map((s) => byState.get(s) ?? []), aside].filter((run) => run.length);
+  return { pinned, runs };
 }
 
 /// A bot's Tasks tab: every session it handed work to, at any depth. They run
@@ -45,6 +72,7 @@ export default function TasksPanel({
   onDelete,
   onDetach,
   onMerge,
+  onFixConflicts,
 }: {
   rows: CrewRow[];
   /// The pull request a task's branch carries, for the mark the sidebar draws.
@@ -56,6 +84,8 @@ export default function TasksPanel({
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
+  /// Asks the task's own agent, which holds the branch, to resolve and push.
+  onFixConflicts: (row: CrewRow, pr: PrMark) => Promise<void>;
 }) {
   if (rows.length === 0) {
     return (
@@ -65,11 +95,7 @@ export default function TasksPanel({
     );
   }
 
-  const sorted = [...rows].sort((a, b) => rank(a) - rank(b));
-  // Pinned under its own heading, as the sidebar draws it. Setting aside
-  // unpins, so the two never meet.
-  const pinned = sorted.filter((r) => r.item.pinned && !r.item.aside);
-  const rest = sorted.filter((r) => !pinned.includes(r));
+  const { pinned, runs } = taskRuns(rows);
   const draw = (row: CrewRow) => (
     <TaskRow
       key={row.item.sessionId}
@@ -81,6 +107,7 @@ export default function TasksPanel({
       onDelete={onDelete}
       onDetach={onDetach}
       onMerge={onMerge}
+      onFixConflicts={onFixConflicts}
     />
   );
   return (
@@ -89,14 +116,22 @@ export default function TasksPanel({
         <>
           <div className="flex min-h-6 items-center px-2 text-ui text-muted-foreground/70">Pinned</div>
           {pinned.map(draw)}
-          {/* The sidebar's break between runs. */}
-          {rest.length > 0 && <div aria-hidden className="h-4 shrink-0" />}
         </>
       )}
-      {rest.map(draw)}
+      {/* The sidebar's break between runs, `shrink-0` so it survives overflow.
+          Rows keep their keys across runs, so a task changing state moves. */}
+      {runs.flatMap((run, i) => [
+        (i > 0 || pinned.length > 0) && <div key={`gap ${i}`} aria-hidden className="h-4 shrink-0" />,
+        ...run.map(draw),
+      ])}
     </div>
   );
 }
+
+/// States a row says without words: the PR glyph carries merged, closed, draft
+/// and red checks, the spinner running ones, Merge and Fix conflicts the rest.
+/// `unknown` is a few seconds' recompute, not worth a flicker.
+const DRAWN = new Set<PrStatusKey>(["merged", "closed", "draft", "checksFailing", "checksRunning", "conflict", "ready", "unknown"]);
 
 function TaskRow({
   row,
@@ -107,6 +142,7 @@ function TaskRow({
   onDelete,
   onDetach,
   onMerge,
+  onFixConflicts,
 }: {
   row: CrewRow;
   pr: PrMark | undefined;
@@ -116,12 +152,16 @@ function TaskRow({
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
+  onFixConflicts: (row: CrewRow, pr: PrMark) => Promise<void>;
 }) {
   const [hovered, setHovered] = useState(false);
   const { item } = row;
   const id = item.sessionId;
   const working = row.busy && !row.asking;
   const mergeable = pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
+  const status = pr && prStatus(pr);
+  // Words only where the glyph, the spinner or a button cannot say it.
+  const words = status && !DRAWN.has(status.key) ? status : null;
 
   return (
     <RowMenu
@@ -204,22 +244,26 @@ function TaskRow({
           </span>
         </span>
 
+        {words && <span className={cn("shrink-0 text-[12px]", TONE_TEXT[words.tone])}>{words.label}</span>}
+
         {/* Opens the pull request in Dray's browser; ⌘-click, the system's. */}
-        {pr && (
+        {pr && status && (
           <button
             type="button"
             className="flex shrink-0 cursor-pointer items-center gap-1 rounded px-0.5 text-[12px] text-muted-foreground tabular-nums hover:text-foreground"
-            title={`Pull request #${pr.number} · ${prStateLabel(pr).toLowerCase()}`}
+            title={`Pull request #${pr.number} · ${status.label.toLowerCase()}`}
             onClick={(e) => {
               e.stopPropagation();
               if (pr.url) openLink(pr.url, e);
             }}
           >
-            <PrStateIcon pr={pr} strokeWidth={1.5} />#{pr.number}
+            {status.key === "checksRunning" ? <ChecksRunningIcon /> : <PrStateIcon pr={pr} strokeWidth={1.5} />}
+            <span>#{pr.number}</span>
           </button>
         )}
 
         {mergeable && pr && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />}
+        {status?.key === "conflict" && pr && <FixConflicts onFix={() => onFixConflicts(row, pr)} />}
       </div>
     </RowMenu>
   );
@@ -325,6 +369,37 @@ export function MergeControl({
           </DropdownMenu>
         </span>
       )}
+    </span>
+  );
+}
+
+/// Merge's stand-in while the PR conflicts with its base: hands the fix to the
+/// task's own agent, which holds the branch.
+export function FixConflicts({ onFix }: { onFix: () => Promise<void> }) {
+  const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const fix = async () => {
+    setState("sending");
+    setError(null);
+    try {
+      await onFix();
+      setState("sent");
+    } catch (e) {
+      setState("idle");
+      setError(String(e));
+    }
+  };
+  // Clicks stop here, so working the button never opens the task.
+  return (
+    <span className="flex shrink-0 items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+      {error && (
+        <span className="text-[12px] text-destructive" title={error}>
+          Failed
+        </span>
+      )}
+      <Button variant="outline" size="xs" disabled={state !== "idle"} onClick={() => void fix()}>
+        {state === "sent" ? "Asked the task" : state === "sending" ? "Sending…" : "Fix conflicts"}
+      </Button>
     </span>
   );
 }

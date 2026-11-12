@@ -23,7 +23,7 @@ import BotAvatar from "@/components/BotAvatar";
 import { TypingDots } from "@/components/chat/BotTranscript";
 import { previewLine, type BotEntry } from "@/lib/bots";
 
-import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
+import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
 import PanelLeftIcon from "@/components/icons/PanelLeftIcon";
 import { Button } from "@/components/ui/button";
@@ -395,6 +395,44 @@ function splitAside(
 /// How many rows a project needs before it is split at all.
 const STATE_SPLIT_MIN = 3;
 
+/// Nests filed into one run per state, the way the live list splits; shared
+/// with the bot Tasks tab so both lists break alike. Draw in your own state
+/// order, a `h-4 shrink-0` break between runs.
+export function stageRuns<S, R>(
+  nests: R[][],
+  stateOf: (nest: R[]) => S,
+  sharedBreaks: S[][],
+): Map<S, R[]> {
+  const byState = new Map<S, R[]>();
+  const file = (state: S, rows: R[]) => byState.set(state, [...(byState.get(state) ?? []), ...rows]);
+  // A short list draws as one run. The split earns its break by making a long
+  // list quicker to scan, and there is nothing to scan in two rows.
+  const flat = nests.flat();
+  if (flat.length < STATE_SPLIT_MIN) {
+    if (flat.length) file(stateOf(flat), flat);
+    return byState;
+  }
+  for (const nest of nests) file(stateOf(nest), nest);
+  // A run of one row between two breaks reads as a heading rather than as a
+  // row. So neighbouring single-row stages in one family share a break: the
+  // row's own mark — yellow, green, the PR glyph, the checks spinner — tells
+  // them apart. A stage with nothing in it is skipped, since on screen its
+  // neighbours touch.
+  for (const family of sharedBreaks) {
+    let into: R[] | undefined;
+    for (const state of family) {
+      const rows = byState.get(state);
+      if (!rows) continue;
+      if (rows.length > 1) into = undefined;
+      else if (into) {
+        into.push(...rows);
+        byState.delete(state);
+      } else into = rows;
+    }
+  }
+  return byState;
+}
+
 /// How many settled rows the window opens by, and opens by again at each edge.
 const SETTLED_STEP = 40;
 
@@ -553,37 +591,9 @@ export function sessionGroups(
   // The live list is stages on top, workspace-wide. Split per project, the
   // answer to "what wants me" was scattered under every heading, and past three
   // rows nobody could read it. Rows inside a stage stay newest-first.
-  const byState = new Map<SessionState, SessionListRow[]>();
-  const file = (state: SessionState, rows: SessionListRow[]) =>
-    byState.set(state, [...(byState.get(state) ?? []), ...rows]);
-  const held = nestsOf(activeItems);
-  // A short list draws as one run. The split earns its break by making a long
-  // list quicker to scan, and there is nothing to scan in two rows.
-  const flat = held.flat();
-  if (flat.length < STATE_SPLIT_MIN) {
-    if (flat.length) file(nestState(flat), flat);
-  } else {
-    for (const nest of held) file(nestState(nest), nest);
-    // A run of one row between two breaks reads as a heading rather than as a
-    // row. So neighbouring single-row stages in one family share a break: the
-    // row's own mark — yellow, green, the PR glyph, the checks spinner — tells
-    // them apart. A stage with nothing in it is skipped, since on screen its
-    // neighbours touch.
-    for (const family of SHARED_BREAKS) {
-      let into: SessionListRow[] | undefined;
-      for (const state of family) {
-        const rows = byState.get(state);
-        if (!rows) continue;
-        if (rows.length > 1) into = undefined;
-        else if (into) {
-          into.push(...rows);
-          byState.delete(state);
-        } else into = rows;
-      }
-    }
-  }
+  const byState = stageRuns(nestsOf(activeItems), nestState, SHARED_BREAKS);
   const aside = nestsOf(asideItems).flat();
-  if (aside.length) file("aside", aside);
+  if (aside.length) byState.set("aside", aside);
 
   return [
     ...lead,
@@ -3001,11 +3011,7 @@ function SessionRow({
                 <SignalSlashIcon className="size-3.5" aria-label={offline} />
               </span>
             ) : marksLive && pr?.checksState === "RUNNING" ? (
-              <CircleDashed
-                className="mr-[3px] size-3.5 animate-spin text-accent-command [animation-duration:3s]"
-                strokeWidth={1.5}
-                aria-label="Checks running"
-              />
+              <ChecksRunningIcon className="mr-[3px]" />
             ) : status === "in_progress" ? (
               <Orb state="working" label="Working" />
             ) : (

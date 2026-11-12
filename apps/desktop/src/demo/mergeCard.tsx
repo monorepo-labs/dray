@@ -38,6 +38,7 @@ const pr = (number: number, more: Partial<PrMark> = {}): PrMark => ({
   url: `https://github.com/acme/site/pull/${number}`,
   headRefName: `b${number}`,
   isDraft: false,
+  reviewDecision: null,
   state: "OPEN",
   checksState: "CLEAR",
   mergeable: "MERGEABLE",
