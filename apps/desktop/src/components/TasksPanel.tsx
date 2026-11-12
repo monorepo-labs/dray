@@ -161,7 +161,7 @@ function TaskRow({
         <span className="relative flex min-w-0 flex-1 items-center">
           <span
             className={cn(
-              "min-w-0 truncate row-reached:[mask-image:linear-gradient(to_left,transparent_52px,black_76px)]",
+              "min-w-0 flex-1 truncate row-reached:[mask-image:linear-gradient(to_left,transparent_52px,black_76px)]",
               row.asking && "text-accent-command",
             )}
           >
