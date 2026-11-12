@@ -17,6 +17,7 @@ import { seededAvatar } from "@/lib/botAvatar";
 import { burstConfetti } from "@/lib/confetti";
 import type { CrewRow } from "@/lib/crew";
 import { openLink } from "@/lib/openLink";
+import { isModClick } from "@/lib/platform";
 import { readyToMerge } from "@/lib/pr";
 import { cn } from "@/lib/utils";
 import type { MergeMethod, PrMark } from "@/types/events";
@@ -48,7 +49,8 @@ export default function TasksPanel({
   rows: CrewRow[];
   /// The pull request a task's branch carries, for the mark the sidebar draws.
   prOf: (row: CrewRow) => PrMark | undefined;
-  onOpen: (sessionId: string) => void;
+  /// `alone`: a ⌘-click, which switches to the task rather than opening its tab.
+  onOpen: (sessionId: string, alone: boolean) => void;
   onSetFlags: (sessionId: string, flags: Flags) => Promise<void>;
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
@@ -108,7 +110,7 @@ function TaskRow({
 }: {
   row: CrewRow;
   pr: PrMark | undefined;
-  onOpen: (sessionId: string) => void;
+  onOpen: (sessionId: string, alone: boolean) => void;
   onSetFlags: (sessionId: string, flags: Flags) => Promise<void>;
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
@@ -139,8 +141,8 @@ function TaskRow({
       <div
         role="button"
         tabIndex={0}
-        onClick={() => onOpen(id)}
-        onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onOpen(id)}
+        onClick={(e) => onOpen(id, isModClick(e))}
+        onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onOpen(id, isModClick(e))}
         onPointerEnter={() => setHovered(true)}
         onPointerLeave={() => setHovered(false)}
         className={cn(

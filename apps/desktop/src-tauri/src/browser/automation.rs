@@ -474,27 +474,39 @@ struct Driven {
     closed: bool,
 }
 
+tokio::task_local! {
+    /// The session whose agent runs this step, where `session` names a browser
+    /// it shares — a bot's task on its bot chat's (#881). `DRIVEN` is keyed by
+    /// it, so two tasks sharing the tabs each keep a page of their own.
+    static DRIVER: String;
+}
+
+/// Whose entry in `DRIVEN` this step reads: the agent's own session.
+fn driver(session: &str) -> String {
+    DRIVER.try_with(Clone::clone).unwrap_or_else(|_| session.to_string())
+}
+
 fn drive(session: &str, tab: i32) {
     let url = tab_state(tab).map(|(url, _, _)| url).unwrap_or_default();
-    DRIVEN.lock().unwrap().insert(session.into(), Driven { tab, url, closed: false });
+    DRIVEN.lock().unwrap().insert(driver(session), Driven { tab, url, closed: false });
 }
 
 fn closed_by_agent(session: &str, tab: i32) {
-    if let Some(d) = DRIVEN.lock().unwrap().get_mut(session).filter(|d| d.tab == tab) {
+    if let Some(d) = DRIVEN.lock().unwrap().get_mut(&driver(session)).filter(|d| d.tab == tab) {
         d.closed = true;
     }
 }
 
 /// The agent's tab, while open.
 fn driven_id(session: &str) -> Option<i32> {
-    let tab = DRIVEN.lock().unwrap().get(session).filter(|d| !d.closed)?.tab;
+    let tab = DRIVEN.lock().unwrap().get(&driver(session)).filter(|d| !d.closed)?.tab;
     tabs_of(session).iter().any(|t| t.id == tab).then_some(tab)
 }
 
 /// The tab a verb acts on: the agent's, or the reader's active tab before
 /// the agent has driven any — the reader handing a page over.
 fn current(session: &str) -> Option<i32> {
-    if DRIVEN.lock().unwrap().contains_key(session) {
+    if DRIVEN.lock().unwrap().contains_key(&driver(session)) {
         driven_id(session)
     } else {
         active_id(session)
@@ -514,16 +526,14 @@ async fn resolve(session: &str) -> Result<(), String> {
     if current(session).is_some() {
         return Ok(());
     }
-    let Some(url) = DRIVEN.lock().unwrap().get(session).filter(|d| !d.closed).map(|d| d.url.clone()) else {
+    let Some(url) = DRIVEN.lock().unwrap().get(&driver(session)).filter(|d| !d.closed).map(|d| d.url.clone()) else {
         return Ok(());
     };
     let tabs = tabs_of(session);
     let tab = match tabs.iter().filter(|t| same_origin(&t.url, &url)).max_by_key(|t| t.active) {
         Some(t) => t.id,
         None if web_url(&url).is_ok() => {
-            let before: Vec<i32> = tabs.iter().map(|t| t.id).collect();
-            open_url(session, url, None).await?;
-            let tab = new_tab(session, &before).await?;
+            let tab = open_new(session, url).await?;
             wait_loaded(tab).await?;
             tab
         }
@@ -546,6 +556,17 @@ fn page(tab: i32) -> (String, Value) {
         }
         None => ("no tab".into(), json!({})),
     }
+}
+
+/// Opens `url` in a new tab and answers its id. Listing, opening and finding
+/// the new tab run under one lock: a bot's tasks share a browser (#881), and
+/// two opens interleaved would both find the first new tab and drive one page.
+async fn open_new(session: &str, url: String) -> Result<i32, String> {
+    static OPENING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one_at_a_time = OPENING.lock().await;
+    let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
+    open_url(session, url, None).await?;
+    new_tab(session, &before).await
 }
 
 /// Waits for a tab that was not there when `before` was read.
@@ -651,11 +672,15 @@ async fn set_checked(tab: i32, at: &Locator, on: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// The whole of `dray browser`: one action on the agent's tab.
-///
+/// The whole of `dray browser`: one action on the agent's tab, in `session`'s
+/// browser. `driver` is the agent's own session where that browser is shared.
+pub async fn run(session: &str, driver: Option<String>, action: BrowserAction) -> Answer {
+    DRIVER.scope(driver.unwrap_or_else(|| session.to_string()), run_step(session, action)).await
+}
+
 /// An input verb first brings the tab's view out of hiding, off-screen —
 /// see `reveal` — and the layout is put back after, whatever the outcome.
-pub async fn run(session: &str, action: BrowserAction) -> Answer {
+async fn run_step(session: &str, action: BrowserAction) -> Answer {
     let input = matches!(
         action,
         BrowserAction::Click { .. }
@@ -782,9 +807,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                     tab
                 }
                 None => {
-                    let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
-                    open_url(session, url, None).await?;
-                    let tab = new_tab(session, &before).await?;
+                    let tab = open_new(session, url).await?;
                     drive(session, tab);
                     // Marked before it loads: `run` had no tab to mark.
                     emit_driven(session, Some(tab), Some("open"));
@@ -836,9 +859,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         BrowserAction::TabNew { url } => {
             let url = url.unwrap_or_else(|| "about:blank".into());
             web_url(&url)?;
-            let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
-            open_url(session, url, None).await?;
-            let tab = new_tab(session, &before).await?;
+            let tab = open_new(session, url).await?;
             drive(session, tab);
             // Marked before it loads: `run` marked the tab it was opened from.
             emit_driven(session, Some(tab), Some("tab_new"));

@@ -6,6 +6,7 @@ import { Folder, Plus, Server, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 
 import AgentBeam from "@/components/browser/AgentBeam";
+import BotAvatar from "@/components/BotAvatar";
 import Favicon, { hostOf } from "@/components/browser/Favicon";
 import FileIcon from "@/components/FileIcon";
 import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
@@ -28,7 +29,13 @@ import { useDragReorder } from "@/hooks/useDragReorder";
 import { serverName, useServers } from "@/lib/servers";
 import { LOCAL, type ServerId } from "@/lib/transport";
 import { useDigitHotkey, useHotkey } from "@/hooks/useHotkey";
-import { activateFile, closeFile, reopenFile, useOpenFiles } from "@/hooks/useOpenFiles";
+import {
+  activateFile,
+  closeFile,
+  openFilesFor,
+  reopenFile,
+  useOpenFiles,
+} from "@/hooks/useOpenFiles";
 import {
   activateBlankTab,
   activateTab,
@@ -43,10 +50,12 @@ import {
   usePendingTab,
   useRecording,
 } from "@/lib/browser";
+import { seededAvatar } from "@/lib/botAvatar";
 import { tabLabels } from "@/lib/fileTree";
 import {
   markClosedSlot,
   moveKey,
+  moveLastClosed,
   popClosedTab,
   pushClosedTab,
   reconcile,
@@ -58,7 +67,8 @@ import { cn } from "@/lib/utils";
 /// Which view fills the main column.
 export const VIEW_TABS = ["chat", "browser", "changes", "files"] as const;
 
-export type ViewTab = (typeof VIEW_TABS)[number];
+/// `pick` is a bot row's Diff or Files tab on a session it picked (#892).
+export type ViewTab = (typeof VIEW_TABS)[number] | "pick";
 
 /// The pointer crosses this row on its way to everything below it, so a
 /// tooltip waits for a hover that means it — the crew's own delay.
@@ -95,6 +105,40 @@ const MARK = "size-4 shrink-0 text-muted-foreground";
 // The project picker's own folder, so a folder means one thing.
 const FOLDER = <Folder className="size-3.5 shrink-0 fill-current text-muted-foreground" />;
 
+/// A bot's tasks open in its row, each a tab that shows the task's own chat.
+export type TaskTabsProps = {
+  items: { sessionId: string; title: string; working: boolean }[];
+  /// The task on screen; while one is, nothing of the bot's own is lit.
+  lit: string | null;
+  onPick: (sessionId: string) => void;
+  onClose: (sessionId: string) => void;
+  /// ⌘⇧T: back in the row, the reader left where they are.
+  onReopen: (sessionId: string) => void;
+};
+
+/// A bot chat's Diff and Files tabs, each on the session its side column
+/// picked (#892). + offers both every time, so several of each can be open.
+export type PickTabsProps = {
+  items: {
+    id: string;
+    kind: "changes" | "files";
+    target: string;
+    /// The picked session's title.
+    title: string;
+    /// Where a Files pick's open files live (`pickFilesKey`).
+    filesKey: string;
+  }[];
+  /// The pick on screen, while the row's view is `pick`.
+  lit: string | null;
+  /// Diff has a task to show. Files always has the bot's own folder.
+  canDiff: boolean;
+  onPick: (id: string) => void;
+  onAdd: (kind: "changes" | "files") => void;
+  onClose: (id: string) => void;
+  /// ⌘⇧T: back in the row on the same session, unlit. Answers the new id.
+  onReopen: (kind: "changes" | "files", target: string) => string;
+};
+
 type Item = {
   key: TabKey;
   icon: React.ReactNode;
@@ -108,6 +152,9 @@ type Item = {
   fixed?: boolean;
   rename?: Rename;
   overlay?: React.ReactNode;
+  /// The last file of its view: closing it hands its slot back to the view's
+  /// stand-in, which stays lit, rather than moving to a neighbour.
+  keepsView?: boolean;
 };
 
 /// The titlebar as a browser's tab strip.
@@ -123,6 +170,7 @@ type Item = {
 /// stays one click away.
 export default function ViewTabs({
   sessionId,
+  browserId = sessionId,
   title,
   tab,
   onChange,
@@ -132,7 +180,15 @@ export default function ViewTabs({
   rename,
   machine,
   working = false,
+  tasks,
+  picks,
 }: {
+  /// Whose browser pages the row lists: a bot's tasks share the bot chat's.
+  browserId?: string;
+  /// A bot chat's Diff and Files picks.
+  picks?: PickTabsProps;
+  /// A bot chat's open tasks, after everything else in its row.
+  tasks?: TaskTabsProps;
   /// Mid-turn: off Chat, the chat tab's icon says so, since the transcript
   /// that would is not on screen.
   working?: boolean;
@@ -156,24 +212,27 @@ export default function ViewTabs({
   // Read for the re-render alone: a server renamed moves the name in the tab.
   useServers();
   const server = machine && machine !== LOCAL ? serverName(machine) : null;
-  const loadedPages = useBrowserTabs(sessionId);
+  const loadedPages = useBrowserTabs(browserId);
   const pages = loadedPages ?? [];
-  const pending = usePendingTab(sessionId);
-  const blanks = useBlankTabs(sessionId);
-  const parkedPages = useParkedTabs(sessionId);
+  const pending = usePendingTab(browserId);
+  const blanks = useBlankTabs(browserId);
+  const parkedPages = useParkedTabs(browserId);
   // The agent's next verb goes to whichever page is active, so the reader
   // cannot move it mid-recording — the panel strip's own rule.
-  const recording = useRecording(sessionId);
+  const recording = useRecording(browserId);
   const { open: files, active: activeFile } = useOpenFiles(sessionId);
   const [, bump] = useReducer((n: number) => n + 1, 0);
   const fileLabels = tabLabels(files.map((f) => f.path));
+  // A task lit in the row puts every view of the bot's own out of it, though
+  // `tab` still says which one the bot's chat goes back to.
+  const own: ViewTab | null = tasks?.lit ? null : tab;
 
   // The view on screen always has its tab, however it was reached — the Diff
   // button in the panel, a file link in the chat — so the row never shows a
   // view with nothing lit for it.
   const shown: Added = {
-    changes: (added.get(sessionId) ?? NONE).changes || tab === "changes",
-    files: (added.get(sessionId) ?? NONE).files || tab === "files",
+    changes: (added.get(sessionId) ?? NONE).changes || own === "changes",
+    files: (added.get(sessionId) ?? NONE).files || own === "files",
   };
   added.set(sessionId, shown);
   const setShown = (kind: keyof Added, on: boolean) => {
@@ -184,7 +243,7 @@ export default function ViewTabs({
   const newTab = () => {
     if (recording) return;
     onChange("browser");
-    setPendingTab(sessionId, true);
+    setPendingTab(browserId, true);
   };
   // From anywhere, whatever else is open: the chord every browser gives it.
   useHotkey("browser.newTab", newTab);
@@ -193,13 +252,13 @@ export default function ViewTabs({
     {
       key: "chat",
       icon:
-        working && tab !== "chat" ? (
+        working && own !== "chat" ? (
           <Orb state="working" label="Working" size={16} />
         ) : (
           <ChatBubbleOvalLeftIcon className={MARK} />
         ),
       label: title,
-      active: tab === "chat",
+      active: own === "chat",
       pick: () => onChange("chat"),
       rename,
     },
@@ -209,7 +268,7 @@ export default function ViewTabs({
             key: "changes",
             icon: <DocumentPlusIcon className={MARK} />,
             label: "Diff",
-            active: tab === "changes",
+            active: own === "changes",
             pick: () => onChange("changes"),
             close: () => setShown("changes", false),
             fixed: true,
@@ -220,20 +279,23 @@ export default function ViewTabs({
       key: `page:${page.id}`,
       icon: <Favicon tab={page} />,
       label: page.error ? "Can't reach page" : page.title || hostOf(page.url),
-      active: tab === "browser" && page.active && !pending,
+      active: own === "browser" && page.active && !pending,
       overlay: <AgentBeam tab={page.id} />,
       locked: recording,
       pick: () => {
         onChange("browser");
-        setPendingTab(sessionId, false);
-        if (!page.active) void activateTab(sessionId, page.id);
+        setPendingTab(browserId, false);
+        if (!page.active) void activateTab(browserId, page.id);
       },
-      close: () => void closeTab(sessionId, page.id),
+      close: () => {
+        void closeTab(browserId, page.id);
+        moveLastClosed(browserId, sessionId);
+      },
       duplicate: page.url
         ? () => {
             onChange("browser");
-            setPendingTab(sessionId, false);
-            void openInBrowser(sessionId, page.url, true).catch(() => undefined);
+            setPendingTab(browserId, false);
+            void openInBrowser(browserId, page.url, true).catch(() => undefined);
           }
         : undefined,
     })),
@@ -241,13 +303,16 @@ export default function ViewTabs({
       key: `blank:${id}`,
       icon: parkedPages[id] ? <Favicon tab={parkedPages[id]} /> : <GlobeFilledIcon className={MARK} />,
       label: parkedPages[id] ? parkedPages[id].title || hostOf(parkedPages[id].url) : "New tab",
-      active: tab === "browser" && blanks.active === id,
+      active: own === "browser" && blanks.active === id,
       locked: recording,
       pick: () => {
         onChange("browser");
-        activateBlankTab(sessionId, id);
+        activateBlankTab(browserId, id);
       },
-      close: () => closeBlankTab(sessionId, id),
+      close: () => {
+        closeBlankTab(browserId, id);
+        moveLastClosed(browserId, sessionId);
+      },
     })),
     ...(files.length === 0 && shown.files
       ? [
@@ -255,7 +320,7 @@ export default function ViewTabs({
             key: "files",
             icon: FOLDER,
             label: "Files",
-            active: tab === "files",
+            active: own === "files",
             pick: () => onChange("files"),
             close: () => setShown("files", false),
             fixed: true,
@@ -266,12 +331,68 @@ export default function ViewTabs({
       key: `file:${file.path}`,
       icon: <FileIcon path={file.path} className="size-3.5 shrink-0" />,
       label: fileLabels[i],
-      active: tab === "files" && file.path === activeFile,
+      active: own === "files" && file.path === activeFile,
       pick: () => {
         onChange("files");
         activateFile(sessionId, file.path);
       },
       close: () => closeFile(sessionId, file.path),
+      keepsView: files.length === 1,
+    })),
+    ...(picks?.items ?? []).flatMap((p): Item[] => {
+      const lit = own === "pick" && picks?.lit === p.id;
+      const pick = () => picks?.onPick(p.id);
+      const standIn: Item = {
+        key: `pick:${p.id}`,
+        icon: p.kind === "changes" ? <DocumentPlusIcon className={MARK} /> : FOLDER,
+        label: p.title,
+        active: lit,
+        pick,
+        close: () => {
+          pushClosedTab(sessionId, { key: `pick:${p.id}`, pick: { kind: p.kind, target: p.target } });
+          picks?.onClose(p.id);
+        },
+      };
+      if (p.kind === "changes") return [standIn];
+      // A Files pick is the Files tab over again: its files are tabs of the
+      // row, and the stand-in holds their place while none is open.
+      const { open, active } = openFilesFor(p.filesKey);
+      if (open.length === 0) return [standIn];
+      const labels = tabLabels(open.map((f) => f.path));
+      return open.map((file, i) => ({
+        key: `pickfile:${p.id}:${file.path}`,
+        icon: <FileIcon path={file.path} className="size-3.5 shrink-0" />,
+        label: labels[i],
+        active: lit && file.path === active,
+        pick: () => {
+          pick();
+          activateFile(p.filesKey, file.path);
+        },
+        close: () => {
+          closeFile(p.filesKey, file.path);
+          // On the row's own stack, where ⌘⇧T and the slot are read.
+          pushClosedTab(sessionId, {
+            key: `pickfile:${p.id}:${file.path}`,
+            file: { store: p.filesKey, path: file.path },
+          });
+        },
+        keepsView: open.length === 1,
+      }));
+    }),
+    ...(tasks?.items ?? []).map((task) => ({
+      key: `task:${task.sessionId}`,
+      icon: task.working ? (
+        <Orb state="working" label="Working" size={16} />
+      ) : (
+        <BotAvatar seed={task.sessionId} avatar={seededAvatar(task.sessionId)} className="block size-4 shrink-0 scale-[1.18]" />
+      ),
+      label: task.title,
+      active: tasks?.lit === task.sessionId,
+      pick: () => tasks?.onPick(task.sessionId),
+      close: () => {
+        pushClosedTab(sessionId, { key: `task:${task.sessionId}` });
+        tasks?.onClose(task.sessionId);
+      },
     })),
   ];
 
@@ -319,7 +440,7 @@ export default function ViewTabs({
   // `activateTab` lights its page at once, before Chromium answers.
   const lastRow = useRef<{ keys: TabKey[]; at: number }>({ keys: [], at: -1 });
   const browserUnlit =
-    tab === "browser" && loadedPages !== null && !drag.shown.some((item) => item.active);
+    own === "browser" && loadedPages !== null && !drag.shown.some((item) => item.active);
   useLayoutEffect(() => {
     if (!browserUnlit) {
       lastRow.current = {
@@ -352,9 +473,19 @@ export default function ViewTabs({
     const entry = popClosedTab(sessionId);
     if (!entry) return;
     let key = entry.key;
-    if (key === "changes" || key === "files") setShown(key, true);
+    if (entry.pick) {
+      if (!picks) return;
+      key = `pick:${picks.onReopen(entry.pick.kind, entry.pick.target)}`;
+    } else if (entry.file) {
+      // Only into the pick still on that target, or it lands in a store
+      // nothing draws.
+      const store = entry.file.store;
+      if (!picks?.items.some((p) => p.filesKey === store)) return;
+      reopenFile(store, entry.file.path);
+    } else if (key === "changes" || key === "files") setShown(key, true);
     else if (key.startsWith("file:")) reopenFile(sessionId, key.slice("file:".length));
-    else key = `blank:${addBlankTab(sessionId, entry.page)}`;
+    else if (key.startsWith("task:")) tasks?.onReopen(key.slice("task:".length));
+    else key = `blank:${addBlankTab(browserId, entry.page)}`;
     if (entry.at !== undefined) {
       orders.set(sessionId, moveKey(orders.get(sessionId) ?? order, key, entry.at));
     }
@@ -368,7 +499,7 @@ export default function ViewTabs({
   // reader stays in that view. A browser tab simply goes.
   const closeAt = (i: number) => {
     const item = drag.shown[i];
-    const last = item.key.startsWith("file:") && files.length === 1;
+    const last = !!item.keepsView;
     // A neighbour, but never a page a recording holds: moving the active page
     // would send the agent's next verb somewhere else. The chat is never
     // locked, so the scan always lands.
@@ -395,7 +526,20 @@ export default function ViewTabs({
 
   // What + can still add. With Diff and Files both in the row it is a plain
   // new-tab button, the one thing left to offer.
-  const offer = [
+  // A bot's row offers Diff and Files every time, each a new pick; its own
+  // folder is no repository, so it has no Diff of its own to offer.
+  const offer = picks
+    ? [
+        {
+          key: "changes",
+          icon: <DocumentPlusIcon className={MARK} />,
+          label: "Diff",
+          add: () => picks.onAdd("changes"),
+          disabled: !picks.canDiff,
+        },
+        { key: "files", icon: FOLDER, label: "Files", add: () => picks.onAdd("files"), disabled: false },
+      ]
+    : [
     !shown.changes && {
       key: "changes",
       icon: <DocumentPlusIcon className={MARK} />,
@@ -404,6 +548,7 @@ export default function ViewTabs({
         setShown("changes", true);
         onChange("changes");
       },
+      disabled: false,
     },
     !shown.files &&
       files.length === 0 && {
@@ -414,6 +559,7 @@ export default function ViewTabs({
           setShown("files", true);
           onChange("files");
         },
+        disabled: false,
       },
   ].filter((o) => !!o);
   const plusClass =
@@ -466,7 +612,7 @@ export default function ViewTabs({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-auto min-w-40">
             {offer.map((o) => (
-              <DropdownMenuItem key={o.key} onSelect={o.add}>
+              <DropdownMenuItem key={o.key} disabled={o.disabled} onSelect={o.add}>
                 {o.icon}
                 {o.label}
               </DropdownMenuItem>

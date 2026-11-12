@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botAt, botChat, botNamed, botSession, inBotTree, previewLine } from "@/lib/bots";
+import { botAt, botBrowser, botChat, botNamed, botSession, inBotTree, previewLine } from "@/lib/bots";
 import type { Bot, SessionIndexItem } from "@/types/events";
 
 const bot: Bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
@@ -54,6 +54,21 @@ describe("inBotTree", () => {
     ];
     expect(inBotTree([bot], items, "grand")).toBe(true);
     expect(inBotTree([bot], items, "other")).toBe(false);
+  });
+});
+
+describe("botBrowser", () => {
+  it("is the chat's oldest session, for tasks and an agent switch alike", () => {
+    const items = [
+      item("chat", { created: "2026-11-01T00:00:00Z" }),
+      // A switch to another agent: a newer session in the same folder.
+      item("switched", { created: "2026-11-02T00:00:00Z" }),
+      item("task", { cwd: "/repo/wt", parentSessionId: "switched" }),
+      item("other", { cwd: "/repo" }),
+    ];
+    expect(botBrowser([bot], items, "task")).toBe("chat");
+    expect(botBrowser([bot], items, "switched")).toBe("chat");
+    expect(botBrowser([bot], items, "other")).toBeUndefined();
   });
 });
 

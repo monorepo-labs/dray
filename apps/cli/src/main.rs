@@ -643,7 +643,7 @@ fn browser(args: BrowserCommand) -> Result<(), String> {
         "which session's browser? Pass --session <id>, or run this from inside a Dray session.",
     )?;
     let action = browser_action(&args).unwrap_or_else(|e| usage(&e));
-    match send(Request::Browser(BrowserRequest { session_id, action }))? {
+    match send(Request::Browser(BrowserRequest { session_id, action, driver: None }))? {
         Response::Browser { output, data } => {
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&data).unwrap_or_default());

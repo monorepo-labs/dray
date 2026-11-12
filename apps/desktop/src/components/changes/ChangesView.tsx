@@ -45,7 +45,10 @@ export default function ChangesView({
   revision,
   writeRevision,
   busy,
+  picker,
 }: {
+  /// A bot-row tab's choice of session, the side column's first row (#892).
+  picker?: React.ReactNode;
   cwd: string;
   /// False while another view is showing. The component stays mounted so its
   /// selection and its rendered diffs survive, but a hidden view must not keep
@@ -193,10 +196,18 @@ export default function ChangesView({
   // for a frame or two. A repository with no commit yet is not this case: it
   // answers with the empty tree, so its files list as additions.
   if (head.settled && head.tree === null && !working.changes) {
-    return (
+    const notRepo = (
       <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-ui text-muted-foreground">
         This session is not in a git repository.
       </div>
+    );
+    return picker ? (
+      <div className="flex min-h-0 flex-1">
+        <div className="flex w-72 shrink-0 flex-col border-r border-border">{picker}</div>
+        {notRepo}
+      </div>
+    ) : (
+      notRepo
     );
   }
 
@@ -204,6 +215,7 @@ export default function ChangesView({
     // No top border: the sheet's ring under the titlebar already parts the two.
     <div className="flex min-h-0 flex-1">
       <div className="flex w-72 shrink-0 flex-col border-r border-border">
+        {picker}
         {/* `px-1` against the right panel's `px-2`, because the tabs here have
             a list under them rather than a panel body: the button's own `px-2`
             lands its label at 12px, level with the filenames below it. */}
