@@ -1,26 +1,26 @@
 import { type ReactNode, createContext, useContext, useEffect, useState } from "react";
 
-type Pt = [number, number];
+export type Pt = [number, number];
 type V3 = [number, number, number];
 /// A two-bone limb: forward angles (upper, then the bend relative to it), or a
 /// target the end reaches for with the middle joint bent to `flip`'s side.
-type Limb = { fk: [number, number] } | { ik: Pt; flip: 1 | -1 };
+export type Limb = { fk: [number, number] } | { ik: Pt; flip: 1 | -1 };
 /// `shoulders` is half the shoulder width; left out, both arms leave one point,
 /// which reads fine side on and crowds the head face on. `nod` turns the head
 /// off the spine's line.
 type Pose = { hip: Pt; spine: number; look?: number; nod?: number; shoulders?: number; arms: [Limb, Limb]; legs: [Limb, Limb] };
 
 const NECK = 36;
-const SHOULDER = 32;
+export const SHOULDER = 32;
 const HEAD = 46;
 const ARM: [number, number] = [17, 16];
 const LEG: [number, number] = [17, 17];
 
 const rad = (d: number) => (d * Math.PI) / 180;
 /** Angles are degrees clockwise from straight up: 90 is right, 180 is down. */
-const at = (p: Pt, a: number, len: number): Pt => [p[0] + Math.sin(rad(a)) * len, p[1] - Math.cos(rad(a)) * len];
-const lerp = (a: number, b: number, w: number) => a + (b - a) * w;
-const ease = (x: number) => {
+export const at = (p: Pt, a: number, len: number): Pt => [p[0] + Math.sin(rad(a)) * len, p[1] - Math.cos(rad(a)) * len];
+export const lerp = (a: number, b: number, w: number) => a + (b - a) * w;
+export const ease = (x: number) => {
   const c = Math.min(1, Math.max(0, x));
   return c * c * (3 - 2 * c);
 };
@@ -64,7 +64,7 @@ function Head({ c: [hx, hy], look = 0 }: { c: Pt; look?: number }) {
 
 /// The stick figure, drawn from a pose so every scene shares one body and
 /// limbs keep their length however they move.
-function Figure({ pose }: { pose: Pose }) {
+export function Figure({ pose }: { pose: Pose }) {
   const { hip, spine, look = 0, nod = 0, shoulders = 0, arms, legs } = pose;
   const shoulder = at(hip, spine, SHOULDER);
   const sl = at(shoulder, spine - 90, shoulders);
@@ -95,7 +95,7 @@ export const StillScenes = createContext(false);
 /// Seconds since the scene mounted, one render a frame; null under reduced
 /// motion, where each scene holds its best pose instead. Follows the setting
 /// live, so turning it on mid-break stops the figure.
-function useClock(): number | null {
+export function useClock(): number | null {
   const held = useContext(StillScenes);
   const [reduced, setStill] = useState(() => matchMedia(REDUCED).matches);
   const still = held || reduced;
@@ -120,7 +120,7 @@ function useClock(): number | null {
 
 /// One drawing for the break card's tile: a 160×110 box, ground at y≈102,
 /// drawn in the card's ink so every palette colours it.
-function Scene({ children }: { children: ReactNode }) {
+export function Scene({ children }: { children: ReactNode }) {
   return (
     <svg aria-hidden viewBox="0 0 160 110" className="h-32" fill="none" stroke="currentColor" strokeWidth={3.5} strokeLinecap="round" strokeLinejoin="round">
       {children}
@@ -129,7 +129,7 @@ function Scene({ children }: { children: ReactNode }) {
 }
 
 /// A plus that twinkles, slowly and out of step with its neighbours.
-function Sparkle({ x, y, r = 5, t, phase = 0 }: { x: number; y: number; r?: number; t: number; phase?: number }) {
+export function Sparkle({ x, y, r = 5, t, phase = 0 }: { x: number; y: number; r?: number; t: number; phase?: number }) {
   const q = r * (0.7 + 0.3 * Math.sin(2 * Math.PI * (t / 1.8 + phase)));
   return <path d={`M${x} ${y - q} L${x} ${y + q} M${x - q} ${y} L${x + q} ${y}`} strokeWidth={2.5} />;
 }
@@ -340,7 +340,7 @@ function PushUp() {
 /// Squats, side on: hips back and down until the thighs are level, knees over
 /// the toes, chest leaning in and arms raised straight out front to balance.
 /// Down slow, a beat at the bottom, up quicker, a breath at the top.
-function Squat() {
+export function Squat() {
   const t = useClock() ?? 1.35;
   const c = (t % 2.4) / 2.4;
   const down = c < 0.12 ? 0 : c < 0.5 ? ease((c - 0.12) / 0.38) : c < 0.62 ? 1 : 1 - ease((c - 0.62) / 0.3);
