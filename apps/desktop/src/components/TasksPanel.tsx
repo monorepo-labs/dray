@@ -5,7 +5,7 @@ import BotAvatar from "@/components/BotAvatar";
 import Orb from "@/components/Orb";
 import { MERGE_FILL, METHOD_DETAIL, METHOD_LABEL } from "@/components/PrPanel";
 import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
-import { RowAction, RowMenu } from "@/components/Sidebar";
+import { RowAction, RowMenu, stageRuns } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -24,11 +24,38 @@ import type { MergeMethod, PrMark } from "@/types/events";
 
 type Flags = { archived?: boolean; pinned?: boolean; aside?: boolean };
 
-/// What wants the reader, then what works, then what is done; set aside last
-/// of all, faded, as the sidebar sinks it. Pinned rows are drawn apart.
-function rank(row: CrewRow): number {
-  if (row.item.aside) return 3;
-  return row.asking ? 0 : row.busy ? 1 : 2;
+type TaskState = "asking" | "busy" | "idle";
+
+/// What wants the reader, then what works, then what is done — also the order
+/// the runs are drawn in. Set aside sinks under all three, as in the sidebar.
+const TASK_STATES: TaskState[] = ["asking", "busy", "idle"];
+
+/// Needs you with working, as the sidebar pairs needs you with unread: each
+/// row's own mark, yellow title or orb, tells them apart.
+const SHARED_BREAKS: TaskState[][] = [["asking", "busy"]];
+
+/// A run takes the strongest state in it, which only matters for the one run
+/// a short list draws.
+const taskState = (rows: CrewRow[]): TaskState =>
+  rows.some((r) => r.asking) ? "asking" : rows.some((r) => r.busy || r.background) ? "busy" : "idle";
+
+/// The Pinned rows, then the runs drawn under them with a break between each.
+/// Sorted by state first, since a short list draws as one run and would
+/// otherwise keep newest-first, an idle task above one waiting on the reader.
+export function taskRuns(rows: CrewRow[]): { pinned: CrewRow[]; runs: CrewRow[][] } {
+  const rank = (r: CrewRow) => TASK_STATES.indexOf(taskState([r]));
+  const sorted = [...rows].sort((a, b) => rank(a) - rank(b));
+  // Pinned under its own heading, as the sidebar draws it. Setting aside
+  // unpins, so the two never meet.
+  const pinned = sorted.filter((r) => r.item.pinned && !r.item.aside);
+  const aside = sorted.filter((r) => r.item.aside);
+  const byState = stageRuns(
+    sorted.filter((r) => !r.item.aside && !pinned.includes(r)).map((r) => [r]),
+    taskState,
+    SHARED_BREAKS,
+  );
+  const runs = [...TASK_STATES.map((s) => byState.get(s) ?? []), aside].filter((run) => run.length);
+  return { pinned, runs };
 }
 
 /// A bot's Tasks tab: every session it handed work to, at any depth. They run
@@ -65,11 +92,7 @@ export default function TasksPanel({
     );
   }
 
-  const sorted = [...rows].sort((a, b) => rank(a) - rank(b));
-  // Pinned under its own heading, as the sidebar draws it. Setting aside
-  // unpins, so the two never meet.
-  const pinned = sorted.filter((r) => r.item.pinned && !r.item.aside);
-  const rest = sorted.filter((r) => !pinned.includes(r));
+  const { pinned, runs } = taskRuns(rows);
   const draw = (row: CrewRow) => (
     <TaskRow
       key={row.item.sessionId}
@@ -89,11 +112,14 @@ export default function TasksPanel({
         <>
           <div className="flex min-h-6 items-center px-2 text-ui text-muted-foreground/70">Pinned</div>
           {pinned.map(draw)}
-          {/* The sidebar's break between runs. */}
-          {rest.length > 0 && <div aria-hidden className="h-4 shrink-0" />}
         </>
       )}
-      {rest.map(draw)}
+      {/* The sidebar's break between runs, `shrink-0` so it survives overflow.
+          Rows keep their keys across runs, so a task changing state moves. */}
+      {runs.flatMap((run, i) => [
+        (i > 0 || pinned.length > 0) && <div key={`gap ${i}`} aria-hidden className="h-4 shrink-0" />,
+        ...run.map(draw),
+      ])}
     </div>
   );
 }
@@ -152,7 +178,9 @@ function TaskRow({
       >
         <span className="flex size-5 shrink-0 items-center justify-center">
           {working ? (
-            <Orb state="working" variant="gyro" size={18} label="Working" />
+            <Orb state="working" label="Working" />
+          ) : row.background ? (
+            <Orb state="background" variant="spiral" label="Background tasks running" />
           ) : (
             <BotAvatar seed={id} avatar={seededAvatar(id)} follow={hovered} className="block size-5 scale-[1.18]" />
           )}
