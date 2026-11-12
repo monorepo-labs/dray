@@ -78,6 +78,8 @@ export function chatTime(iso: string, now = new Date()): string {
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const STARTS_SESSION = /\bdray\s+(session\s+new|new)\b/;
 const TASK_ID = new RegExp(`^\\s*(${UUID.source})\\s*$`, "im");
+/// A session id, or a prefix of one long enough to name it, as `taskOf` takes.
+const SESSION_ID = /^[0-9a-f][0-9a-f-]{7,}$/i;
 const SENDS = /\bdray\s+(?:(session|bot)\s+)?send\b/g;
 /// What `dray bot send` prints, in `apps/cli/src/bot.rs`.
 const BOT_SENT = new RegExp(`^(?:Sent to|Queued for) bot ".*" \\((${UUID.source})\\)\\.$`, "gim");
@@ -136,24 +138,56 @@ function shellWord(text: string): { value: string; length: number } {
   return { value: bare, length: bare.length };
 }
 
-/// `cmd` with every quoted string, escape and heredoc body blanked to spaces,
-/// so a `dray … send` spelled inside a message is never read as a command —
-/// a brief that names `dray session send` drew a send to nobody. Same length,
-/// so an index into it is an index into `cmd`.
+/// A heredoc from its `<<` through its closing word, sticky so it is tried only
+/// where the scan stands.
+const HEREDOC = /<<-?[ \t]*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[ \t]*(?:\n|\)|$))/y;
+/// A `$(cat ` that may open a heredoc inside double quotes, sticky as above.
+const SUBSHELL = /\$\(\s*\w+\s+/y;
+
+/// The length of the match of sticky `re` at `at`, or 0.
+function stuck(re: RegExp, cmd: string, at: number): number {
+  re.lastIndex = at;
+  return re.exec(cmd)?.[0].length ?? 0;
+}
+
+/// `cmd` with every quoted string, escape and heredoc blanked to spaces, so a
+/// `dray … send` spelled inside a message is never read as a command — a brief
+/// that named `dray session send` drew a send to nobody. One pass left to right,
+/// so a `<<` inside quotes opens nothing. Same length, so an index into it is
+/// an index into `cmd`.
 function unquoted(cmd: string): string {
-  const blank = (s: string) => s.replace(/[^\n]/g, " ");
-  return cmd
-    .replace(
-      /(<<-?\s*(['"]?)(\w+)\2[^\n]*\n)([\s\S]*?)(?=\n[ \t]*\3[ \t]*(?:\n|\)|$))/g,
-      (_, open: string, _q, _w, body: string) => open + blank(body),
-    )
-    .replace(/\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"/g, blank);
+  let out = "";
+  let i = 0;
+  const blank = (end: number) => {
+    out += cmd.slice(i, end).replace(/[^\n]/g, " ");
+    i = end;
+  };
+  while (i < cmd.length) {
+    const c = cmd[i];
+    const doc = c === "<" ? stuck(HEREDOC, cmd, i) : 0;
+    if (doc) blank(i + doc);
+    else if (c === "\\") blank(Math.min(i + 2, cmd.length));
+    else if (c === "'") {
+      const end = cmd.indexOf("'", i + 1);
+      blank(end < 0 ? cmd.length : end + 1);
+    } else if (c === '"') {
+      let j = i + 1;
+      while (j < cmd.length && cmd[j] !== '"') {
+        const sub = cmd[j] === "$" ? stuck(SUBSHELL, cmd, j) : 0;
+        const inner = sub ? stuck(HEREDOC, cmd, j + sub) : 0;
+        j += cmd[j] === "\\" ? 2 : inner ? sub + inner : 1;
+      }
+      blank(Math.min(j + 1, cmd.length));
+    } else out += cmd[i++];
+  }
+  return out;
 }
 
 /// Every `dray session send` and `dray bot send` in one command the bot ran —
 /// one command often carries several, joined by `&&` — each with who to, what
-/// it said, and whether it went to a bot. A target the shell fills in, as a
-/// loop's `"$id"`, is skipped: nothing here can say which task it named.
+/// it said, and whether it went to a bot. A task is named by its id or an id
+/// prefix, so a session send to anything else — a loop's `"$id"`, a word
+/// misread — is skipped rather than drawn as a task that opens nothing.
 export function sentMessages(cmd: string): { target: string; text: string; bot?: true }[] {
   const out: { target: string; text: string; bot?: true }[] = [];
   for (const m of unquoted(cmd).matchAll(SENDS)) {
@@ -163,7 +197,7 @@ export function sentMessages(cmd: string): { target: string; text: string; bot?:
     };
     skipSpace();
     const target = firstWord(cmd.slice(at));
-    if (!target || /[$`]/.test(target.word)) continue;
+    if (!target || (m[1] !== "bot" && !SESSION_ID.test(target.word))) continue;
     at += target.length;
     skipSpace();
     const message = shellWord(cmd.slice(at));

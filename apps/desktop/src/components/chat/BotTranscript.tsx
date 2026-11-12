@@ -54,11 +54,7 @@ export default function BotTranscript({
   // "From" rows, a task's messages to the bot, are hidden for now: the bot's
   // reply already says what came in. To draw them again, swap these back.
   // const rows = useMemo(() => botRows(items), [items]);
-  // A send naming no task this app knows is skipped: drawn, it opened "Session not found".
-  const rows = useMemo(
-    () => botRows(items.filter((i) => i.kind !== "report" && !(i.kind === "sent" && taskOf && !taskOf(i.target)))),
-    [items, taskOf],
-  );
+  const rows = useMemo(() => botRows(items.filter((i) => i.kind !== "report")), [items]);
   const [newFrom] = useState(() => (unread ? firstUnread(items) : null));
   const doing = useMemo(() => (busy && events ? currentTool(events) : null), [busy, events]);
   // Only reply text becomes a bubble. A tool call or a thought the model is

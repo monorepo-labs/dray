@@ -66,17 +66,17 @@ describe("botItems", () => {
   });
 
   it("reads a sent message out of each shell quoting", () => {
-    expect(sentMessages(`dray send abc 'it'\\''s done'`)).toEqual([{ target: "abc", text: "it's done" }]);
-    expect(sentMessages(`dray session send abc "$(cat <<'EOF'\nline one\nline two\nEOF\n)"`)).toEqual([
-      { target: "abc", text: "line one\nline two" },
+    expect(sentMessages(`dray send abc12345 'it'\\''s done'`)).toEqual([{ target: "abc12345", text: "it's done" }]);
+    expect(sentMessages(`dray session send abc12345 "$(cat <<'EOF'\nline one\nline two\nEOF\n)"`)).toEqual([
+      { target: "abc12345", text: "line one\nline two" },
     ]);
     expect(sentMessages("dray session ls")).toEqual([]);
   });
 
   it("reads every send out of one command", () => {
-    expect(sentMessages(`dray session send aaa "hello" && dray session send bbb 'hello'`)).toEqual([
-      { target: "aaa", text: "hello" },
-      { target: "bbb", text: "hello" },
+    expect(sentMessages(`dray session send aaaa1111 "hello" && dray session send bbbb2222 'hello'`)).toEqual([
+      { target: "aaaa1111", text: "hello" },
+      { target: "bbbb2222", text: "hello" },
     ]);
   });
 
@@ -119,7 +119,7 @@ describe("botItems", () => {
     const items = botItems([
       call("a", `dray session send ${ID} "one"`),
       result("a", "sent"),
-      call("b", `dray session send other-id "two"`),
+      call("b", `dray session send 01a1d052 "two"`),
       result("b", "sent"),
       said("Sent both."),
       call("c", `dray session send ${ID} "three"`),
@@ -179,7 +179,8 @@ dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot pro
     expect(items[1]).toMatchObject({ target: sent, text: expect.stringContaining("$D/8.png") });
   });
 
-  it("skips a send whose target the shell fills in", () => {
+  it("skips a session send whose target is no session id", () => {
+    expect(sentMessages(`dray session send ', it adds' 'push'`)).toEqual([]);
     expect(sentMessages(`for id in aaa bbb; do dray session send "$id" "hello"; done`)).toEqual([]);
     expect(sentMessages(`dray session send $ID hi && dray session send abc12345 'yo'`)).toEqual([
       { target: "abc12345", text: "yo" },
@@ -187,9 +188,14 @@ dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot pro
   });
 
   it("reads past a heredoc that spells a send", () => {
-    expect(sentMessages(`dray session send aaa "$(cat <<'EOF'\nthen run dray session send bbb "x"\nEOF\n)" && dray session send ccc ok`)).toEqual([
-      { target: "aaa", text: `then run dray session send bbb "x"` },
-      { target: "ccc", text: "ok" },
+    expect(sentMessages(`dray session send aaaa1111 "$(cat <<'EOF'\nthen run dray session send bbbb2222 "x"\nEOF\n)" && dray session send cccc3333 ok`)).toEqual([
+      { target: "aaaa1111", text: `then run dray session send bbbb2222 "x"` },
+      { target: "cccc3333", text: "ok" },
+    ]);
+    // A `<<` inside quotes is text, and opens no heredoc to swallow what follows.
+    expect(sentMessages(`dray send aaaa1111 "Explain <<EOF\nsyntax"; dray send bbbb2222 hi\ncat <<EOF\nbody\nEOF`)).toEqual([
+      { target: "aaaa1111", text: "Explain <<EOF\nsyntax" },
+      { target: "bbbb2222", text: "hi" },
     ]);
   });
 
