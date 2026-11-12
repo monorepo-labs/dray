@@ -52,3 +52,55 @@ export function stripOf(
   const owner = bot && chatOf(bot);
   return bot && owner ? { bot, owner, lit: selected } : null;
 }
+
+/// A Diff or Files tab in a bot's row, showing whichever session the reader
+/// picked in its side column (#892). `target` is a task, or for Files the bot
+/// chat itself, whose folder holds its instructions and memory.
+export type PickTab = { id: string; kind: "changes" | "files"; target: string };
+
+/// Each bot chat's pick tabs, keyed like `TaskTabs`. In memory, the same bargain.
+export type PickTabs = Record<string, PickTab[]>;
+
+export function addPickTab(tabs: PickTabs, owner: string, tab: PickTab): PickTabs {
+  return { ...tabs, [owner]: [...(tabs[owner] ?? []), tab] };
+}
+
+export function closePickTab(tabs: PickTabs, owner: string, id: string): PickTabs {
+  const kept = (tabs[owner] ?? []).filter((t) => t.id !== id);
+  const next = { ...tabs, [owner]: kept };
+  if (kept.length === 0) delete next[owner];
+  return next;
+}
+
+export function repickTab(tabs: PickTabs, owner: string, id: string, target: string): PickTabs {
+  return { ...tabs, [owner]: (tabs[owner] ?? []).map((t) => (t.id === id ? { ...t, target } : t)) };
+}
+
+/// Closes the tabs showing `target`, every kind or only `kind`: a deleted
+/// task or worktree leaves nothing to show, a settled task no files to open.
+export function closePicksOn(tabs: PickTabs, target: string, kind?: PickTab["kind"]): PickTabs {
+  let changed = false;
+  const next: PickTabs = {};
+  for (const [owner, row] of Object.entries(tabs)) {
+    const kept = row.filter((t) => t.target !== target || (!!kind && t.kind !== kind));
+    if (kept.length !== row.length) changed = true;
+    if (kept.length > 0) next[owner] = kept;
+  }
+  return changed ? next : tabs;
+}
+
+/// The open-files store a Files pick reads. Per tab *and* target, so each tab
+/// keeps its own files and picking another task brings that task's set up.
+export function pickFilesKey(tab: PickTab): string {
+  return `pick:${tab.id}:${tab.target}`;
+}
+
+/// The session whose last turn started or ended most recently.
+export function newestSession(items: readonly { sessionId: string; modified: string }[]): string | null {
+  let best: { sessionId: string; at: number } | null = null;
+  for (const item of items) {
+    const at = Date.parse(item.modified);
+    if (!best || at > best.at) best = { sessionId: item.sessionId, at };
+  }
+  return best?.sessionId ?? null;
+}
