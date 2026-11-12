@@ -809,7 +809,7 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::RevokeAssistant(revoke) => assistants(crate::mcp::revoke(app.clone(), revoke.id).await),
         #[cfg(any(feature = "serve", feature = "desktop"))]
         Request::Login => {
-            let pending = crate::org_link::start(app.clone()).await.map_err(anyhow::Error::msg)?;
+            let pending = crate::org_link::start(app.clone(), false).await.map_err(anyhow::Error::msg)?;
             Ok(Response::LinkPending {
                 url: pending.url,
                 short_url: pending.short_url,

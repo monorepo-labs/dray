@@ -1,4 +1,4 @@
-import { Bot, Check, CircleArrowUp, Copy, Globe, GlobeOff, MoreHorizontal, Plus, QrCode, RotateCw } from "lucide-react";
+import { Bot, Check, CircleArrowUp, Copy, Globe, GlobeOff, Link2, MoreHorizontal, Plus, QrCode, RotateCw } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import CommandChip from "@/components/settings/CommandChip";
@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { useCopied } from "@/hooks/useCopied";
+import { useDrayAccount, useOrgLink } from "@/hooks/useOrgLink";
 import { AUTO_EXTEND_MINUTES, boatAsleep, resumeBoat, setBoatPrefs, useBoatPrefs } from "@/lib/boat";
 import { relativeTime } from "@/lib/format";
 import { MACHINE } from "@/lib/platform";
@@ -77,6 +78,59 @@ function detailOf(server: ServerInfo): string {
   if (server.status === "connecting" && server.stage) return STAGE_LABELS[server.stage];
   if (server.status === "disconnected" && (server.boat?.note || server.error)) return server.boat?.note ?? server.error!;
   return address;
+}
+
+type OrgLink = ReturnType<typeof useOrgLink>;
+
+/// Hands a row its server's org link, since a hook can't run inside the
+/// list's `map`.
+function WithLink({
+  server,
+  connected,
+  children,
+}: {
+  server: string;
+  connected: boolean;
+  children: (link: OrgLink) => ReactNode;
+}) {
+  return children(useOrgLink(server, connected));
+}
+
+/// A row's detail with its link in front: the org it belongs to, or the
+/// code waiting for approval.
+function linkDetail(link: OrgLink, detail: ReactNode): ReactNode {
+  const { linked, pending } = link.state ?? {};
+  if (pending) return `Waiting for approval · ${pending.code}`;
+  if (!linked) return detail;
+  return (
+    <>
+      {linked.org.name} · {detail}
+    </>
+  );
+}
+
+/// Link on an unlinked row, Cancel while a code waits. Nothing for a server
+/// too old to link, which answered no state.
+function LinkAction({ link }: { link: OrgLink }) {
+  if (!link.state || link.state.linked) return null;
+  if (link.state.pending)
+    return (
+      <Button variant="ghost" size="sm" onClick={link.cancel}>
+        Cancel
+      </Button>
+    );
+  return (
+    <Button variant="secondary" size="sm" onClick={() => void link.start()}>
+      <Link2 className="size-3.5" />
+      Link
+    </Button>
+  );
+}
+
+/// Why the last link or unlink ended badly, under the row.
+function LinkError({ link }: { link: OrgLink }) {
+  if (!link.error || link.state?.pending) return null;
+  return <p className="text-ui text-muted-foreground">{link.error}</p>;
 }
 
 /// Every Dray server this app shows, This Mac first. A remote one's
@@ -142,10 +196,12 @@ export default function ServersSettings() {
                 />
               </div>
             )}
+            <WithLink server={server.id} connected={server.status === "connected"}>
+            {(link) => (
             <Row
             hidden={renaming === server.id}
             name={server.name}
-            detail={detailOf(server)}
+            detail={linkDetail(link, detailOf(server))}
             status={server.status}
             fix={server.fix}
             onTrust={(fix) => setTrusting({ server, fix })}
@@ -159,7 +215,17 @@ export default function ServersSettings() {
                 </Button>
               ) : server.boat?.warning ? (
                 <ExtendBoat id={server.id} size="sm" onFail={console.error} />
+              ) : server.status === "connected" ? (
+                <LinkAction link={link} />
               ) : undefined
+            }
+            onUnlink={
+              server.status === "connected" && link.state?.linked
+                ? () => {
+                    setRenaming(null);
+                    setConfirming(`unlink:${server.id}`);
+                  }
+                : undefined
             }
             onRetry={
               !server.on || server.status !== "disconnected" || boatAsleep(server)
@@ -182,12 +248,14 @@ export default function ServersSettings() {
             }}
             beta={server.beta}
             onBeta={(beta) => void invoke("set_server_beta", { id: server.id, beta }, LOCAL).catch(console.error)}
-            confirming={confirming === server.id}
+            confirming={confirming === server.id || confirming === `unlink:${server.id}`}
+            confirmVerb={confirming === `unlink:${server.id}` ? "Unlink" : "Remove"}
             onRemove={() => setConfirming(server.id)}
             onCancel={() => setConfirming(null)}
             onConfirm={() => {
               setConfirming(null);
-              void invoke("remove_server", { id: server.id }, LOCAL).catch(console.error);
+              if (confirming === `unlink:${server.id}`) void link.unlink();
+              else void invoke("remove_server", { id: server.id }, LOCAL).catch(console.error);
             }}
             onCheckUpdate={server.status === "connected" ? () => checkUpdate(server.id) : undefined}
             onAssistant={server.status === "connected" ? () => setPairing(server) : undefined}
@@ -195,8 +263,11 @@ export default function ServersSettings() {
             {showsUpdate(server, updates[server.id] ?? {}) && (
               <UpdateLine server={server} state={updates[server.id] ?? {}} onChange={(next) => patchUpdate(server.id, next)} />
             )}
+            {server.status === "connected" && <LinkError link={link} />}
             {server.status === "connected" && <Assistants server={server.id} />}
           </Row>
+            )}
+            </WithLink>
           </div>
         ))}
         {servers.length > 0 && <ShareMachinesRow />}
@@ -417,6 +488,11 @@ function ThisMacRow() {
   const [remote, setRemote] = useState<RemoteAccess>({ on: false, address: null, error: null });
   const [copied, copy] = useCopied<"address" | "token">();
   const [pairing, setPairing] = useState(false);
+  const connected = server?.status === "connected";
+  const link = useOrgLink(LOCAL, connected);
+  // Signing in is what links This Mac, so Link is offered only once signed in.
+  const account = useDrayAccount(connected);
+  const [unlinking, setUnlinking] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -453,24 +529,36 @@ function ThisMacRow() {
   return (
     <Row
       name={serverName(LOCAL)}
-      detail={detail}
+      detail={down ? detail : linkDetail(link, detail)}
       status={server?.status ?? "connected"}
+      confirming={unlinking}
+      confirmVerb="Unlink"
+      onCancel={() => setUnlinking(false)}
+      onConfirm={() => {
+        setUnlinking(false);
+        void link.unlink();
+      }}
+      onUnlink={connected && link.state?.linked ? () => setUnlinking(true) : undefined}
       action={
-        remote.on ? (
-          <Button variant="secondary" size="sm" onClick={() => setOn(false)}>
-            <GlobeOff />
-            Stop remote access
-          </Button>
-        ) : (
-          <Button variant="secondary" size="sm" onClick={() => setOn(true)}>
-            <Globe />
-            Turn on remote access
-          </Button>
-        )
+        <>
+          {connected && (account?.user || link.state?.pending) && <LinkAction link={link} />}
+          {remote.on ? (
+            <Button variant="secondary" size="sm" onClick={() => setOn(false)}>
+              <GlobeOff />
+              Stop remote access
+            </Button>
+          ) : (
+            <Button variant="secondary" size="sm" onClick={() => setOn(true)}>
+              <Globe />
+              Turn on remote access
+            </Button>
+          )}
+        </>
       }
       onAssistant={down ? undefined : () => setPairing(true)}
     >
       {pairing && <ConnectAssistantDialog server={LOCAL} name={serverName(LOCAL)} onClose={() => setPairing(false)} />}
+      {connected && <LinkError link={link} />}
       {remote.on && remote.address && (
         // Both halves of Add server's form. The token is fetched on Copy alone
         // and never held here.
@@ -762,6 +850,8 @@ function Row({
   onCheckUpdate,
   onAssistant,
   confirming = false,
+  confirmVerb = "Remove",
+  onUnlink,
   onRemove,
   onCancel,
   onConfirm,
@@ -793,6 +883,10 @@ function Row({
   /// Present while connected: the code comes from the server itself.
   onAssistant?: () => void;
   confirming?: boolean;
+  /// What the in-row question confirms: Remove, or Unlink.
+  confirmVerb?: string;
+  /// Present while linked to an org: unlinks it, after asking in the row.
+  onUnlink?: () => void;
   onRemove?: () => void;
   onCancel?: () => void;
   onConfirm?: () => void;
@@ -829,9 +923,9 @@ function Row({
         {confirming ? (
           // Asked in the row, the transcription models' own reading: a modal
           // is more than forgetting an address is worth.
-          <CancelOrConfirm verb="Remove" onConfirm={onConfirm!} onCancel={onCancel!} autoFocus />
+          <CancelOrConfirm verb={confirmVerb} onConfirm={onConfirm!} onCancel={onCancel!} autoFocus />
         ) : (
-          (onToggle || onRemove || onAssistant || action) && (
+          (onToggle || onRemove || onAssistant || onUnlink || action) && (
             <div className="flex items-center gap-1.5">
               {onRetry && (
                 <Button variant="ghost" size="sm" onClick={onRetry}>
@@ -841,7 +935,7 @@ function Row({
               {action}
               {/* The Accounts rows' ⋯: the switch is what a row is for, and the
                   items that change the row itself wait beside it. */}
-              {(onRemove || onAssistant) && (
+              {(onRemove || onAssistant || onUnlink) && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" size="sm" aria-label={`${name} options`}>
@@ -868,6 +962,7 @@ function Row({
                         {beta ? "Leave beta" : "Join beta"}
                       </DropdownMenuItem>
                     )}
+                    {onUnlink && <DropdownMenuItem onSelect={elsewhere(onUnlink)}>Unlink from org</DropdownMenuItem>}
                     {onRemove && (
                       <DropdownMenuItem variant="destructive" onSelect={elsewhere(onRemove)}>
                         Remove

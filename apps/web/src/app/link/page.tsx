@@ -51,8 +51,8 @@ async function Approve({
   userId: string;
   activeOrgId?: string | null;
 }) {
-  const { rows } = await pool.query<{ name: string; currentOrg: string | null; open: boolean }>(
-    `select l.name, s."organizationId" as "currentOrg",
+  const { rows } = await pool.query<{ name: string; currentOrg: string | null; open: boolean; signIn: boolean | null }>(
+    `select l.name, s."organizationId" as "currentOrg", l."signIn",
             l."organizationId" is null and not l.denied and l."expiresAt" > now() as open
        from server_link l left join server s on s.id = l."serverId"
       where l."userCode" = $1`,
@@ -77,7 +77,7 @@ async function Approve({
   if (orgs.length === 0)
     return (
       <>
-        <h1 className={H1}>Link a server.</h1>
+        <h1 className={H1}>{link.signIn ? "Sign in to Dray." : "Link a server."}</h1>
         <p className={LEAD}>Only an org&apos;s owners and admins can link servers to it, and you aren&apos;t one in any org.</p>
       </>
     );
@@ -93,6 +93,7 @@ async function Approve({
       initialOrgId={preferred}
       linkedElsewhere={link.currentOrg !== null}
       currentOrgId={currentOrgId}
+      signIn={link.signIn === true}
     />
   );
 }

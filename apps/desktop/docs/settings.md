@@ -1,6 +1,6 @@
 # Settings
 
-**A page taking the whole window, twelve groups down a list where the sidebar stands** ([SettingsPage.tsx](../src/components/SettingsPage.tsx)), gear in the sidebar's titlebar strip, ⌘, from anywhere. Appearance, Spaces, Servers, Accounts, Transcription, Integrations, Shortcuts, Island (Mac and Linux; Linux shows the switch, key, position and layout, its island having no tap pick, a fixed screenshot key and no transcript), Composer, Breaks, Changelog, About. `ALL_TABS` is set *and* order. It was a dialog through three shapes — tabs across the top at 28rem, a rail at 34rem, 44rem once the rail ate the prose's measure — and every one of them was a width argument a page does not have (#273).
+**A page taking the whole window, thirteen groups down a list where the sidebar stands** ([SettingsPage.tsx](../src/components/SettingsPage.tsx)), gear in the sidebar's titlebar strip, ⌘, from anywhere, opening on the first. Account, Appearance, Spaces, Servers, Agents, Transcription, Integrations, Shortcuts, Island (Mac and Linux; Linux shows the switch, key, position and layout, its island having no tap pick, a fixed screenshot key and no transcript), Composer, Breaks, Changelog, About. `ALL_TABS` is set *and* order. It was a dialog through three shapes — tabs across the top at 28rem, a rail at 34rem, 44rem once the rail ate the prose's measure — and every one of them was a width argument a page does not have (#273).
 
 **The shell is hidden, never unmounted, while the page is up.** `App` wraps `AppShell` in a `display: none` box, so transcripts, scroll pins and drafts are where the reader left them. That same `display: none` is what takes the browser's native view down: the pane's `ResizeObserver` measures zero and its claim stops winning, where a page drawn *over* the shell would sit under a view nothing in the DOM can cover. The page itself stays **mounted while closed and draws nothing**, since `useTranscriptionSettings`' download listener has to outlive it; `SettingsTabs` below it is what mounts on open, which is what resets the tab pick. **Its bindings stay registered too, so `setHotkeysSuspended` silences them** — read at the keystroke inside `useHotkey`, with `APP_WIDE` — `settings`, `theme.next`, `mode.toggle`, `panel.side` and the three zoom chords — the only ones that still fire; otherwise ⇧Tab would change a hidden session's model and ⌘I open the issues page behind the page.
 
@@ -18,7 +18,13 @@
 
 **Row shape = `SettingRow`**, label over its reason on the left, control on the right. Two rules it encodes: a description is **not optional**, since it is where "why is this off by default" lives; and a setting that cannot apply on this platform is **disabled, not hidden**, since a row that vanishes reads as a setting the app forgot and the sentence under it is the only place the reason can be said.
 
-## Accounts
+## Account
+
+**The Dray account the app is signed in to** ([AccountSettings.tsx](../src/components/settings/AccountSettings.tsx)): avatar, name, @username and Sign out, or Sign in. Sign in is This machine's org link with the app's sign-in riding it, so one page at drayhq.com does both; see CLAUDE.md's accounts paragraph. Sign out asks in the row and leaves the machine linked. The Servers tab draws each row's link through [useOrgLink](../src/hooks/useOrgLink.ts): the org in the detail line, Link on an unlinked row (This Mac's only while signed in, since signing in is what links it), Cancel while a code waits, Unlink in ⋯.
+
+## Agents
+
+The tab's id is still `accounts`; it was called Accounts until the Dray account took that word.
 
 **Which account each agent runs as, asked of the CLIs themselves** ([accounts.rs](../src-tauri/src/accounts.rs), [AccountsSettings.tsx](../src/components/settings/AccountsSettings.tsx)). The same facts already reach the composer as [LoginExpiredNotice](../src/components/composer/LoginExpiredNotice.tsx), but only *after* a turn has failed on auth and never for a session that is working — so "who is this running as" had nowhere to be asked.
 

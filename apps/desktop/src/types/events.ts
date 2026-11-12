@@ -753,6 +753,17 @@ error: string | null,
  */
 cancelled: boolean, };
 
+export type DrayAccountState = { user: DrayUser | null, };
+
+/**
+ * The account, as the site describes it.
+ */
+export type DrayUser = { id: string, name: string, username: string | null, 
+/**
+ * The Google picture, where the account has one.
+ */
+image: string | null, };
+
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export type ErrorSource = "harness" | "parser" | "process";
@@ -1407,7 +1418,11 @@ shortUrl: string,
 /**
  * `ABCD-EFGH`.
  */
-code: string, expiresInSecs: number, };
+code: string, expiresInSecs: number, 
+/**
+ * Started by the app's Sign in, which approving also signs in.
+ */
+signIn: boolean, };
 
 export type PermissionBehavior = "allow" | "deny";
 

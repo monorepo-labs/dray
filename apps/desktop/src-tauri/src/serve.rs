@@ -1860,8 +1860,12 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         mcp_revoke(id: String) => crate::mcp::revoke(sink, id).await;
         // This server's link to an org at drayhq.com.
         org_link_state() => ok(crate::org_link::state(&sink).await);
-        org_link_start() => crate::org_link::start(sink).await;
+        org_link_start(sign_in: Option<bool>) => crate::org_link::start(sink, sign_in.unwrap_or(false)).await;
+        org_link_cancel() => ok(crate::org_link::cancel(sink).await);
         org_unlink() => crate::org_link::unlink(sink).await;
+        // Who the app on this machine is signed in to drayhq.com as.
+        account_state() => ok(crate::dray_account::state(&sink).await);
+        account_sign_out() => crate::dray_account::sign_out(sink).await;
         read_doc(path: String) => crate::docs::read_doc(path).await;
         save_doc(path: String, text: String, expect: Option<String>) => crate::docs::save_doc(path, text, expect).await;
         watch_docs(scope: String, paths: Vec<String>) => {
