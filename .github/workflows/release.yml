@@ -9,10 +9,15 @@ name: Release
 # stable, `v0.3.0-beta.1` is beta. Semver's own prerelease rule is what makes
 # that work end to end — the updater compares versions, and `0.3.0-beta.1` is
 # older than `0.3.0`, so a beta user lands on the stable release when it ships.
+#
+# A manual run builds the Linux AppImage alone, as a workflow artifact never
+# attached or published: the way to check Linux still compiles while it is
+# held out of releases.
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -26,6 +31,7 @@ jobs:
   # the Account Holder accepts it, and the build only finds out ~30 minutes in.
   # Any notarytool call answers the same 403, so ask before building.
   notary-check:
+    if: github.event_name == 'push'
     runs-on: macos-latest
     steps:
       - run: xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" >/dev/null
@@ -251,7 +257,11 @@ jobs:
   # No cache. warm-cache.yml warms the Mac's, and a tag build's own cache is
   # unreadable to the next tag (see there), so this compiles cold — still
   # inside the Mac job's notarization wait.
+  #
+  # Held out of tag releases until the repo variable RELEASE_LINUX is `true`
+  # (docs/releases.md). Skipped, it leaves no AppImage and no `linux-*` entry.
   linux:
+    if: github.event_name == 'workflow_dispatch' || vars.RELEASE_LINUX == 'true'
     runs-on: ubuntu-22.04
     outputs:
       appimage: ${{ steps.mirror.outputs.appimage }}
@@ -340,6 +350,7 @@ jobs:
       # Mac job is what creates the release and may not have yet.
       - name: Mirror to R2
         id: mirror
+        if: github.event_name == 'push'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -363,16 +374,19 @@ jobs:
         with:
           name: appimage
           path: apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
-          retention-days: 1
+          # A release only hands it to the manifest job; a manual run's is
+          # there to download.
+          retention-days: ${{ github.event_name == 'push' && 1 || 7 }}
 
   # The manifests live on a branch rather than in the release, because
   # `/releases/latest/` skips prereleases — so beta would have no fixed URL.
   # GitHub Pages serves this branch; the artifact URLs inside are rewritten
   # onto the R2 mirror the build job uploaded to.
   #
-  # A failed Linux build holds back nothing of the Mac's: the manifest is
-  # written without a Linux entry, so Linux readers stay where they are, and
-  # the red job says why.
+  # A failed or skipped Linux build holds back nothing of the Mac's: the
+  # manifest is written without a Linux entry, so Linux readers stay where
+  # they are. `!cancelled()` is what runs this past a skipped `linux`; with no
+  # status function the implicit `success()` would skip it too.
   manifest:
     needs: [build, linux]
     if: ${{ !cancelled() && needs.build.result == 'success' }}
