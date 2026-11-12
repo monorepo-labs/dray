@@ -1,7 +1,9 @@
 // The whole app with three bots and a few tasks, to look at the sidebar's bot
 // rows beside the task rows. Ops works for 4s, then finishes with one more
 // unread reply, then works again with the count still on its face, so the
-// typing dots and the glimpse that replaces them both get seen. Tauri's IPC is mocked as in the new-task demo.
+// typing dots and the glimpse that replaces them both get seen. Dray Bot has
+// no chat yet, as on a fresh install, so its row shows its welcome. Tauri's
+// IPC is mocked as in the new-task demo.
 
 import { emit } from "@tauri-apps/api/event";
 import { mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
@@ -18,7 +20,13 @@ const PROJECTS: Project[] = [
 ];
 
 const BOTS: Bot[] = [
-  { id: "dray", name: "Dray Bot", path: "/Users/you/.dray/bots/dray", created: ago(9000) },
+  {
+    id: "dray",
+    name: "Dray Bot",
+    path: "/Users/you/.dray/bots/dray",
+    created: ago(9000),
+    welcome: "Hi! I'm **Dray Bot**, your assistant for everything you build.",
+  },
   { id: "ops", name: "Ops", path: "/Users/you/.dray/bots/ops", created: ago(9000), avatar: { shape: "blob", hue: 200 } },
   { id: "writer", name: "Writer", path: "/Users/you/.dray/bots/writer", created: ago(9000), avatar: { shape: "blob", hue: 30 } },
 ];
@@ -52,17 +60,15 @@ const item = (id: string, title: string, cwd: string, modified: string, status: 
 });
 
 const ITEMS: SessionIndexItem[] = [
-  item("1", "Dray Bot", BOTS[0].path, ago(180)),
   item("2", "Ops", BOTS[1].path, ago(2), "in_progress"),
   item("3", "Writer", BOTS[2].path, ago(26), "completed"),
   item("4", "Fix the pricing page copy", "/Users/you/code/site", ago(5)),
   item("5", "Audit the landing page", "/Users/you/code/site", ago(40), "in_progress"),
   item("6", "Add dark mode to docs", "/Users/you/code/site", ago(300)),
 ];
-const [, OPS, WRITER] = ITEMS;
+const [OPS, WRITER] = ITEMS;
 
 const previews: Record<string, BotPreview> = {
-  [ITEMS[0].sessionId]: { text: "Morning! Ask me to **start a task**, check a PR, or [plan the week](https://x).", replies: 0 },
   [OPS.sessionId]: { text: "Deploy is green. `site` is on 0.30.0 and the error rate is flat.", replies: 0 },
   [WRITER.sessionId]: { text: "## Draft ready\nThe changelog post for 0.30 is in `posts/0-30.md` — want a shorter intro?", replies: 2 },
 };

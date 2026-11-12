@@ -1788,7 +1788,9 @@ function BotRow({
   const [hovered, setHovered] = useState(false);
   const badge = asking ? "asking" : unread ? "unread" : null;
   const mask = badge === "asking" ? DOT_CUTOUT : badge === "unread" ? COUNT_CUTOUT : undefined;
-  const glimpse = preview?.text && previewLine(preview.text);
+  // Before its first chat, Dray Bot's welcome is what its chat opens on.
+  const last = preview?.text || (!sessionId && bot.welcome);
+  const glimpse = last && previewLine(last);
 
   // StalledTasks' row layout, so a bot and its stalled tasks read alike.
   return (
