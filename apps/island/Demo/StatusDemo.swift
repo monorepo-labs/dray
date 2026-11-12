@@ -93,6 +93,7 @@ private struct Case: Identifiable {
     var prs: [String: [String: PrMark]] = [:]
     /// The session the panel is pinned to, when open on no card.
     var pinned: String? = nil
+    var bots: [Bot] = []
 }
 
 private let sections: [(String, [Case])] = [
@@ -130,14 +131,19 @@ private let sections: [(String, [Case])] = [
         Case(name: "Checks running", open: true, items: [withPr], prs: pr("OPEN", "RUNNING"), pinned: withPr.sessionId),
         Case(name: "Working on a PR", note: "Working outranks the PR glyph.", open: true, items: [workingPr], prs: pr("OPEN", "CLEAR"), pinned: workingPr.sessionId),
         Case(name: "Task list open", open: true, listShown: true, items: [s1, working, s4, s5, withPr], prs: pr("OPEN", "FAILING"), pinned: working.sessionId),
+        Case(name: "Bot", open: true, items: [botChat], pinned: botChat.sessionId, bots: bots),
+        Case(name: "Bot working", note: "Typing dots, as the sidebar's bot row.", open: true, items: [opsChat], pinned: opsChat.sessionId, bots: bots),
+        Case(name: "Task list with bots", note: "Face and name; no folder id.", open: true, listShown: true,
+             items: [s1, botChat, opsChat, working, s5], pinned: botChat.sessionId, bots: bots),
     ]),
 ]
 
 // MARK: Seeds
 
-private func session(_ id: String, _ title: String, status: String = "idle", branch: String? = nil) -> SessionItem {
+private func session(_ id: String, _ title: String, status: String = "idle", branch: String? = nil,
+                     cwd: String = "/Users/me/dray") -> SessionItem {
     var o: [String: Any] = [
-        "sessionId": id, "harness": "claude_code", "cwd": "/Users/me/dray", "projectPath": "/Users/me/dray",
+        "sessionId": id, "harness": "claude_code", "cwd": cwd, "projectPath": cwd,
         "title": title, "model": "opus", "effort": "high", "permissionMode": "auto", "status": status,
         "modified": stamp(),
     ]
@@ -154,6 +160,15 @@ private let long = session("s6", "Island status stuck on completed after reading
 private let working = session("s7", "Faster dictation: trim silence before transcribing", status: "in_progress")
 private let withPr = session("s8", "Sidebar globe icon for Mac remote", branch: "worktree-globe")
 private let workingPr = session("s9", "Integrate Devin CLI harness", status: "in_progress", branch: "worktree-globe")
+
+private let bots = [
+    Bot(id: "01a1cfc8-e538-77dc-a2dd-d46b79ecc851", name: "Dray Bot", path: "/Users/me/.dray/bots/01a1cfc8-e538-77dc-a2dd-d46b79ecc851",
+        avatar: BotAvatar(shape: "cloud", hue: 80)),
+    Bot(id: "019a7c2e-5b10-7c3d-9e1f-2a3b4c5d6e7f", name: "Ops", path: "/Users/me/.dray/bots/019a7c2e-5b10-7c3d-9e1f-2a3b4c5d6e7f",
+        avatar: BotAvatar(shape: "hexagon", hue: 185)),
+]
+private let botChat = session("b1", "Dray", cwd: bots[0].path)
+private let opsChat = session("b2", "Ops", status: "in_progress", cwd: bots[1].path)
 
 private func pr(_ state: String, _ checks: String) -> [String: [String: PrMark]] {
     ["/Users/me/dray": ["worktree-globe": PrMark(number: 573, headRefName: "worktree-globe", isDraft: false, state: state, checksState: checks)]]
@@ -251,6 +266,7 @@ private struct CaseStage: View {
         let store = Store()
         let server = UUID()
         store.seed(server, items: c.items, asks: c.asks, prs: c.prs)
+        store.seed(home: server, bots: c.bots)
         let composer = Composer(store: store, server: server)
         composer.placement = placement
         composer.notchHeight = placement == .notch ? 32 : 0
@@ -322,21 +338,23 @@ private func marks(_ turn: MockTurn, _ pull: Pull) -> Marks {
 
 /// One row per state, so the marks can be read against each other.
 private struct ListMock: View {
-    private let rows: [(String, String, Marks)] = [
-        ("Fix the login redirect", "dray", marks(.asking, .none)),
-        ("Island status in the task list", "dray", marks(.working, .checks)),
-        ("Paste images into the composer", "dray", marks(.done, .open)),
-        ("Theme swatches in settings", "dray", marks(.idle, .failing)),
-        ("Orb lab", "dray", marks(.working, .none)),
-        ("Docs for remote access", "web", marks(.idle, .draft)),
-        ("Changelog for 0.12", "web", marks(.done, .merged)),
-        ("Spike: CEF memory", "dray", marks(.idle, .none)),
+    private let rows: [(String, String, Marks, Bot?)] = [
+        ("Dray", "01a1cfc8", marks(.idle, .none), bots[0]),
+        ("Ops", "019a7c2e", marks(.working, .none), bots[1]),
+        ("Fix the login redirect", "dray", marks(.asking, .none), nil),
+        ("Island status in the task list", "dray", marks(.working, .checks), nil),
+        ("Paste images into the composer", "dray", marks(.done, .open), nil),
+        ("Theme swatches in settings", "dray", marks(.idle, .failing), nil),
+        ("Orb lab", "dray", marks(.working, .none), nil),
+        ("Docs for remote access", "web", marks(.idle, .draft), nil),
+        ("Changelog for 0.12", "web", marks(.done, .merged), nil),
+        ("Spike: CEF memory", "dray", marks(.idle, .none), nil),
     ]
 
     var body: some View {
         VStack(spacing: 2) {
             ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
-                SessionRow(title: row.0, project: row.1, marks: row.2, selected: i == 1)
+                SessionRow(title: row.0, project: row.1, marks: row.2, selected: i == 3, bot: row.3)
             }
         }
         .padding(6)

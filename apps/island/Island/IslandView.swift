@@ -247,7 +247,7 @@ struct IslandView: View {
         if !composer.listShown, let key = composer.key {
             // The list, not Dray: a title clicked without thinking must not switch apps,
             // and the arrows can't open the list over text. ⌘-click is the deliberate way to Dray.
-            TitleRow(title: title, machine: store.machine(key.server), marks: store.marks(key), close: composer.closeHint,
+            TitleRow(title: title, machine: store.machine(key.server), marks: store.marks(key), bot: store.bot(key), close: composer.closeHint,
                      list: { composer.searches += 1 },
                      openInApp: { Task { await composer.showInApp(key) } },
                      hint: composer.pinchHint ? (composer.transcript ? "Pinch to hide messages" : "Spread fingers to see messages") : nil)
@@ -575,7 +575,8 @@ private struct SessionList: View {
                 ScrollView {
                     LazyVStack(spacing: 2) {
                         ForEach(listed, id: \.key) { s in
-                            SessionRow(title: s.item.title, project: s.item.project, marks: store.marks(s.key), selected: composer.key == s.key)
+                            SessionRow(title: s.item.title, project: s.item.project, marks: store.marks(s.key), selected: composer.key == s.key,
+                                       bot: store.bot(s.key))
                                 .id(s.key)
                                 .onTapGesture {
                                     composer.pick(.session(s.key))
