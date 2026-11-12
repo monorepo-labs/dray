@@ -1,35 +1,48 @@
-import type { CrewRow } from "@/lib/crew";
-import { readyToMerge } from "@/lib/pr";
-import type { PrMark } from "@/types/events";
+import { botChat } from "@/lib/bots";
+import { crewRows, type CrewRow } from "@/lib/crew";
+import { prStatus, type PrStatusKey } from "@/lib/pr";
+import type { BackgroundTask, Bot, PrMark, SessionIndexItem, SessionStatus } from "@/types/events";
 
-/// How long a bot's task sits untouched before its chat says so.
+/// How long a bot's task sits untouched before anyone hears of it.
 export const STALL_MS = 30 * 60_000;
 
-/// A task of a bot's that has sat untouched for [STALL_MS]: its pull request
-/// ready to merge, or the task idle and waiting on the reader. `since` is when
-/// the stall began; `key` names this one stall, so a dismissed stall stays
-/// dismissed until the task moves or the reader acts on it.
+/// A task of a bot's that has sat untouched for [STALL_MS]. `ready`: its pull
+/// request can land, and the reader merges it from the card. `fix`: something
+/// the task can mend on its own is in the way, said in `problem`, and the bot
+/// is told rather than the reader. `waiting`: the task is idle on the reader;
+/// the bot reads it and either answers it or writes the line the card draws.
+/// `key` names this one stall, so it is acted on once and comes back only
+/// after the task moves.
 export type Stall = {
   row: CrewRow;
   pr?: PrMark;
-  kind: "ready" | "waiting";
+  kind: "ready" | "fix" | "waiting";
+  problem?: string;
   since: number;
   key: string;
 };
 
-/// The bot's tasks that want the reader, oldest stall first.
+/// What a task can mend itself, by PR status, as its bot is told it.
+const FIXABLE: Partial<Record<PrStatusKey, (n: number) => string>> = {
+  conflict: (n) => `PR #${n} has merge conflicts.`,
+  checksFailing: (n) => `PR #${n} has failing checks.`,
+  behind: (n) => `PR #${n} is behind its base branch.`,
+  changesRequested: (n) => `A review on PR #${n} asked for changes.`,
+};
+
+/// The bot's tasks that have stalled, oldest stall first.
 ///
 /// `readySince` is kept by the caller across calls and updated here: when each
 /// task's pull request was seen turning ready, `0` where it was ready the first
-/// time it was seen, `-1` while it is not. Marks are only read while the bot's
-/// chat is up, so a PR found already ready counts from the task's last
-/// activity — waiting another [STALL_MS] of watching would hide one that has
-/// sat for a day.
+/// time it was seen, `-1` while it is not. A PR found already ready counts from
+/// the task's last activity — waiting another [STALL_MS] of watching would hide
+/// one that has sat for a day.
 ///
 /// Left out: a task mid-turn or with a background shell or subagent still
-/// running (the Tasks tab counts it as working), one behind a card (the card is
-/// in the chat already), one set aside or waiting on its usage limit, and one
-/// whose PR is still running checks — that waits on CI, not on the reader.
+/// running, one behind a card (the card is in the chat already), one set aside
+/// or waiting on its usage limit, one whose PR is running checks or still being
+/// worked out by GitHub — those wait on CI, not on anyone — and one whose PR
+/// has merged, which is done.
 export function stalledTasks(
   rows: readonly CrewRow[],
   prOf: (row: CrewRow) => PrMark | undefined,
@@ -41,9 +54,10 @@ export function stalledTasks(
     const { item } = row;
     const id = item.sessionId;
     const pr = prOf(row);
-    const open = pr?.state === "OPEN";
-    // GitHub not having worked it out yet changes nothing either way.
-    const ready = pr && (open && !pr.isDraft ? readyToMerge(pr) : false);
+    const status = pr && prStatus(pr).key;
+    // Ready by the same word the Tasks tab says, so failing checks on a clean
+    // merge state never read as mergeable.
+    const ready = status && (status === "unknown" ? null : status === "ready");
     if (ready === false) readySince.set(id, -1);
     if (ready === true) {
       const was = readySince.get(id);
@@ -52,8 +66,8 @@ export function stalledTasks(
     }
     if (row.busy || row.background || row.asking || item.aside || item.continueAt) continue;
     // Unknown is held, not drawn: a merge elsewhere drops every open PR there
-    // to unknown for a poll, and a waiting row in that gap would be a new stall.
-    if (ready === null || (open && pr.checksState === "RUNNING")) continue;
+    // to unknown for a poll, and a waiting stall in that gap would be a new one.
+    if (ready === null || status === "checksRunning" || status === "merged") continue;
 
     const touched = Date.parse(item.modified) || now;
     if (ready === true) {
@@ -61,9 +75,38 @@ export function stalledTasks(
       if (now - since >= STALL_MS) stalls.push({ row, pr, kind: "ready", since, key: `${id}:ready:${pr.number}:${item.modified}` });
       continue;
     }
-    if (now - touched >= STALL_MS) stalls.push({ row, pr, kind: "waiting", since: touched, key: `${id}:waiting:${item.modified}` });
+    if (now - touched < STALL_MS) continue;
+    const fix = pr && status && FIXABLE[status];
+    if (fix) stalls.push({ row, pr, kind: "fix", problem: fix(pr.number), since: touched, key: `${id}:${status}:${item.modified}` });
+    else stalls.push({ row, pr, kind: "waiting", since: touched, key: `${id}:waiting:${item.modified}` });
   }
   return stalls.sort((a, b) => a.since - b.since);
+}
+
+/// Whether a stall belongs in the bot's card: a PR ready to merge, or a task
+/// whose bot has written what it needs since it last moved. A waiting task the
+/// bot has not judged yet draws nothing, since the bot may answer it itself.
+export function onCard(stall: Stall): boolean {
+  if (stall.kind === "ready") return true;
+  const { need, modified } = stall.row.item;
+  return stall.kind === "waiting" && !!need && Date.parse(need.at) >= Date.parse(modified);
+}
+
+/// Each bot that has a chat: the chat's session id and the bot's tasks.
+export function botCrews(
+  bots: readonly Bot[],
+  items: SessionIndexItem[],
+  live: {
+    statusBySession: Record<string, SessionStatus>;
+    askingSessions: ReadonlySet<string>;
+    tasksBySession?: Record<string, BackgroundTask[]>;
+  },
+): { bot: Bot; chatId: string; rows: CrewRow[] }[] {
+  return bots.flatMap((bot) => {
+    const chat = botChat(items, bot).map((i) => i.sessionId);
+    const chatId = chat.at(-1);
+    return chatId ? [{ bot, chatId, rows: crewRows(items, chatId, live, chat.slice(0, -1)) }] : [];
+  });
 }
 
 /// "45m", "2h", "3d": time since `iso`, as an inbox row says it.
@@ -74,8 +117,7 @@ export function compactAge(iso: string, now: number): string {
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
-/// The stalls in `stalls` not yet in `seen`, which takes them in. Ones the
-/// reader has not been told about, for the bot's one banner.
+/// The stalls in `stalls` not yet in `seen`, which takes them in.
 export function freshStalls(seen: Set<string>, stalls: readonly Stall[]): Stall[] {
   const fresh = stalls.filter((s) => !seen.has(s.key));
   for (const s of fresh) seen.add(s.key);

@@ -705,7 +705,7 @@ pub async fn in_bot_tree(item: &SessionIndexItem) -> bool {
 }
 
 /// The bot chat session `item` is, or the one it descends from.
-async fn bot_chat_of(item: &SessionIndexItem) -> Option<SessionIndexItem> {
+pub(crate) async fn bot_chat_of(item: &SessionIndexItem) -> Option<SessionIndexItem> {
     let bots = read_list().await.ok()?;
     if bots.is_empty() {
         return None;

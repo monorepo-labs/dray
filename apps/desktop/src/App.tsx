@@ -212,7 +212,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { crewRows, crewSeen, inSidebar, withHiddenAsks, type CrewRow } from "@/lib/crew";
-import type { Stall } from "@/lib/stalled";
+import { botCrews, type Stall } from "@/lib/stalled";
 import { useStalledTasks } from "@/hooks/useStalledTasks";
 import {
   addPickTab,
@@ -1323,15 +1323,29 @@ function App() {
       ).join("\n"),
     [sessions, selectedSessionId, earlierIds, memberKey],
   );
+  // Every bot's tasks too, wherever the reader is: a stalled one is judged by
+  // its PR, and its bot is the one told.
+  const botRepoKey = useMemo(
+    () =>
+      [
+        ...new Set(
+          botCrews(bots, sessionIndexItems, { statusBySession: {}, askingSessions: new Set() }).flatMap((c) =>
+            c.rows.map((r) => r.item.projectPath),
+          ),
+        ),
+      ].join("\n"),
+    [bots, sessionIndexItems],
+  );
   // Whichever sidebar list is up: a card on screen is still being read.
   const repoPaths = useMemo(
     () => [
       ...new Set([
         ...(archivedShown ? [] : [...visibleSessions, ...crew.map((r) => r.item)].map((i) => i.projectPath)),
         ...(cardRepoKey ? cardRepoKey.split("\n") : []),
+        ...(botRepoKey ? botRepoKey.split("\n") : []),
       ]),
     ],
-    [archivedShown, visibleSessions, crew, cardRepoKey],
+    [archivedShown, visibleSessions, crew, cardRepoKey, botRepoKey],
   );
   const prMarks = usePrMarks(repoPaths);
 
@@ -1355,7 +1369,7 @@ function App() {
     tasksBySession,
     prOf: taskPr,
   });
-  const stalls = (selectedBot && stalled.byBot.get(selectedBot.id)?.stalls) || NO_STALLS;
+  const stalls = (selectedBot && stalled.byBot.get(selectedBot.id)?.card) || NO_STALLS;
 
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it
@@ -3937,8 +3951,6 @@ function App() {
             botFooter={
               <StalledTasks
                 stalls={stalls}
-                previews={stalled.previews}
-                needs={stalled.needs}
                 now={stalled.now}
                 onOpen={(id, alone) => void openTask(id, alone)}
                 onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}

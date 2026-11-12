@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { CrewRow } from "@/lib/crew";
-import { STALL_MS, compactAge, freshStalls, stalledTasks } from "@/lib/stalled";
+import { STALL_MS, compactAge, freshStalls, onCard, stalledTasks } from "@/lib/stalled";
 import type { PrMark, SessionIndexItem } from "@/types/events";
 
 const T0 = Date.parse("2026-11-12T10:00:00Z");
@@ -78,6 +78,27 @@ describe("stalledTasks", () => {
   it("leaves a task whose checks are still running alone", () => {
     const running = () => pr({ checksState: "RUNNING", mergeStateStatus: "BLOCKED" });
     expect(stalledTasks([row("a")], running, new Map(), T0 + 2 * STALL_MS)).toEqual([]);
+  });
+
+  it("hands what the task can mend to the bot, with the problem", () => {
+    const at = T0 + STALL_MS;
+    const [conflict] = stalledTasks([row("a")], () => pr({ mergeable: "CONFLICTING" }), new Map(), at);
+    expect(conflict).toMatchObject({ kind: "fix", problem: "PR #908 has merge conflicts." });
+    const [failing] = stalledTasks([row("a")], () => pr({ checksState: "FAILING" }), new Map(), at);
+    expect(failing.kind).toBe("fix");
+    expect(failing.key).not.toBe(conflict.key);
+    expect(stalledTasks([row("a")], () => pr({ state: "MERGED" }), new Map(), at)).toEqual([]);
+    expect(stalledTasks([row("a")], () => pr({ reviewDecision: "REVIEW_REQUIRED", mergeStateStatus: "BLOCKED" }), new Map(), at)[0].kind).toBe("waiting");
+  });
+
+  it("puts a waiting task on the card only once its bot wrote a need since it moved", () => {
+    const stall = (need?: { text: string; at: string }) =>
+      stalledTasks([row("a", {}, { need })], () => undefined, new Map(), T0 + STALL_MS)[0];
+    expect(onCard(stall())).toBe(false);
+    expect(onCard(stall({ text: "Pick one", at: new Date(T0 + 1000).toISOString() }))).toBe(true);
+    expect(onCard(stall({ text: "Pick one", at: new Date(T0 - 1000).toISOString() }))).toBe(false);
+    expect(onCard(stalledTasks([row("a")], () => pr(), new Map(), T0 + STALL_MS)[0])).toBe(true);
+    expect(onCard(stalledTasks([row("a")], () => pr({ mergeable: "CONFLICTING" }), new Map(), T0 + STALL_MS)[0])).toBe(false);
   });
 
   it("hands each stall to the banner once", () => {

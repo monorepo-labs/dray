@@ -301,6 +301,15 @@ GitHub link, so the user merges in one click without opening the task. It is
 refused when the task's branch has no open pull request, so post it once the PR
 exists. Post one card per PR; it stays in the chat until the PR is merged.
 
+```bash
+dray session need <task-id> "Pick: keep the button or drop it"   # no text clears it
+```
+
+When a task you started is waiting on the user and you cannot answer it
+yourself, write what it needs in one short line. The user sees it on the task's
+row in the "Waiting on you" card at the foot of your chat, and it clears as soon
+as the task moves.
+
 ## Saving work for later
 
 ```bash

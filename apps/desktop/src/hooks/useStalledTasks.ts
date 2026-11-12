@@ -1,24 +1,36 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { botChat } from "@/lib/bots";
-import { crewRows, type CrewRow } from "@/lib/crew";
+import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
+import type { CrewRow } from "@/lib/crew";
 import { isWindowFocused } from "@/lib/focus";
 import { notifyOS } from "@/lib/notify";
-import { freshStalls, stalledTasks, type Stall } from "@/lib/stalled";
+import { botCrews, freshStalls, onCard, stalledTasks, type Stall } from "@/lib/stalled";
 import { invoke } from "@/lib/transport";
-import type { BackgroundTask, Bot, BotPreview, PrMark, SessionIndexItem, SessionStatus } from "@/types/events";
+import type { BackgroundTask, Bot, PrMark, SessionIndexItem, SessionStatus } from "@/types/events";
 
-/// Every bot's stalled tasks (see `stalledTasks`), keyed by bot id, with each
-/// stalled task's last message for its inbox row and the clock they were read at.
+/// Stalls already handed to their bot, by key: kept across launches, so a
+/// relaunch never nudges the bot about the same stall twice.
+const NUDGED_KEY = "ade.nudgedStalls";
+const NUDGED_CAP = 400;
+
+/// How long after mount nudges hold, so a task's PR marks have landed before
+/// it is judged: unread, a task with a ready PR looks like one idle on the
+/// reader.
+const NUDGE_HOLD_MS = 60_000;
+
+/// Every bot's stalled tasks, keyed by bot id: `card` is what the bot's chat
+/// draws, and the clock they were read at.
+///
+/// Stalls the reader has no part in go to the bot instead, once each, as a
+/// hidden message from the task (`nudge_bot`): a PR the task can mend, or a
+/// task idle on the reader, which the bot either answers itself or names in a
+/// need line (`dray session need`) that puts it on the card.
 ///
 /// Read for every bot rather than the one on screen, since the banner is for a
-/// bot the reader is not looking at: once new stalls land while the window is
-/// in the background, one banner per bot says how many tasks wait on the
-/// reader, and a click opens its chat. Each bot's first read, once its chat is
-/// found, is taken in silence, or every stall already standing would raise one.
-/// PR marks are only
-/// polled for the open bot's repos, so another bot's ready PR shows as idle
-/// until its chat is opened; `stalledTasks` explains why that is safe.
+/// bot the reader is not looking at: once new card rows land while the window
+/// is in the background, one banner per bot says how many. Each bot's first
+/// read, once its chat is found, is taken in silence, or every row already
+/// standing would raise one.
 export function useStalledTasks({
   bots,
   items,
@@ -43,17 +55,28 @@ export function useStalledTasks({
 
   const readySince = useRef(new Map<string, number>());
   const byBot = useMemo(() => {
-    const live = { statusBySession, askingSessions, tasksBySession };
-    const out = new Map<string, { chatId: string; stalls: Stall[] }>();
-    for (const bot of bots) {
-      const chat = botChat(items, bot).map((i) => i.sessionId);
-      const chatId = chat.at(-1);
-      if (!chatId) continue;
-      const rows = crewRows(items, chatId, live, chat.slice(0, -1));
-      out.set(bot.id, { chatId, stalls: stalledTasks(rows, prOf, readySince.current, now) });
+    const out = new Map<string, { chatId: string; stalls: Stall[]; card: Stall[] }>();
+    for (const { bot, chatId, rows } of botCrews(bots, items, { statusBySession, askingSessions, tasksBySession })) {
+      const stalls = stalledTasks(rows, prOf, readySince.current, now);
+      out.set(bot.id, { chatId, stalls, card: stalls.filter(onCard) });
     }
     return out;
   }, [bots, items, statusBySession, askingSessions, tasksBySession, prOf, now]);
+
+  const mountedAt = useRef(Date.now());
+  useEffect(() => {
+    if (now - mountedAt.current < NUDGE_HOLD_MS) return;
+    const nudged = new Set(readLocalStorage<string[]>(NUDGED_KEY, []));
+    const due = [...byBot.values()]
+      .flatMap((b) => b.stalls)
+      .filter((s) => s.kind !== "ready" && !onCard(s) && !nudged.has(s.key));
+    if (due.length === 0) return;
+    for (const s of due) {
+      nudged.add(s.key);
+      invoke("nudge_bot", { sessionId: s.row.item.sessionId, problem: s.problem ?? null }).catch(() => {});
+    }
+    writeLocalStorage(NUDGED_KEY, [...nudged].slice(-NUDGED_CAP));
+  }, [byBot, now]);
 
   const seen = useRef(new Set<string>());
   // Seeded per bot, the first time its chat is found: the bot list and the
@@ -63,67 +86,14 @@ export function useStalledTasks({
     for (const bot of bots) {
       const entry = byBot.get(bot.id);
       if (!entry) continue;
-      const fresh = freshStalls(seen.current, entry.stalls);
+      const fresh = freshStalls(seen.current, entry.card);
       const first = !seeded.current.has(bot.id);
       seeded.current.add(bot.id);
       if (first || fresh.length === 0 || isWindowFocused()) continue;
-      const n = entry.stalls.length;
+      const n = entry.card.length;
       notifyOS(entry.chatId, "asking", bot.name, `${n} ${n === 1 ? "task" : "tasks"} waiting on you`);
     }
   }, [bots, byBot]);
 
-  // Read off the end of each task's log, like a bot row's preview; again only
-  // when the set of stalled tasks or their last activity moves.
-  const [previews, setPreviews] = useState<Record<string, BotPreview>>({});
-  const stalled = [...byBot.values()].flatMap((b) => b.stalls.map((s) => s.row.item));
-  const previewKey = stalled.map((i) => `${i.sessionId}:${i.modified}`).join("|");
-  useEffect(() => {
-    if (stalled.length === 0) return;
-    // A read overtaken by a newer one must not land over it.
-    let stale = false;
-    invoke<Record<string, BotPreview>>("bot_previews", { sessionIds: stalled.map((i) => i.sessionId) })
-      .then((p) => stale || setPreviews(p))
-      .catch(() => {});
-    return () => {
-      stale = true;
-    };
-    // The key carries everything that moves a preview.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewKey]);
-
-  // What each waiting task needs from the reader, written from its last message
-  // by the cheap title model (`task_need`). Asked once per message: a failure
-  // leaves the row on the message itself until the task says something new.
-  const [needByMessage, setNeedByMessage] = useState<Record<string, string>>({});
-  const waiting = [...byBot.values()].flatMap((b) => b.stalls.filter((s) => s.kind === "waiting"));
-  const needs = useMemo(() => {
-    const out: Record<string, string> = {};
-    for (const s of waiting) {
-      const id = s.row.item.sessionId;
-      const need = needByMessage[needKey(id, previews[id]?.text)];
-      if (need) out[id] = need;
-    }
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [byBot, previews, needByMessage]);
-  useEffect(() => {
-    for (const s of waiting) {
-      const id = s.row.item.sessionId;
-      const text = previews[id]?.text;
-      const key = needKey(id, text);
-      if (!text || ASKED.has(key)) continue;
-      ASKED.add(key);
-      invoke<string>("task_need", { sessionId: id, text })
-        .then((need) => setNeedByMessage((n) => ({ ...n, [key]: need })))
-        .catch(() => {});
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [byBot, previews]);
-
-  return { byBot, previews, needs, now };
+  return { byBot, now };
 }
-
-/// Messages already sent to `task_need`, so a re-render asks nothing twice.
-const ASKED = new Set<string>();
-
-const needKey = (sessionId: string, text: string | null | undefined) => `${sessionId}\n${text ?? ""}`;
