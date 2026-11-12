@@ -255,7 +255,7 @@ pub async fn init(
     // refusal that owes the caller no process.
     let mut settings = TurnSettings::new(model, effort, permission_mode, fast);
     settings.developer_instructions =
-        crate::bots::system_prompt(DEVELOPER_INSTRUCTIONS, session_cwd).await;
+        crate::bots::system_prompt(DEVELOPER_INSTRUCTIONS, session_id, session_cwd).await;
     let seq_start = if is_new_session {
         0
     } else {

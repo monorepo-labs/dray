@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { botItems, botRows, chatTime, firstUnread, sentMessages, startsTimeRun } from "@/lib/botTranscript";
+import { botItems, botRows, chatItems, chatTime, firstUnread, sentMessages, startsTimeRun } from "@/lib/botTranscript";
 import type { AgentEvent, AgentEventPayload } from "@/types/events";
 
 let seq = 0;
@@ -122,5 +122,28 @@ describe("botItems", () => {
   it("draws no task for a create that failed", () => {
     const items = botItems([call("c", "dray session new x"), result("c", `no project ${ID}`, true)]);
     expect(items).toEqual([]);
+  });
+});
+
+describe("chatItems", () => {
+  const segment = (sessionId: string, harness: "claude_code" | "codex", events: AgentEvent[]) => ({
+    sessionId,
+    harness,
+    created: "2026-11-12T00:00:00Z",
+    events,
+  });
+
+  it("draws every session in order, with a line where the agent changed", () => {
+    const items = chatItems([
+      segment("a", "claude_code", [user("hi"), said("hello")]),
+      segment("b", "codex", [user("still there?"), said("yes")]),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(["user", "assistant", "switch", "user", "assistant"]);
+    expect(items[2]).toMatchObject({ kind: "switch", harness: "codex", key: "switch:b" });
+  });
+
+  it("draws no line between two sessions on the same agent", () => {
+    const items = chatItems([segment("a", "codex", [said("one")]), segment("b", "codex", [said("two")])]);
+    expect(items.map((i) => i.kind)).toEqual(["assistant", "assistant"]);
   });
 });

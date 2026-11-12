@@ -1,6 +1,5 @@
 import { Plus } from "lucide-react";
 
-import BotAvatar from "@/components/BotAvatar";
 import BranchSelector from "@/components/composer/BranchSelector";
 import BranchSwitchDialog from "@/components/composer/BranchSwitchDialog";
 import ContextMeter from "@/components/composer/ContextMeter";
@@ -15,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import type { ServerId } from "@/lib/transport";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { lockedMidTurn } from "@/lib/liveControls";
+import { botPicksStance } from "@/lib/permission";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type {
   ApprovalPolicy,
@@ -83,8 +83,11 @@ type ComposerToolbarProps = {
   /// Where the session runs is fixed at creation, so the last three controls
   /// only exist before one starts.
   isNewSession: boolean;
-  /// A bot's first chat: its face and name stand in for the project pickers,
-  /// since it runs in its own folder rather than in a repo.
+  /// A bot's chat, which can move to another agent mid-conversation: the next
+  /// send starts a new session there with the conversation handed over.
+  agentSwitch?: boolean;
+  /// A bot's first chat, which draws no project pickers: it runs in its own
+  /// folder rather than in a repo, and the header already names the bot.
   bot?: Bot;
 
   /// Whether this session's turn is in flight. Only the fx provider switch
@@ -130,6 +133,7 @@ export default function ComposerToolbar({
   onAttach,
   contextUsage,
   isNewSession,
+  agentSwitch = false,
   bot,
   busy,
 }: ComposerToolbarProps) {
@@ -167,6 +171,7 @@ export default function ComposerToolbar({
         fastNote={fastNote}
         onFastChange={onFastChange}
         isNewSession={isNewSession}
+        agentSwitch={agentSwitch}
         busy={busy}
         onChange={onModelChange}
         onRefreshModels={onRefreshModels}
@@ -174,13 +179,6 @@ export default function ComposerToolbar({
         onSeedProvider={onSeedProvider}
         loadingModels={loadingModels}
       />
-
-      {isNewSession && bot && (
-        <span className="flex min-w-0 items-center gap-1.5 px-1.5 text-ui text-muted-foreground">
-          <BotAvatar seed={bot.id} avatar={bot.avatar} className="size-4" />
-          <span className="truncate">{bot.name}</span>
-        </span>
-      )}
 
       {isNewSession && !bot && (
         <>
@@ -232,7 +230,8 @@ export default function ComposerToolbar({
 
       {/* Last of the pickers: it is the one control here most sessions set once
           and never touch, so it sits furthest from where the eye lands. */}
-      {offersPermissionModes(harness) && (
+      {/* A bot chat runs on Auto, so it offers no stance unless its agent has none. */}
+      {offersPermissionModes(harness) && (!(bot || agentSwitch) || botPicksStance(harness)) && (
         <PermissionSelector
           harness={harness}
           value={permissionMode}

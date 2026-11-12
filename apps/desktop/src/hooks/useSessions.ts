@@ -27,12 +27,12 @@ import { dropHeld, dropHeldAsks, heldFor, holdEarlyEvent, isAsk } from "@/lib/ea
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { lockedMidTurn } from "@/lib/liveControls";
-import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
+import { AGENT_LABELS, DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
 import { setOlderLoader } from "@/lib/olderPages";
 import { EMPTY_TASKS } from "@/lib/transcript";
-import { stanceFor } from "@/lib/permission";
+import { botStance, stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
 import { questionDrafts } from "@/lib/questionDrafts";
 import { appendLive, mergeMissed, missedEvents, type LiveState } from "@/lib/resync";
@@ -253,7 +253,9 @@ function apiRetryOf(session: SessionSnapshot | null, busy: boolean): ApiRetrySta
 }
 
 /// A composer pick made on a session and not yet sent — see `unsentPicks`.
-type UnsentPick = Partial<Pick<SessionIndexItem, "model" | "effort" | "permissionMode" | "fast">> & {
+/// `harness` only ever differs from the session's own in a bot chat, where the
+/// next send moves the chat to that agent.
+type UnsentPick = Partial<Pick<SessionIndexItem, "harness" | "model" | "effort" | "permissionMode" | "fast">> & {
   efforts?: EffortByModel;
 };
 
@@ -510,8 +512,12 @@ const setHarness = (next: Harness) => {
   // validated *that* — the sentinel is in no list either — so the remembered
   // pick was gone for good. The fetch below repairs against the list it just
   // read, which is the only one that can answer.
-  setModelId(rememberedModel(prefs.modelByHarness, next));
-  setPrefs({ harness: next });
+  const model = rememberedModel(prefs.modelByHarness, next);
+  setModelId(model);
+  // Inside a session only a bot chat offers the switch, and the pick is that
+  // chat's until the next send carries it out.
+  if (selectedSessionId) rememberPick({ harness: next, model });
+  else setPrefs({ harness: next });
 };
 
 // Wrapped rather than exported raw: the hotkey in App.tsx goes through here too.
@@ -835,16 +841,27 @@ const handleSendMsg = async (
 ): Promise<boolean> => {
   const attachmentPaths = attachments.map((a) => a.path);
 
-  let sessionId = selectedSessionId;
+  const selected = selectedSessionId ? sessions.find((s) => s.sessionId === selectedSessionId) : undefined;
+  // A bot chat picked onto another agent moves there now: a new session in the
+  // bot's folder, which the backend hands the conversation so far. Each CLI
+  // resumes only its own sessions, so this one cannot carry on.
+  const switching = !!selected && isBotPath(selected.cwd) && harness !== selected.harness;
+  if (switching && statusOf(selected.sessionId) === "in_progress") {
+    setError(`Wait for this turn to finish before moving the chat to ${AGENT_LABELS[harness]}.`);
+    return false;
+  }
+  if (switching) unsentPicks.current.delete(selected.sessionId);
+
+  let sessionId = switching ? null : selectedSessionId;
   const isNewSession = !sessionId;
   // The unsent pick this send carries. A later edit made while it is out
   // replaces the map entry, and must survive this send landing.
   const sentPick = sessionId ? unsentPicks.current.get(sessionId) : undefined;
 
-  const existing = sessionId ? sessions.find((s) => s.sessionId === sessionId) : undefined;
+  const existing = sessionId ? selected : undefined;
   // The backend reads the recorded cwd on resume, so this only has to be right
   // for a new session.
-  const cwd = isNewSession ? projectPath : existing?.cwd ?? projectPath;
+  const cwd = switching ? selected.cwd : isNewSession ? projectPath : existing?.cwd ?? projectPath;
 
   if (!cwd) {
     setError("Attach a project first.");
@@ -852,6 +869,7 @@ const handleSendMsg = async (
   }
   // A bot's folder is no project, and its chat runs in the folder itself.
   const worktree = useWorktree && !isBotPath(cwd);
+  const stance = isBotPath(cwd) ? botStance(harness, permissionMode) : stanceFor(harness, permissionMode);
   if (!sessionId) {
     sessionId = crypto.randomUUID();
     // Before the selection moves, so the composer reads this server's models
@@ -906,7 +924,7 @@ const handleSendMsg = async (
       sessionId,
       harness,
       cwd,
-      projectPath: projectPath ?? cwd,
+      projectPath: switching ? selected.projectPath : projectPath ?? cwd,
       branch: !worktree ? branch : null,
       worktreeName: null,
       worktreeRemoved: false,
@@ -917,7 +935,7 @@ const handleSendMsg = async (
       titleLocked: false,
       model: modelId,
       effort,
-      permissionMode: stanceFor(harness, permissionMode),
+      permissionMode: stance,
       fast,
       status: "in_progress",
       forkFrom: null,
@@ -1000,7 +1018,7 @@ const handleSendMsg = async (
       // its parent's — and the index is read back, by a later build and by
       // `dray new` inheriting it, so a stance nothing enforces is worse there
       // than on screen, where the control is at least hidden.
-      permissionMode: stanceFor(harness, permissionMode),
+      permissionMode: stance,
       // Already narrowed to this agent and model, for the same reason the
       // stance above is: the index is read back by a later build and by
       // `dray new` inheriting it, so a `true` nothing can honour is worse on
@@ -1048,7 +1066,7 @@ const handleSendMsg = async (
       setSessionIndexItems((prev) =>
         prev.map((i) =>
           i.sessionId === sessionId
-            ? { ...i, model: modelId, effort, permissionMode, fast, aside: false, modified: new Date().toISOString() }
+            ? { ...i, model: modelId, effort, permissionMode: stance, fast, aside: false, modified: new Date().toISOString() }
             : i,
         ),
       );
@@ -1788,7 +1806,8 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
 // Deleting the open one falls back to the empty composer rather than to a
 // neighbour — the next session is not a guess worth making, and `handleNewSession`
 // is the one path that also restores the user's own defaults.
-const deleteSession = async (sessionId: string) => {
+/// Deletes a session and every hidden child; false where the server refused.
+const deleteSession = async (sessionId: string): Promise<boolean> => {
   const fail = failUnlessLeft();
   // Marked before the call, not after it. Deleting a session mid-turn kills
   // its child, and the status that publishes lands while this is still
@@ -1808,7 +1827,7 @@ const deleteSession = async (sessionId: string) => {
       .then((item) => item && applyIndexItem(item))
       .catch((err) => console.error("could not reread", sessionId, err));
     fail(e);
-    return;
+    return false;
   }
 
   // Read before the row goes. A hidden child has no row of its own to be
@@ -1833,6 +1852,7 @@ const deleteSession = async (sessionId: string) => {
     handleNewSession();
   }
   await Promise.all(children.map((c) => deleteSession(c.sessionId)));
+  return true;
 };
 
 // Refetched on every toggle rather than filtered from one cached list: the two

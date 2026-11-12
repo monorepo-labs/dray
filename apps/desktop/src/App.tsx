@@ -115,7 +115,7 @@ import WindowControls from "@/components/layout/WindowControls";
 import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { nextEffort } from "@/components/composer/ModelSelector";
-import { HARNESS_ORDER, nextHarness } from "@/lib/model";
+import { AGENT_LABELS, HARNESS_ORDER, nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { closeActiveTab, ItemTab, type ViewTab } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
@@ -181,10 +181,12 @@ import { changeRange, lastToolResult } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { botAt, botEntries, inBotTree, refreshBots, useBots } from "@/lib/bots";
+import { botAt, botBrowser, botChat, botEntries, botSession, inBotTree, refreshBots, useBots } from "@/lib/bots";
+import { loadOlder } from "@/lib/olderPages";
 import NewBotDialog from "@/components/NewBotDialog";
+import AgentIcon from "@/components/AgentIcon";
 import ModelSelector from "@/components/composer/ModelSelector";
-import { stanceFor } from "@/lib/permission";
+import { botStance } from "@/lib/permission";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -196,6 +198,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { crewRows, crewSeen, inSidebar, withHiddenAsks } from "@/lib/crew";
+import { closeTaskTab, openTaskTab, rowBotOf, stripOf, type TaskTabs } from "@/lib/taskTabs";
 import { panelMove } from "@/lib/sidebarAuto";
 import { playCelebration, playNotification } from "@/lib/sound";
 import {
@@ -602,6 +605,19 @@ function App() {
   // the app onto a repo view for every session would be wrong more often than
   // right.
   const [viewTabs, setViewTabs] = useState<Record<string, ViewTab>>({});
+  // A bot's tasks open as tabs in its row, and the bot a task tab was last
+  // picked from — see `stripOf`. Both by bot id. In memory, like `viewTabs`.
+  const [taskTabs, setTaskTabs] = useState<TaskTabs>({});
+  const [taskTabVia, setTaskTabVia] = useState<string | null>(null);
+  const bots = useBots();
+  /// A bot's current chat session: its newest, since an agent switch starts one.
+  const chatOfBot = useCallback(
+    (id: string) => {
+      const bot = bots.find((b) => b.id === id);
+      return bot && botSession(sessionIndexItems, bot)?.sessionId;
+    },
+    [bots, sessionIndexItems],
+  );
   // Whether the issues page is what the main column is showing. Not a session
   // and not a per-session tab, so it is neither in `viewTabs` nor in the
   // selection: it is a place the reader goes and comes back from, and the
@@ -817,8 +833,6 @@ function App() {
     [selectedSession?.events, busy, liveTaskIds],
   );
 
-  const bots = useBots();
-  useEffect(() => void refreshBots(), []);
   // A bot's folder is a git repository only for its own history, which Dray
   // commits — so no Commit button, no branch and no pull request lookup.
   const inBotFolder = !!selectedSession && !!botAt(bots, selectedSession.cwd);
@@ -915,12 +929,23 @@ function App() {
   // `activeTab`.
   const [panelOpens, setPanelOpens] = useState<Record<string, boolean>>({});
   const [panelTabs, setPanelTabs] = useState<Record<string, PanelTab | null>>({});
+  // A bot's row is one arrangement too (#881): its chat and every task open
+  // in it share one pane, open flag and tab pick alike, so the pane stays put
+  // across the row and shows whatever tab is lit. A pick the lit session does
+  // not draw falls back to its default, as anywhere — see `activeTab`.
+  const rowOf = useCallback(
+    (id: string) => {
+      const bot = rowBotOf(taskTabs, id, taskTabVia);
+      return (bot && chatOfBot(bot)) || id;
+    },
+    [taskTabs, taskTabVia, chatOfBot],
+  );
   const openKey = useCallback(
     (id: string) => {
       const group = groupOf(spaceGroups, id);
-      return group ? `group:${group.id}` : id;
+      return group ? `group:${group.id}` : rowOf(id);
     },
-    [spaceGroups],
+    [spaceGroups, rowOf],
   );
   useEffect(() => {
     if (!activeGroup || !selectedSessionId) return;
@@ -929,14 +954,14 @@ function App() {
       key in prev ? prev : { ...prev, [key]: prev[selectedSessionId] ?? false },
     );
   }, [activeGroup, selectedSessionId]);
-  const panelTab = selectedSessionId ? (panelTabs[selectedSessionId] ?? null) : null;
+  const panelTab = selectedSessionId ? (panelTabs[rowOf(selectedSessionId)] ?? null) : null;
   // Both take the session because one caller opens a session and its pane in
   // the same breath, before the selection has moved.
   const setPanelTab = useCallback(
     (tab: PanelTab | null, id = selectedSessionId) => {
-      if (id) setPanelTabs((prev) => ({ ...prev, [id]: tab }));
+      if (id) setPanelTabs((prev) => ({ ...prev, [rowOf(id)]: tab }));
     },
-    [selectedSessionId],
+    [selectedSessionId, rowOf],
   );
 
   const memberKey = activeGroup ? members(activeGroup).join("\n") : "";
@@ -1009,13 +1034,33 @@ function App() {
   /// preference is kept, so coming back restores the pane exactly as it was;
   /// everything that draws or reads reads this instead.
   const panelShown = panelOpen && !issuesOpen;
+
+  const selectedBot = useMemo(() => {
+    // The held transcript answers too: a session an agent switch just started
+    // reaches the index only once the send returns, and the chat must stay a
+    // bot's chat for that while.
+    const cwd = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.cwd ?? selectedSession?.cwd;
+    return cwd ? botAt(bots, cwd) : undefined;
+  }, [bots, sessionIndexItems, selectedSessionId, selectedSession?.cwd]);
+
+  // A bot chat's sessions from before the selected one: each agent switch
+  // started a new one, and the chat draws them all as one conversation. A
+  // selected session not on the index yet is the newest, just started.
+  const earlierIds = useMemo(() => {
+    if (!selectedBot) return [];
+    const chat = botChat(sessionIndexItems, selectedBot).map((i) => i.sessionId);
+    const at = chat.indexOf(selectedSessionId ?? "");
+    return at >= 0 ? chat.slice(0, at) : chat;
+  }, [selectedBot, sessionIndexItems, selectedSessionId]);
+
   // Every session the selected one started, at any depth. The crew column
   // draws only the ones holding a card, and only while one is; a bot's Tasks
-  // tab lists them all. Off every held session, not the space's: a bot hands
-  // work to whichever project it likes, in any space.
+  // tab lists them all, its earlier sessions' tasks included. Off every held
+  // session, not the space's: a bot hands work to whichever project it likes,
+  // in any space.
   const crew = useMemo(
-    () => crewRows(sessionIndexItems, selectedSessionId, { statusBySession, askingSessions }),
-    [sessionIndexItems, selectedSessionId, statusBySession, askingSessions],
+    () => crewRows(sessionIndexItems, selectedSessionId, { statusBySession, askingSessions }, earlierIds),
+    [sessionIndexItems, selectedSessionId, statusBySession, askingSessions, earlierIds],
   );
   const crewAsks = useMemo(() => crew.filter((r) => r.asking), [crew]);
   // A split has no crew column: it is already several conversations side by
@@ -1058,7 +1103,8 @@ function App() {
   // as on screen. One effect for the grid and the crew together, since
   // `setOnScreen` takes the whole set rather than adding to it — two callers
   // would each wipe the other's.
-  const onScreenKey = [mainGroup ? memberKey : "", crewShown].filter(Boolean).join("\n");
+  // A bot chat's earlier sessions are drawn with it, so they are on screen too.
+  const onScreenKey = [mainGroup ? memberKey : earlierIds.join("\n"), crewShown].filter(Boolean).join("\n");
   useEffect(() => {
     const ids = [...new Set(onScreenKey.split("\n").filter(Boolean))];
     setOnScreen(ids);
@@ -1125,6 +1171,7 @@ function App() {
   // the sidebar, since ⌘F has to open it from a collapsed one, which is not
   // mounted at all.
   const [searchOpen, setSearchOpen] = useState(false);
+  useEffect(() => void refreshBots(), []);
   const searchedSessions = useMemo(
     () => filterSessions(inSidebar(visibleSessions, bots), search),
     [visibleSessions, bots, search],
@@ -1372,8 +1419,18 @@ function App() {
 
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
 
-  const browserTabs = useBrowserTabs(selectedSessionId);
-  const blankTabs = useBlankTabs(selectedSessionId ?? "");
+  // Whose browser the selection shows: a bot and its tasks share the bot
+  // chat's, as the server routes their agents' `dray browser` steps (#881).
+  // A settled task is on no loaded index, so its walk starts at its parent,
+  // off the held transcript, as the server's does off the whole index.
+  const heldParent = selectedSession?.parentSessionId;
+  const browserSession = selectedSessionId
+    ? (botBrowser(bots, sessionIndexItems, rowOf(selectedSessionId)) ??
+      (heldParent ? botBrowser(bots, sessionIndexItems, heldParent) : undefined) ??
+      rowOf(selectedSessionId))
+    : null;
+  const browserTabs = useBrowserTabs(browserSession);
+  const blankTabs = useBlankTabs(browserSession ?? "");
   const pendingBrowserTab = blankTabs.active !== null;
   const hasBrowserTabs = browserTabs && browserTabs.length > 0;
   // A link's tab is answered for before the strip lists it, and the Browser
@@ -1384,9 +1441,14 @@ function App() {
     if (!browserWanted) return;
     if (browserWanted !== selectedSessionId) return setBrowserWanted(null);
     if (!browserTabs?.some((tab) => tab.active)) return;
-    setViewTabs((prev) => ({ ...prev, [browserWanted]: "browser" }));
+    // A task lit in its bot's row has no pages of its own in that row: the
+    // page is the bot's, so the bot's Browser view is where it shows.
+    const row = rowOf(browserWanted);
+    setViewTabs((prev) => ({ ...prev, [row]: "browser" }));
+    if (row !== browserWanted) void handleSelectSessionIndexItem(row);
     setBrowserWanted(null);
-  }, [browserWanted, browserTabs, selectedSessionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browserWanted, browserTabs, selectedSessionId, rowOf]);
   // The main column's Browser view is the panel's browser expanded. Arriving
   // on it closes the pane, whatever tab the pane was on: the reader came for
   // the full width. ⌘E brings it back beside the page, and leaving gives back
@@ -1443,10 +1505,27 @@ function App() {
     [crew, sessionIndexItems],
   );
 
-  const selectedBot = useMemo(() => {
-    const cwd = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.cwd;
-    return cwd ? botAt(bots, cwd) : undefined;
-  }, [bots, sessionIndexItems, selectedSessionId]);
+  const earlierLoaded = sessions.filter((s) => earlierIds.includes(s.sessionId));
+  const earlierKey = earlierLoaded.map((s) => `${s.sessionId}:${s.olderBefore}:${s.events.length}`).join();
+  // Loaded and held as on screen (`onScreenKey`); here read whole, page by
+  // page, as the chat's own log is.
+  useEffect(() => {
+    for (const held of earlierLoaded) {
+      if (held.olderBefore != null) loadOlder(held.sessionId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [earlierKey]);
+  const earlier = useMemo(
+    () => earlierIds.flatMap((id) => earlierLoaded.find((s) => s.sessionId === id) ?? []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [earlierIds.join(), earlierKey],
+  );
+
+  // The bot chat whose row the titlebar draws, and the task lit in it.
+  const strip = stripOf(taskTabs, selectedSessionId, selectedBot?.id ?? null, taskTabVia, chatOfBot);
+  const stripOwner = strip && strip.owner !== selectedSessionId
+    ? sessionIndexItems.find((i) => i.sessionId === strip.owner)
+    : undefined;
 
   const tabs = tabOrder({
     pr: hasPrTab,
@@ -1967,7 +2046,7 @@ function App() {
       void reachableUrl(sessionId, url).then(
         (reached) => {
           if (external) return void openUrl(reached).catch(console.error);
-          void openInBrowser(sessionId, reached, true)
+          void openInBrowser(browserSession ?? sessionId, reached, true)
             .then(() => {
               setBrowserWanted(sessionId);
               trackBrowserOpen(reached);
@@ -2299,8 +2378,11 @@ function App() {
       sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.projectPath;
     // A bot's chat and its tasks belong to every space: a bot hands work to any
     // project, and a task opened from its Tasks tab must not be closed again.
+    // A settled task lit in its bot's row is in no loaded index, so the row
+    // says what `inBotTree` cannot.
     if (
       openPath &&
+      !strip?.lit &&
       !inBotTree(bots, sessionIndexItems, selectedSessionId) &&
       !sessionInSpace(projects, space, openPath)
     ) {
@@ -2310,7 +2392,7 @@ function App() {
     // `handleNewSession` are rebuilt every render, so listing them would run
     // this on every one.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [space, projects, spaceProjects, projectPath, selectedSessionId, selectedSession, sessionIndexItems, bots]);
+  }, [space, projects, spaceProjects, projectPath, selectedSessionId, selectedSession, sessionIndexItems, bots, strip?.lit]);
 
   /// The sidebar's own "New space", which is a request for the field rather
   /// than for a space — naming it is Settings' job, so this only opens the tab.
@@ -2504,12 +2586,12 @@ function App() {
   // arbitration — bar the last arm, which is the reader on Chat with the
   // browser beside it in the panel and no grid to close a pane out of.
   const closeBrowserTab = () => {
-    if (!selectedSessionId || isRecording(selectedSessionId)) return;
+    if (!browserSession || isRecording(browserSession)) return;
     // A blank tab has no browser behind it, so it is dropped rather than
     // closed — and it is what the reader is looking at while it is up.
-    if (blankTabs.active !== null) return closeBlankTab(selectedSessionId, blankTabs.active);
+    if (blankTabs.active !== null) return closeBlankTab(browserSession, blankTabs.active);
     const open = browserTabs?.find((tab) => tab.active);
-    if (open) void closeTab(selectedSessionId, open.id);
+    if (open) void closeTab(browserSession, open.id);
   };
   // `viewTab` is per session and the issues page does not clear it, so a
   // reader who opened Issues from the Files view still has `activeFile`
@@ -2519,7 +2601,9 @@ function App() {
   // page hides.
   const fileShown = !issuesOpen && viewTab === "files" && !!activeFile;
   const rowTabOnScreen =
-    !issuesOpen && !!selectedSessionId && (viewTab === "files" || viewTab === "changes" || fullBrowserOpen);
+    !issuesOpen &&
+    !!selectedSessionId &&
+    (viewTab === "files" || viewTab === "changes" || fullBrowserOpen || !!strip?.lit);
   const closeTabOrPane = () => {
     if (!selectedSessionId) return;
     // The row's own close, so the chord lands where the cross would — and
@@ -2577,9 +2661,9 @@ function App() {
       if (pickedIssue) return pickedIssueData.refresh();
       return issuesRefreshRef.current?.();
     }
-    if (browserShown && selectedSessionId) {
+    if (browserShown && browserSession) {
       if (!pendingBrowserTab && browserTabs?.some((tab) => tab.active)) {
-        void navigate(selectedSessionId, "reload");
+        void navigate(browserSession, "reload");
       }
       return;
     }
@@ -2588,12 +2672,12 @@ function App() {
   // ⌘⇧← / ⌘⇧→ step the browser's strip, clamped like every other subtab row.
   // The pending tab sits at the end of it, which is where the strip draws it.
   const stepBrowserTab = (delta: number) => {
-    if (!selectedSessionId || !browserTabs || isRecording(selectedSessionId)) return;
+    if (!browserSession || !browserTabs || isRecording(browserSession)) return;
     const from = pendingBrowserTab ? browserTabs.length : browserTabs.findIndex((tab) => tab.active);
     const next = browserTabs[from + delta];
     if (!next) return;
-    if (pendingBrowserTab) setPendingTab(selectedSessionId, false);
-    if (!next.active) void activateTab(selectedSessionId, next.id);
+    if (pendingBrowserTab) setPendingTab(browserSession, false);
+    if (!next.active) void activateTab(browserSession, next.id);
   };
   // The Diff view and an open file step their own strip on this chord, and the
   // main column's row wins over a browser sitting beside it in the panel.
@@ -2719,8 +2803,12 @@ function App() {
   // empty pane until it lands rather than a different screen.
   const shownSession =
     selectedSession ?? sessionIndexItems.find((i) => i.sessionId === selectedSessionId) ?? null;
+  // The session whose row the titlebar draws: the bot's chat over its lit task.
+  const rowSession = stripOwner ?? shownSession;
+  // The way back from a hidden session, where its bot's row is not drawn.
+  const crumb = strip ? undefined : hiddenParent;
   // Off the index, never the snapshot: `session_changed` writes only there.
-  const selectedItem = sessionIndexItems.find((i) => i.sessionId === selectedSessionId);
+  const selectedItem =sessionIndexItems.find((i) => i.sessionId === selectedSessionId);
   // The empty composer is a bot's first chat when it is aimed at the bot's folder.
   const newBot = !shownSession && projectPath ? botAt(bots, projectPath) : undefined;
   // A bot whose empty chat opens on a welcome (Dray Bot) draws as a chat
@@ -2739,9 +2827,55 @@ function App() {
 
   // What every transcript on screen reports back through: the main column, a
   // split pane and a crew card alike.
+  /// Steps into a task tab: its chat on screen, the bot's row kept above it.
+  const pickTaskTab = (bot: string, id: string) => {
+    setTaskTabVia(bot);
+    setViewTabs((prev) => ({ ...prev, [id]: "chat" }));
+    void handleSelectSessionIndexItem(id);
+  };
+
+  /// A task clicked in a bot's chat or its Tasks tab opens as a tab in the
+  /// bot's row (#881). ⌘-click, or a session that is no task of this bot,
+  /// switches to it alone, the way it always did.
+  const openTask = async (id: string, alone = false) => {
+    const bot = selectedBot;
+    // A settled task is in no crew, so it is asked for and its parents walked
+    // up to the bot's folder — any of its chat's sessions, since a task
+    // started before an agent switch names the old one. Its chat still names
+    // it, and settling is not what closes a tab. Bounded like `inBotTree`.
+    const indexItem = (sid: string) =>
+      sessionIndexItems.find((i) => i.sessionId === sid) ??
+      invoke<SessionIndexItem | null>("session_index_item", { sessionId: sid }).catch(() => null);
+    let task = crew.find((r) => r.item.sessionId === id)?.item;
+    if (!task && bot && !alone) {
+      const found = await indexItem(id);
+      let at = found;
+      for (let hops = 0; at?.parentSessionId && hops < 8; hops++) {
+        const parent = await indexItem(at.parentSessionId);
+        if (parent && botAt(bots, parent.cwd)?.id === bot.id) {
+          task = found ?? undefined;
+          break;
+        }
+        at = parent;
+      }
+    }
+    if (alone || !bot || !task) {
+      setTaskTabVia(null);
+      void handleSelectSessionIndexItem(id);
+      return;
+    }
+    setTaskTabs((prev) => openTaskTab(prev, bot.id, { sessionId: id, title: task.title }));
+    pickTaskTab(bot.id, id);
+  };
+
+  const deleteTask = async (id: string) => {
+    if (await deleteSession(id)) setTaskTabs((prev) => closeTaskTab(prev, id));
+  };
+
   const paneChat: PaneChat = {
     onOpenSubagent: openSubagent,
-    onOpenSession: (id) => void handleSelectSessionIndexItem(id),
+    onOpenSession: (id, alone) =>
+      selectedBot ? void openTask(id, alone) : void handleSelectSessionIndexItem(id),
     onOpenSubagentPanel: () => showPanel("more"),
     onOpenPlan: () => showPanel("plan"),
     onRespondPermission: handleRespondPermission,
@@ -2811,7 +2945,9 @@ function App() {
           // Cleared while the page is up. The column is showing issues, so a
           // lit row would name a session that is nowhere on screen — and the
           // selection itself is kept, which is what makes coming back free.
-          selectedSessionId={issuesOpen ? null : selectedSessionId}
+          // A task lit in a bot's row keeps the bot's row marked: the task
+          // has none, and the bot's chat is one tab away.
+          selectedSessionId={issuesOpen ? null : strip?.owner ?? selectedSessionId}
           collapsed={collapsed}
           onSelect={(sessionId) => goToSession(() => void handleSelectSessionIndexItem(sessionId))}
           onPrefetch={(sessionId) => void ensureLoaded(sessionId)}
@@ -2838,7 +2974,7 @@ function App() {
           onDetach={detachSession}
           onSetFlags={handleSetSessionFlags}
           onFork={forkSession}
-          onDelete={deleteSession}
+          onDelete={deleteTask}
           onMarkUnread={markSessionUnread}
           archivedShown={archivedShown}
           archivedRequested={archivedRequested}
@@ -2893,7 +3029,7 @@ function App() {
               move. It belongs to the sidebar, so it goes when the sidebar does —
               and on a hidden session, whose way back to its parent runs
               through this same strip. ⌘, still opens settings there. */}
-          {sidebarDrawn > 0 && !(!issuesOpen && shownSession && hiddenParent) && (
+          {sidebarDrawn > 0 && !(!issuesOpen && shownSession && crumb) && (
           <div
             className="absolute top-1/2 flex shrink-0 -translate-y-1/2 items-center gap-1"
             style={{ right: `calc(100% - ${sidebarDrawn}px + 0.5rem)` }}
@@ -2920,20 +3056,23 @@ function App() {
               not a session — the issues page, a new task. */}
           {/* A hidden session has no sidebar row, so this is the way back to
               the session that started it. */}
-          {!issuesOpen && shownSession && hiddenParent && (
+          {!issuesOpen && shownSession && crumb && (
             <button
               type="button"
               onClick={() =>
-                goToSession(() => void handleSelectSessionIndexItem(hiddenParent.sessionId))
+                goToSession(() => void handleSelectSessionIndexItem(crumb.sessionId))
               }
               className="max-w-40 shrink-0 cursor-pointer truncate text-ui text-muted-foreground transition-colors hover:text-foreground"
             >
-              {hiddenParent.title} /
+              {crumb.title} /
             </button>
           )}
-          {!issuesOpen && shownSession && (
+          {!issuesOpen && shownSession && rowSession && (
             <ViewTabs
-              sessionId={shownSession.sessionId}
+              // With a task tab lit, still the bot's row: its chat, pages and
+              // files, the task tabs after them.
+              sessionId={rowSession.sessionId}
+              browserId={browserSession ?? rowSession.sessionId}
               // The group's name over a grid, for the reason the header gave:
               // each pane already names its own session. The project is left
               // off where the sidebar is already filtered down to it.
@@ -2941,28 +3080,56 @@ function App() {
                 mainGroup
                   ? groupName(mainGroup)
                   : projectFilter
-                    ? shownSession.title
-                    : `${botAt(bots, shownSession.projectPath)?.name ?? basename(shownSession.projectPath)} / ${shownSession.title}`
+                    ? rowSession.title
+                    : `${botAt(bots, rowSession.projectPath)?.name ?? basename(rowSession.projectPath)} / ${rowSession.title}`
               }
-              machine={mainGroup ? undefined : serverOfPath(shownSession.projectPath)}
+              machine={mainGroup ? undefined : serverOfPath(rowSession.projectPath)}
               rename={
                 mainGroup
                   ? undefined
                   : {
-                      title: shownSession.title,
+                      title: rowSession.title,
                       save: (title) =>
-                        void invoke("rename_session", { sessionId: shownSession.sessionId, title }).catch(
+                        void invoke("rename_session", { sessionId: rowSession.sessionId, title }).catch(
                           (e) => console.error("rename failed", e),
                         ),
                     }
               }
-              tab={viewTab}
-              onChange={setViewTab}
-              working={busy}
+              tab={stripOwner ? viewTabs[stripOwner.sessionId] ?? "chat" : viewTab}
+              onChange={
+                stripOwner
+                  ? (tab) => {
+                      setViewTabs((prev) => ({ ...prev, [stripOwner.sessionId]: tab }));
+                      void handleSelectSessionIndexItem(stripOwner.sessionId);
+                    }
+                  : setViewTab
+              }
+              working={stripOwner ? statusBySession[stripOwner.sessionId] === "in_progress" : busy}
               branch={prBranch}
               cwd={shownSession.cwd}
+              tasks={
+                strip
+                  ? {
+                      items: (taskTabs[strip.bot] ?? []).map((t) => ({
+                        sessionId: t.sessionId,
+                        title: sessionIndexItems.find((i) => i.sessionId === t.sessionId)?.title ?? t.title,
+                        working: statusBySession[t.sessionId] === "in_progress",
+                      })),
+                      lit: strip.lit,
+                      onPick: (id) => pickTaskTab(strip.bot, id),
+                      onClose: (id) => setTaskTabs((prev) => closeTaskTab(prev, id)),
+                      onReopen: (id) =>
+                        setTaskTabs((prev) =>
+                          openTaskTab(prev, strip.bot, {
+                            sessionId: id,
+                            title: sessionIndexItems.find((i) => i.sessionId === id)?.title ?? "Task",
+                          }),
+                        ),
+                    }
+                  : undefined
+              }
               // Not past a parent's breadcrumb, whose width the lead leaves out.
-              alignX={hiddenParent ? 0 : sidebarDrawn}
+              alignX={crumb ? 0 : sidebarDrawn}
             />
           )}
           {/* Keeps the far end at the far end on pages with no tab row. */}
@@ -3086,7 +3253,7 @@ function App() {
             <TabBody active={activeTab === "browser"}>
               <MountOnce when={panelShown && activeTab === "browser"}>
               <BrowserPane
-                sessionId={shownSession.sessionId}
+                sessionId={browserSession ?? shownSession.sessionId}
                 active={panelShown && activeTab === "browser"}
                 mode="panel"
                 fullOpen={fullBrowserOpen}
@@ -3099,10 +3266,10 @@ function App() {
               <TasksPanel
                 rows={crew}
                 prOf={(row) => prMarks.prFor(row.item.projectPath, sessionBranch(row.item))}
-                onOpen={(id) => void handleSelectSessionIndexItem(id)}
+                onOpen={(id, alone) => void openTask(id, alone)}
                 onSetFlags={handleSetSessionFlags}
                 onFork={forkSession}
-                onDelete={deleteSession}
+                onDelete={deleteTask}
                 onDetach={detachSession}
                 onMerge={async (row, pr, method) => {
                   // From the repo root: a task's worktree may already be gone.
@@ -3285,6 +3452,15 @@ function App() {
           pending={
             sleepingBoat ? (
               <BoatNotice server={sleepingBoat} />
+            ) : selectedBot && selectedSession && harness !== selectedSession.harness ? (
+              // A bot chat picked onto another agent: the send moves it there.
+              <div className="mb-2 flex min-h-7 items-center gap-2 px-1">
+                <AgentIcon harness={harness} brand className="size-3.5 shrink-0" />
+                <p className="min-w-0 flex-1 truncate text-ui text-foreground">
+                  Moving to {AGENT_LABELS[harness]}
+                  <span className="text-muted-foreground"> · Your next message goes to it, with this conversation.</span>
+                </p>
+              </div>
             ) : selectedItem?.continueAt && (
               <AutoContinueNotice
                 at={selectedItem.continueAt}
@@ -3350,6 +3526,7 @@ function App() {
               onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
               contextUsage={contextUsage}
               isNewSession={!selectedSessionId}
+              agentSwitch={!!selectedBot}
               bot={newBot}
               busy={busy}
             />
@@ -3413,6 +3590,7 @@ function App() {
             {...paneState(selectedSessionId ?? "")}
             {...paneChat}
             bot={!!selectedBot}
+            earlier={earlier}
             taskOf={taskOf}
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
             crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
@@ -3448,7 +3626,7 @@ function App() {
         <TabBody active={!issuesOpen && viewTab === "browser"}>
           <MountOnce when={fullBrowserOpen}>
           <BrowserPane
-            sessionId={selectedSession.sessionId}
+            sessionId={browserSession ?? selectedSession.sessionId}
             active={fullBrowserOpen}
             mode="full"
             onCollapse={collapseBrowser}
@@ -3584,7 +3762,7 @@ function App() {
         harness,
         model: modelId,
         effort,
-        permissionMode: stanceFor(harness, permissionMode),
+        permissionMode: botStance(harness, permissionMode),
         fast,
       }}
       onStarted={(chat) => goToSession(() => void handleSelectSessionIndexItem(chat.sessionId))}

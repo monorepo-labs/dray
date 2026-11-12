@@ -45,7 +45,7 @@ pub enum ServerCommand {
     Pair,
     /// Connect Grok, Claude or ChatGPT to this server over MCP, list the
     /// ones connected, or sign one out.
-    #[command(subcommand)]
+    #[command(subcommand, hide = !dray_proto::REMOTE_MCP)]
     Assistant(AssistantCommand),
 }
 

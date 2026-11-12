@@ -37,8 +37,9 @@ type ChatProps = {
   onOpenSubagent: (id: string) => void;
   /// Opens the session that relayed a prompt into this one, for the avatar a
   /// `dray send` message draws. Selecting the session is all it does — the same
-  /// thing clicking its sidebar row does.
-  onOpenSession: (sessionId: string) => void;
+  /// thing clicking its sidebar row does. `alone` is a bot chat's ⌘-click on a
+  /// task, which opens it in place of the chat rather than as a tab beside it.
+  onOpenSession: (sessionId: string, alone?: boolean) => void;
   /// Opens the subagent panel on no particular run — what the background-task
   /// notice needs, since it stands for the whole set rather than for one of them.
   onOpenSubagentPanel: () => void;
@@ -93,11 +94,16 @@ type ChatProps = {
   /// A bot's chat: messages and the tasks it started, tool calls only as the
   /// live line while it works. See [BotTranscript].
   bot?: boolean;
+  /// A bot chat's earlier sessions, oldest first, from before it switched
+  /// agent. Drawn above this one as one conversation.
+  earlier?: SessionSnapshot[];
   /// Names a task the bot started, for its card.
   taskOf?: (sessionId: string) => BotTask | undefined;
   /// The session had unread replies, for a bot chat's NEW divider.
   unread?: boolean;
 };
+
+const NO_EARLIER: SessionSnapshot[] = [];
 
 /// How long an answered permission card holds its place before going.
 ///
@@ -198,6 +204,7 @@ export default function Chat({
   rail = true,
   active = true,
   bot = false,
+  earlier = NO_EARLIER,
   taskOf,
   unread = false,
 }: ChatProps) {
@@ -672,12 +679,19 @@ export default function Chat({
   const callbacks = useRef({ onOpenSubagent, onOpenSession });
   callbacks.current = { onOpenSubagent, onOpenSession };
   const openSubagent = useCallback((id: string) => callbacks.current.onOpenSubagent(id), []);
-  const openSession = useCallback((id: string) => callbacks.current.onOpenSession(id), []);
+  const openSession = useCallback(
+    (id: string, alone?: boolean) => callbacks.current.onOpenSession(id, alone),
+    [],
+  );
 
   // With no session there is no transcript to draw; AppShell centers the
   // composer and skips this pane entirely. A session still being read draws the
   // same nothing, but inside the arrangement it is about to fill — see
   // `shownSession` in App.
+  // Held across renders: a fresh array would rebuild the bot chat's rows on
+  // every event.
+  const segments = useMemo(() => (session ? [...earlier, session] : earlier), [earlier, session]);
+
   if (!session) return null;
 
   return (
@@ -708,7 +722,7 @@ export default function Chat({
               <BotTranscript
                 key={session.sessionId}
                 unread={unread}
-                events={session.events}
+                segments={segments}
                 busy={busy}
                 preview={previewShown ? <StreamingPreview sessionId={session.sessionId} /> : undefined}
                 taskOf={taskOf}
