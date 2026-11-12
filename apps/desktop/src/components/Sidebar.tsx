@@ -1342,8 +1342,10 @@ export default function Sidebar({
 
       {/* Above the project filter: a bot belongs to no project, it hands work
           to any of them. No heading — the face on a row is what says it is a
-          bot. New bot sits in the strip above, beside the other ways in. */}
-      {bots.length > 0 && <div className="mt-4 flex flex-col gap-px px-2">
+          bot. New bot sits in the strip above, beside the other ways in.
+          Inset to the column the sidebar's text and times line up on, so a
+          selected row's fill stays inside it. */}
+      {bots.length > 0 && <div className="mt-4 flex flex-col gap-px pr-[13px] pl-4">
         {bots.map(({ bot, session, preview }) => {
           const status = session ? (statusBySession[session.sessionId] ?? session.status) : "idle";
           return <BotRow
@@ -1800,7 +1802,7 @@ function BotRow({
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
           className={cn(
-            "group relative flex w-full cursor-pointer items-center gap-2.5 rounded-md py-1.5 pr-2 pl-1 text-left",
+            "group relative flex w-full cursor-pointer items-center gap-2.5 rounded-md px-1 py-1 text-left",
             "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
             active
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
