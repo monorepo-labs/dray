@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 /// page is laid out at the recording's size, not the pane's, so the still is
 /// the page as it was when recording began — without this it reads as a
 /// browser that froze while the agent went on working in it.
-export default function RecordingNotice() {
+export default function RecordingNotice({ since }: { since?: number }) {
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-background/80">
       <div className="mb-1 flex items-center gap-2">
@@ -18,7 +18,7 @@ export default function RecordingNotice() {
           />
           <circle cx="8.625" cy="12" r="2.25" className="animate-rec-blink fill-destructive" />
         </svg>
-        <Elapsed />
+        <Elapsed since={since} />
       </div>
       <div className="text-sm font-medium">Recording in progress</div>
       <p className="max-w-64 text-center text-xs text-muted-foreground">
@@ -28,12 +28,12 @@ export default function RecordingNotice() {
   );
 }
 
-/// Time since the notice appeared. ponytail: counted from mount, so a pane
-/// opened mid-recording starts at 0:00; carry the start on `browser_recording`
-/// if that ever misleads anybody.
-function Elapsed() {
-  const [start] = useState(Date.now);
-  const [now, setNow] = useState(start);
+/// Time since `since`, else since the notice appeared. ponytail: `since` is
+/// when this app heard of the recording, so an app opened mid-recording starts
+/// at 0:00; carry the start on `browser_recording` if that ever misleads.
+function Elapsed({ since }: { since?: number }) {
+  const [start] = useState(() => since ?? Date.now());
+  const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);

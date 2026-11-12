@@ -75,6 +75,7 @@ import {
   useUrlDraft,
   usePicking,
   useRecordedTab,
+  recordingStart,
   useViewport,
   VIEWPORT_PRESETS,
   type Snapshot as BrowserSnapshot,
@@ -277,7 +278,7 @@ export default function BrowserPane({
         ) : (
           <Snapshot of={snapshot} />
         )}
-        {current && current.id === recorded && <RecordingNotice />}
+        {current && current.id === recorded && <RecordingNotice since={recordingStart(sessionId)} />}
       </div>
     </div>
   );

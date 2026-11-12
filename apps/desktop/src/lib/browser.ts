@@ -150,8 +150,13 @@ function start() {
   });
   void listen<{ sessionId: string; tab: number | null }>("browser_recording", (e) => {
     const { sessionId, tab } = e.payload;
-    if (tab !== null) recording.set(sessionId, tab);
-    else recording.delete(sessionId);
+    if (tab !== null) {
+      recording.set(sessionId, tab);
+      if (!recordingSince.has(sessionId)) recordingSince.set(sessionId, Date.now());
+    } else {
+      recording.delete(sessionId);
+      recordingSince.delete(sessionId);
+    }
     notify();
   });
   // Whether Chromium is on disk yet. The first read fails in a build without
@@ -347,8 +352,17 @@ export function setPickHandler(fn: typeof pickHandler) {
 /// closed; the reader goes on using the rest.
 const recording = new Map<string, number>();
 
+/// When this app first heard of each session's recording. The notice counts
+/// from here, not its own mount: the reader can switch off the recorded tab
+/// and back, which remounts it.
+const recordingSince = new Map<string, number>();
+
 export function useRecordedTab(sessionId: string): number | null {
   return useSyncExternalStore(subscribe, () => recording.get(sessionId) ?? null);
+}
+
+export function recordingStart(sessionId: string): number | undefined {
+  return recordingSince.get(sessionId);
 }
 
 /// Tabs a `dray browser` verb touched within `DRIVEN_HOLD`, keyed by tab id,
