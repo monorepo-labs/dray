@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { MergeControl } from "@/components/TasksPanel";
 import { seededAvatar } from "@/lib/botAvatar";
 import { FULL_FOR, type MergeCardPayload } from "@/lib/mergeCard";
 import { openLink } from "@/lib/openLink";
-import { qualify, serverOfSession } from "@/lib/transport";
+import { noteSession, qualify, serverOfSession } from "@/lib/transport";
 import { isModClick } from "@/lib/platform";
 import { mergeVerdict, readyToMerge } from "@/lib/pr";
 import { cn } from "@/lib/utils";
@@ -19,6 +19,9 @@ import type { AgentEvent, MergeMethod, PrMark } from "@/types/events";
 export type MergeCardHost = {
   /// `undefined` until the repo is read, `null` where it holds no such PR.
   prNumbered: (repo: string, number: number) => PrMark | null | undefined;
+  /// A card's PR missing from a read: once per card, re-read, since the read
+  /// may predate the PR rather than the PR having left the window.
+  missing: (repo: string, number: number) => void;
   titleOf: (taskId: string) => string | undefined;
   /// `settle`: a bot's chat, where landed work is the bot's to tidy, so the
   /// task is settled and its worktree deleted after the merge.
@@ -78,12 +81,20 @@ const statusLine = (pr: PrMark | undefined) => (pr ? VERDICT_WORDS[mergeVerdict(
 export default function MergeCard({ event }: { event: AgentEvent }) {
   const host = useContext(MergeCardHostContext);
   const chat = useContext(MergeCardChatContext);
-  if (event.payload.type !== "merge_card") return null;
+  const payload = event.payload.type === "merge_card" ? event.payload : null;
   // The server wrote its own bare path; qualified, a remote chat's card reads
   // and merges on that server rather than on a local checkout of the same path.
-  const card = { ...event.payload, projectPath: qualify(event.payload.projectPath, serverOfSession(event.sessionId)) };
+  const repo = payload ? qualify(payload.projectPath, serverOfSession(event.sessionId)) : "";
+  const found = payload ? host?.prNumbered(repo, payload.number) : undefined;
+  useEffect(() => {
+    if (payload && found === null) host?.missing(repo, payload.number);
+  }, [host, repo, payload, found]);
+  if (!payload) return null;
+  const card = { ...payload, projectPath: repo };
+  // The server only posts a card for a task on its own machine, so the task
+  // lives where the chat does, even where no list has told us yet.
+  noteSession(card.taskId, serverOfSession(event.sessionId));
 
-  const found = host?.prNumbered(card.projectPath, card.number);
   const pr = found ?? undefined;
   const merged = pr?.state === "MERGED";
   const title = host?.titleOf(card.taskId) ?? card.title;

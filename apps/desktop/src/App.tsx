@@ -3071,8 +3071,15 @@ function App() {
     }
   };
 
+  const cardsReread = useRef(new Set<string>());
   const mergeCardHost: MergeCardHost = {
     prNumbered: prMarks.prNumbered,
+    missing: (repo, number) => {
+      const key = `${repo}#${number}`;
+      if (cardsReread.current.has(key)) return;
+      cardsReread.current.add(key);
+      prMarks.refreshAfterWrite();
+    },
     titleOf: (id) => sessionIndexItems.find((i) => i.sessionId === id)?.title,
     merge: async (card, method, settle) => {
       const item = settle
@@ -3080,7 +3087,9 @@ function App() {
           (await invoke<SessionIndexItem | null>("session_index_item", { sessionId: card.taskId }).catch(() => null)))
         : null;
       const busy = (statusBySession[card.taskId] ?? item?.status) === "in_progress";
-      return mergeTask(card.projectPath, card.number, method, item && !item.archived ? { item, busy } : null);
+      // A task moved off the card's branch holds work this merge did not land.
+      const landed = item && !item.archived && sessionBranch(item) === card.branch;
+      return mergeTask(card.projectPath, card.number, method, landed ? { item, busy } : null);
     },
     open: (id, alone) => paneChat.onOpenSession(id, alone),
     fixConflicts: async (card) => {
