@@ -81,6 +81,8 @@ pub mod remote_access;
 #[cfg(any(feature = "serve", feature = "desktop"))]
 #[path = "mcp/mcp.rs"]
 pub mod mcp;
+#[cfg(any(feature = "serve", feature = "desktop"))]
+pub mod org_link;
 // Every server reaches other machines on its own (#760).
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod machines;

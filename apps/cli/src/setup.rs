@@ -124,6 +124,66 @@ fn assistant(command: AssistantCommand) -> Result<(), String> {
     }
 }
 
+/// Links this machine's server to an org: prints where to approve the code,
+/// then waits while the server polls drayhq.com. The server runs the flow,
+/// so leaving early stops only the waiting.
+pub fn login() -> Result<(), String> {
+    use dray_proto::{Request, Response};
+    let endpoint = dray_proto::endpoint().ok_or("could not resolve your home directory")?;
+    let status = || match super::send_to(&endpoint, Request::LinkStatus)? {
+        Response::LinkStatus { linked, pending, error } => Ok((linked, pending, error)),
+        Response::Error { message } => Err(message),
+        other => Err(format!("unexpected answer from the server: {other:?}")),
+    };
+    let (before, _, _) = status()?;
+    let (url, short_url, code, expires_in_secs) = match super::send_to(&endpoint, Request::Login)? {
+        Response::LinkPending { url, short_url, code, expires_in_secs } => (url, short_url, code, expires_in_secs),
+        Response::Error { message } => return Err(message),
+        other => return Err(format!("unexpected answer from the server: {other:?}")),
+    };
+    if let Some(org) = &before {
+        println!("{DIM}Linked to {} now. Approving in another org moves it there.{RESET}\n", org.name);
+    }
+    println!(
+        "Open this page and approve the code:\n\n   {url}\n\n\
+         Or go to {short_url} and enter {code}.\n\n\
+         {DIM}Waiting for approval. The code is good for {} minutes.{RESET}",
+        expires_in_secs / 60
+    );
+    // A little past the code's life, so the server's own verdict is what ends it.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(expires_in_secs + 30);
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        match status()? {
+            (_, true, _) => continue,
+            (_, false, Some(error)) => return Err(error),
+            (Some(org), false, None) => {
+                println!("Linked to {}.", org.name);
+                return Ok(());
+            }
+            (None, false, None) => return Err("The link stopped before it finished.".into()),
+        }
+    }
+    Err("The code expired before anyone approved it.".into())
+}
+
+/// Unlinks this machine's server from its org, on drayhq.com too.
+pub fn logout() -> Result<(), String> {
+    use dray_proto::{Request, Response};
+    let endpoint = dray_proto::endpoint().ok_or("could not resolve your home directory")?;
+    match super::send_to(&endpoint, Request::Logout)? {
+        Response::Unlinked { org, warning } => {
+            println!("Unlinked from {}.", org.name);
+            if let Some(warning) = warning {
+                eprintln!("{warning}");
+            }
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(format!("unexpected answer from the server: {other:?}")),
+    }
+}
+
 /// The phone's pairing QR, for a server with no app to draw it. Light
 /// modules are the blocks, since a terminal is usually light text on dark.
 fn pair() -> Result<(), String> {

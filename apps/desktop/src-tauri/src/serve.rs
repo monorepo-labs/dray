@@ -1858,6 +1858,10 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         mcp_pair(read_only: bool, replaces: Option<String>) => crate::mcp::pair(sink, read_only, replaces).await;
         mcp_assistants() => crate::mcp::assistants().await;
         mcp_revoke(id: String) => crate::mcp::revoke(sink, id).await;
+        // This server's link to an org at drayhq.com.
+        org_link_state() => ok(crate::org_link::state(&sink).await);
+        org_link_start() => crate::org_link::start(sink).await;
+        org_unlink() => crate::org_link::unlink(sink).await;
         read_doc(path: String) => crate::docs::read_doc(path).await;
         save_doc(path: String, text: String, expect: Option<String>) => crate::docs::save_doc(path, text, expect).await;
         watch_docs(scope: String, paths: Vec<String>) => {
