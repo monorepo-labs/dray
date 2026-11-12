@@ -42,6 +42,12 @@ describe("previewLine", () => {
       "Done. See the PR. Next?",
     );
   });
+
+  it("drops heading marks and keeps a PR number", () => {
+    expect(previewLine("## Status\n> Opened #908.")).toBe("Status Opened #908.");
+    expect(previewLine("#917 conflicts with main.")).toBe("#917 conflicts with main.");
+    expect(previewLine("Both changed `parse_args`.")).toBe("Both changed parse_args.");
+  });
 });
 
 describe("inBotTree", () => {

@@ -92,6 +92,7 @@ import { useChord } from "@/hooks/useShortcuts";
 import { type Chord, formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_BESIDE, CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import TasksPanel from "@/components/TasksPanel";
+import StalledTasks from "@/components/chat/StalledTasks";
 import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/MergeCard";
 import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
@@ -210,7 +211,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { crewRows, crewSeen, inSidebar, withHiddenAsks } from "@/lib/crew";
+import { crewRows, crewSeen, inSidebar, withHiddenAsks, type CrewRow } from "@/lib/crew";
+import { botCrews, type Stall } from "@/lib/stalled";
+import { useStalledTasks } from "@/hooks/useStalledTasks";
 import {
   addPickTab,
   closePickTab,
@@ -252,6 +255,7 @@ function SettingsReady({ onReady }: { onReady: (ready: boolean) => void }) {
   return null;
 }
 
+const NO_STALLS: Stall[] = [];
 
 function App() {
   const {
@@ -260,6 +264,7 @@ function App() {
     sessions,
     sessionIndexItems,
     statusBySession,
+    unreadWorking,
     askingSessions,
     archivedShown,
     archivedRequested,
@@ -1319,23 +1324,58 @@ function App() {
       ).join("\n"),
     [sessions, selectedSessionId, earlierIds, memberKey],
   );
+  // Every bot's tasks too, wherever the reader is: a stalled one is judged by
+  // its PR, and its bot is the one told.
+  const botRepoKey = useMemo(
+    () =>
+      [
+        ...new Set(
+          botCrews(bots, sessionIndexItems, { statusBySession: {}, askingSessions: new Set() }).flatMap((c) =>
+            c.rows.map((r) => r.item.projectPath),
+          ),
+        ),
+      ].join("\n"),
+    [bots, sessionIndexItems],
+  );
   // Whichever sidebar list is up: a card on screen is still being read.
   const repoPaths = useMemo(
     () => [
       ...new Set([
         ...(archivedShown ? [] : [...visibleSessions, ...crew.map((r) => r.item)].map((i) => i.projectPath)),
         ...(cardRepoKey ? cardRepoKey.split("\n") : []),
+        ...(botRepoKey ? botRepoKey.split("\n") : []),
       ]),
     ],
-    [archivedShown, visibleSessions, crew, cardRepoKey],
+    [archivedShown, visibleSessions, crew, cardRepoKey, botRepoKey],
   );
-  const prMarks = usePrMarks(repoPaths);
+  const botRepos = useMemo(() => (botRepoKey ? botRepoKey.split("\n") : []), [botRepoKey]);
+  const prMarks = usePrMarks(repoPaths, botRepos);
 
   // "This can land now" — raised off the sidebar's marks rather than the
   // panel's own read, which is the only way it can be noticed at all: the
   // panel's poll is gated on its tab being on screen, and a tab on screen is
   // exactly the case with nothing to announce.
   usePrReady({ sessions: visibleSessions, prFor: prMarks.prFor, canAnnounce });
+
+  // Each bot's tasks that have sat untouched: drawn at the foot of its chat,
+  // and a banner per bot when new ones land while the window is away.
+  const taskPr = useCallback(
+    (row: CrewRow) => prMarks.prFor(row.item.projectPath, sessionBranch(row.item)),
+    [prMarks.prFor],
+  );
+  const stalled = useStalledTasks({
+    bots,
+    items: sessionIndexItems,
+    statusBySession,
+    askingSessions,
+    tasksBySession,
+    prOf: taskPr,
+  });
+  const stalls = (selectedBot && stalled.byBot.get(selectedBot.id)?.card) || NO_STALLS;
+  // The card's row the reader last picked, which the bot's chat scrolls to.
+  // Named with its bot, so another bot's chat never acts on it.
+  const [stallFocus, setStallFocus] = useState<{ botId: string; sessionId: string; at: number } | null>(null);
+  const botFocus = stallFocus && stallFocus.botId === selectedBot?.id ? stallFocus : null;
 
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it
@@ -3009,6 +3049,7 @@ function App() {
     pickTaskTab(bot.id, id);
   };
 
+
   /// Closes the picks on `target` — every kind, or only `kind` — and frees
   /// the file stores they and any other pick held for it.
   const dropPicksOn = (target: string, kind?: PickTab["kind"]) => {
@@ -3237,6 +3278,7 @@ function App() {
           onProjectFilterChange={changeProjectFilter}
           onStepProjectFilter={stepProjectFilter}
           statusBySession={statusBySession}
+          unreadWorking={unreadWorking}
           askingSessions={sidebarAsking}
           prFor={prMarks.prFor}
           // Cleared while the page is up. The column is showing issues, so a
@@ -3913,6 +3955,18 @@ function App() {
             earlier={earlier}
             taskOf={taskOf}
             onOpenBot={openBot}
+            botFooter={
+              <StalledTasks
+                stalls={stalls}
+                now={stalled.now}
+                onFocus={(sessionId) =>
+                  selectedBot && setStallFocus({ botId: selectedBot.id, sessionId, at: Date.now() })
+                }
+                onOpen={(id, alone) => void openTask(id, alone)}
+                onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
+              />
+            }
+            botFocus={botFocus}
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
             crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
             // Its own chords only while the chat tab is on screen.

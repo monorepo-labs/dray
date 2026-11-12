@@ -355,6 +355,11 @@ export function useSessions() {
     // snapshot pushed a moment later carries the `idle` it was indexed with. The
     // sidebar's dot never appeared for the session that most needed it.
     const [statusBySession, setStatusBySession] = useState<Record<string, SessionStatus>>({});
+    // Sessions whose replies were unread when a turn of their own began.
+    // `completed` is the unread mark and the new turn overwrites it, so the
+    // mark is held here until the session is read — a bot row keeps its count
+    // beside the typing dots.
+    const [unreadWorking, setUnreadWorking] = useState<ReadonlySet<string>>(() => new Set());
     // sessionId → the current blank-screen wait, or absent when something is
     // actually rendering. Not derived from the event list: `model_request_started`
     // and the thinking deltas that drive it are transient and unpersisted, so
@@ -1400,6 +1405,7 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   // every selection rather than only its own: the mark survives being looked
   // away from, and the next visit is what answers it.
   keptUnreadRef.current = null;
+  forgetUnreadWorking(sessionId);
   if (statusOf(sessionId) === "completed") {
     markSessionRead(sessionId);
   }
@@ -2673,7 +2679,10 @@ const setOnScreen = (ids: string[]) => {
   for (const id of next) {
     if (prev.has(id)) continue;
     lastViewedRef.current.set(id, now);
-    if (isWindowFocused() && statusOf(id) === "completed") markSessionRead(id);
+    if (isWindowFocused()) {
+      forgetUnreadWorking(id);
+      if (statusOf(id) === "completed") markSessionRead(id);
+    }
     // Selecting a session already asked for it, and a group opens that way.
     if (id !== selectionRequestRef.current) refreshHeld(id);
   }
@@ -2912,6 +2921,7 @@ useEffect(() => {
 // a window that finished its turn while it was in the background.
 const markSessionRead = (sessionId: string) => {
   setStatusBySession((prev) => ({ ...prev, [sessionId]: "idle" }));
+  forgetUnreadWorking(sessionId);
   // The notice and the unread dot report the same thing, so the read that
   // retires one retires the other.
   dismissNotice(sessionId, ANSWERED_BY_OPENING);
@@ -2919,6 +2929,14 @@ const markSessionRead = (sessionId: string) => {
   // costs one stale unread dot after a restart, so a failure isn't surfaced.
   void invoke("mark_session_read", { sessionId, read: true }).catch(() => {});
 };
+
+const forgetUnreadWorking = (sessionId: string) =>
+  setUnreadWorking((prev) => {
+    if (!prev.has(sessionId)) return prev;
+    const next = new Set(prev);
+    next.delete(sessionId);
+    return next;
+  });
 
 /// The reader asked for the unread mark back, from the row's own menu. The
 /// reverse of `markSessionRead`, and it has to hold against the path that would
@@ -3156,6 +3174,9 @@ useEffect(() => {
       return;
     }
 
+    if (status === "in_progress" && statusOf(sessionId) === "completed") {
+      setUnreadWorking((prev) => new Set(prev).add(sessionId));
+    }
     setStatusBySession((prev) => ({ ...prev, [sessionId]: status }));
   });
 
@@ -3386,6 +3407,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, unreadWorking, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
 
 }

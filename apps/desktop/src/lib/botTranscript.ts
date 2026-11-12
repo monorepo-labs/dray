@@ -1,3 +1,4 @@
+import { stripSenderPrefix } from "@/lib/relay";
 import { drawsFailure } from "@/lib/transcript";
 import type { AgentEvent, Harness } from "@/types/events";
 import type { JsonValue } from "@/types/serde_json/JsonValue";
@@ -78,6 +79,8 @@ export function chatTime(iso: string, now = new Date()): string {
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 const STARTS_SESSION = /\bdray\s+(session\s+new|new)\b/;
 const TASK_ID = new RegExp(`^\\s*(${UUID.source})\\s*$`, "im");
+/// A session id, or a prefix of one long enough to name it, as `taskOf` takes.
+const SESSION_ID = /^[0-9a-f][0-9a-f-]{7,}$/i;
 const SENDS = /\bdray\s+(?:(session|bot)\s+)?send\b/g;
 /// What `dray bot send` prints, in `apps/cli/src/bot.rs`.
 const BOT_SENT = new RegExp(`^(?:Sent to|Queued for) bot ".*" \\((${UUID.source})\\)\\.$`, "gim");
@@ -136,27 +139,86 @@ function shellWord(text: string): { value: string; length: number } {
   return { value: bare, length: bare.length };
 }
 
+/// A heredoc from its `<<` through its closing word, as `$(cat <<EOF …)` puts
+/// one inside a quoted word. Sticky, so it is tried only where the scan stands.
+const HEREDOC = /<<-?[ \t]*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n[ \t]*\2(?=[ \t]*(?:\n|\)|$))/y;
+/// A `$(cat ` that may open a heredoc inside double quotes, sticky as above.
+const SUBSHELL = /\$\(\s*\w+\s+/y;
+/// A heredoc's `<<WORD` alone: its body starts at the next newline, and the
+/// rest of its own line is still commands. Never a `<<<` herestring.
+const OPENER = /(?<!<)<<(?!<)-?[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|([^\s'"<>;&|()]+))/y;
+
+/// The length of the match of sticky `re` at `at`, or 0.
+function stuck(re: RegExp, cmd: string, at: number): number {
+  re.lastIndex = at;
+  return re.exec(cmd)?.[0].length ?? 0;
+}
+
+/// `cmd` with every quoted string, escape and heredoc blanked to spaces, so a
+/// `dray … send` spelled inside a message is never read as a command — a brief
+/// that named `dray session send` drew a send to nobody. One pass left to right,
+/// so a `<<` inside quotes opens nothing. Same length, so an index into it is
+/// an index into `cmd`.
+function unquoted(cmd: string): string {
+  let out = "";
+  let i = 0;
+  const blank = (end: number) => {
+    out += cmd.slice(i, end).replace(/[^\n]/g, " ");
+    i = end;
+  };
+  /// Heredocs opened on the current line, whose bodies follow it in order.
+  const bodies: string[] = [];
+  while (i < cmd.length) {
+    const c = cmd[i];
+    OPENER.lastIndex = i;
+    const open = c === "<" ? OPENER.exec(cmd) : null;
+    if (open) {
+      bodies.push(open[1] ?? open[2] ?? open[3]);
+      blank(i + open[0].length);
+    } else if (c === "\n" && bodies.length > 0) {
+      out += cmd[i++];
+      for (const word of bodies.splice(0)) {
+        const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const close = new RegExp(`^[ \\t]*${escaped}[ \\t]*$\\n?`, "m").exec(cmd.slice(i));
+        // Unclosed, bash reads the body to the end of input and runs none of it.
+        blank(close ? i + close.index + close[0].length : cmd.length);
+      }
+    } else if (c === "\\") blank(Math.min(i + 2, cmd.length));
+    else if (c === "'") {
+      const end = cmd.indexOf("'", i + 1);
+      blank(end < 0 ? cmd.length : end + 1);
+    } else if (c === '"') {
+      let j = i + 1;
+      while (j < cmd.length && cmd[j] !== '"') {
+        const sub = cmd[j] === "$" ? stuck(SUBSHELL, cmd, j) : 0;
+        const inner = sub ? stuck(HEREDOC, cmd, j + sub) : 0;
+        j += cmd[j] === "\\" ? 2 : inner ? sub + inner : 1;
+      }
+      blank(Math.min(j + 1, cmd.length));
+    } else out += cmd[i++];
+  }
+  return out;
+}
+
 /// Every `dray session send` and `dray bot send` in one command the bot ran —
 /// one command often carries several, joined by `&&` — each with who to, what
-/// it said, and whether it went to a bot. A send spelled out inside another's
-/// message is that message's text, so the search resumes after each message.
+/// it said, and whether it went to a bot. A task is named by its id or an id
+/// prefix, so a session send to anything else — a loop's `"$id"`, a word
+/// misread — is skipped rather than drawn as a task that opens nothing.
 export function sentMessages(cmd: string): { target: string; text: string; bot?: true }[] {
   const out: { target: string; text: string; bot?: true }[] = [];
-  let cursor = 0;
-  for (const m of cmd.matchAll(SENDS)) {
-    if (m.index < cursor) continue;
+  for (const m of unquoted(cmd).matchAll(SENDS)) {
     let at = m.index + m[0].length;
     const skipSpace = () => {
       while (at < cmd.length && /\s/.test(cmd[at])) at++;
     };
     skipSpace();
     const target = firstWord(cmd.slice(at));
-    if (!target) continue;
+    if (!target || (m[1] !== "bot" && !SESSION_ID.test(target.word))) continue;
     at += target.length;
     skipSpace();
     const message = shellWord(cmd.slice(at));
     if (message.length === 0) continue;
-    cursor = at + message.length;
     const sent = { target: target.word, text: message.value };
     out.push(m[1] === "bot" ? { ...sent, bot: true as const } : sent);
   }
@@ -247,7 +309,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       items.push({ kind: "notice", event });
     } else if (p.type === "tool_call_started") {
       const cmd = command(p.input);
-      if (cmd && STARTS_SESSION.test(cmd)) starts.add(p.callId);
+      if (cmd && STARTS_SESSION.test(unquoted(cmd))) starts.add(p.callId);
       const sent = cmd ? sentMessages(cmd) : [];
       if (sent.length > 0) sends.set(p.callId, sent);
     } else if (p.type === "tool_call_completed" && !p.result.isError) {
@@ -273,3 +335,37 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
   }
   return items;
 }
+
+/// What a stalled task's row in the "Waiting on you" card scrolls the chat to,
+/// by item key: the bot's reply to the task's last report, everything it did
+/// before the next message came in. The report itself stays folded, since the
+/// reply already says what it held. A stall nudge is Dray's, not the task's, so
+/// it is skipped. With no reply to point at, the line that started the task.
+export function taskContext(items: readonly BotItem[], sessionId: string): Set<string> {
+  let at = items.length - 1;
+  for (; at >= 0; at--) {
+    const i = items[at];
+    if (
+      i.kind === "report" &&
+      i.sessionId === sessionId &&
+      i.event.payload.type === "user_message" &&
+      !stripSenderPrefix(i.event.payload.text, i.event.payload.from).startsWith(NUDGE)
+    ) {
+      break;
+    }
+  }
+  const keys = new Set<string>();
+  for (const item of at < 0 ? [] : items.slice(at + 1)) {
+    if (item.kind === "user" || item.kind === "report" || item.kind === "botMessage") break;
+    keys.add(itemKey(item));
+  }
+  if (keys.size > 0) return keys;
+  const started = items.find((i) => i.kind === "task" && i.sessionId === sessionId);
+  return new Set(started ? [itemKey(started)] : []);
+}
+
+/// An item's React key, as the chat draws it.
+export const itemKey = (item: BotItem): string => ("key" in item ? item.key : item.event.id);
+
+/// How `nudge_bot` opens every nudge it sends.
+const NUDGE = "Stall nudge:";
