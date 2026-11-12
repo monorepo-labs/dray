@@ -1516,6 +1516,7 @@ impl SessionManager {
         // A bot chat whose first send failed before its welcome was written
         // comes back here, not through creation, after a restart.
         crate::bots::mark_welcome_if_unlogged(session_id, &session_cwd).await;
+        crate::bots::mark_handover_if_unanswered(session_id, &session_cwd, harness).await;
 
         let mut session = Session::init(
             session_id,
@@ -3110,6 +3111,27 @@ impl std::fmt::Display for Undelivered {
     }
 }
 
+/// A bot chat's hand-over, taken for one send and put back unless that send
+/// reached the agent, so a retry still carries the conversation.
+struct HandoverGuard<'a> {
+    session_id: &'a str,
+    text: Option<String>,
+}
+
+impl HandoverGuard<'_> {
+    fn sent(&mut self) {
+        self.text = None;
+    }
+}
+
+impl Drop for HandoverGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(text) = self.text.take() {
+            crate::bots::restore_handover(self.session_id, text);
+        }
+    }
+}
+
 /// Persists the user's own prompt event, emits it, then writes it to the
 /// child's stdin — the CLI never echoes a prompt back, so this is the only
 /// place it enters the transcript.
@@ -3151,7 +3173,8 @@ async fn deliver_prompt(
     // A bot chat taking over from another agent: the conversation so far goes
     // ahead of the first prompt, sent and never logged, so the chat draws only
     // what the reader typed.
-    let given = match crate::bots::take_handover(session_id) {
+    let mut handover = HandoverGuard { session_id, text: crate::bots::take_handover(session_id) };
+    let given = match &handover.text {
         Some(handover) => format!("{handover}{text}"),
         None => text.clone(),
     };
@@ -3230,6 +3253,7 @@ async fn deliver_prompt(
 
     // Logged, not sent: the caller holds the text and opens the turn itself.
     if !send {
+        handover.sent();
         return Ok((given, true));
     }
 
@@ -3239,6 +3263,7 @@ async fn deliver_prompt(
     // a no-op.
     if let Some((thread, input)) = codex {
         crate::harness::codex::start_turn(thread, input).await?;
+        handover.sent();
         return Ok((given, true));
     }
     // pi takes a prompt as a command whose answer says it was accepted, so the
@@ -3248,6 +3273,7 @@ async fn deliver_prompt(
         let runs = crate::harness::pi::send_prompt(client, &given, delivery, &prepared.images)
             .await
             .context(Undelivered)?;
+        handover.sent();
         return Ok((given, runs));
     }
     // grok takes a prompt into the running turn through a method of its own;
@@ -3256,12 +3282,14 @@ async fn deliver_prompt(
         crate::harness::grok::interject(session, &given, &prepared.images)
             .await
             .context(Undelivered)?;
+        handover.sent();
         return Ok((given, true));
     }
     // fx and grok take a prompt as a request that blocks for the turn, so the
     // write is the send and the reader settles the answer.
     if let Some(sent) = transport.open_turn(&given, &prepared.images).await {
         sent?;
+        handover.sent();
         return Ok((given, true));
     }
     let stdin = transport.lines()?;
@@ -3291,6 +3319,7 @@ async fn deliver_prompt(
 
     let line = json!({"type":"user","message":{"role":"user","content": content}});
     write_line(stdin, &line).await?;
+    handover.sent();
     Ok((given, true))
 }
 

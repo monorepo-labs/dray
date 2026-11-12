@@ -1075,7 +1075,8 @@ function App() {
   // as on screen. One effect for the grid and the crew together, since
   // `setOnScreen` takes the whole set rather than adding to it — two callers
   // would each wipe the other's.
-  const onScreenKey = [mainGroup ? memberKey : "", crewShown].filter(Boolean).join("\n");
+  // A bot chat's earlier sessions are drawn with it, so they are on screen too.
+  const onScreenKey = [mainGroup ? memberKey : earlierIds.join("\n"), crewShown].filter(Boolean).join("\n");
   useEffect(() => {
     const ids = [...new Set(onScreenKey.split("\n").filter(Boolean))];
     setOnScreen(ids);
@@ -1463,16 +1464,14 @@ function App() {
 
   const earlierLoaded = sessions.filter((s) => earlierIds.includes(s.sessionId));
   const earlierKey = earlierLoaded.map((s) => `${s.sessionId}:${s.olderBefore}:${s.events.length}`).join();
-  // Loaded whole, page by page as the chat's own log is, and loaded again if
-  // the eviction sweep took one back.
+  // Loaded and held as on screen (`onScreenKey`); here read whole, page by
+  // page, as the chat's own log is.
   useEffect(() => {
-    for (const id of earlierIds) {
-      const held = earlierLoaded.find((s) => s.sessionId === id);
-      if (!held) void ensureLoaded(id);
-      else if (held.olderBefore != null) loadOlder(id);
+    for (const held of earlierLoaded) {
+      if (held.olderBefore != null) loadOlder(held.sessionId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [earlierIds.join(), earlierKey]);
+  }, [earlierKey]);
   const earlier = useMemo(
     () => earlierIds.flatMap((id) => earlierLoaded.find((s) => s.sessionId === id) ?? []),
     // eslint-disable-next-line react-hooks/exhaustive-deps

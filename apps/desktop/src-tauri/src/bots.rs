@@ -163,7 +163,30 @@ pub async fn mark_new_chat(session_id: &str, cwd: &str, harness: Harness) {
         manager().stop(&item.session_id).await;
     }
     let text = handover_prompt(&earlier, harness).await;
-    HANDOVERS.lock().unwrap().push((session_id.to_string(), text));
+    restore_handover(session_id, text);
+}
+
+/// Marks a chat being resumed that took over from an earlier agent and has no
+/// reply yet: its first send failed, or a restart lost the mark made at
+/// creation, and the agent may never have been handed the conversation. A
+/// second copy after a reply that never landed costs nothing.
+pub async fn mark_handover_if_unanswered(session_id: &str, cwd: &str, harness: Harness) {
+    if bot_at(cwd).await.is_none() || HANDOVERS.lock().unwrap().iter().any(|(id, _)| id == session_id) {
+        return;
+    }
+    let chats = chat_sessions(cwd).await.unwrap_or_default();
+    let Some(at) = chats.iter().position(|i| i.session_id == session_id) else { return };
+    if at == 0 {
+        return;
+    }
+    let events = crate::store::list_session_events(session_id).await.unwrap_or_default();
+    let answered = events
+        .iter()
+        .any(|e| e.subagent.is_none() && matches!(e.payload, crate::events::AgentEventPayload::AssistantText { .. }));
+    if !answered {
+        let text = handover_prompt(&chats[..at], harness).await;
+        restore_handover(session_id, text);
+    }
 }
 
 /// Marks a chat being resumed whose log holds no prompt yet: its first send
@@ -209,6 +232,31 @@ pub fn take_handover(session_id: &str) -> Option<String> {
     Some(handovers.remove(at).1)
 }
 
+/// Queues a hand-over, or puts one back after a send that failed, so the
+/// retry still carries the conversation.
+pub fn restore_handover(session_id: &str, text: String) {
+    let mut handovers = HANDOVERS.lock().unwrap();
+    if !handovers.iter().any(|(id, _)| id == session_id) {
+        handovers.push((session_id.to_string(), text));
+    }
+}
+
+/// The other sessions of the bot chat `item` belongs to, unsettled. A switch
+/// leaves the earlier ones open, so settling the chat has to settle them all,
+/// or the previous agent's session becomes the bot's chat again.
+pub async fn rest_of_chat(item: &SessionIndexItem) -> Vec<String> {
+    if bot_at(&item.cwd).await.is_none() {
+        return Vec::new();
+    }
+    chat_sessions(&item.cwd)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|i| i.session_id != item.session_id)
+        .map(|i| i.session_id)
+        .collect()
+}
+
 /// A bot's chat, oldest first: every unsettled session run in its folder. An
 /// agent switch starts a new session, so one conversation spans several.
 async fn chat_sessions(path: &str) -> Result<Vec<SessionIndexItem>> {
@@ -247,17 +295,7 @@ async fn handover_prompt(earlier: &[SessionIndexItem], harness: Harness) -> Stri
         let events = crate::store::list_session_events(&item.session_id).await.unwrap_or_default();
         entries.extend(replay(&events));
     }
-    let mut kept: Vec<&str> = Vec::new();
-    let mut used = 0;
-    for entry in entries.iter().rev() {
-        if used + entry.len() > HANDOVER_CAP {
-            break;
-        }
-        used += entry.len();
-        kept.push(entry);
-    }
-    let cut = kept.len() < entries.len();
-    kept.reverse();
+    let (kept, cut) = newest_within(&entries, HANDOVER_CAP);
     let conversation = escape(&kept.join("\n\n"), "conversation");
 
     let mut logs = Vec::new();
@@ -286,6 +324,32 @@ async fn handover_prompt(earlier: &[SessionIndexItem], harness: Harness) -> Stri
         agent = harness.label(),
         logs = logs.join("\n"),
     )
+}
+
+/// The newest entries that fit in `cap` bytes, in order, and whether any were
+/// cut. The entry on the boundary keeps its tail, so one long paste cannot
+/// leave the new agent with nothing.
+fn newest_within(entries: &[String], cap: usize) -> (Vec<String>, bool) {
+    let mut kept = Vec::new();
+    let mut used = 0;
+    for entry in entries.iter().rev() {
+        if used + entry.len() <= cap {
+            used += entry.len();
+            kept.push(entry.clone());
+            continue;
+        }
+        let mut start = entry.len() - (cap - used);
+        while !entry.is_char_boundary(start) {
+            start += 1;
+        }
+        if start < entry.len() {
+            kept.push(format!("…{}", &entry[start..]));
+        }
+        kept.reverse();
+        return (kept, true);
+    }
+    kept.reverse();
+    (kept, false)
 }
 
 /// One session's conversation as the reader saw it: their messages, the bot's
@@ -644,6 +708,16 @@ mod tests {
                 "You: It landed.",
             ]
         );
+    }
+
+    #[test]
+    fn replay_keeps_the_tail_of_a_message_too_long_to_fit() {
+        let entries = vec!["old".to_string(), format!("You: {}", "é".repeat(20)), "User: hi".to_string()];
+        let (kept, cut) = newest_within(&entries, 20);
+        assert!(cut);
+        assert_eq!(kept.last().unwrap(), "User: hi");
+        assert!(kept[0].starts_with('…') && kept[0].ends_with('é'));
+        assert_eq!(newest_within(&entries, 1000), (entries.clone(), false));
     }
 
     #[test]
