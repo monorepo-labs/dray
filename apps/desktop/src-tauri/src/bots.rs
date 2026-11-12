@@ -204,6 +204,10 @@ async fn make_bot(name: String, avatar: Option<BotAvatar>, welcome: Option<Strin
     let mut bots = read_list().await?;
     bots.push(bot.clone());
     save_list(&bots).await?;
+    // A bot without history still works, so this failing fails nothing.
+    if let Err(e) = start_history(&bot).await {
+        eprintln!("[bot history] {e:#}");
+    }
     Ok(bot)
 }
 
@@ -387,6 +391,11 @@ pub async fn system_prompt(base: &str, cwd: &str) -> String {
     let Some(bot) = bot_at(cwd).await else {
         return base.to_string();
     };
+    // Every bot's spawn passes here, so a bot made before there was history
+    // gets it on first use, and the prompt below is true from its first turn.
+    if let Err(e) = start_history(&bot).await {
+        eprintln!("[bot history] {e:#}");
+    }
     let dir = Path::new(&bot.path);
     let instructions = capped(read_file(&dir.join(INSTRUCTIONS)).await);
     let memory = capped(read_file(&dir.join(MEMORY)).await);
@@ -394,6 +403,78 @@ pub async fn system_prompt(base: &str, cwd: &str) -> String {
         "{base}\n\n{}",
         bot_block(&bot, &instructions, &memory)
     )
+}
+
+/// One bot's folder at a time: a first-use init and a turn's commit must not
+/// both run `git add` in it.
+static HISTORY_LOCK: Mutex<()> = Mutex::const_new(());
+
+/// Makes the bot's folder a git repository with a first commit, where it is
+/// not one yet. `.git` is looked for rather than asked of git, which would
+/// answer for a repository the home happens to sit inside.
+async fn start_history(bot: &Bot) -> Result<()> {
+    let _guard = HISTORY_LOCK.lock().await;
+    let dir = Path::new(&bot.path);
+    if dir.join(".git").exists() {
+        return Ok(());
+    }
+    git(dir, &["init", "-q", "-b", "main"]).await?;
+    // The bot's own name, so its history needs no global identity and reads as
+    // its own; and never signed, since a signing key would prompt every turn.
+    git(dir, &["config", "user.name", &bot.name]).await?;
+    git(dir, &["config", "user.email", &format!("{}@bots.dray.local", bot.id)]).await?;
+    git(dir, &["config", "commit.gpgsign", "false"]).await?;
+    commit_all(dir, Some("Start history")).await
+}
+
+/// Commits what a turn of the bot at `cwd` changed in its folder, where `cwd`
+/// is a bot's. Dray does it rather than the bot, which could forget.
+pub async fn commit_turn(cwd: &str) {
+    let Some(bot) = bot_at(cwd).await else { return };
+    if let Err(e) = start_history(&bot).await {
+        eprintln!("[bot history] {e:#}");
+        return;
+    }
+    let _guard = HISTORY_LOCK.lock().await;
+    if let Err(e) = commit_all(Path::new(&bot.path), None).await {
+        eprintln!("[bot history] {e:#}");
+    }
+}
+
+/// Stages everything and commits it, where anything changed. `None` names the
+/// files changed instead.
+async fn commit_all(dir: &Path, message: Option<&str>) -> Result<()> {
+    git(dir, &["add", "-A"]).await?;
+    let changed = git(dir, &["diff", "--cached", "--name-only", "-z"]).await?;
+    let files: Vec<&str> = changed.split('\0').filter(|f| !f.is_empty()).collect();
+    if files.is_empty() {
+        return Ok(());
+    }
+    let message = message.map_or_else(|| turn_message(&files), str::to_string);
+    // `--no-verify`: a global `core.hooksPath` would run the reader's own
+    // project hooks against a bot's notes.
+    git(dir, &["commit", "-q", "--no-verify", "-m", &message]).await.map(drop)
+}
+
+fn turn_message(files: &[&str]) -> String {
+    let shown = files.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+    match files.len() {
+        n if n > 3 => format!("Update {shown} and {} more", n - 3),
+        _ => format!("Update {shown}"),
+    }
+}
+
+async fn git(dir: &Path, args: &[&str]) -> Result<String> {
+    let out = tokio::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .await
+        .context("could not run git")?;
+    if !out.status.success() {
+        anyhow::bail!("git {}: {}", args[0], String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 fn capped(text: String) -> String {
@@ -424,7 +505,7 @@ You are a long-lived bot the user talks to in one ongoing chat. You run in your 
 - `{INSTRUCTIONS}`: your job. It starts empty: write down what the user tells you that you are for, and update it when they change how you work. Say so in one line when you do.
 - `{MEMORY}`: what you remember across restarts. Keep facts worth knowing next time (people, preferences, decisions, where things live), not a log of work. Keep it short and remove what stops being true.
 
-Your folder is not a repository. Hand work off with `dray session new --project <repo path> \"<brief>\"` (the `dray` skill has the details); every session you start runs hidden from the sidebar. After each of its turns, its final message is sent to you automatically, so never ask one to report back with `dray session send`. Message one with `dray session send <id>` when it needs more from you. Its permission and question cards reach the user without you.
+Your folder is a local git repository with no remote, and Dray commits whatever changed in it after each of your turns. When something goes wrong, or a file was deleted or overwritten, `git log` and `git show` there are the history to look back through and restore from. Never add a remote or push. Your folder is no project, so hand work off with `dray session new --project <repo path> \"<brief>\"` (the `dray` skill has the details); every session you start runs hidden from the sidebar. After each of its turns, its final message is sent to you automatically, so never ask one to report back with `dray session send`. Message one with `dray session send <id>` when it needs more from you. Its permission and question cards reach the user without you.
 
 Settling finished sessions is your job, never the user's. Once a session's work has landed (its pull request merged) or it finished with nothing to land, run `dray session settle <id> --delete-worktree`. That deletes its worktree and branch with whatever they hold, so never settle one whose work is unmerged or unpushed and still wanted.
 
@@ -481,6 +562,32 @@ mod tests {
         let text = "é".repeat(FILE_CAP);
         let cut = capped(text);
         assert!(cut.contains("[cut at"));
+    }
+
+    #[tokio::test]
+    async fn history_starts_once_and_commits_only_a_change() {
+        let dir = std::env::temp_dir().join(format!("dray-bot-{}", uuid::Uuid::now_v7()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(dir.join(MEMORY), "").await.unwrap();
+        let bot = Bot { path: dir.to_string_lossy().into_owned(), ..bot() };
+        let log = || async { git(&dir, &["log", "--format=%an|%s"]).await.unwrap() };
+
+        start_history(&bot).await.unwrap();
+        start_history(&bot).await.unwrap();
+        assert_eq!(log().await, "Ops|Start history\n");
+
+        commit_all(&dir, None).await.unwrap();
+        assert_eq!(log().await.lines().count(), 1);
+
+        tokio::fs::write(dir.join(MEMORY), "likes tea").await.unwrap();
+        commit_all(&dir, None).await.unwrap();
+        assert_eq!(log().await.lines().next(), Some("Ops|Update MEMORY.md"));
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[test]
+    fn a_turn_message_names_three_files_at_most() {
+        assert_eq!(turn_message(&["a", "b", "c", "d", "e"]), "Update a, b, c and 2 more");
     }
 
     #[test]

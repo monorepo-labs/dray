@@ -850,7 +850,7 @@ const handleSendMsg = async (
     setError("Attach a project first.");
     return false;
   }
-  // A bot's folder is no repository, and its chat runs in the folder itself.
+  // A bot's folder is no project, and its chat runs in the folder itself.
   const worktree = useWorktree && !isBotPath(cwd);
   if (!sessionId) {
     sessionId = crypto.randomUUID();
