@@ -1,5 +1,6 @@
 import { invoke, listen, LOCAL, noteSession, qualify, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import { inheritSpaces, keyOfPath, projectKey } from "@/lib/projectGroups";
+import { isBotPath } from "@/lib/bots";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
 import { indexRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
 import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
@@ -849,6 +850,8 @@ const handleSendMsg = async (
     setError("Attach a project first.");
     return false;
   }
+  // A bot's folder is no repository, and its chat runs in the folder itself.
+  const worktree = useWorktree && !isBotPath(cwd);
   if (!sessionId) {
     sessionId = crypto.randomUUID();
     // Before the selection moves, so the composer reads this server's models
@@ -904,7 +907,7 @@ const handleSendMsg = async (
       harness,
       cwd,
       projectPath: projectPath ?? cwd,
-      branch: !useWorktree ? branch : null,
+      branch: !worktree ? branch : null,
       worktreeName: null,
       worktreeRemoved: false,
       // Provisional. The backend truncates its own way and `session_title`
@@ -1006,10 +1009,10 @@ const handleSendMsg = async (
       cwd,
       // Recorded, not acted on — the picker already checked it out. Null for a
       // worktree session, whose branch the CLI names itself.
-      branch: isNewSession && !useWorktree ? branch : null,
-      useWorktree: isNewSession && useWorktree,
+      branch: isNewSession && !worktree ? branch : null,
+      useWorktree: isNewSession && worktree,
       worktreeName: null,
-      baseRef: isNewSession && useWorktree ? baseRef : null,
+      baseRef: isNewSession && worktree ? baseRef : null,
       isNewSession,
     });
 
@@ -1237,6 +1240,13 @@ const handleAnswerQuestions = async (
 // Branch is the exception: it seeds from whatever the repo is checked out to,
 // since the picker is the only thing that moves the tree and a remembered name
 // would either be a lie or an unasked-for checkout.
+/// The empty composer pointed at a bot's folder, for a bot with no chat yet.
+/// Not `handleSelectProject`: that remembers the pick, and a bot is no project.
+const handleNewBotSession = (path: string) => {
+  handleNewSession();
+  setProjectPath(path);
+};
+
 const handleNewSession = () => {
   selectionRequestRef.current = null;
   setSelectedSessionId(null);
@@ -3346,6 +3356,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
   return used !== null && max !== null ? { used, max } : null;
 })();
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
+return {harness, setHarness, sessions, selectedSessionId, selectedSession, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects: orderedProjects, projectPath, branches, branch, useWorktree, busy, backgroundTasks, liveTaskIds, tasksBySession, contextUsage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, moveProject, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, handleNewBotSession, restoreDraftControls, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setNeighbours, dropNeighbours, setOnScreen, setCrewSeen, paneState, indexSide, navGen, activeServer};
 
 }

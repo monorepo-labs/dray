@@ -1,4 +1,5 @@
-import type { SessionIndexItem, SessionStatus } from "@/types/events";
+import { botAt } from "@/lib/bots";
+import type { Bot, SessionIndexItem, SessionStatus } from "@/types/events";
 
 /// One session the selected one started, and what it is doing.
 export type CrewRow = {
@@ -101,13 +102,19 @@ export function crewSeen(rows: CrewRow[], drawn: boolean): string[] {
   return drawn ? rows.map((r) => r.item.sessionId) : [];
 }
 
-/// The sidebar's list: everything but a hidden session whose parent is here.
-/// A hidden session surfaces only through its cards beside that parent. One
-/// whose parent is missing stays listed, since it would surface nowhere. Settled ones too:
-/// unsettling the parent lists them again.
-export function inSidebar(items: SessionIndexItem[]): SessionIndexItem[] {
+/// The sidebar's list: everything but a hidden session whose parent is here,
+/// and a bot's ongoing chat, which the Bots section draws. A bot's *settled*
+/// chats stay, since the settled list is the only way back to one. A hidden
+/// session surfaces through its cards beside that parent and the bot's Tasks
+/// tab. One whose parent is missing stays listed, since it would surface
+/// nowhere. Settled ones too: unsettling the parent lists them again.
+export function inSidebar(items: SessionIndexItem[], bots: readonly Bot[] = []): SessionIndexItem[] {
   const ids = new Set(items.map((i) => i.sessionId));
-  return items.filter((i) => !(i.hidden && i.parentSessionId && ids.has(i.parentSessionId)));
+  return items.filter(
+    (i) =>
+      !(i.hidden && i.parentSessionId && ids.has(i.parentSessionId)) &&
+      !(!i.archived && botAt(bots, i.cwd)),
+  );
 }
 
 /// `asking` with every hidden asker's ancestors added, for the sidebar. A hidden

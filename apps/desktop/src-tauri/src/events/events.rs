@@ -179,6 +179,11 @@ pub enum AgentEventPayload {
         /// to record one is the tree the message was actually written in.
         #[serde(default)]
         cwd: Option<String>,
+        /// Dray's own prompt opening a new bot's chat, so the bot speaks first.
+        /// The transcript draws no bubble for it; the log keeps it, being what
+        /// the agent was actually given.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        kickoff: bool,
     },
     AssistantText {
         /// `Some` only when this content was also streamed, naming the preview
@@ -938,7 +943,9 @@ mod tests {
                 ref from,
                 ref issues,
                 ref cwd,
+                kickoff,
             } if text == "hi"
+                && !kickoff
                 && images.is_empty()
                 && baseline.is_none()
                 && cwd.is_none()

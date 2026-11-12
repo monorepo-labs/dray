@@ -1691,6 +1691,38 @@ pub async fn get_session_page(
     Ok(read_session_page(session_id, Some(before), turns).await?)
 }
 
+/// The last thing a session's main thread said, and how many replies it has
+/// made since the reader last wrote — read off the end of its log alone.
+///
+/// The count stands in for "unread": nothing records what the reader has seen,
+/// but their own last message is a point they had read up to. A relayed report
+/// or a kickoff is not theirs, so neither resets it.
+pub async fn last_reply(session_id: &str) -> Result<(Option<String>, u32)> {
+    let page = read_session_page(session_id, None, 20).await?;
+    let mut last = None;
+    let mut since = 0;
+    // The count stops at the reader's own last message; the preview reads on
+    // past it, or a turn still running would blank the row.
+    let mut counting = true;
+    for event in page.events.into_iter().rev() {
+        if event.subagent.is_some() {
+            continue;
+        }
+        match event.payload {
+            AgentEventPayload::AssistantText { text, .. } if !text.trim().is_empty() => {
+                since += u32::from(counting);
+                last.get_or_insert(text);
+            }
+            AgentEventPayload::UserMessage { from: None, kickoff: false, .. } => counting = false,
+            _ => {}
+        }
+        if !counting && last.is_some() {
+            break;
+        }
+    }
+    Ok((last, since))
+}
+
 /// Events from one stretch of a session's log, and the byte offset the
 /// stretch starts at — `None` once it reaches the top. An offset stays valid
 /// for the life of the file, since the log is only ever appended to.
@@ -2883,6 +2915,7 @@ mod tests {
                 queued: false,
                 from: None,
                 cwd: None,
+                kickoff: false,
             }),
             // Already carried a cwd, so this copy is a fork of a fork. The
             // first ancestor to record one is the tree the message was
@@ -2895,6 +2928,7 @@ mod tests {
                 queued: false,
                 from: None,
                 cwd: Some("/repo/grandparent".into()),
+                kickoff: false,
             }),
             event(AgentEventPayload::ToolCallCompleted {
                 call_id: "c1".into(),

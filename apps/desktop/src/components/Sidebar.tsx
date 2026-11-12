@@ -1,6 +1,7 @@
 import { Cog6ToothIcon, SignalSlashIcon } from "@heroicons/react/16/solid";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  MessageCirclePlus,
   Archive,
   ArchiveRestore,
   Check,
@@ -18,6 +19,9 @@ import {
   Undo2,
 } from "lucide-react";
 import Orb from "@/components/Orb";
+import BotAvatar from "@/components/BotAvatar";
+import { TypingDots } from "@/components/chat/BotTranscript";
+import { previewLine, type BotEntry } from "@/lib/bots";
 
 import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
@@ -63,6 +67,8 @@ import { useResizable } from "@/components/ResizeHandle";
 import { useJumpDigit } from "@/lib/digitChords";
 import { cn } from "@/lib/utils";
 import type {
+  Bot,
+  BotPreview,
   PrMark,
   Project,
   SessionIndexItem,
@@ -79,6 +85,13 @@ type SidebarProps = {
   // Already scoped to `projectFilter` and to `search` by the caller, so the list
   // and the ⌘⇧↑/↓ walk step through exactly the same rows.
   items: SessionIndexItem[];
+  /// The Bots section: every bot with its ongoing chat, if it has one.
+  bots?: BotEntry[];
+  onOpenBot?: (bot: Bot) => void;
+  /// Settles the bot's chat, so its next message starts a new one.
+  onStartBotFresh?: (bot: Bot) => void;
+  onDeleteBot?: (bot: Bot) => void;
+  onNewBot?: () => void;
   // The live search query. Owned by the caller, because the list it narrows is
   // the caller's — the ⌘⇧↑/↓ walk reads the same array, and a query kept in here
   // would leave the shortcut stepping rows the sidebar no longer draws.
@@ -958,6 +971,11 @@ export const SIDEBAR_MIN = 240;
 
 export default function Sidebar({
   items,
+  bots = [],
+  onOpenBot,
+  onStartBotFresh,
+  onDeleteBot,
+  onNewBot,
   search,
   onSearchChange,
   searchOpen,
@@ -1300,7 +1318,61 @@ export default function Sidebar({
             <ShortcutKeys ids={["search"]} className="ml-auto" />
           </Button>
         )}
+
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onNewBot}
+          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
+        >
+          <MessageCirclePlus />
+          New bot
+        </Button>
       </div>
+
+      {/* Above the project filter: a bot belongs to no project, it hands work
+          to any of them. No heading — the face on a row is what says it is a
+          bot. New bot sits in the strip above, beside the other ways in. */}
+      {/* The inbox rows — big face, name and time, last reply under it —
+          are off for now in favour of the one-line rows below. Kept to try
+          again: uncomment this block, and drop `compact` below to swap.
+      {bots.length > 0 && <div className="mt-4 flex flex-col gap-0.5 px-2">
+        {bots.map(({ bot, session, preview }) => (
+          <BotRow
+            key={bot.id}
+            bot={bot}
+            preview={preview}
+            sessionId={session?.sessionId}
+            modified={session?.modified}
+            status={session ? (statusBySession[session.sessionId] ?? session.status) : "idle"}
+            asking={!!session && askingSessions.has(session.sessionId)}
+            active={!!session && session.sessionId === selectedSessionId}
+            onOpen={() => onOpenBot?.(bot)}
+            onStartFresh={session ? () => onStartBotFresh?.(bot) : undefined}
+            onDelete={() => onDeleteBot?.(bot)}
+          />
+        ))}
+      </div>}
+      */}
+
+      {bots.length > 0 && <div className="mt-4 flex flex-col gap-px px-2">
+        {bots.map(({ bot, session, preview }) => (
+          <BotRow
+            key={bot.id}
+            compact
+            bot={bot}
+            preview={preview}
+            sessionId={session?.sessionId}
+            modified={session?.modified}
+            status={session ? (statusBySession[session.sessionId] ?? session.status) : "idle"}
+            asking={!!session && askingSessions.has(session.sessionId)}
+            active={!!session && session.sessionId === selectedSessionId}
+            onOpen={() => onOpenBot?.(bot)}
+            onStartFresh={session ? () => onStartBotFresh?.(bot) : undefined}
+            onDelete={() => onDeleteBot?.(bot)}
+          />
+        ))}
+      </div>}
 
       {/* The filter is where project grouping went. */}
       <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
@@ -1681,6 +1753,242 @@ function DotTrack({
 /// task in it. The plus only appears under the cursor: the row is a label first
 /// and every heading carrying one at rest would draw more chrome than the
 /// sessions beneath it.
+/// A bot and the one chat it is: its face, the session row's own rail and orb,
+/// and no lineage, PR mark or hover controls.
+/// A face with a rounded hole where its badge sits, as a mask: opaque
+/// everywhere but the hole, which is the badge's own box grown by `gap`.
+/// A mask rather than a ring in a fill, since the sidebar is glass and no fill
+/// matches what shows through. Badges hang 2px past the face's lower right.
+function cutout(width: number, height: number, face = 40, gap = 2): string {
+  const [x, y] = [face + 2 - width - gap, face + 2 - height - gap];
+  const [w, h, r] = [width + gap * 2, height + gap * 2, (height + gap * 2) / 2];
+  const hole = `M${x + r} ${y}H${x + w - r}A${r} ${r} 0 0 1 ${x + w - r} ${y + h}H${x + r}A${r} ${r} 0 0 1 ${x + r} ${y}Z`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${face}" height="${face}"><path fill-rule="evenodd" d="M0 0H${face}V${face}H0Z${hole}"/></svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+const ROUND_CUTOUT = cutout(16, 16);
+const DOT_CUTOUT = cutout(12, 12);
+const PILL_CUTOUT = cutout(24, 14);
+// The one-line row's 20px face takes a small dot and a thinner gap.
+const SMALL_DOT_CUTOUT = cutout(8, 8, 20, 1.5);
+
+function BotRow({
+  bot,
+  compact = false,
+  preview,
+  sessionId,
+  modified,
+  status,
+  asking,
+  active,
+  onOpen,
+  onStartFresh,
+  onDelete,
+}: {
+  bot: Bot;
+  /// One line, the session rows' height: a small face, the name, and the
+  /// state where the time sits. No preview.
+  compact?: boolean;
+  /// The chat's last reply and the replies since the reader last wrote.
+  preview?: BotPreview;
+  /// Its chat, for the jump digit; absent before the first message.
+  sessionId?: string;
+  modified?: string;
+  status: SessionStatus;
+  asking: boolean;
+  active: boolean;
+  onOpen: () => void;
+  /// Absent while the bot has no chat to settle.
+  onStartFresh?: () => void;
+  onDelete: () => void;
+}) {
+  const digit = useJumpDigit(sessionId ?? "");
+  const badge = asking
+    ? { kind: "asking" as const, mask: DOT_CUTOUT }
+    : status === "in_progress"
+      ? { kind: "working" as const, mask: PILL_CUTOUT }
+      : status === "completed"
+        ? { kind: "unread" as const, mask: ROUND_CUTOUT }
+        : null;
+  const [hovered, setHovered] = useState(false);
+  if (compact) {
+    return (
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button
+            type="button"
+            onClick={onOpen}
+            onPointerEnter={() => setHovered(true)}
+            onPointerLeave={() => setHovered(false)}
+            className={cn(
+              "group relative flex h-8 w-full cursor-pointer items-center gap-2 rounded-md pr-1.5 pl-1.5 text-left",
+              "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
+              active
+                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
+            )}
+          >
+            {/* State on the face as a dot: orange while it waits on the reader,
+                green while a reply is unread. */}
+            <span className="relative shrink-0">
+              <span
+                className="block size-5"
+                style={
+                  asking || status === "completed"
+                    ? {
+                        maskImage: SMALL_DOT_CUTOUT,
+                        WebkitMaskImage: SMALL_DOT_CUTOUT,
+                        maskRepeat: "no-repeat",
+                        WebkitMaskRepeat: "no-repeat",
+                      }
+                    : undefined
+                }
+              >
+                <BotAvatar seed={bot.id} avatar={bot.avatar} follow={hovered} className="block size-5 scale-[1.18]" />
+              </span>
+              {(asking || status === "completed") && (
+                <span
+                  role="img"
+                  aria-label={asking ? "Waiting for you" : "Unread"}
+                  className={cn(
+                    "absolute -right-0.5 -bottom-0.5 size-2 rounded-full",
+                    asking ? "bg-accent-command" : "bg-accent-add",
+                  )}
+                />
+              )}
+            </span>
+            <span
+              className={cn(
+                "min-w-0 flex-1 truncate text-ui text-sidebar-foreground",
+                status === "completed" && "font-medium",
+              )}
+            >
+              {bot.name}
+            </span>
+            {/* The trailing slot a session row keeps its time in: the digit
+                while the jump modifier is held, typing dots while it works,
+                else when. */}
+            {digit ? (
+              <Kbd>{digit}</Kbd>
+            ) : status === "in_progress" && !asking ? (
+              <span className="mr-0.5 shrink-0">
+                <TypingDots small />
+              </span>
+            ) : (
+              modified && (
+                <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">{inboxTime(modified)}</span>
+              )
+            )}
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-44">
+          <ContextMenuItem className="text-ui" disabled={!onStartFresh} onSelect={onStartFresh}>
+            Start fresh
+          </ContextMenuItem>
+          <ContextMenuItem className="text-ui text-destructive" onSelect={onDelete}>
+            Delete bot…
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  }
+  return (
+    <ContextMenu>
+    <ContextMenuTrigger asChild>
+    <button
+      type="button"
+      onClick={onOpen}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+      className={cn(
+        "group relative flex w-full cursor-pointer items-center gap-1 rounded-md py-[5px] pr-1.5 pl-0.5 text-left",
+        "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
+        active
+          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
+      )}
+    >
+      {/* One badge slot on the face's lower right, a messenger's: a question
+          while it waits on the reader, typing dots while it works, the count
+          of replies since the reader last wrote once it is done and unread. */}
+      <span className="relative shrink-0">
+        <span className="block size-10" style={badge ? { maskImage: badge.mask, WebkitMaskImage: badge.mask, maskRepeat: "no-repeat", WebkitMaskRepeat: "no-repeat" } : undefined}>
+          {/* Scaled as Blobatar's own agent list does: the body sits inside a margin
+              of its box, which read as a wide gap before the name. */}
+          <BotAvatar seed={bot.id} avatar={bot.avatar} follow={hovered} className="block size-10 scale-[1.18]" />
+        </span>
+        {badge?.kind === "asking" && (
+          <span
+            role="img"
+            aria-label="Waiting for you"
+            className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full bg-accent-command"
+          />
+        )}
+        {badge?.kind === "working" && (
+          <span className="absolute -right-0.5 -bottom-0.5 flex h-3.5 w-6 items-center justify-center rounded-full bg-sidebar-accent">
+            <TypingDots small />
+          </span>
+        )}
+        {badge?.kind === "unread" && (
+          <span
+            role="img"
+            aria-label={`${preview?.replies || 1} unread`}
+            // One colour for every bot: in the face's own hue it read as part of the face.
+            className="absolute -right-0.5 -bottom-0.5 flex size-4 items-center justify-center rounded-full bg-foreground text-[10px] leading-none font-semibold text-background tabular-nums"
+          >
+            {preview?.replies || ""}
+          </span>
+        )}
+      </span>
+      {/* An inbox row: who, when, and the last thing they said. */}
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex items-baseline gap-2">
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate text-ui text-sidebar-foreground",
+              status === "completed" && "font-medium",
+            )}
+          >
+            {bot.name}
+          </span>
+          {/* While the jump modifier is held, the row's digit takes the time's place. */}
+          {digit ? (
+            <Kbd>{digit}</Kbd>
+          ) : (
+            modified && (
+              <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
+                {inboxTime(modified)}
+              </span>
+            )
+          )}
+        </span>
+        {preview?.text && (
+          <span className="truncate text-ui text-muted-foreground/60">{previewLine(preview.text)}</span>
+        )}
+      </span>
+    </button>
+    </ContextMenuTrigger>
+    <ContextMenuContent className="w-44">
+      <ContextMenuItem className="text-ui" disabled={!onStartFresh} onSelect={onStartFresh}>
+        Start fresh
+      </ContextMenuItem>
+      <ContextMenuItem className="text-ui text-destructive" onSelect={onDelete}>
+        Delete bot…
+      </ContextMenuItem>
+    </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/// A messenger's time: the clock today, the day this week, the date before.
+function inboxTime(iso: string): string {
+  const at = new Date(iso);
+  const days = (Date.now() - at.getTime()) / 86_400_000;
+  if (isToday(iso)) return at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  if (days < 7) return at.toLocaleDateString([], { weekday: "short" });
+  return at.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
 function HeadingRow({
   onClick,
   label,
@@ -1986,7 +2294,7 @@ function ProjectFilter({
 
 /// One hover control on a session row. Stops the click from reaching the row's
 /// own handler, so acting on a session never also selects it.
-function RowAction({
+export function RowAction({
   label,
   active,
   onClick,
@@ -2044,7 +2352,7 @@ const FORKS = [
 /// `open` — the trigger's own `data-state` is what the row styles off, and there
 /// is no second copy of the flag to fall out of step with it. The row's ⋯
 /// button reaches it by dispatching a `contextmenu` event instead.
-function RowMenu({
+export function RowMenu({
   onFork,
   forkDisabled,
   aside,

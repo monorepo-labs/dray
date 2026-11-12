@@ -574,7 +574,8 @@ pub async fn settle_dead_child(
         if !tracker.background_task_ids().is_empty() {
             closing.push(mint(AgentEventPayload::BackgroundTasksChanged { tasks: vec![] }));
         }
-        if tracker.turn_in_flight() {
+        let died_mid_turn = tracker.turn_in_flight();
+        if died_mid_turn {
             closing.push(mint(closing_turn("process_exited", Some(why))));
         }
         let mut next = None;
@@ -585,10 +586,17 @@ pub async fn settle_dead_child(
             tracker.note_tool_call(&event.payload);
             next = tracker.on_event(&event.payload).or(next);
         }
-        next
+        (next, died_mid_turn)
     };
+    let (next, died_mid_turn) = next;
     if let Some(next) = next {
         publish_status(session_id, next, app).await;
+    }
+    // This close never passes through `ingest_event`, where a bot's child
+    // reports; without this the bot would wait on a turn that is over.
+    if died_mid_turn {
+        LAST_REPLY.lock().unwrap().remove(session_id);
+        report(session_id, format!("(the session's process exited mid-turn: {why})"), app);
     }
 }
 
@@ -3098,6 +3106,7 @@ async fn deliver_prompt(
         // Absent means "this session's own cwd", which is the truth for every
         // message a session logs itself. Only a fork records one.
         cwd: None,
+        kickoff: crate::bots::take_kickoff(session_id),
     };
     // Nothing tracks turns yet; Claude Code opens one per `init`.
     let agent_event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
@@ -3216,6 +3225,34 @@ pub async fn ingest(ctx: &Ingest<'_>, agent_event: AgentEvent, app: &Sink) {
 /// [`ingest`], with `tracked` false for an event whose status change the
 /// caller already made under its own lock — Stop's close, which has to check
 /// and close the turn in one step.
+/// Each session's last main-thread reply this turn. Only Claude Code fills
+/// `TurnCompleted.final_text`; Codex, fx, grok and pi say their answer in
+/// `AssistantText` alone, so a report reading the closing event found nothing.
+static LAST_REPLY: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Sends `text` to the session that started `session_id`, where it is a bot's.
+fn report(session_id: &str, text: String, app: &Sink) {
+    let report = crate::orchestration::report_to_parent(session_id.to_string(), text, app.clone());
+    tokio::spawn(async move {
+        if let Err(e) = report.await {
+            eprintln!("[bot report err] {e:#}");
+        }
+    });
+}
+
+/// What a child's closing turn says to the bot: its last words, or what became
+/// of a turn that ended without any, so the bot is never left waiting on one.
+fn report_text(status: TurnStatus, stop_reason: Option<&str>, final_text: Option<&str>) -> String {
+    match final_text.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(text) => text.to_string(),
+        None if status == TurnStatus::Error => {
+            format!("(the turn failed: {})", stop_reason.unwrap_or("no reason given"))
+        }
+        None => "(the turn ended without a message)".to_string(),
+    }
+}
+
 async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink, tracked: bool) {
     // Filled here rather than in the mapper because only the session layer
     // knows the cwd. Freezing the tree id onto the closing event is what
@@ -3260,6 +3297,22 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
 
     if let Err(err) = app.emit("agent_event", &agent_event) {
         eprintln!("[emit err] {err}");
+    }
+
+    // A bot's child reports every turn it closes. Spawned: the send lands in
+    // the parent's session, which must not hold this one's read loop up.
+    if agent_event.subagent.is_none() {
+        match &agent_event.payload {
+            AgentEventPayload::AssistantText { text, .. } if !text.trim().is_empty() => {
+                LAST_REPLY.lock().unwrap().insert(ctx.session_id.to_string(), text.clone());
+            }
+            AgentEventPayload::TurnCompleted { status, stop_reason, final_text, .. } => {
+                let last = LAST_REPLY.lock().unwrap().remove(ctx.session_id);
+                let said = final_text.as_deref().filter(|t| !t.trim().is_empty()).or(last.as_deref());
+                report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
+            }
+            _ => {}
+        }
     }
 
     // The CLI moved the session to another model for good. Recorded, or the
@@ -3953,6 +4006,7 @@ pub async fn strand_queue_on_exit(
                 queued: true,
                 from: message.from.clone(),
                 cwd: None,
+                kickoff: false,
             },
         );
         if let Err(err) = app.emit("agent_event", &bubble) {
@@ -3977,6 +4031,16 @@ pub async fn strand_queue_on_exit(
 mod tests {
     use super::*;
     use crate::harness::claude_code::{mapper::Mapper, parser};
+
+    #[test]
+    fn a_report_says_something_whatever_the_turn_left() {
+        assert_eq!(report_text(TurnStatus::Success, None, Some(" pong ")), "pong");
+        assert_eq!(
+            report_text(TurnStatus::Error, Some("max_tokens"), None),
+            "(the turn failed: max_tokens)"
+        );
+        assert_eq!(report_text(TurnStatus::Success, None, Some("  ")), "(the turn ended without a message)");
+    }
 
     /// `steer` tells a send that failed after the bubble was logged from one
     /// that failed before it by the marker alone, so it has to survive as

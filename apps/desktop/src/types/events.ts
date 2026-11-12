@@ -232,7 +232,13 @@ from: MessageSender | null,
  * Deliberately not overwritten on a fork of a fork: the first ancestor
  * to record one is the tree the message was actually written in.
  */
-cwd: string | null, } | { "type": "assistant_text", 
+cwd: string | null, 
+/**
+ * Dray's own prompt opening a new bot's chat, so the bot speaks first.
+ * The transcript draws no bubble for it; the log keeps it, being what
+ * the agent was actually given.
+ */
+kickoff?: boolean, } | { "type": "assistant_text", 
 /**
  * `Some` only when this content was also streamed, naming the preview
  * it supersedes. `None` — the common case, covering Claude Code
@@ -557,6 +563,39 @@ warning: boolean,
  * Why the last resume didn't take, in boat's or Dray's words.
  */
 note: string | null, };
+
+/**
+ * A bot: one long-lived chat with instructions and memory of its own, which
+ * everything it spawns reports back to after every turn.
+ *
+ * It is a folder, `bots/<id>/` under the home, holding [`INSTRUCTIONS`] and
+ * [`MEMORY`]; the bot's session runs *in* that folder, which is how a session
+ * is known to be a bot's — no field on the index says so, so an older build
+ * reading the index loses nothing. `bots.json` holds only the list.
+ */
+export type Bot = { id: string, name: string, 
+/**
+ * The bot's folder: its session's cwd. Absolute, on the server holding it.
+ */
+path: string, created: string, 
+/**
+ * The face picked when it was made. `None` for a bot made before there
+ * was a pick, which then draws the face its id seeds.
+ */
+avatar?: BotAvatar | null, };
+
+/**
+ * A Blobatar face: which silhouette and which hue. Strings and degrees rather
+ * than the library's 0–1 trait positions, so a later generation of the
+ * library moving its cut points cannot change a face somebody picked.
+ */
+export type BotAvatar = { shape: string, hue: number, };
+
+/**
+ * A bot chat's inbox row: its last reply, and the replies since the reader
+ * last wrote.
+ */
+export type BotPreview = { text: string | null, replies: number, };
 
 /**
  * What the composer's branch picker needs to render and guard itself.
@@ -1422,6 +1461,10 @@ replies: Array<PrComment>, };
  * threads for every session in the list would be payload nobody reads.
  */
 export type PrMark = { number: number, 
+/**
+ * Where the mark opens it. A scalar, so asking costs no rate-limit points.
+ */
+url: string, 
 /**
  * The branch it was opened from — what the caller matches a session by.
  */

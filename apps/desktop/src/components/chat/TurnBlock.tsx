@@ -136,7 +136,8 @@ export default memo(function TurnBlock({
 
   return (
     <div className="flex flex-col gap-3">
-      {turn.prompt && <UserMessage {...userProps(turn)} onOpenSession={onOpenSession} />}
+      {/* A bot's kickoff is Dray's own prompt: its chat opens on the reply. */}
+      {turn.prompt && !isKickoff(turn) && <UserMessage {...userProps(turn)} onOpenSession={onOpenSession} />}
 
       {/* The work is cut at each queued prompt and each stretch collapses
           behind its own summary line — hiding the rows between the prompts
@@ -320,6 +321,11 @@ function drawsTheSame(a: TurnBlockProps, b: TurnBlockProps): boolean {
     a.onOpenSession === b.onOpenSession &&
     drawsSameTurn(a, b)
   );
+}
+
+function isKickoff(turn: Turn): boolean {
+  const payload = turn.prompt?.payload;
+  return payload?.type === "user_message" && !!payload.kickoff;
 }
 
 /// `prompt` is always a `user_message` here — the grouping only opens a turn on

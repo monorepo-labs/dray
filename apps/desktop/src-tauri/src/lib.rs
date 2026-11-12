@@ -66,6 +66,7 @@ pub mod models;
 #[cfg(feature = "desktop")]
 pub mod notifications;
 pub mod orchestration;
+pub mod bots;
 pub mod drafts;
 pub mod projects;
 #[cfg(feature = "desktop")]

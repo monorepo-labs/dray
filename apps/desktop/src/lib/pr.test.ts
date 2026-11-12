@@ -159,6 +159,7 @@ describe("mergeReadiness", () => {
 describe("readyToMerge", () => {
   const mark = (over: Partial<PrMark> = {}): PrMark => ({
     number: 1,
+    url: "",
     headRefName: "feat/x",
     isDraft: false,
     state: "OPEN",
@@ -448,6 +449,7 @@ describe("threadLabel", () => {
 describe("pickPrMark", () => {
   const mark = (over: Partial<PrMark> = {}): PrMark => ({
     number: 1,
+    url: "",
     headRefName: "feat/x",
     isDraft: false,
     state: "OPEN",
@@ -501,6 +503,7 @@ describe("pickPrMark", () => {
 describe("markDisagrees", () => {
   const mark = (over: Partial<PrMark> = {}): PrMark => ({
     number: 1,
+    url: "",
     headRefName: "feature",
     isDraft: false,
     state: "OPEN",
@@ -564,6 +567,7 @@ describe("markDisagrees", () => {
 describe("sameMark", () => {
   const mark = (over: Partial<PrMark> = {}): PrMark => ({
     number: 1,
+    url: "",
     headRefName: "feature",
     isDraft: false,
     state: "OPEN",
