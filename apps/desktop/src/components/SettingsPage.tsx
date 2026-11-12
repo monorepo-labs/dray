@@ -13,7 +13,7 @@ import {
   NewspaperIcon,
   ServerStackIcon,
 } from "@heroicons/react/16/solid";
-import { ArrowLeft, Check, ChevronDown, Heart, RotateCcw, Star } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Heart, Plus, RotateCcw, Star } from "lucide-react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -46,6 +46,7 @@ import { chordFor, useShortcutOverrides } from "@/hooks/useShortcuts";
 import { useTheme } from "@/hooks/useTheme";
 import { type ManualCheck, updateFailure } from "@/hooks/useUpdater";
 import { downloadChromium, removeChromium, useChromium } from "@/lib/browser";
+import { BREAK_CARDS } from "@/components/breakScenes";
 import { BREAK_INTERVALS, setBreakDue, setBreakSettings, useBreakSettings } from "@/lib/breaks";
 import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
 import {
@@ -757,12 +758,14 @@ function AutoHideRow({
 
 const BREAK_OPTIONS = BREAK_INTERVALS.map((m) => ({ id: String(m), label: `${m} min` }));
 
-/// The hourly break reminder: whether it runs, how often, and a way to see it
-/// without waiting the interval out.
-function BreakRows() {
+/// The hourly break reminder: whether it runs, how often, which cards it can
+/// show, and a way to see it without waiting the interval out.
+export function BreakRows() {
   const switchId = useId();
   const everyId = useId();
+  const cardsId = useId();
   const settings = useBreakSettings();
+  const onCount = BREAK_CARDS.filter((c) => !settings.off.includes(c.name)).length;
 
   return (
     <>
@@ -789,6 +792,44 @@ function BreakRows() {
           onPick={(m) => setBreakSettings({ ...settings, minutes: Number(m) })}
           labelledBy={everyId}
         />
+      </SettingRow>
+      <SettingRow
+        id={cardsId}
+        asGroup
+        stacked
+        label="Cards"
+        description="What a break can ask of you. One is picked at random; the last one on stays on."
+      >
+        <div role="group" aria-labelledby={cardsId} className="flex flex-wrap gap-1.5">
+          {BREAK_CARDS.map(({ name }) => {
+            const on = !settings.off.includes(name);
+            return (
+              <button
+                key={name}
+                type="button"
+                aria-pressed={on}
+                disabled={on && onCount === 1}
+                onClick={() =>
+                  setBreakSettings({
+                    ...settings,
+                    off: on ? [...settings.off, name] : settings.off.filter((n) => n !== name),
+                  })
+                }
+                className={cn(
+                  "flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-ui transition-colors",
+                  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                  "disabled:cursor-not-allowed",
+                  on
+                    ? "border-transparent bg-muted text-foreground"
+                    : "border-border text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {on ? <Check className="size-3.5" /> : <Plus className="size-3.5" />}
+                {name}
+              </button>
+            );
+          })}
+        </div>
       </SettingRow>
     </>
   );

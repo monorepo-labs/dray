@@ -269,29 +269,6 @@ function SideBend() {
   );
 }
 
-/// Stepping into a lunge as the arms sweep up overhead, and back.
-function Lunge() {
-  const t = useClock() ?? 1.6;
-  const w = swing(t, 3.2);
-  return (
-    <Scene>
-      <Figure
-        pose={{
-          hip: [80, lerp(67, 77, w)],
-          spine: 0,
-          arms: [{ fk: [lerp(-168, -42, w), lerp(0, 8, w)] }, { fk: [lerp(168, 42, w), lerp(0, -8, w)] }],
-          legs: [
-            { ik: [lerp(74, 56, w), 101], flip: -1 },
-            { ik: [lerp(86, 100, w), 101], flip: -1 },
-          ],
-        }}
-      />
-      <Sparkle x={34} y={36} t={t} />
-      <Sparkle x={128} y={30} r={4} t={t} phase={0.4} />
-    </Scene>
-  );
-}
-
 /// A walk cycle in place, the footprints sliding away behind.
 function Strut() {
   const t = useClock() ?? 0.2;
@@ -353,28 +330,43 @@ function PushUp() {
   );
 }
 
-/// Each line with its drawings; the card picks one of a line's at random.
-export const BREAK_LINES: { text: string; scenes: { name: string; Scene: () => ReactNode }[] }[] = [
-  {
-    text: "Your agents can wait. Your spine can't.",
-    scenes: [
-      { name: "Twist", Scene: Twist },
-      { name: "Pull-up", Scene: PullUp },
-    ],
-  },
-  {
-    text: "Stretch, you gorgeous workaholic.",
-    scenes: [
-      { name: "Side bend", Scene: SideBend },
-      { name: "Lunge", Scene: Lunge },
-    ],
-  },
-  {
-    text: "Legs exist. Go use them.",
-    scenes: [{ name: "Strut", Scene: Strut }],
-  },
-  {
-    text: "Give me ten push‑ups. Right now.",
-    scenes: [{ name: "Push-up", Scene: PushUp }],
-  },
+/// Squats, side on, in front of the chair the reader just left: hips back and
+/// down until they nearly sit, chest over the knees, arms out front for
+/// balance, feet flat. Down slow, a beat at the bottom, up.
+function Squat() {
+  const t = useClock() ?? 1.3;
+  const c = (t % 2.6) / 2.6;
+  const down = c < 0.12 ? 0 : c < 0.5 ? ease((c - 0.12) / 0.38) : c < 0.6 ? 1 : 1 - ease((c - 0.6) / 0.32);
+  const feet: Pt = [86, 101];
+  return (
+    <Scene>
+      <path d="M36 54 L36 101 M36 82 L58 82 L58 101" strokeWidth={3} />
+      <Figure
+        pose={{
+          hip: [lerp(84, 64, down), lerp(67, 78, down)],
+          spine: lerp(4, 38, down),
+          look: 0.7,
+          nod: lerp(-4, -30, down),
+          arms: [{ fk: [lerp(170, 82, down), lerp(-10, 0, down)] }, { fk: [lerp(176, 88, down), lerp(-14, 0, down)] }],
+          legs: [
+            { ik: feet, flip: -1 },
+            { ik: [feet[0] + 4, feet[1]], flip: -1 },
+          ],
+        }}
+      />
+      <Sparkle x={126} y={38} t={t} />
+      <Sparkle x={138} y={62} r={4} t={t} phase={0.5} />
+    </Scene>
+  );
+}
+
+/// Every card a break can open on. `name` is also what Settings stores to turn
+/// one off, so renaming a card turns it back on for whoever had it off.
+export const BREAK_CARDS: { name: string; text: string; Scene: () => ReactNode }[] = [
+  { name: "Twist", text: "Your agents can wait. Your spine can't.", Scene: Twist },
+  { name: "Pull-ups", text: "Your agents can wait. Your spine can't.", Scene: PullUp },
+  { name: "Side bend", text: "Stretch, you gorgeous workaholic.", Scene: SideBend },
+  { name: "Walk", text: "Legs exist. Go use them.", Scene: Strut },
+  { name: "Squats", text: "Ten squats. Your chair will keep.", Scene: Squat },
+  { name: "Push-ups", text: "Give me ten push\u2011ups. Right now.", Scene: PushUp },
 ];
