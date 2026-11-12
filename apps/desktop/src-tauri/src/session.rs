@@ -3396,8 +3396,9 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                 let last = LAST_REPLY.lock().unwrap().remove(ctx.session_id);
                 let said = final_text.as_deref().filter(|t| !t.trim().is_empty()).or(last.as_deref());
                 report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
-                let cwd = ctx.session_cwd.to_string();
-                tokio::spawn(async move { crate::bots::commit_turn(&cwd).await });
+                // Awaited, not spawned: the queued flush below would start the
+                // next turn, which could overwrite this one's notes unsaved.
+                crate::bots::commit_turn(ctx.session_cwd).await;
             }
             _ => {}
         }

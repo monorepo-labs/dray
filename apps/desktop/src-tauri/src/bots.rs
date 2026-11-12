@@ -420,10 +420,9 @@ async fn start_history(bot: &Bot) -> Result<()> {
     }
     git(dir, &["init", "-q", "-b", "main"]).await?;
     // The bot's own name, so its history needs no global identity and reads as
-    // its own; and never signed, since a signing key would prompt every turn.
+    // its own.
     git(dir, &["config", "user.name", &bot.name]).await?;
     git(dir, &["config", "user.email", &format!("{}@bots.dray.local", bot.id)]).await?;
-    git(dir, &["config", "commit.gpgsign", "false"]).await?;
     commit_all(dir, Some("Start history")).await
 }
 
@@ -451,9 +450,7 @@ async fn commit_all(dir: &Path, message: Option<&str>) -> Result<()> {
         return Ok(());
     }
     let message = message.map_or_else(|| turn_message(&files), str::to_string);
-    // `--no-verify`: a global `core.hooksPath` would run the reader's own
-    // project hooks against a bot's notes.
-    git(dir, &["commit", "-q", "--no-verify", "-m", &message]).await.map(drop)
+    git(dir, &["commit", "-q", "-m", &message]).await.map(drop)
 }
 
 fn turn_message(files: &[&str]) -> String {
@@ -464,8 +461,13 @@ fn turn_message(files: &[&str]) -> String {
     }
 }
 
+/// Runs git in a bot's folder, cut off from the reader's global setup: their
+/// hooks would run against the notes and could fail or hang a commit, their
+/// ignore rules could leave `MEMORY.md` untracked, and a signing key would
+/// prompt on every turn.
 async fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let out = tokio::process::Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null", "-c", "core.excludesFile=/dev/null", "-c", "commit.gpgsign=false"])
         .args(args)
         .current_dir(dir)
         .output()
