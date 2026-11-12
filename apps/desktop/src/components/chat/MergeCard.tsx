@@ -37,22 +37,20 @@ export const MergeCardChatContext = createContext<{ after: Map<string, number>; 
   bot: false,
 });
 
-/// Empty where something else already says it: the PR glyph for a draft, the
-/// Merge button for ready.
+/// Empty where something else already says it, as on the Tasks tab's rows:
+/// the PR glyph for a draft and for failing checks, the Merge button for
+/// ready, Fix conflicts for a conflict.
 const VERDICT_WORDS: Record<ReturnType<typeof mergeVerdict>, string> = {
   merged: "Merged",
   closed: "Closed without merging",
-  conflict: "Conflicts with base",
+  conflict: "",
   unknown: "Checking mergeability…",
   draft: "",
   behind: "Behind base",
   blocked: "Blocked",
-  unstable: "Checks not passing",
+  unstable: "",
   ready: "",
 };
-
-// Running checks draw `ChecksRunningIcon` in place of words.
-const CHECK_WORDS = { RUNNING: null, FAILING: "Checks failing", CLEAR: null } as const;
 
 /// The PR panel's colours for the same verdicts: yellow while something is
 /// still in the way or not passing, red for a conflict, green when it can land.
@@ -68,22 +66,11 @@ const VERDICT_TONE: Record<ReturnType<typeof mergeVerdict>, string> = {
   ready: "text-accent-add",
 };
 
-function statusTone(pr: PrMark | undefined): string {
-  if (!pr) return "text-muted-foreground";
-  const verdict = mergeVerdict(pr);
-  if (verdict === "ready" && pr.checksState !== "CLEAR") return "text-accent-command";
-  return VERDICT_TONE[verdict];
-}
+const statusTone = (pr: PrMark | undefined) => (pr ? VERDICT_TONE[mergeVerdict(pr)] : "text-muted-foreground");
 
-/// The PR's state in words: the checks where they say something, then what
-/// GitHub says about merging.
-function statusLine(pr: PrMark | undefined): string {
-  if (!pr) return "Reading status…";
-  const verdict = VERDICT_WORDS[mergeVerdict(pr)];
-  const checks = pr.state === "OPEN" ? CHECK_WORDS[pr.checksState] : null;
-  if (!checks || verdict === "Checks not passing") return verdict;
-  return verdict ? `${checks} · ${verdict}` : checks;
-}
+/// What GitHub says about merging, where no glyph or button says it. Running
+/// checks draw `ChecksRunningIcon`; failing ones turn the PR glyph red.
+const statusLine = (pr: PrMark | undefined) => (pr ? VERDICT_WORDS[mergeVerdict(pr)] : "Reading status…");
 
 /// A task's pull request, posted into the chat by `dray session merge-card`.
 /// Whole while it is new and unmerged; one line once merged, or once the
