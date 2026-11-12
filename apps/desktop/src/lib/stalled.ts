@@ -26,9 +26,10 @@ export type Stall = {
 /// activity — waiting another [STALL_MS] of watching would hide one that has
 /// sat for a day.
 ///
-/// Left out: a task mid-turn, one behind a card (the card is in the chat
-/// already), one set aside or waiting on its usage limit, and one whose PR is
-/// still running checks — that waits on CI, not on the reader.
+/// Left out: a task mid-turn or with a background shell or subagent still
+/// running (the Tasks tab counts it as working), one behind a card (the card is
+/// in the chat already), one set aside or waiting on its usage limit, and one
+/// whose PR is still running checks — that waits on CI, not on the reader.
 export function stalledTasks(
   rows: readonly CrewRow[],
   prOf: (row: CrewRow) => PrMark | undefined,
@@ -49,7 +50,7 @@ export function stalledTasks(
       if (was === undefined) readySince.set(id, 0);
       else if (was === -1) readySince.set(id, now);
     }
-    if (row.busy || row.asking || item.aside || item.continueAt) continue;
+    if (row.busy || row.background || row.asking || item.aside || item.continueAt) continue;
     // Unknown is held, not drawn: a merge elsewhere drops every open PR there
     // to unknown for a poll, and a waiting row in that gap would be a new stall.
     if (ready === null || (open && pr.checksState === "RUNNING")) continue;
@@ -65,8 +66,18 @@ export function stalledTasks(
   return stalls.sort((a, b) => a.since - b.since);
 }
 
-/// "31 min", "2 h": how long a stall has stood, said briefly.
-export function stalledFor(since: number, now: number): string {
-  const min = Math.max(1, Math.floor((now - since) / 60_000));
-  return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h`;
+/// "45m", "2h", "3d": time since `iso`, as an inbox row says it.
+export function compactAge(iso: string, now: number): string {
+  const min = Math.max(1, Math.floor((now - (Date.parse(iso) || now)) / 60_000));
+  if (min < 60) return `${min}m`;
+  const h = Math.floor(min / 60);
+  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
+}
+
+/// The stalls in `stalls` not yet in `seen`, which takes them in. Ones the
+/// reader has not been told about, for the bot's one banner.
+export function freshStalls(seen: Set<string>, stalls: readonly Stall[]): Stall[] {
+  const fresh = stalls.filter((s) => !seen.has(s.key));
+  for (const s of fresh) seen.add(s.key);
+  return fresh;
 }

@@ -209,7 +209,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { crewRows, crewSeen, inSidebar, withHiddenAsks, type CrewRow } from "@/lib/crew";
-import { stalledTasks } from "@/lib/stalled";
+import type { Stall } from "@/lib/stalled";
+import { useStalledTasks } from "@/hooks/useStalledTasks";
 import {
   addPickTab,
   closePickTab,
@@ -251,6 +252,7 @@ function SettingsReady({ onReady }: { onReady: (ready: boolean) => void }) {
   return null;
 }
 
+const NO_STALLS: Stall[] = [];
 
 function App() {
   const {
@@ -1317,24 +1319,21 @@ function App() {
   // exactly the case with nothing to announce.
   usePrReady({ sessions: visibleSessions, prFor: prMarks.prFor, canAnnounce });
 
-  // A bot's chat says which of its tasks have sat untouched (`stalledTasks`),
-  // re-read once a minute while one is open, since nothing else moves then.
+  // Each bot's tasks that have sat untouched: drawn at the foot of its chat,
+  // and a banner per bot when new ones land while the window is away.
   const taskPr = useCallback(
     (row: CrewRow) => prMarks.prFor(row.item.projectPath, sessionBranch(row.item)),
     [prMarks.prFor],
   );
-  const [stallNow, setStallNow] = useState(Date.now);
-  useEffect(() => {
-    if (!selectedBot) return;
-    setStallNow(Date.now());
-    const tick = setInterval(() => setStallNow(Date.now()), 60_000);
-    return () => clearInterval(tick);
-  }, [selectedBot]);
-  const readySince = useRef(new Map<string, number>());
-  const stalls = useMemo(
-    () => (selectedBot ? stalledTasks(crew, taskPr, readySince.current, stallNow) : []),
-    [selectedBot, crew, taskPr, stallNow],
-  );
+  const stalled = useStalledTasks({
+    bots,
+    items: sessionIndexItems,
+    statusBySession,
+    askingSessions,
+    tasksBySession,
+    prOf: taskPr,
+  });
+  const stalls = (selectedBot && stalled.byBot.get(selectedBot.id)?.stalls) || NO_STALLS;
 
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it
@@ -3870,7 +3869,15 @@ function App() {
             earlier={earlier}
             taskOf={taskOf}
             onOpenBot={openBot}
-            botFooter={<StalledTasks stalls={stalls} now={stallNow} onOpen={(id, alone) => void openTask(id, alone)} onMerge={mergeTask} />}
+            botFooter={
+              <StalledTasks
+                stalls={stalls}
+                previews={stalled.previews}
+                now={stalled.now}
+                onOpen={(id, alone) => void openTask(id, alone)}
+                onMerge={mergeTask}
+              />
+            }
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
             crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
             // Its own chords only while the chat tab is on screen.

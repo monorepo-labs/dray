@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { CrewRow } from "@/lib/crew";
-import { STALL_MS, stalledTasks } from "@/lib/stalled";
+import { STALL_MS, compactAge, freshStalls, stalledTasks } from "@/lib/stalled";
 import type { PrMark, SessionIndexItem } from "@/types/events";
 
 const T0 = Date.parse("2026-11-12T10:00:00Z");
@@ -10,6 +10,7 @@ function row(id: string, over: Partial<CrewRow> = {}, item: Partial<SessionIndex
   return {
     item: { sessionId: id, title: id, modified: new Date(T0).toISOString(), ...item } as SessionIndexItem,
     busy: false,
+    background: false,
     asking: false,
     unread: false,
     ...over,
@@ -39,7 +40,12 @@ describe("stalledTasks", () => {
   });
 
   it("skips a task that is working, asking or set aside", () => {
-    const rows = [row("a", { busy: true }), row("b", { asking: true }), row("c", {}, { aside: true })];
+    const rows = [
+      row("a", { busy: true }),
+      row("b", { asking: true }),
+      row("c", {}, { aside: true }),
+      row("d", { background: true }),
+    ];
     expect(stalledTasks(rows, () => undefined, new Map(), T0 + 2 * STALL_MS)).toEqual([]);
   });
 
@@ -71,6 +77,20 @@ describe("stalledTasks", () => {
   it("leaves a task whose checks are still running alone", () => {
     const running = () => pr({ checksState: "RUNNING", mergeStateStatus: "BLOCKED" });
     expect(stalledTasks([row("a")], running, new Map(), T0 + 2 * STALL_MS)).toEqual([]);
+  });
+
+  it("hands each stall to the banner once", () => {
+    const seen = new Set<string>();
+    const stalls = stalledTasks([row("a"), row("b")], () => undefined, new Map(), T0 + STALL_MS);
+    expect(freshStalls(seen, stalls)).toHaveLength(2);
+    expect(freshStalls(seen, stalls)).toHaveLength(0);
+  });
+
+  it("says its age the way an inbox row does", () => {
+    const at = new Date(T0).toISOString();
+    expect(compactAge(at, T0 + 45 * 60_000)).toBe("45m");
+    expect(compactAge(at, T0 + 2.5 * 3_600_000)).toBe("2h");
+    expect(compactAge(at, T0 + 50 * 3_600_000)).toBe("2d");
   });
 
   it("names a new stall once the task moves", () => {
