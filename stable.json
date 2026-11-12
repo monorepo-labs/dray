@@ -1,23 +1,23 @@
 {
-  "version": "0.29.19",
-  "notes": "### New\n\n- **Break reminders.** After an hour of active use, Dray asks you to\n  stand up and stretch. Set the interval or turn it off in Settings →\n  Breaks.\n\n  ![](https://www.drayhq.com/changelog/break-reminder.png)\n\n- **Crew shows only what needs you.** When a session you started waits on\n  a permission or a question, its card shows above your composer. Arrows\n  step through several; number keys answer.\n- ⌘⇧S picks the next machine on a new task.\n\n### Improved\n\n- The Island stacks waiting cards, and lists them all from the header.\n  Dismiss hides them until the next new ask.\n- A remote session's machine name sits beside its branch in the header.\n- Dictation works in remote chats.\n\n### Fixed\n\n- A Mac running Dray as a server now says when it's behind.\n- Extending a boat sandbox clears the Island's warning at once.\n- `dray` keeps working after its socket file is deleted or replaced.\n- Pressing Escape or Tab in the browser no longer opens About Dray.",
-  "pub_date": "2026-11-09T11:57:43.941Z",
+  "version": "0.30.0",
+  "notes": "### New\n\n- **Bots.** A bot is one long-running chat with its own instructions\n  and memory. It starts tasks for you and hears back when each one\n  finishes. Find them at the top of the sidebar, starting with Dray Bot.\n- **Tasks open as tabs.** Click a task in a bot's Tasks list and it\n  opens as a tab beside the bot's chat. Add Diff and Files tabs with +.\n- **Switch a bot's agent.** Pick another agent mid-chat and the\n  conversation carries over.\n- **Bots message each other.** `dray bot send` reaches another bot by\n  name, and `dray bot new|ls|rename|rm` manage them from the terminal.\n- A bot's folder keeps its own git history, so lost notes can come back.\n\n### Improved\n\n- A server that drops keeps its sessions in the sidebar, faded, with\n  the reason on hover.\n- Idle agents stop after 15 minutes to free memory, and pick up where\n  they left off on your next message.\n- pi signs in and out from Settings → Accounts without opening its TUI.\n\n### Fixed\n\n- Break reminders count time spent outside Dray, and the window comes\n  forward when one is due.\n- Recordings from a remote server play at once instead of sitting at\n  0:00.",
+  "pub_date": "2026-11-12T12:29:58.599Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXYxYlR3M2ZGbnRuakM4M1diQUoydTY3L1laKytxNEpFVDFka051QTI5Uk5obE8rSnRSZ0trckdaNWk4M0MwUURKbjlFeEw4NjhUbzlnRjdldUtVbEFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjI1NDUxCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xOQpmdWtBYXdCN0kzTEwyTXo5QUR2TlpDSjdDbStuM1dkc2IxRU9QTE1ic3YvNTl3dVhNZE4zUHhNdlNVUDlQU3lNTzZIYTF1eUFKdUVkbk1XWlNkYWREZz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.29.19/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNVVnF5WVE2OUZ5WlNodkYxSEVWNkZmWFp4NHljbURrQ0dTajJDeVVmMDR1c1phZk5IZkYwMXpMbzZjUUN0MjZQdW5kOGxRV1MwbkdyaFNycGFwNlFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDg2NTg2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4wCm52MFBFNU8yY1h0Q0NIZkxyY0RGampCTVZZS2JxZ0RaVmVwdDVrbnNVazdCZWZOQzY0VDlMZjVGZ2wxckZsRXlOQno0NjRkVyt0NGdlM3ZwaFZzU0RBPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.0/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXYxYlR3M2ZGbnRuakM4M1diQUoydTY3L1laKytxNEpFVDFka051QTI5Uk5obE8rSnRSZ0trckdaNWk4M0MwUURKbjlFeEw4NjhUbzlnRjdldUtVbEFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjI1NDUxCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xOQpmdWtBYXdCN0kzTEwyTXo5QUR2TlpDSjdDbStuM1dkc2IxRU9QTE1ic3YvNTl3dVhNZE4zUHhNdlNVUDlQU3lNTzZIYTF1eUFKdUVkbk1XWlNkYWREZz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.29.19/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNVVnF5WVE2OUZ5WlNodkYxSEVWNkZmWFp4NHljbURrQ0dTajJDeVVmMDR1c1phZk5IZkYwMXpMbzZjUUN0MjZQdW5kOGxRV1MwbkdyaFNycGFwNlFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDg2NTg2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4wCm52MFBFNU8yY1h0Q0NIZkxyY0RGampCTVZZS2JxZ0RaVmVwdDVrbnNVazdCZWZOQzY0VDlMZjVGZ2wxckZsRXlOQno0NjRkVyt0NGdlM3ZwaFZzU0RBPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.0/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXYxYlR3M2ZGbnRuakM4M1diQUoydTY3L1laKytxNEpFVDFka051QTI5Uk5obE8rSnRSZ0trckdaNWk4M0MwUURKbjlFeEw4NjhUbzlnRjdldUtVbEFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjI1NDUxCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xOQpmdWtBYXdCN0kzTEwyTXo5QUR2TlpDSjdDbStuM1dkc2IxRU9QTE1ic3YvNTl3dVhNZE4zUHhNdlNVUDlQU3lNTzZIYTF1eUFKdUVkbk1XWlNkYWREZz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.29.19/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNVVnF5WVE2OUZ5WlNodkYxSEVWNkZmWFp4NHljbURrQ0dTajJDeVVmMDR1c1phZk5IZkYwMXpMbzZjUUN0MjZQdW5kOGxRV1MwbkdyaFNycGFwNlFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDg2NTg2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4wCm52MFBFNU8yY1h0Q0NIZkxyY0RGampCTVZZS2JxZ0RaVmVwdDVrbnNVazdCZWZOQzY0VDlMZjVGZ2wxckZsRXlOQno0NjRkVyt0NGdlM3ZwaFZzU0RBPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.0/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXYxYlR3M2ZGbnRuakM4M1diQUoydTY3L1laKytxNEpFVDFka051QTI5Uk5obE8rSnRSZ0trckdaNWk4M0MwUURKbjlFeEw4NjhUbzlnRjdldUtVbEFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjI1NDUxCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4yOS4xOQpmdWtBYXdCN0kzTEwyTXo5QUR2TlpDSjdDbStuM1dkc2IxRU9QTE1ic3YvNTl3dVhNZE4zUHhNdlNVUDlQU3lNTzZIYTF1eUFKdUVkbk1XWlNkYWREZz09Cg==",
-      "url": "https://downloads.drayhq.com/v0.29.19/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXNVVnF5WVE2OUZ5WlNodkYxSEVWNkZmWFp4NHljbURrQ0dTajJDeVVmMDR1c1phZk5IZkYwMXpMbzZjUUN0MjZQdW5kOGxRV1MwbkdyaFNycGFwNlFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDg2NTg2CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4wCm52MFBFNU8yY1h0Q0NIZkxyY0RGampCTVZZS2JxZ0RaVmVwdDVrbnNVazdCZWZOQzY0VDlMZjVGZ2wxckZsRXlOQno0NjRkVyt0NGdlM3ZwaFZzU0RBPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.0/Dray_universal.app.tar.gz"
     }
   }
 }
