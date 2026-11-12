@@ -591,6 +591,10 @@ async fn set_session_flags(
     aside: Option<bool>,
     sink: Sink,
 ) -> Result<Option<SessionIndexItem>, Fail> {
+    // Read first: settling an already settled session from an older chat must
+    // not reach the chat the bot moved on to.
+    let was_open = archived == Some(true)
+        && store::get_session_index_item(session_id).await?.is_some_and(|i| !i.archived);
     let updated = store::set_session_flags(session_id, archived, pinned, hidden, aside).await?;
     if updated.is_none() {
         return Ok(None);
@@ -601,7 +605,7 @@ async fn set_session_flags(
     let mut settling = vec![session_id.to_string()];
     // A bot chat that switched agent spans several sessions, and settling it
     // settles them all: left open, the previous one would be the chat again.
-    if archived == Some(true) {
+    if was_open {
         if let Some(item) = &updated {
             for id in bots::rest_of_chat(item).await {
                 store::set_session_flags(&id, Some(true), None, None, None).await?;
