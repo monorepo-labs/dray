@@ -264,6 +264,7 @@ function App() {
     sessions,
     sessionIndexItems,
     statusBySession,
+    unreadWorking,
     askingSessions,
     archivedShown,
     archivedRequested,
@@ -3276,6 +3277,7 @@ function App() {
           onProjectFilterChange={changeProjectFilter}
           onStepProjectFilter={stepProjectFilter}
           statusBySession={statusBySession}
+          unreadWorking={unreadWorking}
           askingSessions={sidebarAsking}
           prFor={prMarks.prFor}
           // Cleared while the page is up. The column is showing issues, so a
