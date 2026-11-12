@@ -1417,8 +1417,13 @@ function App() {
 
   // Whose browser the selection shows: a bot and its tasks share the bot
   // chat's, as the server routes their agents' `dray browser` steps (#881).
+  // A settled task is on no loaded index, so its walk starts at its parent,
+  // off the held transcript, as the server's does off the whole index.
+  const heldParent = selectedSession?.parentSessionId;
   const browserSession = selectedSessionId
-    ? (botBrowser(bots, sessionIndexItems, rowOf(selectedSessionId)) ?? rowOf(selectedSessionId))
+    ? (botBrowser(bots, sessionIndexItems, rowOf(selectedSessionId)) ??
+      (heldParent ? botBrowser(bots, sessionIndexItems, heldParent) : undefined) ??
+      rowOf(selectedSessionId))
     : null;
   const browserTabs = useBrowserTabs(browserSession);
   const blankTabs = useBlankTabs(browserSession ?? "");
