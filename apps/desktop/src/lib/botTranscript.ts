@@ -1,5 +1,5 @@
 import { drawsFailure } from "@/lib/transcript";
-import type { AgentEvent } from "@/types/events";
+import type { AgentEvent, Harness } from "@/types/events";
 import type { JsonValue } from "@/types/serde_json/JsonValue";
 
 /// One row of a bot's chat. A bot is talked to like a person, so its chat draws
@@ -12,7 +12,24 @@ export type BotItem =
   | { kind: "notice"; event: AgentEvent }
   | { kind: "task"; key: string; sessionId: string; ts: string }
   | { kind: "report"; event: AgentEvent; sessionId: string; title: string }
-  | { kind: "sent"; key: string; target: string; text: string; ts: string };
+  | { kind: "sent"; key: string; target: string; text: string; ts: string }
+  /// Where the chat moved to another agent: one session ends and the next begins.
+  | { kind: "switch"; key: string; harness: Harness; ts: string };
+
+/// One session of a bot's chat. An agent switch starts a new one, and the chat
+/// draws them all in order.
+export type BotSegment = { sessionId: string; harness: Harness; created: string; events: readonly AgentEvent[] };
+
+/// The rows of a bot's whole chat, its sessions oldest first, with a line where
+/// the agent changed.
+export function chatItems(segments: readonly BotSegment[]): BotItem[] {
+  return segments.flatMap((segment, i) => {
+    const items = botItems(segment.events);
+    if (i === 0 || segments[i - 1].harness === segment.harness) return items;
+    const ts = segment.events[0]?.ts ?? segment.created;
+    return [{ kind: "switch" as const, key: `switch:${segment.sessionId}`, harness: segment.harness, ts }, ...items];
+  });
+}
 
 /// When an item happened, for the chat's time labels — never its order, which
 /// is the log's.

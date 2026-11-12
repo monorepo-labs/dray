@@ -31,6 +31,9 @@ export function crewRows(
     statusBySession: Record<string, SessionStatus>;
     askingSessions: ReadonlySet<string>;
   },
+  /// More sessions whose children count as the parent's: a bot chat's earlier
+  /// sessions, from before it switched agent, whose tasks are still its own.
+  also: readonly string[] = [],
 ): CrewRow[] {
   if (!parentId) return [];
   const byParent = new Map<string, SessionIndexItem[]>();
@@ -41,20 +44,21 @@ export function crewRows(
     byParent.set(i.parentSessionId, siblings);
   }
   const out: CrewRow[] = [];
+  const roots = [parentId, ...also];
   // A cycle in the index costs a short list rather than a hung render.
-  const seen = new Set([parentId]);
-  const walk = (id: string) => {
-    const kids = [...(byParent.get(id) ?? [])].sort(
+  const seen = new Set(roots);
+  const walk = (ids: readonly string[]) => {
+    const kids = ids.flatMap((id) => byParent.get(id) ?? []).sort(
       (a, b) => Date.parse(b.created) - Date.parse(a.created),
     );
     for (const kid of kids) {
       if (seen.has(kid.sessionId)) continue;
       seen.add(kid.sessionId);
       out.push(rowState(kid, live));
-      walk(kid.sessionId);
+      walk([kid.sessionId]);
     }
   };
-  walk(parentId);
+  walk(roots);
   return out;
 }
 

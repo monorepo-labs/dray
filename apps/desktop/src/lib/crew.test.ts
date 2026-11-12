@@ -65,6 +65,16 @@ describe("crewRows", () => {
     expect(ids(crewRows(items, "b", quiet))).toEqual(["c"]);
   });
 
+  it("counts a bot chat's earlier sessions' tasks as its own", () => {
+    const items = [
+      item("old", null),
+      item("new", null),
+      item("t1", "old", { created: "2026-09-01T00:00:00Z" }),
+      item("t2", "new", { created: "2026-09-02T00:00:00Z" }),
+    ];
+    expect(ids(crewRows(items, "new", quiet, ["old"]))).toEqual(["t2", "t1"]);
+  });
+
   it("survives a cycle in the index", () => {
     const items = [item("a", null), item("b", "a"), item("c", "b"), item("a", "c")];
     expect(ids(crewRows(items, "a", quiet))).toEqual(["b", "c"]);
