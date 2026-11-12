@@ -152,6 +152,21 @@ struct SessionItem: Decodable, Hashable {
     var project: String { (projectPath as NSString).lastPathComponent }
 }
 
+/// A bot, as `list_bots` answers it. Its chat is any session whose `cwd` is `path`.
+struct Bot: Decodable, Hashable {
+    let id: String
+    let name: String
+    let path: String
+    /// Absent for a bot made before there was a pick, which draws the face its id seeds.
+    let avatar: BotAvatar?
+}
+
+/// A Blobatar face: a shape name and hue degrees.
+struct BotAvatar: Decodable, Hashable {
+    let shape: String
+    let hue: Double
+}
+
 /// One branch's pull request, as `pr_marks` answers it. Only `OPEN` and
 /// `MERGED` are asked for; `checksState` is `RUNNING`, `FAILING` or `CLEAR`.
 struct PrMark: Decodable, Hashable {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { crewRows, crewSeen, hiddenChildren, inSidebar, leftToParent, withHiddenAsks } from "@/lib/crew";
-import type { SessionIndexItem, SessionStatus } from "@/types/events";
+import type { BackgroundTask, SessionIndexItem, SessionStatus } from "@/types/events";
 
 const item = (
   sessionId: string,
@@ -122,6 +122,18 @@ describe("crewRows", () => {
     const [row] = crewRows(items, "a", live);
     expect(row.asking).toBe(true);
     expect(row.busy).toBe(false);
+  });
+
+  // A turn over with a background shell still running reads as idle without
+  // this, and the reader takes the task for finished.
+  it("flags a background task only once no turn runs", () => {
+    const items = [item("a", null), item("b", "a"), item("c", "a", { status: "in_progress" })];
+    const task = { taskId: "t", toolUseId: "u", kind: "local_bash", description: "dev server" } as unknown as BackgroundTask;
+    const live = { statusBySession: {}, askingSessions: new Set<string>(), tasksBySession: { b: [task], c: [task] } };
+    const [b, c] = crewRows(items, "a", live);
+    expect(b.background).toBe(true);
+    expect(c.background).toBe(false);
+    expect(crewRows(items, "a", quiet)[0].background).toBe(false);
   });
 });
 

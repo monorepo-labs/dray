@@ -1,6 +1,6 @@
 import { botAt } from "@/lib/bots";
 import type { NoticeKind } from "@/hooks/useNotices";
-import type { Bot, SessionIndexItem, SessionStatus } from "@/types/events";
+import type { BackgroundTask, Bot, SessionIndexItem, SessionStatus } from "@/types/events";
 
 /// One session the selected one started, and what it is doing.
 export type CrewRow = {
@@ -12,6 +12,16 @@ export type CrewRow = {
   asking: boolean;
   /// A turn finished and nobody has read it. The sidebar's green.
   unread: boolean;
+  /// No turn running, but a background shell or subagent still is: the same
+  /// set the chat's Background Tasks row counts.
+  background: boolean;
+};
+
+/// The live maps a row is read off.
+type Live = {
+  statusBySession: Record<string, SessionStatus>;
+  askingSessions: ReadonlySet<string>;
+  tasksBySession?: Record<string, BackgroundTask[]>;
 };
 
 /// Everything the selected session started, at any depth: depth-first, each
@@ -28,10 +38,7 @@ export type CrewRow = {
 export function crewRows(
   items: SessionIndexItem[],
   parentId: string | null,
-  live: {
-    statusBySession: Record<string, SessionStatus>;
-    askingSessions: ReadonlySet<string>;
-  },
+  live: Live,
   /// More sessions whose children count as the parent's: a bot chat's earlier
   /// sessions, from before it switched agent, whose tasks are still its own.
   also: readonly string[] = [],
@@ -70,20 +77,16 @@ export function crewRows(
 /// ahead of status and is not folded into it: the backend reports a session
 /// blocked on a card as `in_progress` and is right to — the turn *is* still
 /// open — so the two are separate questions and this one is the reader's.
-function rowState(
-  item: SessionIndexItem,
-  live: {
-    statusBySession: Record<string, SessionStatus>;
-    askingSessions: ReadonlySet<string>;
-  },
-): CrewRow {
+function rowState(item: SessionIndexItem, live: Live): CrewRow {
   const status = live.statusBySession[item.sessionId] ?? item.status;
   const asking = live.askingSessions.has(item.sessionId);
+  const busy = !asking && status === "in_progress";
   return {
     item,
     asking,
-    busy: !asking && status === "in_progress",
+    busy,
     unread: status === "completed",
+    background: !asking && !busy && (live.tasksBySession?.[item.sessionId]?.length ?? 0) > 0,
   };
 }
 
