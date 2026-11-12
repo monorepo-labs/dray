@@ -18,7 +18,7 @@ use crate::{
     models::{find_model, resolve_effort, runs_on, Effort, Model, ModelId},
     store::{
         append_session_event, append_session_index_item, clear_fork_from, copy_session_log,
-        delete_session, get_session_index_item, link_session_issue, list_session_events,
+        delete_session, get_session_index_item, link_session_issue, list_session_events, next_seq_by_session_id,
         relocate_session_to_project, resolve_unclaimed_worktree_name, set_session_status,
         touch_session_index_item, worktree_path, SessionIndexItem, SessionSnapshot, SessionStatus,
     },
@@ -1886,6 +1886,22 @@ impl SessionManager {
             .with_context(|| format!("no session {session_id}"))?;
 
         Ok((relocated, existed))
+    }
+
+    /// Logs and emits an event Dray writes into a session's chat itself. Numbered
+    /// through the live child's counter where one runs — the agent posting a card
+    /// is mid-turn — and off the log otherwise, under the slot's lock either way
+    /// so a spawn cannot take the same `seq`.
+    pub async fn post_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<()> {
+        let slot = self.slot(session_id).await;
+        let guard = slot.lock().await;
+        let (harness, seq) = match guard.as_ref() {
+            Some(s) => (s.harness, s.seq.fetch_add(1, Relaxed)),
+            None => (harness, next_seq_by_session_id(session_id).await?),
+        };
+        let event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
+        app.emit("agent_event", &event)?;
+        append_session_event(session_id, event).await
     }
 
     /// The agent process's pid, for finding what it started (a dev server is a

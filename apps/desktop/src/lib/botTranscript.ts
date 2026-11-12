@@ -10,6 +10,8 @@ export type BotItem =
   /// An error, or a turn that failed: drawn as the transcript draws them, since
   /// a bot turn that fails before answering otherwise ends with no word why.
   | { kind: "notice"; event: AgentEvent }
+  /// A task's pull request, posted by `dray session merge-card`.
+  | { kind: "card"; event: AgentEvent }
   | { kind: "task"; key: string; sessionId: string; ts: string }
   | { kind: "report"; event: AgentEvent; sessionId: string; title: string }
   | { kind: "sent"; key: string; target: string; text: string; ts: string }
@@ -227,6 +229,8 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       if (p.text.trim()) items.push({ kind: "assistant", event });
     } else if (p.type === "error") {
       items.push({ kind: "notice", event });
+    } else if (p.type === "merge_card") {
+      items.push({ kind: "card", event });
     } else if (p.type === "turn_completed" && drawsFailure(p)) {
       // The harness says the failure twice, as text and on the turn; the red
       // row wins, as in the transcript.

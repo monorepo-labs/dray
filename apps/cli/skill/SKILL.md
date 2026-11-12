@@ -288,6 +288,19 @@ unpushed work included, and nothing asks. Before passing it, check the tree
 yourself — `git -C <cwd> status --short` and `git -C <cwd> log @{u}..` or
 against `origin/<default>` — and ask the user, naming what would be lost.
 
+## Handing a pull request to the user
+
+```bash
+dray session merge-card <task-id>   # a card in your chat for that task's open PR
+```
+
+When a task you started reports its pull request is ready to merge, post a merge
+card rather than asking the user in text. It lands in your own chat with the
+task's title, the PR number, its live status, a Merge button and an Open on
+GitHub link, so the user merges in one click without opening the task. It is
+refused when the task's branch has no open pull request, so post it once the PR
+exists. Post one card per PR; it stays in the chat until the PR is merged.
+
 ## Saving work for later
 
 ```bash

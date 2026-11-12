@@ -225,7 +225,7 @@ function TaskRow({
 
 /// The PR panel's merge, cut to a row: a split button naming the method, and
 /// a confirm step, since a merge is the one thing here that cannot be undone.
-function MergeControl({ onMerge }: { onMerge: (method: MergeMethod) => Promise<void> }) {
+export function MergeControl({ onMerge }: { onMerge: (method: MergeMethod) => Promise<void> }) {
   const [method, setMethod] = useState<MergeMethod>("squash");
   const [confirming, setConfirming] = useState(false);
   const [merging, setMerging] = useState(false);

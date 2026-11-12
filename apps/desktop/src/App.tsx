@@ -91,6 +91,8 @@ import { useChord } from "@/hooks/useShortcuts";
 import { type Chord, formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_BESIDE, CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import TasksPanel from "@/components/TasksPanel";
+import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/MergeCard";
+import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
@@ -177,7 +179,7 @@ import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
-import type { Attachment, Bot, BotPreview, Harness, IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/events";
+import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, SessionIndexItem, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -1296,12 +1298,28 @@ function App() {
   // is dropped is the spending, not the answer.
   // A bot's tasks run hidden, so their repos are added while their Tasks tab
   // can be on screen: that tab draws their marks.
+  // A merge card's task may be settled and out of every list, so the repos the
+  // open chat's cards name are read too.
+  const cardRepoKey = useMemo(
+    () =>
+      cardRepos(
+        sessions
+          .filter((s) => s.sessionId === selectedSessionId || earlierIds.includes(s.sessionId))
+          .flatMap((s) => s.events),
+      ).join("\n"),
+    [sessions, selectedSessionId, earlierIds],
+  );
   const repoPaths = useMemo(
     () =>
       archivedShown
         ? []
-        : [...new Set([...visibleSessions, ...crew.map((r) => r.item)].map((i) => i.projectPath))],
-    [archivedShown, visibleSessions, crew],
+        : [
+            ...new Set([
+              ...[...visibleSessions, ...crew.map((r) => r.item)].map((i) => i.projectPath),
+              ...(cardRepoKey ? cardRepoKey.split("\n") : []),
+            ]),
+          ],
+    [archivedShown, visibleSessions, crew, cardRepoKey],
   );
   const prMarks = usePrMarks(repoPaths);
 
@@ -1350,15 +1368,8 @@ function App() {
     selectedSession?.cwd ?? "",
     prBranch,
     panelShown && (panelTab === "pr" || panelTab === null),
-    // A pull request appearing is the moment the session stops being about the
-    // turn and starts being about landing, so the pane opens onto it rather
-    // than waiting to be asked. Fires at most once per PR — see `onOpened`.
-    //
-    // It moves the pick as well as opening the pane, and has to: `activeTab`
-    // honours a standing pick over the derived default, so opening alone lands
-    // on whichever tab the reader last chose.
-    // A fresh closure each render is fine: the hook holds it in a ref.
-    () => showPanel("pr"),
+    // No opening the pane when a PR appears: an agent posts a merge card in
+    // the chat for that (`dray session merge-card`), and the pane opens by hand.
     // A merge or a reopen changes what the sidebar's mark should say, and that
     // mark comes from a different read with a two-minute freshness window — so
     // without this the row keeps its open-PR glyph until the window expires or
@@ -3022,6 +3033,47 @@ function App() {
     }
   };
 
+  /// Merges a task's pull request, then settles the task where `task` is
+  /// given — the Tasks tab's Merge, and a merge card's in a bot's chat.
+  const mergeTask = async (
+    projectPath: string,
+    number: number,
+    method: MergeMethod,
+    task: { item: SessionIndexItem; busy: boolean } | null,
+  ) => {
+    // From the repo root: a task's worktree may already be gone.
+    await invoke("merge_pr", { cwd: projectPath, number, method });
+    prMarks.refreshAfterWrite();
+    // Landed, so the task is done — unless it is still working,
+    // which settling would kill mid-turn.
+    if (!task) return;
+    const { item } = task;
+    if (task.busy || !(await setSessionFlags(item.sessionId, { archived: true }))) return;
+    if (!item.worktreeName || item.worktreeRemoved) return;
+    // The tree goes without a word only where it holds nothing
+    // the merge did not take; anything else is the settle notice's
+    // question, never a silent delete.
+    const left = await invoke<WorktreeDisposition>("worktree_disposition", { sessionId: item.sessionId }).catch(
+      () => null,
+    );
+    if (left && (!left.exists || (left.changedFiles === 0 && left.unpushedCommits === 0))) {
+      removeWorktree(item.sessionId, "tidy");
+    } else {
+      void askAboutWorktree(item.sessionId, item.worktreeName, item.title, "notice");
+    }
+  };
+
+  const mergeCardHost: MergeCardHost = {
+    prFor: prMarks.prFor,
+    titleOf: (id) => sessionIndexItems.find((i) => i.sessionId === id)?.title,
+    merge: (card, method, settle) => {
+      const item = settle ? sessionIndexItems.find((i) => i.sessionId === card.taskId) : undefined;
+      const busy = (statusBySession[card.taskId] ?? item?.status) === "in_progress";
+      return mergeTask(card.projectPath, card.number, method, item ? { item, busy } : null);
+    },
+    open: (id, alone) => paneChat.onOpenSession(id, alone),
+  };
+
   const paneChat: PaneChat = {
     onOpenSubagent: openSubagent,
     onOpenSession: (id, alone) =>
@@ -3096,6 +3148,7 @@ function App() {
 
   return (
     <TooltipProvider>
+    <MergeCardHostContext value={mergeCardHost}>
     <DiffWorkerPool pair={codeThemePair}>
     {/* Hidden, not unmounted, while settings take the window: transcripts,
         scroll pins and drafts wait here. `display: none` is also what takes
@@ -3520,27 +3573,7 @@ function App() {
                 onFork={forkSession}
                 onDelete={deleteTask}
                 onDetach={detachSession}
-                onMerge={async (row, pr, method) => {
-                  // From the repo root: a task's worktree may already be gone.
-                  await invoke("merge_pr", { cwd: row.item.projectPath, number: pr.number, method });
-                  prMarks.refreshAfterWrite();
-                  // Landed, so the task is done — unless it is still working,
-                  // which settling would kill mid-turn.
-                  const { item } = row;
-                  if (row.busy || !(await setSessionFlags(item.sessionId, { archived: true }))) return;
-                  if (!item.worktreeName || item.worktreeRemoved) return;
-                  // The tree goes without a word only where it holds nothing
-                  // the merge did not take; anything else is the settle notice's
-                  // question, never a silent delete.
-                  const left = await invoke<WorktreeDisposition>("worktree_disposition", { sessionId: item.sessionId }).catch(
-                    () => null,
-                  );
-                  if (left && (!left.exists || (left.changedFiles === 0 && left.unpushedCommits === 0))) {
-                    removeWorktree(item.sessionId, "tidy");
-                  } else {
-                    void askAboutWorktree(item.sessionId, item.worktreeName, item.title, "notice");
-                  }
-                }}
+                onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
               />
             </TabBody>
             <TabBody active={activeTab === "more"}>
@@ -4051,6 +4084,7 @@ function App() {
       </AlertDialogContent>
     </AlertDialog>
     </DiffWorkerPool>
+    </MergeCardHostContext>
     </TooltipProvider>
   );
 }
