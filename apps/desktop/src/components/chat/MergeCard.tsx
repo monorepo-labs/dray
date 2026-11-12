@@ -121,7 +121,9 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
   }
 
   return (
-    <div className="w-full max-w-lg self-start rounded-2xl border border-border bg-card p-3.5 shadow-(--shadow-card)">
+    // Light lifts the card with `--shadow-card` alone; dark has no drop to cast
+    // (`--shadow-card` is `none` there), so a faint half-pixel edge draws it.
+    <div className="w-full max-w-lg self-start rounded-2xl bg-card p-3.5 shadow-(--shadow-card) dark:border-[0.5px] dark:border-border/50">
       <div className="flex items-center gap-2.5">
         <button type="button" onClick={open} className="size-7 shrink-0 cursor-pointer" aria-label={`Open ${title}`}>
           {face}
