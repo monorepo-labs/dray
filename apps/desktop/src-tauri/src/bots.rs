@@ -585,6 +585,9 @@ pub async fn system_prompt(base: &str, session_id: &str, cwd: &str) -> String {
         };
     };
     let dir = Path::new(&bot.path);
+    // A bot made before memory was a folder has none, and the prompt sends it
+    // straight to one. Its old `MEMORY.md` is left alone: bots had no users yet.
+    tokio::fs::create_dir_all(dir.join(MEMORY)).await.ok();
     let instructions = capped(read_file(&dir.join(INSTRUCTIONS)).await);
     format!("{base}\n\n{}", bot_block(&bot, &instructions))
 }
