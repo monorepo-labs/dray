@@ -12,19 +12,24 @@ export type CloudAccount = {
   plan?: {
     id: string;
     name: string;
-    price: number;
+    dollars: number;
     hours: number;
-    machines: number;
-    status: "active" | "past_due" | "canceled";
+    status: string;
     renewsAt: string;
+    overage?: { on: boolean; capCents: number | null; centsPerHour: number };
   } | null;
   usage?: { from: string; to: string; hours: number } | null;
-  github?: { installed: boolean; account: string | null; repos: string[] | null; installUrl: string };
-  agents?: Partial<Record<CloudAgent, { connected: boolean; connectUrl: string | null }>>;
-  links?: { plans: string; dashboard: string };
+  /// Which repos the link reaches is GitHub's answer when a machine starts,
+  /// which refuses one it can't clone with a sentence saying how to fix it.
+  github?: { connected: boolean; login: string | null; connectUrl: string };
+  agents?: Partial<Record<CloudAgent, CloudAgentState>>;
+  links?: { plans: string; billing: string; dashboard: string };
 };
 
 export type CloudAgent = "claude" | "codex";
+
+/// `available` false is a login Dray can't take today, said in `note`.
+export type CloudAgentState = { available: boolean; connected: boolean; connectUrl: string | null; note: string | null };
 
 export type StepId = "signIn" | "plan" | "github" | "agent";
 
@@ -42,23 +47,37 @@ export type Step = {
 
 const SITE = "https://www.drayhq.com";
 
-const hours = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+const AGENT_NAMES: Record<CloudAgent, string> = { claude: "Claude", codex: "Codex" };
+
+const hours = (n: number) => (Number.isInteger(n) ? n.toLocaleString("en-US") : n.toFixed(1));
+
+const day = (iso: string) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+
+/// What the plan step says once a plan exists: hours left, or why machines
+/// are stopped. Overage is off unless the reader turned it on (#1023).
+function planDetail(plan: NonNullable<CloudAccount["plan"]>, used: number): string {
+  if (plan.status === "past_due") return `${plan.name}. Your last payment didn't go through; update your card in billing.`;
+  const left = plan.hours - used;
+  if (left > 0) return `${plan.name}, ${hours(left)} of ${hours(plan.hours)} hours left this period.`;
+  if (!plan.overage?.on) {
+    return `${plan.name}. This period's hours are used up, so machines stay stopped until ${day(plan.renewsAt)} unless you turn on overage.`;
+  }
+  return `${plan.name}, ${hours(-left)} hours past your plan this period, on overage.`;
+}
 
 /// The four things Cloud needs, in the order they can be done, for a task in
 /// the repo `slug`. A step after a missing sign-in can't be read, so it says so.
 export function setupSteps(account: CloudAccount | null, slug: string | null): Step[] {
   const user = account?.user ?? null;
-  const links = account?.links ?? { plans: `${SITE}/cloud`, dashboard: `${SITE}/app/cloud` };
+  const links = account?.links ?? { plans: `${SITE}/cloud`, billing: `${SITE}/app/account/billing`, dashboard: `${SITE}/app/cloud` };
   const unknown = "Sign in first.";
-  const plan = account?.plan && account.plan.status !== "canceled" ? account.plan : null;
+  const plan = account?.plan ?? null;
   const github = account?.github;
-  const reaches = !!github?.installed && !!slug && reachesRepo(github, slug);
-  const owner = slug?.split("/")[0] ?? null;
-  // The repo's owner where the App's install sits on someone else.
-  const otherOwner = github?.account && owner && owner.toLowerCase() !== github.account.toLowerCase() ? owner : null;
-  const agents = (["claude", "codex"] as const).filter((a) => account?.agents?.[a]?.connected);
-  const connectUrl = account?.agents?.claude?.connectUrl ?? account?.agents?.codex?.connectUrl ?? links.dashboard;
-  const left = plan ? plan.hours - (account?.usage?.hours ?? 0) : 0;
+  const agents = (["claude", "codex"] as const).map((id) => ({ id, ...(account?.agents?.[id] ?? null) }));
+  const connected = agents.filter((a) => a.connected);
+  const open = agents.filter((a) => a.available && !a.connected && a.connectUrl);
+  // Nothing to connect today: each agent's own reason, said together.
+  const closed = agents.map((a) => a.note).filter(Boolean).join(" ");
 
   return [
     {
@@ -75,56 +94,39 @@ export function setupSteps(account: CloudAccount | null, slug: string | null): S
       done: !!plan,
       detail: !user
         ? unknown
-        : !plan
-          ? "Plans include awake machine-hours. A machine sleeps when its agent goes quiet."
-          : plan.status === "past_due"
-            ? `${plan.name}. Your last payment didn't go through; update your card in billing.`
-            : left >= 0
-              ? `${plan.name}, ${hours(left)} of ${plan.hours} hours left this period.`
-              : `${plan.name}, ${hours(-left)} hours past your plan this period.`,
-      url: user ? (plan ? links.dashboard : links.plans) : null,
-      verb: plan ? "Manage" : "Choose a plan",
+        : plan
+          ? planDetail(plan, account?.usage?.hours ?? 0)
+          : "Plans include awake machine-hours. A machine sleeps when its agent goes quiet.",
+      url: user ? links.billing : null,
+      verb: plan ? "Billing" : "Choose a plan",
     },
     {
       id: "github",
       title: "Connect GitHub",
-      done: reaches,
+      done: !!github?.connected,
       detail: !user
         ? unknown
-        : reaches
-          ? `The Dray GitHub App reaches ${slug ?? "your repos"}.`
-          : github?.installed && !otherOwner
-            ? `The Dray GitHub App is on ${github.account ?? "GitHub"} but can't reach ${slug ?? "this repo"}. Add it there.`
-            : github?.installed && otherOwner
-              ? `The Dray GitHub App is on ${github.account}, not ${otherOwner}. Install it on ${otherOwner} too.`
-              : `Install the Dray GitHub App so Cloud can clone and push ${slug ?? "your repos"}.`,
-      url: user && !reaches ? (github?.installUrl ?? null) : null,
-      verb: github?.installed && !otherOwner ? "Add repo" : "Install",
+        : github?.connected
+          ? `Linked as ${github.login}. ${slug ?? "The repo"} must be one the Dray GitHub App is installed on.`
+          : `Install the Dray GitHub App so Cloud can clone and push ${slug ?? "your repos"}.`,
+      url: user && !github?.connected ? (github?.connectUrl ?? null) : null,
+      verb: "Install",
     },
     {
       id: "agent",
-      title: "Connect Claude or Codex",
-      done: agents.length > 0,
+      title: "Connect an agent",
+      done: connected.length > 0,
       detail: !user
         ? unknown
-        : agents.length === 2
-          ? "Claude and Codex are connected."
-          : agents.length === 1
-            ? `${agents[0] === "claude" ? "Claude" : "Codex"} is connected.`
-            : "Agents run on your own subscription. Dray never bills you for tokens.",
-      url: user && agents.length === 0 ? connectUrl : null,
+        : connected.length > 0
+          ? `${connected.map((a) => AGENT_NAMES[a.id]).join(" and ")} ${connected.length > 1 ? "are" : "is"} connected.`
+          : open.length > 0
+            ? `Connect your ${AGENT_NAMES[open[0].id]} login. Model usage stays on your ${AGENT_NAMES[open[0].id]} plan.`
+            : closed || "No agent can be connected yet.",
+      url: user && connected.length === 0 ? (open[0]?.connectUrl ?? null) : null,
       verb: "Connect",
     },
   ];
-}
-
-/// Whether the App's installation can clone `slug`. `repos: null` is every
-/// repo on the installation's own account, never another owner's. GitHub
-/// names are case-insensitive.
-function reachesRepo(github: NonNullable<CloudAccount["github"]>, slug: string): boolean {
-  const want = slug.toLowerCase();
-  if (github.repos !== null) return github.repos.some((r) => r.toLowerCase() === want);
-  return !!github.account && want.split("/")[0] === github.account.toLowerCase();
 }
 
 /// Every step done: the only state in which a task can start on Cloud.

@@ -1,21 +1,28 @@
 import type { State } from "./cloud";
 import type { PlanId } from "./plans";
 
-/// What the customer surface (#1021) reads from the lanes built beside it:
-/// billing, per-user machines, the GitHub App and per-user agent logins. Each
-/// function is a stub answering "nothing yet" until its lane lands and fills
-/// it in; the pages and `GET /api/cloud/account` only ever call these.
+/// What the customer surface (#1021) reads from the lanes built beside it.
+/// Each function is a stub answering "nothing yet", shaped after the lane's
+/// own code so swapping it in is a one-line change:
+///
+/// - billing (#1023): `standingOf` and `billingOf` in `billing.ts`
+/// - per-user machines: the user's `dray=cloud` sandboxes
+/// - GitHub App and agent logins (#1022): `connected` in `github-store.ts`,
+///   `enabled` and `list` in `agent-logins.ts`
 ///
 /// `DRAY_CLOUD_STUB` fills them with sample answers outside production, so
 /// every state of the pages can be looked at before the lanes merge:
 /// `plan` (a plan, nothing else), `ready` (everything set up, two machines
-/// awake), `over` (as `ready`, past the plan's hours).
+/// awake), `over` (as `ready`, past the plan's hours with overage on).
 
 export type Subscription = {
   plan: PlanId;
-  status: "active" | "past_due" | "canceled";
+  status: "active" | "trialing" | "past_due";
   periodStart: Date;
   periodEnd: Date;
+  /// Hours past the plan are billed only with this on, up to the cap.
+  overage: boolean;
+  overageCapCents: number | null;
 };
 
 export type UserMachine = {
@@ -27,15 +34,6 @@ export type UserMachine = {
   since: Date;
 };
 
-export type Installation = {
-  /// The GitHub user or org the App is installed on.
-  account: string;
-  /// Repos it can reach, or null for every repo on that account.
-  repos: string[] | null;
-};
-
-export type Agent = "claude" | "codex";
-
 function stub(): "plan" | "ready" | "over" | null {
   if (process.env.NODE_ENV === "production") return null;
   const mode = process.env.DRAY_CLOUD_STUB;
@@ -43,33 +41,23 @@ function stub(): "plan" | "ready" | "over" | null {
 }
 
 const DAY = 86_400_000;
-const periodStart = () => new Date(Date.now() - 12 * DAY);
 
-/// Stripe lane: the reader's subscription, or null for none.
+/// Billing (#1023): the reader's paying subscription, or null for none.
 export async function subscription(_userId: string): Promise<Subscription | null> {
-  if (!stub()) return null;
-  const start = periodStart();
-  return { plan: "pro", status: "active", periodStart: start, periodEnd: new Date(start.getTime() + 30 * DAY) };
+  const mode = stub();
+  if (!mode) return null;
+  const start = new Date(Date.now() - 12 * DAY);
+  const end = new Date(start.getTime() + 30 * DAY);
+  return { plan: "pro", status: "active", periodStart: start, periodEnd: end, overage: mode === "over", overageCapCents: 5000 };
 }
 
-/// Stripe lane (metering): awake machine-hours since `from`.
+/// Billing (#1023): awake machine-hours this period.
 export async function hoursUsed(_userId: string, _from: Date): Promise<number> {
   const mode = stub();
-  return mode === "ready" ? 61.5 : mode === "over" ? 263.2 : 0;
+  return mode === "ready" ? 181.5 : mode === "over" ? 613.2 : 0;
 }
 
-/// Stripe lane: a Checkout session's URL for `plan`, or null while billing
-/// isn't live, which the caller turns into a notice.
-export async function checkoutUrl(_userId: string, _plan: PlanId, _returnTo: string): Promise<string | null> {
-  return null;
-}
-
-/// Stripe lane: the customer portal's URL, or null while billing isn't live.
-export async function billingPortalUrl(_userId: string, _returnTo: string): Promise<string | null> {
-  return null;
-}
-
-/// Per-user machines lane: the reader's machines, every state.
+/// Per-user machines: the reader's machines, every state.
 export async function userMachines(_userId: string): Promise<UserMachine[]> {
   const mode = stub();
   if (mode !== "ready" && mode !== "over") return [];
@@ -81,25 +69,23 @@ export async function userMachines(_userId: string): Promise<UserMachine[]> {
   ];
 }
 
-/// GitHub App lane: where the reader installed the Dray GitHub App, or null.
-export async function githubInstallation(_userId: string): Promise<Installation | null> {
+/// GitHub App (#1022): the GitHub login the reader linked, or null. Which
+/// repos it reaches is GitHub's answer when a machine starts, not known here.
+export async function githubConnection(_userId: string): Promise<{ login: string } | null> {
   const mode = stub();
-  return mode === "ready" || mode === "over" ? { account: "acme", repos: null } : null;
+  return mode === "ready" || mode === "over" ? { login: "acme" } : null;
 }
 
-/// GitHub App lane: where installing the App starts. `GITHUB_APP_SLUG` names it.
-export function githubInstallUrl(): string {
-  return `https://github.com/apps/${process.env.GITHUB_APP_SLUG ?? "dray-cloud"}/installations/new`;
-}
+/// GitHub App (#1022): where linking starts, its own route on this site.
+export const githubInstallUrl = (origin: string) => `${origin}/api/github/install`;
 
-/// Per-user logins lane: which agent subscriptions the reader connected.
-export async function agentLogins(_userId: string): Promise<Record<Agent, boolean>> {
+/// Agent logins (#1022): whether connecting a Claude login is open at all.
+/// Off by default: Anthropic's terms bar routing a user's Pro or Max login
+/// through Dray's machines, so turning it on is a decision, not a deploy.
+export const claudeLoginsOpen = () => process.env.DRAY_CLOUD_AGENT_LOGINS === "1" || stub() !== null;
+
+/// Agent logins (#1022): whether the reader connected a Claude login.
+export async function claudeConnected(_userId: string): Promise<boolean> {
   const mode = stub();
-  return { claude: mode === "ready" || mode === "over", codex: false };
-}
-
-/// Per-user logins lane: where connecting an agent starts, or null until
-/// that lane says how a subscription reaches a machine.
-export function agentConnectUrl(_agent: Agent, _origin: string): string | null {
-  return null;
+  return mode === "ready" || mode === "over";
 }

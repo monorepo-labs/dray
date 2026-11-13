@@ -4,16 +4,15 @@ import { bearer, hashSecret } from "@/lib/link";
 
 import type { State } from "./cloud";
 import {
-  agentConnectUrl,
-  agentLogins,
-  githubInstallation,
+  claudeConnected,
+  claudeLoginsOpen,
+  githubConnection,
   githubInstallUrl,
   hoursUsed,
   subscription,
   userMachines,
-  type Agent,
 } from "./lanes";
-import { planById, type PlanId } from "./plans";
+import { OVERAGE_CENTS_PER_HOUR, PLANS, type PlanId } from "./plans";
 
 /// One customer's Dray Cloud, as `GET /api/cloud/account` answers it and the
 /// dashboard draws it. The app's setup sheet reads the same JSON through
@@ -24,21 +23,31 @@ export type CloudAccount = {
   plan: {
     id: PlanId;
     name: string;
-    price: number;
+    dollars: number;
     hours: number;
-    machines: number;
-    status: "active" | "past_due" | "canceled";
+    status: "active" | "trialing" | "past_due";
     renewsAt: string;
+    /// Hours past the plan run only with overage on, billed per hour up to the cap.
+    overage: { on: boolean; capCents: number | null; centsPerHour: number };
   } | null;
   /// This billing period; null without a plan.
   usage: { from: string; to: string; hours: number } | null;
   machines: { id: string; state: State; repo: string | null; since: string }[];
-  github: { installed: boolean; account: string | null; repos: string[] | null; installUrl: string };
-  agents: Record<Agent, { connected: boolean; connectUrl: string | null }>;
-  links: { plans: string; dashboard: string };
+  /// Linked or not. Which repos the link reaches is checked when a machine
+  /// starts, which refuses one it can't clone with a sentence saying so.
+  github: { connected: boolean; login: string | null; connectUrl: string };
+  /// `available` false is a login Dray can't take today, said in `note`.
+  agents: Record<"claude" | "codex", { available: boolean; connected: boolean; connectUrl: string | null; note: string | null }>;
+  links: { plans: string; billing: string; dashboard: string };
 };
 
 type User = CloudAccount["user"];
+
+/// Why an agent can't be connected, said plainly rather than promised.
+export const AGENT_NOTES = {
+  claude: "Not open yet. Anthropic's terms don't let Dray run your Claude Pro or Max login on its machines.",
+  codex: "Codex on Cloud isn't built yet.",
+};
 
 /// Who is asking: the site's own session, else the desktop app's credential
 /// (#889). Null for neither.
@@ -72,28 +81,40 @@ async function appUser(token: string): Promise<User | null> {
 
 /// Everything the dashboard and the setup sheet show, read from each lane at once.
 export async function cloudAccount(user: User, origin: string): Promise<CloudAccount> {
-  const [sub, machines, install, logins] = await Promise.all([
+  const [sub, machines, github, claude] = await Promise.all([
     subscription(user.id),
     userMachines(user.id),
-    githubInstallation(user.id),
-    agentLogins(user.id),
+    githubConnection(user.id),
+    claudeConnected(user.id),
   ]);
-  const plan = sub && sub.status !== "canceled" ? planById(sub.plan) : null;
-  const hours = sub && plan ? await hoursUsed(user.id, sub.periodStart) : 0;
-  const agent = (a: Agent) => ({ connected: logins[a], connectUrl: agentConnectUrl(a, origin) });
+  const hours = sub ? await hoursUsed(user.id, sub.periodStart) : 0;
+  const open = claudeLoginsOpen();
   return {
     user,
-    plan: sub && plan ? { ...plan, status: sub.status, renewsAt: sub.periodEnd.toISOString() } : null,
-    usage: sub && plan ? { from: sub.periodStart.toISOString(), to: sub.periodEnd.toISOString(), hours } : null,
+    plan: sub
+      ? {
+          id: sub.plan,
+          name: PLANS[sub.plan].name,
+          dollars: PLANS[sub.plan].dollars,
+          hours: PLANS[sub.plan].hours,
+          status: sub.status,
+          renewsAt: sub.periodEnd.toISOString(),
+          overage: { on: sub.overage, capCents: sub.overageCapCents, centsPerHour: OVERAGE_CENTS_PER_HOUR },
+        }
+      : null,
+    usage: sub ? { from: sub.periodStart.toISOString(), to: sub.periodEnd.toISOString(), hours } : null,
     machines: machines.map((m) => ({ ...m, since: m.since.toISOString() })),
-    github: {
-      installed: !!install,
-      account: install?.account ?? null,
-      repos: install?.repos ?? null,
-      installUrl: githubInstallUrl(),
+    github: { connected: !!github, login: github?.login ?? null, connectUrl: githubInstallUrl(origin) },
+    agents: {
+      claude: {
+        available: open,
+        connected: open && claude,
+        connectUrl: open ? `${origin}/app/account` : null,
+        note: open ? null : AGENT_NOTES.claude,
+      },
+      codex: { available: false, connected: false, connectUrl: null, note: AGENT_NOTES.codex },
     },
-    agents: { claude: agent("claude"), codex: agent("codex") },
-    links: { plans: `${origin}/cloud`, dashboard: `${origin}/app/cloud` },
+    links: { plans: `${origin}/cloud`, billing: `${origin}/app/account/billing`, dashboard: `${origin}/app/cloud` },
   };
 }
 

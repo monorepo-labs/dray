@@ -4,15 +4,19 @@ import { H1, LABEL, LEAD, MUTED } from "@/components/account/styles";
 import { PlanCards } from "@/components/cloud/PlanCards";
 import { Closing } from "@/components/home/Closing";
 import { SiteNav } from "@/components/home/SiteNav";
-import { IDLE_MINUTES, OVERAGE_PER_HOUR } from "@/lib/cloud/plans";
+import { OVERAGE_CENTS_PER_HOUR } from "@/lib/cloud/plans";
 
 export const metadata: Metadata = {
   title: "Dray Cloud pricing - Dray",
-  description: "A machine of its own for every task. Bring your Claude or Codex subscription; pay for the hours machines are awake.",
+  description: "A machine of its own for every task. Pay for the hours machines are awake.",
 };
 
+/// Every machine stops itself this long after its agent goes quiet (#857).
+const IDLE_MINUTES = 15;
+const OVERAGE = `$${(OVERAGE_CENTS_PER_HOUR / 100).toFixed(2)} an awake hour`;
+
 const EVERY_PLAN: [string, string][] = [
-  ["Your own agents", "Claude Code and Codex run on the subscription you already pay for. Dray never bills you for tokens."],
+  ["No token markup", "Dray bills the hours machines are awake. Model usage is never on your Dray bill."],
   ["A machine per task", "Each task gets its own machine with its own checkout. It's deleted when you settle the task."],
   ["Awake hours only", `A machine sleeps ${IDLE_MINUTES} minutes after its agent goes quiet. Sleeping time is free.`],
   ["Your repos, your pick", "Cloud reaches GitHub through the Dray GitHub App, on the repos you choose."],
@@ -21,21 +25,21 @@ const EVERY_PLAN: [string, string][] = [
 const FAQ: [string, string][] = [
   [
     "What counts as an awake hour?",
-    "Time a machine is running, counted by the minute. A task that works for 20 minutes and then waits for you uses about 35 minutes, since its machine stays up for 15 more.",
+    `Time a machine is running, counted by the minute. A task that works for 20 minutes and then waits for you uses about 35 minutes, since its machine stays up for ${IDLE_MINUTES} more.`,
   ],
   [
     "What happens past my plan's hours?",
-    `Machines keep running. Each hour past your plan's is $${OVERAGE_PER_HOUR.toFixed(2)}, billed with the next month. The dashboard shows where you are.`,
+    `Machines stop until your next month starts. Overage is off unless you turn it on in billing; then each hour past your plan's is ${OVERAGE}, up to a cap you can set.`,
   ],
   [
-    "Do I need a Claude or Codex subscription?",
-    "Yes, one or the other. You connect it once, and every machine signs in with it.",
+    "Which agents run on Cloud?",
+    "Claude Code, once connecting a Claude login opens. Today Anthropic's terms don't let Dray run your Claude Pro or Max login on its machines. Codex on Cloud isn't built yet.",
   ],
   ["Can I cancel?", "Any time, from billing. Your plan runs to the end of the month you paid for."],
 ];
 
-/// Dray Cloud's plans. Choose goes through sign-in to Checkout, so the page
-/// itself needs no session.
+/// Dray Cloud's plans. Choosing one happens on the billing page, which signs
+/// the reader in first, so this page needs no session.
 export default function CloudPricingPage() {
   return (
     <div
@@ -54,7 +58,8 @@ export default function CloudPricingPage() {
           <div className="mt-12">
             <PlanCards />
             <p className={`mt-4 text-[14px] ${MUTED}`}>
-              Past your plan&apos;s hours, ${OVERAGE_PER_HOUR.toFixed(2)} an awake hour. Prices in US dollars.
+              Past your plan&apos;s hours, machines stop until the month turns over. Turn on overage to keep going at{" "}
+              {OVERAGE}. Prices in US dollars.
             </p>
           </div>
 

@@ -3,28 +3,27 @@ import { Check } from "lucide-react";
 import { MUTED, ROWS, SECONDARY } from "@/components/account/styles";
 import type { CloudAccount } from "@/lib/cloud/account";
 
-/// GitHub, Claude and Codex: each connected, or what connecting takes.
+/// GitHub, Claude and Codex: each connected, what connecting takes, or why
+/// it can't be done today.
 export function SetupRows({ github, agents }: Pick<CloudAccount, "github" | "agents">) {
-  const reach = github.repos === null ? "every repo" : `${github.repos.length} ${github.repos.length === 1 ? "repo" : "repos"}`;
-  const anyAgent = agents.claude.connected || agents.codex.connected;
   return (
     <div className={ROWS}>
       <Row
         title="GitHub"
-        done={github.installed}
+        done={github.connected}
         detail={
-          github.installed
-            ? `The Dray GitHub App is on ${github.account}, for ${reach}.`
+          github.connected
+            ? `Linked as ${github.login}. A task's repo must be one the Dray GitHub App is installed on.`
             : "Install the Dray GitHub App on the repos Cloud may clone and push to."
         }
         action={
-          <a href={github.installUrl} target="_blank" rel="noopener noreferrer" className={SECONDARY}>
-            {github.installed ? "Change repos" : "Install"}
+          <a href={github.connectUrl} className={SECONDARY}>
+            {github.connected ? "Change repos" : "Install"}
           </a>
         }
       />
       {(["claude", "codex"] as const).map((agent) => {
-        const { connected, connectUrl } = agents[agent];
+        const { available, connected, connectUrl, note } = agents[agent];
         const name = agent === "claude" ? "Claude" : "Codex";
         return (
           <Row
@@ -33,19 +32,17 @@ export function SetupRows({ github, agents }: Pick<CloudAccount, "github" | "age
             done={connected}
             detail={
               connected
-                ? `Machines sign in to ${name} with your subscription.`
-                : anyAgent
-                  ? `Optional. Connect it to run ${name} tasks too.`
-                  : `Connect your ${name} subscription, or ${agent === "claude" ? "Codex" : "Claude"}'s.`
+                ? `Machines run ${name} on your own login.`
+                : available
+                  ? `Connect your ${name} login. Model usage stays on your ${name} plan.`
+                  : (note ?? "Not available yet.")
             }
             action={
-              connected ? null : connectUrl ? (
+              !connected && connectUrl ? (
                 <a href={connectUrl} className={SECONDARY}>
                   Connect
                 </a>
-              ) : (
-                <span className={`text-[13px] ${MUTED}`}>Opens soon</span>
-              )
+              ) : null
             }
           />
         );
