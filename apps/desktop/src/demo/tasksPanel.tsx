@@ -57,10 +57,10 @@ const ROWS: { row: CrewRow; pr?: PrMark }[] = [
   { row: { item: task("9", "Try a new sidebar font", { aside: true }), busy: false, asking: false, unread: false, background: false } },
 ];
 
-// Fixes the app asked for: #919's and #920's by nudging the bot. #917's is
-// left for Fix conflicts, so the line can be watched turning up. Cleared
-// first, or an ask kept from the last load would keep its old time.
+// Fixes the app asked for by nudging the bot. Cleared first, or an ask kept
+// from the last load would keep its old time.
 localStorage.removeItem("ade.fixAsks");
+recordFixAsk(task("6", "").sessionId, 917, "conflict", Date.now() - 3 * 60_000);
 recordFixAsk(task("b", "").sessionId, 919, "checksFailing", Date.now() - 12 * 60_000);
 recordFixAsk(task("c", "").sessionId, 920, "changesRequested", Date.now() - 2 * 3600_000);
 
@@ -79,9 +79,9 @@ function Demo() {
       <div className="flex flex-col gap-4 p-10">
         <h1 className="text-lg font-medium">Bot Tasks tab</h1>
         <p className="max-w-xl text-ui text-muted-foreground">
-          #912 and #915 are ready, so they draw Merge; #917 conflicts, so it draws Fix conflicts. The PR glyph carries
-          draft, merged and failing checks, a spinner running ones; words only for review. #919 and #920 were asked to
-          fix their PRs, so each says what it is fixing and for how long; Fix conflicts gives #917 the same. Merge waits a second and
+          #912 and #915 are ready, so they draw Merge. The PR glyph carries draft, merged and failing checks, a spinner
+          running ones; words for conflicts and review. #917, #919 and #920 were nudged to fix their PRs, so each says
+          what it is fixing and for how long. Merge waits a second and
           settles the task, as the app does once the merge lands. Hover a row for ⋯ and Settle; right-click for the
           menu.
         </p>
@@ -95,10 +95,7 @@ function Demo() {
             onFork={async () => {}}
             onDelete={async (id) => update(id, () => null)}
             onDetach={async (id) => update(id, () => null)}
-            onFixConflicts={async (row, pr) => {
-              await new Promise((done) => setTimeout(done, 600));
-              recordFixAsk(row.item.sessionId, pr.number, "conflict");
-            }}
+            onFixConflicts={() => new Promise((done) => setTimeout(done, 600))}
             now={Date.now()}
             onMerge={async (row) => {
               await new Promise((done) => setTimeout(done, 1000));

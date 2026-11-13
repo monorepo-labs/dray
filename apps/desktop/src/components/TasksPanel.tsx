@@ -137,9 +137,10 @@ export default function TasksPanel({
 }
 
 /// States a row says without words: the PR glyph carries merged, closed, draft
-/// and red checks, the spinner running ones, Merge and Fix conflicts the rest.
+/// and red checks, the spinner running ones, Merge the rest. Conflicts take
+/// words while Fix conflicts is off; put `conflict` back here with it.
 /// `unknown` is a few seconds' recompute, not worth a flicker.
-const DRAWN = new Set<PrStatusKey>(["merged", "closed", "draft", "checksFailing", "checksRunning", "conflict", "ready", "unknown"]);
+const DRAWN = new Set<PrStatusKey>(["merged", "closed", "draft", "checksFailing", "checksRunning", "ready", "unknown"]);
 
 function TaskRow({
   row,
@@ -150,7 +151,6 @@ function TaskRow({
   onDelete,
   onDetach,
   onMerge,
-  onFixConflicts,
   fixAsk,
   now,
 }: {
@@ -277,7 +277,8 @@ function TaskRow({
         )}
 
         {mergeable && pr && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />}
-        {status?.key === "conflict" && pr && <FixConflicts onFix={() => onFixConflicts(row, pr)} />}
+        {/* Off while the bot fixes conflicts itself, on its nudge. */}
+        {/* {status?.key === "conflict" && pr && <FixConflicts onFix={() => onFixConflicts(row, pr)} />} */}
         </span>
         {/* Under the title, past the face's 20px and the 8px gap. */}
         {fixing && <span className="-mt-1 truncate pb-1.5 pl-7 text-ui text-foreground/70">{fixing}</span>}
