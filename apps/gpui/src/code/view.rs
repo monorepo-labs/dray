@@ -18,6 +18,13 @@ use crate::theme::{Mode, Theme};
 const MONO: &str = "Geist Mono";
 const SANS: &str = "Geist";
 
+/// Geist Mono's `liga` eats the space before `--` under GPUI's shaping, so
+/// `ls --all` drew `ls--all`. Same as `assets::mono_features` in #1033; use
+/// that one once both land.
+fn mono_features() -> gpui::FontFeatures {
+    gpui::FontFeatures(Arc::new(vec![("liga".into(), 0)]))
+}
+
 /// `@pierre/diffs`' own metrics, which its shadow root sets whatever the host's
 /// `text-code` says: 13px on 20px rows.
 const DIFF_SIZE: f32 = 13.;
@@ -212,6 +219,7 @@ fn frame(palette: &CodePalette) -> gpui::Div {
         .border_color(palette.frame_border)
         .bg(palette.background)
         .font_family(MONO)
+        .font_features(mono_features())
         .text_size(px(DIFF_SIZE))
         .line_height(px(DIFF_LINE))
 }
@@ -247,6 +255,7 @@ impl RenderOnce for CodeBlock {
                 .overflow_x_scroll()
                 .p_4()
                 .font_family(MONO)
+                .font_features(mono_features())
                 .text_size(px(FENCE_SIZE))
                 .line_height(px(FENCE_LINE))
                 .text_color(palette.foreground)

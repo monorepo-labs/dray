@@ -22,6 +22,9 @@ use gpui::{
 use code::{CodeBlock, CodeView, Diff, DiffView, Highlighted, Lang};
 use theme::{Mode, Theme};
 
+// `--` after a space is what Geist Mono's `liga` used to swallow.
+const SHELL: &str = "ls --all -- \"$dir\" | grep -v '^\\.' # a -- b\n";
+
 const FENCE: &str = r#"export function sessionRows(items: SessionIndexItem[], now = Date.now()) {
   // Pinned first, then newest activity.
   const rows = items.filter((s) => !s.archived && s.status !== "settled");
@@ -80,6 +83,7 @@ fn full_file_new() -> String {
 
 struct Example {
     fence: Arc<Highlighted>,
+    shell: Arc<Highlighted>,
     read: Arc<Highlighted>,
     edit: Arc<Diff>,
     write: Arc<Diff>,
@@ -117,6 +121,8 @@ impl Example {
             .text_color(theme.foreground)
             .child(label("Markdown fence · typescript", None))
             .child(CodeBlock::new(SharedString::from(format!("fence-{tag}")), self.fence.clone()).mode(mode))
+            .child(label("Markdown fence · sh", None))
+            .child(CodeBlock::new(SharedString::from(format!("shell-{tag}")), self.shell.clone()).mode(mode))
             .child(label("Read session.rs:212–220", None))
             .child(CodeView::new(SharedString::from(format!("read-{tag}")), self.read.clone(), 212).mode(mode))
             .child(label("Edit reap.rs", Some(&self.edit)))
@@ -149,6 +155,7 @@ fn main() {
         let full_new = full_file_new();
         let example = Example {
             fence: Highlighted::new(Lang::from_fence("typescript"), FENCE),
+            shell: Highlighted::new(Lang::from_fence("sh"), SHELL),
             read: Highlighted::new(Lang::from_path("src/session.rs"), READ),
             edit: Arc::new(Diff::new("src/reap.rs", Some(EDIT_OLD), EDIT_NEW)),
             write: Arc::new(Diff::new(
