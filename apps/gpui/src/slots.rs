@@ -31,6 +31,7 @@ pub fn tool(tool: &Tool, theme: &Theme) -> AnyElement {
                     .min_w_0()
                     .truncate()
                     .font_family(crate::assets::MONO)
+                    .font_features(crate::assets::mono_features())
                     .text_color(if tool.error { theme.destructive } else { theme.muted_foreground })
                     // One line, whitespace collapsed as CSS `truncate` does,
                     // or a multi-line command loses the spaces at its breaks.

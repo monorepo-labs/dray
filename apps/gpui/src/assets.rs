@@ -48,3 +48,9 @@ pub fn load_fonts(cx: &App) {
 
 pub const SANS: &str = "Geist";
 pub const MONO: &str = "Geist Mono";
+
+/// What every `MONO` run sets: Geist Mono's `liga` eats the space before
+/// `--` under GPUI's shaping, so `ls --all` drew `ls--all`.
+pub fn mono_features() -> gpui::FontFeatures {
+    gpui::FontFeatures(std::sync::Arc::new(vec![("liga".into(), 0)]))
+}
