@@ -1295,7 +1295,12 @@ machine: string | null,
  * The bot whose chat sent it, where one did. `title` is then the bot's
  * name, and the chat draws the bot's own face.
  */
-botId?: string, };
+botId?: string, 
+/**
+ * A bot's routine woke it (#972): `session_id` is then the routine's id
+ * and `title` its name. Hidden in the bot's chat, like a task's report.
+ */
+routine?: boolean, };
 
 export type Model = { 
 /**
@@ -1765,11 +1770,31 @@ address: string | null,
  */
 error: string | null, };
 
+export type Routine = { id: string, botId: string, name: string, prompt: string, schedule: Schedule, check?: string, paused: boolean, created: string, 
+/**
+ * RFC3339. `None` while paused.
+ */
+nextRun: string | null, lastResult: RunResult | null, };
+
+/**
+ * How a run ended. `outcome` is a string, not an enum, for [`Schedule`]'s
+ * reason: `running`, `silent`, `replied`, `failed`, `no_change`,
+ * `check_failed` or `skipped`. `text` is the reply's first line, or why.
+ */
+export type RunResult = { outcome: string, text?: string, at: string, };
+
 /**
  * What a save did. `Stale` is not an error: the file moved under the reader,
  * so their text is still in the editor and theirs to force through.
  */
 export type SaveOutcome = "saved" | "stale";
+
+/**
+ * When a routine runs: every `every_minutes`, or at `at` (local `HH:MM`) on
+ * `days` (0 = Monday; empty = every day). Options rather than an enum, so a
+ * kind a later build adds cannot fail an older build's read of the file.
+ */
+export type Schedule = { everyMinutes?: number, at?: string, days: Array<number>, };
 
 /**
  * What a send did. The two fields are mutually exclusive in practice — a

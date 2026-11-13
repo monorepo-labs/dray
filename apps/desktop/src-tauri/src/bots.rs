@@ -575,6 +575,9 @@ pub async fn delete_bot(id: String, sink: Sink) -> Result<(), Fail> {
     }
     let bot = bots.remove(at);
     save_list(&bots).await?;
+    if let Err(e) = crate::routines::remove_bot(&bot.id).await {
+        eprintln!("[routines] {e:#}");
+    }
     // Only a folder this module made: a list entry edited by hand must not
     // aim the removal anywhere else.
     if Path::new(&bot.path).starts_with(bots_dir().await?) {

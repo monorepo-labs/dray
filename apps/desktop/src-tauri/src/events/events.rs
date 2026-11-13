@@ -770,6 +770,11 @@ pub struct MessageSender {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub bot_id: Option<String>,
+    /// A bot's routine woke it (#972): `session_id` is then the routine's id
+    /// and `title` its name. Hidden in the bot's chat, like a task's report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub routine: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

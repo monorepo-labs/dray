@@ -49,6 +49,7 @@ export const PANEL_TABS = [
   "changes",
   "browser",
   "tasks",
+  "routines",
   "more",
   "pr",
   "issue",
@@ -66,6 +67,8 @@ export const PANEL_LABELS: Record<PanelTab, string> = {
   browser: "Browser",
   // A bot's children: the work it handed off, waiting, running or done.
   tasks: "Tasks",
+  // A bot's scheduled checks, which it made itself and the reader can stop.
+  routines: "Routines",
   // A catch-all, and named as one on purpose. What is in it — the task list,
   // the runs this session spawned — is what the reader checks rather than
   // works in, and the row cannot grow a tab per answer of that kind. A name
@@ -129,7 +132,8 @@ export function tabOrder({
 }): readonly PanelTab[] {
   // Browser always: with no page open its empty state is a URL bar, the
   // session's recent pages and its local servers — a place to start.
-  const tabs: PanelTab[] = tasks ? ["tasks"] : pr ? ["pr", "changes"] : ["changes"];
+  // Routines beside Tasks, drawn with none so the reader finds where they go.
+  const tabs: PanelTab[] = tasks ? ["tasks", "routines"] : pr ? ["pr", "changes"] : ["changes"];
   tabs.push("browser");
   // After Changes, which is what keeps Issue immediately before More.
   if (docs) tabs.push("docs");

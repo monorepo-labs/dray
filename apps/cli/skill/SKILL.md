@@ -359,6 +359,27 @@ Colours: red, orange, amber, green, teal, blue, purple, pink, or a hue in
 degrees. Make, rename or delete a bot only when the user asks: the list is
 theirs, and `rm` deletes the bot's instructions and memory with it.
 
+### Routines
+
+```bash
+dray bot routine add "PR watch" "<what to do each run>" --every 2h
+dray bot routine add "Standup" "<what to do>" --at 9am --days weekdays
+dray bot routine add "CI" "<what to do>" --every 10m --check "gh pr checks 970 --json state -q '.[].state'"
+dray bot routine ls            # this bot's: schedule, next run, last result; --json
+dray bot routine pause <id|name>    # also resume, rm, and run (fires once, now)
+```
+
+A routine is a bot's own scheduled check: Dray sends the bot its prompt on the
+schedule, hidden from the chat, and the user sees and stops it in the bot's
+Routines tab. Run from a bot's chat, every verb acts on that bot; `--bot`
+names another. `--every` is at least 5m; `--at` is local time, daily unless
+`--days` says otherwise. A machine that slept through runs runs once on waking.
+
+`--check` runs a shell command in the bot's folder first and wakes the bot only
+when its output differs from the last run's, so a quiet watch costs no turn.
+Print only what matters, and nothing that changes every run. A failing check
+wakes the bot once, then waits quietly until it passes again.
+
 ## Driving the browser
 
 Every session has its own browser, drawn in the app beside the chat. `dray

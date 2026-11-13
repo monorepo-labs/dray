@@ -13,6 +13,7 @@ use clap::{Args, CommandFactory, Parser, Subcommand};
 mod bot;
 mod draft;
 mod machine;
+mod routine;
 mod setup;
 use draft::DraftCommand;
 use dray_proto::{

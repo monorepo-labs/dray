@@ -619,6 +619,7 @@ pub async fn settle_dead_child(
         LAST_REPLY.lock().unwrap().remove(session_id);
         POSTED.lock().unwrap().remove(session_id);
         report(session_id, format!("(the session's process exited mid-turn: {why})"), app);
+        crate::routines::turn_ended(session_id, None, false, app).await;
     }
 }
 
@@ -3481,6 +3482,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                     && !posted
                     && *status == TurnStatus::Success
                     && crate::bots::bot_at(ctx.session_cwd).await.is_some();
+                crate::routines::turn_ended(ctx.session_id, said, *status == TurnStatus::Success, app).await;
                 report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
@@ -4290,7 +4292,7 @@ mod tests {
         };
         let guard = slot.lock().await;
         let session = guard.as_ref().unwrap();
-        let report = MessageSender { session_id: "t".into(), title: "T".into(), machine: None, bot_id: None };
+        let report = MessageSender { session_id: "t".into(), title: "T".into(), machine: None, bot_id: None, routine: None };
         session.queue_msg("mine", &[], &[], None, &sink).await;
         session.queue_msg("done", &[], &[], Some(report), &sink).await;
 

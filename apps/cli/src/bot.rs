@@ -15,6 +15,9 @@ pub enum BotCommand {
     Rename(BotRename),
     /// Delete a bot: its chat is settled and its folder deleted.
     Rm(BotArg),
+    /// Scheduled checks a bot runs on itself, which the user can see and stop.
+    #[command(subcommand)]
+    Routine(crate::routine::RoutineCommand),
 }
 
 /// The colours a face can take, as the app's picker names them.
@@ -131,6 +134,7 @@ pub fn run(command: BotCommand) -> Result<(), String> {
             eprintln!("Deleted \"{}\".", bot.name);
             Ok(())
         }
+        BotCommand::Routine(command) => crate::routine::run(command),
     }
 }
 
