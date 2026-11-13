@@ -144,7 +144,9 @@ export async function fakeBoat({ key, org, pageSize = 2 }) {
     if (action === "usage" && req.method === "GET") {
       const bad = [...url.searchParams.keys()].find((k) => k !== "since" && k !== "until");
       if (bad) return fail(res, 400, "invalid_query", bad);
-      // A test sets `usageSeconds` to what boat's meter would read.
+      // A test sets `usageSeconds` to what boat's meter would read, and
+      // `usageFails` to have the read fail.
+      if (s.usageFails) return fail(res, 500, "internal_error");
       return ok(res, 200, {
         ok: true,
         type: "sandbox.usage",

@@ -2,7 +2,7 @@ import type Stripe from "stripe";
 
 import { pool } from "../db";
 import { prices, stripe } from "../stripe";
-import { billingOf, type Billing } from "./billing";
+import { billingOf, finishPeriod, type Billing } from "./billing";
 import { PAYING, PLANS, PLAN_IDS, type PlanId } from "./plans";
 
 /// The Stripe side of a Dray Cloud plan: the customer, checkout, plan change,
@@ -46,12 +46,26 @@ export async function subscribe(
   plan: PlanId,
   returnTo: string,
 ): Promise<string | null> {
-  const billing = await ensureBilling(user);
+  const s = need();
+  let billing = await ensureBilling(user);
+  // A subscription the webhook hasn't mirrored yet still counts, or a second
+  // click right after paying would sell a second plan.
+  if (!paying(billing)) {
+    const { data } = await s.subscriptions.list({ customer: billing.stripeCustomerId, status: "all", limit: 10 });
+    const live = data.find((sub) => PAYING.has(sub.status));
+    if (live) {
+      await syncSubscription(live.id);
+      billing = (await billingOf(user.id))!;
+    }
+  }
   if (paying(billing)) {
     await changePlan(billing, plan);
     return null;
   }
-  const s = need();
+  // One Checkout open at a time: a page left open in another tab is expired,
+  // so paying twice for one account takes two fresh starts, not two tabs.
+  const open = await s.checkout.sessions.list({ customer: billing.stripeCustomerId, status: "open", limit: 10 });
+  await Promise.all(open.data.map((c) => s.checkout.sessions.expire(c.id)));
   const { plans, overage } = await prices(s);
   const session = await s.checkout.sessions.create({
     mode: "subscription",
@@ -78,11 +92,11 @@ async function changePlan(billing: Billing, plan: PlanId) {
   const item = sub.items.data.find((i) => planOf(i.price.lookup_key));
   if (!item) throw new Error("This subscription has no Dray Cloud plan on it.");
   if (item.price.id === plans[plan]) return;
-  const updated = await s.subscriptions.update(sub.id, {
+  await s.subscriptions.update(sub.id, {
     items: [{ id: item.id, price: plans[plan] }],
     proration_behavior: "create_prorations",
   });
-  await mirror(updated);
+  await syncSubscription(sub.id);
 }
 
 /// A Stripe customer portal page for card, invoices and cancelling.
@@ -116,37 +130,70 @@ function portalConfiguration(s: Stripe) {
 const planOf = (lookupKey: string | null): PlanId | null =>
   PLAN_IDS.find((p) => PLANS[p].lookupKey === lookupKey) ?? null;
 
-/// Webhook entry: reads the subscription fresh rather than trusting the
-/// event's copy, since Stripe can deliver an older event after a newer one.
+/// Mirrors a subscription onto its customer's row, for the webhook and a plan
+/// change alike. The read from Stripe happens inside a per-customer lock, so
+/// two events racing can't land an older state over a newer one.
 export async function syncSubscription(id: string) {
-  await mirror(await need().subscriptions.retrieve(id));
+  const s = need();
+  const first = await s.subscriptions.retrieve(id);
+  const customer = typeof first.customer === "string" ? first.customer : first.customer.id;
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(hashtext($1))", [`dray-cloud-billing:${customer}`]);
+    await mirror(s, await s.subscriptions.retrieve(id), customer);
+    await client.query("commit");
+  } catch (e) {
+    await client.query("rollback").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
-/// Writes a subscription onto its customer's row. A customer can briefly hold
-/// two (a second checkout racing the first), and a row already following one
-/// that pays is never moved onto one that doesn't.
-async function mirror(sub: Stripe.Subscription) {
-  const customer = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
-  const item = sub.items.data.find((i) => planOf(i.price.lookup_key)) ?? sub.items.data[0];
+async function mirror(s: Stripe, sub: Stripe.Subscription, customer: string) {
+  const billing = await billingOfCustomer(customer);
+  if (!billing) return;
   const pays = PAYING.has(sub.status);
+  if (billing.stripeSubscriptionId && billing.stripeSubscriptionId !== sub.id && paying(billing)) {
+    if (!pays) return;
+    // Two paying plans on one account: keep the one already followed, while
+    // Stripe still says it pays, and cancel the newcomer with its proration
+    // credited back.
+    const followed = await s.subscriptions.retrieve(billing.stripeSubscriptionId);
+    if (PAYING.has(followed.status)) {
+      console.error(`cancelling duplicate subscription ${sub.id} on ${customer}`);
+      await s.subscriptions.cancel(sub.id, { prorate: true });
+      return;
+    }
+  }
+  const item = sub.items.data.find((i) => planOf(i.price.lookup_key)) ?? sub.items.data[0];
+  const periodStart = item ? new Date(item.current_period_start * 1000) : null;
+  if (billing.periodStart && periodStart && periodStart.getTime() !== billing.periodStart.getTime()) {
+    // The old period's last stretch is only readable while the row still
+    // names it; once moved on, every read starts at the new period.
+    await finishPeriod(billing.userId).catch((e) => console.error(`finishing period ${billing.userId}:`, e));
+  }
   await pool.query(
     `update cloud_billing set
        "stripeSubscriptionId" = $1, plan = $2, status = $3,
        "periodStart" = $4, "periodEnd" = $5, "cancelAtPeriodEnd" = $6
-     where "stripeCustomerId" = $7
-       and ("stripeSubscriptionId" is null or "stripeSubscriptionId" = $1 or $8::boolean
-            or status is null or status not in ('active', 'trialing', 'past_due'))`,
+     where id = $7`,
     [
       sub.id,
       item ? planOf(item.price.lookup_key) : null,
       sub.status,
-      item ? new Date(item.current_period_start * 1000) : null,
+      periodStart,
       item ? new Date(item.current_period_end * 1000) : null,
       sub.cancel_at_period_end || sub.cancel_at != null,
-      customer,
-      pays,
+      billing.id,
     ],
   );
+}
+
+async function billingOfCustomer(customer: string): Promise<Billing | null> {
+  const { rows } = await pool.query<Billing>(`select * from cloud_billing where "stripeCustomerId" = $1`, [customer]);
+  return rows[0] ?? null;
 }
 
 /// Owner's overage switch and cap. A cap of null is no cap.

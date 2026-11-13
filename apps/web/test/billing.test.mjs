@@ -28,11 +28,15 @@ const HOUR = 3600;
 const STARTER = 100 * HOUR;
 
 /// Enough of Stripe's API for metering and the webhook: subscriptions by id,
-/// and meter events, recorded. `failNext` refuses the next meter event.
+/// cancels, and meter events, recorded and deduplicated by identifier the way
+/// Stripe does. `refuseNext` refuses the next meter event; `loseAnswers(n)`
+/// takes the next n events and hangs up before answering.
 async function fakeStripe() {
   const subscriptions = new Map();
   const events = [];
+  const cancelled = [];
   let failNext = false;
+  let lose = 0;
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
@@ -41,6 +45,10 @@ async function fakeStripe() {
       res.end(JSON.stringify(body));
     };
     const sub = req.url.match(/^\/v1\/subscriptions\/([\w]+)/);
+    if (req.method === "DELETE" && sub) {
+      cancelled.push({ id: sub[1], prorate: new URL(req.url, "http://stripe").searchParams.get("prorate") });
+      return send(200, { ...subscriptions.get(sub[1]), status: "canceled" });
+    }
     if (req.method === "GET" && sub) {
       const found = subscriptions.get(sub[1]);
       return found ? send(200, found) : send(404, { error: { type: "invalid_request_error", message: "No such subscription" } });
@@ -58,7 +66,11 @@ async function fakeStripe() {
         identifier: form.get("identifier"),
         timestamp: Number(form.get("timestamp")),
       };
-      events.push(event);
+      if (!events.some((e) => e.identifier === event.identifier)) events.push(event);
+      if (lose > 0) {
+        lose--;
+        return req.socket.destroy();
+      }
       return send(200, { object: "billing.meter_event", ...event });
     }
     send(404, { error: { type: "invalid_request_error", message: `fake has no ${req.method} ${req.url}` } });
@@ -68,7 +80,9 @@ async function fakeStripe() {
     url: `http://127.0.0.1:${server.address().port}`,
     subscriptions,
     events,
+    cancelled,
     refuseNext: () => (failNext = true),
+    loseAnswers: (n) => (lose = n),
     close: () => new Promise((r) => server.close(r)),
   };
 }
@@ -130,6 +144,11 @@ describe("Dray Cloud billing", { skip: !DB && "set TEST_DATABASE_URL to a scratc
     return { status: res.status, json: text ? JSON.parse(text) : null };
   };
   const beat = (s, busy = true) => call("POST", "/api/cloud/heartbeat", { key: MACHINE_SECRET, body: { sandbox: s.id, busy } });
+  const webhook = (payload) =>
+    call("POST", "/api/billing/webhook", {
+      body: payload,
+      headers: { "stripe-signature": new Stripe("sk_test_fake").webhooks.generateTestHeaderString({ payload, secret: WEBHOOK }) },
+    });
   const callsTo = (method, path) => boat.calls.filter((c) => c.method === method && c.path === path);
   const billing = async () => (await db.query(`select * from cloud_billing where id = 'b_a'`)).rows[0];
   const usage = async (id) =>
@@ -213,17 +232,42 @@ describe("Dray Cloud billing", { skip: !DB && "set TEST_DATABASE_URL to a scratc
     assert.deepEqual(stripe.events.map((e) => e.value), [30, 5, 2]);
   });
 
+  test("a report whose answer is lost is sent again as is, never folded into a bigger one", async () => {
+    a1.usageSeconds += 3 * 60;
+    stripe.loseAnswers(Infinity);
+    await beat(a1);
+    stripe.loseAnswers(0);
+    const pending = await billing();
+    assert.equal(pending.reportedMinutes, 37);
+    assert.equal(pending.pendingTotal, 40);
+    a1.usageSeconds += 60;
+    await beat(a1);
+    // Stripe kept the lost one once; the retry carried its identifier, then 1 more.
+    assert.deepEqual(stripe.events.map((e) => [e.value, e.identifier.split(":").pop()]), [
+      [30, "30"], [5, "35"], [2, "37"], [3, "40"], [1, "41"],
+    ]);
+    const after = await billing();
+    assert.equal(after.reportedMinutes, 41);
+    assert.equal(after.pendingTotal, null);
+  });
+
   test("a cap bills up to itself and then stops the machines", async () => {
     // $1 at $0.20 an hour is 300 minutes.
     await db.query(`update cloud_billing set "overageCapCents" = 100 where id = 'b_a'`);
     a1.usageSeconds = STARTER + 400 * 60;
     const stopsBefore = callsTo("POST", `/sandboxes/${a2.id}/stop`).length;
     await beat(a1);
-    assert.deepEqual(stripe.events.map((e) => e.value), [30, 5, 2, 263]);
+    assert.deepEqual(stripe.events.map((e) => e.value), [30, 5, 2, 3, 1, 259]);
     assert.equal(callsTo("POST", `/sandboxes/${a2.id}/stop`).length, stopsBefore + 1);
   });
 
-  test("delete reads a machine's meter before boat forgets it", async () => {
+  test("delete reads a machine's meter before boat forgets it, and waits when it can't", async () => {
+    a2.usageFails = true;
+    const refused = await call("DELETE", `/api/cloud/machines/${a2.id}`);
+    assert.equal(refused.status, 503);
+    assert.equal(refused.json.error, "usage_unread");
+    assert.ok(boat.sandboxes.has(a2.id));
+    a2.usageFails = false;
     a2.usageSeconds = 90;
     assert.equal((await call("DELETE", `/api/cloud/machines/${a2.id}`)).status, 204);
     const order = boat.calls.filter((c) => c.path.startsWith(`/sandboxes/${a2.id}`)).map((c) => `${c.method} ${c.path}`);
@@ -247,6 +291,12 @@ describe("Dray Cloud billing", { skip: !DB && "set TEST_DATABASE_URL to a scratc
     const second = await call("GET", "/api/cloud/meter", { key: CRON });
     assert.equal(callsTo("GET", `/sandboxes/${a1.id}/usage`).length, before + 1, "read stopped, so settled");
     assert.ok(second.json.read < first.json.read);
+    // A resume makes it count again, so a run with no heartbeat is still read.
+    assert.equal((await call("POST", `/api/cloud/machines/${a1.id}/resume`)).status, 200);
+    assert.equal((await usage(a1.id)).running, true);
+    a1.state = "archived";
+    await call("GET", "/api/cloud/meter", { key: CRON });
+    assert.equal(callsTo("GET", `/sandboxes/${a1.id}/usage`).length, before + 2);
   });
 
   test("the webhook takes only signed events and mirrors the subscription fresh", async () => {
@@ -274,9 +324,16 @@ describe("Dray Cloud billing", { skip: !DB && "set TEST_DATABASE_URL to a scratc
       type: "customer.subscription.updated",
       data: { object: { id: "sub_a", object: "subscription", status: "incomplete" } },
     });
-    const header = new Stripe("sk_test_fake").webhooks.generateTestHeaderString({ payload, secret: WEBHOOK });
-    const ok = await call("POST", "/api/billing/webhook", { body: payload, headers: { "stripe-signature": header } });
+    // A machine still running when the period turns over is read up to the
+    // old period's end before the row moves on.
+    const a4 = machine("u_a", { usageSeconds: 5 });
+    await beat(a4);
+    const readsBefore = callsTo("GET", `/sandboxes/${a4.id}/usage`).length;
+    const ok = await webhook(payload);
     assert.equal(ok.status, 200);
+    const finishing = callsTo("GET", `/sandboxes/${a4.id}/usage`);
+    assert.equal(finishing.length, readsBefore + 1);
+    assert.equal(new URLSearchParams(finishing.at(-1).query).get("since"), periodStart.toISOString());
     const row = await billing();
     assert.equal(row.plan, "pro");
     assert.equal(row.status, "active");
@@ -285,5 +342,20 @@ describe("Dray Cloud billing", { skip: !DB && "set TEST_DATABASE_URL to a scratc
     a3.state = "archived";
     const resumed = await call("POST", `/api/cloud/machines/${a3.id}/resume`);
     assert.equal(resumed.status, 200);
+  });
+
+  test("a second paying subscription on one account is cancelled, not followed", async () => {
+    const dup = structuredClone(stripe.subscriptions.get("sub_a"));
+    dup.id = "sub_dup";
+    stripe.subscriptions.set("sub_dup", dup);
+    const payload = JSON.stringify({
+      id: "evt_2",
+      object: "event",
+      type: "customer.subscription.created",
+      data: { object: { id: "sub_dup", object: "subscription" } },
+    });
+    assert.equal((await webhook(payload)).status, 200);
+    assert.deepEqual(stripe.cancelled, [{ id: "sub_dup", prorate: "true" }]);
+    assert.equal((await billing()).stripeSubscriptionId, "sub_a");
   });
 });

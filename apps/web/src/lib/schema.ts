@@ -101,10 +101,16 @@ export const drayTables = {
         cancelAtPeriodEnd: { type: "boolean", required: true, defaultValue: false },
         overage: { type: "boolean", required: true, defaultValue: false },
         overageCapCents: { type: "number", required: false },
-        // Overage minutes already sent to Stripe for the period starting at
+        // Overage minutes Stripe confirmed for the period starting at
         // `reportedFor`, so each report sends only what is new.
         reportedMinutes: { type: "number", required: true, defaultValue: 0 },
         reportedFor: { type: "date", required: false },
+        // The one report in flight, written before it is sent: `pendingTotal`
+        // minutes for the period at `pendingFor` once it lands. Retried as is
+        // until Stripe answers, so a lost answer is never sent twice.
+        pendingTotal: { type: "number", required: false },
+        pendingFor: { type: "date", required: false },
+        pendingAt: { type: "date", required: false },
       },
     },
     // Boat's meter for one machine over one billing period, as last read.

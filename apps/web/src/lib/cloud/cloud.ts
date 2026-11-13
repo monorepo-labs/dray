@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { after } from "next/server";
-import { meter, settledMachines, standingOf } from "./billing";
+import { markRunning, meter, settledMachines, standingOf } from "./billing";
 import { boat, BoatError, listByLabel, type Sandbox } from "./boat";
 
 /// Dray Cloud's control plane: one boat sandbox per task, each labelled
@@ -216,7 +216,9 @@ export async function resumeMachine(id: string, origin: string): Promise<Respons
   const user = ownerOf(s);
   const refused = user && (await refusal(user, origin));
   if (refused) return refused;
-  return Response.json({ machine: await resume(s) });
+  const resumed = await resume(s);
+  if (user) await markRunning(s.id);
+  return Response.json({ machine: resumed });
 }
 
 export async function stopMachine(id: string): Promise<Response> {
@@ -231,9 +233,17 @@ export async function stopMachine(id: string): Promise<Response> {
 export async function deleteMachine(id: string): Promise<Response> {
   const s = await find(id);
   if (s) {
-    // Boat forgets a deleted sandbox's meter, so its last stretch is read now.
+    // Boat forgets a deleted sandbox's meter, so its last stretch is read now,
+    // and a reading that fails keeps the machine for the app's retry.
     const user = ownerOf(s);
-    if (user) await meter(user, [s.id]);
+    if (user) {
+      try {
+        await meter(user, [s.id], true);
+      } catch (e) {
+        console.error(`final usage ${s.id}:`, e);
+        return error(503, "usage_unread", "Couldn't read this machine's usage before deleting it. Try again.");
+      }
+    }
     // Boat refuses a delete whose confirm header does not name the sandbox.
     await boat("DELETE", `/sandboxes/${s.id}`, undefined, false, { "X-Ascii-Confirm-Delete": s.id });
   }
