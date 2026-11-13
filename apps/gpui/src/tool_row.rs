@@ -115,7 +115,7 @@ impl ToolView {
         let reported: Vec<&str> = edits.iter().filter_map(|e| e.unified_diff.as_deref()).collect();
         let changes = sides
             .as_ref()
-            .map(tools::count_changes)
+            .map(tools::count_changes_cached)
             .or_else(|| (!edits.is_empty()).then(|| tools::count_unified_changes(reported.iter().copied())))
             .filter(|c| c.added > 0 || c.removed > 0);
 
@@ -284,10 +284,21 @@ pub fn output_box(id: impl Into<SharedString>, tokens: &ChatTokens, scroll_cap: 
 }
 
 impl RenderOnce for ToolRow {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = ChatTokens::get(cx);
         let view = ToolView::new(&self.call, self.hide_label);
         let id = self.call.call_id.clone();
+        // No owner for the open state: keep it here, keyed by call id. It lives
+        // while the row is drawn, so a row scrolled out of a virtual list
+        // closes again; an owner that wants it kept passes `on_toggle`.
+        if self.on_toggle.is_none() {
+            let state = window.use_keyed_state(SharedString::from(format!("tool-open-{id}")), cx, |_, _| self.open);
+            self.open = *state.read(cx);
+            self.on_toggle = Some(Rc::new(move |_, _, cx| state.update(cx, |open, cx| {
+                *open = !*open;
+                cx.notify();
+            })));
+        }
         let open = self.open && view.expandable;
         let group: SharedString = format!("tool-{id}").into();
 

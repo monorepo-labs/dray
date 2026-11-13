@@ -7,6 +7,8 @@
 //! window passes them in through [PermissionCard::key] when no text field does,
 //! which is how the web app reaches a card without focusing it.
 
+use std::rc::Rc;
+
 use dray_core::events::{PermissionOption, PermissionOptionKind};
 use gpui::{
     AnyElement, App, BoxShadow, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla, InteractiveElement,
@@ -47,6 +49,7 @@ pub struct PermissionCard {
     /// Another card is up too, so this one rings to say the keys are its.
     contested: bool,
     view_plan: bool,
+    on_respond: Option<Rc<dyn Fn(&str, &mut App)>>,
     focus: FocusHandle,
 }
 
@@ -76,6 +79,7 @@ impl PermissionCard {
             owns_keys: true,
             contested: false,
             view_plan: false,
+            on_respond: None,
             focus: cx.focus_handle(),
         }
     }
@@ -84,6 +88,18 @@ impl PermissionCard {
     pub fn with_view_plan(mut self) -> Self {
         self.view_plan = true;
         self
+    }
+
+    /// Called with the option id as well as emitted, for an owner that holds
+    /// the card in keyed state and so has nowhere to keep a subscription.
+    pub fn on_respond(mut self, f: impl Fn(&str, &mut App) + 'static) -> Self {
+        self.on_respond = Some(Rc::new(f));
+        self
+    }
+
+    /// `(owns_keys, contested)`, as last set.
+    pub fn keys(&self) -> (bool, bool) {
+        (self.owns_keys, self.contested)
     }
 
     pub fn set_owns_keys(&mut self, owns: bool, contested: bool, cx: &mut Context<Self>) {
@@ -100,14 +116,22 @@ impl PermissionCard {
             return;
         }
         self.sent = Some(id.clone());
+        if let Some(f) = self.on_respond.clone() {
+            f(&id, cx);
+        }
         cx.emit(PermissionEvent::Respond { option_id: id });
         cx.notify();
     }
 
     /// One keystroke from outside a text field. True when the card used it.
     pub fn key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) -> bool {
+        self.owns_keys && self.handle_key(keystroke, cx)
+    }
+
+    /// Focused, the card takes its own keys whoever owns the window's.
+    fn handle_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) -> bool {
         let m = &keystroke.modifiers;
-        if self.sent.is_some() || !self.owns_keys || m.platform || m.control || m.alt || m.shift {
+        if self.sent.is_some() || m.platform || m.control || m.alt || m.shift {
             return false;
         }
         if keystroke.key == "enter" {
@@ -189,9 +213,10 @@ pub fn picked_ring(tokens: &ChatTokens, offset: Hsla) -> Vec<BoxShadow> {
 impl Render for PermissionCard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tokens = ChatTokens::get(cx);
-        let owns = self.owns_keys && self.sent.is_none();
-        let disabled = self.sent.is_some();
         let focused = self.focus.is_focused(window);
+        // Focused, it takes keys whoever owns them, so it shows them too.
+        let owns = (self.owns_keys || focused) && self.sent.is_none();
+        let disabled = self.sent.is_some();
 
         let buttons: Vec<AnyElement> = self
             .options
@@ -226,7 +251,7 @@ impl Render for PermissionCard {
             .id("permission-card")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
-                if this.key(&e.keystroke, cx) {
+                if this.handle_key(&e.keystroke, cx) {
                     cx.stop_propagation();
                 }
             }))

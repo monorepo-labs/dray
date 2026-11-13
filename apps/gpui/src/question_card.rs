@@ -8,6 +8,7 @@
 //! does. The logic is [QuestionState], testable without a window.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use dray_core::events::Question;
 use gpui::{
@@ -180,6 +181,9 @@ impl QuestionState {
         match k.key.as_str() {
             "up" | "down" => {
                 let spots = self.spots();
+                if spots.is_empty() {
+                    return KeyOutcome::Ignored;
+                }
                 let at = spots.iter().position(|s| *s == self.spot).unwrap_or(0);
                 let n = spots.len();
                 let next = if k.key == "down" { (at + 1) % n } else { (at + n - 1) % n };
@@ -265,6 +269,7 @@ pub enum KeyOutcome {
 
 pub struct QuestionCard {
     state: QuestionState,
+    on_answer: Option<Rc<dyn Fn(&QuestionsAnswered, &mut App)>>,
     owns_keys: bool,
     contested: bool,
     focus: FocusHandle,
@@ -283,11 +288,23 @@ impl QuestionCard {
     pub fn new(questions: Vec<Question>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        QuestionCard { state: QuestionState::new(questions), owns_keys: true, contested: false, focus }
+        QuestionCard { state: QuestionState::new(questions), on_answer: None, owns_keys: true, contested: false, focus }
+    }
+
+    /// Called with the answers as well as emitted, for an owner that holds the
+    /// card in keyed state and so has nowhere to keep a subscription.
+    pub fn on_answer(mut self, f: impl Fn(&QuestionsAnswered, &mut App) + 'static) -> Self {
+        self.on_answer = Some(Rc::new(f));
+        self
     }
 
     pub fn state(&self) -> &QuestionState {
         &self.state
+    }
+
+    /// `(owns_keys, contested)`, as last set.
+    pub fn keys(&self) -> (bool, bool) {
+        (self.owns_keys, self.contested)
     }
 
     pub fn set_owns_keys(&mut self, owns: bool, contested: bool, cx: &mut Context<Self>) {
@@ -297,9 +314,11 @@ impl QuestionCard {
 
     /// A keystroke from the window when no text field holds focus.
     pub fn key(&mut self, k: &Keystroke, cx: &mut Context<Self>) -> bool {
-        if !self.owns_keys {
-            return false;
-        }
+        self.owns_keys && self.handle_key(k, cx)
+    }
+
+    /// Focused, the card takes its own keys whoever owns the window's.
+    fn handle_key(&mut self, k: &Keystroke, cx: &mut Context<Self>) -> bool {
         let out = self.state.key(k);
         self.finish(out, cx)
     }
@@ -312,6 +331,9 @@ impl QuestionCard {
                 true
             }
             KeyOutcome::Sent(a) => {
+                if let Some(f) = self.on_answer.clone() {
+                    f(&a, cx);
+                }
                 cx.emit(a);
                 cx.notify();
                 true
@@ -511,7 +533,7 @@ impl Render for QuestionCard {
             .id("question-card")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
-                if this.key(&e.keystroke, cx) {
+                if this.handle_key(&e.keystroke, cx) {
                     cx.stop_propagation();
                 }
             }))
@@ -633,6 +655,15 @@ mod tests {
         assert_eq!(s.active, 1);
         s.key(&key("1"));
         assert_eq!(sent(s.key(&key("enter"))), BTreeMap::from([("Two?".into(), "A".into())]));
+    }
+
+    #[test]
+    fn arrows_ignore_a_question_with_nothing_to_move_to() {
+        let mut q = question("Ok?", false);
+        q.options.clear();
+        q.free_text = false;
+        let mut s = QuestionState::new(vec![q]);
+        assert!(matches!(s.key(&key("down")), KeyOutcome::Ignored));
     }
 
     #[test]

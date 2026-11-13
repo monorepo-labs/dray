@@ -1,6 +1,7 @@
 //! Tool rows, the permission card and the question card on fake data, for the
-//! transcript to wire in (#856). Click a row to open it. The question card has
-//! focus at start: digits pick, ↑/↓ move, Return goes on or sends. Click the
+//! transcript to wire in (#856). The cards come through `cards::cards`, the
+//! `slots::cards` body, fed `agent_event` frames. Click a row to open it. The
+//! question card has focus at start: digits pick, ↑/↓ move, Return goes on or sends. Click the
 //! permission card to give it the keys: digits move the pick, Return answers.
 //! `t` flips dark and light. Answers print to stdout.
 //!
@@ -10,6 +11,8 @@
 
 #[path = "../src/assets.rs"]
 mod assets;
+#[path = "../src/cards.rs"]
+mod cards;
 #[path = "../src/chat_tokens.rs"]
 mod chat_tokens;
 #[path = "../src/color.rs"]
@@ -33,15 +36,13 @@ use dray_core::events::{
     ToolResult, ToolType,
 };
 use gpui::{
-    App, Bounds, Context, Entity, KeyDownEvent, Render, Subscription, Window, WindowBounds, WindowOptions, div,
+    App, Bounds, Context, KeyDownEvent, Render, Window, WindowBounds, WindowOptions, div,
     prelude::*, px, size,
 };
 use serde_json::{Value, json};
 
 use crate::chat_tokens::ChatTokens;
 use crate::color::oklch;
-use crate::permission_card::{PermissionCard, PermissionEvent};
-use crate::question_card::{QuestionCard, QuestionsAnswered};
 use crate::theme::{Mode, Theme};
 use crate::tool_row::{ToolCall, ToolRow};
 
@@ -204,36 +205,43 @@ fn questions() -> Vec<Question> {
     ]
 }
 
+fn frame(payload: Value) -> Value {
+    json!({"id": "e", "sessionId": "demo", "harness": "claude_code", "seq": 1, "ts": "2026-11-13T15:00:00Z", "payload": payload})
+}
+
+/// The two open requests as the window hands them to `slots::cards`.
+fn asks() -> Vec<Value> {
+    let options = vec![
+        option("deny", "Deny", PermissionOptionKind::Deny),
+        option("rule", "Always allow cargo run:*", PermissionOptionKind::AlwaysRule),
+        option("once", "Allow once", PermissionOptionKind::Once),
+        option("dir", "Always allow in apps/gpui", PermissionOptionKind::AlwaysDirectory),
+    ];
+    vec![
+        frame(json!({
+            "type": "permission_requested", "requestId": "perm-1", "toolUseId": "t1", "toolName": "Bash",
+            "description": "Run the GPUI example against a fresh build",
+            "input": {"command": "cargo run --example tool_rows -- --release"},
+            "options": serde_json::to_value(options).unwrap(),
+        })),
+        frame(json!({
+            "type": "questions_asked", "requestId": "ask-1", "toolUseId": "t2",
+            "questions": serde_json::to_value(questions()).unwrap(),
+        })),
+    ]
+}
+
 struct Demo {
     calls: Vec<Rc<ToolCall>>,
     open: HashSet<String>,
-    permission: Entity<PermissionCard>,
-    question: Entity<QuestionCard>,
-    _subs: Vec<Subscription>,
+    asks: Vec<Value>,
 }
 
 impl Demo {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let permission = cx.new(|cx| {
-            PermissionCard::new(
-                "Run the GPUI example against a fresh build",
-                Some("cargo run --example tool_rows -- --release".into()),
-                vec![
-                    option("deny", "Deny", PermissionOptionKind::Deny),
-                    option("rule", "Always allow cargo run:*", PermissionOptionKind::AlwaysRule),
-                    option("once", "Allow once", PermissionOptionKind::Once),
-                    option("dir", "Always allow in apps/gpui", PermissionOptionKind::AlwaysDirectory),
-                ],
-                cx,
-            )
-        });
-        let question = cx.new(|cx| QuestionCard::new(questions(), window, cx));
-        let subs = vec![
-            cx.subscribe(&permission, |_, _, e: &PermissionEvent, _| println!("permission: {e:?}")),
-            cx.subscribe(&question, |_, _, e: &QuestionsAnswered, _| println!("answers: {:?}", e.0)),
-        ];
+    fn new(cx: &mut Context<Self>) -> Self {
+        cards::set_responder(cx, |answer, _| println!("{answer:?}"));
         let open = ["read-range", "edit", "bash-fail", "codex-patch"].iter().map(|s| s.to_string()).collect();
-        Demo { calls: calls(), open, permission, question, _subs: subs }
+        Demo { calls: calls(), open, asks: asks() }
     }
 }
 
@@ -286,9 +294,7 @@ impl Render for Demo {
                     .w(px(460.))
                     .flex()
                     .flex_col()
-                    .gap(px(32.))
-                    .child(self.permission.clone())
-                    .child(self.question.clone()),
+                    .children(cards::cards("demo", &self.asks.iter().collect::<Vec<_>>(), &theme)),
             )
     }
 }
@@ -301,7 +307,7 @@ fn main() {
         let bounds = Bounds::centered(None, size(px(1240.), px(980.)), cx);
         cx.open_window(
             WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() },
-            |window, cx| cx.new(|cx| Demo::new(window, cx)),
+            |_, cx| cx.new(Demo::new),
         )
         .unwrap();
         cx.activate(true);

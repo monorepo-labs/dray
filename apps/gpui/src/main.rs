@@ -2,6 +2,7 @@
 //! this Mac already runs; see apps/gpui/README.md.
 
 mod assets;
+mod cards;
 mod chat_tokens;
 mod color;
 mod glass;
