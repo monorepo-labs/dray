@@ -62,14 +62,31 @@ jobs:
           esac
           : "${BOAT_API_KEY:?the BOAT_API_KEY secret is not set}" "${BOAT_ORG:?the BOAT_ORG variable is not set}"
 
+      # Runs are serialised, not ordered: a release's run can come after a
+      # newer one's and would move both names back. A run by hand may, which
+      # is how a rollback is done. A missing pointer is a first run.
+      - name: Skip a release older than the one machines run
+        id: order
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          current=$(curl -fsS --max-time 10 --retry 3 https://downloads.drayhq.com/cloud/serve-version | tr -d '[:space:]' || :)
+          top=$(printf '%s\n%s\n' "${VERSION#cli-v}" "${current#cli-v}" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+          if [ -n "$current" ] && [ "$current" != "$VERSION" ] && [ "$top" != "${VERSION#cli-v}" ]; then
+            echo "::notice::Dray Cloud already runs $current; leaving it for $VERSION"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.order.outputs.skip != 'true'
 
       # cloud-verify.mjs speaks the serve wire through Node's own WebSocket.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.order.outputs.skip != 'true'
         with:
           node-version: 22
 
       - name: Install the boat CLI
+        if: steps.order.outputs.skip != 'true'
         run: |
           mkdir -p "$HOME/.local/bin"
           curl -fsSL "https://boat.dev/api/boat/cli/download?platform=linux-x64&channel=prod" \
@@ -78,15 +95,18 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Sign in to boat
+        if: steps.order.outputs.skip != 'true'
         run: printf '%s' "$BOAT_API_KEY" | boat login --key-stdin --json >/dev/null
 
       - name: Build, verify and save the snapshot
+        if: steps.order.outputs.skip != 'true'
         run: DRAY_VERSION="$VERSION" apps/desktop/scripts/cloud-snapshot.sh
 
       # Only once a machine made from the release has passed. Machines move
       # forward alone, so one made from the new snapshot before this lands
       # keeps what it runs. Short cache: every start reads it.
       - name: Point resumed machines at the release
+        if: steps.order.outputs.skip != 'true'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

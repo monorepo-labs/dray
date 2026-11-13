@@ -178,8 +178,10 @@ top=$(printf '%s\n%s\n' "${want#cli-v}" "${have#cli-v}" | sort -t. -k1,1n -k2,2n
 [ "$want" != "$have" ] && [ "$top" = "${want#cli-v}" ] || exit 0
 echo "dray-cloud-update: $have -> $want"
 t=$(mktemp)
+# The whole install bounded well inside the unit's TimeoutStartSec, or a
+# stalled download fails the start where it should start the old server.
 curl -fsSL --max-time 30 --retry 3 https://www.drayhq.com/install.sh -o "$t" \
-  && DRAY_INSTALL_DIR="$bin" DRAY_UPDATING=1 DRAY_VERSION="$want" sh "$t" \
+  && DRAY_INSTALL_DIR="$bin" DRAY_UPDATING=1 DRAY_VERSION="$want" timeout 120 sh "$t" \
   || echo "dray-cloud-update: the install failed; starting $have"
 rm -f "$t"
 exit 0
@@ -201,8 +203,10 @@ release=$(b ssh "$id" -- '$HOME/.local/bin/dray-serve --version' | tr -d '\r' | 
 say "Stopping the build sandbox"
 b stop "$id" >/dev/null
 state() { b info "$1" --json | jq -r .sandbox.state; }
-for _ in $(seq 120); do [ "$(state "$id")" = stopped ] && break; sleep 5; done
-[ "$(state "$id")" = stopped ] || die "the build sandbox never stopped"
+# The CLI says `stopped` and the API `archived`; either means done.
+stopped() { case "$(state "$id")" in stopped | archived) ;; *) return 1 ;; esac; }
+for _ in $(seq 120); do stopped && break; sleep 5; done
+stopped || die "the build sandbox never stopped"
 
 say "Saving the disk as $CANDIDATE"
 b snapshot "$id" "$CANDIDATE"
