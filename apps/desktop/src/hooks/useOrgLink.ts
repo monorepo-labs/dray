@@ -4,19 +4,24 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke, listen, LOCAL, type ServerId } from "@/lib/transport";
 import type { DrayAccountState, LinkState } from "@/types/events";
 
-/// Reads `load` now and again on `event` from `server`, while `enabled`.
-/// `null` until the first answer, and for a server too old to know the
-/// command, which answers `unknown command`.
+/// The servers' own recheck interval with drayhq.com.
+const RECHECK_MS = 60_000;
+
+/// Reads `cmd` now, again on `event` from `server`, and once a minute, while
+/// `enabled`. `null` until the first answer, and for a server too old to
+/// know the command, which answers `unknown command`.
 function useServerState<T>(server: ServerId, enabled: boolean, cmd: string, event: string) {
   const [state, setState] = useState<T | null>(null);
   useEffect(() => {
     if (!enabled) return;
     let live = true;
     let unlisten: (() => void) | undefined;
-    const load = () =>
+    // A timed reread that fails keeps what it had, so a blip never blanks
+    // the row; the first read's failure is what marks a server too old.
+    const load = (keep = false) =>
       void invoke<T>(cmd, {}, server)
         .then((now) => live && setState(now))
-        .catch(() => live && setState(null));
+        .catch(() => live && !keep && setState(null));
     void listen(event, ({ server: from }) => {
       if (from === server) load();
     }).then((off) => {
@@ -24,8 +29,12 @@ function useServerState<T>(server: ServerId, enabled: boolean, cmd: string, even
       unlisten = off;
       load();
     });
+    // A change made on the site sends no event: the server only rechecks
+    // when asked, at most once a minute, so ask that often while shown.
+    const timer = setInterval(() => load(true), RECHECK_MS);
     return () => {
       live = false;
+      clearInterval(timer);
       unlisten?.();
     };
   }, [server, enabled, cmd, event]);
