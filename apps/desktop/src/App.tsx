@@ -3509,10 +3509,11 @@ function App() {
                         // The task last at work, which is most often the one
                         // the reader came to look at.
                         const target = newestSession(botTasks) ?? (kind === "files" ? strip.bot : null);
-                        if (!target) return;
+                        if (!target) return null;
                         const id = crypto.randomUUID();
                         setPickTabs((prev) => addPickTab(prev, strip.bot, { id, kind, target }));
                         showPick(strip.bot, strip.owner, id);
+                        return id;
                       },
                       onClose: (id) => {
                         forgetOpenFilesUnder(`pick:${id}:`);
