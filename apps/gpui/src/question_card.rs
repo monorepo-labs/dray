@@ -406,7 +406,7 @@ impl Render for QuestionCard {
                         .rounded(px(8.))
                         .border_1()
                         .border_color(tokens.input)
-                        .font_family(text::MONO).font_features(text::mono_features())
+                        .font_family(text::MONO).font_features(crate::assets::mono_features())
                         .text_size(px(10.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(tokens.muted_foreground)
@@ -430,7 +430,7 @@ impl Render for QuestionCard {
                                 .border_color(tokens.border)
                                 .px(px(10.))
                                 .py(px(8.))
-                                .font_family(text::MONO).font_features(text::mono_features())
+                                .font_family(text::MONO).font_features(crate::assets::mono_features())
                                 .text_size(px(12.))
                                 .child(preview),
                         )

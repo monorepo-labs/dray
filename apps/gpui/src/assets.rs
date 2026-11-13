@@ -22,21 +22,29 @@ const ICONS: &[(&str, &[u8])] = &[
     ("icons/copy.svg", include_bytes!("../assets/icons/copy.svg")),
     ("icons/corner-down-left.svg", include_bytes!("../assets/icons/corner-down-left.svg")),
     ("icons/dray-logo.svg", include_bytes!("../assets/icons/dray-logo.svg")),
+    ("icons/file.svg", include_bytes!("../assets/icons/file.svg")),
     ("icons/folder-plus.svg", include_bytes!("../assets/icons/folder-plus.svg")),
     ("icons/folder.svg", include_bytes!("../assets/icons/folder.svg")),
+    ("icons/loader-circle.svg", include_bytes!("../assets/icons/loader-circle.svg")),
+    ("icons/message-square.svg", include_bytes!("../assets/icons/message-square.svg")),
+    ("icons/mic.svg", include_bytes!("../assets/icons/mic.svg")),
     ("icons/panel-left.svg", include_bytes!("../assets/icons/panel-left.svg")),
+    ("icons/paperclip.svg", include_bytes!("../assets/icons/paperclip.svg")),
     ("icons/plus.svg", include_bytes!("../assets/icons/plus.svg")),
     ("icons/search.svg", include_bytes!("../assets/icons/search.svg")),
     ("icons/server-filled.svg", include_bytes!("../assets/icons/server-filled.svg")),
+    ("icons/square-slash.svg", include_bytes!("../assets/icons/square-slash.svg")),
+    ("icons/square.svg", include_bytes!("../assets/icons/square.svg")),
+    ("icons/x.svg", include_bytes!("../assets/icons/x.svg")),
 ];
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
-        Ok(ICONS.iter().chain(crate::composer::ICONS).find(|(p, _)| *p == path).map(|(_, bytes)| Cow::Borrowed(*bytes)))
+        Ok(ICONS.iter().find(|(p, _)| *p == path).map(|(_, bytes)| Cow::Borrowed(*bytes)))
     }
 
     fn list(&self, path: &str) -> anyhow::Result<Vec<SharedString>> {
-        Ok(ICONS.iter().chain(crate::composer::ICONS).filter(|(p, _)| p.starts_with(path)).map(|(p, _)| SharedString::from(*p)).collect())
+        Ok(ICONS.iter().filter(|(p, _)| p.starts_with(path)).map(|(p, _)| SharedString::from(*p)).collect())
     }
 }
 

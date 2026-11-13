@@ -3,6 +3,9 @@
 //!
 //! `cargo run --example code`
 
+#[path = "../src/assets.rs"]
+#[allow(dead_code)]
+mod assets;
 #[path = "../src/code/code.rs"]
 #[allow(dead_code)]
 mod code;

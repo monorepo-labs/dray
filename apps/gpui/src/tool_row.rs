@@ -276,7 +276,7 @@ pub fn output_box(id: impl Into<SharedString>, tokens: &ChatTokens, scroll_cap: 
         .bg(tokens.surface_raised)
         .px(px(10.))
         .py(px(8.))
-        .font_family(text::MONO).font_features(text::mono_features())
+        .font_family(text::MONO).font_features(crate::assets::mono_features())
         .text_size(px(text::TOOL))
         .line_height(px(text::TOOL_LEADING))
         .text_color(tokens.muted_foreground)
@@ -314,7 +314,7 @@ impl RenderOnce for ToolRow {
 
         let summary_ink = if view.label.is_none() && view.alarming { tokens.destructive } else { tokens.muted_foreground };
         let summary = view.summary.clone().map(|s| {
-            let el = div().min_w_0().font_family(text::MONO).font_features(text::mono_features()).text_color(summary_ink);
+            let el = div().min_w_0().font_family(text::MONO).font_features(crate::assets::mono_features()).text_color(summary_ink);
             let el = if view.delegated.is_some() && open { el } else { el.truncate() };
             let el = match s {
                 Summary::File { path } => el.child(tools::basename(&path).to_owned()),
@@ -337,7 +337,7 @@ impl RenderOnce for ToolRow {
                 .flex_none()
                 .flex()
                 .gap(px(5.))
-                .font_family(text::MONO).font_features(text::mono_features())
+                .font_family(text::MONO).font_features(crate::assets::mono_features())
                 .when(c.added > 0, |d| d.child(div().text_color(tokens.accent_add).child(format!("+{}", c.added))))
                 .when(c.removed > 0, |d| d.child(div().text_color(tokens.destructive).child(format!("-{}", c.removed))))
         });
@@ -378,7 +378,7 @@ impl RenderOnce for ToolRow {
             .when_some(view.tooltip.clone(), |d, tip| d.tooltip(move |_, cx| tooltip(tip.clone(), cx)))
             .children(label)
             .when_some(view.settings.clone(), |d, s| {
-                d.child(div().flex_none().font_family(text::MONO).font_features(text::mono_features()).text_color(tokens.muted_foreground.opacity(0.7)).child(s))
+                d.child(div().flex_none().font_family(text::MONO).font_features(crate::assets::mono_features()).text_color(tokens.muted_foreground.opacity(0.7)).child(s))
             })
             .children(summary)
             .children(changes)
@@ -430,7 +430,7 @@ impl RenderOnce for ToolRow {
                     .text_size(px(text::CHAT))
                     .line_height(px(text::CHAT_LEADING))
                     .text_color(tokens.foreground.opacity(0.9))
-                    .when(view.failed, |d| d.font_family(text::MONO).font_features(text::mono_features()))
+                    .when(view.failed, |d| d.font_family(text::MONO).font_features(crate::assets::mono_features()))
                     .child(if view.failed { format!("Error: {output}") } else { output.clone() })
             } else {
                 output_box(format!("{id}-output"), &tokens, true).child(output.clone())
@@ -453,7 +453,7 @@ impl gpui::Render for Tip {
             .bg(tokens.foreground)
             .text_color(tokens.button_primary_foreground)
             .text_size(px(12.))
-            .font_family(text::MONO).font_features(text::mono_features())
+            .font_family(text::MONO).font_features(crate::assets::mono_features())
             .child(self.0.clone())
     }
 }

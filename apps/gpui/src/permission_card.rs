@@ -235,7 +235,7 @@ impl Render for PermissionCard {
                     .gap(px(2.))
                     .child(option.label.clone())
                     .when(owns && i < 9, |d| {
-                        d.child(div().font_family(text::MONO).font_features(text::mono_features()).text_size(px(10.)).opacity(0.6).child(format!("{}", i + 1)))
+                        d.child(div().font_family(text::MONO).font_features(crate::assets::mono_features()).text_size(px(10.)).opacity(0.6).child(format!("{}", i + 1)))
                     });
                 button(SharedString::from(format!("perm-{}", option.id)), label, variant, false, disabled, &tokens)
                     .max_w_full()
@@ -282,7 +282,7 @@ impl Render for PermissionCard {
                         .border_color(tokens.border)
                         .px(px(12.))
                         .py(px(10.))
-                        .font_family(text::MONO).font_features(text::mono_features())
+                        .font_family(text::MONO).font_features(crate::assets::mono_features())
                         .text_size(px(12.))
                         .line_height(px(16.))
                         .text_color(tokens.foreground)

@@ -42,12 +42,6 @@ pub const CODE_SIZE: f32 = 14.;
 pub const CODE_LINE_HEIGHT: f32 = 1.6;
 const MONO: &str = "Geist Mono";
 
-/// Geist Mono's `liga` eats the space before `--` under GPUI's shaping, so
-/// every mono run turns it off. The same as #1033's `assets::mono_features`,
-/// which this should call once that lands.
-fn mono_features() -> gpui::FontFeatures {
-    gpui::FontFeatures(Arc::new(vec![("liga".into(), 0)]))
-}
 
 /// Colours a fenced block: the fence's language (`None` for a bare fence) and
 /// its code, to byte ranges of that code and their styles.
@@ -280,12 +274,12 @@ fn style(theme: &Theme) -> TextViewStyle {
         .font_family(MONO)
         .text_size(px(CODE_SIZE))
         .line_height(relative(CODE_LINE_HEIGHT));
-    code_block.text.font_features = Some(mono_features());
+    code_block.text.font_features = Some(crate::assets::mono_features());
     // Streamdown's inline code: `rounded bg-muted px-1.5 py-0.5 font-mono`,
     // at `text-code`.
     let mut inline_code =
         StyleRefinement::default().bg(ink.muted).rounded(px(4.)).px(px(6.)).font_family(MONO).text_size(px(CODE_SIZE));
-    inline_code.text.font_features = Some(mono_features());
+    inline_code.text.font_features = Some(crate::assets::mono_features());
     // `my-4 border-l-4 border-muted-foreground/30 pl-4 text-muted-foreground italic`.
     let blockquote = StyleRefinement::default()
         .border_l_4()
