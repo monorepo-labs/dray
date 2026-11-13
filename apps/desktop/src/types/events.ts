@@ -360,7 +360,22 @@ automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUse
  * notice says it did. The session layer records it, so the composer
  * stops naming the model the CLI left.
  */
-model: ModelId | null, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+model: ModelId | null, } | { "type": "merge_card", taskId: string, title: string, 
+/**
+ * The repo root, what the sidebar's PR marks are keyed by. The task's
+ * machine's path where `machine` is set.
+ */
+projectPath: string, branch: string, number: number, url: string, 
+/**
+ * The machine holding the task, where it is not the chat's. Such a card
+ * reads and merges by `repo` through `gh` here, since its checkout
+ * is there, and may be gone with a sandbox.
+ */
+machine?: string, 
+/**
+ * `owner/name`, set with `machine`.
+ */
+repo?: string, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.
@@ -426,7 +441,12 @@ remoteAccess: boolean,
  * lists through it (#847). Off by default: it hands that token every
  * machine's reach, SSH logins included.
  */
-shareMachines: boolean, };
+shareMachines: boolean, 
+/**
+ * Dray Cloud's switch (#857). Here because Rust lists the machines at
+ * launch; the key itself sits in `credentials.json`.
+ */
+drayCloud: boolean, };
 
 /**
  * Permission stance a session *runs under*, in roughly increasing order of
@@ -672,6 +692,20 @@ export type ChromiumStatus = { "state": "absent" } | { "state": "downloading", r
  * One line of git's progress while a repo clones.
  */
 export type CloneProgress = { slug: string, line: string, };
+
+/**
+ * The Dray Cloud row in Settings. The machines themselves ride
+ * `servers_changed`, each a server marked `cloud`.
+ */
+export type CloudInfo = { on: boolean, 
+/**
+ * A key is saved. The key itself never leaves Rust.
+ */
+keyed: boolean, 
+/**
+ * Why the last listing failed.
+ */
+error: string | null, };
 
 /**
  * What kind of entry a timeline row is. A review carries a verdict where a
@@ -1231,6 +1265,35 @@ export type IssueUnavailable = { "kind": "not_connected" } | { "kind": "unauthor
 export type IssuesChangedEvent = { sessionId: string, issues: Array<IssueRef>, };
 
 /**
+ * One file of a "Learned" row, before and after, for View diff.
+ */
+export type LearnedDiff = { path: string, before: string, after: string, };
+
+/**
+ * One file a bot's turn changed under its instructions, skills or memory.
+ * `kind` and `change` are plain strings, never enums, so a kind a later build
+ * adds cannot fail an older reader's whole line.
+ */
+export type LearnedFile = { 
+/**
+ * Relative to the bot's folder.
+ */
+path: string, 
+/**
+ * `instructions`, `skill` or `memory`.
+ */
+kind: string, 
+/**
+ * `added`, `changed` or `removed`.
+ */
+change: string, 
+/**
+ * One line saying what was learned: the rule added, or the skill's or
+ * memory's own `description`.
+ */
+summary: string, };
+
+/**
  * Where this server stands, as the app and `dray login` read it.
  */
 export type LinkState = { linked: Linked | null, pending: PendingLink | null, 
@@ -1286,7 +1349,12 @@ export type MessageSender = { sessionId: string, title: string,
  * The machine the sender runs on, where that is not this one. Stamped by
  * the forwarding app, so it names the machine it came from.
  */
-machine: string | null, };
+machine: string | null, 
+/**
+ * The bot whose chat sent it, where one did. `title` is then the bot's
+ * name, and the chat draws the bot's own face.
+ */
+botId?: string, };
 
 export type Model = { 
 /**
@@ -1541,7 +1609,12 @@ headRefName: string, isDraft: boolean, state: PrMarkState, checksState: PrChecks
  * `None` on the merged half, where they are not asked for. The frontend
  * reads that as *unknown* rather than as ready — see `mergeVerdict`.
  */
-mergeable: string | null, mergeStateStatus: string | null, };
+mergeable: string | null, mergeStateStatus: string | null, 
+/**
+ * `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `None` where the
+ * repo asks for no review, and on the merged half.
+ */
+reviewDecision: string | null, };
 
 /**
  * Which of the two connections a mark came from.
@@ -1837,7 +1910,16 @@ app: boolean,
 /**
  * An update landed on the server and it restarts onto it once idle.
  */
-restarting: boolean, boat: BoatStatus | null, };
+restarting: boolean, 
+/**
+ * Stopped and resuming, for a boat sandbox and a Dray Cloud machine alike.
+ */
+boat: BoatStatus | null, 
+/**
+ * A Dray Cloud machine (#857): drawn as no row of its own, and read as
+ * "Cloud" wherever a machine is named.
+ */
+cloud: boolean, };
 
 export type ServerStatus = "connecting" | "connected" | "disconnected";
 
@@ -1975,7 +2057,13 @@ continueAt?: string,
  * The reader cancelled the continue above. Kept beside it rather than
  * clearing it, so they can turn it back on until the time passes.
  */
-continueOff: boolean, };
+continueOff: boolean, 
+/**
+ * What a bot's stalled task needs from the reader, one line the bot wrote
+ * with `dray session need`. Drawn only while `at` is no older than
+ * `modified`, so the task moving clears it without a write.
+ */
+need?: TaskNeed, };
 
 /**
  * Session-level facts, known at startup.
@@ -2132,7 +2220,13 @@ continueAt?: string,
  * The reader cancelled the continue above. Kept beside it rather than
  * clearing it, so they can turn it back on until the time passes.
  */
-continueOff: boolean, };
+continueOff: boolean, 
+/**
+ * What a bot's stalled task needs from the reader, one line the bot wrote
+ * with `dray session need`. Drawn only while `at` is no older than
+ * `modified`, so the task moving clears it without a write.
+ */
+need?: TaskNeed, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`
@@ -2251,6 +2345,15 @@ distinctId: string,
  * work.
  */
 personProperties: Record<string, string | number | boolean>, };
+
+/**
+ * See [`SessionIndexItem::need`].
+ */
+export type TaskNeed = { text: string, 
+/**
+ * RFC3339, when the bot wrote it.
+ */
+at: string, };
 
 /**
  * A tool `dray setup --install` takes, as a server has it.

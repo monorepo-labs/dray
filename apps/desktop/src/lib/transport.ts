@@ -96,6 +96,9 @@ const QUALIFIED = new Set([
   "fork_session",
   "send_msg",
   "read_file",
+  "list_bots",
+  "create_bot",
+  "start_bot",
 ]);
 
 /// Events whose payload names paths, and how to qualify it.
@@ -170,6 +173,13 @@ export const APP_COMMANDS = new Set([
   "upload_attachment",
   "resume_boat",
   "extend_boat",
+  "cloud_info",
+  "set_cloud_key",
+  "set_cloud_on",
+  "start_cloud_machine",
+  "drop_cloud_machine",
+  "save_cloud_transcript",
+  "cloud_transcript",
   "paste_attachments",
   "read_file",
   "browser_open",

@@ -75,6 +75,8 @@ final class Store {
     /// An older page that could not be read; the newer turns stay on screen.
     private(set) var olderErrors: [SessionKey: String] = [:]
     private(set) var tasks: [SessionKey: Int] = [:]
+    /// This Mac's bots, the Island's alone: bots live on the local server only.
+    private(set) var bots: [Bot] = []
 
     /// For a client that reacts beside drawing: the Island chimes and counts a new card on its pill.
     @ObservationIgnored var asksChanged: () -> Void = {}
@@ -313,7 +315,10 @@ final class Store {
     /// A fresh connection re-reads the index and the tail of every open
     /// transcript, so nothing that happened while it was down is missed.
     private func connected(_ server: UUID) async {
-        if server == home { linksMayHaveMoved() }
+        if server == home {
+            linksMayHaveMoved()
+            Task { await loadBots() }
+        }
         // Its own task: a sandbox's sessions need not wait on this server's.
         Task { await loadShared(server) }
         // Heard on the old socket, so older than the read below — and a read
@@ -325,6 +330,17 @@ final class Store {
         // After the transcripts: a mark costs a `gh` call per repo, missed messages must not wait on it.
         await loadProjects(server)
         await loadMarks(server, force: false)
+    }
+
+    private func loadBots() async {
+        guard let home, let list: [Bot] = try? await connections[home]?.call("list_bots") else { return }
+        bots = list
+    }
+
+    /// The bot whose chat this session is: one running in its folder.
+    func bot(_ key: SessionKey) -> Bot? {
+        guard key.server == home, let cwd = items[key]?.cwd else { return nil }
+        return bots.first { $0.path == cwd }
     }
 
     /// A project list a command answered with, such as `add_project`'s.
@@ -652,6 +668,8 @@ final class Store {
             cloneProgress[server, default: [:]][p.slug] = p.line
         case "host_changed":
             linksMayHaveMoved()
+        case "bots_changed":
+            if server == home { Task { await loadBots() } }
         case "drafts_changed":
             draftsRevision += 1
         case "machines_shared":
@@ -661,6 +679,10 @@ final class Store {
             guard let item = try? decoder.decode(EventFrame<SessionItem>.self, from: data).payload else { return }
             items[SessionKey(server: server, id: item.sessionId)] = item
             Task { await loadMarks(server, force: false, only: [item.projectPath]) }
+            // `bots_changed` comes from the CLI alone, and a bot the app made is first seen as its chat.
+            if name == "session_created", server == home, !bots.contains(where: { $0.path == item.cwd }) {
+                Task { await loadBots() }
+            }
         default:
             break
         }
@@ -747,6 +769,11 @@ extension Store {
         for item in items { self.items[SessionKey(server: server, id: item.sessionId)] = item }
         for ask in asks { self.asks[SessionKey(server: server, id: ask.sessionId), default: []].append(ask) }
         for (path, byBranch) in prs { marks[ProjectKey(server: server, path: path)] = byBranch }
+    }
+
+    func seed(home server: UUID, bots: [Bot]) {
+        home = server
+        self.bots = bots
     }
 }
 #endif

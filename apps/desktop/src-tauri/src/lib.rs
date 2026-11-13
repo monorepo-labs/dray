@@ -69,6 +69,7 @@ pub mod orchestration;
 pub mod bots;
 pub mod drafts;
 pub mod projects;
+pub mod remote_reports;
 #[cfg(feature = "desktop")]
 pub mod quit;
 #[cfg(feature = "desktop")]
@@ -88,8 +89,12 @@ pub mod dray_account;
 // Every server reaches other machines on its own (#760).
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod machines;
+#[cfg(any(feature = "serve", feature = "desktop"))]
+pub mod cloud_machine;
 #[cfg(feature = "desktop")]
 pub mod boat;
+#[cfg(feature = "desktop")]
+pub mod cloud;
 #[cfg(feature = "desktop")]
 pub mod servers;
 pub mod session;
@@ -593,6 +598,10 @@ async fn set_session_flags(
     aside: Option<bool>,
     sink: Sink,
 ) -> Result<Option<SessionIndexItem>, Fail> {
+    // Read first: settling an already settled session from an older chat must
+    // not reach the chat the bot moved on to.
+    let was_open = archived == Some(true)
+        && store::get_session_index_item(session_id).await?.is_some_and(|i| !i.archived);
     let updated = store::set_session_flags(session_id, archived, pinned, hidden, aside).await?;
     if updated.is_none() {
         return Ok(None);
@@ -601,8 +610,20 @@ async fn set_session_flags(
     // screen lists it. Here off the whole index, where the frontend
     // holds one side of the split and can miss a child on the other.
     let mut settling = vec![session_id.to_string()];
+    // A bot chat that switched agent spans several sessions, and settling it
+    // settles them all: left open, the previous one would be the chat again.
+    if was_open {
+        if let Some(item) = &updated {
+            for id in bots::rest_of_chat(item).await {
+                store::set_session_flags(&id, Some(true), None, None, None).await?;
+                settling.push(id);
+            }
+        }
+    }
     if let Some(archived) = archived {
-        settling.extend(store::archive_hidden_descendants(session_id, archived).await?);
+        for id in settling.clone() {
+            settling.extend(store::archive_hidden_descendants(&id, archived).await?);
+        }
     }
     // The answer reaches the caller alone, and a server has other clients.
     // Ahead of the stop, which can take seconds.
@@ -931,6 +952,13 @@ pub fn run() {
             servers::upload_attachment,
             servers::resume_boat,
             servers::extend_boat,
+            servers::cloud_info,
+            servers::set_cloud_key,
+            servers::set_cloud_on,
+            servers::start_cloud_machine,
+            servers::drop_cloud_machine,
+            servers::save_cloud_transcript,
+            servers::cloud_transcript,
             attachments::paste_attachments,
             // Here and not on the server: a video plays through this
             // webview's asset protocol, which only this process can widen.

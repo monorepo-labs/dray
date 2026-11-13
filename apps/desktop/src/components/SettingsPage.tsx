@@ -47,6 +47,8 @@ import { chordFor, useShortcutOverrides } from "@/hooks/useShortcuts";
 import { useTheme } from "@/hooks/useTheme";
 import { type ManualCheck, updateFailure } from "@/hooks/useUpdater";
 import { downloadChromium, removeChromium, useChromium } from "@/lib/browser";
+import { BreakTile } from "@/components/BreakOverlay";
+import { BREAK_CARDS } from "@/components/breakScenes";
 import { BREAK_INTERVALS, setBreakDue, setBreakSettings, useBreakSettings } from "@/lib/breaks";
 import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
 import {
@@ -760,12 +762,14 @@ function AutoHideRow({
 
 const BREAK_OPTIONS = BREAK_INTERVALS.map((m) => ({ id: String(m), label: `${m} min` }));
 
-/// The hourly break reminder: whether it runs, how often, and a way to see it
-/// without waiting the interval out.
-function BreakRows() {
+/// The hourly break reminder: whether it runs, how often, which cards it can
+/// show, and a way to see it without waiting the interval out.
+export function BreakRows() {
   const switchId = useId();
   const everyId = useId();
+  const cardsId = useId();
   const settings = useBreakSettings();
+  const onCount = BREAK_CARDS.filter((c) => !settings.off.includes(c.name)).length;
 
   return (
     <>
@@ -792,6 +796,46 @@ function BreakRows() {
           onPick={(m) => setBreakSettings({ ...settings, minutes: Number(m) })}
           labelledBy={everyId}
         />
+      </SettingRow>
+      <SettingRow
+        id={cardsId}
+        asGroup
+        stacked
+        label="Cards"
+        description="Click a card to turn it on or off. Each break picks one at random, and the last one on stays on."
+      >
+        <div role="group" aria-labelledby={cardsId} className="grid grid-cols-3 gap-3">
+          {BREAK_CARDS.map(({ name, text, Scene }) => {
+            const on = !settings.off.includes(name);
+            return (
+              <button
+                key={name}
+                type="button"
+                aria-pressed={on}
+                disabled={on && onCount === 1}
+                onClick={() =>
+                  setBreakSettings({
+                    ...settings,
+                    off: on ? [...settings.off, name] : settings.off.filter((n) => n !== name),
+                  })
+                }
+                aria-label={name}
+                className={cn(
+                  "relative rounded-lg outline-none transition-[opacity,filter] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                  "cursor-pointer disabled:cursor-not-allowed",
+                  !on && "opacity-35 grayscale hover:opacity-55",
+                )}
+              >
+                <BreakTile text={text} Scene={Scene} />
+                {on && (
+                  <span className="absolute top-2 right-2 grid size-5 place-items-center rounded-full bg-(--break-ink,var(--foreground)) text-(--break-card,var(--background))">
+                    <Check className="size-3" strokeWidth={3} />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       </SettingRow>
     </>
   );

@@ -75,11 +75,13 @@ export function useLocalServer(): ServerInfo | null {
   return useSyncExternalStore(subscribeServers, localServer, localServer);
 }
 
-/// What the reader calls a server: its name, or "This Mac" ("This machine" off a
-/// Mac) — the machine the app runs on.
+/// What the reader calls a server: its name, "This Mac" ("This machine" off a
+/// Mac) — the machine the app runs on — or "Cloud" for every Dray Cloud
+/// machine, which the reader never picks one by one.
 export function serverName(id: ServerId): string {
   if (id === LOCAL) return `This ${MACHINE}`;
-  return servers.find((s) => s.id === id)?.name ?? id;
+  const server = servers.find((s) => s.id === id);
+  return server?.cloud ? "Cloud" : (server?.name ?? id);
 }
 
 /// A project's name where only text fits, with its machine after it where that
@@ -93,6 +95,13 @@ export function projectLabel(name: string, server: ServerId | null): string {
 export function serverConnected(id: ServerId): boolean {
   return id === LOCAL || servers.some((s) => s.id === id && s.status === "connected");
 }
+
+/// A Dray Cloud machine. Dray's own service rather than a server the reader
+/// added, so it never reads as stopped or offline: a send wakes it.
+export const cloudServer = (id: ServerId): boolean => servers.some((s) => s.id === id && s.cloud);
+
+/// Whether `id` should read as unreachable: not connected, and no cloud machine.
+export const shownOffline = (id: ServerId): boolean => !serverConnected(id) && !cloudServer(id);
 
 /// A remote's connection state; `undefined` for This Mac and a server no
 /// longer listed.
@@ -110,7 +119,7 @@ export function offlineReason(server: ServerInfo): string | null {
 /// `null` for one that is, and for This Mac, whose calls wait out a restart.
 export function offlineLine(id: ServerId): string | null {
   const server = servers.find((s) => s.id === id);
-  if (!server || server.status === "connected") return null;
+  if (!server || server.status === "connected" || server.cloud) return null;
   const reason = offlineReason(server);
   return reason ? `${server.name} is offline · ${reason}` : `${server.name} is offline`;
 }

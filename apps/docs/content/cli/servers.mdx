@@ -28,7 +28,6 @@ dray server status
 | `status` | Says whether the server is running, and its public address if it has one. |
 | `tunnel on` / `tunnel off` | Puts a public address in front of the server, or takes it down. |
 | `dray login` / `dray logout` | Links this server to an org at drayhq.com, or unlinks it. See [Link to an org](#link-to-an-org). |
-| `assistant add` / `ls` / `revoke <id>` | Connects Grok, Claude or ChatGPT to the server, lists the ones connected, or signs one out. See [Connect an assistant](/reference/assistants). |
 
 ### Install
 
@@ -72,19 +71,6 @@ dray server tunnel on
 Gives the server a public address that stays the same across restarts, and waits for it, up to two minutes. In a terminal it prints the address and a line to paste into the app: Settings → Servers → Add server → Use an address and token. Anyone holding that line can use the server.
 
 `dray server tunnel off` takes the address down. The server is then reachable over SSH alone. The address is off until you turn it on.
-
-### Assistants
-
-```bash
-dray server assistant add
-dray server assistant add --read-only
-dray server assistant ls
-dray server assistant revoke <id>
-```
-
-`add` prints the URL to add as a custom connector in Grok, Claude or ChatGPT, and a code the connector's sign-in asks for. The code works once, for 10 minutes. It turns on the public address first if it is off, and waits for it. `--read-only` makes an assistant that can list and read sessions but not change them.
-
-`ls` lists the assistants signed in, with their id, name, access and when each was last used. `revoke` signs one out at once. See [Connect an assistant](/reference/assistants).
 
 ### Link to an org
 

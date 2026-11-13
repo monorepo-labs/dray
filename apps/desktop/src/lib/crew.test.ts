@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { crewRows, crewSeen, hiddenChildren, inSidebar, withHiddenAsks } from "@/lib/crew";
-import type { SessionIndexItem, SessionStatus } from "@/types/events";
+import { crewRows, crewSeen, hiddenChildren, inSidebar, leftToParent, withHiddenAsks } from "@/lib/crew";
+import type { BackgroundTask, SessionIndexItem, SessionStatus } from "@/types/events";
 
 const item = (
   sessionId: string,
@@ -65,6 +65,16 @@ describe("crewRows", () => {
     expect(ids(crewRows(items, "b", quiet))).toEqual(["c"]);
   });
 
+  it("counts a bot chat's earlier sessions' tasks as its own", () => {
+    const items = [
+      item("old", null),
+      item("new", null),
+      item("t1", "old", { created: "2026-09-01T00:00:00Z" }),
+      item("t2", "new", { created: "2026-09-02T00:00:00Z" }),
+    ];
+    expect(ids(crewRows(items, "new", quiet, ["old"]))).toEqual(["t2", "t1"]);
+  });
+
   it("survives a cycle in the index", () => {
     const items = [item("a", null), item("b", "a"), item("c", "b"), item("a", "c")];
     expect(ids(crewRows(items, "a", quiet))).toEqual(["b", "c"]);
@@ -113,6 +123,18 @@ describe("crewRows", () => {
     expect(row.asking).toBe(true);
     expect(row.busy).toBe(false);
   });
+
+  // A turn over with a background shell still running reads as idle without
+  // this, and the reader takes the task for finished.
+  it("flags a background task only once no turn runs", () => {
+    const items = [item("a", null), item("b", "a"), item("c", "a", { status: "in_progress" })];
+    const task = { taskId: "t", toolUseId: "u", kind: "local_bash", description: "dev server" } as unknown as BackgroundTask;
+    const live = { statusBySession: {}, askingSessions: new Set<string>(), tasksBySession: { b: [task], c: [task] } };
+    const [b, c] = crewRows(items, "a", live);
+    expect(b.background).toBe(true);
+    expect(c.background).toBe(false);
+    expect(crewRows(items, "a", quiet)[0].background).toBe(false);
+  });
 });
 
 describe("crewSeen", () => {
@@ -153,6 +175,11 @@ describe("hidden sessions", () => {
     expect(inSidebar(withBot, [bot]).map((i) => i.sessionId)).toEqual(["a", "shown", "orphan"]);
   });
 
+  it("leaves a hidden child out when a filter has dropped its parent", () => {
+    const filtered = items.filter((i) => i.sessionId !== "a");
+    expect(inSidebar(filtered, [], items).map((i) => i.sessionId)).toEqual(["shown", "orphan"]);
+  });
+
   it("keeps a bot's settled chat in the history", () => {
     const bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
     const settled = [item("old", null, { cwd: "/h/bots/b", archived: true })];
@@ -176,5 +203,17 @@ describe("hidden sessions", () => {
 
   it("names only the hidden children for a cascade", () => {
     expect(hiddenChildren(items, "a").map((i) => i.sessionId)).toEqual(["review"]);
+  });
+});
+
+describe("leftToParent", () => {
+  it("quiets a hidden session's done and ready-to-merge, never its cards", () => {
+    const hidden = item("h", "p", { hidden: true });
+    expect(leftToParent(hidden, "completed")).toBe(true);
+    expect(leftToParent(hidden, "pr")).toBe(true);
+    expect(leftToParent(hidden, "asking")).toBe(false);
+    expect(leftToParent(hidden, undefined)).toBe(false);
+    expect(leftToParent(item("v", "p"), "completed")).toBe(false);
+    expect(leftToParent(undefined, "completed")).toBe(false);
   });
 });
