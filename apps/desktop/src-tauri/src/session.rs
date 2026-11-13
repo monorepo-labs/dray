@@ -771,28 +771,20 @@ impl SessionManager {
         false
     }
 
-    /// How many sessions have a turn running, and whether anything at all is
-    /// working, background tasks included: Dray Cloud's `machine_load` and its
-    /// heartbeat. A slot locked by a send or a respawn counts as a turn, as in
-    /// [`Self::any_turn_in_flight`]. A new session's first send joins the map
-    /// only once its prompt is out, so `SENDS` is what makes it busy before.
-    pub async fn load(&self) -> (usize, bool) {
-        let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
-        let (mut turns, mut busy) = (0, false);
-        for slot in slots {
-            let Ok(guard) = slot.try_lock() else {
-                turns += 1;
-                continue;
-            };
-            let Some(session) = guard.as_ref() else { continue };
-            let Ok(tracker) = session.status.try_lock() else {
-                turns += 1;
-                continue;
-            };
-            turns += usize::from(tracker.turn_in_flight());
-            busy |= tracker.has_outstanding_work();
+    /// Whether anything is working here, background tasks included: what Dray
+    /// Cloud's heartbeat reports. A slot locked by a send or a respawn counts,
+    /// as in [`Self::any_turn_in_flight`]. A new session's first send joins the
+    /// map only once its prompt is out, so `SENDS` is what makes it busy before.
+    pub async fn busy(&self) -> bool {
+        if SENDS.load(SeqCst) > 0 {
+            return true;
         }
-        (turns, busy || turns > 0 || SENDS.load(SeqCst) > 0)
+        let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
+        slots.iter().any(|slot| {
+            let Ok(guard) = slot.try_lock() else { return true };
+            let Some(session) = guard.as_ref() else { return false };
+            session.status.try_lock().map_or(true, |t| t.turn_in_flight() || t.has_outstanding_work())
+        })
     }
 
     /// Stops every child idle past [`IDLE_LIMIT`]. Each holds ~250MB doing

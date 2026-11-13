@@ -2,7 +2,7 @@
 # Builds the `dray-cloud` saved snapshot every Dray Cloud machine is created
 # from (#857): a boat sandbox with `dray` and `dray-serve` installed, agents
 # installed but signed in nowhere, and the server enabled as a systemd user
-# service that starts on its own after create, resume and fork.
+# service that starts on its own after create and resume.
 #
 # Run it on a machine where `boat login` is done, with the Dray Cloud org:
 #
@@ -106,14 +106,14 @@ for _ in $(seq 30); do [ -s "$HOME/.dray/serve-token" ] && break; sleep 1; done
 step "Stopping the server and clearing what is this sandbox's own"
 systemctl --user stop dray
 # The control plane writes serve-token and cloud.json into every create; the
-# rest is this build sandbox's and would read as a fork of it.
+# rest is this build sandbox's, and every task's machine would start with it.
 rm -rf "$HOME/.dray/sessions" "$HOME/.dray/serve-token" "$HOME/.dray/cloud.json" \
-  "$HOME/.dray/boat-id" "$HOME/.dray/serve-port" "$HOME/.dray/tunnel-url"
+  "$HOME/.dray/serve-port" "$HOME/.dray/tunnel-url"
 
 # boat writes a create's files before it reports ready, but nothing says
 # before a lingering user service starts. A server up first mints a token of
 # its own and never reads the one written over it, so it waits — a minute at
-# most, then starts regardless. A resume or fork has both and waits for nothing.
+# most, then starts regardless. A resume has both and waits for nothing.
 mkdir -p "$HOME/.config/systemd/user/dray.service.d"
 cat > "$HOME/.config/systemd/user/dray.service.d/cloud.conf" <<'UNIT'
 [Service]
