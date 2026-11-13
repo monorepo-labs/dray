@@ -248,6 +248,7 @@ import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { useHandoffConfig } from "@/hooks/useHandoffConfig";
 import { buildTranscript, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
+import { onUnhandledEscape } from "@/lib/escape";
 import { playSwipeTick } from "@/lib/tick";
 
 /// Commits only with its Suspense siblings, so its layout effect says the lazy
@@ -371,6 +372,25 @@ function App() {
     if (openDraftId && !drafts.some((d) => d.id === openDraftId)) setOpenDraftId(null);
   }, [drafts, openDraftId]);
   const composerKey = selectedSessionId ?? (openDraftId ? draftKey(openDraftId) : null);
+  // Esc takes the sidebar back to the active list, the way the toggles do —
+  // closing the open draft with its view. Last in line for the key, so
+  // anything else on screen that answers Escape keeps it.
+  useEffect(
+    () =>
+      onUnhandledEscape(() => {
+        if (draftsShown) {
+          setOpenDraftId(null);
+          setDraftsShown(false);
+          return true;
+        }
+        if (archivedRequested) {
+          setShowArchived(false);
+          return true;
+        }
+        return false;
+      }),
+    [draftsShown, archivedRequested, setShowArchived],
+  );
 
   useEffect(
     () =>
