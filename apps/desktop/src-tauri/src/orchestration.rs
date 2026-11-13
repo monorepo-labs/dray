@@ -1260,33 +1260,52 @@ async fn post_merge_card(card: dray_proto::MergeCard, app: &Sink) -> Result<Resp
     let payload = task.card(branch, number, url.clone());
     let _held = POSTING_CARD.lock().await;
     let sessions = chat_sessions_of(chat.clone()).await?;
-    let existing = chat_holds_card(&sessions, task_id, number, &url).await?;
-    if !existing {
-        manager().post_event(&card.session_id, chat.harness, payload, app).await?;
-    }
+    let existing = !post_card(&sessions, &chat, payload, app).await?;
     Ok(Response::MergeCard { number, url, title, existing })
 }
 
-/// Whether any of a chat's `sessions` already holds a merge card for this pull
-/// request. The app's post and the agent's both ask first, under
-/// [`POSTING_CARD`], so whichever comes second is the one dropped.
-async fn chat_holds_card(sessions: &[SessionIndexItem], task_id: &str, number: u64, url: &str) -> Result<bool> {
-    for session in sessions {
-        if holds_card(&store::list_session_events(&session.session_id).await?, task_id, number, url) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+/// Posts `card` in `chat`, the newest of `sessions`, through the store and the
+/// session manager; see [`post_card_once`]. The caller holds [`POSTING_CARD`].
+async fn post_card(sessions: &[SessionIndexItem], chat: &SessionIndexItem, card: CardPayload, sink: &Sink) -> Result<bool> {
+    let ids: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
+    post_card_once(
+        &ids,
+        card,
+        async |id| store::list_session_events(id).await,
+        async |card| manager().post_event(&chat.session_id, chat.harness, card, sink).await,
+    )
+    .await
 }
 
-/// Whether `events` hold a merge card for this pull request. The app's URL
-/// comes from its marks read and the agent's from `gh`, so the task's own PR
-/// number counts as well as the URL; the frontend's `cardKey` matches alike.
-fn holds_card(events: &[crate::events::AgentEvent], task_id: &str, number: u64, url: &str) -> bool {
-    events.iter().any(|e| match &e.payload {
-        crate::events::AgentEventPayload::MergeCard { task_id: t, number: n, url: u, .. } => {
-            u == url || (t == task_id && *n == number)
+type CardPayload = crate::events::AgentEventPayload;
+
+/// Posts `card` unless a log of the chat's `sessions` already holds a card for
+/// its pull request, and answers whether it posted. The app's post and the
+/// agent's both come through here, under [`POSTING_CARD`], so whichever is
+/// second is the one dropped. `read` and `post` are the store and the chat,
+/// taken as arguments so a test can run this very step on logs in memory.
+async fn post_card_once(
+    sessions: &[&str],
+    card: CardPayload,
+    read: impl AsyncFn(&str) -> Result<Vec<crate::events::AgentEvent>>,
+    post: impl AsyncFnOnce(CardPayload) -> Result<()>,
+) -> Result<bool> {
+    for session in sessions {
+        if holds_card(&read(session).await?, &card) {
+            return Ok(false);
         }
+    }
+    post(card).await?;
+    Ok(true)
+}
+
+/// Whether `events` hold a merge card for `card`'s pull request. The app's URL
+/// comes from its marks read and the agent's from `gh`, so the task's own PR
+/// number counts as well as the URL; the frontend's `cardRepeats` matches alike.
+fn holds_card(events: &[crate::events::AgentEvent], card: &CardPayload) -> bool {
+    let CardPayload::MergeCard { task_id, number, url, .. } = card else { return false };
+    events.iter().any(|e| match &e.payload {
+        CardPayload::MergeCard { task_id: t, number: n, url: u, .. } => u == url || (t == task_id && n == number),
         _ => false,
     })
 }
@@ -1409,16 +1428,13 @@ pub async fn auto_merge_card(
     let Some(chat) = sessions.last() else {
         return Ok(None);
     };
-    if chat_holds_card(&sessions, &task_id, number, &url).await? {
-        return Ok(Some(chat.session_id.clone()));
-    }
     let Some(task) = CardTask::find(&task_id).await? else {
         return Ok(None);
     };
     if task.row.archived {
         return Ok(None);
     }
-    manager().post_event(&chat.session_id, chat.harness, task.card(branch, number, url), &sink).await?;
+    post_card(&sessions, chat, task.card(branch, number, url), &sink).await?;
     Ok(Some(chat.session_id.clone()))
 }
 
@@ -2441,35 +2457,72 @@ mod tests {
         assert!(!resolve_fast(None, None, Harness::ClaudeCode));
     }
 
+    fn merge_card(task: &str, number: u64, url: &str) -> CardPayload {
+        CardPayload::MergeCard {
+            task_id: task.into(),
+            title: "Fix".into(),
+            project_path: "/p".into(),
+            branch: "b".into(),
+            number,
+            url: url.into(),
+            machine: None,
+            repo: None,
+        }
+    }
+
+    /// A bot chat's logs in memory, posted to through [`post_card_once`] the
+    /// way both posts are: the newest session takes the card.
+    struct Chat(std::sync::Mutex<Vec<(&'static str, Vec<crate::events::AgentEvent>)>>);
+
+    impl Chat {
+        /// Answers whether it posted, which a hand post sends back as
+        /// `existing: false`.
+        async fn post(&self, card: CardPayload) -> bool {
+            let ids: Vec<&str> = self.0.lock().unwrap().iter().map(|(id, _)| *id).collect();
+            post_card_once(
+                &ids,
+                card,
+                async |id| Ok(self.0.lock().unwrap().iter().find(|(s, _)| *s == id).unwrap().1.clone()),
+                async |card| {
+                    let mut logs = self.0.lock().unwrap();
+                    let (id, log) = logs.last_mut().unwrap();
+                    log.push(crate::events::AgentEvent::mint(id.to_string(), Harness::ClaudeCode, 0, None, None, card));
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap()
+        }
+
+        fn cards(&self) -> usize {
+            let logs = self.0.lock().unwrap();
+            logs.iter().flat_map(|(_, log)| log).filter(|e| matches!(e.payload, CardPayload::MergeCard { .. })).count()
+        }
+    }
+
     /// The app posts its card off its marks read, the agent off `gh`; either
     /// may land first and the other must find it, even where the two spell
-    /// the URL differently.
-    #[test]
-    fn a_card_is_held_whichever_post_came_first() {
-        let card = |url: &str| {
-            let payload = crate::events::AgentEventPayload::MergeCard {
-                task_id: "task".into(),
-                title: "Fix".into(),
-                project_path: "/p".into(),
-                branch: "b".into(),
-                number: 980,
-                url: url.into(),
-                machine: None,
-                repo: None,
-            };
-            vec![crate::events::AgentEvent::mint("chat".into(), Harness::ClaudeCode, 0, None, None, payload)]
-        };
-        let app = "https://github.com/o/r/pull/980";
-        let agent = "https://github.com/O/R/pull/980/";
+    /// the URL differently and an agent switch put the first in an older
+    /// session of the bot's chat.
+    #[tokio::test]
+    async fn a_chat_holds_one_card_whichever_post_came_first() {
+        let app = merge_card("task", 980, "https://github.com/o/r/pull/980");
+        let agent = merge_card("task", 980, "https://github.com/O/R/pull/980/");
 
-        // The app first, then the agent's `dray session merge-card`.
-        assert!(holds_card(&card(app), "task", 980, agent));
-        // The agent first, then the app.
-        assert!(holds_card(&card(agent), "task", 980, app));
-        // A new PR on the task, or another task's, is a card of its own.
-        assert!(!holds_card(&card(app), "task", 981, "https://github.com/o/r/pull/981"));
-        assert!(!holds_card(&card(app), "other", 980, "https://github.com/o/s/pull/980"));
-        assert!(!holds_card(&[], "task", 980, app));
+        for (first, second) in [(&app, &agent), (&agent, &app)] {
+            let chat = Chat(std::sync::Mutex::new(vec![("old", Vec::new())]));
+            assert!(chat.post(first.clone()).await);
+            chat.0.lock().unwrap().push(("new", Vec::new()));
+            assert!(!chat.post(second.clone()).await, "the second post is existing");
+            assert!(!chat.post(first.clone()).await);
+            assert_eq!(chat.cards(), 1);
+
+            // A new PR on the task, or another task's same number elsewhere,
+            // is a card of its own.
+            assert!(chat.post(merge_card("task", 981, "https://github.com/o/r/pull/981")).await);
+            assert!(chat.post(merge_card("other", 980, "https://github.com/o/s/pull/980")).await);
+            assert_eq!(chat.cards(), 3);
+        }
     }
 
     #[test]
