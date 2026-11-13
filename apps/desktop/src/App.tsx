@@ -182,7 +182,7 @@ import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
-import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, SessionIndexItem, WorktreeDisposition } from "@/types/events";
+import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -197,7 +197,6 @@ import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { botAt, botBrowser, botChat, botEntries, botSession, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
-import { loadOlder } from "@/lib/olderPages";
 import NewBotDialog from "@/components/NewBotDialog";
 import AgentIcon from "@/components/AgentIcon";
 import ModelSelector from "@/components/composer/ModelSelector";
@@ -1606,16 +1605,20 @@ function App() {
 
   const earlierLoaded = sessions.filter((s) => earlierIds.includes(s.sessionId));
   const earlierKey = earlierLoaded.map((s) => `${s.sessionId}:${s.olderBefore}:${s.events.length}`).join();
-  // Loaded and held as on screen (`onScreenKey`); here read whole, page by
-  // page, as the chat's own log is.
-  useEffect(() => {
-    for (const held of earlierLoaded) {
-      if (held.olderBefore != null) loadOlder(held.sessionId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [earlierKey]);
+  // Loaded and held as on screen (`onScreenKey`), and read further back only
+  // as the reader scrolls (`Chat`). Only the run of loaded ones just before the
+  // selected session is passed: one still loading would leave a gap the chat
+  // could not tell from the conversation.
   const earlier = useMemo(
-    () => earlierIds.flatMap((id) => earlierLoaded.find((s) => s.sessionId === id) ?? []),
+    () => {
+      const run: SessionSnapshot[] = [];
+      for (const id of [...earlierIds].reverse()) {
+        const held = earlierLoaded.find((s) => s.sessionId === id);
+        if (!held) break;
+        run.unshift(held);
+      }
+      return run;
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [earlierIds.join(), earlierKey],
   );
@@ -3971,6 +3974,7 @@ function App() {
             {...paneChat}
             bot={!!selectedBot}
             earlier={earlier}
+            earlierLoading={earlier.length < earlierIds.length}
             taskOf={taskOf}
             onOpenBot={openBot}
             botFooter={
