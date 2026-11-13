@@ -138,8 +138,10 @@ async function create(origin: string, serveToken: string, machineSecret: string)
     true,
   );
   const hosted = res.hostedPorts?.[0];
-  // Boat creates the sandbox even where hosting its port failed.
-  if (!hosted?.url) hostWhenUp(res.sandbox.id);
+  // Always, not only where hosting failed: a create's `localhost` relay never
+  // starts (the sandbox's relay list stays `[]`), so the URL answers 502 until
+  // the port is hosted again on the running machine (#1003).
+  hostWhenUp(res.sandbox.id);
   const fromUrl = hosted?.url?.match(/^https:\/\/([a-z0-9-]+)-\d+\.on\.boat\.dev/)?.[1];
   return machine(res.sandbox, res.sandbox.subdomain ?? fromUrl);
 }

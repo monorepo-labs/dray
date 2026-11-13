@@ -268,6 +268,9 @@ impl Welcome {
     }
 }
 
+/// How `admit_with` opens a refusal: the server answered, so retrying cannot help.
+pub const REFUSED: &str = "the server refused: ";
+
 /// Connects and says `hello`. Answers the admitted socket, or why not.
 pub async fn admit_with(url: &str, hello: Value) -> Result<(Socket, Welcome), String> {
     let attempt = async {
@@ -282,7 +285,7 @@ pub async fn admit_with(url: &str, hello: Value) -> Result<(Socket, Welcome), St
                 Some(Ok(Message::Text(text))) => {
                     let frame: Value = serde_json::from_str(&text).unwrap_or_default();
                     return match frame.get("err").and_then(Value::as_str) {
-                        Some(err) => Err(format!("the server refused: {err}")),
+                        Some(err) => Err(format!("{REFUSED}{err}")),
                         None => Ok((ws, serde_json::from_value(frame).unwrap_or_default())),
                     };
                 }
