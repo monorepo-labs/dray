@@ -92,10 +92,13 @@ impl Chat {
             }
             Err(e) => {
                 log::error!("get_session_by_id: {e}");
-                // Shown only while nothing was ever drawn; a failed catch-up
-                // keeps the transcript.
-                if self.transcript.rows.is_empty() {
+                // Before history first lands, live events stay held: folded
+                // now they would sit above the history a retry brings. A
+                // failed catch-up keeps the transcript and lets them through.
+                if !self.opened {
                     self.error = Some(e);
+                    cx.notify();
+                    return;
                 }
                 Vec::new()
             }
@@ -114,9 +117,12 @@ impl Chat {
         self.error.is_some()
     }
 
+    /// Folds one event, keeping it for a page's refold only if it was new,
+    /// so each catch-up's overlap with what is held is not stored twice.
     fn fold(&mut self, event: AgentEvent, change: &mut Change) {
-        self.transcript.apply(&event, change);
-        self.events.push(event);
+        if self.transcript.apply(&event, change) {
+            self.events.push(event);
+        }
     }
 
     /// Reads the turns before the oldest held and folds everything again with

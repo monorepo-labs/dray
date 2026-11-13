@@ -7,10 +7,12 @@
 
 use std::collections::HashSet;
 
-use dray_core::events::{has_text, AgentEvent, AgentEventPayload, BlockRef, BlockType, DeltaEvent, ToolType, TurnStatus};
+use dray_core::events::{
+    AgentEvent, AgentEventPayload, BlockRef, BlockType, DeltaEvent, FileEdit, ToolResult, ToolType, TurnStatus, has_text,
+};
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Row {
     User { text: String },
     /// `block` names the stream this row previews, while it still streams.
@@ -20,7 +22,9 @@ pub enum Row {
     Failed { text: String },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// One tool call as the row draws it: the call, and its result and file edits
+/// once they land, all joined on the call id.
+#[derive(Debug, Clone)]
 pub struct Tool {
     pub call_id: String,
     pub name: String,
@@ -28,6 +32,30 @@ pub struct Tool {
     pub summary: Option<String>,
     pub done: bool,
     pub error: bool,
+    /// `Null` while only the stream has named the call.
+    pub input: Value,
+    pub raw_input: Option<String>,
+    pub title: Option<String>,
+    pub result: Option<ToolResult>,
+    pub edits: Vec<FileEdit>,
+}
+
+impl Tool {
+    fn streaming(call_id: &str, name: &str) -> Tool {
+        Tool {
+            call_id: call_id.to_string(),
+            name: name.to_string(),
+            tool_type: ToolType::Other,
+            summary: None,
+            done: false,
+            error: false,
+            input: Value::Null,
+            raw_input: None,
+            title: None,
+            result: None,
+            edits: Vec::new(),
+        }
+    }
 }
 
 /// What applying events changed, for the view to pass to its list.
@@ -50,9 +78,10 @@ pub struct Transcript {
 }
 
 impl Transcript {
-    pub fn apply(&mut self, event: &AgentEvent, change: &mut Change) {
+    /// Folds one event; `false` where it was a subagent's or already folded.
+    pub fn apply(&mut self, event: &AgentEvent, change: &mut Change) -> bool {
         if event.subagent.is_some() || !self.seen.insert(event.id.clone()) {
-            return;
+            return false;
         }
         let before = self.rows.len();
         match &event.payload {
@@ -77,21 +106,32 @@ impl Transcript {
                 }
             }
             AgentEventPayload::Delta(delta) => self.delta(delta, change),
-            AgentEventPayload::ToolCallStarted { call_id, name, tool_type, input, .. } => {
-                let tool = Tool {
-                    call_id: call_id.clone(),
-                    name: name.clone(),
-                    tool_type: *tool_type,
-                    summary: summary(name, *tool_type, input),
-                    done: false,
-                    error: false,
-                };
-                match self.tool(call_id) {
+            AgentEventPayload::ToolCallStarted { call_id, name, tool_type, input, raw_input, title } => {
+                let i = match self.tool(call_id) {
                     Some(i) => {
-                        self.rows[i] = Row::Tool(tool);
                         change.changed.push(i);
+                        i
                     }
-                    None => self.rows.push(Row::Tool(tool)),
+                    None => {
+                        self.rows.push(Row::Tool(Tool::streaming(call_id, name)));
+                        self.rows.len() - 1
+                    }
+                };
+                if let Row::Tool(tool) = &mut self.rows[i] {
+                    tool.name = name.clone();
+                    tool.tool_type = *tool_type;
+                    tool.summary = summary(name, *tool_type, input);
+                    tool.input = input.clone();
+                    tool.raw_input = raw_input.clone();
+                    tool.title = title.clone();
+                }
+            }
+            AgentEventPayload::FileEdits { call_id: Some(call_id), edits } => {
+                if let Some(i) = self.tool(call_id)
+                    && let Row::Tool(tool) = &mut self.rows[i]
+                {
+                    tool.edits.extend(edits.iter().cloned());
+                    change.changed.push(i);
                 }
             }
             AgentEventPayload::ToolCallCompleted { call_id, result } => {
@@ -100,6 +140,7 @@ impl Transcript {
                 {
                     tool.done = true;
                     tool.error = result.is_error;
+                    tool.result = Some(result.clone());
                     change.changed.push(i);
                 }
             }
@@ -122,6 +163,7 @@ impl Transcript {
             _ => {}
         }
         change.added += self.rows.len() - before;
+        true
     }
 
     fn delta(&mut self, delta: &DeltaEvent, change: &mut Change) {
@@ -135,14 +177,7 @@ impl Transcript {
             // `tool_call_started` fills the row in place.
             DeltaEvent::BlockStart { block_type: BlockType::ToolUse { id, name }, .. } => {
                 if self.tool(id).is_none() {
-                    self.rows.push(Row::Tool(Tool {
-                        call_id: id.clone(),
-                        name: name.clone(),
-                        tool_type: ToolType::Other,
-                        summary: None,
-                        done: false,
-                        error: false,
-                    }));
+                    self.rows.push(Row::Tool(Tool::streaming(id, name)));
                 }
             }
             DeltaEvent::TextDelta { block, text } => match self.streaming(block) {
@@ -265,7 +300,7 @@ mod tests {
             event("4", json!({ "type": "assistant_text", "block": block(), "text": "Hello" })),
         ]);
         assert_eq!(t.rows.len(), 2);
-        assert_eq!(t.rows[1], Row::Assistant { text: "Hello".into(), block: None, streaming: false });
+        assert!(matches!(&t.rows[1], Row::Assistant { text, block: None, streaming: false } if text == "Hello"));
     }
 
     #[test]
@@ -287,7 +322,8 @@ mod tests {
         assert_eq!(change.added, 1);
         let Row::Tool(tool) = &t.rows[0] else { panic!() };
         assert_eq!(tool.summary.as_deref(), Some("c/main.rs"));
-        assert!(tool.done && tool.error);
+        assert_eq!(tool.input["file_path"], "/a/b/c/main.rs");
+        assert!(tool.done && tool.error && tool.result.is_some());
     }
 
     #[test]
@@ -303,7 +339,7 @@ mod tests {
     #[test]
     fn a_delta_for_a_block_opened_before_the_session_was_seen_opens_a_preview() {
         let (t, _) = fold(&[event("1", json!({ "type": "delta", "delta": "text_delta", "block": block(), "text": "lo" }))]);
-        assert_eq!(t.rows, [Row::Assistant { text: "lo".into(), block: Some(serde_json::from_value(block()).unwrap()), streaming: true }]);
+        assert!(matches!(&t.rows[..], [Row::Assistant { text, block: Some(_), streaming: true }] if text == "lo"));
     }
 
     #[test]
@@ -327,6 +363,6 @@ mod tests {
             event("2", json!({ "type": "turn_completed", "status": "error", "stopReason": "stop_sequence",
                         "finalText": "Credit balance is too low", "usage": null, "durationMs": null })),
         ]);
-        assert_eq!(t.rows, [Row::Failed { text: "Credit balance is too low".into() }]);
+        assert!(matches!(&t.rows[..], [Row::Failed { text }] if text == "Credit balance is too low"));
     }
 }
