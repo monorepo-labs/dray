@@ -1557,7 +1557,7 @@ const detachSession = async (sessionId: string) => {
 const applyIndexItem = (updated: SessionIndexItem) => {
   const { sessionId } = updated;
   // Settled from anywhere, the CLI included: its machine may be done with.
-  if (updated.archived) void retireIfDone(sessionId, serverOfPath(updated.cwd));
+  if (updated.archived) void retireIfDone(serverOfPath(updated.cwd));
   indexWrites.set(sessionId, (indexWrites.get(sessionId) ?? 0) + 1);
   setSessionIndexItems((prev) => {
     // The ref, not the closure: this runs after the write, and the reader can
@@ -1615,16 +1615,17 @@ const cloudMachineOf = (sessionId: string): ServerId | null => {
   return isCloud(server) ? server : null;
 };
 
-/// Whether a live session other than `sessionId` is on `machine` — a task's
-/// machine is its own, but a fork or a spawned child can share it. Asked of
-/// the machine where it answers and of its kept list where it doesn't: the
-/// sidebar holds one side of the settled split, so it cannot say. `null`
-/// where neither knows.
-const othersLive = async (sessionId: string, machine: ServerId): Promise<boolean | null> => {
+/// Whether a live session is on `machine`, leaving out `except` — one being
+/// settled or deleted this moment, which a stopped machine's kept list still
+/// names as live. A task's machine is its own, but a fork or a spawned child
+/// can share it. Asked of the machine where it answers and of its kept list
+/// where it doesn't: the sidebar holds one side of the settled split, so it
+/// cannot say. `null` where neither knows.
+const othersLive = async (except: string | null, machine: ServerId): Promise<boolean | null> => {
   const live = serverConnected(machine)
     ? await invoke<SessionIndexItem[]>("list_session_index_items", { archived: false }, machine).catch(() => null)
     : ((await loadServerCaches())[machine]?.sessions ?? null);
-  return live && live.some((i) => i.sessionId !== sessionId && !i.archived);
+  return live && live.some((i) => i.sessionId !== except && !i.archived);
 };
 
 /// Machines a delete is out for, so a settle heard twice deletes once.
@@ -1647,18 +1648,19 @@ const retireCloudMachine = async (machine: ServerId): Promise<boolean> => {
 };
 
 /// Deletes `machine` once nothing live is left on it. Run on every settled row
-/// the app hears of, so a settle from `dray session settle` counts too.
-const retireIfDone = async (sessionId: string, machine: ServerId) => {
+/// the app hears of, so a settle from `dray session settle` counts too. Names
+/// no session to leave out: by the time this runs one may have been taken back.
+const retireIfDone = async (machine: ServerId) => {
   if (!isCloud(machine) || retiring.current.has(machine)) return;
   if (flagWrites.current.has(machine)) {
-    deferredChecks.current.set(machine, sessionId);
+    deferredChecks.current.add(machine);
     return;
   }
-  const others = await othersLive(sessionId, machine);
+  const live = await othersLive(null, machine);
   // Read again after the wait: a write that started meanwhile would lose its
   // reply with the connection.
-  if (flagWrites.current.has(machine)) deferredChecks.current.set(machine, sessionId);
-  else if (others === false) await retireCloudMachine(machine);
+  if (flagWrites.current.has(machine)) deferredChecks.current.add(machine);
+  else if (live === false) await retireCloudMachine(machine);
 };
 
 /// Flag writes still waiting on each cloud machine's reply. The machine says
@@ -1668,7 +1670,7 @@ const flagWrites = useRef(new Map<ServerId, number>());
 /// A check put off for a pending write, run once the machine's last one
 /// finishes — failed ones too, since a reply lost with the connection can
 /// still have settled the session.
-const deferredChecks = useRef(new Map<ServerId, string>());
+const deferredChecks = useRef(new Set<ServerId>());
 const countFlagWrite = (machine: ServerId | null, by: 1 | -1) => {
   if (!machine) return;
   const n = (flagWrites.current.get(machine) ?? 0) + by;
@@ -1677,9 +1679,7 @@ const countFlagWrite = (machine: ServerId | null, by: 1 | -1) => {
     return;
   }
   flagWrites.current.delete(machine);
-  const sessionId = deferredChecks.current.get(machine);
-  deferredChecks.current.delete(machine);
-  if (sessionId) void retireIfDone(sessionId, machine);
+  if (deferredChecks.current.delete(machine)) void retireIfDone(machine);
 };
 
 /// Writes a session's flags — settled, pinned, hidden, set aside — and answers
@@ -1962,7 +1962,7 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   const whole = !!machine && !serverConnected(machine) && (await othersLive(sessionId, machine)) === false;
   try {
     if (!whole) await invoke<boolean>("delete_session", { sessionId });
-    if (machine) void (whole ? retireCloudMachine(machine) : retireIfDone(sessionId, machine));
+    if (machine) void (whole ? retireCloudMachine(machine) : retireIfDone(machine));
   } catch (e) {
     deletedRef.current.delete(sessionId);
     // A delete can stop the child and then fail, and the status that said so
