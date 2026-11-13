@@ -1592,15 +1592,25 @@ function App() {
     sessionTodos !== null ||
     sessionAttachments.length > 0;
 
+  const taskSources = useRef({ crew, sessionIndexItems });
+  taskSources.current = { crew, sessionIndexItems };
+  const taskTitles = useMemo(
+    () => sessionIndexItems.map((i) => `${i.sessionId}${i.title}`).join("\n"),
+    [sessionIndexItems],
+  );
   // A task a bot started, named in the bot's chat. Takes an id prefix, as
-  // `dray session send` does, so a message the bot sent finds its task.
+  // `dray session send` does, so a message the bot sent finds its task. A new
+  // function only when a session or a title changes: every row of a bot's chat
+  // is redrawn when it does, and `crew` moves on every status change.
   const taskOf = useCallback(
     (id: string) => {
+      const { crew, sessionIndexItems } = taskSources.current;
       const match = (sessionId: string) => sessionId === id || (id.length >= 8 && sessionId.startsWith(id));
       const item = crew.find((r) => match(r.item.sessionId))?.item ?? sessionIndexItems.find((i) => match(i.sessionId));
       return item && { sessionId: item.sessionId, title: item.title };
     },
-    [crew, sessionIndexItems],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [taskTitles],
   );
 
   const earlierLoaded = sessions.filter((s) => earlierIds.includes(s.sessionId));

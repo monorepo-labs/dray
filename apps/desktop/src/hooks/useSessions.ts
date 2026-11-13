@@ -30,7 +30,7 @@ import { lockedMidTurn } from "@/lib/liveControls";
 import { AGENT_LABELS, DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { islandOn } from "@/lib/island";
 import { notifyOS } from "@/lib/notify";
-import { setOlderLoader } from "@/lib/olderPages";
+import { setOlderDropper, setOlderLoader } from "@/lib/olderPages";
 import { EMPTY_TASKS } from "@/lib/transcript";
 import { botStance, stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId } from "@/lib/provisional";
@@ -2799,9 +2799,19 @@ const dropNeighbours = () => {
 /// transcript asks only when its window moves and would otherwise sit short of
 /// its first turn for as long as it stays loaded.
 const pageReads = useRef(new Set<string>());
+/// Per session, the byte each event a page was read above begins at: what
+/// `olderBefore` named when it was the first event held. True for the life of
+/// the log, which is only ever appended to, so never cleared.
+const pageStarts = useRef(new Map<string, Map<string, number>>());
 const loadOlder = async (sessionId: string, turns = OLDER_PAGE_TURNS, attempt = 0) => {
-  const before = sessionsRef.current.find((s) => s.sessionId === sessionId)?.olderBefore;
+  const session = sessionsRef.current.find((s) => s.sessionId === sessionId);
+  const before = session?.olderBefore;
   if (before == null || pageReads.current.has(sessionId)) return;
+  const first = session?.events[0]?.id;
+  if (first) {
+    const starts = pageStarts.current.get(sessionId) ?? new Map<string, number>();
+    pageStarts.current.set(sessionId, starts.set(first, before));
+  }
   pageReads.current.add(sessionId);
   try {
     const page = await invoke<SessionPage>("get_session_page", {
@@ -2827,6 +2837,26 @@ const loadOlder = async (sessionId: string, turns = OLDER_PAGE_TURNS, attempt = 
   }
 };
 useEffect(() => setOlderLoader((sessionId, turns) => void loadOlder(sessionId, turns)), []);
+
+/// Lets go of every event above the nearest page start at or above `keepFrom`,
+/// so they are read from the log again if wanted. Nothing is set where nothing
+/// would go, since a new sessions array re-renders the whole app.
+const dropOlder = (sessionId: string, keepFrom: string) => {
+  const starts = pageStarts.current.get(sessionId);
+  const session = sessionsRef.current.find((s) => s.sessionId === sessionId);
+  if (!starts || !session) return;
+  let at = session.events.findIndex((e) => e.id === keepFrom);
+  while (at > 0 && !starts.has(session.events[at].id)) at--;
+  if (at <= 0) return;
+  const id = session.events[at].id;
+  setSessions((prev) =>
+    prev.map((s) => {
+      const from = s.sessionId === sessionId ? s.events.findIndex((e) => e.id === id) : -1;
+      return from > 0 ? { ...s, events: s.events.slice(from), olderBefore: starts.get(id)! } : s;
+    }),
+  );
+};
+useEffect(() => setOlderDropper(dropOlder), []);
 
 // When each loaded transcript was last on screen. Stamped on arrival and on
 // leaving, so the idle clock starts the moment the reader looks away.

@@ -38,6 +38,23 @@ export function drawnSegments<T extends { olderBefore?: number | null }>(segment
   return segments.slice(Math.max(from, 0));
 }
 
+/// Where a bot chat draws from when it shows its last `turns` turns: the index of
+/// the main-thread message opening the oldest of them, or 0 with fewer held. A
+/// turn is cut only there, so a task's `dray session new` and the id it printed
+/// never land on opposite sides of the cut.
+export function lastTurns(events: readonly AgentEvent[], turns: number): number {
+  for (let i = events.length - 1; i > 0; i--) {
+    if (!events[i].subagent && events[i].payload.type === "user_message" && --turns === 0) return i;
+  }
+  return 0;
+}
+
+/// Where a bot chat drawing from `from` draws from once it grows by `turns`
+/// turns above it, or 0 at the start of what is held.
+export function earlierTurns(events: readonly AgentEvent[], from: number, turns: number): number {
+  return lastTurns(events.slice(0, from), turns);
+}
+
 /// The rows of a bot's whole chat, its sessions oldest first, with a line where
 /// the agent changed.
 export function chatItems(segments: readonly BotSegment[]): BotItem[] {

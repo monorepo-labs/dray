@@ -29,10 +29,10 @@ import { RANK_OWN } from "@/lib/cardKeys";
 import { planAsked, setPlan } from "@/lib/plan";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
-import { drawnSegments } from "@/lib/botTranscript";
+import { drawnSegments, earlierTurns, lastTurns } from "@/lib/botTranscript";
 import { readerMessagesAfter } from "@/lib/mergeCard";
 import { isProvisional } from "@/lib/provisional";
-import { loadOlder } from "@/lib/olderPages";
+import { dropOlder, loadOlder } from "@/lib/olderPages";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
 import type { Bot, SessionSnapshot } from "@/types/events";
 
@@ -144,6 +144,15 @@ const JUMP_PAD_PX = 12;
 /// page lands as one render of the whole app, which costs far more than the
 /// read, so a long way back is taken in few of them.
 const FOCUS_PAGE_TURNS = 64;
+
+/// Turns a bot chat draws while the reader follows its bottom: the tail it
+/// opens on and a page above it.
+const BOT_WINDOW_TURNS = 24;
+/// Turns drawn above at a time as the reader nears the top of what is drawn, as
+/// many as a page read from the log holds.
+const OLDER_TURNS = 16;
+/// A bot chat's window drawing everything held.
+const ALL_HELD = "all";
 
 /// Below this the rail is one or two ticks describing what is already on screen,
 /// which is chrome for nothing.
@@ -268,9 +277,44 @@ export default function Chat({
   // exactly when there is newly something below to go to.
   const [atBottom, setAtBottom] = useState(true);
 
+  // How much of a bot chat's newest session is drawn. A chat left open grows by
+  // every turn, and each row it holds cost every event that landed: with the
+  // whole log read back, an event took ~40ms. So while the reader follows the
+  // bottom (`null`) it draws the last `BOT_WINDOW_TURNS` alone, sliding as turns
+  // land; scrolled up, the top holds on an event id, grown a page at a time as
+  // they near it, or on `ALL_HELD`, where pages read from the log are drawn as
+  // they land. Back at the bottom it slides again, and what was above goes.
+  const [botWindow, setBotWindow] = useState<{ sessionId: string | null; from: string | null }>({
+    sessionId: null,
+    from: null,
+  });
+  const held = bot && botWindow.sessionId === session?.sessionId ? botWindow.from : null;
+  const holdWindow = (from: string | null) => {
+    if (held !== from) setBotWindow({ sessionId: session?.sessionId ?? null, from });
+  };
+  const drawFrom = useMemo(() => {
+    if (!bot || !session || held === ALL_HELD) return 0;
+    const at = held ? session.events.findIndex((e) => e.id === held) : -1;
+    return at >= 0 ? at : lastTurns(session.events, BOT_WINDOW_TURNS);
+  }, [bot, session?.events, held]);
+  // Pages read above a sliding window are let go, so a chat read back and left
+  // holds its tail again. Turns that landed live stay held, since only a page
+  // read says where in the log it began.
+  const keepFrom = bot && held === null && drawFrom > 0 ? session?.events[drawFrom]?.id : undefined;
+  useEffect(() => {
+    if (session && keepFrom) dropOlder(session.sessionId, keepFrom);
+  }, [session?.sessionId, keepFrom]);
   // A bot chat's sessions as drawn. Held across renders: a fresh array would
-  // rebuild the bot chat's rows on every event.
-  const segments = useMemo(() => drawnSegments(session ? [...earlier, session] : earlier), [earlier, session]);
+  // rebuild the bot chat's rows on every event. A windowed session says it has
+  // more above, so the sessions before it stay undrawn and the unread divider
+  // waits, as they do for a session not yet read back to its start.
+  const segments = useMemo(() => {
+    const live =
+      session && drawFrom > 0
+        ? { ...session, events: session.events.slice(drawFrom), olderBefore: session.olderBefore ?? 0 }
+        : session;
+    return drawnSegments(live ? [...earlier, live] : earlier);
+  }, [earlier, session, drawFrom]);
   const oldest = segments[0];
   const more = !!bot && (oldest?.olderBefore != null || earlierLoading);
   // Moves when a page lands above, which is what the anchor below answers.
@@ -280,9 +324,12 @@ export default function Chat({
     if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX);
   };
 
+  // A bot chat draws no turns, only its cards, which sit at the end: the window
+  // alone holds them.
+  const transcriptEvents = bot ? segments.at(-1)?.events : session?.events;
   const { events, turns, subagentById, resultByCallId, editsByCallId, pendingAsks } = useMemo(
-    () => buildTranscript(session?.events ?? [], busy, liveTaskIds),
-    [session?.events, busy, liveTaskIds],
+    () => buildTranscript(transcriptEvents ?? [], busy, liveTaskIds),
+    [transcriptEvents, busy, liveTaskIds],
   );
 
   const sessionId = session?.sessionId ?? null;
@@ -605,10 +652,17 @@ export default function Chat({
   // was the whole cost of opening one: it opens on its tail and reads a page
   // further back whenever the reader comes within a screen of the top. The
   // pane must also hold a screen above the bottom, or a short tail leaves
-  // nothing to scroll and nothing is ever asked for.
+  // nothing to scroll and nothing is ever asked for. What is already held is
+  // drawn before the log is read further.
   const askOlder = () => {
     const el = scrollRef.current;
-    if (el && oldest?.olderBefore != null && el.scrollTop < el.clientHeight) loadOlder(oldest.sessionId);
+    if (!el || !session || el.scrollTop >= el.clientHeight) return;
+    if (drawFrom > 0) {
+      const from = earlierTurns(session.events, drawFrom, OLDER_TURNS);
+      holdWindow(from > 0 ? session.events[from].id : ALL_HELD);
+    } else if (oldest?.olderBefore != null) {
+      loadOlder(oldest.sessionId);
+    }
   };
 
   // The rows at the top of the view and where they sat, taken on every scroll
@@ -653,7 +707,8 @@ export default function Chat({
   useEffect(() => {
     if (!botFocus || focusedAt.current === botFocus.at) return;
     if (!contentRef.current?.querySelector("[data-bot-focus]")) {
-      if (oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
+      if (drawFrom > 0) holdWindow(ALL_HELD);
+      else if (oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
       return;
     }
     const frame = requestAnimationFrame(() => {
@@ -766,6 +821,12 @@ export default function Chat({
     setAtBottom(atEnd);
     syncActive();
     if (bot) {
+      // Turns landing must not move the top out from under a reader who left
+      // the bottom, so it holds where it is until they come back.
+      if (atEnd) holdWindow(null);
+      else if (!followRef.current && held === null && session) {
+        holdWindow(drawFrom > 0 ? session.events[drawFrom].id : ALL_HELD);
+      }
       noteAnchor();
       askOlder();
     }
