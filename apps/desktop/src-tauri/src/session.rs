@@ -617,6 +617,7 @@ pub async fn settle_dead_child(
     // reports; without this the bot would wait on a turn that is over.
     if died_mid_turn {
         LAST_REPLY.lock().unwrap().remove(session_id);
+        POSTED.lock().unwrap().remove(session_id);
         report(session_id, format!("(the session's process exited mid-turn: {why})"), app);
     }
 }
@@ -1904,6 +1905,7 @@ impl SessionManager {
             None => (harness, next_seq_by_session_id(session_id).await?),
         };
         let event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
+        POSTED.lock().unwrap().insert(session_id.to_string());
         app.emit("agent_event", &event)?;
         append_session_event(session_id, event).await
     }
@@ -3387,6 +3389,11 @@ pub async fn ingest(ctx: &Ingest<'_>, agent_event: AgentEvent, app: &Sink) {
 static LAST_REPLY: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// Sessions something was posted into this turn, a merge card being the one
+/// kind: drawn with no reply beside it, so the turn is not a silent one.
+static POSTED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
 /// Sends `text` to the session that started `session_id`, where it is a bot's.
 fn report(session_id: &str, text: String, app: &Sink) {
     let report = crate::orchestration::report_to_parent(session_id.to_string(), text, app.clone());
@@ -3457,6 +3464,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
 
     // A bot's child reports every turn it closes. Spawned: the send lands in
     // the parent's session, which must not hold this one's read loop up.
+    let mut silent_bot_turn = false;
     if agent_event.subagent.is_none() {
         match &agent_event.payload {
             AgentEventPayload::AssistantText { text, .. } if !text.trim().is_empty() => {
@@ -3465,6 +3473,14 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
             AgentEventPayload::TurnCompleted { status, stop_reason, final_text, .. } => {
                 let last = LAST_REPLY.lock().unwrap().remove(ctx.session_id);
                 let said = final_text.as_deref().filter(|t| !t.trim().is_empty()).or(last.as_deref());
+                // A bot answering a report that needs nothing from the reader
+                // says nothing, and its chat draws nothing; a "Done" for it
+                // would point the reader at an empty turn.
+                let posted = POSTED.lock().unwrap().remove(ctx.session_id);
+                silent_bot_turn = said.is_none()
+                    && !posted
+                    && *status == TurnStatus::Success
+                    && crate::bots::bot_at(ctx.session_cwd).await.is_some();
                 report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
@@ -3518,6 +3534,9 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
             tracker.note_tool_call(&agent_event.payload);
         }
         tracker.on_event(&agent_event.payload);
+        if silent_bot_turn {
+            tracker.mark_read(true);
+        }
         let limit_reset = matches!(agent_event.payload, AgentEventPayload::TurnCompleted { .. })
             .then(|| tracker.take_limit_reset())
             .flatten();
