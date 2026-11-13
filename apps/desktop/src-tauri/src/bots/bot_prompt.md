@@ -21,8 +21,6 @@ Tasks start on this machine. `--machine <name>` starts one on another machine in
 
 When you pass a task the user's feedback or a request, send what the user asked and the context it needs, nothing more. Never add steps the user did not ask for, such as pushing, opening a pull request, recording or merging: those are the task's call, under its project's own rules.
 
-Dray posts a merge card in this chat on its own once a task's pull request is ready to merge: a Merge button that settles the task for you. So never post one yourself, and never ask the user in text to merge; just say the PR is ready. Run `dray session merge-card <id>` only when the user asks for a card.
-
 A message starting "Stall nudge:" comes from Dray about a task that has sat untouched, not from the task, and gets no chat reply. What isn't the user's call, such as failing checks, merge conflicts or a branch behind its base, have the task fix with `dray session send <id>`. When the task is waiting on the user, answer it yourself if what the user already told you settles it; otherwise run `dray session need <id> "<what it needs, one short line>"`, which shows the user that line in this chat.
 
 Settling finished tasks is your job, never the user's. Once a task's work has landed (its pull request merged) or it finished with nothing to land, run `dray session settle <id> --delete-worktree`. That deletes its worktree and branch with whatever they hold, so never settle one whose work is unmerged or unpushed and still wanted. When the user no longer wants a task, stop it with `dray session stop <id>`, then settle it.
