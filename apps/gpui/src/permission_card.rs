@@ -16,6 +16,7 @@ use gpui::{
     Window, div, point, prelude::FluentBuilder, px,
 };
 
+use crate::cards::Delivery;
 use crate::chat_tokens::{ChatTokens, text};
 
 /// What the card answered with. Emitted once.
@@ -41,15 +42,18 @@ pub struct PermissionCard {
     argument: Option<SharedString>,
     options: Vec<PermissionOption>,
     picked: Option<String>,
-    /// Never cleared: the reply is one-shot in the backend.
+    /// Cleared only when the answer never reached the server: the reply is
+    /// one-shot in the backend.
     sent: Option<String>,
+    /// Why the last answer did not arrive, shown until the next one.
+    failed: Option<SharedString>,
     /// Whether this card is the one the keys reach. Numbers show on the buttons
     /// only then.
     owns_keys: bool,
     /// Another card is up too, so this one rings to say the keys are its.
     contested: bool,
     view_plan: bool,
-    on_respond: Option<Rc<dyn Fn(&str, &mut App)>>,
+    on_respond: Option<Rc<dyn Fn(&str, &mut App) -> Delivery>>,
     focus: FocusHandle,
 }
 
@@ -76,6 +80,7 @@ impl PermissionCard {
             options,
             picked,
             sent: None,
+            failed: None,
             owns_keys: true,
             contested: false,
             view_plan: false,
@@ -91,8 +96,9 @@ impl PermissionCard {
     }
 
     /// Called with the option id as well as emitted, for an owner that holds
-    /// the card in keyed state and so has nowhere to keep a subscription.
-    pub fn on_respond(mut self, f: impl Fn(&str, &mut App) + 'static) -> Self {
+    /// the card in keyed state and so has nowhere to keep a subscription. A
+    /// delivery that fails makes the card answerable again.
+    pub fn on_respond(mut self, f: impl Fn(&str, &mut App) -> Delivery + 'static) -> Self {
         self.on_respond = Some(Rc::new(f));
         self
     }
@@ -116,8 +122,20 @@ impl PermissionCard {
             return;
         }
         self.sent = Some(id.clone());
+        self.failed = None;
         if let Some(f) = self.on_respond.clone() {
-            f(&id, cx);
+            let delivery = f(&id, cx);
+            cx.spawn(async move |this, cx| {
+                if let Err(err) = delivery.await {
+                    this.update(cx, |card, cx| {
+                        card.sent = None;
+                        card.failed = Some(err.into());
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            })
+            .detach();
         }
         cx.emit(PermissionEvent::Respond { option_id: id });
         cx.notify();
@@ -311,7 +329,13 @@ impl Render for PermissionCard {
                     })
                     .children(buttons),
             )
+            .when_some(self.failed.clone(), |d, why| d.child(failed_line(why, &tokens)))
     }
+}
+
+/// Under a card whose answer never arrived, so the reader knows to answer again.
+pub fn failed_line(why: SharedString, tokens: &ChatTokens) -> impl IntoElement {
+    div().mt(px(8.)).text_size(px(12.)).text_color(tokens.destructive).child(format!("Not sent: {why}. Try again."))
 }
 
 #[cfg(test)]

@@ -250,6 +250,14 @@ impl Render for Workspace {
             .relative()
             .bg(theme.body)
             .track_focus(&self.focus)
+            // With nothing else focused, a card's digits and Return reach it
+            // unclicked, as cardKeys.ts lets them. A focused text field keeps
+            // its own keys: the root is then not the focus itself.
+            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
+                if this.focus.is_focused(window) && crate::cards::forward_key(&e.keystroke, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, _: &NewTask, _, cx| this.new_task(cx)))
             .on_action(cx.listener(|this, _: &NextSession, _, cx| this.step(1, cx)))
             .on_action(cx.listener(|this, _: &PrevSession, _, cx| this.step(-1, cx)))
@@ -466,14 +474,14 @@ fn install_modules(wire: &Wire, cx: &mut App) {
             ),
         };
         let reply = answers.invoke(cmd, args);
-        // A failed answer is only logged: the card has already marked itself
-        // sent and cards.rs has no way back to answerable yet (follow-up).
+        // The card waits on this and takes answers again on `Err`, since the
+        // request is still open server-side.
         cx.spawn(async move |_| {
-            if let Err(err) = reply.await {
-                log::error!("{cmd} failed, the card stays blocked: {err}");
-            }
+            reply.await.map(drop).map_err(|err| {
+                log::warn!("{cmd} failed: {err}");
+                err.as_str().map(str::to_owned).unwrap_or_else(|| err.to_string())
+            })
         })
-        .detach();
     });
 
     crate::new_task::install(dray_core::harness::Harness::ClaudeCode, cx);

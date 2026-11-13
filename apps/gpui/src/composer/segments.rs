@@ -71,6 +71,17 @@ pub fn trigger_at(text: &str, caret: usize) -> Option<Trigger> {
     Some(Trigger { sigil, start, end, query: query.to_string() })
 }
 
+/// The picker to show for `found`, the token the caret is in, after Escape
+/// dismissed the one at `dismissed`. The dismissal holds while the caret stays
+/// in that token and lapses once it leaves, so it is checked against `found`
+/// before hiding it: checked after, every keystroke in the token lapsed it.
+pub fn visible_trigger(found: Option<Trigger>, dismissed: &mut Option<usize>) -> Option<Trigger> {
+    if dismissed.is_some_and(|start| found.as_ref().is_none_or(|t| t.start != start)) {
+        *dismissed = None;
+    }
+    found.filter(|t| *dismissed != Some(t.start))
+}
+
 fn next_len(text: &str, at: usize) -> usize {
     text[at..].chars().next().map_or(1, char::len_utf8)
 }
@@ -186,6 +197,21 @@ mod tests {
         assert_eq!(at("mail me@exa|mple.com"), None);
         assert_eq!(at("@|").map(|t| t.query), Some(String::new()));
         assert_eq!(at("|@x"), None);
+    }
+
+    #[test]
+    fn a_dismissed_picker_stays_shut_inside_its_token() {
+        let mut dismissed = Some(8);
+        // Typing on in the dismissed token: still shut, still dismissed.
+        assert_eq!(visible_trigger(at("look at @src/m|"), &mut dismissed), None);
+        assert_eq!(visible_trigger(at("look at @src/mai|"), &mut dismissed), None);
+        assert_eq!(dismissed, Some(8));
+        // Leaving it lapses the dismissal; a new token opens.
+        assert_eq!(visible_trigger(at("look at @src/main |"), &mut dismissed), None);
+        assert_eq!(dismissed, None);
+        let mut dismissed = Some(8);
+        assert_eq!(visible_trigger(at("look at @src/main @l|"), &mut dismissed).map(|t| t.start), Some(18));
+        assert_eq!(dismissed, None);
     }
 
     #[test]

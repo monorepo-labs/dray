@@ -12,7 +12,8 @@ use std::rc::Rc;
 
 use dray_core::events::{AgentEvent, AgentEventPayload, PermissionOption, Question};
 use gpui::{
-    AnyElement, App, Global, IntoElement, ParentElement, RenderOnce, SharedString, Styled, Window, div, px,
+    AnyElement, App, Global, IntoElement, Keystroke, ParentElement, RenderOnce, SharedString, Styled, Task, Window,
+    div, px,
 };
 use serde_json::Value;
 
@@ -30,21 +31,38 @@ pub enum CardAnswer {
     Questions { session_id: String, request_id: String, answers: BTreeMap<String, String> },
 }
 
-/// Where answers go. Set once by the window; until then answers are logged and
-/// dropped, and the agent stays blocked.
-pub struct CardResponder(pub Rc<dyn Fn(CardAnswer, &mut App)>);
+/// Whether an answer reached the server. A card that sees `Err` takes answers
+/// again, since the request is still open and the agent still blocked.
+pub type Delivery = Task<Result<(), String>>;
+
+/// Where answers go. Set once by the window; until then every answer fails.
+pub struct CardResponder(pub Rc<dyn Fn(CardAnswer, &mut App) -> Delivery>);
 
 impl Global for CardResponder {}
 
-pub fn set_responder(cx: &mut App, f: impl Fn(CardAnswer, &mut App) + 'static) {
+/// Sets what sends a card's answer, for every card in the window.
+pub fn set_responder(cx: &mut App, f: impl Fn(CardAnswer, &mut App) -> Delivery + 'static) {
     cx.set_global(CardResponder(Rc::new(f)));
 }
 
-fn respond(answer: CardAnswer, cx: &mut App) {
+fn respond(answer: CardAnswer, cx: &mut App) -> Delivery {
     match cx.try_global::<CardResponder>().map(|r| r.0.clone()) {
         Some(f) => f(answer, cx),
-        None => log::warn!("card answered with no responder set: {answer:?}"),
+        None => Task::ready(Err("not connected".into())),
     }
+}
+
+/// The card the window's keys reach when nothing else holds focus: the oldest
+/// open one, as cardKeys.ts picks. Weak, so a card gone from screen takes none.
+struct KeyOwner(Rc<dyn Fn(&Keystroke, &mut Window, &mut App) -> bool>);
+
+impl Global for KeyOwner {}
+
+/// A keystroke the window's root got with nothing else focused. True when the
+/// owning card used it, so the caller stops it there.
+pub fn forward_key(keystroke: &Keystroke, window: &mut Window, cx: &mut App) -> bool {
+    let Some(f) = cx.try_global::<KeyOwner>().map(|o| o.0.clone()) else { return false };
+    f(keystroke, window, cx)
 }
 
 /// One open request, read off its `agent_event` frame.
@@ -122,6 +140,12 @@ impl RenderOnce for Cards {
                         })
                     });
                     sync_keys(&card, owns, contested, cx, PermissionCard::keys, |c, o, k, cx| c.set_owns_keys(o, k, cx));
+                    if owns {
+                        let card = card.downgrade();
+                        cx.set_global(KeyOwner(Rc::new(move |k, _, cx| {
+                            card.update(cx, |c, cx| c.key(k, cx)).unwrap_or(false)
+                        })));
+                    }
                     card.into_any_element()
                 }
                 Ask::Questions { request_id, questions } => {
@@ -138,6 +162,12 @@ impl RenderOnce for Cards {
                         })
                     });
                     sync_keys(&card, owns, contested, cx, QuestionCard::keys, |c, o, k, cx| c.set_owns_keys(o, k, cx));
+                    if owns {
+                        let card = card.downgrade();
+                        cx.set_global(KeyOwner(Rc::new(move |k, window, cx| {
+                            card.update(cx, |c, cx| c.key(k, window, cx)).unwrap_or(false)
+                        })));
+                    }
                     card.into_any_element()
                 }
             });

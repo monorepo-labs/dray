@@ -12,13 +12,15 @@ use std::rc::Rc;
 
 use dray_core::events::Question;
 use gpui::{
-    AnyElement, App, BoxShadow, Context, EventEmitter, FocusHandle, Focusable, FontWeight, InteractiveElement,
-    IntoElement, KeyDownEvent, Keystroke, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    Window, div, point, prelude::FluentBuilder, px, svg,
+    AnyElement, App, AppContext, BoxShadow, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
+    InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, point, prelude::FluentBuilder, px, svg,
 };
+use gpui_base::input::{InputEvent, Textarea, TextareaState};
 
+use crate::cards::Delivery;
 use crate::chat_tokens::{ChatTokens, text};
-use crate::permission_card::{Variant, button};
+use crate::permission_card::{Variant, button, failed_line};
 
 /// The answers, keyed by each question's verbatim text as the CLI matches
 /// them. A skipped question is absent, which is a real answer.
@@ -102,24 +104,16 @@ impl QuestionState {
         }
     }
 
-    pub fn type_text(&mut self, s: &str) {
-        let i = self.active;
-        self.text[i].push_str(s);
-        self.after_edit();
-    }
-
-    pub fn backspace(&mut self) {
-        let i = self.active;
-        self.text[i].pop();
-        self.after_edit();
-    }
-
-    fn after_edit(&mut self) {
-        let i = self.active;
+    /// Question `i`'s box now holds `text`; typing in it selects it.
+    pub fn set_text(&mut self, i: usize, text: String) {
+        if i >= self.questions.len() || self.text[i] == text {
+            return;
+        }
+        self.text[i] = text;
         let filled = !self.text[i].trim().is_empty();
         self.skipped[i] = false;
         self.text_selected[i] = filled;
-        if filled && !self.q().multi_select {
+        if filled && !self.questions[i].multi_select {
             self.picked[i].clear();
         }
     }
@@ -164,8 +158,25 @@ impl QuestionState {
         Some(QuestionsAnswered(answers))
     }
 
+    /// Return on the current spot: goes on, or sends, once it holds an answer.
+    /// The text box raises this through its own Enter, not through [Self::key].
+    pub fn enter(&mut self) -> KeyOutcome {
+        if self.sent || self.questions.is_empty() {
+            return KeyOutcome::Ignored;
+        }
+        let ready = match self.spot {
+            Spot::Choice(c) => self.picked[self.active].contains(&c),
+            Spot::Input => self.answered(self.active) && self.text_selected[self.active],
+        };
+        if !ready {
+            return KeyOutcome::Used;
+        }
+        self.advance().map_or(KeyOutcome::Used, KeyOutcome::Sent)
+    }
+
     /// One keystroke. `None` when the card did not use it; `Some(answers)` once
-    /// the card is sent.
+    /// the card is sent. In the text box every key but ⌘/Ctrl+Return is the
+    /// box's own, bar ↑/↓ out of an empty one.
     pub fn key(&mut self, k: &Keystroke) -> KeyOutcome {
         if self.sent || self.questions.is_empty() {
             return KeyOutcome::Ignored;
@@ -178,8 +189,9 @@ impl QuestionState {
             return KeyOutcome::Ignored;
         }
         let in_box = self.spot == Spot::Input;
+        let arrows_leave = !in_box || self.text[self.active].is_empty();
         match k.key.as_str() {
-            "up" | "down" => {
+            "up" | "down" if arrows_leave => {
                 let spots = self.spots();
                 if spots.is_empty() {
                     return KeyOutcome::Ignored;
@@ -205,40 +217,14 @@ impl QuestionState {
                 }
                 KeyOutcome::Used
             }
-            "enter" if in_box && m.shift => {
-                self.type_text("\n");
-                KeyOutcome::Used
-            }
-            "enter" => {
-                let ready = match self.spot {
-                    Spot::Choice(c) => self.picked[self.active].contains(&c),
-                    Spot::Input => self.answered(self.active) && self.text_selected[self.active],
-                };
-                if !ready {
-                    return KeyOutcome::Used;
-                }
-                self.advance().map_or(KeyOutcome::Used, KeyOutcome::Sent)
-            }
-            "space" if !in_box => {
+            _ if in_box => KeyOutcome::Ignored,
+            "enter" if !m.shift => self.enter(),
+            "space" => {
                 if let Spot::Choice(c) = self.spot {
                     self.toggle(c);
                 }
                 KeyOutcome::Used
             }
-            "backspace" if in_box => {
-                self.backspace();
-                KeyOutcome::Used
-            }
-            key if in_box => match k.key_char.as_deref() {
-                Some(ch) if !ch.chars().any(char::is_control) => {
-                    self.type_text(ch);
-                    KeyOutcome::Used
-                }
-                _ => {
-                    let _ = key;
-                    KeyOutcome::Ignored
-                }
-            },
             key => match key.parse::<usize>() {
                 Ok(n) if (1..=9).contains(&n) && n <= self.q().options.len() => {
                     self.toggle(n - 1);
@@ -269,10 +255,16 @@ pub enum KeyOutcome {
 
 pub struct QuestionCard {
     state: QuestionState,
-    on_answer: Option<Rc<dyn Fn(&QuestionsAnswered, &mut App)>>,
+    /// One box per question that takes free text, indexed like `questions`:
+    /// gpui-base's input, so paste, selection and IME composition all work.
+    inputs: Vec<Option<Entity<TextareaState>>>,
+    on_answer: Option<Rc<dyn Fn(&QuestionsAnswered, &mut App) -> Delivery>>,
+    /// Why the last send did not arrive, shown until the next one.
+    failed: Option<SharedString>,
     owns_keys: bool,
     contested: bool,
     focus: FocusHandle,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<QuestionsAnswered> for QuestionCard {}
@@ -288,12 +280,53 @@ impl QuestionCard {
     pub fn new(questions: Vec<Question>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        QuestionCard { state: QuestionState::new(questions), on_answer: None, owns_keys: true, contested: false, focus }
+        let mut subscriptions = Vec::new();
+        let inputs = questions
+            .iter()
+            .enumerate()
+            .map(|(i, q)| {
+                q.free_text.then(|| {
+                    let input = cx.new(|cx| {
+                        TextareaState::new(window, cx).auto_grow(1, 6).submit_on_enter(true).placeholder("Something else…")
+                    });
+                    subscriptions.push(cx.subscribe_in(&input, window, move |this, input, event: &InputEvent, window, cx| {
+                        match event {
+                            InputEvent::Change => {
+                                let text = input.read(cx).value().to_string();
+                                this.state.set_text(i, text);
+                                cx.notify();
+                            }
+                            InputEvent::Focus => {
+                                this.state.spot = Spot::Input;
+                                cx.notify();
+                            }
+                            InputEvent::PressEnter { shift: false, .. } => {
+                                let out = this.state.enter();
+                                this.finish(out, window, cx);
+                            }
+                            _ => {}
+                        }
+                    }));
+                    input
+                })
+            })
+            .collect();
+        QuestionCard {
+            state: QuestionState::new(questions),
+            inputs,
+            on_answer: None,
+            failed: None,
+            owns_keys: true,
+            contested: false,
+            focus,
+            _subscriptions: subscriptions,
+        }
     }
 
     /// Called with the answers as well as emitted, for an owner that holds the
-    /// card in keyed state and so has nowhere to keep a subscription.
-    pub fn on_answer(mut self, f: impl Fn(&QuestionsAnswered, &mut App) + 'static) -> Self {
+    /// card in keyed state and so has nowhere to keep a subscription. A
+    /// delivery that fails makes the card answerable again.
+    pub fn on_answer(mut self, f: impl Fn(&QuestionsAnswered, &mut App) -> Delivery + 'static) -> Self {
         self.on_answer = Some(Rc::new(f));
         self
     }
@@ -313,42 +346,79 @@ impl QuestionCard {
     }
 
     /// A keystroke from the window when no text field holds focus.
-    pub fn key(&mut self, k: &Keystroke, cx: &mut Context<Self>) -> bool {
-        self.owns_keys && self.handle_key(k, cx)
+    pub fn key(&mut self, k: &Keystroke, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.owns_keys && self.handle_key(k, window, cx)
     }
 
     /// Focused, the card takes its own keys whoever owns the window's.
-    fn handle_key(&mut self, k: &Keystroke, cx: &mut Context<Self>) -> bool {
+    fn handle_key(&mut self, k: &Keystroke, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let out = self.state.key(k);
-        self.finish(out, cx)
+        self.finish(out, window, cx)
     }
 
-    fn finish(&mut self, out: KeyOutcome, cx: &mut Context<Self>) -> bool {
-        match out {
-            KeyOutcome::Ignored => false,
-            KeyOutcome::Used => {
-                cx.notify();
-                true
-            }
-            KeyOutcome::Sent(a) => {
-                if let Some(f) = self.on_answer.clone() {
-                    f(&a, cx);
+    fn active_input(&self) -> Option<&Entity<TextareaState>> {
+        self.inputs.get(self.state.active).and_then(Option::as_ref)
+    }
+
+    /// Focus follows the spot: into the box when keys move there, back to the
+    /// card when they leave it, so the box never swallows a choice's digits.
+    fn sync_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let boxes_focused = self.inputs.iter().flatten().any(|i| i.read(cx).focus_handle(cx).is_focused(window));
+        match (self.state.spot, self.active_input()) {
+            (Spot::Input, Some(input)) if !self.state.sent => {
+                let handle = input.read(cx).focus_handle(cx);
+                if !handle.is_focused(window) {
+                    window.focus(&handle, cx);
                 }
-                cx.emit(a);
-                cx.notify();
-                true
             }
+            _ if boxes_focused => window.focus(&self.focus, cx),
+            _ => {}
         }
     }
 
-    fn act(&mut self, f: impl FnOnce(&mut QuestionState) -> Option<QuestionsAnswered>, cx: &mut Context<Self>) {
+    fn finish(&mut self, out: KeyOutcome, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let used = match out {
+            KeyOutcome::Ignored => return false,
+            KeyOutcome::Used => true,
+            KeyOutcome::Sent(a) => {
+                self.failed = None;
+                if let Some(f) = self.on_answer.clone() {
+                    let delivery = f(&a, cx);
+                    cx.spawn(async move |this, cx| {
+                        if let Err(err) = delivery.await {
+                            this.update(cx, |card, cx| {
+                                card.state.sent = false;
+                                card.failed = Some(err.into());
+                                cx.notify();
+                            })
+                            .ok();
+                        }
+                    })
+                    .detach();
+                }
+                cx.emit(a);
+                true
+            }
+        };
+        self.sync_focus(window, cx);
+        cx.notify();
+        used
+    }
+
+    fn act(
+        &mut self,
+        f: impl FnOnce(&mut QuestionState) -> Option<QuestionsAnswered>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.state.sent {
             return;
         }
         let out = f(&mut self.state).map_or(KeyOutcome::Used, KeyOutcome::Sent);
-        self.finish(out, cx);
+        self.finish(out, window, cx);
     }
 }
+
 
 fn focus_ring(tokens: &ChatTokens) -> Vec<BoxShadow> {
     vec![BoxShadow {
@@ -460,7 +530,7 @@ impl Render for QuestionCard {
                     .when(!sent, |d| d.cursor_pointer())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.focus.focus(window, cx);
-                        this.act(|s| s.toggle(i).into_none(), cx);
+                        this.act(|s| s.toggle(i).into_none(), window, cx);
                     }))
                     .child(indicator)
                     .child(body)
@@ -469,14 +539,10 @@ impl Render for QuestionCard {
             })
             .collect();
 
-        let in_box = focused && s.spot == Spot::Input;
-        let typed = s.text[active].clone();
-        let free_text = q.free_text.then(|| {
+        let free_text = self.active_input().cloned().map(|input| {
+            let in_box = input.read(cx).focus_handle(cx).is_focused(window);
             div()
                 .id(SharedString::from(format!("q-{active}-text")))
-                .min_h(px(40.))
-                .max_h(px(160.))
-                .overflow_y_scroll()
                 .px(px(10.))
                 .py(px(8.))
                 .rounded(px(10.))
@@ -484,24 +550,11 @@ impl Render for QuestionCard {
                 .border_color(if in_box { tokens.ring } else { tokens.input })
                 .when(dark, |d| d.bg(tokens.input.opacity(0.3)))
                 .when(in_box, |d| d.shadow(focus_ring(&tokens)))
+                .when(sent, |d| d.opacity(0.5))
                 .text_size(px(14.))
                 .line_height(px(20.))
-                .cursor_text()
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.focus.focus(window, cx);
-                    this.state.spot = Spot::Input;
-                    cx.notify();
-                }))
-                .map(|d| {
-                    if typed.is_empty() {
-                        d.flex().child(div().when(in_box, |d| d.child(caret(&tokens)))).child(
-                            div().text_color(tokens.muted_foreground).child("Something else…"),
-                        )
-                    } else {
-                        d.text_color(tokens.foreground)
-                            .child(div().flex().flex_wrap().child(typed.clone()).when(in_box, |d| d.child(caret(&tokens))))
-                    }
-                })
+                .text_color(tokens.foreground)
+                .child(Textarea::new(&input))
         });
 
         let total = s.questions.len();
@@ -512,28 +565,28 @@ impl Render for QuestionCard {
             .when(active > 0, |d| {
                 d.child(
                     button("q-previous", "Previous", Variant::Outline, true, sent, &tokens)
-                        .on_click(cx.listener(move |this, _, _, cx| this.act(|s| s.go_to(active - 1).into_none(), cx))),
+                        .on_click(cx.listener(move |this, _, window, cx| this.act(|s| s.go_to(active - 1).into_none(), window, cx))),
                 )
             })
             .child(
                 button("q-skip", "Skip", Variant::Outline, true, sent, &tokens)
                     .flex_grow(1.)
                     .flex_basis(gpui::relative(0.))
-                    .on_click(cx.listener(|this, _, _, cx| this.act(QuestionState::skip, cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.act(QuestionState::skip, window, cx))),
             )
             .child(
                 button("q-forward", if s.is_last() { "Send" } else { "Next" }, Variant::Default, true, sent, &tokens)
                     // `flex-4` against Skip's `flex-1`: the answer is the bigger target.
                     .flex_grow(4.)
                     .flex_basis(gpui::relative(0.))
-                    .on_click(cx.listener(|this, _, _, cx| this.act(QuestionState::advance, cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.act(QuestionState::advance, window, cx))),
             );
 
         div()
             .id("question-card")
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
-                if this.handle_key(&e.keystroke, cx) {
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                if this.handle_key(&e.keystroke, window, cx) {
                     cx.stop_propagation();
                 }
             }))
@@ -577,12 +630,10 @@ impl Render for QuestionCard {
                     .child(div().flex().flex_col().gap(px(8.)).children(choices).children(free_text)),
             )
             .child(actions)
+            .when_some(self.failed.clone(), |d, why| d.child(failed_line(why, &tokens)))
     }
 }
 
-fn caret(tokens: &ChatTokens) -> impl IntoElement {
-    div().w(px(1.)).h(px(16.)).mt(px(2.)).bg(tokens.foreground)
-}
 
 #[cfg(test)]
 mod tests {
@@ -641,11 +692,20 @@ mod tests {
         let mut s = QuestionState::new(vec![question("Name?", false)]);
         s.key(&key("1"));
         s.spot = Spot::Input;
-        for c in ["h", "i"] {
-            s.key(&key(c));
+        s.set_text(0, "hi".into());
+        assert!(s.picked[0].is_empty());
+        assert_eq!(sent(s.enter()), BTreeMap::from([("Name?".into(), "hi".into())]));
+    }
+
+    #[test]
+    fn keys_in_a_filled_box_are_the_box_own() {
+        let mut s = QuestionState::new(vec![question("Name?", false)]);
+        s.spot = Spot::Input;
+        s.set_text(0, "hi".into());
+        for k in ["1", "up", "enter", "backspace"] {
+            assert!(matches!(s.key(&key(k)), KeyOutcome::Ignored), "{k}");
         }
         assert!(s.picked[0].is_empty());
-        assert_eq!(sent(s.key(&key("enter"))), BTreeMap::from([("Name?".into(), "hi".into())]));
     }
 
     #[test]

@@ -1,11 +1,12 @@
 //! Tool rows, the permission card and the question card on fake data, for the
 //! transcript to wire in (#856). The cards come through `cards::cards`, the
 //! `slots::cards` body, fed `agent_event` frames. Click a row to open it. The
-//! question card has focus at start: digits pick, ↑/↓ move, Return goes on or sends. Click the
-//! permission card to give it the keys: digits move the pick, Return answers.
-//! `t` flips dark and light. Answers print to stdout.
+//! question card has focus at start: digits pick, ↑/↓ move, Return goes on or sends. Escape
+//! hands focus to the window, whose keys then reach the permission card unclicked, as in the
+//! app: digits move the pick, Return answers. `t` flips dark and light. Answers print to
+//! stdout; `--fail` makes every one fail to arrive, so the cards take answers again.
 //!
-//! `cargo run --example tool_rows`
+//! `cargo run --example tool_rows [-- --fail]`
 
 #![allow(dead_code)]
 
@@ -235,13 +236,18 @@ struct Demo {
     calls: Vec<Rc<ToolCall>>,
     open: HashSet<String>,
     asks: Vec<Value>,
+    focus: gpui::FocusHandle,
 }
 
 impl Demo {
     fn new(cx: &mut Context<Self>) -> Self {
-        cards::set_responder(cx, |answer, _| println!("{answer:?}"));
+        let fail = std::env::args().any(|a| a == "--fail");
+        cards::set_responder(cx, move |answer, _| {
+            println!("{answer:?}");
+            gpui::Task::ready(if fail { Err("the server is unreachable".into()) } else { Ok(()) })
+        });
         let open = ["read-range", "edit", "bash-fail", "codex-patch"].iter().map(|s| s.to_string()).collect();
-        Demo { calls: calls(), open, asks: asks() }
+        Demo { calls: calls(), open, asks: asks(), focus: cx.focus_handle() }
     }
 }
 
@@ -268,8 +274,14 @@ impl Render for Demo {
             .bg(backdrop)
             .font_family(assets::SANS)
             .text_color(tokens.foreground)
-            .on_key_down(cx.listener(|_, e: &KeyDownEvent, window, cx| {
-                if e.keystroke.key == "t" {
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                if this.focus.is_focused(window) && cards::forward_key(&e.keystroke, window, cx) {
+                    return;
+                }
+                if e.keystroke.key == "escape" {
+                    window.focus(&this.focus, cx);
+                } else if e.keystroke.key == "t" {
                     let mode = if Theme::get(cx).mode == Mode::Dark { Mode::Light } else { Mode::Dark };
                     cx.set_global(Theme::new(mode));
                     window.refresh();
@@ -302,6 +314,8 @@ impl Render for Demo {
 fn main() {
     gpui_platform::application().with_assets(assets::Assets).run(|cx: &mut App| {
         assets::load_fonts(cx);
+        // The question card's text box is gpui-base's: its state and keys.
+        gpui_base::init(cx);
         let light = std::env::args().any(|a| a == "--light");
         cx.set_global(Theme::new(if light { Mode::Light } else { Mode::Dark }));
         let bounds = Bounds::centered(None, size(px(1240.), px(980.)), cx);

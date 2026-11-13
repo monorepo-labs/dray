@@ -32,7 +32,7 @@ use gpui_base::input::{
 
 pub use attachments::Attachment;
 use colors::Colors;
-use segments::{Sigil, Trigger, apply_pick, placeholder, score, trigger_at};
+use segments::{Sigil, Trigger, apply_pick, placeholder, score, trigger_at, visible_trigger};
 
 use crate::theme::Theme;
 
@@ -291,10 +291,7 @@ impl Composer {
             let input = self.input.read(cx);
             (input.value().to_string(), input.cursor())
         };
-        let next = trigger_at(&text, caret).filter(|t| self.dismissed != Some(t.start));
-        if self.dismissed.is_some_and(|start| next.as_ref().is_none_or(|t| t.start != start)) {
-            self.dismissed = None;
-        }
+        let next = visible_trigger(trigger_at(&text, caret), &mut self.dismissed);
         let moved = next.as_ref().map(|t| (t.sigil, &t.query)) != self.trigger.as_ref().map(|t| (t.sigil, &t.query));
         if moved {
             self.active = 0;
