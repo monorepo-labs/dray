@@ -489,8 +489,21 @@ async fn on_machine(machine: &str, request: Request) -> Result<Response> {
         return elsewhere::list_everywhere(list).await;
     }
     let creates = matches!(request, Request::CreateSession(_));
+    if machine == elsewhere::CLOUD && !creates {
+        bail!("only `dray session new` takes --machine cloud — a cloud task's own machine is named on its row");
+    }
     let forward = elsewhere::prepare(request).await?;
-    let response = elsewhere::forward(machine, &forward).await?;
+    let placed = match machine == elsewhere::CLOUD {
+        true => Some(elsewhere::start_cloud(forward.origin.as_deref()).await?),
+        false => None,
+    };
+    let machine = placed.as_deref().unwrap_or(machine);
+    let response = elsewhere::forward(machine, &forward).await;
+    // Its machine is the task's alone, so one that never got the task goes.
+    if let (Some(id), false) = (&placed, matches!(response, Ok(Response::Created { .. }))) {
+        elsewhere::drop_cloud(id).await;
+    }
+    let response = response?;
     // The task's server keeps its reports, and this server holds the link to
     // collect them by; the other way round usually does not exist.
     if let (true, Some(caller), Response::Created { session, .. }) = (creates, &forward.caller, &response) {
@@ -620,6 +633,40 @@ mod elsewhere {
     use crate::machines;
     use anyhow::anyhow;
     use serde_json::json;
+
+    /// `--machine cloud`: a fresh Dray Cloud machine for one task, as the
+    /// composer's Cloud pick starts one.
+    pub const CLOUD: &str = "cloud";
+
+    /// Starts a cloud machine and clones the project there, answering the
+    /// machine's id. The app starts it, since it holds Dray Cloud's key and
+    /// connections and writes the machine into `servers.json` once connected.
+    pub async fn start_cloud(origin: Option<&str>) -> Result<String> {
+        let slug = origin
+            .and_then(|o| o.strip_prefix("github.com/"))
+            .filter(|slug| slug.split('/').count() == 2)
+            .ok_or_else(|| anyhow!("Cloud runs projects with a GitHub remote — pass --project <repo path> for one"))?;
+        let id = match crate::serve::host_call("start_cloud_machine", serde_json::Value::Null).await {
+            Some(Ok(id)) => id.as_str().unwrap_or_default().to_string(),
+            Some(Err(e)) => bail!("couldn't start a cloud machine: {}", e.as_str().unwrap_or(&e.to_string())),
+            None => bail!("Dray Cloud starts machines through the Dray app — open it and try again"),
+        };
+        let cloned = async {
+            let saved = machines::on(&id).await?;
+            machines::call(&saved, "clone_github_repo", json!({ "slug": slug })).await
+        };
+        if let Err(e) = cloned.await {
+            drop_cloud(&id).await;
+            bail!("couldn't clone {slug} onto its cloud machine: {e}");
+        }
+        Ok(id)
+    }
+
+    /// Deletes cloud machine `id`, best effort: a machine left behind still
+    /// goes when the app settles what runs on it, or by hand in Settings.
+    pub async fn drop_cloud(id: &str) {
+        let _ = crate::serve::host_call("drop_cloud_machine", json!({ "id": id })).await;
+    }
 
     /// The machine holding session `id`, where one does. Every machine is
     /// asked at once, each given [`machines::SWEEP`].
@@ -981,6 +1028,18 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
             Ok(serde_json::Value::Null)
         }
         "island_links" => serde_json::to_value(crate::servers::island_links()).map_err(|e| e.to_string()),
+        // `dray session new --machine cloud`, which the server cannot start
+        // itself: the cloud connections and their `servers.json` rows are the app's.
+        // Refused while off, since a machine started then is never listed and
+        // its start would only time out.
+        "start_cloud_machine" => match crate::servers::cloud_info().await.on {
+            true => crate::servers::start_cloud_machine().await.map(serde_json::Value::from),
+            false => Err("Dray Cloud is off. Turn it on in Settings, Servers.".into()),
+        },
+        "drop_cloud_machine" => {
+            let id = args["id"].as_str().ok_or("drop_cloud_machine wants an id")?.to_string();
+            crate::servers::drop_cloud_machine(id).await.map(|()| serde_json::Value::Null)
+        }
         // The island's Extend, on a timer only the app is reading.
         "extend_boat" => {
             let id = args["id"].as_str().ok_or("extend_boat wants an id")?.to_string();

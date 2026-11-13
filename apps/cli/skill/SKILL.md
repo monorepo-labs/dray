@@ -494,6 +494,13 @@ has none. `--base <session-id>` names that session's branch, which the other
 machine can only see once it is pushed. Model, effort, agent and fast mode
 inherit from you as they do here.
 
+`--machine cloud` starts a session on a fresh Dray Cloud machine of its own:
+the app starts the machine, clones the project's GitHub repository there and
+starts the session in a worktree of it. It takes `session new` alone, needs
+Dray Cloud on with the app open, and can take a few minutes, so give the
+command a long timeout. The session's row names its machine (`cloud-…`), and
+settling it deletes the machine.
+
 **Reach follows tokens.** You reach a machine this one added; it reaches you
 only if it added this one too. A session you start there can message you back
 with `dray session send <your-id>` where it can — otherwise check on it with
