@@ -15,9 +15,11 @@ export async function POST(req: Request) {
   if (!server) return refuse("invalid_token", 401);
 
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+  // Counted in code points, as the server's `chars().take(80)` caps a
+  // client's name: `length` counts an emoji twice and would refuse it.
   const text = (key: string, max: number) => {
     const value = body?.[key];
-    return typeof value === "string" && value.length > 0 && value.length <= max ? value : null;
+    return typeof value === "string" && value.length > 0 && [...value].length <= max ? value : null;
   };
   const returnUrl = text("returnUrl", 2048);
   const state = text("state", 256);

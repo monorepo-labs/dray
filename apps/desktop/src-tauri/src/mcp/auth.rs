@@ -711,10 +711,15 @@ pub async fn token(body: &[u8], sink: &Sink) -> (u16, Value) {
                 }
                 Admit::Refused => {
                     // Gone for good: the assistant must sign in again, so the
-                    // list shouldn't show it.
+                    // list shouldn't show it. Its live access tokens go too, or
+                    // restoring the person's access before they expire would
+                    // revive a grant no list shows and nothing can revoke.
                     let dropped = async {
                         let _held = BOOK.lock().await;
                         let mut book = read_book().await?;
+                        let gone: Vec<String> =
+                            book.grants.iter().filter(|g| g.refresh == wanted).map(|g| g.id.clone()).collect();
+                        memory().access.retain(|_, live| !gone.contains(&live.grant));
                         book.grants.retain(|g| g.refresh != wanted);
                         write_book(&book).await
                     };
