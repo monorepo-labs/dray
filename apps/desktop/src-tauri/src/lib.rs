@@ -88,7 +88,7 @@ pub mod org_link;
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod machines;
 #[cfg(any(feature = "serve", feature = "desktop"))]
-pub mod cloud;
+pub mod cloud_machine;
 #[cfg(feature = "desktop")]
 pub mod boat;
 #[cfg(feature = "desktop")]

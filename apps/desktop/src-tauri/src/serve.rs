@@ -140,10 +140,10 @@ pub async fn run(port: u16) -> Result<()> {
         let _ = STARTED_FROM.set((exe.clone(), stamp_of(&exe)));
     }
     let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
-    let boat = crate::cloud::boat_id().await;
+    let boat = crate::cloud_machine::boat_id().await;
     let home = start_core(sink.clone(), boat.as_deref()).await?;
     if let Some(sandbox) = boat {
-        tokio::spawn(crate::cloud::heartbeat(home.clone(), sandbox));
+        tokio::spawn(crate::cloud_machine::heartbeat(home.clone(), sandbox));
     }
 
     let (token, token_path) = mint_token().await?;
@@ -515,7 +515,7 @@ async fn start_core(sink: Sink, boat: Option<&str>) -> Result<PathBuf> {
     // Before anything reads the index, which on a fork is the source's. A
     // failure is said and served through: a server that will not start
     // costs the whole machine.
-    if let Some(Err(e)) = boat.map(|id| crate::cloud::scrub_if_forked(&home, id)) {
+    if let Some(Err(e)) = boat.map(|id| crate::cloud_machine::scrub_if_forked(&home, id)) {
         eprintln!("[cloud] {e:#}");
     }
     if let Err(e) = store::reset_in_progress_sessions().await {
@@ -1749,7 +1749,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         // an app installed after it meets as This Mac.
         live_state() => ok(HUB.live.lock().unwrap_or_else(|e| e.into_inner()).payload());
         // Dray Cloud's placement: turns running here and memory left.
-        machine_load() => ok(crate::cloud::machine_load().await);
+        machine_load() => ok(crate::cloud_machine::machine_load().await);
         // Sessions.
         send_msg(
             session_id: String, prompt: String, attachment_paths: Vec<String>,
