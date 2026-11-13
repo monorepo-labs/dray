@@ -23,6 +23,7 @@ import {
   refreshOpenFiles,
   useOpenFiles,
   useOpenFilesWatcher,
+  type FilesScope,
 } from "@/hooks/useOpenFiles";
 import { cn } from "@/lib/utils";
 
@@ -61,7 +62,10 @@ export default function FilesView({
   active,
   revision,
   picker,
+  watchScope,
 }: {
+  /// A split pane's own watcher, so it takes none from the Files view or a pick.
+  watchScope?: FilesScope;
   /// A bot-row tab's choice of session, the list's first row (#892). Such a
   /// tab is not its session's own Files view, so opening a file here must not
   /// flip that session's view to it.
@@ -75,7 +79,7 @@ export default function FilesView({
   revision: string;
 }) {
   const { open, active: activePath } = useOpenFiles(sessionId);
-  useOpenFilesWatcher(sessionId, picker ? "pick" : "files");
+  useOpenFilesWatcher(sessionId, watchScope ?? (picker ? "pick" : "files"));
 
   const [side, setSide] = useLocalStorage<Side>(SIDE_KEY, DEFAULT_SIDE);
   const [shown, setShown] = useLocalStorage<boolean>(SHOWN_KEY, true);

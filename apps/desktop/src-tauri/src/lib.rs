@@ -978,6 +978,8 @@ pub fn run() {
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_layout,
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
+            cef::browser_pins,
+            #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_shutter_ready,
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::browser_devtools,

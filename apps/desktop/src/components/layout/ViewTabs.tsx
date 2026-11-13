@@ -63,6 +63,17 @@ import {
   type TabKey,
 } from "@/lib/tabOrder";
 import BranchButton from "@/components/layout/BranchButton";
+import { IS_MAC } from "@/lib/platform";
+import {
+  addSplit,
+  filePaneStore,
+  isSplit,
+  setPaneHeads,
+  setSplitDrag,
+  splitTarget,
+  useSplitPanes,
+  type PaneHead,
+} from "@/lib/splitPanes";
 import { cn } from "@/lib/utils";
 
 /// Which view fills the main column.
@@ -434,7 +445,57 @@ export default function ViewTabs({
     ...byKey.keys(),
   ]);
   orders.set(sessionId, order);
-  const items = order.map((key) => byKey.get(key)!);
+  // A tab split out keeps its slot in `order`, so closing its pane puts it
+  // back where it was; it is only left out of what is drawn.
+  const splits = useSplitPanes(sessionId);
+  const items = order.map((key) => byKey.get(key)!).filter((item) => !isSplit(sessionId, item.key));
+
+  // The panes draw the same icon and label their tab did.
+  useLayoutEffect(() => {
+    const heads = new Map<TabKey, PaneHead>();
+    for (const key of splits) {
+      const item = byKey.get(key);
+      const pick = key.startsWith("pick:") ? picks?.items.find((p) => `pick:${p.id}` === key) : undefined;
+      if (item) heads.set(key, { icon: item.icon, label: item.label });
+      else if (pick)
+        heads.set(key, {
+          icon: pick.kind === "changes" ? <DocumentPlusIcon className={MARK} /> : FOLDER,
+          label: pick.title,
+        });
+    }
+    setPaneHeads(sessionId, heads);
+  });
+
+  // Out of the row into a pane right of the main view. The tab on screen
+  // hands the view to its neighbour first, as closing it would. A file takes
+  // a store of its own with it, so the pane's Files is that file's alone.
+  const splitOut = (item: Item) => {
+    if (item.active) {
+      const at = items.indexOf(item);
+      [items[at - 1], items[at + 1], ...items].find((t) => t && t !== item)?.pick();
+    }
+    let key = item.key;
+    if (key.startsWith("page:")) {
+      const page = pages.find((p) => `page:${p.id}` === key);
+      const heir = pages.find((p) => p !== page && !isSplit(sessionId, `page:${p.id}`));
+      if (page?.active && heir) void activateTab(browserId, heir.id);
+    } else if (key === "files" || key.startsWith("file:")) {
+      key = `filepane:${crypto.randomUUID()}`;
+      if (item.key.startsWith("file:")) {
+        const path = item.key.slice("file:".length);
+        closeFile(sessionId, path);
+        reopenFile(filePaneStore(sessionId, key), path);
+      } else {
+        added.set(sessionId, { ...(added.get(sessionId) ?? NONE), files: false });
+      }
+    } else if (key.startsWith("pickfile:")) {
+      key = `pick:${key.split(":")[1]}`;
+    }
+    addSplit(sessionId, key);
+  };
+  // The chat is what the panes sit beside, and a blank has no page to show.
+  const splittable = (item: Item) =>
+    /^(page:|changes$|files$|file:|task:|pick:|pickfile:)/.test(item.key) && (IS_MAC || !item.key.startsWith("page:"));
 
   const drag = useDragReorder(
     items,
@@ -447,6 +508,14 @@ export default function ViewTabs({
       bump();
     },
     "x",
+    {
+      over: (item, at) => {
+        const target = at && splittable(item) ? splitTarget(at.x, at.y, splits.length) : null;
+        setSplitDrag(target ? { sessionId, key: item.key, label: target === "room" ? "Split right" : null } : null);
+        return target === "room";
+      },
+      drop: splitOut,
+    },
   );
 
   // The row is pushed right to start where the sheet does. Worked
