@@ -58,6 +58,7 @@ final class OpenAtBottomTests: XCTestCase {
     }
 
     func testHeldShrinks2() throws {
+        guard env["DRAY_URL"] != nil else { throw XCTSkip("run after testHeldShrinks1, with TEST_RUNNER_DRAY_URL set") }
         let app = XCUIApplication()
         app.launch()
         let row = app.staticTexts["Scroll check"]
