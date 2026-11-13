@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use ts_rs::TS;
 
+pub mod learn;
+
 use crate::{
     events::ApprovalPolicy,
     models::{Effort, ModelId},
@@ -365,8 +367,9 @@ fn replay(events: &[crate::events::AgentEvent]) -> Vec<String> {
     use crate::events::AgentEventPayload as P;
     events
         .iter()
-        .filter(|e| e.subagent.is_none())
-        .filter_map(|e| match &e.payload {
+        .zip(learn::in_review(events))
+        .filter(|(e, review)| e.subagent.is_none() && !review)
+        .filter_map(|(e, _)| match &e.payload {
             P::UserMessage { kickoff: true, .. } => None,
             // Already prefixed with who sent it, as the bot first read it.
             P::UserMessage { text, from: Some(_), .. } => Some(text.trim().to_string()),
@@ -606,16 +609,23 @@ pub async fn bot_previews(
     Ok(previews)
 }
 
-/// Sessions whose next prompt is a bot's kickoff, which the transcript draws no
-/// bubble for. Read where the prompt's event is built: threading a flag through
-/// `send_msg`'s twenty parameters for one caller would touch every other one.
-static KICKOFFS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// Dray's own prompts on their way into a bot's chat, as (session, text): a
+/// kickoff, or a review (#973). The transcript draws no bubble for either.
+/// Read where the prompt's event is built: threading a flag through
+/// `send_msg`'s twenty parameters for two callers would touch every other one.
+/// Keyed on the text too, so a message the reader sends meanwhile is never
+/// taken for one.
+static DRAY_PROMPTS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
-/// Whether `session_id`'s prompt now being logged is a kickoff, and forgets it.
-pub fn take_kickoff(session_id: &str) -> bool {
-    let mut kickoffs = KICKOFFS.lock().unwrap();
-    let at = kickoffs.iter().position(|k| k == session_id);
-    at.map(|i| kickoffs.remove(i)).is_some()
+pub fn mark_dray_prompt(session_id: &str, prompt: &str) {
+    DRAY_PROMPTS.lock().unwrap().push((session_id.to_string(), prompt.to_string()));
+}
+
+/// Whether `prompt`, now being logged in `session_id`, is Dray's own, and forgets it.
+pub fn take_dray_prompt(session_id: &str, prompt: &str) -> bool {
+    let mut marks = DRAY_PROMPTS.lock().unwrap();
+    let at = marks.iter().position(|(s, p)| s == session_id && p == prompt);
+    at.map(|i| marks.remove(i)).is_some()
 }
 
 /// Opens a bot's chat with the bot speaking first: a prompt the reader never
@@ -640,7 +650,7 @@ pub async fn start_bot(
         .ok_or_else(|| anyhow::anyhow!("no bot {id}"))?;
     let session_id = uuid::Uuid::now_v7().to_string();
     let prompt = kickoff_prompt(&bot).await;
-    KICKOFFS.lock().unwrap().push(session_id.clone());
+    mark_dray_prompt(&session_id, &prompt);
     let sent = manager()
         .send_msg(
             &session_id, &prompt, &[], &[], harness, model, effort, permission_mode, fast,
@@ -648,7 +658,7 @@ pub async fn start_bot(
         )
         .await;
     // A send that failed before logging the prompt left the mark behind.
-    take_kickoff(&session_id);
+    take_dray_prompt(&session_id, &prompt);
     let item = sent?
         .snapshot
         .map(|s| s.index_item)
@@ -774,6 +784,7 @@ pub async fn system_prompt(base: &str, session_id: &str, cwd: &str) -> String {
     // A bot made before memory was a folder has none, and the prompt sends it
     // straight to one. Its old `MEMORY.md` is left alone: bots had no users yet.
     tokio::fs::create_dir_all(dir.join(MEMORY)).await.ok();
+    learn::ensure_skills(dir).await;
     let instructions = capped(read_file(&dir.join(INSTRUCTIONS)).await);
     format!("{base}\n\n{}", bot_block(bot, &others, &instructions))
 }
@@ -840,40 +851,108 @@ async fn start_history(bot: &Bot) -> Result<()> {
         return Ok(());
     }
     git(dir, &["init", "-q", "-b", "main"]).await?;
-    commit_all(bot, Some("Start history")).await
+    commit_all(bot, Some("Start history")).await.map(drop)
 }
 
 /// Commits what a turn of the bot at `cwd` changed in its folder, where `cwd`
-/// is a bot's. Dray does it rather than the bot, which could forget.
-pub async fn commit_turn(cwd: &str) {
-    let Some(bot) = bot_at(cwd).await else { return };
-    if let Err(e) = start_history(&bot).await {
-        eprintln!("[bot history] {e:#}");
-        return;
-    }
-    let _guard = HISTORY_LOCK.lock().await;
-    if let Err(e) = commit_all(&bot, None).await {
-        eprintln!("[bot history] {e:#}");
-    }
+/// is a bot's, and reads back the lessons in it. Dray does it rather than the
+/// bot, which could forget. `None` where `cwd` is no bot's.
+pub async fn commit_turn(cwd: &str, notes: learn::TurnNotes) -> Option<learn::Turn> {
+    let bot = bot_at(cwd).await?;
+    Some(commit_bot_turn(&bot, notes).await)
 }
 
-/// Stages everything and commits it, where anything changed. `None` names the
-/// files changed instead.
-async fn commit_all(bot: &Bot, message: Option<&str>) -> Result<()> {
+async fn commit_bot_turn(bot: &Bot, notes: learn::TurnNotes) -> learn::Turn {
+    let mut turn = learn::Turn { notes, ..Default::default() };
+    if let Err(e) = start_history(bot).await {
+        eprintln!("[bot history] {e:#}");
+        return turn;
+    }
+    let dir = Path::new(&bot.path);
+    let _guard = HISTORY_LOCK.lock().await;
+    if turn.notes.reviewing {
+        match learn::keep_rules(dir).await {
+            Ok(true) => eprintln!("[bot learn] a review took a rule away from {}; put back", bot.name),
+            Ok(false) => {}
+            Err(e) => eprintln!("[bot learn] {e:#}"),
+        }
+    }
+    turn.commit = match commit_all(bot, None).await {
+        Ok(commit) => commit,
+        Err(e) => {
+            eprintln!("[bot history] {e:#}");
+            None
+        }
+    };
+    if let Some(commit) = &turn.commit {
+        match learn::read_commit(dir, commit).await {
+            Ok((files, oversize)) => (turn.files, turn.oversize) = (files, oversize),
+            Err(e) => eprintln!("[bot learn] {e:#}"),
+        }
+    }
+    turn
+}
+
+/// Stages everything and commits it, where anything changed, answering the
+/// commit. `None` names the files changed instead.
+async fn commit_all(bot: &Bot, message: Option<&str>) -> Result<Option<String>> {
     let dir = Path::new(&bot.path);
     git(dir, &["add", "-A"]).await?;
     let changed = git(dir, &["diff", "--cached", "--name-only", "-z"]).await?;
     let files: Vec<&str> = changed.split('\0').filter(|f| !f.is_empty()).collect();
     if files.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let message = message.map_or_else(|| turn_message(&files), str::to_string);
-    // The bot's own name on every commit, so its history needs no global
-    // identity and reads as its own. Given each time rather than written to
-    // the repo's config once, which a setup cut off after `init` would skip.
+    commit_as(bot, &["commit", "-q", "-m", &message]).await?;
+    Ok(Some(git(dir, &["rev-parse", "HEAD"]).await?.trim().to_string()))
+}
+
+/// Commits `paths` alone, staged first, leaving anything else in the folder
+/// for the turn's own commit.
+async fn commit_paths(bot: &Bot, message: &str, paths: &[&str]) -> Result<()> {
+    let mut add = vec!["add", "-A", "--"];
+    add.extend_from_slice(paths);
+    git(Path::new(&bot.path), &add).await?;
+    let mut commit = vec!["commit", "-q", "-m", message, "--"];
+    commit.extend_from_slice(paths);
+    commit_as(bot, &commit).await
+}
+
+/// Runs a commit as the bot: its own name on every one, so its history needs
+/// no global identity and reads as its own. Given each time rather than
+/// written to the repo's config once, which a setup cut off after `init`
+/// would skip.
+async fn commit_as(bot: &Bot, args: &[&str]) -> Result<()> {
     let name = format!("user.name={}", bot.name);
     let email = format!("user.email={}@bots.dray.local", bot.id);
-    git(dir, &["-c", &name, "-c", &email, "commit", "-q", "-m", &message]).await.map(drop)
+    let mut all = vec!["-c", name.as_str(), "-c", email.as_str()];
+    all.extend_from_slice(args);
+    git(Path::new(&bot.path), &all).await.map(drop)
+}
+
+/// The two halves of one file of a "Learned" row, for View diff.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn bot_learned_diff(session_id: String, commit: String, path: String) -> Result<learn::LearnedDiff, Fail> {
+    let bot = bot_of_session(&session_id).await?;
+    Ok(learn::diff(&bot, &commit, &path).await?)
+}
+
+/// Undo on a "Learned" row: reverts that one file of the commit and says so in
+/// the chat, where the row reads it back as undone.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn bot_undo_learned(session_id: String, commit: String, path: String, sink: Sink) -> Result<(), Fail> {
+    let bot = bot_of_session(&session_id).await?;
+    learn::undo(&bot, &commit, &path).await?;
+    let item = crate::store::get_session_index_item(&session_id).await?.context("no such session")?;
+    let payload = crate::events::AgentEventPayload::LearnedUndone { commit, path };
+    manager().log_event(&session_id, item.harness, payload, &sink).await?;
+    Ok(())
+}
+
+async fn bot_of_session(session_id: &str) -> Result<Bot> {
+    let item = crate::store::get_session_index_item(session_id).await?.context("no such session")?;
+    bot_at(&item.cwd).await.context("that session is no bot's chat")
 }
 
 fn turn_message(files: &[&str]) -> String {
@@ -1063,7 +1142,8 @@ mod tests {
     fn every_template_is_filled_whole() {
         let block = bot_block(&bot(), &[], "a");
         let kickoff = fill(KICKOFF_PROMPT, &[("name", "Ops"), ("projects", "dray")]);
-        for text in [&block, &kickoff] {
+        let review = fill(include_str!("bots/review_prompt.md"), &[("reason", "The user just corrected you.")]);
+        for text in [&block, &kickoff, &review] {
             assert!(!text.contains('{'), "{text}");
         }
         assert!(block.contains(INSTRUCTIONS));

@@ -2198,6 +2198,31 @@ pub fn deliver_report(
     })
 }
 
+/// Dray's hidden review into a bot's chat (#973): sent like the reader's own
+/// message, signed by nobody, and drawn as nothing, as the kickoff is. Boxed
+/// for the reason [`report_to_parent`] is.
+pub fn send_review(
+    session_id: String,
+    prompt: String,
+    app: Sink,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+    Box::pin(async move {
+        let Some(chat) = store::get_session_index_item(&session_id).await? else { return Ok(()) };
+        // A settled chat stays settled: a review must not resume it.
+        let chat = crate::bots::current_chat(chat).await;
+        if chat.archived {
+            return Ok(());
+        }
+        crate::bots::mark_dray_prompt(&chat.session_id, &prompt);
+        let send = SendMessage { session_id: chat.session_id.clone(), prompt: prompt.clone(), from_session_id: None };
+        let sent = send_message(send, None, &app).await;
+        if sent.is_err() {
+            crate::bots::take_dray_prompt(&chat.session_id, &prompt);
+        }
+        sent.map(drop)
+    })
+}
+
 /// The prompt as the receiving *agent* will read it, with its sender named.
 ///
 /// This and [`user_message.from`](crate::events::MessageSender) carry the same

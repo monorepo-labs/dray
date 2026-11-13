@@ -1,7 +1,10 @@
+import { Lightbulb } from "lucide-react";
 import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
+import DiffView from "@/components/chat/DiffView";
 import EventRow from "@/components/chat/EventRow";
+import { Button } from "@/components/ui/button";
 import UserMessage from "@/components/chat/UserMessage";
 import { OrbLine } from "@/components/chat/WorkingIndicator";
 import { useStreamingBlock, useStreamingKind } from "@/hooks/useStreamingBlock";
@@ -25,8 +28,9 @@ import { isModClick } from "@/lib/platform";
 import { stripSenderPrefix } from "@/lib/relay";
 import { streamingCall } from "@/lib/streaming";
 import { streamingLabel, toolArgument, toolLabel } from "@/lib/tools";
+import { invoke } from "@/lib/transport";
 import { cn } from "@/lib/utils";
-import type { AgentEvent, Bot, BotAvatar as Avatar, Harness, ToolResult } from "@/types/events";
+import type { AgentEvent, Bot, BotAvatar as Avatar, Harness, LearnedDiff, LearnedFile, ToolResult } from "@/types/events";
 
 /// A task a bot started, as its card names it.
 /// A task as its chat draws it. `sessionId` is the full id, since the bot may
@@ -206,6 +210,7 @@ function sameItem(x: BotRow, y: BotRow): boolean {
     );
   }
   if ("event" in x) return "event" in y && x.event === y.event;
+  if (x.kind === "learned") return y.kind === "learned" && x.key === y.key && x.undone === y.undone;
   return rowKey(x) === rowKey(y);
 }
 
@@ -217,6 +222,8 @@ const ChatRow = memo(function ChatRow({ item, time, tight, isNew, bots, taskOf, 
       {time && <TimeLabel at={time} />}
       {item.kind === "switch" ? (
         <SwitchLine harness={item.harness} />
+      ) : item.kind === "learned" ? (
+        <LearnedLine sessionId={item.sessionId} commit={item.commit} file={item.file} undone={item.undone} />
       ) : item.kind === "botMessage" ? (
         <>
           <BotLine
@@ -486,6 +493,85 @@ function StartedLine({ party, onOpen }: { party: Party; onOpen: (alone: boolean)
     <div className="flex max-w-full items-center gap-0.5 self-start text-ui text-muted-foreground">
       <span className="shrink-0">Started a new task</span>
       <PartyChip parties={[party]} onClick={(e) => onOpen(isModClick(e))} />
+    </div>
+  );
+}
+
+/// What a turn taught the bot, one file a line: the rule, skill or memory it
+/// wrote, which the reader can look at and take back. The bot says so in its
+/// reply too; this is the part it cannot forget to say.
+function LearnedLine({
+  sessionId,
+  commit,
+  file,
+  undone,
+}: {
+  sessionId: string;
+  commit: string;
+  file: LearnedFile;
+  undone: boolean;
+}) {
+  const [diff, setDiff] = useState<LearnedDiff | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const verb = file.change === "removed" ? "Forgot" : "Learned";
+
+  const view = async () => {
+    if (open) return setOpen(false);
+    setError(null);
+    try {
+      setDiff(diff ?? (await invoke<LearnedDiff>("bot_learned_diff", { sessionId, commit, path: file.path })));
+      setOpen(true);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  const undo = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await invoke("bot_undo_learned", { sessionId, commit, path: file.path });
+      setOpen(false);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="group flex w-full flex-col gap-1.5 self-start">
+      <div className="flex max-w-full items-center gap-1.5 text-ui text-muted-foreground">
+        <Lightbulb className="size-3.5 shrink-0" strokeWidth={1.75} />
+        <span className="shrink-0">{verb}</span>
+        <span className={cn("min-w-0 truncate text-foreground/80", undone && "line-through opacity-60")}>
+          {file.summary}
+        </span>
+        {undone ? (
+          <span className="shrink-0 text-[12px] text-muted-foreground/70">Undone</span>
+        ) : (
+          <span
+            className={cn(
+              "flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100",
+              open && "opacity-100",
+            )}
+          >
+            <Button variant="ghost" size="xs" className="text-muted-foreground" aria-expanded={open} onClick={view}>
+              {open ? "Hide diff" : "View diff"}
+            </Button>
+            <Button variant="ghost" size="xs" className="text-muted-foreground" disabled={busy} onClick={undo}>
+              Undo
+            </Button>
+          </span>
+        )}
+      </div>
+      {error && <p className="pl-5 text-[12px] text-destructive">{error}</p>}
+      {open && diff && (
+        <div className="w-full overflow-hidden rounded-lg border border-border/60">
+          <DiffView sides={{ path: diff.path, oldText: diff.before, newText: diff.after }} />
+        </div>
+      )}
     </div>
   );
 }
