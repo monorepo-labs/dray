@@ -54,6 +54,11 @@ similar = "3.2.1"
 # selection for the transcript. Its look is restyled, never kept (#856).
 gpui_base = { package = "gpui-base", version = "=0.9.1" }
 
+# Linux opens no window without a backend feature, and says nothing about it.
+# X11 is what the boat sandboxes run, where the examples are screenshotted.
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["x11"] }
+
 # The window's glass: an NSVisualEffectView on the `sidebar` material, as
 # tauri.conf.json asks for. Same majors as the core's and GPUI's.
 [target.'cfg(target_os = "macos")'.dependencies]
