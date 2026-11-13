@@ -314,6 +314,9 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
     const p = event.payload;
     if (p.type === "turn_completed") review = other = false;
     if (p.type === "user_message") {
+      // Sent with no turn running, it opens one, closed or not: a child that
+      // died mid-turn logs no `turn_completed`.
+      if (!p.queued) review = other = false;
       if (isReview(p)) review = true;
       else other = true;
       // A task's report-back is the bot's input, not the reader's: the bot's
@@ -440,6 +443,8 @@ export function inReviewTurn(events: readonly AgentEvent[]): boolean {
     // Anything else in the turn makes the reply someone's.
     if (!isReview(payload)) return false;
     review = true;
+    // Sent with no turn running: it opened this one.
+    if (!payload.queued) break;
   }
   return review;
 }

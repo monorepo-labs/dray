@@ -171,6 +171,11 @@ pub fn in_review(events: &[crate::events::AgentEvent]) -> Vec<bool> {
         .iter()
         .map(|e| {
             if e.subagent.is_none() {
+                // A prompt sent with no turn running opens a new one, closed or
+                // not: a child that died mid-turn logs no `turn_completed`.
+                if let AgentEventPayload::UserMessage { queued: false, .. } = &e.payload {
+                    (review, other) = (false, false);
+                }
                 match &e.payload {
                     AgentEventPayload::UserMessage { text, kickoff: true, .. } if text.starts_with(REVIEW) => {
                         review = true
@@ -473,14 +478,20 @@ mod tests {
             }))
             .unwrap()
         };
-        let prompt = |text: &str, kickoff: bool| event(serde_json::json!({"type": "user_message", "text": text, "kickoff": kickoff}));
+        let prompt = |text: &str, kickoff: bool, queued: bool| {
+            event(serde_json::json!({"type": "user_message", "text": text, "kickoff": kickoff, "queued": queued}))
+        };
         let said = || event(serde_json::json!({"type": "assistant_text", "text": "x"}));
         let done = || event(serde_json::json!({"type": "turn_completed", "status": "success"}));
         let events = [
-            prompt("Review: a", true), said(), done(),
-            prompt("rename it", false), prompt("Review: b", true), said(), done(), said(),
+            prompt("Review: a", true, false), said(), done(),
+            // Queued behind the reader's message, a review joins their turn.
+            prompt("rename it", false, false), prompt("Review: b", true, true), said(), done(), said(),
+            // A turn a dead child never closed: the next prompt opens a new one.
+            prompt("rename it", false, false), said(), prompt("Review: c", true, false), said(),
         ];
-        assert_eq!(in_review(&events), [true, true, false, false, false, false, false, false]);
+        let expected = [true, true, false, false, false, false, false, false, false, false, true, true];
+        assert_eq!(in_review(&events), expected);
     }
 
     #[test]
