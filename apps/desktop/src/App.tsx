@@ -93,6 +93,7 @@ import { useChord } from "@/hooks/useShortcuts";
 import { type Chord, formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_BESIDE, CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
 import TasksPanel from "@/components/TasksPanel";
+import RoutinesPanel from "@/components/RoutinesPanel";
 import StalledTasks from "@/components/chat/StalledTasks";
 import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/MergeCard";
 import { cardRepos } from "@/lib/mergeCard";
@@ -214,6 +215,7 @@ import {
 import { crewRows, crewSeen, inSidebar, withHiddenAsks, type CrewRow } from "@/lib/crew";
 import type { Stall } from "@/lib/stalled";
 import { useStalledTasks } from "@/hooks/useStalledTasks";
+import { useRoutines } from "@/hooks/useRoutines";
 import {
   addPickTab,
   closePickTab,
@@ -1376,6 +1378,7 @@ function App() {
     prReadAt: taskPrReadAt,
   });
   const stalls = (selectedBot && stalled.byBot.get(selectedBot.id)?.card) || NO_STALLS;
+  const routines = useRoutines(selectedBot);
   // The card's row the reader last picked, which the bot's chat scrolls to.
   // Named with its bot, so another bot's chat never acts on it.
   const [stallFocus, setStallFocus] = useState<{ botId: string; sessionId: string; at: number } | null>(null);
@@ -3681,6 +3684,15 @@ function App() {
                 onFixConflicts={(row, pr) => askToFixConflicts(row.item, pr.number)}
                 onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
                 now={stalled.now}
+              />
+            </TabBody>
+            <TabBody active={activeTab === "routines"}>
+              <RoutinesPanel
+                routines={routines.routines}
+                now={stalled.now}
+                onPause={routines.setPaused}
+                onDelete={routines.remove}
+                onRunNow={routines.runNow}
               />
             </TabBody>
             <TabBody active={activeTab === "more"}>
