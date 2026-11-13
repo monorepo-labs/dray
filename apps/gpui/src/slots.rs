@@ -3,7 +3,7 @@
 //! body, keep the signature. The window, the sidebar and the transcript's
 //! wiring call only these.
 
-use gpui::{AnyElement, div, prelude::*, px};
+use gpui::{AnyElement, App, Window, div, prelude::*, px};
 use serde_json::Value;
 
 use crate::theme::Theme;
@@ -56,8 +56,9 @@ pub fn cards(_session_id: &str, asks: &[&Value], theme: &Theme) -> Option<AnyEle
 }
 
 /// Stand-in for the composer, under the open session's transcript and its
-/// cards. Sending is `send_msg` with the session's id.
-pub fn composer(_session_id: &str, _theme: &Theme) -> Option<AnyElement> {
+/// cards. Sending is `send_msg` with the session's id. Called on every
+/// render, with the window, so a stateful input can live per session.
+pub fn composer(_session_id: &str, _theme: &Theme, _window: &mut Window, _cx: &mut App) -> Option<AnyElement> {
     None
 }
 

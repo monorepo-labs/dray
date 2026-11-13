@@ -315,7 +315,7 @@ impl Render for Workspace {
                                 .flex_col()
                                 .child(div().flex_1().min_h_0().child(chat.clone()))
                                 .children(crate::slots::cards(&id, &asks, &theme))
-                                .children(crate::slots::composer(&id, &theme))
+                                .children(crate::slots::composer(&id, &theme, window, cx))
                         }
                         None => match crate::slots::new_task(&theme) {
                             Some(screen) if matches!(self.connection, Connection::Up) => sheet.child(screen),
