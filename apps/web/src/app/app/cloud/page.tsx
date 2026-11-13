@@ -36,7 +36,7 @@ export default async function CloudDashboard() {
         <section className="mt-8">
           <p className={LEAD}>Pick a plan to run tasks in the cloud. You pay for the hours machines are awake.</p>
           <div className="mt-8">
-            <PlanCards />
+            <PlanCards choose={account.links.billing} />
           </div>
         </section>
       )}
@@ -149,7 +149,7 @@ function since(iso: string): string {
   return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${min % 60} min`;
 }
 
-function PlanRow({ plan, billing }: { plan: NonNullable<CloudAccount["plan"]>; billing: string }) {
+function PlanRow({ plan, billing }: { plan: NonNullable<CloudAccount["plan"]>; billing: string | null }) {
   return (
     <section className="mt-14">
       <h2 className={LABEL}>Plan</h2>
@@ -165,9 +165,11 @@ function PlanRow({ plan, billing }: { plan: NonNullable<CloudAccount["plan"]>; b
             <p className={`mt-1 ${ERROR}`}>Your last payment didn&apos;t go through. Update your card in billing.</p>
           )}
         </div>
-        <a href={billing} className={SECONDARY}>
-          Billing
-        </a>
+        {billing && (
+          <a href={billing} className={SECONDARY}>
+            Billing
+          </a>
+        )}
       </div>
     </section>
   );

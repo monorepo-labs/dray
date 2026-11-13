@@ -4,6 +4,7 @@ import { H1, LABEL, LEAD, MUTED } from "@/components/account/styles";
 import { PlanCards } from "@/components/cloud/PlanCards";
 import { Closing } from "@/components/home/Closing";
 import { SiteNav } from "@/components/home/SiteNav";
+import { billingUrl } from "@/lib/cloud/lanes";
 import { OVERAGE_CENTS_PER_HOUR } from "@/lib/cloud/plans";
 
 export const metadata: Metadata = {
@@ -56,7 +57,7 @@ export default function CloudPricingPage() {
             </p>
           </div>
           <div className="mt-12">
-            <PlanCards />
+            <PlanCards choose={billingUrl("")} />
             <p className={`mt-4 text-[14px] ${MUTED}`}>
               Past your plan&apos;s hours, machines stop until the month turns over. Turn on overage to keep going at{" "}
               {OVERAGE}. Prices in US dollars.

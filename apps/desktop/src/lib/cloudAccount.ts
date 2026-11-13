@@ -21,9 +21,10 @@ export type CloudAccount = {
   usage?: { from: string; to: string; hours: number } | null;
   /// Which repos the link reaches is GitHub's answer when a machine starts,
   /// which refuses one it can't clone with a sentence saying how to fix it.
-  github?: { connected: boolean; login: string | null; connectUrl: string };
+  /// A null URL, here and on `links`, is a step whose page hasn't shipped yet.
+  github?: { connected: boolean; login: string | null; connectUrl: string | null };
   agents?: Partial<Record<CloudAgent, CloudAgentState>>;
-  links?: { plans: string; billing: string; dashboard: string };
+  links?: { plans: string; billing: string | null; dashboard: string };
 };
 
 export type CloudAgent = "claude" | "codex";
@@ -69,7 +70,7 @@ function planDetail(plan: NonNullable<CloudAccount["plan"]>, used: number): stri
 /// the repo `slug`. A step after a missing sign-in can't be read, so it says so.
 export function setupSteps(account: CloudAccount | null, slug: string | null): Step[] {
   const user = account?.user ?? null;
-  const links = account?.links ?? { plans: `${SITE}/cloud`, billing: `${SITE}/app/account/billing`, dashboard: `${SITE}/app/cloud` };
+  const links = account?.links ?? { plans: `${SITE}/cloud`, billing: null, dashboard: `${SITE}/app/cloud` };
   const unknown = "Sign in first.";
   const plan = account?.plan ?? null;
   const github = account?.github;
@@ -96,7 +97,9 @@ export function setupSteps(account: CloudAccount | null, slug: string | null): S
         ? unknown
         : plan
           ? planDetail(plan, account?.usage?.hours ?? 0)
-          : "Plans include awake machine-hours. A machine sleeps when its agent goes quiet.",
+          : links.billing
+            ? "Plans include awake machine-hours. A machine sleeps when its agent goes quiet."
+            : "Choosing a plan opens soon.",
       url: user ? links.billing : null,
       verb: plan ? "Billing" : "Choose a plan",
     },
@@ -108,7 +111,9 @@ export function setupSteps(account: CloudAccount | null, slug: string | null): S
         ? unknown
         : github?.connected
           ? `Linked as ${github.login}. ${slug ?? "The repo"} must be one the Dray GitHub App is installed on.`
-          : `Install the Dray GitHub App so Cloud can clone and push ${slug ?? "your repos"}.`,
+          : github?.connectUrl
+            ? `Install the Dray GitHub App so Cloud can clone and push ${slug ?? "your repos"}.`
+            : "Linking GitHub opens soon.",
       url: user && !github?.connected ? (github?.connectUrl ?? null) : null,
       verb: "Install",
     },

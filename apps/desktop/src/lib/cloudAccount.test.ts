@@ -96,6 +96,18 @@ describe("setupSteps", () => {
     expect(s.detail).toBe("Connect your Claude login. Model usage stays on your Claude plan.");
   });
 
+  test("a page that hasn't shipped is said, never linked", () => {
+    const early = {
+      ...ready,
+      plan: null,
+      usage: null,
+      github: { connected: false, login: null, connectUrl: null },
+      links: { ...ready.links!, billing: null },
+    };
+    expect([step(early, "plan").detail, step(early, "plan").url]).toEqual(["Choosing a plan opens soon.", null]);
+    expect([step(early, "github").detail, step(early, "github").url]).toEqual(["Linking GitHub opens soon.", null]);
+  });
+
   test("a sparse answer costs steps, never a throw", () => {
     expect(setupSteps({ user } as CloudAccount, null).map((s) => s.done)).toEqual([true, false, false, false]);
   });

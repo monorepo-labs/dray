@@ -76,8 +76,13 @@ export async function githubConnection(_userId: string): Promise<{ login: string
   return mode === "ready" || mode === "over" ? { login: "acme" } : null;
 }
 
-/// GitHub App (#1022): where linking starts, its own route on this site.
-export const githubInstallUrl = (origin: string) => `${origin}/api/github/install`;
+/// GitHub App (#1022): where linking starts, or null until that lane's
+/// `/api/github/install` route exists, so no button leads to a 404.
+export const githubInstallUrl = (_origin: string): string | null => null;
+
+/// Billing (#1023): where plans are chosen and billing is managed, or null
+/// until that lane's `/app/account/billing` page exists.
+export const billingUrl = (_origin: string): string | null => null;
 
 /// Agent logins (#1022): whether connecting a Claude login is open at all.
 /// Off by default: Anthropic's terms bar routing a user's Pro or Max login

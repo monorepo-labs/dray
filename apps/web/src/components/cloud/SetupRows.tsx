@@ -14,12 +14,16 @@ export function SetupRows({ github, agents }: Pick<CloudAccount, "github" | "age
         detail={
           github.connected
             ? `Linked as ${github.login}. A task's repo must be one the Dray GitHub App is installed on.`
-            : "Install the Dray GitHub App on the repos Cloud may clone and push to."
+            : github.connectUrl
+              ? "Install the Dray GitHub App on the repos Cloud may clone and push to."
+              : "Linking GitHub opens soon."
         }
         action={
-          <a href={github.connectUrl} className={SECONDARY}>
-            {github.connected ? "Change repos" : "Install"}
-          </a>
+          github.connectUrl ? (
+            <a href={github.connectUrl} className={SECONDARY}>
+              {github.connected ? "Change repos" : "Install"}
+            </a>
+          ) : null
         }
       />
       {(["claude", "codex"] as const).map((agent) => {

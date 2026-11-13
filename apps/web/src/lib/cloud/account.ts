@@ -4,6 +4,7 @@ import { bearer, hashSecret } from "@/lib/link";
 
 import type { State } from "./cloud";
 import {
+  billingUrl,
   claudeConnected,
   claudeLoginsOpen,
   githubConnection,
@@ -35,10 +36,11 @@ export type CloudAccount = {
   machines: { id: string; state: State; repo: string | null; since: string }[];
   /// Linked or not. Which repos the link reaches is checked when a machine
   /// starts, which refuses one it can't clone with a sentence saying so.
-  github: { connected: boolean; login: string | null; connectUrl: string };
+  /// A null URL is a step that can't be taken yet, drawn as "opens soon".
+  github: { connected: boolean; login: string | null; connectUrl: string | null };
   /// `available` false is a login Dray can't take today, said in `note`.
   agents: Record<"claude" | "codex", { available: boolean; connected: boolean; connectUrl: string | null; note: string | null }>;
-  links: { plans: string; billing: string; dashboard: string };
+  links: { plans: string; billing: string | null; dashboard: string };
 };
 
 type User = CloudAccount["user"];
@@ -114,7 +116,7 @@ export async function cloudAccount(user: User, origin: string): Promise<CloudAcc
       },
       codex: { available: false, connected: false, connectUrl: null, note: AGENT_NOTES.codex },
     },
-    links: { plans: `${origin}/cloud`, billing: `${origin}/app/account/billing`, dashboard: `${origin}/app/cloud` },
+    links: { plans: `${origin}/cloud`, billing: billingUrl(origin), dashboard: `${origin}/app/cloud` },
   };
 }
 

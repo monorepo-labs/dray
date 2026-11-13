@@ -10,8 +10,9 @@ const BLURBS: Record<PlanId, string> = {
 };
 
 /// The three plans side by side in the site's hairlines. Choosing happens on
-/// the billing page (#1023), which signs the reader in first.
-export function PlanCards({ current = null }: { current?: PlanId | null }) {
+/// the billing page (#1023), which signs the reader in first; with no `choose`
+/// address yet, each card says plans open soon instead of linking nowhere.
+export function PlanCards({ current = null, choose }: { current?: PlanId | null; choose: string | null }) {
   return (
     <div className="grid border border-white/20 sm:grid-cols-3 light:border-black/15">
       {PLAN_IDS.map((id, i) => {
@@ -33,8 +34,10 @@ export function PlanCards({ current = null }: { current?: PlanId | null }) {
             </p>
             {id === current ? (
               <span className={`${SECONDARY} mt-auto cursor-default`}>Your plan</span>
+            ) : !choose ? (
+              <span className={`${SECONDARY} mt-auto cursor-default opacity-60`}>Opens soon</span>
             ) : (
-              <a href="/app/account/billing" className={`${id === "pro" ? PRIMARY : SECONDARY} mt-auto`}>
+              <a href={choose} className={`${id === "pro" ? PRIMARY : SECONDARY} mt-auto`}>
                 {current ? `Switch to ${plan.name}` : `Choose ${plan.name}`}
               </a>
             )}
