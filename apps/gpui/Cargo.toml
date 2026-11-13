@@ -1,0 +1,50 @@
+[package]
+name = "dray-gpui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "dray-gpui"
+path = "src/main.rs"
+
+[dependencies]
+# Zed's GPUI as a weekly crates.io snapshot of Zed main. The official `gpui`
+# crate is a year old; this is what `gpui-component` pins too, so a kit stays
+# reachable. Pinned exactly: GPUI breaks its API between snapshots.
+gpui = { package = "gpui-pre", version = "=0.3.12" }
+# `font-kit` is the macOS text system: without it GPUI falls back to a no-op one
+# and draws no text at all, silently. `runtime_shaders` compiles Metal shaders at
+# launch, so building needs the Command Line Tools rather than full Xcode.
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["font-kit", "runtime_shaders"] }
+
+# The core, for its types and its half of the serve wire. Default features off,
+# so no Tauri; `serve` for `machines::admit_with` and the protocol constants.
+dray_core = { package = "dray", path = "../desktop/src-tauri", default-features = false, features = ["serve"] }
+
+anyhow = "1"
+chrono = "0.4"
+env_logger = "0.11"
+futures = "0.3"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "fs", "macros"] }
+# Same major as the core's, so cargo builds it once.
+tokio-tungstenite = { version = "0.30", default-features = false }
+raw-window-handle = "0.6"
+
+# The window's glass: an NSVisualEffectView on the `sidebar` material, as
+# tauri.conf.json asks for. Same majors as the core's and GPUI's.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSVisualEffectView", "NSView", "NSResponder", "NSWindow", "NSAppearance"] }
+objc2-foundation = "0.3"
+
+# The spikes in examples/ that settled #856's open questions. Kept, so they
+# can be run again against the next GPUI pin.
+[dev-dependencies]
+gpui_base = { package = "gpui-base", version = "=0.9.1" }
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.12" }
+tree-sitter-highlight = "0.27"
+tree-sitter-rust = "0.24"

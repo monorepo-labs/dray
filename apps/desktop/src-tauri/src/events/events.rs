@@ -179,6 +179,11 @@ pub enum AgentEventPayload {
         /// to record one is the tree the message was actually written in.
         #[serde(default)]
         cwd: Option<String>,
+        /// Dray's own prompt opening a new bot's chat, so the bot speaks first.
+        /// The transcript draws no bubble for it; the log keeps it, being what
+        /// the agent was actually given.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        kickoff: bool,
     },
     AssistantText {
         /// `Some` only when this content was also streamed, naming the preview
@@ -411,6 +416,31 @@ pub enum AgentEventPayload {
         /// stops naming the model the CLI left.
         #[serde(default)]
         model: Option<crate::models::ModelId>,
+    },
+
+    /// A task's pull request, posted by the agent with `dray session merge-card`
+    /// or by the app once it is ready, so the reader can land it from the chat.
+    /// The PR's live state is read by the frontend; these fields are what the
+    /// card still names once the task is settled and gone from the index.
+    MergeCard {
+        task_id: String,
+        title: String,
+        /// The repo root, what the sidebar's PR marks are keyed by. The task's
+        /// machine's path where `machine` is set.
+        project_path: String,
+        branch: String,
+        number: u64,
+        url: String,
+        /// The machine holding the task, where it is not the chat's. Such a card
+        /// reads and merges by `repo` through `gh` here, since its checkout
+        /// is there, and may be gone with a sandbox.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        machine: Option<String>,
+        /// `owner/name`, set with `machine`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        repo: Option<String>,
     },
 
     /// The agent moved the checkout's git state or a pull request mid-turn —
@@ -735,6 +765,11 @@ pub struct MessageSender {
     /// the forwarding app, so it names the machine it came from.
     #[serde(default)]
     pub machine: Option<String>,
+    /// The bot whose chat sent it, where one did. `title` is then the bot's
+    /// name, and the chat draws the bot's own face.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub bot_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -938,7 +973,9 @@ mod tests {
                 ref from,
                 ref issues,
                 ref cwd,
+                kickoff,
             } if text == "hi"
+                && !kickoff
                 && images.is_empty()
                 && baseline.is_none()
                 && cwd.is_none()

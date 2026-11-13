@@ -63,7 +63,7 @@ type PrPanelProps = PrData & {
   cwd: string;
 };
 
-const TONE_TEXT: Record<Tone, string> = {
+export const TONE_TEXT: Record<Tone, string> = {
   ready: "text-accent-add",
   blocked: "text-accent-command",
   conflict: "text-destructive",
@@ -439,7 +439,7 @@ function PrRow({
 /// The primary fill is a near-white on this palette, which made the least
 /// reversible control on the pane also the brightest thing on it. Green is what
 /// the same button is on GitHub, so it is recognisable before it is read.
-const MERGE_FILL =
+export const MERGE_FILL =
   "bg-accent-merge text-accent-merge-foreground hover:bg-accent-merge-hover shadow-none";
 
 /// Kept clickable-looking while a write is in flight.
@@ -537,7 +537,7 @@ function BranchCleanup({
   );
 }
 
-const METHOD_LABEL: Record<MergeMethod, string> = {
+export const METHOD_LABEL: Record<MergeMethod, string> = {
   squash: "Squash and merge",
   merge: "Create a merge commit",
   rebase: "Rebase and merge",
@@ -546,7 +546,7 @@ const METHOD_LABEL: Record<MergeMethod, string> = {
 /// What each one does to the base branch's history, in the one line that
 /// actually distinguishes them. Spelled out in the menu rather than left to be
 /// known: this is the only irreversible choice on the pane.
-const METHOD_DETAIL: Record<MergeMethod, string> = {
+export const METHOD_DETAIL: Record<MergeMethod, string> = {
   squash: "All commits become one new commit on the base.",
   merge: "Every commit is kept, plus a merge commit joining the two histories.",
   rebase: "Each commit is replayed onto the base. Linear history, new SHAs.",
@@ -750,6 +750,13 @@ const CHECK_ICON: Record<PrCheck["state"], { Icon: typeof Check; tone: string }>
   cancelled: { Icon: CircleSlash, tone: "text-muted-foreground" },
   neutral: { Icon: MinusCircle, tone: "text-muted-foreground" },
 };
+
+/// A running check's glyph alone, for a row or card that says "checks
+/// running" without the words.
+export function ChecksRunningIcon({ className }: { className?: string }) {
+  const { Icon, tone } = CHECK_ICON.pending;
+  return <Icon role="img" aria-label="Checks running" className={cn("size-3.5 shrink-0", tone, className)} />;
+}
 
 function CheckRow({ check }: { check: PrCheck }) {
   const { Icon, tone } = CHECK_ICON[check.state];

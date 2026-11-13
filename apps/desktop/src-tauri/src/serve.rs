@@ -313,7 +313,7 @@ pub fn appimage_safe_cwd() -> Option<PathBuf> {
 }
 
 #[cfg(all(target_os = "linux", feature = "desktop"))]
-fn appimage() -> Option<PathBuf> {
+pub(crate) fn appimage() -> Option<PathBuf> {
     let image = std::env::var_os("APPIMAGE").filter(|v| !v.is_empty())?;
     let mount = std::env::temp_dir().join(".mount_");
     let exe = std::env::current_exe().ok()?;
@@ -462,9 +462,7 @@ async fn shut_down(code: i32) -> ! {
 /// that settle without cleaning up are gone (#482).
 ///
 /// An empty index sweeps nothing, since a missing file reads as no sessions
-/// and would take every profile. The CEF root ignores `DRAY_HOME`, so a
-/// server on a home of its own leaves it alone: that index is not the one
-/// those profiles belong to.
+/// and would take every profile.
 async fn sweep_browser_profiles() {
     let Ok(index) = store::read_index().await else { return };
     if index.is_empty() {
@@ -477,9 +475,7 @@ async fn sweep_browser_profiles() {
     // Only the renames are waited on; the removals run on.
     let _ = tokio::task::spawn_blocking(move || {
         #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
-        if std::env::var_os("DRAY_HOME").is_none() {
-            crate::cef::automation::sweep_profiles(&live);
-        }
+        crate::cef::automation::sweep_profiles(&live);
         crate::headless::automation::sweep_profiles(&live);
     })
     .await;
@@ -531,6 +527,7 @@ async fn start_core(sink: Sink, boat: Option<&str>) -> Result<PathBuf> {
     sweep_browser_profiles().await;
     crate::auto_continue::rearm(&sink).await;
 
+    tokio::spawn(crate::remote_reports::run(sink.clone()));
     // Agents this server spawns reach it through `dray`, so it serves the
     // socket the desktop app does — under `DRAY_HOME` where that is set.
     tokio::spawn(async move {
@@ -576,6 +573,13 @@ impl Hub {
 /// reads it from the command table.
 pub static HUB: std::sync::LazyLock<Hub> = std::sync::LazyLock::new(Hub::default);
 
+/// The permission and question cards open now, every session's, as
+/// `agent_event` payloads. What an MCP assistant reads to learn a session is
+/// blocked on the user, since nothing can be pushed to it.
+pub fn open_asks() -> Vec<Value> {
+    HUB.live.lock().unwrap_or_else(|e| e.into_inner()).asks.clone()
+}
+
 /// Serves `listener` until the future is dropped, which also drops every
 /// connection it accepted — how the desktop app turns serving off.
 /// `tunnel_file` holds the address whose origin is let through. `hosts` lets a
@@ -610,8 +614,12 @@ pub async fn listen(
             // its task and its socket until the peer went away.
             let first = tokio::time::timeout(ADMIT, request_line(&stream)).await.ok().flatten();
             let served = match first {
+                Some(line) if relayed(&line) => relay_http(stream, &token).await,
                 Some(line) if line.starts_with("GET /file?") => file(stream, &token).await,
                 Some(line) if line.starts_with("POST /upload?") => upload(stream, &token).await,
+                // Its own sign-in, never the serve token: an assistant's cloud
+                // must not hold the key to every other door here.
+                Some(line) if dray_proto::REMOTE_MCP && crate::mcp::routes(&line) =>crate::mcp::serve(stream, sink).await,
                 Some(_) => connection(stream, sink, hub, &token, &tunnel_file, hosts).await,
                 None => Ok(()),
             };
@@ -713,6 +721,10 @@ struct Hello {
     /// than being a client: see [`pipe`].
     #[serde(default)]
     forward: Option<u16>,
+    /// A machine this server shares, by id: the socket is that machine's,
+    /// relayed through here. See [`relay`].
+    #[serde(default)]
+    via: Option<String>,
 }
 
 /// What the app can answer when it connects as the host.
@@ -938,6 +950,156 @@ where
         _ = outbound => {}
         _ = inbound => {}
     }
+}
+
+/// Passes one client's socket to a machine this server shares (#847), frames
+/// untouched both ways, so the machine's welcome, events and replies reach the
+/// client as if it had connected there. Admitted by this server's token; the
+/// machine is told its own. Only what a plain client says is passed on — never
+/// `host` or `client`, which a machine honours on its local listener, where
+/// an SSH forward lands — and no `via`, so a relay is one hop.
+async fn relay<W, R>(mut write: W, mut read: R, hello: Hello) -> Result<()>
+where
+    W: futures_util::Sink<Message> + Unpin,
+    R: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    let theirs = json!({ "v": hello.v, "deflate": hello.deflate, "counts": hello.counts });
+    let upstream = match crate::machines::relay(hello.via.as_deref().unwrap_or_default(), theirs).await {
+        Ok(upstream) => upstream,
+        Err(refusal) => {
+            write.send(Message::text(json!({ "err": refusal }).to_string())).await.ok();
+            write.close().await.ok();
+            return Ok(());
+        }
+    };
+    let via = hello.via.unwrap_or_default();
+    let (mut up_write, mut up_read) = upstream.split();
+    // The client's pings are answered here, so they say nothing of the machine;
+    // it is pinged from here and dropped once silent, which ends the client's
+    // socket and has it reconnect.
+    let mut ping = tokio::time::interval(PIPE_PING);
+    let mut heard = tokio::time::Instant::now();
+    loop {
+        tokio::select! {
+            frame = read.next() => match frame {
+                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(frame)) => if up_write.send(frame).await.is_err() { break },
+            },
+            frame = up_read.next() => {
+                heard = tokio::time::Instant::now();
+                match frame {
+                    Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(frame)) => if write.send(frame).await.is_err() { break },
+                }
+            }
+            // Sharing switched off, or the machine left the list, ends the relay
+            // too. The tick catches the Mac app's own list edits, which no
+            // notify in this process sees.
+            _ = crate::machines::SHARING_MOVED.notified() => {
+                if !crate::machines::still_shared(&via).await {
+                    break;
+                }
+            }
+            _ = ping.tick() => {
+                if heard.elapsed() > PIPE_SILENCE
+                    || !crate::machines::still_shared(&via).await
+                    || up_write.send(Message::Ping(Default::default())).await.is_err()
+                {
+                    break;
+                }
+            }
+        }
+    }
+    up_write.close().await.ok();
+    write.close().await.ok();
+    Ok(())
+}
+
+/// Whether an HTTP request line names a shared machine with `via=`.
+fn relayed(line: &str) -> bool {
+    let target = line.split(' ').nth(1).unwrap_or_default();
+    let routed = line.starts_with("GET /file?") || line.starts_with("POST /upload?");
+    routed && target.split_once('?').is_some_and(|(_, q)| form_urlencoded::parse(q.as_bytes()).any(|(k, _)| k == "via"))
+}
+
+/// `/file` or `/upload` with `via=<machine id>`: answered by that machine under
+/// its own token, the HTTP half of [`relay`]. This server's token admits it,
+/// as a header or `token=` in the query the way `/file` takes it.
+async fn relay_http(stream: TcpStream, token: &str) -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (head, reader) = read_head(stream).await?;
+    let early = reader.buffer().to_vec();
+    let mut stream = reader.into_inner().into_inner();
+    let (route, query) = head.target.split_once('?').unwrap_or((&head.target, ""));
+    let (mut given, mut via, mut rest) = (head.bearer.clone().unwrap_or_default(), String::new(), String::new());
+    for (key, value) in form_urlencoded::parse(query.as_bytes()) {
+        match &*key {
+            "token" => {
+                if given.is_empty() {
+                    given = value.into_owned();
+                }
+            }
+            "via" => via = value.into_owned(),
+            _ => {
+                form_urlencoded::Serializer::for_suffix(&mut rest, 0).append_pair(&key, &value);
+            }
+        }
+    }
+    let refuse = |status: &str| format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    if !same_token(&given, token) {
+        stream.write_all(refuse("401 Unauthorized").as_bytes()).await?;
+        return Ok(());
+    }
+    let Ok((base, theirs)) = crate::machines::relay_http(&via).await else {
+        stream.write_all(refuse("502 Bad Gateway").as_bytes()).await?;
+        return Ok(());
+    };
+    let url = format!("{base}{route}?{rest}");
+    // An upload's body goes out inside `send`, so its wait grows with the
+    // body: 64 KiB/s at worst.
+    let mut wait = PIPE_SILENCE;
+    let mut request = match route {
+        "/upload" => {
+            let Some(length) = head.length.filter(|&l| l <= crate::attachments::MAX_UPLOAD_BYTES) else {
+                stream.write_all(refuse("413 Content Too Large").as_bytes()).await?;
+                return Ok(());
+            };
+            // ponytail: held whole, which a phone's dictation fits; stream it
+            // if a client starts relaying attachments.
+            let mut body = Vec::with_capacity(length as usize);
+            (&early[..]).chain(&mut stream).take(length).read_to_end(&mut body).await?;
+            wait += std::time::Duration::from_secs(length / (64 * 1024));
+            crate::http().post(url).body(body)
+        }
+        _ => crate::http().get(url),
+    }
+    .bearer_auth(theirs);
+    if let Some(range) = &head.range {
+        request = request.header(reqwest::header::RANGE, range);
+    }
+    // `http()` has no timeout of its own, and a body may stream for minutes,
+    // so the wait is bounded per step: the answer's head, then each chunk.
+    let Ok(Ok(mut response)) = tokio::time::timeout(wait, request.send()).await else {
+        stream.write_all(refuse("502 Bad Gateway").as_bytes()).await?;
+        return Ok(());
+    };
+    let status = response.status();
+    let mut reply = format!("HTTP/1.1 {} {}\r\n", status.as_u16(), status.canonical_reason().unwrap_or_default());
+    for name in ["content-type", "content-length", "content-range", "accept-ranges"] {
+        if let Some(value) = response.headers().get(name).and_then(|v| v.to_str().ok()) {
+            reply.push_str(&format!("{name}: {value}\r\n"));
+        }
+    }
+    reply.push_str("Connection: close\r\n\r\n");
+    stream.write_all(reply.as_bytes()).await?;
+    while let Some(chunk) = tokio::time::timeout(PIPE_SILENCE, response.chunk()).await.context("the machine stopped sending")?? {
+        stream.write_all(&chunk).await?;
+    }
+    stream.shutdown().await.ok();
+    Ok(())
 }
 
 /// An HTTP request head: its target, the bearer token if one was sent, the
@@ -1258,6 +1420,9 @@ async fn connection(
         write.close().await.ok();
         return Ok(());
     }
+    if let Some(relayed) = serde_json::from_str::<Hello>(&hello).ok().filter(|h| h.via.is_some()) {
+        return relay(write, read, relayed).await;
+    }
     if let Some(port) = serde_json::from_str::<Hello>(&hello).ok().and_then(|h| h.forward) {
         // `localhost` rather than 127.0.0.1: every address it resolves to is
         // tried, and Vite binds `::1` alone on some machines. Any port is
@@ -1536,6 +1701,9 @@ async fn dispatch_mac(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value
 /// server's own desktop: opening apps and terminals, and the pasteboard.
 /// Mac-only modules are not compiled here.
 async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
+    if !dray_proto::REMOTE_MCP && cmd.starts_with("mcp_") {
+        return Err(json!(format!("unknown command {cmd}")));
+    }
     #[cfg(feature = "desktop")]
     if matches!(
         cmd,
@@ -1616,12 +1784,17 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         ) => ok(crate::orchestration::answer_forward(
             crate::orchestration::Forward { line, origin, caller, sender }, sink,
         ).await);
-        worktree_disposition(session_id: String) => crate::worktree_disposition(&session_id).await;
+        // A bot's server collecting what its tasks here said (#958).
+        parent_reports(children: Vec<String>, ack: Vec<String>, forget: Option<Vec<String>>) =>
+            crate::remote_reports::take(children, ack, forget.unwrap_or_default()).await;
+        worktree_disposition(session_id: String) =>crate::worktree_disposition(&session_id).await;
         remove_session_worktree(session_id: String) => crate::remove_session_worktree(&session_id).await;
         detach_session(session_id: String) => store::detach_session(&session_id).await;
         set_auto_continue(session_id: String, on: bool) => crate::auto_continue::set_auto_continue(session_id, on, sink).await;
         list_session_index_items(archived: bool) => store::list_session_index_items(archived).await;
         reachable_sessions() => ok(crate::machines::reachable_sessions().await);
+        share_machines() => ok(crate::machines::sharing().await);
+        set_share_machines(on: bool) => crate::machines::set_sharing(on).await;
         get_session_by_id(session_id: String, turns: Option<u32>) => store::get_session_by_id(&session_id, turns).await;
         get_session_page(session_id: String, before: u64, turns: u32) => store::get_session_page(&session_id, before, turns).await;
         get_session_since(session_id: String, after: Vec<String>) => store::get_session_since(&session_id, after).await;
@@ -1634,7 +1807,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         list_slash_commands(cwd: String, harness: Harness) => crate::list_slash_commands(&cwd, harness).await;
         agent_accounts(cwd: String) => ok(crate::accounts::agent_accounts(cwd).await);
         agent_auth_options(harness: Harness, provider: Option<String>) =>
-            ok(crate::accounts::agent_auth_options(harness, provider));
+            ok(crate::accounts::agent_auth_options(harness, provider).await);
         add_agent_account(harness: Harness, provider: Option<String>, auth: String, key: Option<String>) =>
             crate::accounts::add_agent_account(harness, provider, auth, key).await;
         sign_out_agent(harness: Harness, provider: Option<String>) =>
@@ -1694,6 +1867,24 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             saved
         };
         delete_draft(id: String) => crate::drafts::delete_draft(id).await;
+        list_bots() => crate::bots::list_bots().await;
+        create_bot(name: String, avatar: Option<crate::bots::BotAvatar>) => crate::bots::create_bot(name, avatar).await;
+        bot_previews(session_ids: Vec<String>) => crate::bots::bot_previews(session_ids).await;
+        nudge_bot(session_id: String, problem: Option<String>, ready: Option<u32>) => crate::orchestration::nudge_bot(session_id, problem, ready, sink).await;
+        auto_merge_card(session_id: String, task_id: String, number: u64, url: String, branch: String) =>
+            crate::orchestration::auto_merge_card(session_id, task_id, number, url, branch, sink).await;
+        start_bot(id: String, harness: crate::session::Harness, model: crate::models::ModelId, effort: Option<crate::models::Effort>, permission_mode: crate::events::ApprovalPolicy, fast: bool) =>
+            crate::bots::start_bot(id, harness, model, effort, permission_mode, fast, sink).await;
+        delete_bot(id: String) => crate::bots::delete_bot(id, sink).await;
+
+        // Assistants signed in to `/mcp`.
+        mcp_pair(read_only: bool, replaces: Option<String>) => crate::mcp::pair(sink, read_only, replaces).await;
+        mcp_assistants() => crate::mcp::assistants().await;
+        mcp_revoke(id: String) => crate::mcp::revoke(sink, id).await;
+        // This server's link to an org at drayhq.com.
+        org_link_state() => ok(crate::org_link::state(&sink).await);
+        org_link_start() => crate::org_link::start(sink).await;
+        org_unlink() => crate::org_link::unlink(sink).await;
         read_doc(path: String) => crate::docs::read_doc(path).await;
         save_doc(path: String, text: String, expect: Option<String>) => crate::docs::save_doc(path, text, expect).await;
         watch_docs(scope: String, paths: Vec<String>) => {
@@ -1743,6 +1934,16 @@ mod tests {
         assert_eq!(byte_span(Some("bytes=0-1,5-6"), 100), Whole, "many ranges answer whole");
         assert_eq!(byte_span(Some("items=0-1"), 100), Whole);
         assert_eq!(byte_span(Some("bytes=0-"), 0), Unsatisfiable);
+    }
+
+    #[test]
+    fn only_a_file_or_upload_naming_via_is_relayed() {
+        use super::relayed;
+        assert!(relayed("GET /file?path=%2Fa&via=69b4 HTTP/1.1"));
+        assert!(relayed("POST /upload?via=69b4&name=a.wav HTTP/1.1"));
+        assert!(!relayed("GET /file?path=%2Fvia%3Dx HTTP/1.1"), "a path holding via= is not a via");
+        assert!(!relayed("GET /file?path=%2Fa HTTP/1.1"));
+        assert!(!relayed("GET /?via=69b4 HTTP/1.1"), "the socket's upgrade carries via in its hello");
     }
 
     use super::*;

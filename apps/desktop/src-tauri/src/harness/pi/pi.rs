@@ -150,7 +150,7 @@ pub async fn init(
     }
 
     args.push("--append-system-prompt".into());
-    args.push(APPEND_SYSTEM_PROMPT.to_string());
+    args.push(crate::bots::system_prompt(APPEND_SYSTEM_PROMPT, session_id, session_cwd).await);
 
     let bin = crate::binpath::pi().await;
     let mut command = Command::new(&bin);

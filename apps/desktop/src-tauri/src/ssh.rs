@@ -23,7 +23,10 @@ const KEYSCAN: &str = "/usr/bin/ssh-keyscan";
 const KEYGEN: &str = "/usr/bin/ssh-keygen";
 
 /// The machine logging in, in a failure's words: a Linux server runs this too.
-const HERE: &str = if cfg!(target_os = "macos") { "This Mac" } else { "This machine" };
+pub(crate) const HERE: &str = if cfg!(target_os = "macos") { "This Mac" } else { "This machine" };
+/// `HERE` mid-sentence, for the app's own server and boat errors.
+#[cfg(feature = "desktop")]
+pub(crate) const HERE_MID: &str = if cfg!(target_os = "macos") { "this Mac" } else { "this machine" };
 
 /// Where `dray-serve` listens on the server, as `dray setup` leaves it.
 const REMOTE_PORT: u16 = dray_proto::SERVE_PORT;

@@ -294,18 +294,24 @@ add_to_path || case ":$PATH:" in
     ;;
 esac
 
-# The Dray app's login agent, or its bundle: the same three paths as
-# `app_on_this_mac` in apps/cli/src/setup.rs.
-app_on_this_mac() {
-  [ "$(uname -s)" = Darwin ] || return 1
-  [ -e "$HOME/Library/LaunchAgents/com.yogesh.dray.server.plist" ] \
-    || [ -e /Applications/Dray.app ] || [ -e "$HOME/Applications/Dray.app" ]
+# The Dray app's login agent or bundle on a Mac, the AppImage the app recorded
+# on Linux: `app_ships_this_cli` in apps/cli/src/setup.rs. A `DRAY_HOME` of its
+# own is a server apart from the app, as `app_updates_this_cli` reads it.
+app_on_this_machine() {
+  [ -z "${DRAY_HOME:-}" ] || return 1
+  if [ "$(uname -s)" = Darwin ]; then
+    [ -e "$HOME/Library/LaunchAgents/com.yogesh.dray.server.plist" ] \
+      || [ -e /Applications/Dray.app ] || [ -e "$HOME/Applications/Dray.app" ]
+  else
+    record="$HOME/.local/share/dray/appimage"
+    [ -s "$record" ] && [ -f "$(cat "$record")" ]
+  fi
 }
 
 # Away from the app `dray` is only useful as a server, so a first install goes
 # on to set one up. stdin is the rest of this script under `curl | sh`, so
 # setup gets none and asks its questions on /dev/tty.
-if [ -n "$SERVER" ] && [ -z "${DRAY_UPDATING:-}" ] && ! app_on_this_mac; then
+if [ -n "$SERVER" ] && [ -z "${DRAY_UPDATING:-}" ] && ! app_on_this_machine; then
   say ""
   "$INSTALL_DIR/dray" setup </dev/null
   exit

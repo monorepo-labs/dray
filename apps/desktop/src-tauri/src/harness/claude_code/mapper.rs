@@ -978,6 +978,7 @@ fn user_message(text: String) -> AgentEventPayload {
         // Absent is "this session's own cwd", which a line off the wire was
         // written against by definition. Only a fork records one.
         cwd: None,
+        kickoff: false,
     }
 }
 

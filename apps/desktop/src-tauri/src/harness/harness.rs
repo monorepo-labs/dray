@@ -907,12 +907,10 @@ impl Harness {
         match self {
             Harness::ClaudeCode => "claude auth login",
             Harness::Codex => "codex login",
-            // pi's login is a slash command inside its TUI, not a subcommand:
-            // `pi auth` offers `print-api-key`, `print-bearer-token` and
-            // `check` and nothing that signs anyone in. So the command opens
-            // pi, and [`Harness::login_hint`] carries the rest — bare `pi`
-            // lands the reader in a TUI with no idea what to type next, which
-            // is a cure that does not cure.
+            // `pi auth login` (pi 1.5.1) needs a provider and this line has
+            // none, so it opens pi and [`Harness::login_hint`] says to type
+            // `/login` there. The Accounts tab knows the provider and uses
+            // `pi auth login <provider>`.
             Harness::Pi => "pi",
             // `fx login [vercel|codex|grok]` — bare, it asks which. Verified
             // against `fx --help`.

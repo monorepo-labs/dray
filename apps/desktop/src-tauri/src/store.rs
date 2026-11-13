@@ -178,6 +178,12 @@ pub struct SessionIndexItem {
     /// clearing it, so they can turn it back on until the time passes.
     #[serde(default)]
     pub continue_off: bool,
+    /// What a bot's stalled task needs from the reader, one line the bot wrote
+    /// with `dray session need`. Drawn only while `at` is no older than
+    /// `modified`, so the task moving clears it without a write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub need: Option<TaskNeed>,
     /// Every key this build does not know, carried through untouched.
     ///
     /// The index is rewritten **whole**, and `INDEX_LOCK` is an in-process
@@ -200,6 +206,25 @@ pub struct SessionIndexItem {
     #[serde(flatten)]
     #[ts(skip)]
     pub unknown: serde_json::Map<String, Value>,
+}
+
+/// See [`SessionIndexItem::need`].
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "events.ts")]
+pub struct TaskNeed {
+    pub text: String,
+    /// RFC3339, when the bot wrote it.
+    pub at: String,
+}
+
+/// Writes or clears a task's need line. `None` where the session is unknown.
+/// `modified` is left alone: the line is about the task, not activity in it.
+pub async fn set_session_need(session_id: &str, text: Option<String>) -> Result<Option<SessionIndexItem>> {
+    update_item(session_id, |item| {
+        item.need = text.map(|text| TaskNeed { text, at: now_rfc3339() });
+        item.clone()
+    })
+    .await
 }
 
 /// What crosses the IPC boundary for one session: its index entry plus the
@@ -696,6 +721,7 @@ impl SessionIndexItem {
             aside: false,
             continue_at: None,
             continue_off: false,
+            need: None,
             unknown: Default::default(),
         }
     }
@@ -789,6 +815,7 @@ impl SessionIndexItem {
             aside: false,
             continue_at: None,
             continue_off: false,
+            need: None,
             unknown: Default::default(),
         }
     }
@@ -1689,6 +1716,38 @@ pub async fn get_session_page(
     turns: u32,
 ) -> Result<SessionPage, Fail> {
     Ok(read_session_page(session_id, Some(before), turns).await?)
+}
+
+/// The last thing a session's main thread said, and how many replies it has
+/// made since the reader last wrote — read off the end of its log alone.
+///
+/// The count stands in for "unread": nothing records what the reader has seen,
+/// but their own last message is a point they had read up to. A relayed report
+/// or a kickoff is not theirs, so neither resets it.
+pub async fn last_reply(session_id: &str) -> Result<(Option<String>, u32)> {
+    let page = read_session_page(session_id, None, 20).await?;
+    let mut last = None;
+    let mut since = 0;
+    // The count stops at the reader's own last message; the preview reads on
+    // past it, or a turn still running would blank the row.
+    let mut counting = true;
+    for event in page.events.into_iter().rev() {
+        if event.subagent.is_some() {
+            continue;
+        }
+        match event.payload {
+            AgentEventPayload::AssistantText { text, .. } if !text.trim().is_empty() => {
+                since += u32::from(counting);
+                last.get_or_insert(text);
+            }
+            AgentEventPayload::UserMessage { from: None, kickoff: false, .. } => counting = false,
+            _ => {}
+        }
+        if !counting && last.is_some() {
+            break;
+        }
+    }
+    Ok((last, since))
 }
 
 /// Events from one stretch of a session's log, and the byte offset the
@@ -2883,6 +2942,7 @@ mod tests {
                 queued: false,
                 from: None,
                 cwd: None,
+                kickoff: false,
             }),
             // Already carried a cwd, so this copy is a fork of a fork. The
             // first ancestor to record one is the tree the message was
@@ -2895,6 +2955,7 @@ mod tests {
                 queued: false,
                 from: None,
                 cwd: Some("/repo/grandparent".into()),
+                kickoff: false,
             }),
             event(AgentEventPayload::ToolCallCompleted {
                 call_id: "c1".into(),

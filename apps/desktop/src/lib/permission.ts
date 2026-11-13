@@ -79,3 +79,16 @@ export function stanceFor(harness: Harness, mode: ApprovalPolicy): ApprovalPolic
   if (honoursMode(harness, mode)) return mode;
   return FALLBACK[harness]?.(mode) ?? "bypassPermissions";
 }
+
+/// The stance a bot chat runs on: always Auto, so the reader never picks one
+/// for a chat that is talked to like a person. The composer's pick counts only
+/// on a harness with no Auto.
+export function botStance(harness: Harness, mode: ApprovalPolicy): ApprovalPolicy {
+  return honoursMode(harness, "auto") ? "auto" : stanceFor(harness, mode);
+}
+
+/// Whether a bot chat on `harness` shows the stance picker: only where there
+/// is no Auto to hold it on.
+export function botPicksStance(harness: Harness): boolean {
+  return !honoursMode(harness, "auto");
+}

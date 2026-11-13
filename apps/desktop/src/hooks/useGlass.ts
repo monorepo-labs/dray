@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useTheme } from "@/hooks/useTheme";
+import { IS_LINUX } from "@/lib/platform";
 import { flatWhenWindowed, keepsGlassInFullscreen, modeFor } from "@/lib/theme";
 
 /// Whether the document opened as glass at all — read once, at import, because
@@ -23,6 +24,10 @@ const VIBRANT = document.documentElement.dataset.vibrancy !== undefined;
 /// fully opaque, and **the palette answers that**, not the reader — see
 /// `keepsGlassInFullscreen`, which weighs the mode and the theme in that order.
 ///
+/// **Linux is always flat**, windowed or not and in every palette: every surface
+/// an opaque fill, as a Mac draws a flat palette. Nothing is behind its window
+/// to layer over, so translucency there only cost contrast.
+///
 /// The invariant this guarantees, which App.css leans on: vibrancy is never present
 /// without transparency. Two veils can therefore never stack, because the pair that
 /// would stack them cannot occur.
@@ -39,7 +44,7 @@ export function useGlass(fullscreen: boolean) {
     // takes it away — in fullscreen, for light mode or a flat-in-fullscreen
     // theme. One frame of glass is the cost of not being able to ask the OS
     // about fullscreen before the first paint.
-    const flat = !fullscreen && flatWhenWindowed(theme, resolvedMode);
+    const flat = IS_LINUX || (!fullscreen && flatWhenWindowed(theme, resolvedMode));
     if (!flat && (!fullscreen || keepsGlassInFullscreen(theme, resolvedMode))) {
       el.dataset.transparency = "";
     } else {

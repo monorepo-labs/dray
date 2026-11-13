@@ -61,6 +61,11 @@ pub struct AppSettings {
     /// Rust starts it at launch, before any webview exists to ask.
     #[serde(default)]
     pub remote_access: bool,
+    /// Whether a client holding this server's token reaches the machines it
+    /// lists through it (#847). Off by default: it hands that token every
+    /// machine's reach, SSH logins included.
+    #[serde(default)]
+    pub share_machines: bool,
 }
 
 /// The transcription picks. Model and device mean "not chosen" when absent.
@@ -108,6 +113,7 @@ impl Default for AppSettings {
             linear_account: None,
             transcription: TranscriptionSettings::default(),
             remote_access: false,
+            share_machines: false,
         }
     }
 }
@@ -274,6 +280,7 @@ mod tests {
             linear_account: None,
             transcription: TranscriptionSettings::default(),
             remote_access: true,
+            share_machines: true,
         };
 
         write_to(&dir, &off).await.unwrap();

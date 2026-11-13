@@ -1,6 +1,6 @@
 [package]
 name = "dray"
-version = "0.29.19"
+version = "0.30.2"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -15,7 +15,11 @@ default-run = "dray"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "ade_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# `rlib` alone. Tauri's template adds `staticlib` and `cdylib` for mobile, which
+# Dray never builds — and either one makes cargo drop the hash from this
+# crate's file names, so two lockfiles building the core into one build dir
+# (apps/gpui depends on it) overwrite each other's `libade_lib.rlib` unseen.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
@@ -96,6 +100,9 @@ opentunnel = "0.5.1"
 # tree under `reqwest`.
 hyper = { version = "1", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
+# Whole-body requests and answers for `/mcp` and its OAuth routes. Already in
+# the tree under `reqwest`.
+http-body-util = "0.1"
 tauri-plugin-window-state = { version = "2", optional = true }
 # `dray-serve`'s WebSocket. The server half alone, and no TLS: it binds localhost.
 tokio-tungstenite = { version = "0.30", optional = true, default-features = false, features = ["handshake"] }
@@ -133,6 +140,9 @@ transcribe-cpp = { version = "0.4", default-features = false, features = [
   "vulkan",
   "dynamic-backends",
 ], optional = true }
+# logind's `PrepareForSleep` and a banner's click, both D-Bus signals. The
+# version and features notify-rust already builds, so this costs no build.
+zbus = { version = "5", default-features = false, features = ["async-io"], optional = true }
 
 [target.'cfg(not(any(target_os = "macos", target_os = "linux")))'.dependencies]
 transcribe-cpp = { version = "0.4", default-features = false, optional = true }
@@ -177,6 +187,10 @@ desktop = [
   # with `desktop` alone. See chromium.rs.
   "dep:bzip2",
   "dep:tar",
+  # The composer's paste reads GTK's clipboard on Linux (attachments.rs).
+  "dep:gtk",
+  # Linux's sleep and banner click. See transcription.rs and notifications.rs.
+  "dep:zbus",
 ]
 cef = ["desktop", "dep:cef", "dep:gtk", "dep:gdkx11", "dep:x11"]
 # `connect` and TLS: a server reaches other machines too (machines.rs).

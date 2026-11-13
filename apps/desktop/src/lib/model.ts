@@ -203,6 +203,18 @@ export function usableEffort(
 /// skipping one it can, reads as the chord being broken.
 export const HARNESS_ORDER: Harness[] = ["claude_code", "codex", "pi", "fx", "grok"];
 
+/// Named as the reader knows them, not as the wire spells them.
+export const AGENT_LABELS: Record<Harness, string> = {
+  claude_code: "Claude Code",
+  codex: "Codex",
+  pi: "pi",
+  fx: "fx",
+  // xAI's own name for the CLI. Not "grok", which is the chat assistant every
+  // one of these models is also served by — the installer calls this one Grok
+  // Build and the picker is naming an agent, not a model.
+  grok: "Grok",
+};
+
 /// Where ⌘⇧A lands from `current`, wrapping, over the agents the reader has
 /// left on. An unknown or disabled current steps onto the first, the same place
 /// the picker parks its thumb.

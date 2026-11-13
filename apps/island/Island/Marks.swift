@@ -63,6 +63,8 @@ struct TitleRow: View {
     /// Beside the title rather than in it, since a long title is cut and this must not be.
     var machine: String? = nil
     let marks: Marks
+    /// A bot's chat: its face leads the name.
+    var bot: Bot? = nil
     let close: String
     let list: () -> Void
     let openInApp: () -> Void
@@ -75,10 +77,14 @@ struct TitleRow: View {
             Button {
                 if NSEvent.modifierFlags.contains(.command) { openInApp() } else { list() }
             } label: {
-                HStack(spacing: 4) {
-                    let lead = LeadMark(marks: marks, orb: false)
-                    if lead.shown { lead }
-                    Text(title).lineLimit(1)
+                HStack(spacing: bot == nil ? 4 : 6) {
+                    if let bot {
+                        BotFace(bot: bot, size: 16)
+                    } else {
+                        let lead = LeadMark(marks: marks, orb: false)
+                        if lead.shown { lead }
+                    }
+                    Text(bot?.name ?? title).lineLimit(1)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white.opacity(hovered ? 1 : 0.7))
                         .shimmer(marks.busy, period: 1.4)
@@ -126,16 +132,25 @@ struct SessionRow: View {
     let project: String
     let marks: Marks
     let selected: Bool
+    /// A bot's chat: its face and name, and no project, which would be its folder's id.
+    var bot: Bot? = nil
     @State private var hover = false
     static let height: CGFloat = 32
 
     var body: some View {
         HStack(spacing: 4) {
-            let lead = LeadMark(marks: marks)
-            if lead.shown { lead }
-            Text(title.isEmpty ? "Untitled" : title).lineLimit(1)
-            Spacer(minLength: 8)
-            Text(project).lineLimit(1).foregroundStyle(.secondary)
+            if let bot {
+                BotFace(bot: bot).padding(.trailing, 2)
+                Text(bot.name).lineLimit(1)
+                Spacer(minLength: 8)
+                if marks.busy { TypingDots() }
+            } else {
+                let lead = LeadMark(marks: marks)
+                if lead.shown { lead }
+                Text(title.isEmpty ? "Untitled" : title).lineLimit(1)
+                Spacer(minLength: 8)
+                Text(project).lineLimit(1).foregroundStyle(.secondary)
+            }
         }
         .font(.system(size: 13))
         .padding(.horizontal, 8)

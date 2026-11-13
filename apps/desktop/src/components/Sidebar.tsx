@@ -1,6 +1,7 @@
-import { Cog6ToothIcon } from "@heroicons/react/16/solid";
+import { Cog6ToothIcon, SignalSlashIcon } from "@heroicons/react/16/solid";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  MessageCirclePlus,
   Archive,
   ArchiveRestore,
   Check,
@@ -18,8 +19,11 @@ import {
   Undo2,
 } from "lucide-react";
 import Orb from "@/components/Orb";
+import BotAvatar from "@/components/BotAvatar";
+import { TypingDots } from "@/components/chat/BotTranscript";
+import { previewLine, type BotEntry } from "@/lib/bots";
 
-import PrStateIcon, { prStateLabel } from "@/components/PrStateIcon";
+import PrStateIcon, { ChecksRunningIcon, prStateLabel } from "@/components/PrStateIcon";
 import UpdateRow from "@/components/UpdateRow";
 import PanelLeftIcon from "@/components/icons/PanelLeftIcon";
 import { Button } from "@/components/ui/button";
@@ -41,7 +45,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ShortcutKeys, { DigitKeys } from "@/components/ShortcutKeys";
-import { useSwipe } from "@/lib/swipe";
+import { HAS_SWIPE, useSwipe } from "@/lib/swipe";
 import { playSwipeTick } from "@/lib/tick";
 import { Kbd } from "@/components/ui/kbd";
 import {
@@ -57,12 +61,14 @@ import { basename, isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
 import { sessionBranch } from "@/lib/pr";
 import { checkoutsOf, groupProjects, keyOfPath, leadPath, soleServer } from "@/lib/projectGroups";
-import { projectLabel, serverConnected, serverName, useServers } from "@/lib/servers";
+import { offlineLine, projectLabel, serverConnected, serverName, useServers } from "@/lib/servers";
 import { LOCAL, serverOfPath } from "@/lib/transport";
 import { useResizable } from "@/components/ResizeHandle";
 import { useJumpDigit } from "@/lib/digitChords";
 import { cn } from "@/lib/utils";
 import type {
+  Bot,
+  BotPreview,
   PrMark,
   Project,
   SessionIndexItem,
@@ -79,6 +85,11 @@ type SidebarProps = {
   // Already scoped to `projectFilter` and to `search` by the caller, so the list
   // and the ⌘⇧↑/↓ walk step through exactly the same rows.
   items: SessionIndexItem[];
+  /// The Bots section: every bot with its ongoing chat, if it has one.
+  bots?: BotEntry[];
+  onOpenBot?: (bot: Bot) => void;
+  onDeleteBot?: (bot: Bot) => void;
+  onNewBot?: () => void;
   // The live search query. Owned by the caller, because the list it narrows is
   // the caller's — the ⌘⇧↑/↓ walk reads the same array, and a query kept in here
   // would leave the shortcut stepping rows the sidebar no longer draws.
@@ -94,6 +105,8 @@ type SidebarProps = {
   // The live status of every session the app has heard about this run. Wins over
   // the item's own field, which is only as fresh as the last list fetch.
   statusBySession: Record<string, SessionStatus>;
+  /// Sessions working again with replies still unread; a bot row keeps its count.
+  unreadWorking: ReadonlySet<string>;
   // Sessions standing still behind a permission request or a question. Kept
   // apart from `statusBySession` rather than folded into it: the backend's
   // status machine still reads these as `in_progress`, and it is right to —
@@ -384,6 +397,44 @@ function splitAside(
 /// How many rows a project needs before it is split at all.
 const STATE_SPLIT_MIN = 3;
 
+/// Nests filed into one run per state, the way the live list splits; shared
+/// with the bot Tasks tab so both lists break alike. Draw in your own state
+/// order, a `h-4 shrink-0` break between runs.
+export function stageRuns<S, R>(
+  nests: R[][],
+  stateOf: (nest: R[]) => S,
+  sharedBreaks: S[][],
+): Map<S, R[]> {
+  const byState = new Map<S, R[]>();
+  const file = (state: S, rows: R[]) => byState.set(state, [...(byState.get(state) ?? []), ...rows]);
+  // A short list draws as one run. The split earns its break by making a long
+  // list quicker to scan, and there is nothing to scan in two rows.
+  const flat = nests.flat();
+  if (flat.length < STATE_SPLIT_MIN) {
+    if (flat.length) file(stateOf(flat), flat);
+    return byState;
+  }
+  for (const nest of nests) file(stateOf(nest), nest);
+  // A run of one row between two breaks reads as a heading rather than as a
+  // row. So neighbouring single-row stages in one family share a break: the
+  // row's own mark — yellow, green, the PR glyph, the checks spinner — tells
+  // them apart. A stage with nothing in it is skipped, since on screen its
+  // neighbours touch.
+  for (const family of sharedBreaks) {
+    let into: R[] | undefined;
+    for (const state of family) {
+      const rows = byState.get(state);
+      if (!rows) continue;
+      if (rows.length > 1) into = undefined;
+      else if (into) {
+        into.push(...rows);
+        byState.delete(state);
+      } else into = rows;
+    }
+  }
+  return byState;
+}
+
 /// How many settled rows the window opens by, and opens by again at each edge.
 const SETTLED_STEP = 40;
 
@@ -542,37 +593,9 @@ export function sessionGroups(
   // The live list is stages on top, workspace-wide. Split per project, the
   // answer to "what wants me" was scattered under every heading, and past three
   // rows nobody could read it. Rows inside a stage stay newest-first.
-  const byState = new Map<SessionState, SessionListRow[]>();
-  const file = (state: SessionState, rows: SessionListRow[]) =>
-    byState.set(state, [...(byState.get(state) ?? []), ...rows]);
-  const held = nestsOf(activeItems);
-  // A short list draws as one run. The split earns its break by making a long
-  // list quicker to scan, and there is nothing to scan in two rows.
-  const flat = held.flat();
-  if (flat.length < STATE_SPLIT_MIN) {
-    if (flat.length) file(nestState(flat), flat);
-  } else {
-    for (const nest of held) file(nestState(nest), nest);
-    // A run of one row between two breaks reads as a heading rather than as a
-    // row. So neighbouring single-row stages in one family share a break: the
-    // row's own mark — yellow, green, the PR glyph, the checks spinner — tells
-    // them apart. A stage with nothing in it is skipped, since on screen its
-    // neighbours touch.
-    for (const family of SHARED_BREAKS) {
-      let into: SessionListRow[] | undefined;
-      for (const state of family) {
-        const rows = byState.get(state);
-        if (!rows) continue;
-        if (rows.length > 1) into = undefined;
-        else if (into) {
-          into.push(...rows);
-          byState.delete(state);
-        } else into = rows;
-      }
-    }
-  }
+  const byState = stageRuns(nestsOf(activeItems), nestState, SHARED_BREAKS);
   const aside = nestsOf(asideItems).flat();
-  if (aside.length) file("aside", aside);
+  if (aside.length) byState.set("aside", aside);
 
   return [
     ...lead,
@@ -958,11 +981,16 @@ export const SIDEBAR_MIN = 240;
 
 export default function Sidebar({
   items,
+  bots = [],
+  onOpenBot,
+  onDeleteBot,
+  onNewBot,
   search,
   onSearchChange,
   searchOpen,
   onSearchOpenChange,
   statusBySession,
+  unreadWorking,
   askingSessions,
   prFor,
   selectedSessionId,
@@ -1300,7 +1328,39 @@ export default function Sidebar({
             <ShortcutKeys ids={["search"]} className="ml-auto" />
           </Button>
         )}
+
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onNewBot}
+          className="w-full justify-start px-1.5 text-ui text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground/80 dark:hover:bg-sidebar-accent/50"
+        >
+          <MessageCirclePlus />
+          New bot
+        </Button>
       </div>
+
+      {/* Above the project filter: a bot belongs to no project, it hands work
+          to any of them. No heading — the face on a row is what says it is a
+          bot. New bot sits in the strip above, beside the other ways in. */}
+      {bots.length > 0 && <div className="mt-4 flex flex-col gap-px px-2">
+        {bots.map(({ bot, session, preview }) => {
+          const status = session ? (statusBySession[session.sessionId] ?? session.status) : "idle";
+          return <BotRow
+            key={bot.id}
+            bot={bot}
+            preview={preview}
+            sessionId={session?.sessionId}
+            modified={session?.modified}
+            status={status}
+            unread={status === "completed" || (!!session && unreadWorking.has(session.sessionId))}
+            asking={!!session && askingSessions.has(session.sessionId)}
+            active={!!session && session.sessionId === selectedSessionId}
+            onOpen={() => onOpenBot?.(bot)}
+            onDelete={() => onDeleteBot?.(bot)}
+          />;
+        })}
+      </div>}
 
       {/* The filter is where project grouping went. */}
       <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
@@ -1450,6 +1510,7 @@ export default function Sidebar({
                     // A row on a server that dropped stays listed — its agent
                     // is still running there — and fades with its heading.
                     faded={(archivedShown && !isToday(item.modified)) || offline(item.cwd)}
+                    offline={offlineLine(serverOfPath(item.cwd))}
                     // The flag too, for a row drawn in a split group or under a
                     // pinned ancestor, where no aside run holds it.
                     aside={
@@ -1680,6 +1741,154 @@ function DotTrack({
 /// task in it. The plus only appears under the cursor: the row is a label first
 /// and every heading carrying one at rest would draw more chrome than the
 /// sessions beneath it.
+/// A bot and the one chat it is: its face, the session row's own rail and orb,
+/// and no lineage, PR mark or hover controls.
+/// A face with a rounded hole where its badge sits, as a mask: opaque
+/// everywhere but the hole, which is the badge's own box grown by `gap`.
+/// A mask rather than a ring in a fill, since the sidebar is glass and no fill
+/// matches what shows through. Badges hang 2px past the face's lower right.
+function cutout(width: number, height: number, face = 40, gap = 2): string {
+  const [x, y] = [face + 2 - width - gap, face + 2 - height - gap];
+  const [w, h, r] = [width + gap * 2, height + gap * 2, (height + gap * 2) / 2];
+  const hole = `M${x + r} ${y}H${x + w - r}A${r} ${r} 0 0 1 ${x + w - r} ${y + h}H${x + r}A${r} ${r} 0 0 1 ${x + r} ${y}Z`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${face}" height="${face}"><path fill-rule="evenodd" d="M0 0H${face}V${face}H0Z${hole}"/></svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+}
+// The inbox row's 32px face: a dot while it waits on the reader, the unread count after.
+const DOT_CUTOUT = cutout(10, 10, 32);
+const COUNT_CUTOUT = cutout(16, 16, 32);
+
+function BotRow({
+  bot,
+  preview,
+  sessionId,
+  modified,
+  status,
+  unread,
+  asking,
+  active,
+  onOpen,
+  onDelete,
+}: {
+  bot: Bot;
+  /// The chat's last reply and the replies since the reader last wrote.
+  preview?: BotPreview;
+  /// Its chat, for the jump digit; absent before the first message.
+  sessionId?: string;
+  modified?: string;
+  status: SessionStatus;
+  /// Replies wait unread: `completed`, or a turn begun on top of them.
+  unread: boolean;
+  asking: boolean;
+  active: boolean;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
+  const digit = useJumpDigit(sessionId ?? "");
+  const [hovered, setHovered] = useState(false);
+  const badge = asking ? "asking" : unread ? "unread" : null;
+  const mask = badge === "asking" ? DOT_CUTOUT : badge === "unread" ? COUNT_CUTOUT : undefined;
+  // Before its first chat, Dray Bot's welcome is what its chat opens on.
+  const last = preview?.text || (!sessionId && bot.welcome);
+  const glimpse = last && previewLine(last);
+  const offline = offlineLine(serverOfPath(bot.path));
+
+  // StalledTasks' row layout, so a bot and its stalled tasks read alike.
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <button
+          type="button"
+          onClick={onOpen}
+          onPointerEnter={() => setHovered(true)}
+          onPointerLeave={() => setHovered(false)}
+          className={cn(
+            "group relative flex w-full cursor-pointer items-center gap-2 rounded-md py-1 pr-[5px] pl-1 text-left",
+            "transition-[color,background-color] focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none",
+            active
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50",
+            offline && "opacity-50",
+          )}
+        >
+          <span className="relative shrink-0">
+            <span
+              className="block size-8"
+              style={
+                mask
+                  ? { maskImage: mask, WebkitMaskImage: mask, maskRepeat: "no-repeat", WebkitMaskRepeat: "no-repeat" }
+                  : undefined
+              }
+            >
+              <BotAvatar seed={bot.id} avatar={bot.avatar} follow={hovered} className="block size-8 scale-[1.18]" />
+            </span>
+            {badge === "asking" && (
+              <span
+                role="img"
+                aria-label="Waiting for you"
+                className="absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full bg-accent-command"
+              />
+            )}
+            {badge === "unread" && (
+              <span
+                role="img"
+                aria-label={`${preview?.replies || 1} unread`}
+                // One colour for every bot: in the face's own hue it read as part of the face.
+                // Dray theme: green in light; red in dark, deeper than its own red, which is too pale under white text.
+                className="absolute -right-0.5 -bottom-0.5 flex size-4 items-center justify-center rounded-full bg-foreground text-[10px] leading-none font-semibold text-background tabular-nums [[data-theme=default][data-mode=light]_&]:bg-accent-add [[data-theme=default][data-mode=dark]_&]:bg-[oklch(0.55_0.2_25)] [[data-theme=default]_&]:text-white"
+              >
+                {preview?.replies || ""}
+              </span>
+            )}
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="relative flex items-baseline gap-2">
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate text-ui text-sidebar-foreground",
+                  unread && "font-medium",
+                )}
+              >
+                {bot.name}
+              </span>
+              {/* A bot whose server is offline shows the offline mark in the time's place. */}
+              {offline ? (
+                <span className={cn("flex shrink-0 self-center", digit && "invisible")} title={offline}>
+                  <SignalSlashIcon className="size-3.5 text-muted-foreground" aria-label={offline} />
+                </span>
+              ) : (
+                modified && (
+                  <span
+                    className={cn("shrink-0 text-[11px] text-muted-foreground/70 tabular-nums", digit && "invisible")}
+                  >
+                    {relativeTime(modified)}
+                  </span>
+                )
+              )}
+              {/* Laid over the time, never in its place: the keycap is wider and
+                  taller than the time, and swapping them moved the whole row. */}
+              {digit && <Kbd className="absolute top-1/2 right-0 -translate-y-1/2">{digit}</Kbd>}
+            </span>
+            {/* A messenger's typing dots stand in for the last message while it works. */}
+            {status === "in_progress" && !asking ? (
+              <span className="flex h-[1lh] items-center text-ui">
+                <TypingDots small />
+              </span>
+            ) : (
+              glimpse && <span className="truncate text-ui text-foreground/70">{glimpse}</span>
+            )}
+          </span>
+        </button>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-44">
+        <ContextMenuItem className="text-ui text-destructive" onSelect={onDelete}>
+          Delete bot…
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 function HeadingRow({
   onClick,
   label,
@@ -1880,7 +2089,7 @@ function ProjectFilter({
         <TooltipTrigger asChild>{trigger}</TooltipTrigger>
         <TooltipContent side="bottom" align="start" className="flex items-center gap-1.5 px-1.5">
           <ShortcutKeys ids={["filter.prev", "filter.next"]} />
-          or swipe anywhere on the sidebar
+          {HAS_SWIPE && "or swipe anywhere on the sidebar"}
         </TooltipContent>
       </Tooltip>
     );
@@ -1976,7 +2185,7 @@ function ProjectFilter({
         <DropdownMenuSeparator />
         <div className="flex flex-col items-start gap-1 px-2 py-1 text-xs text-muted-foreground">
           <ShortcutKeys ids={["filter.prev", "filter.next"]} />
-          <span>or swipe the sidebar</span>
+          {HAS_SWIPE && <span>or swipe the sidebar</span>}
         </div>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -1985,7 +2194,7 @@ function ProjectFilter({
 
 /// One hover control on a session row. Stops the click from reaching the row's
 /// own handler, so acting on a session never also selects it.
-function RowAction({
+export function RowAction({
   label,
   active,
   onClick,
@@ -2043,7 +2252,7 @@ const FORKS = [
 /// `open` — the trigger's own `data-state` is what the row styles off, and there
 /// is no second copy of the flag to fall out of step with it. The row's ⋯
 /// button reaches it by dispatching a `contextmenu` event instead.
-function RowMenu({
+export function RowMenu({
   onFork,
   forkDisabled,
   aside,
@@ -2051,6 +2260,7 @@ function RowMenu({
   onDelete,
   onDetach,
   onMarkUnread,
+  onSettle,
   pin,
   children,
 }: {
@@ -2070,6 +2280,8 @@ function RowMenu({
   /// row with no Completed run to rejoin, and one already unread or mid-turn
   /// has nothing to take back.
   onMarkUnread?: () => void;
+  /// Absent where the row draws Settle itself, as every sidebar row does.
+  onSettle?: () => void;
   pin?: { pinned: boolean; toggle: () => void };
   /// Whether the row reads as set aside, and so which way the item turns.
   /// Absent where the item would move nothing.
@@ -2196,6 +2408,13 @@ function RowMenu({
               <ContextMenuItem className="text-ui" onSelect={onMarkUnread}>
                 <Circle />
                 Mark unread
+              </ContextMenuItem>
+            )}
+
+            {onSettle && (
+              <ContextMenuItem className="text-ui" onSelect={onSettle}>
+                <Check />
+                Settle
               </ContextMenuItem>
             )}
 
@@ -2330,6 +2549,7 @@ function SessionRow({
   pr,
   active,
   faded = false,
+  offline = null,
   aside = false,
   marksLive = true,
   onSelect,
@@ -2357,6 +2577,9 @@ function SessionRow({
   pr?: PrMark;
   active: boolean;
   faded?: boolean;
+  /// Its server is not connected, said as the mark's tooltip. The row is what
+  /// the server last answered, so nothing on it is live.
+  offline?: string | null;
   /// Drawn in its project's set-aside run, or flagged aside itself. Faded
   /// further than `faded`, since the reader asked for it out of the way.
   aside?: boolean;
@@ -2404,7 +2627,9 @@ function SessionRow({
   const ownRail = RAIL_X + (depth - 1) * STEP;
   const parentCarriesOn = guides[depth - 1] ?? false;
   // The trailing slot is drawing a spinner or an orb rather than a timestamp.
-  const live = (marksLive && pr?.checksState === "RUNNING") || status === "in_progress";
+  // An offline row's mark stays under the cursor like the orb does, since its
+  // tooltip is the only place the reason is said.
+  const live = !!offline || (marksLive && pr?.checksState === "RUNNING") || status === "in_progress";
   // While the jump modifier is held, this row's digit takes the slot.
   const digit = useJumpDigit(item.sessionId);
 
@@ -2659,7 +2884,7 @@ function SessionRow({
         <div className="flex shrink-0 items-center self-stretch pl-2 text-ui">
           <span
             className={cn(
-              "pointer-events-none flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150",
+              "pointer-events-none relative flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150",
               // Only the timestamp gives way to the buttons. Something in
               // flight is still in flight under the cursor.
               !live && !digit && "row-reached:opacity-0",
@@ -2688,19 +2913,25 @@ function SessionRow({
                 `mr-[3px]` sits it on the orb's centre line: the glyph is 14px
                 against the orb's 20px box, and both are flush right, so without
                 it the mark shifts sideways row to row. */}
-            {digit ? (
-              <Kbd>{digit}</Kbd>
-            ) : marksLive && pr?.checksState === "RUNNING" ? (
-              <CircleDashed
-                className="mr-[3px] size-3.5 animate-spin text-accent-command [animation-duration:3s]"
-                strokeWidth={1.5}
-                aria-label="Checks running"
-              />
-            ) : status === "in_progress" ? (
-              <Orb state="working" label="Working" />
-            ) : (
-              relativeTime(item.modified)
-            )}
+            <span className={cn("flex items-center", digit && "invisible")}>
+              {offline ? (
+                // Ahead of the orb and the checks, which would animate a claim
+                // nobody can currently make. Hovered for the reason, since the
+                // fade alone cannot say a sandbox stopped.
+                <span className="pointer-events-auto mr-[3px] flex" title={offline}>
+                  <SignalSlashIcon className="size-3.5" aria-label={offline} />
+                </span>
+              ) : marksLive && pr?.checksState === "RUNNING" ? (
+                <ChecksRunningIcon className="mr-[3px]" />
+              ) : status === "in_progress" ? (
+                <Orb state="working" label="Working" />
+              ) : (
+                relativeTime(item.modified)
+              )}
+            </span>
+            {/* Over the slot rather than in it, so the slot keeps its width and
+                the title beside it doesn't re-truncate while the modifier is held. */}
+            {digit && <Kbd className="absolute top-1/2 right-0 -translate-y-1/2">{digit}</Kbd>}
           </span>
 
           {/* `pointer-events-none` keeps the invisible buttons unclickable. */}

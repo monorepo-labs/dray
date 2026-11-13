@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { honoursMode, stanceFor } from "./permission";
+import { botPicksStance, botStance, honoursMode, stanceFor } from "./permission";
+
+describe("botStance", () => {
+  it("holds a bot chat on Auto wherever the agent has one", () => {
+    for (const harness of ["claude_code", "codex", "fx", "grok"] as const) {
+      expect(botStance(harness, "bypassPermissions")).toBe("auto");
+      expect(botPicksStance(harness)).toBe(false);
+    }
+  });
+
+  it("falls back to the ordinary stance on an agent with no Auto", () => {
+    expect(botStance("pi", "plan")).toBe(stanceFor("pi", "plan"));
+    expect(botPicksStance("pi")).toBe(true);
+  });
+});
 
 describe("honoursMode", () => {
   it("offers every stance where a harness takes every stance", () => {

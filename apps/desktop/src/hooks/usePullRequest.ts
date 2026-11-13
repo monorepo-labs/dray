@@ -151,13 +151,6 @@ export function usePullRequest(
   cwd: string,
   branch: string | null,
   active: boolean,
-  /// Called the moment a branch that had no open pull request turns out to have
-  /// one. Fired from inside `load` rather than derived by the caller from
-  /// `prs`, because only the fetch knows what the *previous* answer was — and
-  /// the previous answer is the whole guard. A first read has none, so opening
-  /// the app onto a session that already has a PR is not an appearance and
-  /// raises nothing.
-  onOpened?: () => void,
   /// Called after a write here succeeds. A merge, a reopen or a ready-for-review
   /// changes what every *other* view of this branch should say, and the sidebar
   /// mark is the one that would otherwise sit wrong the longest — it reads from
@@ -178,9 +171,6 @@ export function usePullRequest(
   // landing after a session switch can tell it is answering the wrong branch.
   const keyRef = useRef(key);
   keyRef.current = key;
-
-  const onOpenedRef = useRef(onOpened);
-  onOpenedRef.current = onOpened;
 
   const onChangedRef = useRef(onChanged);
   onChangedRef.current = onChanged;
@@ -213,9 +203,6 @@ export function usePullRequest(
       commit(key, (prev) => ({ ...prev, loading: true }));
       reading.set(key, (reading.get(key) ?? 0) + 1);
 
-      // Read before the write below, since that is what makes this an
-      // appearance rather than a first sighting.
-      const before = cache.get(key);
       const seq = (latest.get(key) ?? 0) + 1;
       latest.set(key, seq);
 
@@ -232,13 +219,6 @@ export function usePullRequest(
         // Whatever the reader switched to: the answer is about this branch,
         // and the mark it is checked against is too.
         panelRead.emit({ cwd, branch, prs });
-
-        // Guarded on the key for the same reason every other write here is: a
-        // read that lands after a session switch must not pull the panel open
-        // onto a branch the reader has left.
-        if (keyRef.current === key && before && !before.some(isOpen) && prs.some(isOpen)) {
-          onOpenedRef.current?.();
-        }
       } catch (e) {
         if (latest.get(key) !== seq) return;
         // The previous answer stays up: a failed refresh is a refresh that

@@ -96,6 +96,9 @@ const QUALIFIED = new Set([
   "fork_session",
   "send_msg",
   "read_file",
+  "list_bots",
+  "create_bot",
+  "start_bot",
 ]);
 
 /// Events whose payload names paths, and how to qualify it.
@@ -146,6 +149,8 @@ export const APP_COMMANDS = new Set([
   "local_server",
   "add_server",
   "remove_server",
+  "save_server_cache",
+  "server_caches",
   "reconnect_servers",
   "server_invoke",
   "update_server",
@@ -186,6 +191,7 @@ export const APP_COMMANDS = new Set([
   "chromium_download",
   "chromium_remove",
   "notify_session",
+  "set_window_urgent",
   "check_update",
   "install_update",
   "confirm_quit",

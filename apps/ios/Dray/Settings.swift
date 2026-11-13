@@ -199,7 +199,7 @@ private struct ServerCard: View {
                 HStack(spacing: 6) {
                     StatusDot(server: server.id, size: 7)
                     (Text("\(store.stateLabel(server.id)) · ").foregroundStyle(Theme.secondary)
-                        + Text(update ? "Update available" : socketURL(server.url)?.host() ?? server.url)
+                        + Text(update ? "Update available" : place)
                         .foregroundStyle(update ? Theme.accent : Theme.tertiary))
                         .font(Theme.Font.footnote)
                         .lineLimit(1)
@@ -212,6 +212,12 @@ private struct ServerCard: View {
         .padding(.horizontal, 14)
         .background(Theme.raised, in: .rect(cornerRadius: Theme.Radius.group, style: .continuous))
         .contentShape(.rect)
+    }
+
+    /// Its host, or the paired server a relayed one is reached through.
+    private var place: String {
+        if let via = server.via { return "via \(store.name(of: via.parent))" }
+        return socketURL(server.url)?.host() ?? server.url
     }
 }
 
@@ -294,42 +300,53 @@ struct ServerDetail: View {
         ScrollView {
             if let server {
                 VStack(spacing: Theme.Space.xl) {
-                    VStack(alignment: .leading, spacing: Theme.Space.s) {
-                        onRow(server)
-                        Text(server.on ? "Off stops this phone connecting and hides its tasks. Nothing stops on the server."
-                                       : "Its tasks are hidden until you turn it back on. They keep running on \(server.name).")
-                            .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.horizontal, Theme.Space.xs)
-                    }
-                    statusCard
-                    VStack(alignment: .leading, spacing: Theme.Space.s) {
-                        RowGroup(fill: Theme.card, radius: Theme.Radius.group) {
-                            FieldRow(label: "Name", text: $name, prompt: server.name)
-                                .submitLabel(.done)
-                                .onSubmit(rename)
-                            RowDivider()
-                            address(server.url)
-                            RowDivider()
-                            FieldRow(label: "Token", text: $token, prompt: "Paste a new token")
-                                .onChange(of: token) { _, _ in
-                                    guard let fresh = newToken else { return }
-                                    store.updateToken(id, fresh)
-                                    token = ""
-                                    Haptic.success()
-                                }
+                    if let via = server.via {
+                        VStack(alignment: .leading, spacing: Theme.Space.s) {
+                            stateRow(server)
+                            Text("Reached through \(store.name(of: via.parent)), which shares it. It goes when \(store.name(of: via.parent)) stops sharing.")
+                                .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal, Theme.Space.xs)
                         }
-                        Text("A whole connect line works too.")
-                            .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
-                            .padding(.horizontal, Theme.Space.xs)
+                        statusCard
+                    } else {
+                        VStack(alignment: .leading, spacing: Theme.Space.s) {
+                            onRow(server)
+                            Text(server.on ? "Off stops this phone connecting and hides its tasks. Nothing stops on the server."
+                                           : "Its tasks are hidden until you turn it back on. They keep running on \(server.name).")
+                                .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal, Theme.Space.xs)
+                        }
+                        statusCard
+                        VStack(alignment: .leading, spacing: Theme.Space.s) {
+                            RowGroup(fill: Theme.card, radius: Theme.Radius.group) {
+                                FieldRow(label: "Name", text: $name, prompt: server.name)
+                                    .submitLabel(.done)
+                                    .onSubmit(rename)
+                                RowDivider()
+                                address(server.url)
+                                RowDivider()
+                                FieldRow(label: "Token", text: $token, prompt: "Paste a new token")
+                                    .onChange(of: token) { _, _ in
+                                        guard let fresh = newToken else { return }
+                                        store.updateToken(id, fresh)
+                                        token = ""
+                                        Haptic.success()
+                                    }
+                            }
+                            Text("A whole connect line works too.")
+                                .font(Theme.Font.footnote).foregroundStyle(Theme.tertiary)
+                                .padding(.horizontal, Theme.Space.xs)
+                        }
+                        Button { removing = true } label: {
+                            Text("Remove server").font(Theme.Font.body).foregroundStyle(Theme.destructive)
+                                .padding(.horizontal, Theme.Space.l)
+                                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                                .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.group, style: .continuous))
+                        }
+                        .buttonStyle(RowButtonStyle())
                     }
-                    Button { removing = true } label: {
-                        Text("Remove server").font(Theme.Font.body).foregroundStyle(Theme.destructive)
-                            .padding(.horizontal, Theme.Space.l)
-                            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-                            .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.group, style: .continuous))
-                    }
-                    .buttonStyle(RowButtonStyle())
                 }
                 .padding(.horizontal, Theme.Space.l)
                 .padding(.top, Theme.Space.m)
@@ -364,14 +381,7 @@ struct ServerDetail: View {
     /// The phone's switch for this server, carrying its live state beside it.
     private func onRow(_ server: Server) -> some View {
         Toggle(isOn: Binding(get: { server.on }, set: { Haptic.select(); store.setServerOn(id, $0) })) {
-            HStack(spacing: Theme.Space.s) {
-                StatusDot(server: id)
-                Text(store.stateLabel(id)).foregroundStyle(Theme.text)
-                if server.on, connected, let w = welcome {
-                    Text(w.macApp ? "Dray \(w.version ?? "")" : "dray \(w.release ?? w.version ?? "")")
-                        .foregroundStyle(Theme.tertiary).lineLimit(1)
-                }
-            }
+            state(server)
         }
         .toggleStyle(SwitchStyle())
         .font(Theme.Font.body)
@@ -380,6 +390,27 @@ struct ServerDetail: View {
         .frame(height: 52)
         .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.group, style: .continuous))
         .accessibilityIdentifier("server.on")
+    }
+
+    /// A relayed server's row: its state alone, since it follows the server it
+    /// goes through and has no switch of its own.
+    private func stateRow(_ server: Server) -> some View {
+        state(server)
+            .font(Theme.Font.body)
+            .padding(.horizontal, Theme.Space.l)
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .background(Theme.card, in: .rect(cornerRadius: Theme.Radius.group, style: .continuous))
+    }
+
+    private func state(_ server: Server) -> some View {
+        HStack(spacing: Theme.Space.s) {
+            StatusDot(server: id)
+            Text(store.stateLabel(id)).foregroundStyle(Theme.text)
+            if server.on, connected, let w = welcome {
+                Text(w.macApp ? "Dray \(w.version ?? "")" : "dray \(w.release ?? w.version ?? "")")
+                    .foregroundStyle(Theme.tertiary).lineLimit(1)
+            }
+        }
     }
 
     /// What is wrong and its cure, else an update and its button; nothing when neither.
