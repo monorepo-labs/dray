@@ -375,7 +375,7 @@ machine?: string,
 /**
  * `owner/name`, set with `machine`.
  */
-repo?: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+repo?: string, } | { "type": "learned", commit: string, files: Array<LearnedFile>, } | { "type": "learned_undone", commit: string, path: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.
@@ -1233,6 +1233,35 @@ export type IssueUnavailable = { "kind": "not_connected" } | { "kind": "unauthor
  * The payload of [`ISSUES_CHANGED`].
  */
 export type IssuesChangedEvent = { sessionId: string, issues: Array<IssueRef>, };
+
+/**
+ * One file of a "Learned" row, before and after, for View diff.
+ */
+export type LearnedDiff = { path: string, before: string, after: string, };
+
+/**
+ * One file a bot's turn changed under its instructions, skills or memory.
+ * `kind` and `change` are plain strings, never enums, so a kind a later build
+ * adds cannot fail an older reader's whole line.
+ */
+export type LearnedFile = { 
+/**
+ * Relative to the bot's folder.
+ */
+path: string, 
+/**
+ * `instructions`, `skill` or `memory`.
+ */
+kind: string, 
+/**
+ * `added`, `changed` or `removed`.
+ */
+change: string, 
+/**
+ * One line saying what was learned: the rule added, or the skill's or
+ * memory's own `description`.
+ */
+summary: string, };
 
 /**
  * Where this server stands, as the app and `dray login` read it.
