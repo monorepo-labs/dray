@@ -171,6 +171,12 @@ impl Workspace {
 
     pub fn select(&mut self, session_id: &str, cx: &mut Context<Self>) {
         if self.selected.as_deref() == Some(session_id) {
+            // Clicking a transcript that failed to open tries it again.
+            if let Some(chat) = &self.chat
+                && chat.read(cx).failed()
+            {
+                chat.update(cx, |chat, cx| chat.read(cx));
+            }
             return;
         }
         self.selected = Some(session_id.to_string());

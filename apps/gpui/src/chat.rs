@@ -110,6 +110,10 @@ impl Chat {
         cx.notify();
     }
 
+    pub fn failed(&self) -> bool {
+        self.error.is_some()
+    }
+
     fn fold(&mut self, event: AgentEvent, change: &mut Change) {
         self.transcript.apply(&event, change);
         self.events.push(event);
@@ -179,6 +183,13 @@ impl Chat {
         let Some(row) = self.transcript.rows.get(ix) else {
             return div().into_any_element();
         };
+        // A preview before its first character, or a block of invisible
+        // characters, takes no room; rows are never removed, only emptied.
+        if let Row::Assistant { text, .. } = row
+            && !dray_core::events::has_text(text)
+        {
+            return div().into_any_element();
+        }
         // `gap-4` between rows, with `pt-6`/`pb-6` at the column's ends.
         let next_is_tool = matches!(self.transcript.rows.get(ix + 1), Some(Row::Tool(_)));
         let gap = if matches!(row, Row::Tool(_)) && next_is_tool { 12. } else { 16. };

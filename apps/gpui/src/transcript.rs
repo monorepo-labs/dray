@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use dray_core::events::{AgentEvent, AgentEventPayload, BlockRef, BlockType, DeltaEvent, ToolType, TurnStatus};
+use dray_core::events::{has_text, AgentEvent, AgentEventPayload, BlockRef, BlockType, DeltaEvent, ToolType, TurnStatus};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,8 +69,8 @@ impl Transcript {
                         self.rows[i] = Row::Assistant { text: text.clone(), block: None, streaming: false };
                         change.changed.push(i);
                     }
-                    // Whitespace-only blocks draw nothing in the web app either.
-                    None if !text.trim().is_empty() => {
+                    // Blocks with nothing visible draw nothing in the web app either.
+                    None if has_text(text) => {
                         self.rows.push(Row::Assistant { text: text.clone(), block: None, streaming: false })
                     }
                     None => {}
@@ -106,7 +106,7 @@ impl Transcript {
             AgentEventPayload::TurnCompleted { status: TurnStatus::Error, stop_reason, final_text, .. } => {
                 // Aborts draw nothing; otherwise the harness's own sentence,
                 // which replaces an identical last block rather than repeating it.
-                if stop_reason.as_deref() != Some("aborted") {
+                if !stop_reason.as_deref().is_some_and(|r| r.starts_with("aborted")) {
                     let text = final_text.clone().filter(|t| !t.trim().is_empty()).unwrap_or("Turn failed".into());
                     if let Some(Row::Assistant { text: last, .. }) = self.rows.last()
                         && last.trim() == text.trim()
@@ -145,14 +145,20 @@ impl Transcript {
                     }));
                 }
             }
-            DeltaEvent::TextDelta { block, text } => {
-                if let Some(i) = self.streaming(block)
-                    && let Row::Assistant { text: held, .. } = &mut self.rows[i]
-                {
-                    held.push_str(text);
-                    change.changed.push(i);
+            DeltaEvent::TextDelta { block, text } => match self.streaming(block) {
+                Some(i) => {
+                    if let Row::Assistant { text: held, .. } = &mut self.rows[i] {
+                        held.push_str(text);
+                        change.changed.push(i);
+                    }
                 }
-            }
+                // Opened mid-block: its `block_start` went by before the
+                // session was on screen, so the first delta seen opens it.
+                None if !self.committed.contains(&(block.message_id.clone(), block.index)) => {
+                    self.rows.push(Row::Assistant { text: text.clone(), block: Some(block.clone()), streaming: true });
+                }
+                None => {}
+            },
             _ => {}
         }
     }
@@ -292,6 +298,19 @@ mod tests {
             event("3", json!({ "type": "delta", "delta": "text_delta", "block": block(), "text": "Hel" })),
         ]);
         assert_eq!(t.rows.len(), 1);
+    }
+
+    #[test]
+    fn a_delta_for_a_block_opened_before_the_session_was_seen_opens_a_preview() {
+        let (t, _) = fold(&[event("1", json!({ "type": "delta", "delta": "text_delta", "block": block(), "text": "lo" }))]);
+        assert_eq!(t.rows, [Row::Assistant { text: "lo".into(), block: Some(serde_json::from_value(block()).unwrap()), streaming: true }]);
+    }
+
+    #[test]
+    fn a_stop_draws_no_failure() {
+        let (t, _) = fold(&[event("1", json!({ "type": "turn_completed", "status": "error",
+            "stopReason": "aborted_streaming", "finalText": null, "usage": null, "durationMs": null }))]);
+        assert!(t.rows.is_empty());
     }
 
     #[test]
