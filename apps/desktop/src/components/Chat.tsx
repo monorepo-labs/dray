@@ -29,6 +29,7 @@ import { RANK_OWN } from "@/lib/cardKeys";
 import { planAsked, setPlan } from "@/lib/plan";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
+import { drawnSegments } from "@/lib/botTranscript";
 import { readerMessagesAfter } from "@/lib/mergeCard";
 import { loadOlder } from "@/lib/olderPages";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
@@ -99,6 +100,8 @@ type ChatProps = {
   /// A bot chat's earlier sessions, oldest first, from before it switched
   /// agent. Drawn above this one as one conversation.
   earlier?: SessionSnapshot[];
+  /// An earlier session still loading, older than every one in `earlier`.
+  earlierLoading?: boolean;
   /// Names a task the bot started, for its card.
   taskOf?: (sessionId: string) => BotTask | undefined;
   /// Opens another bot's chat, from a message between it and this one.
@@ -135,6 +138,11 @@ const ACTIVE_LINE_PX = 24;
 /// The gap left above a turn jumped to from the rail, so the prompt doesn't sit
 /// flush against the header.
 const JUMP_PAD_PX = 12;
+
+/// Turns per page while a bot chat reads back to a picked task's reply. Each
+/// page lands as one render of the whole app, which costs far more than the
+/// read, so a long way back is taken in few of them.
+const FOCUS_PAGE_TURNS = 64;
 
 /// Below this the rail is one or two ticks describing what is already on screen,
 /// which is chrome for nothing.
@@ -213,6 +221,7 @@ export default function Chat({
   active = true,
   bot = false,
   earlier = NO_EARLIER,
+  earlierLoading = false,
   taskOf,
   onOpenBot,
   unread = false,
@@ -257,6 +266,14 @@ export default function Chat({
   // growing under a reader who sat still fires no scroll event, and that is
   // exactly when there is newly something below to go to.
   const [atBottom, setAtBottom] = useState(true);
+
+  // A bot chat's sessions as drawn. Held across renders: a fresh array would
+  // rebuild the bot chat's rows on every event.
+  const segments = useMemo(() => drawnSegments(session ? [...earlier, session] : earlier), [earlier, session]);
+  const oldest = segments[0];
+  const more = !!bot && (oldest?.olderBefore != null || earlierLoading);
+  // Moves when a page lands above, which is what the anchor below answers.
+  const oldestKey = oldest ? `${oldest.sessionId}:${oldest.events[0]?.id}` : "";
   const syncAtBottom = () => {
     const el = scrollRef.current;
     if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX);
@@ -433,8 +450,11 @@ export default function Chat({
     sessionId: null,
     key: null,
   });
-  const mounted =
-    mount.sessionId === session?.sessionId
+  // A bot chat draws everything it holds and reads further back on scroll
+  // instead — see `askOlder`.
+  const mounted = bot
+    ? 0
+    : mount.sessionId === session?.sessionId
       ? Math.max(0, turns.findIndex((turn) => turn.key === mount.key))
       : firstMount(turns.length);
   const shownTurns = mountedTurns(turns, mounted);
@@ -457,7 +477,7 @@ export default function Chat({
   // above it, and each page lands as more to backfill.
   const olderBefore = session?.olderBefore;
   useEffect(() => {
-    if (!session) return;
+    if (!session || bot) return;
     if (!backfilling) {
       if (olderBefore != null) loadOlder(session.sessionId);
       return;
@@ -472,7 +492,7 @@ export default function Chat({
       setMount({ sessionId, key: turns[grow(mounted)].key });
     }, 0);
     return () => clearTimeout(timer);
-  }, [backfilling, mounted, session?.sessionId, olderBefore]);
+  }, [backfilling, mounted, session?.sessionId, olderBefore, bot]);
 
   // A step mounts turns *above* everything on screen, so left alone it would
   // shove what the reader is looking at down by their height. Pinned, the
@@ -568,21 +588,74 @@ export default function Chat({
     scroller.scrollTo({ top: Math.max(top, 0), behavior: "smooth" });
   };
 
+  // A bot chat is one conversation that grows forever, and drawing all of it
+  // was the whole cost of opening one: it opens on its tail and reads a page
+  // further back whenever the reader comes within a screen of the top. The
+  // pane must also hold a screen above the bottom, or a short tail leaves
+  // nothing to scroll and nothing is ever asked for.
+  const askOlder = () => {
+    const el = scrollRef.current;
+    if (el && oldest?.olderBefore != null && el.scrollTop < el.clientHeight) loadOlder(oldest.sessionId);
+  };
+
+  // The row at the top of the view and where it sat, taken on every scroll
+  // near the top, so a page landing above can put the reader back on it.
+  // Only near the top: the walk is short there, and nothing lands above
+  // anywhere else.
+  const botAnchor = useRef<{ node: Element; top: number } | null>(null);
+  const noteAnchor = () => {
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    botAnchor.current = null;
+    if (!bot || !el || !content || el.scrollTop > 2 * el.clientHeight) return;
+    const top = el.getBoundingClientRect().top;
+    for (const node of content.children) {
+      const box = node.getBoundingClientRect();
+      if (box.bottom > top) {
+        botAnchor.current = { node, top: box.top - top };
+        return;
+      }
+    }
+  };
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const anchor = botAnchor.current;
+    if (!bot || !el) return;
+    if (followRef.current) {
+      pin(el);
+    } else if (anchor?.node.isConnected) {
+      el.scrollTop += anchor.node.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top;
+    }
+    noteAnchor();
+    askOlder();
+  }, [bot, oldestKey]);
+
   // A task picked from the bot's "Waiting on you" card: the bot's reply about
   // it, at the top of the pane, once the lit block is laid out. The pin drops
-  // as a jump to a turn's does.
+  // as a jump to a turn's does. A reply above what is loaded is read back to,
+  // a page at a time, until it is drawn or the chat runs out.
+  const focusedAt = useRef<number | null>(null);
   useEffect(() => {
-    if (!botFocus) return;
+    if (!botFocus || focusedAt.current === botFocus.at) return;
+    if (!contentRef.current?.querySelector("[data-bot-focus]")) {
+      if (oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
+      return;
+    }
     const frame = requestAnimationFrame(() => {
       const scroller = scrollRef.current;
       const node = contentRef.current?.querySelector<HTMLElement>("[data-bot-focus]");
       if (!scroller || !node) return;
+      focusedAt.current = botFocus.at;
       const top = node.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      const to = Math.max(top - JUMP_PAD_PX, 0);
       followRef.current = false;
-      scroller.scrollTo({ top: Math.max(top - JUMP_PAD_PX, 0), behavior: "smooth" });
+      // Within a screen of the top the scroll reads the next page, and putting
+      // the reader back on their row cuts a smooth one short.
+      scroller.scrollTo({ top: to, behavior: to < scroller.clientHeight ? "auto" : "smooth" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [botFocus]);
+  }, [botFocus, oldestKey]);
 
   useEffect(() => () => cancelAnimationFrame(spyFrame.current), []);
 
@@ -678,6 +751,10 @@ export default function Chat({
     }
     setAtBottom(atEnd);
     syncActive();
+    if (bot) {
+      noteAnchor();
+      askOlder();
+    }
   };
 
   // Re-arms the pin as well as scrolling: pressing this is the reader saying they
@@ -714,21 +791,19 @@ export default function Chat({
 
   // The shell hands these down as fresh arrows on every render, which would
   // defeat `TurnBlock`'s memo; the rows only need whichever is current.
-  const callbacks = useRef({ onOpenSubagent, onOpenSession });
-  callbacks.current = { onOpenSubagent, onOpenSession };
+  const callbacks = useRef({ onOpenSubagent, onOpenSession, onOpenBot });
+  callbacks.current = { onOpenSubagent, onOpenSession, onOpenBot };
   const openSubagent = useCallback((id: string) => callbacks.current.onOpenSubagent(id), []);
   const openSession = useCallback(
     (id: string, alone?: boolean) => callbacks.current.onOpenSession(id, alone),
     [],
   );
+  const openBot = useCallback((bot: Bot) => callbacks.current.onOpenBot?.(bot), []);
 
   // With no session there is no transcript to draw; AppShell centers the
   // composer and skips this pane entirely. A session still being read draws the
   // same nothing, but inside the arrangement it is about to fill — see
   // `shownSession` in App.
-  // Held across renders: a fresh array would rebuild the bot chat's rows on
-  // every event.
-  const segments = useMemo(() => (session ? [...earlier, session] : earlier), [earlier, session]);
   const cardChat = useMemo(
     () => ({ after: readerMessagesAfter(segments.flatMap((s) => s.events)), bot: !!bot }),
     [segments, bot],
@@ -767,11 +842,12 @@ export default function Chat({
                   key={session.sessionId}
                   unread={unread}
                   segments={segments}
+                  more={more}
                   busy={busy}
                   preview={previewShown ? <StreamingPreview sessionId={session.sessionId} /> : undefined}
                   taskOf={taskOf}
                   onOpenSession={openSession}
-                  onOpenBot={onOpenBot}
+                  onOpenBot={openBot}
                   focus={botFocus}
                 />
                 {botFooter}

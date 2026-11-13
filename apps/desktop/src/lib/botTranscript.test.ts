@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { botItems, botRows, chatItems, chatTime, firstUnread, sentMessages, startsTimeRun, taskContext } from "@/lib/botTranscript";
+import {
+  botItems,
+  botRows,
+  chatItems,
+  chatTime,
+  drawnSegments,
+  firstUnread,
+  itemKey,
+  sentMessages,
+  startsTimeRun,
+  taskContext,
+  unreadStart,
+} from "@/lib/botTranscript";
 import type { AgentEvent, AgentEventPayload } from "@/types/events";
 
 let seq = 0;
@@ -265,5 +277,44 @@ describe("taskContext", () => {
     const start = [call("c1", `dray session new "Pricing"`), result("c1", `${ID}\nStarted`)];
     expect([...taskContext(botItems(start), ID)]).toEqual(["c1"]);
     expect([...taskContext(botItems([...start, from("done")]), ID)]).toEqual(["c1"]);
+  });
+});
+
+describe("drawnSegments", () => {
+  const seg = (id: string, olderBefore: number | null) => ({ id, olderBefore });
+
+  it("draws the newest alone while it is not read back to its start", () => {
+    expect(drawnSegments([seg("a", null), seg("b", 120)]).map((s) => s.id)).toEqual(["b"]);
+  });
+
+  it("draws each earlier session once the one after it is whole", () => {
+    expect(drawnSegments([seg("a", 40), seg("b", null), seg("c", null)]).map((s) => s.id)).toEqual(["a", "b", "c"]);
+    expect(drawnSegments([seg("a", null), seg("b", 40), seg("c", null)]).map((s) => s.id)).toEqual(["b", "c"]);
+  });
+
+  it("draws nothing for no sessions", () => {
+    expect(drawnSegments([])).toEqual([]);
+  });
+});
+
+describe("unreadStart", () => {
+  it("marks the first reply after the reader's last message, among what was there on opening", () => {
+    const [hi, first, two] = [user("hi"), said("one"), said("two")];
+    const opened = botItems([hi, first, two]);
+    const later = botItems([hi, first, two, user("thanks"), said("welcome")]);
+    // A reply that came in after opening is not where unread began.
+    expect(unreadStart(later, itemKey(opened.at(-1)!), false)).toBe(first.id);
+  });
+
+  it("waits while the reader's last message may sit above what is loaded", () => {
+    const old = said("old");
+    const items = botItems([old, said("new")]);
+    expect(unreadStart(items, itemKey(items.at(-1)!), false)).toBeUndefined();
+    // The whole chat loaded and no message of theirs: every reply is unread.
+    expect(unreadStart(items, itemKey(items.at(-1)!), true)).toBe(old.id);
+  });
+
+  it("marks nothing for a chat opened read", () => {
+    expect(unreadStart(botItems([said("x")]), null, false)).toBeNull();
   });
 });

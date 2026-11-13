@@ -2799,7 +2799,7 @@ const dropNeighbours = () => {
 /// transcript asks only when its window moves and would otherwise sit short of
 /// its first turn for as long as it stays loaded.
 const pageReads = useRef(new Set<string>());
-const loadOlder = async (sessionId: string, attempt = 0) => {
+const loadOlder = async (sessionId: string, turns = OLDER_PAGE_TURNS, attempt = 0) => {
   const before = sessionsRef.current.find((s) => s.sessionId === sessionId)?.olderBefore;
   if (before == null || pageReads.current.has(sessionId)) return;
   pageReads.current.add(sessionId);
@@ -2807,7 +2807,7 @@ const loadOlder = async (sessionId: string, attempt = 0) => {
     const page = await invoke<SessionPage>("get_session_page", {
       sessionId,
       before,
-      turns: OLDER_PAGE_TURNS,
+      turns,
     });
     setSessions((prev) =>
       prev.map((s) => {
@@ -2820,13 +2820,13 @@ const loadOlder = async (sessionId: string, attempt = 0) => {
   } catch (e) {
     console.error("failed to load older turns", e);
     if (attempt < OLDER_PAGE_RETRIES) {
-      setTimeout(() => void loadOlder(sessionId, attempt + 1), 1000 * 2 ** attempt);
+      setTimeout(() => void loadOlder(sessionId, turns, attempt + 1), 1000 * 2 ** attempt);
     }
   } finally {
     pageReads.current.delete(sessionId);
   }
 };
-useEffect(() => setOlderLoader((sessionId) => void loadOlder(sessionId)), []);
+useEffect(() => setOlderLoader((sessionId, turns) => void loadOlder(sessionId, turns)), []);
 
 // When each loaded transcript was last on screen. Stamped on arrival and on
 // leaving, so the idle clock starts the moment the reader looks away.

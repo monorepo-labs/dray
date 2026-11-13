@@ -329,6 +329,7 @@ export default function UserMessage({
                     onClick={() => onOpenBot(bot)}
                   >
                     <BotAvatar
+                      still
                       seed={bot.id}
                       avatar={bot.avatar}
                       className="mr-0.5 inline-block size-4 align-text-bottom"
