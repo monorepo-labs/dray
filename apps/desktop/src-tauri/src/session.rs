@@ -3220,8 +3220,10 @@ async fn deliver_prompt(
     // ahead of the first prompt, sent and never logged, so the chat draws only
     // what the reader typed. What the reader did to the bot's tasks meanwhile
     // rides the same way, and a failed send keeps it for the retry with the rest.
-    // A logged-only prompt leaves it for [`flush_one_per_turn`], which owns the send.
-    let mut handover = HandoverGuard { session_id, text: if send { take_hidden(session_id).await } else { None } };
+    // A logged-only prompt leaves it for [`flush_one_per_turn`], which owns the
+    // send, and so does a slash command, which only reads as one at the start.
+    let lead_in = send && !text.starts_with('/');
+    let mut handover = HandoverGuard { session_id, text: if lead_in { take_hidden(session_id).await } else { None } };
     let given = match &handover.text {
         Some(handover) => format!("{handover}{text}"),
         None => text.clone(),
@@ -4056,7 +4058,7 @@ async fn flush_one_per_turn(
         // batch's; on failure every message is already on screen and in the log,
         // so the sentence saying why is the only thing still owing.
         let mut handover = HandoverGuard { session_id, text: None };
-        if !texts.is_empty() {
+        if texts.first().is_some_and(|t| !t.starts_with('/')) {
             handover.text = take_hidden(session_id).await;
         }
         let given = format!("{}{}", handover.text.as_deref().unwrap_or(""), texts.join("\n\n"));
