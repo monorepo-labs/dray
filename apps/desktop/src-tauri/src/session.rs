@@ -3167,6 +3167,28 @@ impl Drop for HandoverGuard<'_> {
     }
 }
 
+/// A bot chat's hidden lead-in for its next prompt: the hand-over, then what
+/// the reader did to its tasks. Taken once; put back with
+/// [`crate::bots::restore_handover`] where the send fails.
+async fn take_hidden(session_id: &str) -> Option<String> {
+    let hidden: String = [crate::bots::take_handover(session_id), crate::bots::take_since(session_id).await]
+        .into_iter()
+        .flatten()
+        .collect();
+    (!hidden.is_empty()).then_some(hidden)
+}
+
+/// `text` with the hidden lead-in ahead of it, or after it where `after`: a
+/// slash command only reads as one at the start, and fx's skills take the
+/// words that follow as theirs.
+fn lead_in_around(hidden: Option<&str>, text: &str, after: bool) -> String {
+    match hidden {
+        Some(hidden) if after => format!("{text}\n\n{}", hidden.trim_end()),
+        Some(hidden) => format!("{hidden}{text}"),
+        None => text.to_string(),
+    }
+}
+
 /// Persists the user's own prompt event, emits it, then writes it to the
 /// child's stdin — the CLI never echoes a prompt back, so this is the only
 /// place it enters the transcript.
@@ -3207,12 +3229,17 @@ async fn deliver_prompt(
     let text = prepared.text;
     // A bot chat taking over from another agent: the conversation so far goes
     // ahead of the first prompt, sent and never logged, so the chat draws only
-    // what the reader typed.
-    let mut handover = HandoverGuard { session_id, text: crate::bots::take_handover(session_id) };
-    let given = match &handover.text {
-        Some(handover) => format!("{handover}{text}"),
-        None => text.clone(),
-    };
+    // what the reader typed. What the reader did to the bot's tasks meanwhile
+    // rides the same way, and a failed send keeps it for the retry with the rest.
+    // A logged-only prompt leaves it for [`flush_one_per_turn`], which owns the
+    // send. So does a slash command, which only reads as one at the start,
+    // except on Codex, whose input carries the lead-in as an item of its own,
+    // and fx, whose commands are all skills that read the words after them.
+    let slash = text.starts_with('/');
+    let fx = matches!(transport, Transport::Fx(_));
+    let lead_in = send && (!slash || fx || matches!(transport, Transport::Rpc(_)));
+    let mut handover = HandoverGuard { session_id, text: if lead_in { take_hidden(session_id).await } else { None } };
+    let given = lead_in_around(handover.text.as_deref(), &text, slash && fx);
 
     // Ahead of the event for a second reason, and this one is about failure
     // rather than content. Codex resolves a leading `/skill` by asking its own
@@ -3222,10 +3249,14 @@ async fn deliver_prompt(
     // and the retry the error invites draws the reader's sentence twice.
     let codex = match transport {
         Transport::Rpc(thread) if send => {
-            Some((
-                thread,
-                crate::harness::codex::turn_input(thread, &given, &prepared.images).await?,
-            ))
+            // The skill is resolved off the reader's own text, so a lead-in
+            // cannot hide its leading `/`.
+            let mut input = crate::harness::codex::turn_input(thread, &text, &prepared.images).await?;
+            if let (Some(hidden), Some(items)) = (&handover.text, input.as_array_mut()) {
+                let at = usize::from(items.first().is_some_and(|i| i["type"] != "text"));
+                items.insert(at, json!({"type": "text", "text": hidden}));
+            }
+            Some((thread, input))
         }
         _ => None,
     };
@@ -4042,12 +4073,18 @@ async fn flush_one_per_turn(
         // success the reservation stands as `InProgress` and the turn is this
         // batch's; on failure every message is already on screen and in the log,
         // so the sentence saying why is the only thing still owing.
-        if let (false, Some(sent)) = (
-            texts.is_empty(),
-            transport.open_turn(&texts.join("\n\n"), &[]).await,
-        ) {
+        let mut handover = HandoverGuard { session_id, text: None };
+        if !texts.is_empty() {
+            handover.text = take_hidden(session_id).await;
+        }
+        let joined = texts.join("\n\n");
+        let given = lead_in_around(handover.text.as_deref(), &joined, joined.starts_with('/'));
+        if let (false, Some(sent)) = (texts.is_empty(), transport.open_turn(&given, &[]).await) {
             match sent {
-                Ok(()) => return,
+                Ok(()) => {
+                    handover.sent();
+                    return;
+                }
                 Err(err) => {
                     eprintln!("[queued flush err] {err}");
                     report_send_failure(session_id, harness, &err.to_string(), seq, app)
@@ -4252,6 +4289,14 @@ pub async fn strand_queue_on_exit(
 mod tests {
     use super::*;
     use crate::harness::claude_code::{mapper::Mapper, parser};
+
+    #[test]
+    fn a_lead_in_never_hides_a_leading_slash() {
+        let hidden = Some("[Since your last turn: x]\n\n");
+        assert_eq!(lead_in_around(hidden, "hi", false), "[Since your last turn: x]\n\nhi");
+        assert_eq!(lead_in_around(hidden, "/hello", true), "/hello\n\n[Since your last turn: x]");
+        assert_eq!(lead_in_around(None, "/hello", true), "/hello");
+    }
 
     #[test]
     fn a_report_says_something_whatever_the_turn_left() {

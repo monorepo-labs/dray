@@ -1749,7 +1749,11 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             permission_mode, fast, &cwd, branch.as_deref(), use_worktree,
             worktree_name.as_deref(), base_ref.as_deref(), is_new_session, sink,
         ).await;
-        interrupt_session(session_id: String) => crate::interrupt_session(&session_id, sink).await;
+        // The reader's own stop, settle and delete are noted for the task's bot
+        // here, on the client wire: `dray` is how the bot does each itself.
+        interrupt_session(session_id: String) => crate::bots::reader_did(
+            &session_id, Some(crate::bots::Act::Stopped), crate::interrupt_session(&session_id, sink),
+        ).await;
         stop_task(session_id: String, task_id: String) => crate::stop_task(&session_id, &task_id).await;
         cancel_queued(session_id: String) => crate::cancel_queued(&session_id, sink).await;
         respond_permission(session_id: String, request_id: String, option_id: String) =>
@@ -1758,9 +1762,15 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             crate::answer_questions(&session_id, &request_id, answers, sink).await;
         mark_session_read(session_id: String, read: bool) => crate::mark_session_read(&session_id, read, sink).await;
         set_session_flags(session_id: String, archived: Option<bool>, pinned: Option<bool>, hidden: Option<bool>, aside: Option<bool>) =>
-            crate::set_session_flags(&session_id, archived, pinned, hidden, aside, sink).await;
+            crate::bots::reader_did(
+                &session_id,
+                (archived == Some(true)).then_some(crate::bots::Act::Settled),
+                crate::set_session_flags(&session_id, archived, pinned, hidden, aside, sink),
+            ).await;
         rename_session(session_id: String, title: String) => crate::rename_session(session_id, title, sink).await;
-        delete_session(session_id: String) => crate::delete_session(&session_id).await;
+        delete_session(session_id: String) => crate::bots::reader_did(
+            &session_id, Some(crate::bots::Act::Deleted), crate::delete_session(&session_id),
+        ).await;
         fork_session(session_id: String, fork_id: String, worktree: bool) =>
             crate::fork_session(&session_id, &fork_id, worktree).await;
         session_index_item(session_id: String) => crate::session_index_item(&session_id).await;
