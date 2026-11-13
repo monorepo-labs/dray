@@ -402,6 +402,8 @@ mockIPC(
 // change what the card and the Tasks tab draw. Only this page's own: the app
 // on the same origin keeps its history.
 const mine = (key: string) => key.startsWith(id(0).slice(0, 24));
+// A browser that never ran Dray would otherwise open on "What's new".
+localStorage.setItem("ade.changelogSeen", JSON.stringify("999.0.0"));
 for (const key of ["ade.nudgedStalls", "ade.dismissedStalls"]) {
   const kept = (JSON.parse(localStorage.getItem(key) ?? "[]") as string[]).filter((k) => !mine(k));
   localStorage.setItem(key, JSON.stringify(kept));
