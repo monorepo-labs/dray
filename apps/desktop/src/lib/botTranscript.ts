@@ -295,7 +295,7 @@ export function botRows(items: readonly BotItem[]): BotRow[] {
 /// characters (zero-width spaces and joiners) alone are no reply. Keep in step
 /// with `has_text` in events.rs, which decides Done, unread and the preview.
 export function hasText(text: string): boolean {
-  return !/^[\s\p{Cf}]*$/u.test(text);
+  return !/^[\p{White_Space}\p{Cf}]*$/u.test(text);
 }
 
 /// The rows of a bot's chat, in log order.

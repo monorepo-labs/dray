@@ -974,7 +974,7 @@ mod tests {
 
     #[test]
     fn invisible_text_is_no_text() {
-        for blank in ["", " \n\t", "\u{200B}", "\u{FEFF}\u{200D} \u{2060}", "\u{00A0}\u{3000}\u{AD}"] {
+        for blank in ["", " \n\t", "\u{200B}", "\u{FEFF}\u{200D} \u{2060}", "\u{00A0}\u{3000}\u{AD}\u{85}"] {
             assert!(!has_text(blank), "{blank:?}");
         }
         for seen in ["ok", "\u{200B}hi", "🙂", "\u{200D}👍"] {

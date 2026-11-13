@@ -51,7 +51,7 @@ describe("botItems", () => {
   it("draws no bubble for a reply of whitespace and zero-width characters", () => {
     const items = botItems([user("hi"), said("\u200b"), said(" \ufeff\u200d\n"), said("\u200bok")]);
     expect(items.map((i) => i.kind)).toEqual(["user", "assistant"]);
-    expect(hasText("\u00a0\u2060\u00ad")).toBe(false);
+    expect(hasText("\u00a0\u2060\u00ad\u0085")).toBe(false);
     expect(hasText("\u200d👍")).toBe(true);
   });
 
