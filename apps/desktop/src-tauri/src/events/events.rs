@@ -443,6 +443,19 @@ pub enum AgentEventPayload {
         repo: Option<String>,
     },
 
+    /// What a bot's turn changed in its instructions, skills or memory, read
+    /// off the commit Dray made of its folder. Drawn as "Learned" rows with
+    /// View diff and Undo, so a lesson the bot gave itself is never silent.
+    Learned {
+        commit: String,
+        files: Vec<LearnedFile>,
+    },
+    /// The reader undid one file of a [`Learned`](Self::Learned) commit.
+    LearnedUndone {
+        commit: String,
+        path: String,
+    },
+
     /// The agent moved the checkout's git state or a pull request mid-turn —
     /// Claude Code's `vcs_state_changed` and `code_change_published`. Tells the
     /// handoff row, and with `pull_request` the PR tab and sidebar marks, to
@@ -743,6 +756,24 @@ pub struct ToolResult {
     /// 12MB of base64 in a 14MB log.
     #[serde(default)]
     pub images: Vec<ImageRef>,
+}
+
+/// One file a bot's turn changed under its instructions, skills or memory.
+/// `kind` and `change` are plain strings, never enums, so a kind a later build
+/// adds cannot fail an older reader's whole line.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct LearnedFile {
+    /// Relative to the bot's folder.
+    pub path: String,
+    /// `instructions`, `skill` or `memory`.
+    pub kind: String,
+    /// `added`, `changed` or `removed`.
+    pub change: String,
+    /// One line saying what was learned: the rule added, or the skill's or
+    /// memory's own `description`.
+    pub summary: String,
 }
 
 /// Who relayed a prompt into this session, for a `user_message` the user did
