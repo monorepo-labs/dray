@@ -4,6 +4,8 @@ import { botsOf, isBotPath, keepBots, refreshBots, useBots } from "@/lib/bots";
 import { mergeFrom, remoteServers, serverConnected, serverName, subscribeServers } from "@/lib/servers";
 import { indexRow, loadServerCaches, saveServerCache, unreachable, withKept } from "@/lib/serverCache";
 import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
+import { CloudError, cloudIo, isCloud, onCloud, placeTask, setCloudFailure, setPlacing } from "@/lib/cloud";
+import { keepCloudTranscript, keptCloudTranscript } from "@/lib/cloudTranscripts";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
 import { restoreAttachments } from "@/hooks/useAttachments";
@@ -871,11 +873,37 @@ const handleSendMsg = async (
   const existing = sessionId ? selected : undefined;
   // The backend reads the recorded cwd on resume, so this only has to be right
   // for a new session.
-  const cwd = switching ? selected.cwd : isNewSession ? projectPath : existing?.cwd ?? projectPath;
+  let cwd = switching ? selected.cwd : isNewSession ? projectPath : existing?.cwd ?? projectPath;
 
   if (!cwd) {
     setError("Attach a project first.");
     return false;
+  }
+  // A new task on Cloud has no machine until it is placed, which can start
+  // one and take minutes, so the prompt sits on disk meanwhile as it does
+  // through a resume.
+  let placed: string | null = null;
+  // A new task is a move like any other: the composer is about to belong to
+  // it, so an action still out from the new-task view must not report into
+  // it. Bumped before placement awaits, since the caller stamps the move it
+  // waits on the moment this returns its promise.
+  if (isNewSession) navGen.current++;
+  const before = navGen.current;
+  setCloudFailure(null);
+  const remote = projects.find((p) => p.path === cwd)?.remote;
+  if (isNewSession && remote && onCloud(projects, cwd)) {
+    const letGo = holdThroughResume(null, message);
+    try {
+      const where = await placeTask(remote, cloudIo, setPlacing);
+      setProjects((prev) => mergeFrom(prev, where.server, where.cloned, pathOfProject));
+      placed = cwd = where.path;
+    } catch (e) {
+      if (before === navGen.current) setCloudFailure({ sessionId: null, message: e instanceof Error ? e.message : String(e) });
+      return false;
+    } finally {
+      letGo();
+      setPlacing(null);
+    }
   }
   // A bot's folder is no project, and its chat runs in the folder itself.
   const worktree = useWorktree && !isBotPath(cwd);
@@ -885,13 +913,14 @@ const handleSendMsg = async (
     // Before the selection moves, so the composer reads this server's models
     // on the very frame it lands on the new session.
     noteSession(sessionId, serverOfPath(cwd));
-    // Claimed alongside the selection everywhere it moves, or a read still out
-    // from an earlier click can land afterwards and roll this one away.
-    selectionRequestRef.current = sessionId;
-    setSelectedSessionId(sessionId);
-    // A move like any other: the composer now belongs to this session, so an
-    // action still out from the new-task view must not report into it.
-    navGen.current++;
+    // A reader who moved on while it was placed keeps their place, and the
+    // task starts in the sidebar.
+    if (before === navGen.current) {
+      // Claimed alongside the selection everywhere it moves, or a read still
+      // out from an earlier click can land afterwards and roll this one away.
+      selectionRequestRef.current = sessionId;
+      setSelectedSessionId(sessionId);
+    }
   }
   // Taken after the mint, so this send's own failure still reports.
   const fail = failUnlessLeft();
@@ -923,8 +952,11 @@ const handleSendMsg = async (
   // The three the backend alone resolves — the worktree name, the truncated
   // title, the recorded branch — arrive with the snapshot and replace these.
   const provisional = provisionalId();
-  // A stopped sandbox is woken by this send, and it goes once that's done.
-  const asleep = boatAsleepById(serverOfPath(cwd));
+  // A stopped sandbox is woken by this send, and it goes once that's done. A
+  // cloud machine that is merely unreachable is asked back the same way: the
+  // listing that would say it stopped can be 30s behind.
+  const target = serverOfPath(cwd);
+  const asleep = boatAsleepById(target) || (isCloud(target) && !serverConnected(target));
   const letGo = asleep ? holdThroughResume(isNewSession ? null : sessionId, message) : null;
 
   if (isNewSession) {
@@ -934,8 +966,8 @@ const handleSendMsg = async (
       sessionId,
       harness,
       cwd,
-      projectPath: switching ? selected.projectPath : projectPath ?? cwd,
-      branch: !worktree ? branch : null,
+      projectPath: switching ? selected.projectPath : placed ?? projectPath ?? cwd,
+      branch: !worktree && !placed ? branch : null,
       worktreeName: null,
       worktreeRemoved: false,
       // Provisional. The backend truncates its own way and `session_title`
@@ -998,7 +1030,11 @@ const handleSendMsg = async (
       if (remote) waitFor(provisional, server, attachmentPaths);
       const gate = (async () => {
         await ahead;
-        if (asleep) await resumeBoat(server);
+        if (asleep) {
+          await resumeBoat(server).catch((e) => {
+            throw isCloud(server) ? new CloudError(`Couldn't resume its cloud machine: ${e}`) : e;
+          });
+        }
         return remote ? Promise.all(attachments.map((a) => upload(server, a.path, a.size))) : attachmentPaths;
       })();
       const settled = gate.then(
@@ -1036,8 +1072,9 @@ const handleSendMsg = async (
       fast,
       cwd,
       // Recorded, not acted on — the picker already checked it out. Null for a
-      // worktree session, whose branch the CLI names itself.
-      branch: isNewSession && !worktree ? branch : null,
+      // worktree session, whose branch the CLI names itself, and for a placed
+      // one, whose checkout the picker never read.
+      branch: isNewSession && !worktree && !placed ? branch : null,
       useWorktree: isNewSession && worktree,
       worktreeName: null,
       baseRef: isNewSession && worktree ? baseRef : null,
@@ -1147,7 +1184,11 @@ const handleSendMsg = async (
       // the composer still holds the text and the error says why.
       dropProvisional(sessionId, provisional);
     }
-    fail(e);
+    if (e instanceof CloudError) {
+      if (before === navGen.current) setCloudFailure({ sessionId, message: e.message });
+    } else {
+      fail(e);
+    }
     return false;
   } finally {
     letGo?.();
@@ -1558,6 +1599,31 @@ const applyIndexItem = (updated: SessionIndexItem) => {
   if (updated.archived) evictSessions({ sessionId });
 };
 
+/// The cloud machine a session runs on, or `null` for any other server.
+const cloudMachineOf = (sessionId: string): ServerId | null => {
+  const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
+  const server = item ? serverOfPath(item.cwd) : serverOfSession(sessionId);
+  return isCloud(server) ? server : null;
+};
+
+/// Whether `sessionId` is the last live session on `machine`: a task's machine
+/// is its own, but a fork or a spawned child can share it.
+const lastOnMachine = (sessionId: string, machine: ServerId) =>
+  !sessionIndexItemsRef.current.some(
+    (i) => i.sessionId !== sessionId && !i.archived && serverOfPath(i.cwd) === machine,
+  );
+
+/// Deletes a settled task's machine. A failure says so, since the machine
+/// would otherwise sit there unseen.
+const retireCloudMachine = (machine: ServerId): Promise<boolean> =>
+  invoke("drop_cloud_machine", { id: machine }, LOCAL).then(
+    () => true,
+    (e) => {
+      setError(`Couldn't delete its cloud machine: ${e}`);
+      return false;
+    },
+  );
+
 /// Writes a session's flags — settled, pinned, hidden, set aside — and answers
 /// whether it landed.
 ///
@@ -1574,6 +1640,12 @@ const setSessionFlags = async (
   flags: { archived?: boolean; pinned?: boolean; hidden?: boolean; aside?: boolean },
 ): Promise<boolean> => {
   const fail = failUnlessLeft();
+  const machine = cloudMachineOf(sessionId);
+  // Its machine is deleted with it, so a stopped one is not woken just to
+  // write a flag it is about to lose.
+  if (flags.archived && machine && !serverConnected(machine) && lastOnMachine(sessionId, machine)) {
+    return retireCloudMachine(machine);
+  }
   try {
     const updated = await invoke<SessionIndexItem | null>("set_session_flags", {
       sessionId,
@@ -1596,6 +1668,7 @@ const setSessionFlags = async (
         ),
       );
     }
+    if (flags.archived && machine && lastOnMachine(sessionId, machine)) void retireCloudMachine(machine);
     return true;
   } catch (e) {
     fail(e);
@@ -1825,8 +1898,13 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   // awaiting its answer — where it announced "Done" for a session on its way
   // out and left its status behind for good.
   deletedRef.current.add(sessionId);
+  const machine = cloudMachineOf(sessionId);
+  const last = !!machine && lastOnMachine(sessionId, machine);
   try {
-    await invoke<boolean>("delete_session", { sessionId });
+    // A stopped machine is deleted whole below, so it is not woken to delete
+    // one log first.
+    if (!last || serverConnected(machine)) await invoke<boolean>("delete_session", { sessionId });
+    if (last) void retireCloudMachine(machine);
   } catch (e) {
     deletedRef.current.delete(sessionId);
     // A delete can stop the child and then fail, and the status that said so
@@ -2738,10 +2816,20 @@ const loadTail = (sessionId: string, touch = true): Promise<boolean> => {
     evictSessionsRef.current();
     return Promise.resolve(true);
   }
-  const read = invoke<SessionSnapshot | null>("get_session_by_id", {
-    sessionId,
-    turns: FIRST_MOUNT,
-  })
+  // A cloud task whose machine is stopped opens from the copy kept here, and
+  // catches up once a send brings the machine back.
+  const item = sessionIndexItemsRef.current.find((i) => i.sessionId === sessionId);
+  const server = item ? serverOfPath(item.cwd) : serverOfSession(sessionId);
+  const kept = isCloud(server) && !serverConnected(server) ? keptCloudTranscript(server, sessionId) : null;
+  const read = Promise.resolve(kept)
+    .then(
+      (copy) =>
+        copy ??
+        invoke<SessionSnapshot | null>("get_session_by_id", {
+          sessionId,
+          turns: FIRST_MOUNT,
+        }),
+    )
     .then((snapshot) => {
       if (!snapshot) return false;
       // A read outlived by a delete must not put the transcript back.
@@ -2916,6 +3004,14 @@ const evictSessions = (force?: { sessionId: string; status?: SessionStatus }) =>
     return kept;
   });
 };
+// Each loaded cloud transcript is kept on disk once its turn is over, so it
+// opens while its machine is stopped.
+useEffect(() => {
+  for (const s of sessions) {
+    const server = serverOfSession(s.sessionId);
+    if (isCloud(server) && statusBySession[s.sessionId] !== "in_progress") keepCloudTranscript(server, s);
+  }
+}, [sessions, statusBySession]);
 const evictSessionsRef = useRef(evictSessions);
 evictSessionsRef.current = evictSessions;
 useEffect(() => {

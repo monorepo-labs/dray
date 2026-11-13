@@ -9,15 +9,22 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cloudReady, githubSlug, isCloud, onCloud, setCloudPick, useCloud, useCloudPicks } from "@/lib/cloud";
 import { basename } from "@/lib/format";
-import { checkoutsOf, nextCheckout, soleServer } from "@/lib/projectGroups";
+import { checkoutsOf, nextCheckout, projectKey, soleServer } from "@/lib/projectGroups";
 import { serverConnected, serverName, useServers } from "@/lib/servers";
 import { displayPath, LOCAL, serverOfPath } from "@/lib/transport";
 import type { Project } from "@/types/events";
 
+/// The Cloud entry's radio value, which no path can be.
+const CLOUD = "cloud:";
+
 /// Where a new task runs, among the picked project's checkouts. A project only
 /// on This Mac draws nothing, since no name is what says local. One checkout on
 /// a server is named and disabled: worth saying, with nothing to choose.
+///
+/// Dray Cloud is one entry, on a project with a GitHub remote, whatever
+/// machines hold it: a task there is placed on send, so no machine is picked.
 export default function MachineSelector({
   projects,
   value,
@@ -28,11 +35,23 @@ export default function MachineSelector({
   onSelect: (path: string) => void;
 }) {
   useServers();
+  const cloud = useCloud();
+  useCloudPicks();
   const checkouts = value ? checkoutsOf(projects, value) : [];
   const current = checkouts.find((p) => p.path === value);
   if (!current) return null;
-  const only = checkouts.length === 1;
+  const offersCloud = cloudReady(cloud) && !!githubSlug(current.remote);
+  const picked = offersCloud && onCloud(projects, current.path);
+  // Cloud's own checkouts fold into its entry rather than listing one by one.
+  const machines = offersCloud ? checkouts.filter((p) => !isCloud(serverOfPath(p.path))) : checkouts;
+  const only = machines.length + (offersCloud ? 1 : 0) === 1;
   if (only && serverOfPath(current.path) === LOCAL) return null;
+  const label = picked ? "Cloud" : checkoutLabel(current, machines, offersCloud, basename);
+
+  const pick = (next: string) => {
+    setCloudPick(projectKey(current), next === CLOUD);
+    if (next !== CLOUD) onSelect(next);
+  };
 
   return (
     <DropdownMenu>
@@ -47,7 +66,7 @@ export default function MachineSelector({
               className="max-w-40 gap-1.5 px-1.5 text-ui text-muted-foreground disabled:opacity-100"
             >
               <ServerFilledIcon className="size-3.5 shrink-0" />
-              <span className="truncate">{checkoutLabel(current, checkouts, basename)}</span>
+              <span className="truncate">{label}</span>
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
@@ -62,8 +81,8 @@ export default function MachineSelector({
       </Tooltip>
 
       <DropdownMenuContent align="start" className="w-auto max-w-96 min-w-40">
-        <DropdownMenuRadioGroup value={current.path} onValueChange={onSelect}>
-          {checkouts.map((checkout) => {
+        <DropdownMenuRadioGroup value={picked ? CLOUD : current.path} onValueChange={pick}>
+          {machines.map((checkout) => {
             const reachable = serverConnected(serverOfPath(checkout.path));
             return (
               <DropdownMenuRadioItem
@@ -73,11 +92,16 @@ export default function MachineSelector({
                 disabled={!reachable}
                 className="text-ui"
               >
-                <span className="truncate">{checkoutLabel(checkout, checkouts, (path) => path)}</span>
+                <span className="truncate">{checkoutLabel(checkout, machines, offersCloud, (path) => path)}</span>
                 {!reachable && <span className="ml-auto shrink-0 pl-3 opacity-70">disconnected</span>}
               </DropdownMenuRadioItem>
             );
           })}
+          {offersCloud && (
+            <DropdownMenuRadioItem value={CLOUD} className="text-ui">
+              Cloud
+            </DropdownMenuRadioItem>
+          )}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -85,11 +109,17 @@ export default function MachineSelector({
 }
 
 /// A checkout among its project's others: its machine, its folder where that
-/// machine holds two, and the folder alone where every one is on This Mac.
-function checkoutLabel(checkout: Project, checkouts: Project[], folder: (path: string) => string): string {
+/// machine holds two, and the folder alone where every one is on This Mac —
+/// unless Cloud sits beside them, which makes This Mac a choice to name.
+function checkoutLabel(
+  checkout: Project,
+  checkouts: Project[],
+  besideCloud: boolean,
+  folder: (path: string) => string,
+): string {
   const server = serverOfPath(checkout.path);
   const path = folder(displayPath(checkout.path));
-  if (soleServer(checkouts) === LOCAL) return path;
+  if (soleServer(checkouts) === LOCAL && !besideCloud) return path;
   const twoHere = checkouts.filter((p) => serverOfPath(p.path) === server).length > 1;
   return twoHere ? `${serverName(server)} · ${path}` : serverName(server);
 }

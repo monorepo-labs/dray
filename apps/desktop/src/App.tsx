@@ -125,7 +125,7 @@ import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { closeActiveTab, ItemTab, type ViewTab } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { attachmentKey, clearAttachments, pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
+import { attachmentKey, clearAttachments, pickAttachments, readAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
 import {
@@ -170,8 +170,10 @@ import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailabil
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import ServerOfflineNotice from "@/components/composer/ServerOfflineNotice";
 import BoatNotice from "@/components/composer/BoatNotice";
+import { CloudFailedNotice, CloudNotice } from "@/components/composer/CloudNotice";
 import BoatWarnings from "@/components/BoatWarnings";
 import { boatAsleep, restoreHeld } from "@/lib/boat";
+import { onCloud, setCloudFailure, useCloud, useCloudFailure, useCloudPicks, usePlacing } from "@/lib/cloud";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
 import { serverConnected, serverName, useServers } from "@/lib/servers";
@@ -455,6 +457,18 @@ function App() {
     }
   };
 
+  /// Sends what a failed cloud step left in the composer, as Enter would.
+  const retryCloud = () => {
+    const trayKey = attachmentKey(selectedSessionId, composerCwd);
+    const text = readDraft(composerKey).trim();
+    const attachments = readAttachments(trayKey);
+    setCloudFailure(null);
+    if (!text && !attachments.length) return;
+    writeDraft(composerKey, "");
+    clearAttachments(trayKey);
+    void sendFromComposer(text, attachments);
+  };
+
   // ⌘S inside a draft has nothing to do, so the "Changes auto-saved" hint
   // lights up for a moment to say why.
   const [draftNudge, setDraftNudge] = useState(false);
@@ -506,11 +520,19 @@ function App() {
   // The open session's server, while it cannot be reached. Shown in place of
   // the error a read or send would raise, and cleared by the reconnect itself.
   const allServers = useServers();
+  // A cloud machine is neither: it is Dray's own, and a send wakes it.
   const offlineServer = allServers.find(
-    (s) => !!selectedSessionId && s.id === activeServer && s.status !== "connected",
+    (s) => !!selectedSessionId && s.id === activeServer && s.status !== "connected" && !s.cloud,
   );
   // Stopped or waking, which a send can do something about, unlike offline.
-  const sleepingBoat = allServers.find((s) => s.id === activeServer && boatAsleep(s));
+  const sleepingBoat = allServers.find((s) => s.id === activeServer && boatAsleep(s) && !s.cloud);
+  const placing = usePlacing();
+  const cloudFailure = useCloudFailure();
+  useCloud();
+  useCloudPicks();
+  // A new task bound for Cloud runs wherever placement puts it, so an agent
+  // missing from the picked checkout's machine says nothing about it.
+  const cloudTask = !selectedSessionId && onCloud(projects, projectPath);
   useEffect(restoreHeld, []);
   // A turn or a background task on that server, which auto-extend keeps alive.
   // Read off the live maps, which hold every session whatever the sidebar
@@ -3831,7 +3853,7 @@ function App() {
           notice={
             sleepingBoat ? null : offlineServer ? (
               <ServerOfflineNotice server={offlineServer} />
-            ) : !selectedSessionId && missingAgent ? (
+            ) : !selectedSessionId && missingAgent && !cloudTask ? (
               <AgentMissingNotice agent={missingAgent} />
             ) : loggedOutAgent && authTurn && selectedSession ? (
               <LoginExpiredNotice
@@ -3843,7 +3865,15 @@ function App() {
             ) : null
           }
           pending={
-            sleepingBoat ? (
+            cloudFailure && cloudFailure.sessionId === selectedSessionId ? (
+              <CloudFailedNotice
+                message={cloudFailure.message}
+                onRetry={retryCloud}
+                onDismiss={() => setCloudFailure(null)}
+              />
+            ) : placing && !selectedSessionId ? (
+              <CloudNotice step={placing} />
+            ) : sleepingBoat ? (
               <BoatNotice server={sleepingBoat} />
             ) : selectedBot && selectedSession && harness !== selectedSession.harness ? (
               // A bot chat picked onto another agent: the send moves it there.

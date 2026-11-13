@@ -441,7 +441,12 @@ remoteAccess: boolean,
  * lists through it (#847). Off by default: it hands that token every
  * machine's reach, SSH logins included.
  */
-shareMachines: boolean, };
+shareMachines: boolean, 
+/**
+ * Dray Cloud's switch (#857). Here because Rust lists the machines at
+ * launch; the key itself sits in `credentials.json`.
+ */
+drayCloud: boolean, };
 
 /**
  * Permission stance a session *runs under*, in roughly increasing order of
@@ -687,6 +692,20 @@ export type ChromiumStatus = { "state": "absent" } | { "state": "downloading", r
  * One line of git's progress while a repo clones.
  */
 export type CloneProgress = { slug: string, line: string, };
+
+/**
+ * The Dray Cloud row in Settings. The machines themselves ride
+ * `servers_changed`, each a server marked `cloud`.
+ */
+export type CloudInfo = { on: boolean, 
+/**
+ * A key is saved. The key itself never leaves Rust.
+ */
+keyed: boolean, 
+/**
+ * Why the last listing failed.
+ */
+error: string | null, };
 
 /**
  * What kind of entry a timeline row is. A review carries a verdict where a
@@ -1876,7 +1895,16 @@ app: boolean,
 /**
  * An update landed on the server and it restarts onto it once idle.
  */
-restarting: boolean, boat: BoatStatus | null, };
+restarting: boolean, 
+/**
+ * Stopped and resuming, for a boat sandbox and a Dray Cloud machine alike.
+ */
+boat: BoatStatus | null, 
+/**
+ * A Dray Cloud machine (#857): drawn as no row of its own, and read as
+ * "Cloud" wherever a machine is named.
+ */
+cloud: boolean, };
 
 export type ServerStatus = "connecting" | "connected" | "disconnected";
 
