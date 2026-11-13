@@ -30,6 +30,17 @@ const RIM: f32 = 8.;
 /// The sheet's corner (`rounded-[8px]`).
 const SHEET_RADIUS: f32 = 8.;
 
+gpui::actions!(dray, [NewTask, NextSession, PrevSession]);
+
+/// The window's chords, as shortcuts.ts names them.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        gpui::KeyBinding::new("cmd-n", NewTask, None),
+        gpui::KeyBinding::new("cmd-shift-down", NextSession, None),
+        gpui::KeyBinding::new("cmd-shift-up", PrevSession, None),
+    ]);
+}
+
 pub enum Connection {
     Connecting,
     Up,
@@ -45,6 +56,9 @@ pub struct Workspace {
     pub sidebar_scroll: ScrollHandle,
     /// The open session's transcript, made on selecting it.
     chat: Option<Entity<Chat>>,
+    /// The root's focus, so the window's chords reach it with nothing else
+    /// focused.
+    focus: gpui::FocusHandle,
     _tasks: Vec<Task<()>>,
 }
 
@@ -72,6 +86,8 @@ impl Workspace {
             cx.notify();
         })
         .detach();
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
         Workspace {
             wire,
             store: Store::default(),
@@ -80,6 +96,7 @@ impl Workspace {
             sidebar_open: true,
             sidebar_scroll: ScrollHandle::new(),
             chat: None,
+            focus,
             _tasks: vec![listen, tick],
         }
     }
@@ -196,6 +213,17 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Steps the selection through the sidebar's rows, in its order.
+    fn step(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let refs: Vec<&SessionIndexItem> = self.store.items.iter().filter(|i| !i.hidden).collect();
+        let groups = crate::sessions::session_groups(&refs, &self.store.live, chrono::Utc::now().timestamp_millis());
+        let order: Vec<&str> =
+            groups.iter().flat_map(|g| g.rows().iter().map(|r| r.item.session_id.as_str())).collect();
+        if let Some(id) = crate::sessions::step(&order, self.selected.as_deref(), delta).map(str::to_string) {
+            self.select(&id, cx);
+        }
+    }
+
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_open = !self.sidebar_open;
         cx.notify();
@@ -221,6 +249,10 @@ impl Render for Workspace {
             .size_full()
             .relative()
             .bg(theme.body)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &NewTask, _, cx| this.new_task(cx)))
+            .on_action(cx.listener(|this, _: &NextSession, _, cx| this.step(1, cx)))
+            .on_action(cx.listener(|this, _: &PrevSession, _, cx| this.step(-1, cx)))
             .font_family(crate::assets::SANS)
             // `--text-ui--line-height`. GPUI's own default is 1.618, which
             // pushes every row of text down a few pixels against the web app.
@@ -397,6 +429,7 @@ pub fn open(cx: &mut App) {
         },
         |window, cx| {
             crate::glass::apply(window);
+            bind_keys(cx);
             cx.set_global(Theme::new(Mode::of(window.appearance())));
             cx.new(|cx| Workspace::new(wire, signals, window, cx))
         },
