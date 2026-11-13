@@ -8,7 +8,7 @@
 //! and each token sits in `credentials.json` under `server:<id>`, never on a
 //! struct the frontend is handed.
 
-use crate::machines::{admit_with, credential_name, default_name, normalize, BoatLink, Saved, Socket, Welcome, ADMIT};
+use crate::machines::{admit_with, credential_name, default_name, normalize, BoatLink, Saved, Socket, Welcome, ADMIT, REFUSED};
 use crate::{boat, cloud, sink::Sink, ssh, store};
 use chrono::{DateTime, Utc};
 use futures_util::{SinkExt, StreamExt};
@@ -911,6 +911,8 @@ const BOAT_READ_NEAR: Duration = Duration::from_secs(60);
 const BOAT_ASLEEP_READ: Duration = Duration::from_secs(30);
 /// The server and its tunnel take 1 to 3 minutes after `boat resume` returns.
 const BOAT_WAKE: Duration = Duration::from_secs(6 * 60);
+/// A new cloud machine's server answers ~30s after create, measured.
+const CLOUD_FRESH: Duration = Duration::from_secs(2 * 60);
 
 /// Reads the timer of every sandbox connected now, redraws what moved, and tells
 /// the island. A stop seen here beats waiting for the socket to go silent.
@@ -1112,17 +1114,31 @@ async fn wake_boat(id: String, sleeper: Sleeper) {
         }
     }
     settle(BoatPhase::Resuming, None, true);
-    let deadline = tokio::time::Instant::now() + BOAT_WAKE;
+    let wait = if matches!(sleeper, Sleeper::Cloud { started: true, .. }) { CLOUD_FRESH } else { BOAT_WAKE };
+    let deadline = tokio::time::Instant::now() + wait;
+    let mut last = None;
     while tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let up = conns().iter().any(|c| c.saved.id == id && c.status == ServerStatus::Connected);
-        if up {
+        let Some((status, error)) =
+            conns().iter().find(|c| c.saved.id == id).map(|c| (c.status, c.error.clone()))
+        else {
+            return;
+        };
+        if status == ServerStatus::Connected {
             settle(BoatPhase::Running, None, false);
             return;
         }
+        // The server answered and said no: a wrong token or protocol. Waiting
+        // out the deadline only hid that sentence from the reader for minutes.
+        if let Some(refused) = error.as_deref().filter(|e| e.starts_with(REFUSED)) {
+            settle(BoatPhase::Running, Some(refused.to_string()), false);
+            return;
+        }
+        last = error.or(last);
     }
     let name = conns().iter().find(|c| c.saved.id == id).map(|c| c.saved.name.clone()).unwrap_or_default();
-    settle(BoatPhase::Running, Some(format!("{name} is running, but Dray hasn't answered on it yet.")), false);
+    let why = last.map(|e| format!(" Last try: {e}")).unwrap_or_default();
+    settle(BoatPhase::Running, Some(format!("{name} is running, but Dray hasn't answered on it yet.{why}")), false);
 }
 
 /// More time on a sandbox's auto-stop: `minutes` from now, and on each later resume.
@@ -1332,7 +1348,12 @@ async fn apply_listing(listing: cloud::Listing) {
                     conn.saved.url = url;
                     let row = conn.boat.get_or_insert_with(|| BoatRow::new(phase));
                     row.phase = phase;
-                    row.note = (machine.state == cloud::State::Error).then(|| "Dray Cloud reports an error on it.".into());
+                    // Set, never cleared: a failed connect asks for a listing at
+                    // once, which otherwise wiped the reason `wake_boat` had just
+                    // left for its waiter. `wake` clears it on the next try.
+                    if machine.state == cloud::State::Error {
+                        row.note = Some("Dray Cloud reports an error on it.".into());
+                    }
                     let woke = was == Some(BoatPhase::Stopped) && phase == BoatPhase::Running;
                     let slept = was != Some(BoatPhase::Stopped) && phase == BoatPhase::Stopped;
                     if moved || woke || slept {
