@@ -18,10 +18,10 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 **Default road = work → test → ready PR → `/greploop`.** No Codex reviewer sessions: that road only ran while Greptile credits were gone.
 
-1. Do the work, then test it for real — run it, not just compile it.
+1. Do the work, then test it for real — run it, not just compile it. A UI change = drive the running app yourself, screenshot or record it, fix what you find ([Testing in the app](#testing-in-the-app)).
 2. Commit, push, open the PR **ready**. Greptile review it on its own.
 3. **Always run `/greploop` right after opening the PR**, unasked. It waits for Greptile's review and fixes what is real. Never post `@greptile review` — Greptile reviews every push on its own, so skip the loop's trigger step.
-4. **Inside greploop, push each round's fixes yourself and keep looping** — fix, test, commit, push, wait for the next review — until 5/5 or the loop's cap. That push is pre-approved and needs no ask. Stop and wait instead when a fix changes something Yogesh has to try in the dev app, or when he says not to push.
+4. **Inside greploop, push each round's fixes yourself and keep looping** — fix, test, commit, push, wait for the next review — until 5/5 or the loop's cap. That push is pre-approved and needs no ask. Retest a fix that touches UI the same way. Stop and wait instead when a fix changes something only a human can check (below), or when he says not to push.
 
 **One repo, `monorepo-labs/dray`. Assign every issue to `yogesharc`.** `gh issue create --repo monorepo-labs/dray --assignee yogesharc`.
 
@@ -29,7 +29,7 @@ File give Claude Code (claude.ai/code) guidance for work with code in this repo.
 
 `gh` missing or logged out → say so, then carry on with the work. Tell reader at the end which issue still want creating.
 
-**Commit, push and open the PR unasked once the work is done and tested** — the default road above — and loop Greptile to 5/5. Yogesh tests after that, so end by saying what to try. **Hold the PR only where he says he wants to test first**: it is his call per task, not a rule to infer. Still ask before anything rewriting history, and before a branch nobody asked for.
+**Commit, push and open the PR unasked once the work is done and tested** — the default road above — and loop Greptile to 5/5. End with a short "what changed", plus only what truly needs a human — never a list of steps to try. **Hold the PR only where he says he wants to test first**: it is his call per task, not a rule to infer. Still ask before anything rewriting history, and before a branch nobody asked for.
 
 **Always write commit message with `caveman-commit` skill.** Invoke it, don't imitate — skill carry format and it can change under you. Every commit here, amend included.
 
@@ -99,7 +99,7 @@ cd apps/desktop && pnpm tauri dev
 
 That = real entry point. `pnpm tauri` = shim ([scripts/tauri.mjs](apps/desktop/scripts/tauri.mjs)) merging `tauri.dev.conf.json` into `dev` subcommand only, so dev app carry own name and icon and `build` untouched.
 
-**Never wait for the dev app to come up.** Start `pnpm tauri dev` as one background Bash, hand over to the reader, and stop — no `until`/`sleep` loop on its log, no second task watching the first. The dev task is a server and never ends, and a cold compile is minutes, so a wait is either a turn spent sleeping or a task nobody can close. A failed compile exits the task and the harness reports it on its own. Need a look at the log anyway? Read it once, and grep what sits past cargo's colour codes: Tauri run cargo with `--color always`, so `` Running\x1b[0m `target/debug/dray` `` never matches ``Running ` `` — `` `target/debug/dray` `` and `could not compile` do.
+**Wait for the dev app with one capped watch, never an open-ended one.** Start `pnpm tauri dev` as one background Bash writing to a log, then one `Monitor` (or counted loop) that exits on the window launching or the compile failing, capped at 30 minutes — then go test in it. Never a bare `until`/`sleep`: the dev task is a server and never ends, so an uncapped watch is a task nobody can close. Grep what sits past cargo's colour codes: Tauri run cargo with `--color always`, so `` Running\x1b[0m `target/debug/dray` `` never matches ``Running ` `` — `` `target/debug/dray` `` and `could not compile` do.
 
 **Shim also pick dev port, and it only side that can.** Vite and Tauri have to agree on one, and both start from here — so shim ask the OS for a free one (`listen(0)`), hand it to Vite as `DRAY_DEV_PORT` and to Tauri as second `--config` carrying `build.devUrl`. Fixed 1420 was hard failure before, which = one worktree's dev build refusing to start because another's already running. `strictPort: true` **stay** on Vite side: port already known free, and Vite wandering off it leave Tauri loading URL nothing serve.
 
@@ -109,6 +109,22 @@ That = real entry point. `pnpm tauri` = shim ([scripts/tauri.mjs](apps/desktop/s
 - `cd apps/desktop/src-tauri && cargo check` — fast type check, no linking whole app.
 - `cd apps/desktop/src-tauri && cargo check --no-default-features --features serve --bin dray-serve --tests` — the headless build. **Run it after any core change**: nothing else compiles it.
 - `pnpm test` — frontend tests (vitest, node environment, no DOM). Pure logic where being wrong invisible on screen: most of `src/lib` and the module stores in `src/hooks`, a `*.test.ts` beside each. [streaming.ts](apps/desktop/src/lib/streaming.ts) read same committed fixtures Rust tests do. Components not tested — no DOM here.
+
+## Testing in the app
+
+**Agent test its own UI work in the real running app, before handing over.** Start the dev app, drive it to the change, check the behaviour, screenshot or record it, fix what is wrong, test again. Reader get "what changed" and the proof, not steps to try. Hand over only what truly need a human: hardware (mic, speakers, camera), a signed or release build (updater, launchd server, TCC prompts), Mac-only behaviour a sandbox can't run (vibrancy, traffic lights, Dock, Dray Island).
+
+- **Mac**: computer use on the dev app; `dray browser` for pages — a demo page, `pnpm dev` layout, a deployed site.
+- **Boat sandbox**: a Linux desktop on Xorg `:0` (1920×1080) and a `computer` MCP server (cua-driver). Linux take the dev path, so the dev app run there.
+
+What a sandbox run take, measured:
+
+- **Image already carry WebKitGTK, GTK and ffmpeg.** Fresh worktree need `pnpm install` at root (~25s), then `DISPLAY=:0 pnpm tauri dev` from `apps/desktop`. Sandbox's untracked `~/dray/.cargo/config.toml` share one cargo `build-dir` across worktrees, so a worktree rebuild Dray alone: ~1 min to a window. Empty build dir: ~7 min (`jobs = 2`).
+- **Dev home is `~/.dray-worktrees/<name>`, empty at start.** No project = no send: Attach project → Enter path, a scratch `git init` repo in `/tmp` will do. A real turn run, so check what it did and wait on that with a capped loop, not a sleep.
+- **AT-SPI see nothing inside WebKitGTK** — tree is the window alone. Act by pixel off `get_window_state`'s screenshot, which is window-relative.
+- **Every input want `delivery_mode: "foreground"`**; background delivery is refused.
+- **A screenshot right after an action can show the old frame.** Take another before calling it broken.
+- **Proof**: `screenshot_out_file` (its directory must exist), or `start_recording` with `record_video: true` → mp4 of the display, which `dray video add` put in the chat. WebKit's GStreamer warnings in the log are noise.
 
 ## Architecture: the event pipeline
 
