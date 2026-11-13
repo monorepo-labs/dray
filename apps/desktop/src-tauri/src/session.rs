@@ -771,6 +771,22 @@ impl SessionManager {
         false
     }
 
+    /// Whether anything is working here, background tasks included: what Dray
+    /// Cloud's heartbeat reports. A slot locked by a send or a respawn counts,
+    /// as in [`Self::any_turn_in_flight`]. A new session's first send joins the
+    /// map only once its prompt is out, so `SENDS` is what makes it busy before.
+    pub async fn busy(&self) -> bool {
+        if SENDS.load(SeqCst) > 0 {
+            return true;
+        }
+        let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
+        slots.iter().any(|slot| {
+            let Ok(guard) = slot.try_lock() else { return true };
+            let Some(session) = guard.as_ref() else { return false };
+            session.status.try_lock().map_or(true, |t| t.turn_in_flight() || t.has_outstanding_work())
+        })
+    }
+
     /// Stops every child idle past [`IDLE_LIMIT`]. Each holds ~250MB doing
     /// nothing, and the next send resumes it as it does after a restart. A slot
     /// or tracker locked right now is busy by definition, so it is skipped.
