@@ -898,6 +898,9 @@ async fn remember_boat(id: &str, reported: Option<&str>, target: &ssh::Target) {
     announce();
 }
 
+/// Off while readers find them noisy; `true` brings the island's warning back.
+/// Its twin of the same name in `lib/boat.ts` gates the sidebar card.
+const BOAT_STOP_WARNINGS: bool = false;
 /// How long before auto-stop the reader hears about it.
 const WARN: Duration = Duration::from_secs(10 * 60);
 /// How often a running sandbox's timer is read. `archiveAfter` moves under a
@@ -967,6 +970,9 @@ async fn watch_boats() {
 
 /// The sandboxes about to stop, in the shape the island reads off the server.
 fn boat_alerts() -> Value {
+    if !BOAT_STOP_WARNINGS {
+        return json!([]);
+    }
     let alerts: Vec<Value> = conns()
         .iter()
         .filter_map(|c| {

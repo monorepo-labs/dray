@@ -2233,9 +2233,10 @@ function App() {
 
   // A link in the transcript opens as a new tab in the browser of the chat it
   // was clicked in and flips the main column to the Browser view, leaving the
-  // side panel alone. In a bot's row the main column is the row's, so there
-  // it opens in the side panel instead, beside that chat — the bot's or the
-  // lit task's. ⌘-click, or no session to hold one, goes to the system browser.
+  // side panel alone — in a bot chat too, where that tab joins the bot's row.
+  // A task lit in a bot's row is the exception: the row's tabs are the bot's,
+  // so its link opens in the side panel, in the task's own browser. ⌘-click,
+  // or no session to hold one, goes to the system browser.
   useEffect(() => {
     setLinkOpener((url, { external }) => {
       if (!selectedSessionId || !browserSession) {
@@ -2246,14 +2247,14 @@ function App() {
       // then the reader may be on another session whose pane must stay put.
       const sessionId = selectedSessionId;
       const browser = browserSession;
-      const inBotRow = !!selectedBotId || rowOf(sessionId) !== sessionId;
+      const inTaskTab = rowOf(sessionId) !== sessionId;
       const gen = navGen.current;
       void reachableUrl(sessionId, url).then(
         (reached) => {
           if (external) return void openUrl(reached).catch(console.error);
           void openInBrowser(browser, reached, true)
             .then(() => {
-              if (inBotRow) showPanel("browser", sessionId);
+              if (inTaskTab) showPanel("browser", sessionId);
               else setBrowserWanted(sessionId);
               trackBrowserOpen(reached);
             })
@@ -2271,7 +2272,7 @@ function App() {
       );
     });
     return () => setLinkOpener(null);
-  }, [selectedSessionId, browserSession, selectedBotId, rowOf, showPanel, navGen, setError]);
+  }, [selectedSessionId, browserSession, rowOf, showPanel, navGen, setError]);
 
   // An element picked in the page lands in that session's draft, and the
   // composer is brought on screen to show it — off the full view and onto
@@ -3133,6 +3134,7 @@ function App() {
   ) => {
     // From the repo root: a task's worktree may already be gone.
     await invoke("merge_pr", { cwd: projectPath, number, method });
+    prMarks.markMerged(projectPath, number);
     prMarks.refreshAfterWrite();
     // Landed, so the task is done — unless it is still working,
     // which settling would kill mid-turn.
@@ -3531,10 +3533,11 @@ function App() {
                         // The task last at work, which is most often the one
                         // the reader came to look at.
                         const target = newestSession(botTasks) ?? (kind === "files" ? strip.bot : null);
-                        if (!target) return;
+                        if (!target) return null;
                         const id = crypto.randomUUID();
                         setPickTabs((prev) => addPickTab(prev, strip.bot, { id, kind, target }));
                         showPick(strip.bot, strip.owner, id);
+                        return id;
                       },
                       onClose: (id) => {
                         forgetOpenFilesUnder(`pick:${id}:`);
