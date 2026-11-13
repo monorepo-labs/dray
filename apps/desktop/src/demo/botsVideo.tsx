@@ -12,8 +12,9 @@
 //
 // The story: Yogesh asks for the 0.42 changelog, Dray starts a task and
 // messages it, posts the merge card, the card is merged, Yogesh sets a rule
-// and Dray learns it, then two tasks land on "Waiting on you". Messages are
-// typed into the real composer and sent through the real send path.
+// and Dray learns it, then the iOS task joins the Cloud PR on "Waiting on
+// you". Messages are typed into the real composer and sent through the real
+// send path.
 
 import { emit } from "@tauri-apps/api/event";
 import { mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
@@ -120,7 +121,7 @@ const index: SessionIndexItem[] = [
   task(ISLAND, "Island: quieter send sound", { created: ago(190), modified: ago(25) }),
   task(SHORTCUTS, "Settings: search box for shortcuts", { created: ago(190), modified: ago(3), status: "in_progress" }),
   task(IOS, "iOS: bot chats in the session list", { created: ago(190), modified: ago(1), status: "in_progress" }),
-  task(CLOUD, "Cloud: name the machine in the titlebar", { created: ago(150), modified: ago(2), status: "in_progress" }),
+  task(CLOUD, "Cloud: name the machine in the titlebar", { created: ago(150), modified: ago(40) }),
 ];
 
 const pr = (n: number, number: number, more: Partial<PrMark> = {}): PrMark => ({
@@ -237,7 +238,7 @@ function history() {
   t = ago(150);
   log(user("Also: Cloud tasks should name their machine in the titlebar."), t);
   for (const p of startTask(CLOUD, "Cloud: name the machine in the titlebar")) log(p, t);
-  log(say("Started. It's a small one, so I'll post the PR here once checks pass."), t);
+  log(say("Started. It's a small one."), t);
   log(done(), t);
 
   t = ago(34);
@@ -545,9 +546,9 @@ async function story() {
   });
   setStatus(CHAT, "completed");
 
-  // Two tasks stop on the reader, and the card at the chat's foot gathers them.
+  // The iOS task stops on a question and joins the Cloud PR, which has sat
+  // on the card at the chat's foot since the start.
   await beat(4000);
-  setStatus(id(CLOUD), "completed", ago(9));
   setStatus(id(IOS), "completed", ago(7));
   await beat(1500);
   change(id(IOS), { need: { text: "Should bot chats sit above or below projects in the iOS list?", at: new Date().toISOString() } });
