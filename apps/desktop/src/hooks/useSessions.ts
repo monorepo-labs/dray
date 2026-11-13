@@ -2839,13 +2839,15 @@ const loadOlder = async (sessionId: string, turns = OLDER_PAGE_TURNS, attempt = 
 useEffect(() => setOlderLoader((sessionId, turns) => void loadOlder(sessionId, turns)), []);
 
 /// Lets go of every event above the nearest page start at or above `keepFrom`,
-/// so they are read from the log again if wanted. Nothing is set where nothing
-/// would go, since a new sessions array re-renders the whole app.
-const dropOlder = (sessionId: string, keepFrom: string) => {
+/// or with none named, above the tail the transcript opened on, so they are
+/// read from the log again if wanted. Nothing is set where nothing would go,
+/// since a new sessions array re-renders the whole app.
+const dropOlder = (sessionId: string, keepFrom?: string) => {
   const starts = pageStarts.current.get(sessionId);
   const session = sessionsRef.current.find((s) => s.sessionId === sessionId);
   if (!starts || !session) return;
-  let at = session.events.findIndex((e) => e.id === keepFrom);
+  const tail = [...starts].reduce<[string, number] | null>((a, b) => (a && a[1] > b[1] ? a : b), null)?.[0];
+  let at = session.events.findIndex((e) => e.id === (keepFrom ?? tail));
   while (at > 0 && !starts.has(session.events[at].id)) at--;
   if (at <= 0) return;
   const id = session.events[at].id;

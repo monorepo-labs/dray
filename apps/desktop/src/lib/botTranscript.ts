@@ -41,10 +41,12 @@ export function drawnSegments<T extends { olderBefore?: number | null }>(segment
 /// Where a bot chat draws from when it shows its last `turns` turns: the index of
 /// the main-thread message opening the oldest of them, or 0 with fewer held. A
 /// turn is cut only there, so a task's `dray session new` and the id it printed
-/// never land on opposite sides of the cut.
+/// never land on opposite sides of the cut. A queued message is no cut: it
+/// lands inside a running turn, between a call and its result.
 export function lastTurns(events: readonly AgentEvent[], turns: number): number {
   for (let i = events.length - 1; i > 0; i--) {
-    if (!events[i].subagent && events[i].payload.type === "user_message" && --turns === 0) return i;
+    const { subagent, payload } = events[i];
+    if (!subagent && payload.type === "user_message" && !payload.queued && --turns === 0) return i;
   }
   return 0;
 }

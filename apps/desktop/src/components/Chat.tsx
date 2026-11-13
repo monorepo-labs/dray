@@ -304,6 +304,11 @@ export default function Chat({
   useEffect(() => {
     if (session && keepFrom) dropOlder(session.sessionId, keepFrom);
   }, [session?.sessionId, keepFrom]);
+  // The sessions before an agent switch go back to the tails they opened on.
+  const following = bot && held === null;
+  useEffect(() => {
+    if (following) for (const s of earlier) dropOlder(s.sessionId);
+  }, [following, earlier]);
   // A bot chat's sessions as drawn. Held across renders: a fresh array would
   // rebuild the bot chat's rows on every event. A windowed session says it has
   // more above, so the sessions before it stay undrawn and the unread divider

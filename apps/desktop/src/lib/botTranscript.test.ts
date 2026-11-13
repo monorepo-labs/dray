@@ -324,6 +324,12 @@ describe("lastTurns", () => {
     expect(lastTurns(events, 9)).toBe(0);
   });
 
+  it("never cuts at a queued message, which lands between a call and its result", () => {
+    const queued = ev({ type: "user_message", text: "report", images: [], issues: [], queued: true, from: null } as unknown as AgentEventPayload);
+    const run = [user("go"), call("c2", "dray session new y"), queued, result("c2", ID), said("started")];
+    expect(lastTurns(run, 1)).toBe(0);
+  });
+
   it("grows a window by whole turns above it", () => {
     expect(earlierTurns(events, 7, 1)).toBe(3);
     expect(earlierTurns(events, 3, 1)).toBe(1);
