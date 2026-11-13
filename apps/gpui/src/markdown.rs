@@ -355,8 +355,10 @@ impl Render for Markdown {
 /// The copy control: no chrome at rest, `bg-muted/60` under the cursor, a
 /// check for two seconds after a copy. Shown while the message is hovered.
 fn copy_button(id: &'static str, text: SharedString, theme: &Theme, window: &mut Window, cx: &mut App) -> impl IntoElement + use<> {
-    let copied = window.use_keyed_state(id, cx, |_, _| false);
-    let done = *copied.read(cx);
+    // `(clicks, showing)`: a timer clears the check only if no click came
+    // after the one that started it.
+    let copied = window.use_keyed_state(id, cx, |_, _| (0u64, false));
+    let done = copied.read(cx).1;
     let (rest, fill) = (theme.muted_foreground, theme.muted.opacity(0.6));
     div()
         .id(id)
@@ -371,16 +373,19 @@ fn copy_button(id: &'static str, text: SharedString, theme: &Theme, window: &mut
         .hover(move |s| s.bg(fill))
         .on_click(move |_, _, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
-            copied.update(cx, |c, cx| {
-                *c = true;
+            let click = copied.update(cx, |c, cx| {
+                *c = (c.0 + 1, true);
                 cx.notify();
+                c.0
             });
             let copied = copied.downgrade();
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(Duration::from_secs(2)).await;
                 _ = copied.update(cx, |c, cx| {
-                    *c = false;
-                    cx.notify();
+                    if c.0 == click {
+                        c.1 = false;
+                        cx.notify();
+                    }
                 });
             })
             .detach();

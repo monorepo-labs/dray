@@ -713,8 +713,15 @@ fn html_tags(t: &[char]) -> Vec<char> {
 
 /// A lone `-` or `=` under a line would make it a setext heading for a frame;
 /// a zero-width space keeps it a paragraph until the line says otherwise.
+///
+/// Not inside an open fence, where remend adds one too: there it lands in the
+/// code, and the copy control would hand the reader a character nobody wrote.
+/// The one deliberate departure from remend.
 fn setext_headings(t: &[char]) -> Vec<char> {
     let Some(nl) = t.iter().rposition(|&c| c == '\n') else { return t.to_vec() };
+    if Ctx::new(t).open_fence {
+        return t.to_vec();
+    }
     let (before, last) = (&t[..nl], &t[nl + 1..]);
     let trimmed: Vec<char> = {
         let s: String = last.iter().collect();
@@ -1208,5 +1215,12 @@ mod tests {
         assert_eq!(remend("see [the docs](https://dr"), "see [the docs](streamdown:incomplete-link)");
         assert_eq!(remend("~~gone"), "~~gone~~");
         assert_eq!(remend("```rust\nfn a() { **x"), "```rust\nfn a() { **x");
+    }
+
+    #[test]
+    fn a_dash_line_in_open_code_stays_code() {
+        assert_eq!(remend("```\nlet a = 1;\n--"), "```\nlet a = 1;\n--");
+        // Outside code it is still held off becoming an underline.
+        assert_eq!(remend("text\n--"), "text\n--\u{200B}");
     }
 }
