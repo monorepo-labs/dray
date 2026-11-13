@@ -17,8 +17,8 @@ Dray Cloud runs a new task on a machine of its own. Dray starts the machine when
   <Step title="Paste your key">
     The row reads "A machine of its own for each task, started by Dray and gone once the task settles. Paste your key to turn it on." Type the key into **Dray Cloud key** and press **Save**. The button reads **Checking…** while Dray asks Dray Cloud whether the key is good. A bad key is refused and nothing is saved. **Change key** replaces it later. The key is not shown again.
   </Step>
-  <Step title="Turn the switch on">
-    The switch appears once a key is saved. Off, the row says **Off**. On, the dot says whether Dray Cloud answers, not whether a machine is running. With nothing running it says "No tasks on it yet. Pick Cloud beside a project to start one." With tasks running it says how many, such as "2 tasks on Dray Cloud". An error from Dray Cloud replaces that line.
+  <Step title="The switch">
+    Saving a good key turns Dray Cloud on, and the switch appears. It turns Cloud off, and back on. Off, the row says **Off**. On, the dot says whether Dray Cloud answers, not whether a machine is running. With nothing running it says "No tasks on it yet. Pick Cloud beside a project to start one." With tasks running it says how many, such as "2 tasks on Dray Cloud". An error from Dray Cloud replaces that line.
   </Step>
 </Steps>
 
@@ -53,7 +53,7 @@ If you had already left the new task, the prompt is back in the new-task compose
 
 A cloud machine has no stopped, sleeping or offline mark. Opening a task whose machine has stopped reads a copy of the transcript kept on this Mac, and does not wake the machine. Sending a message does wake it. The copy leaves out permission and question cards, since only the machine that asked can act on them.
 
-Settling the last live session on the machine deletes the machine, and the task leaves the sidebar with it. A fork, or a session the task started, can share the machine, and it stays until those are settled too. Settling from `dray session settle` counts the same as the sidebar. A machine that is already stopped is deleted without being woken to write the settle.
+Settling the last live session on the machine deletes the machine and the transcript kept on this Mac, and the task leaves the sidebar with it. A fork, or a session the task started, can share the machine, and it stays until those are settled too. Settling from `dray session settle` counts the same as the sidebar. A machine that is already stopped is deleted without being woken to write the settle.
 
 ## Limits
 
