@@ -1039,7 +1039,7 @@ mod tests {
         assert!(block.contains("/h/bots/b"));
         assert!(block.contains(&format!("`{MEMORY}/`")));
         assert!(block.contains("YYYY-MM-DD-short-title.md"));
-        assert!(block.contains("never ask one to report back"));
+        assert!(block.contains("never ask it to report back"));
         assert!(block.contains("dray session settle <id> --delete-worktree"));
         assert!(block.contains("The other bots now: \"Research\"."));
         assert!(bot_block(&bot(), &[], "").contains("There are no other bots yet."));
