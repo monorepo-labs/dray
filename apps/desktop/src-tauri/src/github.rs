@@ -1136,9 +1136,9 @@ const QUERY_GREPTILE: &str = r#"
 query($owner:String!,$repo:String!,$number:Int!){
  repository(owner:$owner,name:$repo){
   pullRequest(number:$number){
-   body headRefOid
+   headRefOid
    comments(last:50){nodes{author{login} body}}
-   reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login}}}}}
+   reviewThreads(first:100){totalCount nodes{isResolved comments(first:1){nodes{author{login}}}}}
   }
   recent: pullRequests(last:10){nodes{comments(first:20){nodes{author{login}}}}}
  }}
@@ -1155,11 +1155,17 @@ struct GreptileRepository {
 #[serde(rename_all = "camelCase")]
 struct GreptilePr {
     #[serde(default)]
-    body: String,
-    #[serde(default)]
     head_ref_oid: String,
     comments: Option<Nodes<GreptileComment>>,
-    review_threads: Option<Nodes<GreptileThread>>,
+    review_threads: Option<GreptileThreads>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GreptileThreads {
+    #[serde(default)]
+    total_count: u32,
+    nodes: Option<Vec<GreptileThread>>,
 }
 
 #[derive(Deserialize)]
@@ -1224,16 +1230,16 @@ fn read_greptile(out: &str) -> Result<GreptileReview, String> {
     let repo = Response::<GreptileRepository>::repository(out)?.ok_or("no such repository")?;
     let pr = repo.pull_request.ok_or("no such pull request")?;
     let comments = Nodes::take(pr.comments);
-    let threads = Nodes::take(pr.review_threads);
+    let (total, threads) = pr.review_threads.map_or((0, Vec::new()), |t| (t.total_count, t.nodes.unwrap_or_default()));
 
-    // Newest first: Greptile edits one summary in place, but a re-trigger can
-    // leave a second. The PR body last, where a repo has it write there.
+    // Greptile's own comments alone: the PR body is the author's to write, and
+    // a score typed there would pass for a review. Newest first, since a
+    // re-trigger can leave a second summary beside the one it edits in place.
     let summary = comments
         .iter()
         .rev()
         .filter(|c| by_greptile(&c.author))
         .map(|c| c.body.as_str())
-        .chain([pr.body.as_str()])
         .find(|body| confidence_score(body).is_some());
     let score = summary.and_then(confidence_score);
     let head = pr.head_ref_oid.as_str();
@@ -1241,7 +1247,10 @@ fn read_greptile(out: &str) -> Result<GreptileReview, String> {
         .and_then(reviewed_commit)
         .is_some_and(|sha| !head.is_empty() && !head.starts_with(sha));
 
-    let unresolved = threads.iter().filter(|t| !t.is_resolved && t.by_greptile()).count() as u32;
+    // Threads past the hundred read are counted open: one of them may be
+    // Greptile's, and reading them as resolved would let one-below pass.
+    let unread = total.saturating_sub(threads.len() as u32);
+    let unresolved = threads.iter().filter(|t| !t.is_resolved && t.by_greptile()).count() as u32 + unread;
     let present = score.is_some()
         || comments.iter().any(|c| by_greptile(&c.author))
         || threads.iter().any(GreptileThread::by_greptile)
@@ -1920,6 +1929,22 @@ mod tests {
         .join(",");
         let review = read_greptile(&greptile_answer("abc1234def", SUMMARY_4, &threads, "")).unwrap();
         assert_eq!(review, GreptileReview { present: true, score: Some(4), stale: false, unresolved: 1 });
+    }
+
+    /// The author writes the PR body, so a score typed there is no review.
+    #[test]
+    fn greptile_review_ignores_a_score_in_the_pr_body() {
+        let answer = greptile_answer("a", "", "", "").replace(r#""body":"""#, r#""body":"Confidence Score: 5/5""#);
+        assert_eq!(read_greptile(&answer).unwrap().score, None);
+        let by_author = r#"{"author":{"login":"someone"},"body":"Confidence Score: 5/5"}"#;
+        assert_eq!(read_greptile(&greptile_answer("a", by_author, "", "")).unwrap().score, None);
+    }
+
+    /// Threads past the hundred read may hold an open one of Greptile's.
+    #[test]
+    fn greptile_threads_past_the_page_count_as_open() {
+        let answer = greptile_answer("abc1234def", SUMMARY_4, "", "").replace(r#""reviewThreads":{"#, r#""reviewThreads":{"totalCount":102,"#);
+        assert_eq!(read_greptile(&answer).unwrap().unresolved, 102);
     }
 
     #[test]

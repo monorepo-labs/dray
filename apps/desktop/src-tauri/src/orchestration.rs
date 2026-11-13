@@ -1239,51 +1239,73 @@ async fn post_merge_card(card: dray_proto::MergeCard, app: &Sink) -> Result<Resp
         number: pr.number,
         url: pr.url.clone(),
     };
+    let _held = POSTING_CARD.lock().await;
     manager().post_event(&card.session_id, chat.harness, payload, app).await?;
     Ok(Response::MergeCard { number: pr.number, url: pr.url, title: task.title })
 }
 
-/// Posts a merge card for a task's pull request into `session_id`'s chat once
-/// the app judges it ready, unless a card for that PR is in the chat already —
-/// one the agent posted by hand counts. Answers whether it posted.
+/// Held over every merge card's post, by hand or automatic, so the automatic
+/// one's check of the log and its append cannot straddle another post.
+static POSTING_CARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The chat a task's merge card goes in: the session that started it. A bot's
+/// task goes to the bot's current chat, since Start fresh settles the one that
+/// started it and an agent switch leaves it behind. `None` where there is none.
+async fn card_chat(task: &SessionIndexItem) -> Result<Option<SessionIndexItem>> {
+    let Some(parent_id) = task.parent_session_id.as_deref().filter(|id| *id != task.session_id) else {
+        return Ok(None);
+    };
+    let Some(parent) = store::get_session_index_item(parent_id).await? else {
+        return Ok(None);
+    };
+    Ok(match bots::bot_at(&parent.cwd).await {
+        Some(bot) => bots::chat_of(&bot).await,
+        None => (!parent.archived).then_some(parent),
+    })
+}
+
+/// Posts a merge card for task `session_id`'s pull request in the chat that
+/// started it, once the app judges the PR ready, unless that chat already holds
+/// a card for it — one the agent posted by hand counts. Answers the chat the
+/// card is in, or `None` where there is no chat to post in yet (the task or its
+/// starter settled), which the caller asks again about.
 ///
 /// The PR comes from the app's own marks read, so no `gh` runs here. The log is
 /// the record of what was posted, so a restart or a second client never posts
-/// twice; the lock keeps two calls from both finding none.
+/// twice.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn auto_merge_card(
     session_id: String,
-    task_id: String,
     number: u64,
     url: String,
     branch: String,
     sink: Sink,
-) -> Result<bool, crate::Fail> {
-    static POSTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    let _held = POSTING.lock().await;
+) -> Result<Option<String>, crate::Fail> {
+    let _held = POSTING_CARD.lock().await;
 
-    let chat = store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
-    let task = store::get_session_index_item(&task_id).await?.with_context(|| format!("no session {task_id}"))?;
-    if chat.archived || task.archived {
-        return Ok(false);
+    let task = store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
+    if task.archived {
+        return Ok(None);
     }
-    let posted = store::list_session_events(&session_id).await?.iter().any(|e| {
+    let Some(chat) = card_chat(&task).await? else {
+        return Ok(None);
+    };
+    let posted = store::list_session_events(&chat.session_id).await?.iter().any(|e| {
         matches!(&e.payload, crate::events::AgentEventPayload::MergeCard { number: n, project_path, .. }
             if *n == number && *project_path == task.project_path)
     });
-    if posted {
-        return Ok(false);
+    if !posted {
+        let payload = crate::events::AgentEventPayload::MergeCard {
+            task_id: session_id,
+            title: task.title,
+            project_path: task.project_path,
+            branch,
+            number,
+            url,
+        };
+        manager().post_event(&chat.session_id, chat.harness, payload, &sink).await?;
     }
-    let payload = crate::events::AgentEventPayload::MergeCard {
-        task_id,
-        title: task.title,
-        project_path: task.project_path,
-        branch,
-        number,
-        url,
-    };
-    manager().post_event(&session_id, chat.harness, payload, &sink).await?;
-    Ok(true)
+    Ok(Some(chat.session_id))
 }
 
 /// Tags a session that already exists, or untags it.

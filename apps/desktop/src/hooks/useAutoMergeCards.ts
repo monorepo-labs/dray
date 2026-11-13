@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { cardChat, greptileClears, useMinGreptileScore } from "@/lib/autoMergeCard";
+import { greptileClears, useMinGreptileScore } from "@/lib/autoMergeCard";
+import { botAt } from "@/lib/bots";
 import { prStatus, sessionBranch } from "@/lib/pr";
 import { invoke } from "@/lib/transport";
 import type { Bot, GreptileReview, PrMark, SessionIndexItem } from "@/types/events";
@@ -22,10 +23,11 @@ type Args = {
 /// ready: `prStatus` says ready and Greptile clears it (`greptileClears`).
 ///
 /// **State, not transition**, unlike the Ready to merge notice: a PR that turned
-/// ready while the app was closed still gets its card. The chat's log is what
-/// keeps it to one per PR — `auto_merge_card` posts nothing where a card for
-/// it is already there, the agent's own included — so `done` here only saves
-/// the call.
+/// ready while the app was closed still gets its card. The server picks the
+/// chat, since it sees settled sessions this list may not hold, and its log is
+/// what keeps it to one card per PR, the agent's own included. `done` here
+/// only saves the call, so it is dropped when a bot's chat changes: a fresh
+/// chat holds no card yet.
 export function useAutoMergeCards({ items, bots, prFor }: Args) {
   const minScore = useMinGreptileScore();
   const done = useRef(new Set<string>());
@@ -35,18 +37,20 @@ export function useAutoMergeCards({ items, bots, prFor }: Args) {
   const [tick, setTick] = useState(0);
   const [pending, setPending] = useState(false);
 
-  const tasks = useMemo(() => {
-    const byId = new Map(items.map((i) => [i.sessionId, i]));
-    return items.flatMap((task) => {
-      const chatId = cardChat(task, byId, items, bots);
-      return chatId ? [{ task, chatId }] : [];
-    });
-  }, [items, bots]);
+  const tasks = useMemo(
+    () => items.filter((i) => !i.archived && i.parentSessionId && i.parentSessionId !== i.sessionId),
+    [items],
+  );
+  const botChats = useMemo(
+    () => items.filter((i) => !i.archived && botAt(bots, i.cwd)).map((i) => i.sessionId).sort().join("\n"),
+    [items, bots],
+  );
+  useEffect(() => done.current.clear(), [botChats]);
 
   useEffect(() => {
     const now = Date.now();
     const ready = new Set<string>();
-    for (const { task, chatId } of tasks) {
+    for (const task of tasks) {
       const branch = sessionBranch(task);
       const mark = prFor(task.projectPath, branch);
       if (!branch || !mark || mark.state !== "OPEN" || prStatus(mark).key !== "ready") continue;
@@ -61,14 +65,14 @@ export function useAutoMergeCards({ items, bots, prFor }: Args) {
         try {
           const review = await invoke<GreptileReview>("greptile_review", { cwd: task.projectPath, number: mark.number });
           if (!greptileClears(review, minScore)) return;
-          await invoke<boolean>("auto_merge_card", {
-            sessionId: chatId,
-            taskId: task.sessionId,
+          const chat = await invoke<string | null>("auto_merge_card", {
+            sessionId: task.sessionId,
             number: mark.number,
             url: mark.url,
             branch,
           });
-          done.current.add(key);
+          // No chat to post in yet is asked again at the next recheck.
+          if (chat) done.current.add(key);
         } catch {
           // A failed read or post is asked again at the next recheck.
         } finally {
