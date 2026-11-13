@@ -1,5 +1,5 @@
 import { invoke, LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
-import type { Project, ServerInfo, SessionIndexItem } from "@/types/events";
+import type { Bot, Project, ServerInfo, SessionIndexItem } from "@/types/events";
 
 /// A remote's last known lists, kept on disk by the app so its rows outlive a
 /// restart while it cannot be reached (#871). `sessions` is the live side,
@@ -8,6 +8,7 @@ export type ServerCache = {
   sessions?: SessionIndexItem[];
   archived?: SessionIndexItem[];
   projects?: Project[];
+  bots?: Bot[];
 };
 
 /// Whether `server`'s rows belong in the sidebar: This Mac always, a remote

@@ -3,7 +3,9 @@ import { useSyncExternalStore } from "react";
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
 
-export type BreakSettings = { on: boolean; minutes: number };
+/// `off` names the break cards the reader turned off, so a card added later
+/// shows up without them having to find it.
+export type BreakSettings = { on: boolean; minutes: number; off: string[] };
 
 export const BREAK_INTERVALS = [30, 45, 60, 90] as const;
 /// Window focused with no key or pointer for this long reads as the reader gone.
@@ -13,13 +15,14 @@ export const AWAY_RESET_MS = 10 * 60_000;
 export const TICK_MS = 30_000;
 
 const KEY = "ade.breakReminder";
-const DEFAULTS: BreakSettings = { on: true, minutes: 60 };
+const DEFAULTS: BreakSettings = { on: true, minutes: 60, off: ["Pull-ups", "Push-ups"] };
 
 function coerce(raw: unknown): BreakSettings {
   const v = (raw ?? {}) as Partial<BreakSettings>;
   return {
     on: typeof v.on === "boolean" ? v.on : DEFAULTS.on,
     minutes: BREAK_INTERVALS.includes(v.minutes as never) ? (v.minutes as number) : DEFAULTS.minutes,
+    off: Array.isArray(v.off) ? v.off.filter((n) => typeof n === "string") : DEFAULTS.off,
   };
 }
 

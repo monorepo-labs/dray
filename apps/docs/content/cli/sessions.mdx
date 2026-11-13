@@ -111,6 +111,31 @@ dray session unset-aside <id>
 
 These are the same as the sidebar's buttons. Settling a session also settles the hidden sessions it started.
 
+## Merge card
+
+```bash
+dray session merge-card <task-id>
+```
+
+Run from inside a session, this posts a card in that session's chat for the open pull request on another session's branch, usually a task it started. The card shows the task, the PR number, its live status, a **Merge** button and an **Open on GitHub** link, so you can merge without opening the task or the side panel. It is refused when the branch has no open pull request.
+
+Dray also posts the card on its own, once per pull request, in the chat of the session that started the task, as soon as GitHub says the PR can merge: its branch protection, required checks and required reviews pass, and no check is still running. A card already in the chat for that PR, by hand or not, stops a second.
+
+The task can run on another machine, such as a sandbox of its own. The card then reads and merges the pull request through the GitHub CLI on the chat's machine, so it keeps working after that machine is gone.
+
+In a bot's chat, Merge also settles the task and deletes its worktree when that holds nothing the merge did not take. In any other chat it only merges. The card shrinks to one line once the PR is merged, or after you have sent three more messages.
+
+## Need line
+
+```bash
+dray session need <task-id> "Pick: keep the button or drop it"
+dray session need <task-id>
+```
+
+Sets what a bot's task needs from you, in one line. It shows on the task's row in the **Waiting on you** card at the foot of the bot's chat, and clears once the task moves. With no text it clears now. Bots write it themselves when a task has sat waiting on you for 5 minutes.
+
+A task whose pull request is ready to merge gets a line only when it asked you to try or check something before merging. Otherwise its row shows **Merge** alone.
+
 ## Limits
 
 - No flag sets the permission mode, the worktree name, or turns the worktree off.

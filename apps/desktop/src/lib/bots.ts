@@ -1,32 +1,103 @@
 import { useSyncExternalStore } from "react";
 
-import { invoke } from "@/lib/transport";
+import { remoteServers, subscribeServers } from "@/lib/servers";
+import { invoke, listen, LOCAL, serverOfPath, serverOfSession, type ServerId } from "@/lib/transport";
 import type { Bot, BotPreview, SessionIndexItem } from "@/types/events";
 
-/// The bots on this Mac's server, held once for the app. Settings writes and
-/// the sidebar reads, so both go through here rather than each fetching.
+/// Every server's bots, held once for the app: This Mac's first, then each
+/// remote's in the server list's order. A remote's paths come back qualified,
+/// so a bot's server is `serverOfPath(bot.path)`.
 let bots: Bot[] = [];
+const byServer = new Map<ServerId, Bot[]>();
+const answered = new Set<ServerId>();
 const listeners = new Set<() => void>();
+let watching = false;
 
-/// Reads the list again, after a write or on launch.
-export async function refreshBots(): Promise<void> {
-  try {
-    bots = await invoke<Bot[]>("list_bots");
-  } catch {
-    // An older server answers `unknown command`: it has no bots to list.
-    bots = [];
-  }
+/// The flat list again, from each shown server's last answer. A remote that is
+/// on but unreachable keeps its bots, drawn offline; one turned off or removed
+/// takes them with it, as it does its projects.
+function rebuild() {
+  const next = [
+    ...(byServer.get(LOCAL) ?? []),
+    ...remoteServers().flatMap((s) => (s.on ? (byServer.get(s.id) ?? []) : [])),
+  ];
+  if (next.length === bots.length && next.every((b, i) => b === bots[i])) return;
+  bots = next;
   listeners.forEach((l) => l());
 }
+
+/// Reads `server`'s list again, after a write or on its connect.
+export async function refreshBots(server: ServerId = LOCAL): Promise<void> {
+  try {
+    byServer.set(server, await invoke<Bot[]>("list_bots", {}, server));
+    answered.add(server);
+  } catch (e) {
+    // An older server answers `unknown command`: it has no bots to list. A
+    // remote that cannot be reached keeps what it last said.
+    if (server === LOCAL || String(e).includes("unknown command")) byServer.set(server, []);
+  }
+  rebuild();
+}
+
+/// A remote's bots as last kept on disk, standing in until it answers.
+export function keepBots(server: ServerId, list: Bot[]): void {
+  if (answered.has(server)) return;
+  byServer.set(server, list);
+  rebuild();
+}
+
+/// What `server` last said, this run or kept from an earlier one, for the
+/// cache that outlives a restart.
+export const botsOf = (server: ServerId): Bot[] | undefined => byServer.get(server);
 
 export function useBots(): Bot[] {
   return useSyncExternalStore(
     (l) => {
+      if (!watching) {
+        watching = true;
+        subscribeServers(rebuild);
+      }
       listeners.add(l);
       return () => listeners.delete(l);
     },
     () => bots,
   );
+}
+
+/// The server a bot runs on.
+export const serverOfBot = (bot: Bot): ServerId => serverOfPath(bot.path);
+
+/// Each chat's inbox row, asked of the server that chat runs on.
+export async function readPreviews(sessionIds: string[]): Promise<Record<string, BotPreview>> {
+  const by = new Map<ServerId, string[]>();
+  for (const id of sessionIds) {
+    const server = serverOfSession(id);
+    by.set(server, [...(by.get(server) ?? []), id]);
+  }
+  const answers = await Promise.all(
+    [...by].map(([server, ids]) =>
+      invoke<Record<string, BotPreview>>("bot_previews", { sessionIds: ids }, server).catch(() => ({})),
+    ),
+  );
+  return Object.assign({}, ...answers);
+}
+
+/// Keeps each server's list current while `dray bot` changes it from outside
+/// the app. A connect needs nothing here: `readServer` reads every server's
+/// bots on its `live_state`, which covers a change made while it was down.
+export function listenForBots(): () => void {
+  const changed = listen("bots_changed", ({ server }) => void refreshBots(server));
+  return () => void changed.then((off) => off());
+}
+
+/// The bot `key` names, the way `dray bot send` reads it: its id, else its
+/// name in any case, where only one bot has it.
+export function botNamed(list: readonly Bot[], key: string): Bot | undefined {
+  const byId = list.find((b) => b.id === key);
+  if (byId) return byId;
+  const name = key.trim().toLowerCase();
+  const matches = list.filter((b) => b.name.trim().toLowerCase() === name);
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 const trimmed = (path: string) => path.replace(/\/+$/, "");
@@ -36,6 +107,12 @@ const trimmed = (path: string) => path.replace(/\/+$/, "");
 export function botAt(list: readonly Bot[], cwd: string): Bot | undefined {
   const at = trimmed(cwd);
   return list.find((b) => trimmed(b.path) === at);
+}
+
+/// Whether `id` names a bot, for code outside React. What tells a bot tag from
+/// a file mention followed by some id in parentheses.
+export function isBotId(id: string): boolean {
+  return bots.some((b) => b.id === id);
 }
 
 /// Whether `cwd` is a bot's folder, for code outside React.
@@ -51,14 +128,38 @@ export function inBotTree(
   items: readonly SessionIndexItem[],
   sessionId: string,
 ): boolean {
-  if (list.length === 0) return false;
+  return botOf(list, items, sessionId) !== undefined;
+}
+
+/// The bot whose chat `sessionId` is part of, or descends from.
+export function botOf(
+  list: readonly Bot[],
+  items: readonly SessionIndexItem[],
+  sessionId: string,
+): Bot | undefined {
+  if (list.length === 0) return undefined;
   const byId = new Map(items.map((i) => [i.sessionId, i]));
   let at = byId.get(sessionId);
   for (let hops = 0; at && hops < 8; hops++) {
-    if (botAt(list, at.cwd)) return true;
+    const bot = botAt(list, at.cwd);
+    if (bot) return bot;
     at = at.parentSessionId ? byId.get(at.parentSessionId) : undefined;
   }
-  return false;
+  return undefined;
+}
+
+/// The session whose browser a bot chat's `sessionId` uses, as the server's
+/// `bots::browser_owner` resolves it: the chat's oldest session, since an
+/// agent switch adds a newer one and the pages must outlive it (#878). A
+/// bot's tasks have browsers of their own, so anything else is `undefined`.
+export function botBrowser(
+  list: readonly Bot[],
+  items: readonly SessionIndexItem[],
+  sessionId: string,
+): string | undefined {
+  const cwd = items.find((i) => i.sessionId === sessionId)?.cwd;
+  const bot = cwd === undefined ? undefined : botAt(list, cwd);
+  return bot && botChat(items, bot)[0]?.sessionId;
 }
 
 /// A bot, its ongoing chat, and the chat's inbox row, for the sidebar.
@@ -79,7 +180,10 @@ export function botEntries(
 export function previewLine(text: string): string {
   return text
     .replace(/```[\s\S]*?```/g, " ")
-    .replace(/[*_`#>]+/g, "")
+    // Headings and quotes by their line-start marks alone: `#908` mid-line is a PR.
+    .replace(/^\s*(?:#{1,6}\s+|>\s?)+/gm, "")
+    // Underscores stay: `parse_args` is a name, and agents bold with `*`.
+    .replace(/[*`]+/g, "")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\s+/g, " ")
     .trim();

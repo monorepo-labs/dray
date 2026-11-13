@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { crewRows, crewSeen, hiddenChildren, inSidebar, withHiddenAsks } from "@/lib/crew";
-import type { SessionIndexItem, SessionStatus } from "@/types/events";
+import { crewRows, crewSeen, hiddenChildren, inSidebar, leftToParent, withHiddenAsks } from "@/lib/crew";
+import type { BackgroundTask, SessionIndexItem, SessionStatus } from "@/types/events";
 
 const item = (
   sessionId: string,
@@ -123,6 +123,18 @@ describe("crewRows", () => {
     expect(row.asking).toBe(true);
     expect(row.busy).toBe(false);
   });
+
+  // A turn over with a background shell still running reads as idle without
+  // this, and the reader takes the task for finished.
+  it("flags a background task only once no turn runs", () => {
+    const items = [item("a", null), item("b", "a"), item("c", "a", { status: "in_progress" })];
+    const task = { taskId: "t", toolUseId: "u", kind: "local_bash", description: "dev server" } as unknown as BackgroundTask;
+    const live = { statusBySession: {}, askingSessions: new Set<string>(), tasksBySession: { b: [task], c: [task] } };
+    const [b, c] = crewRows(items, "a", live);
+    expect(b.background).toBe(true);
+    expect(c.background).toBe(false);
+    expect(crewRows(items, "a", quiet)[0].background).toBe(false);
+  });
 });
 
 describe("crewSeen", () => {
@@ -186,5 +198,17 @@ describe("hidden sessions", () => {
 
   it("names only the hidden children for a cascade", () => {
     expect(hiddenChildren(items, "a").map((i) => i.sessionId)).toEqual(["review"]);
+  });
+});
+
+describe("leftToParent", () => {
+  it("quiets a hidden session's done and ready-to-merge, never its cards", () => {
+    const hidden = item("h", "p", { hidden: true });
+    expect(leftToParent(hidden, "completed")).toBe(true);
+    expect(leftToParent(hidden, "pr")).toBe(true);
+    expect(leftToParent(hidden, "asking")).toBe(false);
+    expect(leftToParent(hidden, undefined)).toBe(false);
+    expect(leftToParent(item("v", "p"), "completed")).toBe(false);
+    expect(leftToParent(undefined, "completed")).toBe(false);
   });
 });

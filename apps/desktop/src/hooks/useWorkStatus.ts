@@ -29,8 +29,10 @@ export function useWorkStatus(cwd: string, busy: boolean) {
   const issued = useRef(0);
 
   const read = useRef((at: string) => {
-    if (!at) return;
+    // Bumped even with nothing to read, so an answer still out for the last
+    // directory cannot land on a session that has none (a bot's chat).
     const token = ++issued.current;
+    if (!at) return;
     void invoke<WorkStatus>("work_status", { cwd: at })
       .then((next) => {
         cache.set(at, next);

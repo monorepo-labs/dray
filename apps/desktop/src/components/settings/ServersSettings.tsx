@@ -25,7 +25,7 @@ import { Input } from "@/components/ui/input";
 import Spinner from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { useCopied } from "@/hooks/useCopied";
-import { AUTO_EXTEND_MINUTES, boatAsleep, resumeBoat, setBoatPrefs, useBoatPrefs } from "@/lib/boat";
+import { boatAsleep, resumeBoat } from "@/lib/boat";
 import { relativeTime } from "@/lib/format";
 import { MACHINE } from "@/lib/platform";
 import { serverName, useLocalServer, useServers } from "@/lib/servers";
@@ -43,6 +43,10 @@ import type {
 } from "@/types/events";
 
 type TrustHost = Extract<Fix, { kind: "trust_host" }>;
+
+/// Remote MCP's UI, dev builds only until Dray accounts land (#900).
+/// `dray_proto::REMOTE_MCP` is the server's half; flip both together.
+const REMOTE_MCP = import.meta.env.DEV;
 
 const STAGE_LABELS: Record<Stage, string> = {
   connecting: "Connecting…",
@@ -190,17 +194,16 @@ export default function ServersSettings() {
               void invoke("remove_server", { id: server.id }, LOCAL).catch(console.error);
             }}
             onCheckUpdate={server.status === "connected" ? () => checkUpdate(server.id) : undefined}
-            onAssistant={server.status === "connected" ? () => setPairing(server) : undefined}
+            onAssistant={REMOTE_MCP && server.status === "connected" ? () => setPairing(server) : undefined}
           >
             {showsUpdate(server, updates[server.id] ?? {}) && (
               <UpdateLine server={server} state={updates[server.id] ?? {}} onChange={(next) => patchUpdate(server.id, next)} />
             )}
-            {server.status === "connected" && <Assistants server={server.id} />}
+            {REMOTE_MCP && server.status === "connected" && <Assistants server={server.id} />}
           </Row>
           </div>
         ))}
         {servers.length > 0 && <ShareMachinesRow />}
-        {servers.some((s) => s.boat) && <AutoExtendRow />}
       </div>
 
       <AddServerDialog
@@ -277,23 +280,6 @@ function ShareMachinesRow() {
         </span>
       </div>
       <Switch aria-label="Share these servers" checked={on} onCheckedChange={toggle} />
-    </div>
-  );
-}
-
-/// Off by default, offered once after the first Extend; this is where it goes
-/// back off. Drawn only once a boat sandbox is on the list.
-function AutoExtendRow() {
-  const { auto } = useBoatPrefs();
-  return (
-    <div className="flex min-h-7 items-center gap-3 py-1.5 pl-4.5">
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-ui font-medium">Keep busy sandboxes running</span>
-        <span className="text-ui text-muted-foreground">
-          Adds {AUTO_EXTEND_MINUTES} minutes when a boat sandbox is about to stop with a turn or background task running.
-        </span>
-      </div>
-      <Switch aria-label="Keep busy sandboxes running" checked={auto} onCheckedChange={(on) => setBoatPrefs({ auto: on, offered: true })} />
     </div>
   );
 }
@@ -468,7 +454,7 @@ function ThisMacRow() {
           </Button>
         )
       }
-      onAssistant={down ? undefined : () => setPairing(true)}
+      onAssistant={REMOTE_MCP && !down ? () => setPairing(true) : undefined}
     >
       {pairing && <ConnectAssistantDialog server={LOCAL} name={serverName(LOCAL)} onClose={() => setPairing(false)} />}
       {remote.on && remote.address && (
@@ -492,7 +478,7 @@ function ThisMacRow() {
           <PairButton />
         </div>
       )}
-      {!down && <Assistants server={LOCAL} />}
+      {REMOTE_MCP && !down && <Assistants server={LOCAL} />}
     </Row>
   );
 }
