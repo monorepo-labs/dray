@@ -195,8 +195,8 @@ impl Chat {
         let gap = if matches!(row, Row::Tool(_)) && next_is_tool { 12. } else { 16. };
         let body: AnyElement = match row {
             Row::User { text } => user_bubble(text, &theme),
-            Row::Assistant { text, streaming, .. } => slots::assistant(text, *streaming, &theme),
-            Row::Tool(tool) => slots::tool(tool, &theme),
+            Row::Assistant { text, streaming, .. } => crate::slots::assistant(text, *streaming, &theme),
+            Row::Tool(tool) => crate::slots::tool(tool, &theme),
             Row::Failed { text } => div().text_color(theme.destructive).child(text.clone()).into_any_element(),
         };
         div()
@@ -263,45 +263,6 @@ impl Render for Chat {
             .line_height(rems(0.9375 * 1.65))
             .text_color(theme.foreground)
             .child(list(self.list.clone(), cx.processor(|this, ix, _, cx| this.row(ix, cx))).size_full())
-            .into_any_element()
-    }
-}
-
-/// Where the rows other milestone-1 modules draw plug in. Each is a stand-in
-/// until its module lands: markdown for assistant text, tool rows for calls.
-mod slots {
-    use gpui::{AnyElement, div, prelude::*};
-
-    use crate::theme::Theme;
-    use crate::transcript::{Tool, label};
-
-    /// Stand-in for the streaming markdown module: the text as written.
-    pub fn assistant(text: &str, _streaming: bool, _theme: &Theme) -> AnyElement {
-        div().whitespace_normal().child(text.to_string()).into_any_element()
-    }
-
-    /// Stand-in for the tool-row module: the collapsed header alone, label and
-    /// target (ToolCall.tsx), with no body to expand.
-    pub fn tool(tool: &Tool, theme: &Theme) -> AnyElement {
-        let ink = if tool.error { theme.destructive } else { theme.foreground.opacity(0.8) };
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .min_w_0()
-            .child(div().flex_shrink_0().text_color(ink).child(label(&tool.name, !tool.done).to_string()))
-            .when_some(tool.summary.clone(), |d, s| {
-                d.child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .font_family(crate::assets::MONO)
-                        .text_color(if tool.error { theme.destructive } else { theme.muted_foreground })
-                        // One line, whitespace collapsed as CSS `truncate` does,
-                        // or a multi-line command loses the spaces at its breaks.
-                        .child(s.split_whitespace().collect::<Vec<_>>().join(" ")),
-                )
-            })
             .into_any_element()
     }
 }

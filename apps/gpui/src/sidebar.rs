@@ -24,14 +24,14 @@ pub fn sidebar(ws: &Workspace, theme: &Theme, cx: &mut Context<Workspace>) -> im
         .size_full()
         .flex()
         .flex_col()
-        .child(top_buttons(theme))
+        .child(top_buttons(theme, cx))
         .child(filter_row(ws, theme))
         .child(list(ws, theme, cx))
 }
 
 /// New Task, Issues and Search, as ghost buttons drawn at a row's strength.
-/// Inert in this PR: each lands with the screen it opens.
-fn top_buttons(theme: &Theme) -> impl IntoElement {
+/// New Task opens the new-task screen; Issues and Search land with theirs.
+fn top_buttons(theme: &Theme, cx: &mut Context<Workspace>) -> impl IntoElement {
     let button = |id: &'static str, icon: &'static str, label: &'static str, key: &'static str| {
         let hover = theme.sidebar_accent_hover;
         div()
@@ -59,7 +59,10 @@ fn top_buttons(theme: &Theme) -> impl IntoElement {
         .gap(px(1.))
         .px_2()
         .pt_3()
-        .child(button("new-task", "icons/plus.svg", "New Task", "N"))
+        .child(
+            button("new-task", "icons/plus.svg", "New Task", "N")
+                .on_click(cx.listener(|this, _, _, cx| this.new_task(cx))),
+        )
         .child(button("issues", "icons/circle-dot.svg", "Issues", "I"))
         .child(button("search", "icons/search.svg", "Search", "F"))
 }

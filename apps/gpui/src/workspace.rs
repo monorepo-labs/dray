@@ -188,6 +188,14 @@ impl Workspace {
         cx.notify();
     }
 
+    /// New Task: closes the open session, leaving the sheet to the new-task
+    /// screen.
+    pub fn new_task(&mut self, cx: &mut Context<Self>) {
+        self.selected = None;
+        self.chat = None;
+        cx.notify();
+    }
+
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_open = !self.sidebar_open;
         cx.notify();
@@ -267,8 +275,20 @@ impl Render for Workspace {
                     .bg(theme.sheet)
                     .overflow_hidden()
                     .map(|sheet| match &self.chat {
-                        Some(chat) => sheet.child(chat.clone()),
-                        None => sheet.child(self.empty_state(&theme)),
+                        Some(chat) => {
+                            let id = chat.read(cx).session_id.clone();
+                            let asks: Vec<_> = self.store.asks(&id).collect();
+                            sheet
+                                .flex()
+                                .flex_col()
+                                .child(div().flex_1().min_h_0().child(chat.clone()))
+                                .children(crate::slots::cards(&id, &asks, &theme))
+                                .children(crate::slots::composer(&id, &theme))
+                        }
+                        None => match crate::slots::new_task(&theme) {
+                            Some(screen) if matches!(self.connection, Connection::Up) => sheet.child(screen),
+                            _ => sheet.child(self.empty_state(&theme)),
+                        },
                     }),
             )
             .child(self.header(&theme, cx))

@@ -7,6 +7,7 @@ mod color;
 mod glass;
 mod sessions;
 mod sidebar;
+mod slots;
 mod store;
 mod theme;
 mod transcript;
