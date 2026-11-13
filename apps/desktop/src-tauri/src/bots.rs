@@ -266,7 +266,7 @@ pub async fn rest_of_chat(item: &SessionIndexItem) -> Vec<String> {
 
 /// A bot's chat, oldest first: every unsettled session run in its folder. An
 /// agent switch starts a new session, so one conversation spans several.
-async fn chat_sessions(path: &str) -> Result<Vec<SessionIndexItem>> {
+pub(crate) async fn chat_sessions(path: &str) -> Result<Vec<SessionIndexItem>> {
     let mut items: Vec<SessionIndexItem> = crate::store::list_session_index_items(false)
         .await?
         .into_iter()

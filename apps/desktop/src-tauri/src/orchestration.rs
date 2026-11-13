@@ -1248,19 +1248,22 @@ async fn post_merge_card(card: dray_proto::MergeCard, app: &Sink) -> Result<Resp
 /// one's check of the log and its append cannot straddle another post.
 static POSTING_CARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// The chat a task's merge card goes in: the session that started it. A bot's
-/// task goes to the bot's current chat, since Start fresh settles the one that
-/// started it and an agent switch leaves it behind. `None` where there is none.
-async fn card_chat(task: &SessionIndexItem) -> Result<Option<SessionIndexItem>> {
+/// The chat a task's merge card goes in, as its sessions oldest first: the card
+/// is posted in the last, and a card in any of them counts. A normal task's is
+/// the session that started it. A bot's task goes to the bot's chat, since
+/// Start fresh settles the session that started it, and an agent switch leaves
+/// earlier sessions on screen in the same conversation. Empty where there is none.
+async fn card_chat(task: &SessionIndexItem) -> Result<Vec<SessionIndexItem>> {
     let Some(parent_id) = task.parent_session_id.as_deref().filter(|id| *id != task.session_id) else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     let Some(parent) = store::get_session_index_item(parent_id).await? else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     Ok(match bots::bot_at(&parent.cwd).await {
-        Some(bot) => bots::chat_of(&bot).await,
-        None => (!parent.archived).then_some(parent),
+        Some(bot) => bots::chat_sessions(&bot.path).await?,
+        None if parent.archived => Vec::new(),
+        None => vec![parent],
     })
 }
 
@@ -1287,13 +1290,20 @@ pub async fn auto_merge_card(
     if task.archived {
         return Ok(None);
     }
-    let Some(chat) = card_chat(&task).await? else {
+    let sessions = card_chat(&task).await?;
+    let Some(chat) = sessions.last() else {
         return Ok(None);
     };
-    let posted = store::list_session_events(&chat.session_id).await?.iter().any(|e| {
-        matches!(&e.payload, crate::events::AgentEventPayload::MergeCard { number: n, project_path, .. }
-            if *n == number && *project_path == task.project_path)
-    });
+    let mut posted = false;
+    for session in &sessions {
+        posted = store::list_session_events(&session.session_id).await?.iter().any(|e| {
+            matches!(&e.payload, crate::events::AgentEventPayload::MergeCard { number: n, project_path, .. }
+                if *n == number && *project_path == task.project_path)
+        });
+        if posted {
+            break;
+        }
+    }
     if !posted {
         let payload = crate::events::AgentEventPayload::MergeCard {
             task_id: session_id,
@@ -1305,7 +1315,7 @@ pub async fn auto_merge_card(
         };
         manager().post_event(&chat.session_id, chat.harness, payload, &sink).await?;
     }
-    Ok(Some(chat.session_id))
+    Ok(Some(chat.session_id.clone()))
 }
 
 /// Tags a session that already exists, or untags it.
