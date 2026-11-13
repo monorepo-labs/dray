@@ -8,15 +8,37 @@
 
 use dray_core::git::BranchList;
 use dray_core::harness::Harness;
-use dray_core::models::{Effort, Model, ModelId};
+use dray_core::models::{Effort, Model, ModelId, default_model_for};
 use dray_core::projects::Project;
 use gpui::{
-    AnyElement, AnyView, ClickEvent, Context, EventEmitter, FontWeight, Hsla, InteractiveElement, IntoElement,
-    ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, deferred, div, prelude::*, px, rems, svg,
+    AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FontWeight, Hsla, InteractiveElement, IntoElement,
+    ParentElement, Pixels, SharedString, StatefulInteractiveElement, Styled, Window, canvas, deferred, div, prelude::*,
+    px, rems, svg,
 };
+
+use std::cell::Cell;
+use std::rc::Rc;
 
 use crate::color::oklch;
 use crate::theme::{Mode, Theme};
+
+thread_local! {
+    static INSTALLED: std::cell::RefCell<Option<Entity<NewTask>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Makes the screen once and keeps it where [`element`] finds it. The window
+/// subscribes to the entity returned and feeds it through the setters.
+pub fn install(harness: Harness, cx: &mut App) -> Entity<NewTask> {
+    let task = cx.new(|_| NewTask::new(harness));
+    INSTALLED.with(|slot| *slot.borrow_mut() = Some(task.clone()));
+    task
+}
+
+/// `slots::new_task`'s body. The picks live in the entity, which reads the
+/// theme global itself; `None` until [`install`] has run.
+pub fn element(_theme: &Theme) -> Option<AnyElement> {
+    INSTALLED.with(|slot| slot.borrow().clone().map(|task| task.into_any_element()))
+}
 
 /// A project on one machine. `server: None` is This Mac, which no label names.
 #[derive(Clone, Debug)]
@@ -74,8 +96,11 @@ pub struct NewTask {
     /// The model row whose effort submenu is showing, held until another row
     /// takes it so the pointer can cross into the submenu.
     effort_row: Option<usize>,
-    composer: Option<AnyView>,
+    composer: Option<Box<dyn Fn(&Theme) -> Option<AnyElement>>>,
     hint: Option<SharedString>,
+    /// Where the pickers row sat last frame, window-relative: the room a menu
+    /// opening upward has, as Radix's `--available-height` is.
+    toolbar_top: Rc<Cell<Pixels>>,
 }
 
 impl EventEmitter<NewTaskEvent> for NewTask {}
@@ -97,12 +122,14 @@ impl NewTask {
             effort_row: None,
             composer: None,
             hint: None,
+            toolbar_top: Rc::new(Cell::new(px(f32::MAX))),
         }
     }
 
-    /// The composer goes here, between the pickers and the send hint.
-    pub fn set_composer(&mut self, composer: AnyView, cx: &mut Context<Self>) {
-        self.composer = Some(composer);
+    /// The composer goes here, between the pickers and the send hint, drawn
+    /// each frame the way `slots::composer` hands it out.
+    pub fn set_composer(&mut self, composer: impl Fn(&Theme) -> Option<AnyElement> + 'static, cx: &mut Context<Self>) {
+        self.composer = Some(Box::new(composer));
         cx.notify();
     }
 
@@ -120,11 +147,23 @@ impl NewTask {
     /// The picked harness's models. Keeps the pick where it is still listed,
     /// else lands on the first, as `useSessions` resolves an unknown id.
     pub fn set_models(&mut self, models: Vec<Model>, cx: &mut Context<Self>) {
-        if !models.iter().any(|m| m.id == self.model)
-            && let Some(first) = models.first()
+        // pi and fx name no default, so unset is a pick there: the spawn omits
+        // `--model` and the agent's own settings decide.
+        let unset_is_a_pick = self.model.is_unset() && default_model_for(self.harness).is_none();
+        if !unset_is_a_pick && !models.iter().any(|m| m.id == self.model) {
+            let fallback =
+                default_model_for(self.harness).and_then(|id| models.iter().find(|m| m.id == id)).or(models.first());
+            if let Some(m) = fallback {
+                self.model = m.id.clone();
+                self.effort = None;
+            }
+        }
+        // An effort the refreshed list no longer offers falls back to the
+        // model's own, as the send resolves it.
+        if let Some(m) = models.iter().find(|m| m.id == self.model)
+            && !self.effort.is_some_and(|e| m.efforts.contains(&e))
         {
-            self.model = first.id.clone();
-            self.effort = first.default_effort;
+            self.effort = m.default_effort.filter(|e| m.efforts.contains(e));
         }
         self.models = models;
         cx.notify();
@@ -398,10 +437,12 @@ impl Render for NewTask {
                     // `-ml-2.5 pb-1.5`: the `+` glyph, not its box, lines up
                     // with the text below.
                     .child(div().ml(px(-10.)).pb(px(6.)).child(self.toolbar(&theme, &ink, cx)))
-                    .child(match &self.composer {
-                        Some(view) => view.clone().into_any_element(),
-                        None => div().h(px(36.)).into_any_element(),
-                    })
+                    .child(
+                        self.composer
+                            .as_ref()
+                            .and_then(|f| f(&theme))
+                            .unwrap_or_else(|| div().h(px(36.)).into_any_element()),
+                    )
                     .child(self.send_hint(&theme)),
             )
     }
@@ -420,7 +461,15 @@ impl NewTask {
     }
 
     fn toolbar(&self, theme: &Theme, ink: &Ink, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut row = div().flex().min_w_0().items_center().gap(px(2.)).px_1();
+        let top = self.toolbar_top.clone();
+        let mut row = div()
+            .relative()
+            .flex()
+            .min_w_0()
+            .items_center()
+            .gap(px(2.))
+            .px_1()
+            .child(canvas(move |bounds, _, _| top.set(bounds.origin.y), |_, _, _, _| {}).absolute().size_full());
         row = row.child(
             div()
                 .id("attach")
@@ -468,7 +517,14 @@ impl NewTask {
 
     /// A trigger with its menu hung above it, since the composer sits at the
     /// window's foot and Radix flips every one of these to open upward there.
-    fn anchored_menu(trigger: impl IntoElement, menu: Option<AnyElement>, cx: &mut Context<Self>) -> impl IntoElement {
+    fn anchored_menu(
+        &self,
+        trigger: impl IntoElement,
+        menu: Option<AnyElement>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        // The row's top less `mb-1` and a margin off the window's edge.
+        let room = (self.toolbar_top.get() - px(12.)).max(px(120.));
         div().relative().flex_none().min_w_0().child(trigger).when_some(menu, |d, menu| {
             d.child(
                 deferred(
@@ -482,7 +538,8 @@ impl NewTask {
                             this.open = None;
                             cx.notify();
                         }))
-                        .child(menu),
+                        // A long list scrolls rather than running off the top.
+                        .child(div().id("menu-scroll").max_h(room).overflow_y_scroll().rounded(px(10.)).child(menu)),
                 )
                 .with_priority(1),
             )
@@ -548,7 +605,7 @@ impl NewTask {
                 d.child(div().text_color(theme.muted_foreground.opacity(0.6)).child(effort_label(e)))
             });
         let menu = (self.open == Some(Menu::Model)).then(|| self.model_menu(theme, ink, cx).into_any_element());
-        Self::anchored_menu(trigger, menu, cx)
+        self.anchored_menu(trigger, menu, cx)
     }
 
     fn model_menu(&self, theme: &Theme, ink: &Ink, cx: &mut Context<Self>) -> impl IntoElement {
@@ -670,14 +727,18 @@ impl NewTask {
                         .when(!picked && model.efforts.is_empty(), |s| s.invisible()),
                 );
             let wrap = div().relative().child(row).when(open_effort, |d| {
+                // Deferred, so the menu's scroll clip does not cut it off.
                 d.child(
-                    div()
-                        .absolute()
-                        .left_full()
-                        .top(px(-5.))
-                        .ml(px(6.))
-                        .occlude()
-                        .child(self.effort_menu(model, effort, theme, ink, cx)),
+                    deferred(
+                        div()
+                            .absolute()
+                            .left_full()
+                            .top(px(-5.))
+                            .ml(px(6.))
+                            .occlude()
+                            .child(self.effort_menu(model, effort, theme, ink, cx)),
+                    )
+                    .with_priority(2),
                 )
             });
             menu = menu.child(wrap);
@@ -796,7 +857,7 @@ impl NewTask {
             );
             menu.into_any_element()
         });
-        Self::anchored_menu(trigger, menu, cx).into_any_element()
+        self.anchored_menu(trigger, menu, cx).into_any_element()
     }
 
     /// MachineSelector: nothing for a project only on This Mac, a named and
@@ -840,7 +901,7 @@ impl NewTask {
             }
             menu.into_any_element()
         });
-        Some(Self::anchored_menu(trigger, menu, cx).into_any_element())
+        Some(self.anchored_menu(trigger, menu, cx).into_any_element())
     }
 
     /// WorktreeToggle: a track that reads as on/off at a glance, then the word.
@@ -907,6 +968,6 @@ impl NewTask {
             }
             menu.into_any_element()
         });
-        Some(Self::anchored_menu(trigger, menu, cx).into_any_element())
+        Some(self.anchored_menu(trigger, menu, cx).into_any_element())
     }
 }

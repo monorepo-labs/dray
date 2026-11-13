@@ -71,18 +71,26 @@ fn codex_models() -> Vec<Model> {
 fn branches() -> BranchList {
     BranchList {
         current: Some("main".into()),
-        branches: vec!["main".into(), "worktree-tidy-bronze-tundra".into(), "gpui-rewrite".into()],
+        branches: ["main", "worktree-tidy-bronze-tundra", "gpui-rewrite"]
+            .into_iter()
+            .map(String::from)
+            // `--many`: enough rows to need the menu's scroll.
+            .chain(
+                std::env::args()
+                    .any(|a| a == "--many")
+                    .then(|| (1..=40).map(|i| format!("feature-{i}")))
+                    .into_iter()
+                    .flatten(),
+            )
+            .collect(),
         default_base: Some("origin/main".into()),
         dirty: 2,
     }
 }
 
-/// Stands in for the composer task's view: the bare new-task prompt line.
-struct ComposerStub;
-
-impl Render for ComposerStub {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::get(cx);
+/// Stands in for `slots::composer`: the bare new-task prompt line.
+fn composer_stub(theme: &Theme) -> Option<gpui::AnyElement> {
+    Some(
         div()
             .pt_3()
             .py_1()
@@ -90,7 +98,8 @@ impl Render for ComposerStub {
             .line_height(rems(0.9375 * 1.5))
             .text_color(theme.muted_foreground)
             .child("Describe a task.")
-    }
+            .into_any_element(),
+    )
 }
 
 struct Demo {
@@ -110,7 +119,7 @@ impl Render for Demo {
             .size_full()
             .bg(backdrop)
             .font_family(assets::SANS)
-            .child(div().size_full().bg(theme.body).child(self.task.clone()))
+            .child(div().size_full().bg(theme.body).children(new_task::element(theme)))
     }
 }
 
@@ -134,8 +143,8 @@ fn main() {
             WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() },
             |_, cx| {
                 cx.new(|cx| {
-                    let task = cx.new(|cx| {
-                        let mut t = NewTask::new(Harness::ClaudeCode);
+                    let task = new_task::install(Harness::ClaudeCode, cx);
+                    task.update(cx, |t, cx| {
                         t.set_checkouts(
                             vec![
                                 Checkout {
@@ -177,9 +186,8 @@ fn main() {
                             cx,
                         );
                         t.set_branches(Some(branches()), cx);
-                        t.set_composer(cx.new(|_| ComposerStub).into(), cx);
+                        t.set_composer(composer_stub, cx);
                         t.open_menu(open, cx);
-                        t
                     });
                     let sub = cx.subscribe(&task, |_, task, event: &NewTaskEvent, cx| {
                         println!("{event:?}");
