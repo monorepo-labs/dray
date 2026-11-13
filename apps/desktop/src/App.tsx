@@ -56,6 +56,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
 import { usePrMarks } from "@/hooks/usePrMarks";
 import { usePrReady } from "@/hooks/usePrReady";
+import { useAutoMergeCards } from "@/hooks/useAutoMergeCards";
 import { useWorkStatus } from "@/hooks/useWorkStatus";
 import HandoffRow from "@/components/composer/HandoffRow";
 import { trackFeature } from "@/lib/analytics";
@@ -181,7 +182,7 @@ import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
-import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, SessionIndexItem, WorktreeDisposition } from "@/types/events";
+import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -196,7 +197,6 @@ import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { botAt, botBrowser, botChat, botEntries, botSession, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
-import { loadOlder } from "@/lib/olderPages";
 import NewBotDialog from "@/components/NewBotDialog";
 import AgentIcon from "@/components/AgentIcon";
 import ModelSelector from "@/components/composer/ModelSelector";
@@ -212,7 +212,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { crewRows, crewSeen, inSidebar, withHiddenAsks, type CrewRow } from "@/lib/crew";
-import { botCrews, type Stall } from "@/lib/stalled";
+import type { Stall } from "@/lib/stalled";
 import { useStalledTasks } from "@/hooks/useStalledTasks";
 import {
   addPickTab,
@@ -1322,18 +1322,19 @@ function App() {
       ).join("\n"),
     [sessions, selectedSessionId, earlierIds, memberKey],
   );
-  // Every bot's tasks too, wherever the reader is: a stalled one is judged by
-  // its PR, and its bot is the one told.
+  // Every task's too, wherever the reader is, hidden or filtered away: its PR
+  // turning ready posts a merge card in the chat that started it, and a bot's
+  // stalled task is judged by its PR. A bot's tasks are tasks like any other.
   const botRepoKey = useMemo(
     () =>
       [
         ...new Set(
-          botCrews(bots, sessionIndexItems, { statusBySession: {}, askingSessions: new Set() }).flatMap((c) =>
-            c.rows.map((r) => r.item.projectPath),
-          ),
+          sessionIndexItems
+            .filter((i) => !i.archived && i.parentSessionId && i.parentSessionId !== i.sessionId)
+            .map((i) => i.projectPath),
         ),
       ].join("\n"),
-    [bots, sessionIndexItems],
+    [sessionIndexItems],
   );
   // Whichever sidebar list is up: a card on screen is still being read.
   const repoPaths = useMemo(
@@ -1354,6 +1355,9 @@ function App() {
   // panel's poll is gated on its tab being on screen, and a tab on screen is
   // exactly the case with nothing to announce.
   usePrReady({ sessions: visibleSessions, prFor: prMarks.prFor, canAnnounce });
+  // The same marks, turned into a merge card in the chat that started a task,
+  // so landing it never waits on an agent remembering to post one.
+  useAutoMergeCards({ items: sessionIndexItems, bots, prFor: prMarks.prFor });
 
   // Each bot's tasks that have sat untouched: drawn at the foot of its chat,
   // and a banner per bot when new ones land while the window is away.
@@ -1361,6 +1365,7 @@ function App() {
     (row: CrewRow) => prMarks.prFor(row.item.projectPath, sessionBranch(row.item)),
     [prMarks.prFor],
   );
+  const taskPrReadAt = useCallback((row: CrewRow) => prMarks.readAt(row.item.projectPath), [prMarks.readAt]);
   const stalled = useStalledTasks({
     bots,
     items: sessionIndexItems,
@@ -1368,12 +1373,18 @@ function App() {
     askingSessions,
     tasksBySession,
     prOf: taskPr,
+    prReadAt: taskPrReadAt,
   });
   const stalls = (selectedBot && stalled.byBot.get(selectedBot.id)?.card) || NO_STALLS;
   // The card's row the reader last picked, which the bot's chat scrolls to.
   // Named with its bot, so another bot's chat never acts on it.
   const [stallFocus, setStallFocus] = useState<{ botId: string; sessionId: string; at: number } | null>(null);
   const botFocus = stallFocus && stallFocus.botId === selectedBot?.id ? stallFocus : null;
+  // A pick is honoured once. Kept past leaving its bot, it came back as a new
+  // `botFocus` on every return and the chat jumped to it again.
+  useEffect(() => {
+    setStallFocus((focus) => (focus && focus.botId !== selectedBot?.id ? null : focus));
+  }, [selectedBot?.id]);
 
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it
@@ -1594,16 +1605,20 @@ function App() {
 
   const earlierLoaded = sessions.filter((s) => earlierIds.includes(s.sessionId));
   const earlierKey = earlierLoaded.map((s) => `${s.sessionId}:${s.olderBefore}:${s.events.length}`).join();
-  // Loaded and held as on screen (`onScreenKey`); here read whole, page by
-  // page, as the chat's own log is.
-  useEffect(() => {
-    for (const held of earlierLoaded) {
-      if (held.olderBefore != null) loadOlder(held.sessionId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [earlierKey]);
+  // Loaded and held as on screen (`onScreenKey`), and read further back only
+  // as the reader scrolls (`Chat`). Only the run of loaded ones just before the
+  // selected session is passed: one still loading would leave a gap the chat
+  // could not tell from the conversation.
   const earlier = useMemo(
-    () => earlierIds.flatMap((id) => earlierLoaded.find((s) => s.sessionId === id) ?? []),
+    () => {
+      const run: SessionSnapshot[] = [];
+      for (const id of [...earlierIds].reverse()) {
+        const held = earlierLoaded.find((s) => s.sessionId === id);
+        if (!held) break;
+        run.unshift(held);
+      }
+      return run;
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [earlierIds.join(), earlierKey],
   );
@@ -3965,6 +3980,7 @@ function App() {
             {...paneChat}
             bot={!!selectedBot}
             earlier={earlier}
+            earlierLoading={earlier.length < earlierIds.length}
             taskOf={taskOf}
             onOpenBot={openBot}
             botFooter={

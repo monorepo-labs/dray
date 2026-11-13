@@ -28,6 +28,16 @@ export type BotItem =
 /// draws them all in order.
 export type BotSegment = { sessionId: string; harness: Harness; created: string; events: readonly AgentEvent[] };
 
+/// The sessions a bot chat draws, oldest first: the newest, and each one before
+/// it only once the one after it is read back to its start. The chat opens on
+/// its tail and reads further back as the reader scrolls, so drawing an earlier
+/// session sooner would open a gap the reader could not see.
+export function drawnSegments<T extends { olderBefore?: number | null }>(segments: readonly T[]): T[] {
+  let from = segments.length - 1;
+  while (from > 0 && segments[from].olderBefore == null) from--;
+  return segments.slice(Math.max(from, 0));
+}
+
 /// The rows of a bot's whole chat, its sessions oldest first, with a line where
 /// the agent changed.
 export function chatItems(segments: readonly BotSegment[]): BotItem[] {
@@ -245,6 +255,18 @@ export function firstUnread(items: readonly BotItem[]): string | null {
     }
   }
   return mark;
+}
+
+/// Where unread replies begin among the items the chat held when it opened,
+/// `upTo` being the last of them. `undefined` while not yet known: the reader's
+/// last message may sit above what is loaded, so it is settled once one of
+/// theirs is loaded or the whole chat is (`complete`).
+export function unreadStart(items: readonly BotItem[], upTo: string | null, complete: boolean): string | null | undefined {
+  if (upTo === null) return null;
+  const end = items.findIndex((i) => itemKey(i) === upTo);
+  const seen = end < 0 ? items : items.slice(0, end + 1);
+  if (!complete && !seen.some((i) => i.kind === "user")) return undefined;
+  return firstUnread(seen);
 }
 
 /// Messages between the bot and its tasks, one way or the other.

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
 import EventRow from "@/components/chat/EventRow";
@@ -11,11 +11,12 @@ import {
   botRows,
   chatItems,
   chatTime,
-  firstUnread,
   itemKey,
   itemTime,
   startsTimeRun,
   taskContext,
+  unreadStart,
+  type BotRow,
   type BotSegment,
   type TalkItem,
 } from "@/lib/botTranscript";
@@ -39,6 +40,7 @@ const NO_RESULTS = new Map<string, ToolResult>();
 /// one line naming what it is doing — the only place its tool calls show.
 export default function BotTranscript({
   segments,
+  more = false,
   busy,
   preview,
   unread,
@@ -52,6 +54,8 @@ export default function BotTranscript({
   unread: boolean;
   /// Every session of the chat, oldest first; the last is the one running.
   segments: readonly BotSegment[];
+  /// Older messages exist above the loaded ones.
+  more?: boolean;
   busy: boolean;
   /// The open streaming block. Drawn only while it is reply text.
   preview?: ReactNode;
@@ -73,13 +77,15 @@ export default function BotTranscript({
   const rows = useMemo(() => botRows(items.filter((i) => i.kind !== "report")), [items]);
   const context = useMemo(() => (focus ? taskContext(items, focus.sessionId) : null), [items, focus]);
   const [lit, setLit] = useState(false);
-  useEffect(() => {
-    if (!focus) return;
-    setLit(true);
-    const off = setTimeout(() => setLit(false), 1600);
-    return () => clearTimeout(off);
-  }, [focus]);
-  const [newFrom] = useState(() => (unread ? firstUnread(items) : null));
+  // Read where the chat stood on opening, and settled once the messages above
+  // it say where unread begins — see `unreadStart`.
+  const [upTo] = useState(() => (unread && items.length ? itemKey(items[items.length - 1]) : null));
+  const [unreadFrom, setUnreadFrom] = useState<string | null | undefined>(undefined);
+  if (unreadFrom === undefined) {
+    const at = unreadStart(items, upTo, !more);
+    if (at !== undefined) setUnreadFrom(at);
+  }
+  const newFrom = unreadFrom ?? null;
   const doing = useMemo(() => (busy && events ? currentTool(events) : null), [busy, events]);
   // Only reply text becomes a bubble. A tool call or a thought the model is
   // still composing would read as a message, so the orb line names it instead.
@@ -87,71 +93,24 @@ export default function BotTranscript({
   const streaming = useStreamingKind(sessionId);
 
   const drawn = rows.map((item, i) => {
-        const key = "key" in item ? item.key : item.event.id;
-        // A time label opens the chat and follows every pause, as a messenger's.
-        const at = itemTime(item);
-        const time = startsTimeRun(i === 0 ? null : itemTime(rows[i - 1]), at) && <TimeLabel at={at} />;
-        return (
-          <Fragment key={key}>
-            {"event" in item && item.event.id === newFrom && <NewDivider />}
-            {time}
-            {item.kind === "switch" ? (
-              <SwitchLine harness={item.harness} />
-            ) : item.kind === "botMessage" ? (
-              <>
-                <BotLine
-                  verb="Message from"
-                  incoming
-                  bot={bots.find((b) => b.id === item.botId)}
-                  fallback={{ id: item.botId, title: item.title }}
-                  onOpenBot={onOpenBot}
-                />
-                {item.event.payload.type === "user_message" && (
-                  <UserMessage
-                    eventId={item.event.id}
-                    text={stripSenderPrefix(item.event.payload.text, item.event.payload.from)}
-                    images={item.event.payload.images}
-                    issues={item.event.payload.issues}
-                    onOpenSession={onOpenSession}
-                    onOpenBot={onOpenBot}
-                  />
-                )}
-              </>
-            ) : item.kind === "botSent" ? (
-              <BotLine
-                verb="Messaged"
-                bot={item.botId ? bots.find((b) => b.id === item.botId) : botNamed(bots, item.bot)}
-                fallback={{ id: item.bot, title: item.bot }}
-                onOpenBot={onOpenBot}
-              />
-            ) : item.kind === "talk" ? (
-              <TalkLine items={item.items} taskOf={taskOf} onOpenSession={onOpenSession} onOpenBot={onOpenBot} />
-            ) : item.kind === "task" ? (
-              <StartedLine
-                party={{ id: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? "Task" }}
-                onOpen={(alone) => onOpenSession(item.sessionId, alone)}
-              />
-            ) : item.kind === "assistant" ? (
-              // Replies in a row sit close, as a messenger stacks them; a new
-              // turn after the reader's message keeps the full gap.
-              <BotBubble tight={!time && rows[i - 1]?.kind === "assistant"}>
-                <EventRow
-                event={item.event}
-                resultByCallId={NO_RESULTS}
-                onOpenSession={onOpenSession}
-                onOpenBot={onOpenBot}
-              />
-              </BotBubble>
-            ) : (
-              <EventRow
-                event={item.event}
-                resultByCallId={NO_RESULTS}
-                onOpenSession={onOpenSession}
-                onOpenBot={onOpenBot}
-              />
-            )}
-          </Fragment>
-        );
+    // A time label opens the chat and follows every pause, as a messenger's.
+    const at = itemTime(item);
+    const time = startsTimeRun(i === 0 ? null : itemTime(rows[i - 1]), at) ? at : null;
+    return (
+      <ChatRow
+        key={rowKey(item)}
+        item={item}
+        time={time}
+        // Replies in a row sit close, as a messenger stacks them; a new turn
+        // after the reader's message keeps the full gap.
+        tight={!time && item.kind === "assistant" && rows[i - 1]?.kind === "assistant"}
+        isNew={"event" in item && item.event.id === newFrom}
+        bots={bots}
+        taskOf={taskOf}
+        onOpenSession={onOpenSession}
+        onOpenBot={onOpenBot}
+      />
+    );
   });
   // The picked task's rows sit in one block, so they light and scroll as one.
   const inContext = rows.map((row) =>
@@ -159,15 +118,25 @@ export default function BotTranscript({
   );
   const first = inContext.indexOf(true);
   const last = inContext.lastIndexOf(true);
+  // Lit when the block is drawn, which may be a page or two after the pick.
+  const found = first >= 0;
+  useEffect(() => {
+    if (!focus || !found) return;
+    setLit(true);
+    const off = setTimeout(() => setLit(false), 1600);
+    return () => clearTimeout(off);
+  }, [focus, found]);
 
-  return (
-    <>
-      {first < 0 ? (
-        drawn
-      ) : (
-        <>
-          {drawn.slice(0, first)}
+  // One flat keyed list either way, so the rows outside the block keep their
+  // place and only the block's own remount: split into slots, a pick remounted
+  // every row in the chat.
+  const shown =
+    first < 0
+      ? drawn
+      : [
+          ...drawn.slice(0, first),
           <div
+            key="bot-focus"
             data-bot-focus
             className={cn(
               "-mx-3 -my-2 flex flex-col gap-4 rounded-xl px-3 py-2 transition-colors duration-700",
@@ -175,10 +144,13 @@ export default function BotTranscript({
             )}
           >
             {drawn.slice(first, last + 1)}
-          </div>
-          {drawn.slice(last + 1)}
-        </>
-      )}
+          </div>,
+          ...drawn.slice(last + 1),
+        ];
+
+  return (
+    <>
+      {shown}
       {busy &&
         (preview && streaming === "text" ? (
           <BotBubble tight={rows[rows.length - 1]?.kind === "assistant"}>{preview}</BotBubble>
@@ -191,6 +163,104 @@ export default function BotTranscript({
     </>
   );
 }
+
+const rowKey = (row: BotRow): string => ("key" in row ? row.key : row.event.id);
+
+type ChatRowProps = {
+  item: BotRow;
+  /// The time label it opens with, if any.
+  time: string | null;
+  tight: boolean;
+  /// Unread replies begin here.
+  isNew: boolean;
+  bots: Bot[];
+  taskOf: TaskOf | undefined;
+  onOpenSession: (sessionId: string, alone?: boolean) => void;
+  onOpenBot?: (bot: Bot) => void;
+};
+
+/// Whether two renders of a row draw the same thing. Rows are rebuilt from the
+/// log on every change, so they are compared by what they were built from,
+/// never by identity — a page landing above would otherwise redraw every row
+/// already on screen, which cost more with each page read.
+function sameRow(a: ChatRowProps, b: ChatRowProps): boolean {
+  return (
+    sameItem(a.item, b.item) &&
+    a.time === b.time &&
+    a.tight === b.tight &&
+    a.isNew === b.isNew &&
+    a.bots === b.bots &&
+    a.taskOf === b.taskOf &&
+    a.onOpenSession === b.onOpenSession &&
+    a.onOpenBot === b.onOpenBot
+  );
+}
+
+function sameItem(x: BotRow, y: BotRow): boolean {
+  if (x.kind === "talk" || y.kind === "talk") {
+    return (
+      x.kind === "talk" &&
+      y.kind === "talk" &&
+      x.items.length === y.items.length &&
+      x.items.every((t, i) => itemKey(t) === itemKey(y.items[i]))
+    );
+  }
+  if ("event" in x) return "event" in y && x.event === y.event;
+  return rowKey(x) === rowKey(y);
+}
+
+/// One row of the chat, with the time label and NEW divider above it.
+const ChatRow = memo(function ChatRow({ item, time, tight, isNew, bots, taskOf, onOpenSession, onOpenBot }: ChatRowProps) {
+  return (
+    <>
+      {isNew && <NewDivider />}
+      {time && <TimeLabel at={time} />}
+      {item.kind === "switch" ? (
+        <SwitchLine harness={item.harness} />
+      ) : item.kind === "botMessage" ? (
+        <>
+          <BotLine
+            verb="Message from"
+            incoming
+            bot={bots.find((b) => b.id === item.botId)}
+            fallback={{ id: item.botId, title: item.title }}
+            onOpenBot={onOpenBot}
+          />
+          {item.event.payload.type === "user_message" && (
+            <UserMessage
+              eventId={item.event.id}
+              text={stripSenderPrefix(item.event.payload.text, item.event.payload.from)}
+              images={item.event.payload.images}
+              issues={item.event.payload.issues}
+              onOpenSession={onOpenSession}
+              onOpenBot={onOpenBot}
+            />
+          )}
+        </>
+      ) : item.kind === "botSent" ? (
+        <BotLine
+          verb="Messaged"
+          bot={item.botId ? bots.find((b) => b.id === item.botId) : botNamed(bots, item.bot)}
+          fallback={{ id: item.bot, title: item.bot }}
+          onOpenBot={onOpenBot}
+        />
+      ) : item.kind === "talk" ? (
+        <TalkLine items={item.items} taskOf={taskOf} onOpenSession={onOpenSession} onOpenBot={onOpenBot} />
+      ) : item.kind === "task" ? (
+        <StartedLine
+          party={{ id: item.sessionId, title: taskOf?.(item.sessionId)?.title ?? "Task" }}
+          onOpen={(alone) => onOpenSession(item.sessionId, alone)}
+        />
+      ) : item.kind === "assistant" ? (
+        <BotBubble tight={tight}>
+          <EventRow event={item.event} resultByCallId={NO_RESULTS} onOpenSession={onOpenSession} onOpenBot={onOpenBot} />
+        </BotBubble>
+      ) : (
+        <EventRow event={item.event} resultByCallId={NO_RESULTS} onOpenSession={onOpenSession} onOpenBot={onOpenBot} />
+      )}
+    </>
+  );
+}, sameRow);
 
 /// Who a line names: a task, by its session id, or a bot, with its own face.
 type Party = { id: string; title: string; avatar?: Avatar | null };
@@ -320,7 +390,7 @@ export function PartyChip({
       <span className="flex shrink-0 -space-x-2">
         {parties.slice(0, 3).map((p) => (
           <span key={p.id} className="size-5">
-            <BotAvatar seed={p.id} avatar={p.avatar ?? seededAvatar(p.id)} className="block size-5 scale-[1.18]" />
+            <BotAvatar still seed={p.id} avatar={p.avatar ?? seededAvatar(p.id)} className="block size-5 scale-[1.18]" />
           </span>
         ))}
       </span>
@@ -342,7 +412,13 @@ function partyColours(party: Party): CSSProperties {
 
 /// The time a run of messages began, centred and quiet, as a messenger draws it.
 function TimeLabel({ at }: { at: string }) {
-  return <p className="self-center pt-2 text-[12px] text-muted-foreground/70">{chatTime(at)}</p>;
+  // `data-bot-passing`: a page landing above can take it away, so the chat
+  // never keeps the reader's place on it.
+  return (
+    <p data-bot-passing className="self-center pt-2 text-[12px] text-muted-foreground/70">
+      {chatTime(at)}
+    </p>
+  );
 }
 
 /// A bot's reply as a messenger draws the other side: a bubble on the left,
@@ -368,7 +444,7 @@ function SwitchLine({ harness }: { harness: Harness }) {
 /// Where the replies the reader has not seen begin, as a messenger marks it.
 function NewDivider() {
   return (
-    <div role="separator" aria-label="New messages" className="flex items-center gap-3">
+    <div role="separator" aria-label="New messages" data-bot-passing className="flex items-center gap-3">
       <span className="h-px flex-1 bg-border" />
       <span className="text-[11px] font-medium tracking-wide text-muted-foreground">NEW</span>
       <span className="h-px flex-1 bg-border" />

@@ -266,7 +266,7 @@ pub async fn rest_of_chat(item: &SessionIndexItem) -> Vec<String> {
 
 /// A bot's chat, oldest first: every unsettled session run in its folder. An
 /// agent switch starts a new session, so one conversation spans several.
-async fn chat_sessions(path: &str) -> Result<Vec<SessionIndexItem>> {
+pub(crate) async fn chat_sessions(path: &str) -> Result<Vec<SessionIndexItem>> {
     let mut items: Vec<SessionIndexItem> = crate::store::list_session_index_items(false)
         .await?
         .into_iter()
@@ -818,7 +818,10 @@ fn fill(template: &str, vars: &[(&str, &str)]) -> String {
 /// off the index entry `send_msg` writes before the spawn.
 async fn reports_to_parent(session_id: &str) -> bool {
     match crate::store::get_session_index_item(session_id).await {
-        Ok(Some(item)) => item.parent_session_id.is_some() && in_bot_tree(&item).await,
+        Ok(Some(item)) => {
+            item.parent_session_id.is_some()
+                && (in_bot_tree(&item).await || crate::remote_reports::owed(&item.session_id).await)
+        }
         _ => false,
     }
 }

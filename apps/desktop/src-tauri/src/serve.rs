@@ -516,6 +516,7 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     sweep_browser_profiles().await;
     crate::auto_continue::rearm(&sink).await;
 
+    tokio::spawn(crate::remote_reports::run(sink.clone()));
     // Agents this server spawns reach it through `dray`, so it serves the
     // socket the desktop app does — under `DRAY_HOME` where that is set.
     tokio::spawn(async move {
@@ -1770,7 +1771,10 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         ) => ok(crate::orchestration::answer_forward(
             crate::orchestration::Forward { line, origin, caller, sender }, sink,
         ).await);
-        worktree_disposition(session_id: String) => crate::worktree_disposition(&session_id).await;
+        // A bot's server collecting what its tasks here said (#958).
+        parent_reports(children: Vec<String>, ack: Vec<String>, forget: Option<Vec<String>>) =>
+            crate::remote_reports::take(children, ack, forget.unwrap_or_default()).await;
+        worktree_disposition(session_id: String) =>crate::worktree_disposition(&session_id).await;
         remove_session_worktree(session_id: String) => crate::remove_session_worktree(&session_id).await;
         detach_session(session_id: String) => store::detach_session(&session_id).await;
         set_auto_continue(session_id: String, on: bool) => crate::auto_continue::set_auto_continue(session_id, on, sink).await;
@@ -1853,7 +1857,9 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         list_bots() => crate::bots::list_bots().await;
         create_bot(name: String, avatar: Option<crate::bots::BotAvatar>) => crate::bots::create_bot(name, avatar).await;
         bot_previews(session_ids: Vec<String>) => crate::bots::bot_previews(session_ids).await;
-        nudge_bot(session_id: String, problem: Option<String>) => crate::orchestration::nudge_bot(session_id, problem, sink).await;
+        nudge_bot(session_id: String, problem: Option<String>, ready: Option<u32>) => crate::orchestration::nudge_bot(session_id, problem, ready, sink).await;
+        auto_merge_card(session_id: String, task_id: String, number: u64, url: String, branch: String) =>
+            crate::orchestration::auto_merge_card(session_id, task_id, number, url, branch, sink).await;
         start_bot(id: String, harness: crate::session::Harness, model: crate::models::ModelId, effort: Option<crate::models::Effort>, permission_mode: crate::events::ApprovalPolicy, fast: bool) =>
             crate::bots::start_bot(id, harness, model, effort, permission_mode, fast, sink).await;
         delete_bot(id: String) => crate::bots::delete_bot(id, sink).await;

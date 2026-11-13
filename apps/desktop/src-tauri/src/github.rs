@@ -766,12 +766,47 @@ impl PrUnavailable {
 /// it back to tell "no CLI" from a CLI that answered badly.
 pub(crate) const NO_CLI: &str = "GitHub CLI (gh) not found.";
 
+/// Where a `cwd` names a repo by GitHub slug rather than by checkout:
+/// `github:owner/name`. A merge card for a task on another machine reads and
+/// merges through one, since no checkout of the repo need exist here.
+pub const SLUG_PREFIX: &str = "github:";
+
+/// A leading `/` is taken too: the app qualifies a remote server's key as a
+/// path, `dray://<server>/github:…`, and unwraps it to `/github:…`.
+fn slug_of(cwd: &str) -> Option<&str> {
+    let cwd = cwd.strip_prefix('/').unwrap_or(cwd);
+    cwd.strip_prefix(SLUG_PREFIX).filter(|slug| slug.contains('/'))
+}
+
+/// `owner/name` out of a pull request's URL, `https://github.com/owner/name/pull/7`.
+pub fn slug_from_pr_url(url: &str) -> Option<String> {
+    let path = url.split_once("://")?.1.split_once('/')?.1;
+    let mut parts = path.split('/');
+    let (owner, name) = (parts.next()?, parts.next()?);
+    (parts.next() == Some("pull") && !owner.is_empty() && !name.is_empty()).then(|| format!("{owner}/{name}"))
+}
+
 /// Runs `gh` in `cwd`. `Err` is the message to put on screen: `gh` writes a
 /// readable sentence to stderr for every failure that matters here — not
 /// logged in, no remote, no such repo — and rewording them would only make them
 /// less like what the user sees in their own terminal.
 pub(crate) async fn gh(cwd: &str, args: &[&str]) -> Result<String, String> {
     let bin = binpath::gh().await.ok_or(NO_CLI)?;
+
+    // A repo named by slug has no checkout here: `gh pr` is told which one,
+    // and runs from home.
+    let mut args = args.to_vec();
+    let home;
+    let cwd = match slug_of(cwd) {
+        Some(slug) => {
+            if args.first() == Some(&"pr") {
+                args.extend(["--repo", slug]);
+            }
+            home = std::env::home_dir().ok_or("no home directory")?;
+            home.to_str().ok_or("home directory is not UTF-8")?
+        }
+        None => cwd,
+    };
 
     // A worktree removed outside Dray leaves the session's `cwd` naming a
     // directory that is gone, and the spawn then fails with ENOENT *before*
@@ -782,7 +817,7 @@ pub(crate) async fn gh(cwd: &str, args: &[&str]) -> Result<String, String> {
     }
 
     let out = Command::new(bin)
-        .args(args)
+        .args(&args)
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")
         // `gh` prompts when it can't decide something on its own, and a prompt
@@ -811,6 +846,9 @@ async fn repo_slug(cwd: &str) -> Result<(String, String), String> {
     static SLUGS: LazyLock<Mutex<HashMap<String, (String, String)>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
 
+    if let Some((owner, name)) = slug_of(cwd).and_then(|slug| slug.split_once('/')) {
+        return Ok((owner.to_string(), name.to_string()));
+    }
     if let Some(hit) = SLUGS.lock().await.get(cwd) {
         return Ok(hit.clone());
     }
@@ -1722,5 +1760,20 @@ mod tests {
         assert_eq!(MergeMethod::Squash.flag(), "--squash");
         assert_eq!(MergeMethod::Rebase.flag(), "--rebase");
         assert_eq!(MergeMethod::Merge.flag(), "--merge");
+    }
+
+    #[test]
+    fn a_pr_url_names_its_repo() {
+        assert_eq!(slug_from_pr_url("https://github.com/monorepo-labs/dray/pull/954").as_deref(), Some("monorepo-labs/dray"));
+        assert_eq!(slug_from_pr_url("https://github.com/monorepo-labs/dray/issues/9"), None);
+        assert_eq!(slug_from_pr_url("not a url"), None);
+    }
+
+    #[test]
+    fn a_slug_cwd_is_told_from_a_path() {
+        assert_eq!(slug_of("github:monorepo-labs/dray"), Some("monorepo-labs/dray"));
+        assert_eq!(slug_of("/github:monorepo-labs/dray"), Some("monorepo-labs/dray"));
+        assert_eq!(slug_of("/home/me/dray"), None);
+        assert_eq!(slug_of("github:nothing"), None);
     }
 }

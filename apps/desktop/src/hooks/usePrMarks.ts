@@ -26,8 +26,9 @@ const FRESH_MS = 120_000;
 const OPEN_POLL_MS = 30_000;
 
 /// The background poll's gap, for repos whose marks drive something off
-/// screen: a bot's stalled tasks, judged every minute against a 15-minute
-/// stall. Slow, since every `gh` here spends the same hourly budget as the
+/// screen: a bot's stalled tasks, judged every minute against a 5-minute
+/// stall, and a problem its task can mend on the first read after the task
+/// last moved. Slow, since every `gh` here spends the same hourly budget as the
 /// agents' own.
 const BACKGROUND_POLL_MS = 5 * 60_000;
 
@@ -44,6 +45,10 @@ const cache = new Map<string, Map<string, PrMark>>();
 /// its own PR, which the per-branch pick may not be.
 const numbered = new Map<string, Map<number, PrMark>>();
 const fetchedAt = new Map<string, number>();
+/// When the answer in [cache] was asked for, not when it landed: a bot's stall
+/// judges whether a mark postdates the task's last move, and the gap between
+/// the two is where a push hides.
+const askedAt = new Map<string, number>();
 
 /// The read currently running for a repo, so two effects landing in the same
 /// frame — a turn ending in a project that is also newly visible — cost one
@@ -188,6 +193,7 @@ export function usePrMarks(
       const attempt = (async () => {
         let answer: Map<string, PrMark>;
         let all: PrMark[];
+        const asked = Date.now();
         try {
           all = await invoke<PrMark[]>("pr_marks", { cwd: path });
           answer = marksByBranch(all);
@@ -227,6 +233,7 @@ export function usePrMarks(
         cache.set(path, answer);
         numbered.set(path, new Map(all.map((pr) => [pr.number, pr])));
         fetchedAt.set(path, Date.now());
+        askedAt.set(path, asked);
 
         // Tell the panel which branches moved, so its own cache for them is
         // stale from here and not from its next poll. Compared against the
@@ -353,6 +360,14 @@ export function usePrMarks(
         void byRepo; // re-made on every read, so a caller re-renders on one
         const marks = numbered.get(repoPath);
         return marks ? (marks.get(number) ?? null) : undefined;
+      },
+      [byRepo],
+    ),
+    /// When a repo's marks were asked for, or nothing before its first read.
+    readAt: useCallback(
+      (repoPath: string): number | undefined => {
+        void byRepo; // re-made on every read, so a caller re-renders on one
+        return askedAt.get(repoPath);
       },
       [byRepo],
     ),

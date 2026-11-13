@@ -23,7 +23,8 @@ const DISMISSED_CAP = 200;
 /// The foot of a bot's chat while any of its tasks waits on the reader: an
 /// inbox row per task — its face, title, PR and how long it has sat. A PR
 /// ready to merge carries Merge; a task idle on the reader carries the line its
-/// bot wrote for it (`dray session need`). A click scrolls the chat to the
+/// bot wrote for it (`dray session need`), and so does a ready PR the task
+/// asked the reader to try first. A click scrolls the chat to the
 /// task's last report and the bot's reply, so the reader has the whole story
 /// without leaving the bot; Open, shown on hover, opens the task. A row clears
 /// the moment its task moves; dismissed, a stall stays gone until the task
@@ -68,8 +69,9 @@ export default function StalledTasks({
   );
 }
 
-/// One task as an inbox row: face, title, PR and time on top; for a waiting
-/// task, what it needs under it, a skeleton until its bot has written that.
+/// One task as an inbox row: face, title, PR and time on top; what it needs
+/// under it where its bot wrote that. Only a waiting task holds a skeleton for
+/// the line, since most ready PRs never get one.
 function StalledRow({
   stall,
   now,
