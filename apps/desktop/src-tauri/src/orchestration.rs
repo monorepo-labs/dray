@@ -488,7 +488,18 @@ async fn on_machine(machine: &str, request: Request) -> Result<Response> {
         };
         return elsewhere::list_everywhere(list).await;
     }
-    elsewhere::forward(machine, &elsewhere::prepare(request).await?).await
+    let creates = matches!(request, Request::CreateSession(_));
+    let forward = elsewhere::prepare(request).await?;
+    let response = elsewhere::forward(machine, &forward).await?;
+    // The task's server keeps its reports, and this server holds the link to
+    // collect them by; the other way round usually does not exist.
+    if let (true, Some(caller), Response::Created { session, .. }) = (creates, &forward.caller, &response) {
+        if caller.bot_tree {
+            let saved = crate::machines::on(machine).await.map_err(anyhow::Error::msg)?;
+            crate::remote_reports::track(&saved.id, &session.session_id, &caller.session.session_id).await?;
+        }
+    }
+    Ok(response)
 }
 
 /// A build with no serve wire has no client half to reach one with.
@@ -520,6 +531,11 @@ pub struct Forward {
 pub struct Caller {
     pub session: SessionIndexItem,
     pub depth: usize,
+    /// The caller is a bot's chat or under one, so the child's reports are
+    /// kept for the forwarding server to collect (#958). Absent from an
+    /// older one, whose tasks report nowhere.
+    #[serde(default)]
+    pub bot_tree: bool,
 }
 
 /// The serve command `orchestrate`: a request a Mac forwarded, answered as the
@@ -688,7 +704,11 @@ mod elsewhere {
 
     async fn caller(parent: Option<&SessionIndexItem>) -> Result<Option<Caller>> {
         let Some(parent) = parent else { return Ok(None) };
-        Ok(Some(Caller { session: parent.clone(), depth: depth_of(parent).await? }))
+        Ok(Some(Caller {
+            session: parent.clone(),
+            depth: depth_of(parent).await?,
+            bot_tree: crate::bots::in_bot_tree(parent).await,
+        }))
     }
 
     /// A `--base` naming a session here means its branch there, which the far
@@ -1401,6 +1421,10 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
     };
 
     let session_id = uuid::Uuid::now_v7().to_string();
+    // Before the spawn, which reads it for the task's own prompt.
+    if caller.is_some_and(|c| c.bot_tree) {
+        crate::remote_reports::owe(&session_id).await?;
+    }
     let manager = manager();
 
     let outcome = manager
@@ -1979,21 +2003,42 @@ pub fn report_to_parent(
         let Some(parent_id) = child.parent_session_id.clone() else {
             return Ok(());
         };
+        if child.archived {
+            return Ok(());
+        }
+        let Some(parent) = store::get_session_index_item(&parent_id).await? else {
+            // A bot's task started from another machine: its bot's server
+            // collects this, since this one rarely holds a way back to it.
+            if crate::remote_reports::owed(&child_id).await {
+                crate::remote_reports::keep(&child_id, &parent_id, &child.title, text).await?;
+            }
+            return Ok(());
+        };
+        if parent.archived || !crate::bots::in_bot_tree(&child).await {
+            return Ok(());
+        }
+        let Some(from) = sender(Some(&child_id)).await else { return Ok(()) };
+        deliver_report(parent_id, text, from, app).await
+    })
+}
+
+/// A task's report into the bot chat `parent_id`, from this machine's task or
+/// one collected from another (#958). The same path as `dray session send`, so
+/// the bot sees it exactly as it would a message the task sent itself.
+pub fn deliver_report(
+    parent_id: String,
+    text: String,
+    from: MessageSender,
+    app: Sink,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+    Box::pin(async move {
         // A settled chat — Start fresh, or the child put away — takes no more
         // reports: sending would resume a conversation the reader closed.
-        let parent = store::get_session_index_item(&parent_id).await?;
-        if child.archived || parent.is_none_or(|p| p.archived) {
+        if store::get_session_index_item(&parent_id).await?.is_none_or(|p| p.archived) {
             return Ok(());
         }
-        if !crate::bots::in_bot_tree(&child).await {
-            return Ok(());
-        }
-        send_message(
-            SendMessage { session_id: parent_id.clone(), prompt: text, from_session_id: Some(child_id) },
-            None,
-            &app,
-        )
-        .await?;
+        let send = SendMessage { session_id: parent_id.clone(), prompt: text, from_session_id: Some(from.session_id.clone()) };
+        send_message(send, Some(from), &app).await?;
         // Settling writes the flag and then stops the child, so a Start fresh
         // landing between the check above and this send resumed the chat it
         // had just closed. Read again and stop it: one landing after this read

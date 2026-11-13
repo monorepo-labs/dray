@@ -69,6 +69,7 @@ pub mod orchestration;
 pub mod bots;
 pub mod drafts;
 pub mod projects;
+pub mod remote_reports;
 #[cfg(feature = "desktop")]
 pub mod quit;
 #[cfg(feature = "desktop")]
