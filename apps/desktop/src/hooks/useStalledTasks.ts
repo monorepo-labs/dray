@@ -74,7 +74,9 @@ export function useStalledTasks({
     const nudged = new Set(readLocalStorage<string[]>(NUDGED_KEY, []));
     const due = [...byBot.values()]
       .flatMap((b) => b.stalls)
-      .filter((s) => !needLine(s) && !nudged.has(s.key) && !sending.current.has(s.key));
+      // A ready stall is nudged even under a need, which a waiting stall
+      // wrote and `nudge_bot` clears for the bot to judge afresh.
+      .filter((s) => (s.kind === "ready" || !needLine(s)) && !nudged.has(s.key) && !sending.current.has(s.key));
     for (const s of due) {
       sending.current.add(s.key);
       invoke("nudge_bot", {

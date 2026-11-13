@@ -1937,6 +1937,12 @@ pub async fn nudge_bot(
     if task.archived || chat.archived || chat.session_id == task.session_id {
         return Ok(());
     }
+    // A need written while the PR waited on review would outlive the review
+    // on the ready row, since approving a PR does not move its task.
+    if ready.is_some() && problem.is_none() && task.need.is_some() {
+        store::set_session_need(&session_id, None).await?;
+        announce_change(std::slice::from_ref(&session_id), &sink).await;
+    }
     let idle = idle_since(&task.modified);
     let prompt = match (problem, ready) {
         (Some(problem), _) => format!("Stall nudge: this task has sat untouched for {idle}. {problem}"),
