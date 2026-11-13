@@ -21,7 +21,7 @@ The **wire** stays as it is, and the `dray-serve` binary ships *beside* the app.
 
 ```rust
 fn frame_in(message: Message) -> Option<String> {
-    // a * and a ** and a ` inside code stay as they are
+    // a * and a ** and a ` inside code stay as they are, as does ls --all
     match message {
         Message::Text(text) => Some(text.to_string()),
         _ => None,
@@ -39,7 +39,7 @@ Heading by underline
 
 ***
 
-Inline `code`, *emphasis*, a bare link https://drayhq.com/docs and a ``double `tick` span``. A <kbd>tag</kbd> and a price of $5.
+Inline `code` like `ls --all`, *emphasis*, a bare link https://drayhq.com/docs and a ``double `tick` span``. A <kbd>tag</kbd> and a price of $5.
 
 $$
 x^2
