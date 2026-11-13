@@ -3426,15 +3426,22 @@ async fn after_bot_turn(ctx: &Ingest<'_>, turn: crate::bots::learn::Turn, app: &
             eprintln!("[learned write err] {err}");
         }
     }
-    if let Some(prompt) = turn.review(ctx.session_id) {
-        // Spawned: the send lands in this same session, whose read loop this is.
-        let review = crate::orchestration::send_review(ctx.session_id.to_string(), prompt, app.clone());
-        tokio::spawn(async move {
-            if let Err(e) = review.await {
+    // Reviews held while this turn ran go first, then any this turn owes. Each
+    // waits for the turn the one before it opens.
+    let mut reviews = crate::bots::learn::take_deferred(ctx.session_id);
+    reviews.extend(turn.review(ctx.session_id));
+    if reviews.is_empty() {
+        return;
+    }
+    let (session_id, app) = (ctx.session_id.to_string(), app.clone());
+    // Spawned: the send lands in this same session, whose read loop this is.
+    tokio::spawn(async move {
+        for prompt in reviews {
+            if let Err(e) = crate::orchestration::send_review(session_id.clone(), prompt, app.clone()).await {
                 eprintln!("[bot review err] {e:#}");
             }
-        });
-    }
+        }
+    });
 }
 
 /// What a child's closing turn says to the bot: its last words, or what became

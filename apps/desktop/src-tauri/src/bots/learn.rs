@@ -90,6 +90,28 @@ pub fn note_prompt(session_id: &str, prompt: &str, from: Option<&MessageSender>,
     }
 }
 
+/// Reviews held until the chat's running turn ends, by session.
+static DEFERRED: LazyLock<Mutex<HashMap<String, Vec<String>>>> = LazyLock::new(Default::default);
+
+/// Holds a review for the end of the turn now running.
+pub fn defer(session_id: &str, prompt: &str) {
+    DEFERRED.lock().unwrap().entry(session_id.to_string()).or_default().push(prompt.to_string());
+}
+
+/// Every review held for `session_id`, oldest first.
+pub fn take_deferred(session_id: &str) -> Vec<String> {
+    DEFERRED.lock().unwrap().remove(session_id).unwrap_or_default()
+}
+
+/// Takes one held review back, where nothing took it yet.
+pub fn take_deferred_one(session_id: &str, prompt: &str) -> bool {
+    let mut held = DEFERRED.lock().unwrap();
+    let Some(list) = held.get_mut(session_id) else { return false };
+    let Some(at) = list.iter().position(|p| p == prompt) else { return false };
+    list.remove(at);
+    true
+}
+
 /// Takes what the turn now ending was opened with. Every session's turn takes
 /// its own, bot or not, so nothing piles up.
 pub fn take_notes(session_id: &str) -> TurnNotes {
@@ -492,6 +514,17 @@ mod tests {
         ];
         let expected = [true, true, false, false, false, false, false, false, false, false, true, true];
         assert_eq!(in_review(&events), expected);
+    }
+
+    #[test]
+    fn a_held_review_is_taken_once() {
+        let id = "learn-defer-test";
+        defer(id, "Review: a");
+        defer(id, "Review: b");
+        assert!(take_deferred_one(id, "Review: a"));
+        assert!(!take_deferred_one(id, "Review: a"), "already taken back");
+        assert_eq!(take_deferred(id), ["Review: b"]);
+        assert!(take_deferred(id).is_empty());
     }
 
     #[test]
