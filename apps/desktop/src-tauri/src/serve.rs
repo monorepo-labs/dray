@@ -1854,6 +1854,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         create_bot(name: String, avatar: Option<crate::bots::BotAvatar>) => crate::bots::create_bot(name, avatar).await;
         bot_previews(session_ids: Vec<String>) => crate::bots::bot_previews(session_ids).await;
         nudge_bot(session_id: String, problem: Option<String>) => crate::orchestration::nudge_bot(session_id, problem, sink).await;
+        auto_merge_card(session_id: String, task_id: String, number: u64, url: String, branch: String) =>
+            crate::orchestration::auto_merge_card(session_id, task_id, number, url, branch, sink).await;
         start_bot(id: String, harness: crate::session::Harness, model: crate::models::ModelId, effort: Option<crate::models::Effort>, permission_mode: crate::events::ApprovalPolicy, fast: bool) =>
             crate::bots::start_bot(id, harness, model, effort, permission_mode, fast, sink).await;
         delete_bot(id: String) => crate::bots::delete_bot(id, sink).await;
@@ -1880,6 +1882,7 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         // GitHub and issues.
         prs_for_branch(cwd: String, branch: String) => github::prs_for_branch(cwd, branch).await;
         pr_marks(cwd: String) => github::pr_marks(cwd).await;
+        greptile_review(cwd: String, number: u64) => github::greptile_review(cwd, number).await;
         merge_pr(cwd: String, number: u64, method: MergeMethod) => github::merge_pr(cwd, number, method).await;
         delete_branch(cwd: String, number: u64) => github::delete_branch(cwd, number).await;
         reopen_pr(cwd: String, number: u64) => github::reopen_pr(cwd, number).await;

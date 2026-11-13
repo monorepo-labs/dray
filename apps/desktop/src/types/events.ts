@@ -870,6 +870,33 @@ slug: string, description: string | null,
 path: string | null, };
 
 /**
+ * What Greptile has said about one pull request, read before a task's merge
+ * card is posted, beside GitHub's own verdict.
+ */
+export type GreptileReview = { 
+/**
+ * Whether Greptile reviews this repo: it commented here or on one of the
+ * repo's ten newest pull requests. A repo without it is judged on GitHub's
+ * verdict alone; one with it waits for a score.
+ */
+present: boolean, 
+/**
+ * The confidence out of 5 in its newest summary; `None` until it has
+ * reviewed this pull request.
+ */
+score: number | null, 
+/**
+ * The summary names a commit other than the head: a push it has not
+ * reviewed yet, so the score is about code that has since moved.
+ */
+stale: boolean, 
+/**
+ * Its inline threads nobody has resolved. Resolving one is how the reader
+ * or the task marks a finding seen and set aside.
+ */
+unresolved: number, };
+
+/**
  * Which agent runs a session.
  *
  * **Unknown spellings are kept, not refused.** `index.json` is a shared store

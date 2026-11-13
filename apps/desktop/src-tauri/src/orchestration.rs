@@ -1243,6 +1243,49 @@ async fn post_merge_card(card: dray_proto::MergeCard, app: &Sink) -> Result<Resp
     Ok(Response::MergeCard { number: pr.number, url: pr.url, title: task.title })
 }
 
+/// Posts a merge card for a task's pull request into `session_id`'s chat once
+/// the app judges it ready, unless a card for that PR is in the chat already —
+/// one the agent posted by hand counts. Answers whether it posted.
+///
+/// The PR comes from the app's own marks read, so no `gh` runs here. The log is
+/// the record of what was posted, so a restart or a second client never posts
+/// twice; the lock keeps two calls from both finding none.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn auto_merge_card(
+    session_id: String,
+    task_id: String,
+    number: u64,
+    url: String,
+    branch: String,
+    sink: Sink,
+) -> Result<bool, crate::Fail> {
+    static POSTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _held = POSTING.lock().await;
+
+    let chat = store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
+    let task = store::get_session_index_item(&task_id).await?.with_context(|| format!("no session {task_id}"))?;
+    if chat.archived || task.archived {
+        return Ok(false);
+    }
+    let posted = store::list_session_events(&session_id).await?.iter().any(|e| {
+        matches!(&e.payload, crate::events::AgentEventPayload::MergeCard { number: n, project_path, .. }
+            if *n == number && *project_path == task.project_path)
+    });
+    if posted {
+        return Ok(false);
+    }
+    let payload = crate::events::AgentEventPayload::MergeCard {
+        task_id,
+        title: task.title,
+        project_path: task.project_path,
+        branch,
+        number,
+        url,
+    };
+    manager().post_event(&session_id, chat.harness, payload, &sink).await?;
+    Ok(true)
+}
+
 /// Tags a session that already exists, or untags it.
 ///
 /// **Written down as given, with nothing asked of the tracker.** A link is a

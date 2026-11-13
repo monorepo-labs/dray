@@ -72,6 +72,7 @@ import { HAS_DICTATION, IS_LINUX, IS_MAC } from "@/lib/platform";
 import { applyIsland, ISLAND_ENABLED, ISLAND_KEY, ISLAND_KEYS, type IslandKey } from "@/lib/island";
 import { captureCaps, captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/islandCapture";
 import { useWindowFocused } from "@/lib/focus";
+import { GREPTILE_SCORES, setMinGreptileScore, useMinGreptileScore } from "@/lib/autoMergeCard";
 import { invoke } from "@/lib/transport";
 import { hasLightMode, modeFor, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -247,6 +248,7 @@ export default function SettingsPage({
           <Section>
             <OpenFilesRow />
             <BrowserRow />
+            <MergeCardRow />
             {/* Draws nothing until something is connected, which is why it
                 carries no heading of its own — a heading left standing over
                 nothing names a group the reader cannot reach. Connecting
@@ -881,6 +883,30 @@ function PanelSideRow({
 /// Remove asks twice in the row, the way the model list does — the file comes
 /// back with one press, but only after a download the reader may not want
 /// twice on a slow link.
+const SCORE_OPTIONS = GREPTILE_SCORES.map((n) => ({ id: String(n), label: `${n}/5` }));
+
+/// The Greptile confidence a task's PR needs before Dray posts its merge card.
+function MergeCardRow() {
+  const id = useId();
+  const score = useMinGreptileScore();
+  const below = score > 1 ? `${score - 1}/5 also passes once every Greptile thread is resolved. ` : "";
+  return (
+    <SettingRow
+      id={id}
+      asGroup
+      label="Merge card Greptile score"
+      description={`A task's PR gets a merge card in the chat that started it once it can merge, checks pass and Greptile scores this. ${below}Repos without Greptile need only the first two.`}
+    >
+      <SegmentedRadio
+        options={SCORE_OPTIONS}
+        value={String(score)}
+        onPick={(n) => setMinGreptileScore(Number(n))}
+        labelledBy={id}
+      />
+    </SettingRow>
+  );
+}
+
 function BrowserRow() {
   const id = useId();
   const status = useChromium();
