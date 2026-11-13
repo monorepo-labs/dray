@@ -1898,6 +1898,15 @@ impl SessionManager {
     /// is mid-turn — and off the log otherwise, under the slot's lock either way
     /// so a spawn cannot take the same `seq`.
     pub async fn post_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<()> {
+        self.log_event(session_id, harness, payload, app).await?;
+        POSTED.lock().unwrap().insert(session_id.to_string());
+        Ok(())
+    }
+
+    /// [`post_event`](Self::post_event) for a note made outside any turn, such
+    /// as an Undo: marked as posted it would leave the next silent turn
+    /// counted as an answered one.
+    pub async fn log_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<()> {
         let slot = self.slot(session_id).await;
         let guard = slot.lock().await;
         let (harness, seq) = match guard.as_ref() {
@@ -1905,7 +1914,6 @@ impl SessionManager {
             None => (harness, next_seq_by_session_id(session_id).await?),
         };
         let event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
-        POSTED.lock().unwrap().insert(session_id.to_string());
         app.emit("agent_event", &event)?;
         append_session_event(session_id, event).await
     }
@@ -3252,6 +3260,8 @@ async fn deliver_prompt(
         append_session_event(session_id, event).await?;
     }
     let seq = seq.fetch_add(1, Relaxed);
+    let dray = crate::bots::take_dray_prompt(session_id, prompt);
+    crate::bots::learn::note_prompt(session_id, prompt, from.as_ref(), dray);
 
     let payload = AgentEventPayload::UserMessage {
         text: text.clone(),
@@ -3271,7 +3281,7 @@ async fn deliver_prompt(
         // Absent means "this session's own cwd", which is the truth for every
         // message a session logs itself. Only a fork records one.
         cwd: None,
-        kickoff: crate::bots::take_kickoff(session_id),
+        kickoff: dray,
     };
     // Nothing tracks turns yet; Claude Code opens one per `init`.
     let agent_event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
@@ -3417,6 +3427,29 @@ fn report(session_id: &str, text: String, app: &Sink) {
     });
 }
 
+/// Logs what a bot's turn learned and asks for a review where one is owed
+/// (#973). Logged here rather than through `post_event`, whose slot lock a
+/// send can hold while it waits on this read loop.
+async fn after_bot_turn(ctx: &Ingest<'_>, turn: crate::bots::learn::Turn, app: &Sink) {
+    if let Some(payload) = turn.learned() {
+        let seq = ctx.flush_seq.fetch_add(1, Relaxed);
+        let event = AgentEvent::mint(ctx.session_id.to_string(), ctx.harness, seq, None, None, payload);
+        app.emit("agent_event", &event).ok();
+        if let Err(err) = append_session_event(ctx.session_id, event).await {
+            eprintln!("[learned write err] {err}");
+        }
+    }
+    if let Some(prompt) = turn.review(ctx.session_id) {
+        // Spawned: the send lands in this same session, whose read loop this is.
+        let review = crate::orchestration::send_review(ctx.session_id.to_string(), prompt, app.clone());
+        tokio::spawn(async move {
+            if let Err(e) = review.await {
+                eprintln!("[bot review err] {e:#}");
+            }
+        });
+    }
+}
+
 /// What a child's closing turn says to the bot: its last words, or what became
 /// of a turn that ended without any, so the bot is never left waiting on one.
 fn report_text(status: TurnStatus, stop_reason: Option<&str>, final_text: Option<&str>) -> String {
@@ -3478,6 +3511,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
     // A bot's child reports every turn it closes. Spawned: the send lands in
     // the parent's session, which must not hold this one's read loop up.
     let mut silent_bot_turn = false;
+    let mut bot_turn = None;
     if agent_event.subagent.is_none() {
         match &agent_event.payload {
             AgentEventPayload::AssistantText { text, .. } if !text.trim().is_empty() => {
@@ -3490,14 +3524,17 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                 // says nothing, and its chat draws nothing; a "Done" for it
                 // would point the reader at an empty turn.
                 let posted = POSTED.lock().unwrap().remove(ctx.session_id);
-                silent_bot_turn = said.is_none()
+                let notes = crate::bots::learn::take_notes(ctx.session_id);
+                // A review's words are hidden like its prompt, so it is silent
+                // whatever the bot said; its "Learned" rows wait unannounced.
+                silent_bot_turn = (said.is_none() || notes.reviewing())
                     && !posted
                     && *status == TurnStatus::Success
                     && crate::bots::bot_at(ctx.session_cwd).await.is_some();
                 report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
-                crate::bots::commit_turn(ctx.session_cwd).await;
+                bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes).await;
             }
             _ => {}
         }
@@ -3624,6 +3661,12 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
 
     if let Err(err) = append_session_event(ctx.session_id, agent_event).await {
         eprintln!("[write err] {err}");
+    }
+
+    // After the turn's close in the log, so its "Learned" rows draw under the
+    // turn that made them, and ahead of any queued prompt.
+    if let Some(turn) = bot_turn {
+        after_bot_turn(ctx, turn, app).await;
     }
 
     // After the boundary event is logged, so the prompt that follows it

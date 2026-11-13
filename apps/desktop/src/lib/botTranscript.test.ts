@@ -7,7 +7,9 @@ import {
   chatTime,
   drawnSegments,
   firstUnread,
+  inReviewTurn,
   itemKey,
+  lessonKind,
   sentMessages,
   startsTimeRun,
   taskContext,
@@ -220,6 +222,35 @@ dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot pro
       { target: "aaaa1111", text: "Explain <<EOF\nsyntax" },
       { target: "bbbb2222", text: "hi" },
     ]);
+  });
+
+  it("draws a hidden review as nothing and each lesson as its own row, undone once taken back", () => {
+    const rule = { path: "INSTRUCTIONS.md", kind: "instructions", change: "changed", summary: "Check the login first" };
+    const skill = { path: ".claude/skills/fork/SKILL.md", kind: "skill", change: "added", summary: "Fork a sandbox" };
+    const items = botItems([
+      user("Review: The user just corrected you.", true),
+      said("Nothing to keep; that was a one-off."),
+      ev({ type: "learned", commit: "abc1234", files: [rule, skill] } as AgentEventPayload),
+      ev({ type: "learned_undone", commit: "abc1234", path: skill.path } as AgentEventPayload),
+    ]);
+    expect(items.map((i) => (i.kind === "learned" ? [i.file.path, i.undone] : i.kind))).toEqual([
+      ["INSTRUCTIONS.md", false],
+      [".claude/skills/fork/SKILL.md", true],
+    ]);
+  });
+
+  it("knows a turn a review opened while it streams", () => {
+    expect(inReviewTurn([user("hi"), said("hello"), user("Review: x", true)])).toBe(true);
+    expect(inReviewTurn([user("Review: x", true), said("…"), user("thanks")])).toBe(false);
+    expect(inReviewTurn([user("start", true)])).toBe(false);
+  });
+
+  it("names each lesson's kind, and a new or removed one as such", () => {
+    const file = (kind: string, change: string) => ({ path: "p", kind, change, summary: "s" });
+    expect(lessonKind(file("instructions", "changed"))).toBe("Rule");
+    expect(lessonKind(file("skill", "added"))).toBe("New skill");
+    expect(lessonKind(file("memory", "removed"))).toBe("Removed memory");
+    expect(lessonKind(file("routine", "changed"))).toBe("Lesson");
   });
 
   it("draws no task for a create that failed", () => {
