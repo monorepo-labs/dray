@@ -3,7 +3,7 @@ import Foundation
 
 // MARK: Wire
 
-struct Project: Decodable, Hashable {
+struct Project: Codable, Hashable {
     let path: String
     let name: String
     var lastSelected: String
