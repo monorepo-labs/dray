@@ -466,8 +466,12 @@ fn install_modules(wire: &Wire, cx: &mut App) {
             ),
         };
         let reply = answers.invoke(cmd, args);
+        // A failed answer is only logged: the card has already marked itself
+        // sent and cards.rs has no way back to answerable yet (follow-up).
         cx.spawn(async move |_| {
-            reply.await;
+            if let Err(err) = reply.await {
+                log::error!("{cmd} failed, the card stays blocked: {err}");
+            }
         })
         .detach();
     });
