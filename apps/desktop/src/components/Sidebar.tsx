@@ -1219,6 +1219,15 @@ export default function Sidebar({
           ? "Nothing settled yet."
           : "No tasks yet.";
 
+  // The filter is where project grouping went. With no project attached it has
+  // nothing to filter, so it goes — unless something it controls is still in
+  // force: a stored filter still narrows the list, and its toggles are the only
+  // way back from drafts or settled, `archivedShown` included since it lags the
+  // request until the read lands. The empty text goes with it, under the bots
+  // "No tasks yet." is a line about nothing.
+  const filterShown =
+    projects.length > 0 || projectFilter !== null || draftsShown || archivedRequested || archivedShown;
+
   const asideRef = useRef<HTMLElement>(null);
   // The step ticks for itself, in `App`, where the chords land too.
   useSwipe(asideRef, onStepProjectFilter);
@@ -1362,12 +1371,7 @@ export default function Sidebar({
         })}
       </div>}
 
-      {/* The filter is where project grouping went. With no project attached
-          it has nothing to filter, so it goes — unless something it controls is
-          still in force: a stored filter still narrows the list, and its toggles
-          are the only way back from drafts or settled, `archivedShown` included
-          since it lags the request until the read lands. */}
-      {(projects.length > 0 || projectFilter !== null || draftsShown || archivedRequested || archivedShown) && <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
+      {filterShown && <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
         <ProjectFilter
           projects={projects}
           value={projectFilter}
@@ -1434,7 +1438,8 @@ export default function Sidebar({
         onScroll={more ? openMore : undefined}
       >
         {runs.length === 0 ? (
-          <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
+          // A typed query still gets its answer: silence there reads as broken.
+          (filterShown || search.trim()) && <p className="px-2 py-6 text-ui text-muted-foreground">{emptyText}</p>
         ) : (
           runs.flatMap((group, index) => {
             // A project heading is drawn only where the list spans projects:
