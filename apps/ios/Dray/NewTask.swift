@@ -68,7 +68,8 @@ final class NewTask {
     /// The server comes first and the project is picked from what it holds, so a
     /// machine with nothing attached yet is still a place to start: it attaches one.
     var server: UUID? {
-        if let bot, connected.contains(where: { $0.id == bot.server }) { return bot.server }
+        // A bot's folder is on its own machine: down, there is nowhere to send, never another machine.
+        if let bot { return connected.contains { $0.id == bot.server } ? bot.server : nil }
         return connected.first { $0.id == pickedServer }?.id
             ?? connected.first { s in (store.projects[s.id] ?? []).contains { $0.name == projectName } }?.id
             ?? connected.first?.id
@@ -115,6 +116,8 @@ final class NewTask {
 
     func pick(_ choice: ProjectChoice?) {
         guard let choice else { return }
+        // The menu lists the bot's machine's projects, so leaving the bot stays on that machine.
+        if let bot { pickedServer = bot.server }
         bot = nil
         projectName = choice.name
         projectPath = choice.path
@@ -122,6 +125,7 @@ final class NewTask {
 
     /// Opens a saved draft with the picks it was saved on, so starting it or saving it again keeps them.
     func open(_ draft: DraftItem, on server: UUID) {
+        bot = nil
         text = draft.prompt
         draftId = (server, draft.id)
         if let name = draft.project { projectName = name }
