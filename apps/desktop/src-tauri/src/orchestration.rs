@@ -1921,28 +1921,44 @@ const NUDGE_TAIL: usize = 4000;
 /// it (`stalledTasks`). Sent from the task, the way its reports are, so the
 /// bot's queue view and transcript treat it as one and the reader never sees
 /// it. `problem` is what stands in the bot's way to fix through the task (a
-/// conflict, failing checks); without one the task waits on the reader, and
-/// its last message rides along, since the bot has no way to read it.
+/// conflict, failing checks); `ready` the number of a PR the reader can merge,
+/// so the bot can name what to try first. Without either the task waits on the
+/// reader. Bar a problem, the task's last message rides along, since the bot
+/// has no way to read it.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn nudge_bot(session_id: String, problem: Option<String>, sink: Sink) -> Result<(), crate::Fail> {
+pub async fn nudge_bot(
+    session_id: String,
+    problem: Option<String>,
+    ready: Option<u32>,
+    sink: Sink,
+) -> Result<(), crate::Fail> {
     let task = store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
     let Some(chat) = bots::bot_chat_of(&task).await else { return Ok(()) };
     if task.archived || chat.archived || chat.session_id == task.session_id {
         return Ok(());
     }
     let idle = idle_since(&task.modified);
-    let prompt = match problem {
-        Some(problem) => format!("Stall nudge: this task has sat untouched for {idle}. {problem}"),
-        None => {
-            let last = store::last_reply(&session_id).await?.0.unwrap_or_else(|| "(it wrote none)".into());
-            let chars: Vec<char> = last.chars().collect();
-            let tail: String = chars[chars.len().saturating_sub(NUDGE_TAIL)..].iter().collect();
-            format!("Stall nudge: this task has sat idle for {idle}, waiting on the user. Its last message:\n\n{tail}")
-        }
+    let prompt = match (problem, ready) {
+        (Some(problem), _) => format!("Stall nudge: this task has sat untouched for {idle}. {problem}"),
+        (None, Some(n)) => format!(
+            "Stall nudge: this task's PR #{n} is ready to merge and has sat for {idle}; the user merges it from the card. Its last message:\n\n{}",
+            last_message_tail(&session_id).await?
+        ),
+        (None, None) => format!(
+            "Stall nudge: this task has sat idle for {idle}, waiting on the user. Its last message:\n\n{}",
+            last_message_tail(&session_id).await?
+        ),
     };
     let send = SendMessage { session_id: chat.session_id, prompt, from_session_id: Some(session_id) };
     send_message(send, None, &sink).await?;
     Ok(())
+}
+
+/// The last [NUDGE_TAIL] characters of a task's last message.
+async fn last_message_tail(session_id: &str) -> Result<String> {
+    let last = store::last_reply(session_id).await?.0.unwrap_or_else(|| "(it wrote none)".into());
+    let chars: Vec<char> = last.chars().collect();
+    Ok(chars[chars.len().saturating_sub(NUDGE_TAIL)..].iter().collect())
 }
 
 /// "45m", "2h", "3d" since an RFC3339 time; the app's `compactAge`.

@@ -87,11 +87,13 @@ export function stalledTasks(
 /// idle on the reader. The rest are the bot's alone.
 export const onCard = (stall: Stall): boolean => stall.kind !== "fix";
 
-/// What a waiting task needs from the reader, as its bot wrote it since the
-/// task last moved; nothing while the bot is still on it.
+/// What a card row needs from the reader, as its bot wrote it since the task
+/// last moved: an answer for a waiting task, something to try before a ready
+/// PR is merged. Nothing while the bot is still on it, and for most ready PRs
+/// nothing at all.
 export function needLine(stall: Stall): string | undefined {
   const { need, modified } = stall.row.item;
-  return stall.kind === "waiting" && need && Date.parse(need.at) >= Date.parse(modified) ? need.text : undefined;
+  return onCard(stall) && need && Date.parse(need.at) >= Date.parse(modified) ? need.text : undefined;
 }
 
 /// Each bot that has a chat: the chat's session id and the bot's tasks.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { CrewRow } from "@/lib/crew";
-import { STALL_MS, compactAge, freshStalls, needLine, onCard, stalledTasks } from "@/lib/stalled";
+import { STALL_MS, compactAge, freshStalls, needLine, onCard, stalledTasks, type Stall } from "@/lib/stalled";
 import type { PrMark, SessionIndexItem } from "@/types/events";
 
 const T0 = Date.parse("2026-11-12T10:00:00Z");
@@ -121,5 +121,26 @@ describe("stalledTasks", () => {
     const later = new Date(T0 + 1000).toISOString();
     const [b] = stalledTasks([row("a", {}, { modified: later })], () => undefined, new Map(), T0 + 2 * STALL_MS);
     expect(a.key).not.toBe(b.key);
+  });
+});
+
+describe("needLine", () => {
+  // Built by hand rather than through `stalledTasks`, so the test pins the line
+  // alone and not the stall timing.
+  const stall = (kind: Stall["kind"], need?: string): Stall => ({
+    row: row("a", {}, need ? { need: { text: need, at: new Date(T0 + 1000).toISOString() } } : {}),
+    pr: pr(),
+    kind,
+    since: T0,
+    key: `a:${kind}`,
+  });
+
+  it("draws a need on a ready PR, and nothing where the bot wrote none", () => {
+    expect(needLine(stall("ready", "Try the ⌥ hints in the dev app first"))).toBe("Try the ⌥ hints in the dev app first");
+    expect(needLine(stall("ready"))).toBeUndefined();
+  });
+
+  it("never draws one on a stall the card leaves out", () => {
+    expect(needLine(stall("fix", "Fix the checks"))).toBeUndefined();
   });
 });
