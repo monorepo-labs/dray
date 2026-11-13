@@ -281,7 +281,7 @@ function TaskRow({
         {/* {status?.key === "conflict" && pr && <FixConflicts onFix={() => onFixConflicts(row, pr)} />} */}
         </span>
         {/* Under the title, past the face's 20px and the 8px gap. */}
-        {fixing && <span className="-mt-1 truncate pb-1.5 pl-7 text-ui text-foreground/70">{fixing}</span>}
+        {fixing && <span className="-mt-1 truncate pb-1.5 pl-7 text-ui text-foreground/50">{fixing}</span>}
       </div>
     </RowMenu>
   );
