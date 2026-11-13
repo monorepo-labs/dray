@@ -101,6 +101,10 @@ impl Workspace {
                 let applied = self.store.apply(&name, payload);
                 if applied.reload {
                     self.reload(cx);
+                    // A drop may have cost the open transcript events.
+                    if let Some(chat) = &self.chat {
+                        chat.update(cx, |chat, cx| chat.read(cx));
+                    }
                 }
                 applied.redraw
             }

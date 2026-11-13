@@ -97,6 +97,7 @@ cargo run --example spike_input
 - [x] Virtualised transcript, live: the newest turns read on select, events
       folded on after, deltas streaming into a preview the committed event
       takes over in place ([transcript.rs](src/transcript.rs), [chat.rs](src/chat.rs))
+- [x] Paging back on reaching the top, and catching up on every reconnect
 - [ ] Streaming markdown (plugs into `chat.rs`'s `slots::assistant`)
 - [ ] Tool rows, tree-sitter code and diffs (`slots::tool` draws the
       collapsed header until then)
