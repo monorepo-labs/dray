@@ -1904,6 +1904,7 @@ impl SessionManager {
             None => (harness, next_seq_by_session_id(session_id).await?),
         };
         let event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
+        POSTED.lock().unwrap().insert(session_id.to_string());
         app.emit("agent_event", &event)?;
         append_session_event(session_id, event).await
     }
@@ -3387,6 +3388,11 @@ pub async fn ingest(ctx: &Ingest<'_>, agent_event: AgentEvent, app: &Sink) {
 static LAST_REPLY: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// Sessions something was posted into this turn, a merge card being the one
+/// kind: drawn with no reply beside it, so the turn is not a silent one.
+static POSTED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
 /// Sends `text` to the session that started `session_id`, where it is a bot's.
 fn report(session_id: &str, text: String, app: &Sink) {
     let report = crate::orchestration::report_to_parent(session_id.to_string(), text, app.clone());
@@ -3469,7 +3475,9 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                 // A bot answering a report that needs nothing from the reader
                 // says nothing, and its chat draws nothing; a "Done" for it
                 // would point the reader at an empty turn.
+                let posted = POSTED.lock().unwrap().remove(ctx.session_id);
                 silent_bot_turn = said.is_none()
+                    && !posted
                     && *status == TurnStatus::Success
                     && crate::bots::bot_at(ctx.session_cwd).await.is_some();
                 report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
