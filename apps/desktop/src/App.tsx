@@ -3442,7 +3442,9 @@ function App() {
                     ? rowSession.title
                     : withProject(rowSession, botAt(bots, rowSession.projectPath)?.name ?? basename(rowSession.projectPath))
               }
-              machine={mainGroup ? undefined : serverOfPath(rowSession.projectPath)}
+              // The lit task's, over a bot's row: a bot's task can run on
+              // another machine than the bot.
+              machine={mainGroup ? undefined : serverOfPath(shownSession.projectPath)}
               // A bot chat's header is the bot's name, renamed with the bot.
               rename={
                 mainGroup || botAt(bots, rowSession.cwd)
@@ -3470,11 +3472,15 @@ function App() {
               tasks={
                 strip
                   ? {
-                      items: (taskTabs[strip.bot] ?? []).map((t) => ({
-                        sessionId: t.sessionId,
-                        title: sessionIndexItems.find((i) => i.sessionId === t.sessionId)?.title ?? t.title,
-                        working: statusBySession[t.sessionId] === "in_progress",
-                      })),
+                      items: (taskTabs[strip.bot] ?? []).map((t) => {
+                        const item = sessionIndexItems.find((i) => i.sessionId === t.sessionId);
+                        return {
+                          sessionId: t.sessionId,
+                          title: item?.title ?? t.title,
+                          working: statusBySession[t.sessionId] === "in_progress",
+                          machine: item ? serverOfPath(item.projectPath) : serverOfSession(t.sessionId),
+                        };
+                      }),
                       lit: strip.lit,
                       onPick: (id) => pickTaskTab(strip.bot, id),
                       onClose: (id) => setTaskTabs((prev) => closeTaskTab(prev, id)),

@@ -7,6 +7,7 @@ import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react"
 
 import AgentBeam from "@/components/browser/AgentBeam";
 import BotAvatar from "@/components/BotAvatar";
+import MachineMark from "@/components/MachineMark";
 import Favicon, { hostOf } from "@/components/browser/Favicon";
 import FileIcon from "@/components/FileIcon";
 import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
@@ -107,7 +108,8 @@ const FOLDER = <Folder className="size-3.5 shrink-0 fill-current text-muted-fore
 
 /// A bot's tasks open in its row, each a tab that shows the task's own chat.
 export type TaskTabsProps = {
-  items: { sessionId: string; title: string; working: boolean }[];
+  /// `machine`: the task's server, marked on its tab where it is not This Mac.
+  items: { sessionId: string; title: string; working: boolean; machine: ServerId }[];
   /// The task on screen; while one is, nothing of the bot's own is lit.
   lit: string | null;
   onPick: (sessionId: string) => void;
@@ -155,6 +157,8 @@ type Item = {
   /// The last file of its view: closing it hands its slot back to the view's
   /// stand-in, which stays lit, rather than moving to a neighbour.
   keepsView?: boolean;
+  /// The remote server the tab's session runs on; absent for This Mac.
+  machine?: string;
 };
 
 /// The titlebar as a browser's tab strip.
@@ -378,6 +382,7 @@ export default function ViewTabs({
     }),
     ...(tasks?.items ?? []).map((task) => ({
       key: `task:${task.sessionId}`,
+      machine: task.machine !== LOCAL ? serverName(task.machine) : undefined,
       icon: task.working ? (
         <Orb state="working" label="Working" size={16} />
       ) : (
@@ -582,6 +587,7 @@ export default function ViewTabs({
           fixed={item.fixed}
           onPick={item.pick}
           rename={item.rename}
+          machine={item.machine}
           onClose={item.close && (() => closeAt(i))}
           onDuplicate={item.duplicate}
           onPointerDown={(e) => drag.start(e, i)}
@@ -647,18 +653,23 @@ export default function ViewTabs({
         </span>
       )}
       {/* At the row's far end, where it gives way before any tab does. */}
-      {server && (
-        <span className="ml-auto flex min-w-6.5 shrink-[999] items-center gap-1 overflow-hidden pl-2 text-ui text-muted-foreground animate-in fade-in duration-200">
-          <Server className="size-3.5 shrink-0" />
-          <span className="truncate">{server}</span>
-        </span>
-      )}
+      {server && <RowMachine name={server} />}
       {branch && cwd && (
         <span className={cn("flex min-w-6.5 shrink-[999] pl-2 text-ui animate-in fade-in duration-200", !server && "ml-auto")}>
           <BranchButton branch={branch} cwd={cwd} />
         </span>
       )}
     </div>
+  );
+}
+
+/// The row's far end names a remote session's machine; This Mac goes unnamed.
+export function RowMachine({ name }: { name: string }) {
+  return (
+    <span className="ml-auto flex min-w-6.5 shrink-[999] items-center gap-1 overflow-hidden pl-2 text-ui text-muted-foreground animate-in fade-in duration-200">
+      <Server className="size-3.5 shrink-0" />
+      <span className="truncate">{name}</span>
+    </span>
   );
 }
 
@@ -683,8 +694,11 @@ export function ItemTab({
   hint,
   rename,
   overlay,
+  machine,
 }: {
   icon: React.ReactNode;
+  /// The remote server the tab's session runs on; absent for This Mac.
+  machine?: string;
   /// Drawn over the whole tab, out of the row's flow: the agent's beam.
   overlay?: React.ReactNode;
   label: string;
@@ -792,6 +806,7 @@ export function ItemTab({
         {label}
       </span>
       )}
+      <MachineMark machine={machine ?? null} className="@max-[100px]:hidden" />
       {/* No tooltip: a cross on a tab says what it does, the way it does in
           every browser. */}
       {onClose && !locked && (
