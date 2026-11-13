@@ -104,4 +104,10 @@ pub mod text {
     pub const TOOL: f32 = 13.;
     pub const TOOL_LEADING: f32 = 13. * 1.55;
     pub const MONO: &str = "Geist Mono";
+
+    /// Ligatures off for code. On Linux the shaper otherwise swallows the space
+    /// before `--`, so `cargo build --release` read `cargo build--release`.
+    pub fn mono_features() -> gpui::FontFeatures {
+        gpui::FontFeatures(std::sync::Arc::new(vec![("calt".into(), 0), ("liga".into(), 0)]))
+    }
 }
