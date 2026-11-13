@@ -3,17 +3,18 @@
 //! body, keep the signature. The window, the sidebar and the transcript's
 //! wiring call only these.
 
-use gpui::{AnyElement, App, Window, div, prelude::*, px};
+use gpui::{AnyElement, App, Window, div, prelude::*};
 use serde_json::Value;
 
 use crate::theme::Theme;
 use crate::transcript::{Tool, label};
 
-/// Stand-in for the streaming markdown module: the text as written. Called
-/// on every change while `streaming`, with the whole text so far; `key` names
-/// the message for as long as its row lives, the commit included.
-pub fn assistant(_key: &str, text: &str, _streaming: bool, _theme: &Theme) -> AnyElement {
-    div().whitespace_normal().child(text.to_string()).into_any_element()
+/// An assistant message as streaming markdown. Called on every change while
+/// `streaming`, with the whole text so far; `key` names the message for as
+/// long as its row lives, the commit included, and keys the parse kept
+/// between frames.
+pub fn assistant(key: &str, text: &str, streaming: bool, _theme: &Theme) -> AnyElement {
+    crate::markdown::element(gpui::SharedString::from(key.to_string()), text.to_string(), streaming).into_any_element()
 }
 
 /// Stand-in for the tool-row module: the collapsed header alone, label and
@@ -48,24 +49,19 @@ pub fn tool(tool: &Tool, theme: &Theme) -> AnyElement {
 /// above the composer, outside the turn stack, as Chat.tsx draws
 /// `pendingAsks`. Answers go back as `respond_permission`/`answer_questions`;
 /// the decision's event retires the frame from this list.
-pub fn cards(_session_id: &str, asks: &[&Value], theme: &Theme) -> Option<AnyElement> {
-    let line = match asks.len() {
-        0 => return None,
-        1 => "1 request waiting on you".to_string(),
-        n => format!("{n} requests waiting on you"),
-    };
-    Some(div().px_6().pb_3().text_size(px(13.)).text_color(theme.accent_command).child(line).into_any_element())
+pub fn cards(session_id: &str, asks: &[&Value], theme: &Theme) -> Option<AnyElement> {
+    crate::cards::cards(session_id, asks, theme)
 }
 
-/// Stand-in for the composer, under the open session's transcript and its
-/// cards. Sending is `send_msg` with the session's id. Called on every
-/// render, with the window, so a stateful input can live per session.
-pub fn composer(_session_id: &str, _theme: &Theme, _window: &mut Window, _cx: &mut App) -> Option<AnyElement> {
-    None
+/// The composer, under the open session's transcript and its cards: one
+/// input per session, kept between renders. What it emits goes through
+/// `composer::slot::on_event`, set at startup.
+pub fn composer(session_id: &str, _theme: &Theme, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+    Some(crate::composer::slot::slot(session_id, window, cx))
 }
 
-/// Stand-in for the new-task screen, drawn in the sheet while no session is
-/// open. `None` leaves the sheet's empty state.
-pub fn new_task(_theme: &Theme) -> Option<AnyElement> {
-    None
+/// The new-task screen, drawn in the sheet while no session is open. `None`
+/// until `new_task::install` has run, which leaves the sheet's empty state.
+pub fn new_task(theme: &Theme) -> Option<AnyElement> {
+    crate::new_task::element(theme)
 }
