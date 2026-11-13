@@ -64,7 +64,7 @@ export default function FilesView({
   picker,
   watchScope,
 }: {
-  /// A split pane's own watcher, so it takes none from the Files view or a pick.
+  /// A split pick's own watcher, so it takes none from the pick in the main view.
   watchScope?: FilesScope;
   /// A bot-row tab's choice of session, the list's first row (#892). Such a
   /// tab is not its session's own Files view, so opening a file here must not

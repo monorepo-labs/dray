@@ -57,6 +57,7 @@ import {
   markClosedSlot,
   moveKey,
   moveLastClosed,
+  movedTo,
   popClosedTab,
   pushClosedTab,
   reconcile,
@@ -66,7 +67,6 @@ import BranchButton from "@/components/layout/BranchButton";
 import { IS_MAC } from "@/lib/platform";
 import {
   addSplit,
-  filePaneStore,
   isSplit,
   setPaneHeads,
   setSplitDrag,
@@ -467,8 +467,7 @@ export default function ViewTabs({
   });
 
   // Out of the row into a pane right of the main view. The tab on screen
-  // hands the view to its neighbour first, as closing it would. A file takes
-  // a store of its own with it, so the pane's Files is that file's alone.
+  // hands the view to its neighbour first, as closing it would.
   const splitOut = (item: Item) => {
     if (item.active) {
       const at = items.indexOf(item);
@@ -479,23 +478,15 @@ export default function ViewTabs({
       const page = pages.find((p) => `page:${p.id}` === key);
       const heir = pages.find((p) => p !== page && !isSplit(sessionId, `page:${p.id}`));
       if (page?.active && heir) void activateTab(browserId, heir.id);
-    } else if (key === "files" || key.startsWith("file:")) {
-      key = `filepane:${crypto.randomUUID()}`;
-      if (item.key.startsWith("file:")) {
-        const path = item.key.slice("file:".length);
-        closeFile(sessionId, path);
-        reopenFile(filePaneStore(sessionId, key), path);
-      } else {
-        added.set(sessionId, { ...(added.get(sessionId) ?? NONE), files: false });
-      }
     } else if (key.startsWith("pickfile:")) {
       key = `pick:${key.split(":")[1]}`;
     }
     addSplit(sessionId, key);
   };
-  // The chat is what the panes sit beside, and a blank has no page to show.
+  // The chat is what the panes sit beside, a blank has no page to show, and
+  // Files with nothing open is a tree whose clicks belong to the main view.
   const splittable = (item: Item) =>
-    /^(page:|changes$|files$|file:|task:|pick:|pickfile:)/.test(item.key) && (IS_MAC || !item.key.startsWith("page:"));
+    /^(page:|changes$|file:|task:|pick:|pickfile:)/.test(item.key) && (IS_MAC || !item.key.startsWith("page:"));
 
   const drag = useDragReorder(
     items,
@@ -503,7 +494,7 @@ export default function ViewTabs({
     (item, _, to) => {
       orders.set(
         sessionId,
-        moveKey(orders.get(sessionId) ?? order, item.key, to),
+        movedTo(orders.get(sessionId) ?? order, items, item.key, to),
       );
       bump();
     },

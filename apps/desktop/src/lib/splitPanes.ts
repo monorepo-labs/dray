@@ -1,6 +1,5 @@
 import { useSyncExternalStore } from "react";
 
-import { forgetOpenFiles, openFilesFor, reopenFile } from "@/hooks/useOpenFiles";
 import type { TabKey } from "@/lib/tabOrder";
 
 /// Tabs dragged out of a session's row into panes right of its main view,
@@ -90,23 +89,6 @@ export function setSplitDrag(next: SplitDrag | null) {
 
 export function useSplitDrag(): SplitDrag | null {
   return useSyncExternalStore(subscribe, () => drag);
-}
-
-/// The open-files store a Files pane reads, apart from the session's own so
-/// its files are not the row's tabs as well.
-export function filePaneStore(sessionId: string, key: TabKey): string {
-  return `${sessionId}\n${key}`;
-}
-
-/// Puts a pane's tab back in the row. A Files pane hands its files back to
-/// the session's own Files, since its key stood for no tab of the row.
-export function closeSplit(sessionId: string, key: TabKey) {
-  if (key.startsWith("filepane:")) {
-    const store = filePaneStore(sessionId, key);
-    for (const file of openFilesFor(store).open) reopenFile(sessionId, file.path);
-    forgetOpenFiles(store);
-  }
-  removeSplit(sessionId, key);
 }
 
 /// The element the main view and its panes share, measured for room.

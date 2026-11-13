@@ -1,12 +1,15 @@
-import { Folder, X } from "lucide-react";
-import { Suspense, useEffect } from "react";
+import { X } from "lucide-react";
+import { lazy, Suspense, useEffect } from "react";
 
 import { DropZone } from "@/components/SplitView";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { setDropping } from "@/lib/browser";
-import { closeSplit, usePaneHead, useSplitDrag, useSplitPanes } from "@/lib/splitPanes";
+import { useOpenFiles, useOpenFilesWatcher } from "@/hooks/useOpenFiles";
+import { removeSplit, usePaneHead, useSplitDrag, useSplitPanes } from "@/lib/splitPanes";
 import type { TabKey } from "@/lib/tabOrder";
+
+const FileViewer = lazy(() => import("@/components/files/FileViewer"));
 
 /// The tabs a session's row split out, each a column right of the main view
 /// with its tab's own icon and title over it. Equal widths, like the split
@@ -32,7 +35,7 @@ export default function SplitPanes({
       {sessionId &&
         panes.map((key) => (
           <div key={key} className="flex min-w-0 flex-1 flex-col border-l border-hairline-strong">
-            <PaneHeader sessionId={sessionId} paneKey={key} onClose={() => closeSplit(sessionId, key)} />
+            <PaneHeader sessionId={sessionId} paneKey={key} onClose={() => removeSplit(sessionId, key)} />
             <div className="flex min-h-0 flex-1 flex-col">
               <Suspense fallback={null}>{body(key)}</Suspense>
             </div>
@@ -50,12 +53,10 @@ export default function SplitPanes({
 
 function PaneHeader({ sessionId, paneKey, onClose }: { sessionId: string; paneKey: TabKey; onClose: () => void }) {
   const head = usePaneHead(sessionId, paneKey);
-  // A Files pane stands for no tab of the row, so it names itself.
-  const files = paneKey.startsWith("filepane:");
   return (
     <div className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline px-3 text-ui text-muted-foreground">
-      {files ? <Folder className="size-3.5 shrink-0 fill-current" /> : head?.icon}
-      <span className="min-w-0 truncate">{files ? "Files" : (head?.label ?? "")}</span>
+      {head?.icon}
+      <span className="min-w-0 truncate">{head?.label ?? ""}</span>
       <Tooltip>
         <TooltipTrigger asChild>
           <Button variant="ghost" size="icon-xs" className="ml-auto shrink-0" aria-label="Close pane" onClick={onClose}>
@@ -67,4 +68,17 @@ function PaneHeader({ sessionId, paneKey, onClose }: { sessionId: string; paneKe
       </Tooltip>
     </div>
   );
+}
+
+/// One of the session's open files, read from its own store: the tab is only
+/// left out of the row, so the file stays the session's. Watched under the
+/// pane's own scope, since the Files view may not be mounted to watch it.
+export function SplitFile({ sessionId, path }: { sessionId: string; path: string }) {
+  const file = useOpenFiles(sessionId).open.find((f) => f.path === path) ?? null;
+  useOpenFilesWatcher(sessionId, `filepane:${path}`);
+  // Closed from elsewhere: nothing left to show.
+  useEffect(() => {
+    if (!file) removeSplit(sessionId, `file:${path}`);
+  }, [file, sessionId, path]);
+  return <FileViewer file={file} />;
 }

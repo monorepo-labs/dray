@@ -993,6 +993,9 @@ type PinStill = { url: string | null; painted: boolean };
 const pinStills = new Map<string, PinStill>();
 const pinCapturing = new Set<string>();
 let pinsSent = 0;
+// Rust holds the pins past a reload of this page, which forgets the panes;
+// left there, a page from the last load stays on screen over whatever loads.
+void invoke("browser_pins", { pins: [] }).catch(() => undefined);
 
 /// A shot under way lays out `tab` of `sessionId`.
 function shotCovers(sessionId: string, tab: number): boolean {

@@ -98,8 +98,8 @@ import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/Merg
 import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
-import SplitPanes from "@/components/SplitPanes";
-import { filePaneStore, pruneSplits, useSplitPanes } from "@/lib/splitPanes";
+import SplitPanes, { SplitFile } from "@/components/SplitPanes";
+import { pruneSplits, useSplitPanes } from "@/lib/splitPanes";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
   closePane,
@@ -136,6 +136,7 @@ import {
   forgetOpenFilesUnder,
   openFilesFor,
   useOpenFiles,
+  type FilesScope,
 } from "@/hooks/useOpenFiles";
 import BotAvatar from "@/components/BotAvatar";
 import Orb from "@/components/Orb";
@@ -3258,7 +3259,7 @@ function App() {
   /// A lit Diff or Files pick: the view on the picked session, its side
   /// column led by the picker. Keyed on tab and target, so a repick or another
   /// pick of the same kind opens fresh rather than on the last one's place.
-  const pickBody = (tab: (typeof litPick) & object, bot: string) => {
+  const pickBody = (tab: (typeof litPick) & object, bot: string, watchScope?: FilesScope) => {
     const options: PickOption[] = [
       ...(tab.kind === "files" ? [bot] : []),
       ...botTasks.map((t) => t.sessionId),
@@ -3309,6 +3310,7 @@ function App() {
         active={!issuesOpen}
         revision={revision}
         picker={picker}
+        watchScope={watchScope}
       />
     );
   };
@@ -3337,23 +3339,16 @@ function App() {
         />
       );
     }
-    if (key.startsWith("filepane:")) {
-      return (
-        <FilesView
-          sessionId={filePaneStore(rowSession.sessionId, key)}
-          cwd={rowSession.cwd}
-          active={!issuesOpen}
-          revision={turnRevision}
-          watchScope={key as `filepane:${string}`}
-        />
-      );
+    if (key.startsWith("file:")) {
+      return <SplitFile sessionId={rowSession.sessionId} path={key.slice("file:".length)} />;
     }
     if (key.startsWith("task:")) {
       // Read here; the composer sends to the main view's session.
       return <Chat {...paneState(key.slice("task:".length))} {...paneChat} crowded active={false} />;
     }
     const pick = strip && pickTabs[strip.bot]?.find((t) => `pick:${t.id}` === key);
-    return pick && strip ? pickBody(pick, strip.bot) : null;
+    // Its own watcher, since the lit pick in the main view holds `"pick"`.
+    return pick && strip ? pickBody(pick, strip.bot, key as `pick:${string}`) : null;
   };
 
   // Pages with no tabs for the strip: the sheet reaches up behind the header.

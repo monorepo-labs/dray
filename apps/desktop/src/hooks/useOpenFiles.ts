@@ -264,7 +264,7 @@ export function useOpenFiles(sid: string | null): FilesSnapshot {
 /// `"files"` and a bot row's Files pick `"pick"`: one watcher shared would
 /// mean whichever opened last silently took the other's watch away — and the
 /// Files view stays mounted beside a pick.
-export type FilesScope = "files" | "pick" | `filepane:${string}`;
+export type FilesScope = "files" | "pick" | `pick:${string}` | `filepane:${string}`;
 
 /// Every `watch_docs` call for this scope, in the order it was made — the same
 /// chain [useDocWatcher](./useDocs.ts) keeps, and for the same reason: the
