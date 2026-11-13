@@ -200,18 +200,19 @@ export default function ComposerToolbar({
               picked — and a worktree has nothing to fork from. */}
           {projectPath && (
             <>
-              <WorktreeToggle on={useWorktree} onToggle={onToggleWorktree} />
+              {/* A cloud task always runs in a worktree, so there is nothing to toggle. */}
+              {!cloud && <WorktreeToggle on={useWorktree} onToggle={onToggleWorktree} />}
 
               {/* A worktree forks from the remote's default branch no matter
                   what is checked out, so offering a branch here would promise
                   something the CLI doesn't honour. State the real base instead. */}
-              {useWorktree ? (
+              {useWorktree || cloud ? (
                 branches?.defaultBase && (
                   <span className="truncate px-1.5 text-ui text-muted-foreground/60">
                     from {branches.defaultBase}
                   </span>
                 )
-              ) : cloud ? null : (
+              ) : (
                 // Relative, so the switch popover anchors to the picker rather
                 // than to the window.
                 <div className="relative flex min-w-0 items-center">

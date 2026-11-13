@@ -2974,7 +2974,7 @@ function App() {
   useHotkey("worktree.toggle", () => setUseWorktree((v) => !v), {
     // A worktree has nothing to fork from until a project is picked, which is
     // the same condition the toggle itself is drawn under.
-    enabled: composingNewSession && projectPath !== null,
+    enabled: composingNewSession && projectPath !== null && !cloudTask,
   });
   // No accelerator: Shift+Tab on its own, and the model gets it because the
   // model is the pick reached for most often. The CLI spends this chord on
