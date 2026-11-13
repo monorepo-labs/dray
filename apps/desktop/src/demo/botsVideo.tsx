@@ -410,8 +410,14 @@ mockIPC(
 // change what the card and the Tasks tab draw. Only this page's own: the app
 // on the same origin keeps its history.
 const mine = (key: string) => key.startsWith(id(0).slice(0, 24));
-// A browser that never ran Dray would otherwise open on "What's new".
-localStorage.setItem("ade.changelogSeen", JSON.stringify("999.0.0"));
+// A browser that never ran Dray would otherwise open on "What's new". The feed
+// is answered empty rather than the seen mark moved, which the app on this
+// origin would keep.
+const realFetch = window.fetch;
+window.fetch = (input, init) =>
+  String(input instanceof Request ? input.url : input).endsWith("/changelog.json")
+    ? Promise.resolve(new Response("[]", { headers: { "content-type": "application/json" } }))
+    : realFetch(input, init);
 for (const key of ["ade.nudgedStalls", "ade.dismissedStalls"]) {
   const kept = (JSON.parse(localStorage.getItem(key) ?? "[]") as string[]).filter((k) => !mine(k));
   localStorage.setItem(key, JSON.stringify(kept));
