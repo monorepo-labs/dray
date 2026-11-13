@@ -68,17 +68,24 @@ struct RunWithSheet: View {
     }
 
     @ViewBuilder private var whereCard: some View {
-        let servers = task.project == nil ? task.connected : task.machines
+        // Server first: the project menu lists what the picked server holds.
         PickCard {
-            if servers.count > 1 {
+            if !task.connected.isEmpty {
                 PickMenu("Server", value: task.server.map(store.name(of:)) ?? "") {
-                    Picker("Server", selection: Binding(get: { task.server }, set: { task.pickedServer = $0 })) {
-                        ForEach(servers) { Text($0.name).tag(Optional($0.id)) }
+                    Picker("Server", selection: Binding(get: { task.server }, set: task.pick(server:))) {
+                        ForEach(task.connected) { Text($0.name).tag(Optional($0.id)) }
                     }
                 }
                 PickDivider()
             }
-            if task.projectChoices.isEmpty {
+            if let bot = task.bot {
+                // Its folder is not a repo: no worktree or branch to pick. A project picked here leaves the bot.
+                PickMenu("Project", value: bot.bot.name) {
+                    Picker("Project", selection: Binding<ProjectChoice?>(get: { nil }, set: task.pick)) {
+                        ForEach(task.projectChoices, id: \.self) { Text($0.label).tag(Optional($0)) }
+                    }
+                }
+            } else if task.projectChoices.isEmpty {
                 Button { attaching = true } label: {
                     HStack(spacing: Theme.Space.s) {
                         Image(systemName: "plus").font(.system(size: 14, weight: .semibold)).frame(width: 16)

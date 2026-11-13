@@ -15,11 +15,13 @@ struct LocalServer: Decodable, Hashable {
 /// The session view's way in: a toolbar button opening the server list.
 struct LocalServersButton: ViewModifier {
     let key: SessionKey
+    /// Off in a bot's chat, whose folder runs no dev server.
+    var shown = true
     @State private var open = false
 
     func body(content: Content) -> some View {
         content
-            .toolbar { Button("Local servers", systemImage: "globe") { open = true } }
+            .toolbar { if shown { Button("Local servers", systemImage: "globe") { open = true } } }
             .sheet(isPresented: $open) { LocalServersView(key: key) }
     }
 }
@@ -69,7 +71,8 @@ struct LocalServersView: View {
                         .padding(.top, Theme.Space.xs)
                 }
                 .padding(.horizontal, Theme.Space.l)
-                .padding(.top, Theme.Space.xs)
+                // The side inset again, so the first row clears the header's border.
+                .padding(.top, Theme.Space.l)
             }
         } else if servers != nil {
             empty("globe", title: "No servers running",

@@ -36,7 +36,8 @@ struct ReplyDock: View {
     }
     private var open: Bool { phase != .rest }
     private var connected: Bool { store.serverState[key.server] == .connected }
-    private var away: Bool { !connected || !store.online }
+    /// Down long enough that its session says so; a quick reconnect dims nothing.
+    private var away: Bool { store.lost.contains(key.server) }
     /// Settings' pick, else any machine that can: the words come back to this draft whoever reads them.
     private var transcriber: UUID? { store.dictationServer(dictationPick) }
     private var harness: String { item?.harness ?? "" }
@@ -54,7 +55,7 @@ struct ReplyDock: View {
                 KeptNote(line: line, draft: key).transition(.opacity)
             }
             // Dim while the server or the network is away; the banner up top says why, and typing still works.
-            DockOrb(draft: key, size: 76, hold: hold, tap: tapped).opacity(away ? 0.4 : 1)
+            DockOrb(draft: key, size: 76, tap: tapped).opacity(away ? 0.4 : 1)
             if open {
                 actions
                     .padding(.top, 6)
@@ -292,15 +293,15 @@ struct ReplyDock: View {
         return names.prefix(1).uppercased() + names.dropFirst() + " can change once this turn ends. The rest go with your next message."
     }
 
+    /// Tap to talk, tap again to stop: the orb is never held.
     private func tapped() {
-        guard phase == .rest else { return }
-        flash(transcriber != nil ? "Hold to talk" : "This server can't transcribe. Type instead.")
-    }
-
-    private func hold() {
+        if dictation == .recording {
+            Task { await Dictations.shared.stop(store, draft: key) }
+            return
+        }
         guard phase == .rest || phase == .ready else { return }
         guard let transcriber else { return flash("This server can't transcribe. Type instead.") }
-        // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new hold.
+        // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new tap.
         guard Dictations.shared.kept[key] == nil else { return }
         Dictations.shared.dismiss(key)
         failed = nil
