@@ -2974,7 +2974,7 @@ function App() {
   useHotkey("worktree.toggle", () => setUseWorktree((v) => !v), {
     // A worktree has nothing to fork from until a project is picked, which is
     // the same condition the toggle itself is drawn under.
-    enabled: composingNewSession && projectPath !== null,
+    enabled: composingNewSession && projectPath !== null && !cloudTask,
   });
   // No accelerator: Shift+Tab on its own, and the model gets it because the
   // model is the pick reached for most often. The CLI spends this chord on
@@ -3296,6 +3296,51 @@ function App() {
   // Pages with no tabs for the strip: the sheet reaches up behind the header.
   const tallSheet = issuesOpen || !shownSession;
 
+  // The composer is drawn under the transcript alone; a bot's chat moves its
+  // pickers into the titlebar, so they show and hide with it.
+  const composerShown = !(issuesOpen || (shownSession && viewTab !== "chat"));
+  // Not on a settled chat, whose composer is the Unsettle bar alone.
+  const toolbarInTitlebar = composerShown && !!composerBot && !selectedSession?.archived;
+  const composerToolbar = (inTitlebar: boolean) => (
+    <ComposerToolbar
+      server={activeServer}
+      harness={harness}
+      onHarnessChange={setHarness}
+      models={models}
+      modelId={modelId}
+      effort={effort}
+      fast={fast}
+      onFastChange={setFast}
+      fastNote={fastNote}
+      onModelChange={handleModelChange}
+      onRefreshModels={refreshModels}
+      onReloadModels={reloadModels}
+      onSeedProvider={seedFxModels}
+      loadingModels={loadingModels}
+      permissionMode={permissionMode}
+      onPermissionModeChange={setPermissionMode}
+      projects={spaceProjects}
+      projectPath={projectPath}
+      onSelectProject={handleSelectProject}
+      onAttachProject={handleAttachProject}
+      branches={branches}
+      branch={branch}
+      onSelectBranch={handleSelectBranch}
+      pendingBranch={pendingBranch}
+      onConfirmBranchSwitch={(stash) => pendingBranch && runCheckout(pendingBranch, stash)}
+      onCancelBranchSwitch={() => setPendingBranch(null)}
+      useWorktree={useWorktree}
+      onToggleWorktree={() => setUseWorktree((v) => !v)}
+      onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
+      contextUsage={contextUsage}
+      isNewSession={!selectedSessionId}
+      agentSwitch={!!selectedBot}
+      bot={newBot}
+      inTitlebar={inTitlebar}
+      busy={busy}
+    />
+  );
+
   return (
     <TooltipProvider>
     <MergeCardHostContext value={mergeCardHost}>
@@ -3588,6 +3633,8 @@ function App() {
           {/* Keeps the far end at the far end on pages with no tab row. */}
           {(issuesOpen || !shownSession) && <div className="min-w-0 flex-1" />}
 
+          {toolbarInTitlebar && <div className="shrink-0">{composerToolbar(true)}</div>}
+
 
           {issuesOpen
             ? // Only once something is open to close. Nothing on this page can
@@ -3805,7 +3852,7 @@ function App() {
         // `shownSession`, like the rest of the layout: gated on the snapshot,
         // the composer came up under Files or Diff for as long as a transcript
         // took to load.
-        issuesOpen || (shownSession && viewTab !== "chat") ? null : (
+        !composerShown ? null : (
         <ChatInput
           onSend={(message, attachments) => void sendFromComposer(message, attachments)}
           commands={slashCommands}
@@ -3944,46 +3991,8 @@ function App() {
               />
             )
           }
-          toolbar={
-            <ComposerToolbar
-              server={activeServer}
-              harness={harness}
-              onHarnessChange={setHarness}
-              models={models}
-              modelId={modelId}
-              effort={effort}
-              fast={fast}
-              onFastChange={setFast}
-              fastNote={fastNote}
-              onModelChange={handleModelChange}
-              onRefreshModels={refreshModels}
-              onReloadModels={reloadModels}
-              onSeedProvider={seedFxModels}
-              loadingModels={loadingModels}
-              permissionMode={permissionMode}
-              onPermissionModeChange={setPermissionMode}
-              projects={spaceProjects}
-              projectPath={projectPath}
-              onSelectProject={handleSelectProject}
-              onAttachProject={handleAttachProject}
-              branches={branches}
-              branch={branch}
-              onSelectBranch={handleSelectBranch}
-              pendingBranch={pendingBranch}
-              onConfirmBranchSwitch={(stash) =>
-                pendingBranch && runCheckout(pendingBranch, stash)
-              }
-              onCancelBranchSwitch={() => setPendingBranch(null)}
-              useWorktree={useWorktree}
-              onToggleWorktree={() => setUseWorktree((v) => !v)}
-              onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
-              contextUsage={contextUsage}
-              isNewSession={!selectedSessionId}
-              agentSwitch={!!selectedBot}
-              bot={newBot}
-              busy={busy}
-            />
-          }
+          toolbar={toolbarInTitlebar ? undefined : composerToolbar(false)}
+          attachInCard={toolbarInTitlebar}
         />
         )
       }

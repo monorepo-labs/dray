@@ -912,8 +912,9 @@ const handleSendMsg = async (
       setPlacing(null);
     }
   }
-  // A bot's folder is no project, and its chat runs in the folder itself.
-  const worktree = useWorktree && !isBotPath(cwd);
+  // A bot's folder is no project, and its chat runs in the folder itself. A
+  // cloud task always gets a worktree, whatever the saved toggle says.
+  const worktree = (useWorktree || placed !== null) && !isBotPath(cwd);
   const stance = isBotPath(cwd) ? botStance(harness, permissionMode) : stanceFor(harness, permissionMode);
   if (!sessionId) {
     sessionId = crypto.randomUUID();

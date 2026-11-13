@@ -1362,8 +1362,12 @@ export default function Sidebar({
         })}
       </div>}
 
-      {/* The filter is where project grouping went. */}
-      <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
+      {/* The filter is where project grouping went. With no project attached
+          it has nothing to filter, so it goes — unless something it controls is
+          still in force: a stored filter still narrows the list, and its toggles
+          are the only way back from drafts or settled, `archivedShown` included
+          since it lags the request until the read lands. */}
+      {(projects.length > 0 || projectFilter !== null || draftsShown || archivedRequested || archivedShown) && <div className="mt-4 flex items-start justify-between py-1 pr-2 pl-3">
         <ProjectFilter
           projects={projects}
           value={projectFilter}
@@ -1413,7 +1417,7 @@ export default function Sidebar({
             </TooltipContent>
           </Tooltip>
         </div>
-      </div>
+      </div>}
 
       {/* With classic scrollbars the reserved gutter is the right-hand spacing,
           and the rows balance the track's extra width with `pr-0.5`. Overlay
