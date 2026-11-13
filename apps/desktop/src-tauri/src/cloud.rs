@@ -66,10 +66,15 @@ struct One {
 
 /// One authorized call, answered as JSON or a sentence the Settings row can show.
 async fn call(key: &str, method: reqwest::Method, path: &str, wait: Duration) -> Result<Value, String> {
-    let answer = crate::http()
-        .request(method, format!("{}{path}", base()))
-        .bearer_auth(key)
-        .timeout(wait)
+    send(key, method, path, wait, None).await
+}
+
+async fn send(key: &str, method: reqwest::Method, path: &str, wait: Duration, body: Option<Value>) -> Result<Value, String> {
+    let mut request = crate::http().request(method, format!("{}{path}", base())).bearer_auth(key).timeout(wait);
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let answer = request
         .send()
         .await
         .map_err(|e| format!("Couldn't reach Dray Cloud: {e}"))?;
@@ -87,6 +92,9 @@ pub fn refusal(status: u16, body: &Value) -> String {
     match (status, body["error"].as_str()) {
         // A machine already deleted; a key it doesn't take is a bare 404.
         (404, Some("not_found")) => "Dray Cloud no longer has that machine.".into(),
+        // The user's GitHub link refused the repo; the control plane says how
+        // to fix it, so its sentence is the whole message.
+        (409, Some("github")) => body["message"].as_str().unwrap_or("GitHub refused this repo.").to_string(),
         (401 | 403 | 404, _) => "Dray Cloud didn't accept this key.".into(),
         (500.., None) => format!("Dray Cloud isn't answering right now ({status})."),
         (_, Some(error)) => format!("Dray Cloud said: {error}"),
@@ -99,9 +107,11 @@ pub async fn list(key: &str) -> Result<Listing, String> {
     serde_json::from_value(body).map_err(|e| format!("Dray Cloud answered in a shape this build can't read: {e}"))
 }
 
-/// A new machine for one task, created from the saved snapshot.
-pub async fn start(key: &str) -> Result<Machine, String> {
-    one(call(key, reqwest::Method::POST, "/machines", START).await?)
+/// A new machine for one task, created from the saved snapshot. With `repo`,
+/// `owner/name`, the machine gets GitHub tokens for that repo alone (#1013).
+pub async fn start(key: &str, repo: Option<&str>) -> Result<Machine, String> {
+    let body = repo.map(|repo| serde_json::json!({ "repo": repo }));
+    one(send(key, reqwest::Method::POST, "/machines", START, body).await?)
 }
 
 /// Deletes a machine for good. One already gone answers the same.
@@ -156,5 +166,7 @@ mod tests {
         assert_eq!(refusal(404, &json!({ "error": "not_found" })), "Dray Cloud no longer has that machine.");
         assert_eq!(refusal(500, &json!({ "error": "boat down" })), "Dray Cloud said: boat down");
         assert_eq!(refusal(502, &Value::Null), "Dray Cloud isn't answering right now (502).");
+        let github = json!({ "error": "github", "message": "Connect GitHub on drayhq.com to run tasks on Cloud." });
+        assert_eq!(refusal(409, &github), "Connect GitHub on drayhq.com to run tasks on Cloud.");
     }
 }

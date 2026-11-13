@@ -81,5 +81,28 @@ export const drayTables = {
       },
       indexes: [{ fields: ["serverId", "userId"], unique: true }],
     },
+    // A user's link to the Dray GitHub App (#1013). Their user token is kept
+    // only to ask GitHub, at each create and token mint, whether they can still
+    // push to the repo; machines get installation tokens, never this one.
+    // Deleting the row is disconnecting, and stops every machine's next mint.
+    githubAccount: {
+      modelName: "github_account",
+      fields: {
+        userId: {
+          type: "string",
+          required: true,
+          unique: true,
+          references: { model: "user", field: "id", onDelete: "cascade" },
+        },
+        githubId: { type: "number", required: true },
+        login: { type: "string", required: true },
+        // Sealed by `vault.ts`, bound to the user id.
+        accessToken: { type: "string", required: true },
+        accessExpiresAt: { type: "date", required: true },
+        refreshToken: { type: "string", required: true },
+        refreshExpiresAt: { type: "date", required: true },
+        connectedAt: { type: "date", required: true, defaultValue: () => new Date() },
+      },
+    },
   },
 } satisfies BetterAuthPlugin;
