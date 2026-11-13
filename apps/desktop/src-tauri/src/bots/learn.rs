@@ -90,6 +90,28 @@ pub fn note_prompt(session_id: &str, prompt: &str, from: Option<&MessageSender>,
     }
 }
 
+/// Reviews held until the chat's running turn ends, by session.
+static DEFERRED: LazyLock<Mutex<HashMap<String, Vec<String>>>> = LazyLock::new(Default::default);
+
+/// Holds a review for the end of the turn now running.
+pub fn defer(session_id: &str, prompt: &str) {
+    DEFERRED.lock().unwrap().entry(session_id.to_string()).or_default().push(prompt.to_string());
+}
+
+/// Every review held for `session_id`, oldest first.
+pub fn take_deferred(session_id: &str) -> Vec<String> {
+    DEFERRED.lock().unwrap().remove(session_id).unwrap_or_default()
+}
+
+/// Takes one held review back, where nothing took it yet.
+pub fn take_deferred_one(session_id: &str, prompt: &str) -> bool {
+    let mut held = DEFERRED.lock().unwrap();
+    let Some(list) = held.get_mut(session_id) else { return false };
+    let Some(at) = list.iter().position(|p| p == prompt) else { return false };
+    list.remove(at);
+    true
+}
+
 /// Takes what the turn now ending was opened with. Every session's turn takes
 /// its own, bot or not, so nothing piles up.
 pub fn take_notes(session_id: &str) -> TurnNotes {
@@ -161,15 +183,31 @@ pub fn undone_prompt(path: &str, commit: &str) -> String {
 /// bot says there is for nobody: told to write no reply, it sometimes still
 /// explains itself, and that must not reach the chat, the sidebar's preview
 /// or a new agent's replay.
+///
+/// Only a turn a review opened *alone*, as [`TurnNotes::reviewing`] reads it:
+/// a review queued behind the reader's message joins their turn, and the
+/// reply there is theirs.
 pub fn in_review(events: &[crate::events::AgentEvent]) -> Vec<bool> {
-    let mut on = false;
+    let (mut review, mut other) = (false, false);
     events
         .iter()
         .map(|e| {
-            if let AgentEventPayload::UserMessage { text, kickoff, .. } = &e.payload {
-                on = *kickoff && text.starts_with(REVIEW);
+            if e.subagent.is_none() {
+                // A prompt sent with no turn running opens a new one, closed or
+                // not: a child that died mid-turn logs no `turn_completed`.
+                if let AgentEventPayload::UserMessage { queued: false, .. } = &e.payload {
+                    (review, other) = (false, false);
+                }
+                match &e.payload {
+                    AgentEventPayload::UserMessage { text, kickoff: true, .. } if text.starts_with(REVIEW) => {
+                        review = true
+                    }
+                    AgentEventPayload::UserMessage { .. } => other = true,
+                    AgentEventPayload::TurnCompleted { .. } => (review, other) = (false, false),
+                    _ => {}
+                }
             }
-            on
+            review && !other
         })
         .collect()
 }
@@ -452,6 +490,41 @@ mod tests {
         note_prompt(id, "remove the second rule", None, false);
         note_prompt(id, "Review: x", None, true);
         assert!(!take_notes(id).reviewing());
+    }
+
+    #[test]
+    fn only_a_turn_a_review_opened_alone_is_hidden() {
+        let event = |payload: serde_json::Value| -> crate::events::AgentEvent {
+            serde_json::from_value(serde_json::json!({
+                "id": "e", "sessionId": "s", "harness": "claude_code", "seq": 0, "ts": "", "payload": payload
+            }))
+            .unwrap()
+        };
+        let prompt = |text: &str, kickoff: bool, queued: bool| {
+            event(serde_json::json!({"type": "user_message", "text": text, "kickoff": kickoff, "queued": queued}))
+        };
+        let said = || event(serde_json::json!({"type": "assistant_text", "text": "x"}));
+        let done = || event(serde_json::json!({"type": "turn_completed", "status": "success"}));
+        let events = [
+            prompt("Review: a", true, false), said(), done(),
+            // Queued behind the reader's message, a review joins their turn.
+            prompt("rename it", false, false), prompt("Review: b", true, true), said(), done(), said(),
+            // A turn a dead child never closed: the next prompt opens a new one.
+            prompt("rename it", false, false), said(), prompt("Review: c", true, false), said(),
+        ];
+        let expected = [true, true, false, false, false, false, false, false, false, false, true, true];
+        assert_eq!(in_review(&events), expected);
+    }
+
+    #[test]
+    fn a_held_review_is_taken_once() {
+        let id = "learn-defer-test";
+        defer(id, "Review: a");
+        defer(id, "Review: b");
+        assert!(take_deferred_one(id, "Review: a"));
+        assert!(!take_deferred_one(id, "Review: a"), "already taken back");
+        assert_eq!(take_deferred(id), ["Review: b"]);
+        assert!(take_deferred(id).is_empty());
     }
 
     #[test]

@@ -618,7 +618,22 @@ pub async fn settle_dead_child(
     if died_mid_turn {
         LAST_REPLY.lock().unwrap().remove(session_id);
         POSTED.lock().unwrap().remove(session_id);
+        crate::bots::learn::take_notes(session_id);
         report(session_id, format!("(the session's process exited mid-turn: {why})"), app);
+        // Reviews held for this turn's end, which `after_bot_turn` never sees
+        // now. Only while the slot holds this child: an emptied one is a chat
+        // being settled or deleted.
+        let held_reviews = if held.is_some() { crate::bots::learn::take_deferred(session_id) } else { Vec::new() };
+        if !held_reviews.is_empty() {
+            let (session_id, app) = (session_id.to_string(), app.clone());
+            tokio::spawn(async move {
+                for prompt in held_reviews {
+                    if let Err(e) = crate::orchestration::send_review(session_id.clone(), prompt, app.clone()).await {
+                        eprintln!("[bot review err] {e:#}");
+                    }
+                }
+            });
+        }
     }
 }
 
@@ -3426,15 +3441,22 @@ async fn after_bot_turn(ctx: &Ingest<'_>, turn: crate::bots::learn::Turn, app: &
             eprintln!("[learned write err] {err}");
         }
     }
-    if let Some(prompt) = turn.review(ctx.session_id) {
-        // Spawned: the send lands in this same session, whose read loop this is.
-        let review = crate::orchestration::send_review(ctx.session_id.to_string(), prompt, app.clone());
-        tokio::spawn(async move {
-            if let Err(e) = review.await {
+    // Reviews held while this turn ran go first, then any this turn owes. Each
+    // waits for the turn the one before it opens.
+    let mut reviews = crate::bots::learn::take_deferred(ctx.session_id);
+    reviews.extend(turn.review(ctx.session_id));
+    if reviews.is_empty() {
+        return;
+    }
+    let (session_id, app) = (ctx.session_id.to_string(), app.clone());
+    // Spawned: the send lands in this same session, whose read loop this is.
+    tokio::spawn(async move {
+        for prompt in reviews {
+            if let Err(e) = crate::orchestration::send_review(session_id.clone(), prompt, app.clone()).await {
                 eprintln!("[bot review err] {e:#}");
             }
-        });
-    }
+        }
+    });
 }
 
 /// What a child's closing turn says to the bot: its last words, or what became

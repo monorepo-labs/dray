@@ -2213,6 +2213,18 @@ pub fn send_review(
         if chat.archived {
             return Ok(());
         }
+        // Never into a running turn: steered or queued there it joins someone
+        // else's turn, and telling its reply apart from theirs would rest on
+        // how each harness logs a prompt. Held for the turn's end instead
+        // (`after_bot_turn`), and taken back where that end came meanwhile.
+        if manager().turn_in_flight(&chat.session_id).await {
+            crate::bots::learn::defer(&chat.session_id, &prompt);
+            if manager().turn_in_flight(&chat.session_id).await
+                || !crate::bots::learn::take_deferred_one(&chat.session_id, &prompt)
+            {
+                return Ok(());
+            }
+        }
         crate::bots::mark_dray_prompt(&chat.session_id, &prompt);
         let send = SendMessage { session_id: chat.session_id.clone(), prompt: prompt.clone(), from_session_id: None };
         let sent = send_message(send, None, &app).await;

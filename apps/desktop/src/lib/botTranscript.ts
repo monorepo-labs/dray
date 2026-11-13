@@ -304,21 +304,28 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
   const sends = new Map<string, ReturnType<typeof sentMessages>>();
   const items: BotItem[] = [];
   const undone = undoneLessons(events);
-  // Inside a turn Dray's review opened, whose words are for nobody: told to
-  // write no reply, the bot sometimes explains itself anyway.
+  // Inside a turn Dray's review opened alone, whose words are for nobody: told
+  // to write no reply, the bot sometimes explains itself anyway. A review that
+  // joins a turn with anyone else's message in it leaves the reply theirs.
   let review = false;
+  let other = false;
   for (const event of events) {
     if (event.subagent) continue;
     const p = event.payload;
+    if (p.type === "turn_completed") review = other = false;
     if (p.type === "user_message") {
-      review = !!p.kickoff && p.text.startsWith(REVIEW);
+      // Sent with no turn running, it opens one, closed or not: a child that
+      // died mid-turn logs no `turn_completed`.
+      if (!p.queued) review = other = false;
+      if (isReview(p)) review = true;
+      else other = true;
       // A task's report-back is the bot's input, not the reader's: the bot's
       // reply carries what it said, so the chat names who wrote and folds the rest.
       if (p.from?.botId) items.push({ kind: "botMessage", event, botId: p.from.botId, title: p.from.title });
       else if (p.from) items.push({ kind: "report", event, sessionId: p.from.sessionId, title: p.from.title });
       else if (!p.kickoff) items.push({ kind: "user", event });
     } else if (p.type === "assistant_text") {
-      if (p.text.trim() && !review) items.push({ kind: "assistant", event });
+      if (p.text.trim() && !(review && !other)) items.push({ kind: "assistant", event });
     } else if (p.type === "error") {
       items.push({ kind: "notice", event });
     } else if (p.type === "merge_card") {
@@ -427,13 +434,23 @@ const REVIEW = "Review:";
 /// Whether the turn now open was started by Dray's review, whose reply is
 /// hidden, so nothing it streams may draw a bubble either.
 export function inReviewTurn(events: readonly AgentEvent[]): boolean {
+  let review = false;
   for (let i = events.length - 1; i >= 0; i--) {
     const { payload, subagent } = events[i];
-    if (subagent || payload.type !== "user_message") continue;
-    return !!payload.kickoff && payload.text.startsWith(REVIEW);
+    if (subagent) continue;
+    if (payload.type === "turn_completed") break;
+    if (payload.type !== "user_message") continue;
+    // Anything else in the turn makes the reply someone's.
+    if (!isReview(payload)) return false;
+    review = true;
+    // Sent with no turn running: it opened this one.
+    if (!payload.queued) break;
   }
-  return false;
+  return review;
 }
+
+/// A review opened by Dray, never one the reader typed with the same words.
+const isReview = (p: { kickoff?: boolean; text: string }) => !!p.kickoff && p.text.startsWith(REVIEW);
 
 /// How `nudge_bot` opens every nudge it sends.
 const NUDGE = "Stall nudge:";

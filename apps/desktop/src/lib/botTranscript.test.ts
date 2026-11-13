@@ -20,10 +20,11 @@ let seq = 0;
 const ev = (payload: AgentEventPayload, subagent: string | null = null) =>
   ({ id: `e${seq}`, seq: seq++, payload, subagent }) as unknown as AgentEvent;
 
-const user = (text: string, kickoff = false) =>
-  ev({ type: "user_message", text, images: [], issues: [], baseline: null, queued: false, from: null, cwd: null, kickoff } as AgentEventPayload);
+const user = (text: string, kickoff = false, queued = false) =>
+  ev({ type: "user_message", text, images: [], issues: [], baseline: null, queued, from: null, cwd: null, kickoff } as AgentEventPayload);
 const said = (text: string, subagent: string | null = null) =>
   ev({ type: "assistant_text", block: null, text } as AgentEventPayload, subagent);
+const done = () => ev({ type: "turn_completed", status: "success" } as unknown as AgentEventPayload);
 const call = (callId: string, command: string) =>
   ev({ type: "tool_call_started", callId, name: "Bash", input: { command } } as unknown as AgentEventPayload);
 const result = (callId: string, text: string, isError = false) =>
@@ -239,9 +240,22 @@ dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot pro
   });
 
   it("knows a turn a review opened while it streams", () => {
-    expect(inReviewTurn([user("hi"), said("hello"), user("Review: x", true)])).toBe(true);
-    expect(inReviewTurn([user("Review: x", true), said("…"), user("thanks")])).toBe(false);
+    expect(inReviewTurn([user("hi"), said("hello"), done(), user("Review: x", true)])).toBe(true);
+    expect(inReviewTurn([user("Review: x", true), said("…"), user("thanks", false, true)])).toBe(false);
     expect(inReviewTurn([user("start", true)])).toBe(false);
+    // Queued behind the reader's message, a review joins their turn.
+    const joined = [user("Review: x", true), said("…"), done(), user("rename it"), user("Review: y", true, true)];
+    expect(inReviewTurn(joined)).toBe(false);
+    expect(inReviewTurn([user("rename it"), said("done"), done(), user("Review: y", true)])).toBe(true);
+    // A turn a dead child never closed: a prompt sent with none running opens a new one.
+    expect(inReviewTurn([user("rename it"), said("…"), user("Review: y", true)])).toBe(true);
+  });
+
+  it("keeps the reply to a turn a review joined, and hides one after a turn left open", () => {
+    const joined = botItems([user("rename it"), user("Review: y", true, true), said("Renamed.")]);
+    expect(joined.map((i) => i.kind)).toEqual(["user", "assistant"]);
+    const open = botItems([user("rename it"), said("Renamed."), user("Review: y", true), said("Kept nothing.")]);
+    expect(open.map((i) => i.kind)).toEqual(["user", "assistant"]);
   });
 
   it("draws no task for a create that failed", () => {
