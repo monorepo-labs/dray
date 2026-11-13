@@ -3112,6 +3112,7 @@ function App() {
   ) => {
     // From the repo root: a task's worktree may already be gone.
     await invoke("merge_pr", { cwd: projectPath, number, method });
+    prMarks.markMerged(projectPath, number);
     prMarks.refreshAfterWrite();
     // Landed, so the task is done — unless it is still working,
     // which settling would kill mid-turn.
