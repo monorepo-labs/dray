@@ -66,6 +66,10 @@ pub struct AppSettings {
     /// machine's reach, SSH logins included.
     #[serde(default)]
     pub share_machines: bool,
+    /// Dray Cloud's switch (#857). Here because Rust lists the machines at
+    /// launch; the key itself sits in `credentials.json`.
+    #[serde(default)]
+    pub dray_cloud: bool,
 }
 
 /// The transcription picks. Model and device mean "not chosen" when absent.
@@ -114,6 +118,7 @@ impl Default for AppSettings {
             transcription: TranscriptionSettings::default(),
             remote_access: false,
             share_machines: false,
+            dray_cloud: false,
         }
     }
 }
@@ -281,6 +286,7 @@ mod tests {
             transcription: TranscriptionSettings::default(),
             remote_access: true,
             share_machines: true,
+            dray_cloud: true,
         };
 
         write_to(&dir, &off).await.unwrap();

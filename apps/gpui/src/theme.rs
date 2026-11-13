@@ -51,6 +51,11 @@ pub struct Theme {
     pub sidebar_border: Hsla,
     pub accent_command: Hsla,
     pub accent_add: Hsla,
+    /// `--card` under glass (`--veil-card`): the user's bubble.
+    pub card: Hsla,
+    /// `--shadow-card`, which only light draws.
+    pub card_shadow: bool,
+    pub destructive: Hsla,
 }
 
 impl Global for Theme {}
@@ -89,6 +94,9 @@ impl Theme {
             sidebar_border: oklch(1., 0., 0., 0.08).hsla(),
             accent_command: oklch(0.82, 0.13, 90., 1.).hsla(),
             accent_add: oklch(0.7, 0.15, 163., 1.).hsla(),
+            card: oklch(1., 0., 0., 0.055).hsla(),
+            card_shadow: false,
+            destructive: oklch(0.704, 0.191, 22.216, 1.).hsla(),
         }
     }
 
@@ -115,6 +123,9 @@ impl Theme {
             sidebar_border: oklch(0., 0., 0., 0.08).hsla(),
             accent_command: oklch(0.65, 0.14, 78., 1.).hsla(),
             accent_add: oklch(0.585, 0.174, 163., 1.).hsla(),
+            card: oklch(0.99, 0.004, 250., 0.6).hsla(),
+            card_shadow: true,
+            destructive: oklch(0.55, 0.2, 25., 1.).hsla(),
         }
     }
 }

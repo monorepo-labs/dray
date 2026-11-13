@@ -47,17 +47,22 @@ struct SessionKey: Hashable {
     let id: String
 }
 
+/// One folder however it was written: a bot's path and its chat's cwd differ by a trailing slash at most.
+func samePath(_ a: String, _ b: String) -> Bool {
+    a.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == b.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+}
+
 /// Every server's sessions, merged, and what the phone holds about each.
 @MainActor @Observable
 final class Store {
     private(set) var servers: [Server] = []
     private(set) var serverState: [UUID: Connection.State] = [:]
-    private(set) var items: [SessionKey: SessionItem] = [:]
+    private(set) var items: [SessionKey: SessionItem] = [:] { didSet { keepList() } }
     private(set) var transcripts: [SessionKey: Transcript] = [:]
     private(set) var asks: [SessionKey: [AgentEvent]] = [:] { didSet { asksChanged() } }
     private(set) var queued: [SessionKey: [Queued]] = [:]
     private(set) var boatAlerts: [BoatAlert] = [] { didSet { boatChanged() } }
-    private(set) var projects: [UUID: [Project]] = [:]
+    private(set) var projects: [UUID: [Project]] = [:] { didSet { keepList() } }
     /// Each repo's PR marks by branch, as `pr_marks` last answered.
     private(set) var marks: [ProjectKey: [String: PrMark]] = [:]
     var drafts: [SessionKey: String] = [:]
@@ -75,8 +80,14 @@ final class Store {
     /// An older page that could not be read; the newer turns stay on screen.
     private(set) var olderErrors: [SessionKey: String] = [:]
     private(set) var tasks: [SessionKey: Int] = [:]
-    /// This Mac's bots, the Island's alone: bots live on the local server only.
-    private(set) var bots: [Bot] = []
+    /// Each server's bots: any server can hold them (#887).
+    private(set) var bots: [UUID: [Bot]] = [:] { didSet { keepList() } }
+    /// Servers whose index was read since this launch: before that, an empty list
+    /// is one not read yet, never "No tasks yet".
+    private(set) var listed: Set<UUID> = []
+    /// Servers down long enough to say so (`lostAfter`), or refused outright.
+    /// A quick drop — the app back from the background, a blip — says nothing.
+    private(set) var lost: Set<UUID> = []
 
     /// For a client that reacts beside drawing: the Island chimes and counts a new card on its pill.
     @ObservationIgnored var asksChanged: () -> Void = {}
@@ -95,6 +106,10 @@ final class Store {
     /// `dropTranscripts` calls so far, and the session the last one kept, so a read out across a drop knows.
     @ObservationIgnored private var drops = 0
     @ObservationIgnored private var kept: SessionKey?
+    @ObservationIgnored private var downSince: [UUID: Date] = [:]
+    /// Transcripts opened while their server was down, read once it connects.
+    @ObservationIgnored private var waiting: Set<SessionKey> = []
+    @ObservationIgnored private var listSaving = false
 
     init() {
         if let data = UserDefaults.standard.data(forKey: "servers"),
@@ -165,6 +180,7 @@ final class Store {
         drop(id)
         for key in transcripts.keys where gone.contains(key.server) { transcripts[key] = nil }
         servers.removeAll { $0.id == id }
+        for server in gone { try? FileManager.default.removeItem(at: Cache.folder(server)) }
     }
 
     /// Transcripts stay: a session left open across off and on is reloaded by `connected`,
@@ -186,7 +202,11 @@ final class Store {
         for key in tasks.keys where key.server == id { tasks[key] = nil }
         for key in queued.keys where key.server == id { queued[key] = nil }
         projects[id] = nil
+        bots[id] = nil
         loadErrors[id] = nil
+        listed.remove(id)
+        lost.remove(id)
+        downSince[id] = nil
     }
 
     /// The Island's machines beyond This Mac, as Dray's window last listed them:
@@ -230,7 +250,37 @@ final class Store {
     /// iOS drops sockets once the app leaves the screen; coming back reconnects.
     /// `now` also asks servers that stopped, as a Retry does.
     func resume(now: Bool = false) {
+        // Back from the background every socket is down; each gets a fresh grace
+        // to come up before anything says it is lost.
+        for (id, state) in serverState where state != .connected {
+            if case .failed = state { continue }
+            lost.remove(id)
+            downSince[id] = nil
+            track(id, state)
+        }
         for c in connections.values { now ? c.retryNow() : c.resume() }
+    }
+
+    /// How long a server may stay down before a session on it says so.
+    private static let lostAfter: Duration = .seconds(10)
+
+    private func track(_ id: UUID, _ state: Connection.State) {
+        switch state {
+        case .connected:
+            downSince[id] = nil
+            lost.remove(id)
+        case .failed:
+            // Waiting cannot fix a refused token or a version apart.
+            lost.insert(id)
+        case .connecting, .waiting:
+            guard downSince[id] == nil else { return }
+            let since = Date()
+            downSince[id] = since
+            Task {
+                try? await Task.sleep(for: Self.lostAfter)
+                if downSince[id] == since { lost.insert(id) }
+            }
+        }
     }
 
     /// One server's Retry: reconnect where it is down, re-read where it is up.
@@ -305,42 +355,180 @@ final class Store {
         c.onState = { [weak self] state in
             guard let self else { return }
             serverState[s.id] = state
+            track(s.id, state)
             if state == .connected { Task { await self.connected(s.id) } }
         }
         c.onEvent = { [weak self] name, data in self?.handle(s.id, name, data) }
         connections[s.id] = c
+        restoreList(s.id)
         c.resume()
+    }
+
+    // MARK: Cache
+
+    /// What the list last held of a server, so a cold open draws it before any socket is up.
+    private struct CachedList: Codable {
+        var items: [SessionItem]
+        var projects: [Project]
+        var bots: [Bot]
+        var previews: [String: BotPreview]?
+    }
+
+    /// The phone's alone: the Island reads This Mac, which answers before a cache would.
+    private func restoreList(_ id: UUID) {
+        guard home == nil, !items.keys.contains(where: { $0.server == id }),
+              let data = try? Data(contentsOf: Cache.list(id)),
+              let held = try? JSONDecoder().decode(CachedList.self, from: data) else { return }
+        for item in held.items { items[SessionKey(server: id, id: item.sessionId)] = item }
+        projects[id] = held.projects
+        bots[id] = held.bots
+        for (sid, p) in held.previews ?? [:] { previews[SessionKey(server: id, id: sid)] = p }
+    }
+
+    /// Writes every live server's list a moment after the last change, off the main thread.
+    private func keepList() {
+        guard home == nil, !listSaving else { return }
+        listSaving = true
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            listSaving = false
+            for s in live {
+                // Only what a read answered: a server not reached yet keeps its file as it was.
+                guard listed.contains(s.id) else { continue }
+                let held = CachedList(items: items.filter { $0.key.server == s.id && $0.value.archived != true }.map(\.value),
+                                      projects: projects[s.id] ?? [], bots: bots[s.id] ?? [],
+                                      previews: Dictionary(uniqueKeysWithValues: previews.filter { $0.key.server == s.id }.map { ($0.key.id, $0.value) }))
+                Cache.write(Cache.list(s.id)) { try JSONEncoder().encode(held) }
+            }
+        }
+    }
+
+    /// A transcript as its last read left it, decoded off the main thread.
+    private func cachedSnapshot(_ key: SessionKey) async -> Snapshot? {
+        guard home == nil else { return nil }
+        let url = Cache.transcript(key)
+        return await Task.detached(priority: .userInitiated) {
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return (try? JSONDecoder().decode(Reply<Snapshot?>.self, from: data))?.ok ?? nil
+        }.value
     }
 
     /// A fresh connection re-reads the index and the tail of every open
     /// transcript, so nothing that happened while it was down is missed.
     private func connected(_ server: UUID) async {
-        if server == home {
-            linksMayHaveMoved()
-            Task { await loadBots() }
-        }
+        if server == home { linksMayHaveMoved() }
+        Task { await loadBots(server) }
         // Its own task: a sandbox's sessions need not wait on this server's.
         Task { await loadShared(server) }
         // Heard on the old socket, so older than the read below — and a read
         // never moves `modified`, so a stale `completed` would win the tie.
         for key in statuses.keys where key.server == server { statuses[key] = nil }
         await loadIndex(server)
+        Task { await loadPreviews(server) }
         // A failed first read holds no transcript, so its error is what remembers it.
-        for key in Set(transcripts.keys).union(transcriptErrors.keys) where key.server == server { await reload(key) }
+        let opened = waiting.filter { $0.server == server }
+        waiting.subtract(opened)
+        for key in Set(transcripts.keys).union(transcriptErrors.keys).union(opened) where key.server == server { await reload(key) }
         // After the transcripts: a mark costs a `gh` call per repo, missed messages must not wait on it.
         await loadProjects(server)
         await loadMarks(server, force: false)
     }
 
-    private func loadBots() async {
-        guard let home, let list: [Bot] = try? await connections[home]?.call("list_bots") else { return }
-        bots = list
+    private func loadBots(_ server: UUID) async {
+        // A server from before bots answers `unknown command`, and holds none.
+        guard let list: [Bot] = try? await connections[server]?.call("list_bots") else { return }
+        bots[server] = list
+        await loadPreviews(server)
     }
 
     /// The bot whose chat this session is: one running in its folder.
     func bot(_ key: SessionKey) -> Bot? {
-        guard key.server == home, let cwd = items[key]?.cwd else { return nil }
-        return bots.first { $0.path == cwd }
+        guard let cwd = items[key]?.cwd else { return nil }
+        return bots[key.server]?.first { samePath($0.path, cwd) }
+    }
+
+    /// Every live server's bots, in its own order, servers in the list's.
+    var allBots: [(server: UUID, bot: Bot)] {
+        live.flatMap { s in (bots[s.id] ?? []).map { (s.id, $0) } }
+    }
+
+    /// A bot's chat: every unsettled session in its folder, oldest first. The
+    /// newest is the one a reply goes to; an agent switch leaves the older ones (`botChat`).
+    func botChat(_ server: UUID, _ bot: Bot) -> [SessionKey] {
+        items.filter { $0.key.server == server && $0.value.archived != true && samePath($0.value.cwd, bot.path) }
+            .sorted { ($0.value.created ?? $0.value.modified) < ($1.value.created ?? $1.value.modified) }
+            .map(\.key)
+    }
+
+    /// A bot's tasks at any depth under any of its chat's sessions, newest
+    /// created first at each level; settled ones drop with everything under them (`crewRows`).
+    func botTasks(_ chat: [SessionKey]) -> [SessionKey] {
+        guard let server = chat.first?.server else { return [] }
+        var kids: [String: [SessionItem]] = [:]
+        for (key, item) in items where key.server == server && item.archived != true {
+            if let p = item.parentSessionId, p != item.sessionId { kids[p, default: []].append(item) }
+        }
+        var out: [SessionKey] = []
+        var seen = Set(chat.map(\.id))
+        func walk(_ ids: [String]) {
+            let level = ids.flatMap { kids[$0] ?? [] }.sorted { ($0.created ?? $0.modified) > ($1.created ?? $1.modified) }
+            for item in level where seen.insert(item.sessionId).inserted {
+                out.append(SessionKey(server: server, id: item.sessionId))
+                walk([item.sessionId])
+            }
+        }
+        walk(chat.reversed().map(\.id))
+        return out
+    }
+
+    /// Each bot chat's newest reply and unread count, read off the log's end by its server.
+    private(set) var previews: [SessionKey: BotPreview] = [:] { didSet { keepList() } }
+
+    func loadPreviews(_ server: UUID) async {
+        let chats = (bots[server] ?? []).compactMap { botChat(server, $0).last }
+        guard !chats.isEmpty,
+              let read: [String: BotPreview] = try? await call(server, "bot_previews", ["sessionIds": .array(chats.map { .string($0.id) })])
+        else { return }
+        for (id, p) in read { previews[SessionKey(server: server, id: id)] = p }
+    }
+
+    /// Reads a repo's PR marks if none are held, for a merge card on a repo no row lists.
+    func ensureMarks(_ server: UUID, _ path: String) async {
+        await loadMarks(server, force: false, only: [path])
+    }
+
+    /// Whether a repo's marks have been read at all: a PR missing from them then is one GitHub no longer lists.
+    func marksRead(_ server: UUID, _ path: String) -> Bool { marks[ProjectKey(server: server, path: path)] != nil }
+
+    private struct WorktreeDisposition: Decodable {
+        let exists: Bool
+        let changedFiles: Int
+        let unpushedCommits: Int
+    }
+
+    /// Lands a bot task's PR the desktop's way (`mergeTask`): merge, then settle
+    /// the task and remove its worktree where nothing in it would be lost. A task
+    /// mid-turn, or one whose branch moved on, keeps both.
+    func mergeTask(_ server: UUID, taskId: String, cwd: String, number: Int, branch: String, method: String) async -> Bool {
+        do {
+            let _: JSON = try await call(server, "merge_pr", ["cwd": .string(cwd), "number": JSON(number), "method": .string(method)],
+                                         timeout: .seconds(120))
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+        await loadMarks(server, force: true, only: [cwd])
+        let key = SessionKey(server: server, id: taskId)
+        guard let item = items[key], item.archived != true, !item.busy,
+              sessionBranch(branch: item.branch, worktreeName: item.worktreeName,
+                            worktreeRemoved: item.worktreeRemoved ?? false, observed: nil) == branch else { return true }
+        _ = try? await call(server, "set_session_flags", ["sessionId": .string(taskId), "archived": true], as: JSON.self)
+        if item.worktreeName != nil, item.worktreeRemoved != true,
+           let d: WorktreeDisposition = try? await call(server, "worktree_disposition", ["sessionId": .string(taskId)]),
+           !d.exists || (d.changedFiles == 0 && d.unpushedCommits == 0) {
+            _ = try? await call(server, "remove_session_worktree", ["sessionId": .string(taskId)], as: JSON.self)
+        }
+        return true
     }
 
     /// A project list a command answered with, such as `add_project`'s.
@@ -381,7 +569,9 @@ final class Store {
     /// app is on screen, and once on coming back.
     func pollMarks() async {
         for s in servers where serverState[s.id] == .connected {
-            let open = repos(s.id).filter { path in
+            // Every repo whose marks are held, not the list's alone: a bot's tasks are hidden,
+            // and their merge cards read marks the list never asks for (`ensureMarks`).
+            let open = Set(marks.keys.filter { $0.server == s.id }.map(\.path)).filter { path in
                 let key = ProjectKey(server: s.id, path: path)
                 return marks[key]?.values.contains { $0.state == "OPEN" } == true
                     && Date().timeIntervalSince(marksAt[key] ?? .distantPast) >= 30
@@ -401,9 +591,15 @@ final class Store {
         do {
             let list: [SessionItem] = try await c.call("list_session_index_items", ["archived": false])
             // Settled rows are the settled view's to replace; this read never holds them.
-            for key in items.keys where key.server == server && items[key]?.archived != true { items[key] = nil }
-            for item in list { store(SessionKey(server: server, id: item.sessionId), item) }
+            // Built apart and written once, so the list redraws once rather than per row.
+            var next = items.filter { $0.key.server != server || $0.value.archived == true }
+            for item in list {
+                let key = SessionKey(server: server, id: item.sessionId)
+                next[key] = merged(key, item)
+            }
+            items = next
             loadErrors[server] = nil
+            listed.insert(server)
         } catch {
             // The rows already listed stay; the list says this read failed beside them.
             loadErrors[server] = error.localizedDescription
@@ -429,12 +625,16 @@ final class Store {
     /// Writes an entry read off the index. A status event that arrived while
     /// the read was out is newer than it, so it wins.
     private func store(_ key: SessionKey, _ read: SessionItem) {
+        items[key] = merged(key, read)
+    }
+
+    private func merged(_ key: SessionKey, _ read: SessionItem) -> SessionItem {
         var item = read
         if let s = statuses[key], let m = s.modified, m >= item.modified {
             item.status = s.status
             item.modified = m
         }
-        items[key] = item
+        return item
     }
 
     // MARK: Sessions
@@ -443,9 +643,12 @@ final class Store {
     /// or the settled ones, narrowed to one project by name when one is picked —
     /// by name, so a repo checked out on two machines is one project.
     func runs(project: String?, settled: Bool = false) -> [(stage: Stage, rows: [ListRow])] {
-        let list = items.filter { _, item in
+        // A bot's chat is its row in the Bots section, never a task row.
+        let chats = Dictionary(uniqueKeysWithValues: bots.map { ($0.key, $0.value.map(\.path)) })
+        let list = items.filter { key, item in
             item.hidden != true && (item.archived == true) == settled
                 && (project.map { $0 == item.project } ?? true)
+                && !(settled == false && (chats[key.server] ?? []).contains { samePath($0, item.cwd) })
         }.map { (key: $0.key, item: $0.value) }
         return stageRuns(list) { stage($0.key, $0.item) }
     }
@@ -483,9 +686,24 @@ final class Store {
     }
 
     /// Starts following a transcript without marking the session read.
+    /// What was read last time draws at once, and the read lays the newest turns over it.
     func load(_ key: SessionKey) async {
-        if transcripts[key] == nil { await reload(key) }
+        guard transcripts[key] == nil else { return }
+        if let held = await cachedSnapshot(key), transcripts[key] == nil {
+            var t = Transcript(olderBefore: held.olderBefore)
+            for e in held.events { t.append(e) }
+            transcripts[key] = t
+        }
+        // Down, the connect reads it: a read now only fails, and says so under what the cache drew.
+        guard serverState[key.server] == .connected else {
+            waiting.insert(key)
+            return
+        }
+        await reload(key)
     }
+
+    /// Whether a transcript read is out with nothing held to show: the skeleton's cue.
+    func isLoading(_ key: SessionKey) -> Bool { transcripts[key] == nil && transcriptErrors[key] == nil }
 
     /// A transcript's Retry. Disconnected, the error stays until the connect
     /// re-reads it, since a key with nothing held is reloaded through that error.
@@ -502,7 +720,9 @@ final class Store {
         let before = transcripts[key]?.ids ?? []
         let drop = drops
         do {
-            let snap: Snapshot? = try await c.call("get_session_by_id", ["sessionId": .string(key.id), "turns": 8])
+            let raw = try await c.callRaw("get_session_by_id", ["sessionId": .string(key.id), "turns": 8])
+            let snap = try await decodeReply(raw, as: Snapshot?.self)
+            if snap != nil, home == nil { Cache.write(Cache.transcript(key)) { raw } }
             // Dropped while the read was out: writing it back would hold it, growing, until the next drop.
             guard drop == drops || key == kept else { return }
             // Deleted from another client. Said, or the transcript waits on a read that already answered.
@@ -653,13 +873,18 @@ final class Store {
             let key = SessionKey(server: server, id: s.sessionId)
             statuses[key] = s
             notice(key)
+            let ended = items[key]?.busy == true && s.status != "in_progress"
             // A turn ending is when a pull request appears.
-            if items[key]?.busy == true, s.status != "in_progress", let path = items[key]?.projectPath {
+            if ended, let path = items[key]?.projectPath {
                 Task { await loadMarks(server, force: true, only: [path]) }
             }
             items[key]?.status = s.status
             if let m = s.modified { items[key]?.modified = m }
             if s.status != "in_progress" { strand(key) }
+            // Live events reach memory alone; the turn's end re-reads it so a cold open has the reply.
+            if ended, home == nil, transcripts[key] != nil { Task { await reload(key) } }
+            // A bot's row shows its newest reply, which only its server can read.
+            if s.status != "in_progress", bot(key) != nil { Task { await loadPreviews(server) } }
         case "session_title":
             guard let t = try? decoder.decode(EventFrame<TitleEvent>.self, from: data).payload else { return }
             items[SessionKey(server: server, id: t.sessionId)]?.title = t.title
@@ -669,7 +894,7 @@ final class Store {
         case "host_changed":
             linksMayHaveMoved()
         case "bots_changed":
-            if server == home { Task { await loadBots() } }
+            Task { await loadBots(server) }
         case "drafts_changed":
             draftsRevision += 1
         case "machines_shared":
@@ -680,8 +905,8 @@ final class Store {
             items[SessionKey(server: server, id: item.sessionId)] = item
             Task { await loadMarks(server, force: false, only: [item.projectPath]) }
             // `bots_changed` comes from the CLI alone, and a bot the app made is first seen as its chat.
-            if name == "session_created", server == home, !bots.contains(where: { $0.path == item.cwd }) {
-                Task { await loadBots() }
+            if name == "session_created", !(bots[server] ?? []).contains(where: { $0.path == item.cwd }) {
+                Task { await loadBots(server) }
             }
         default:
             break
@@ -714,7 +939,7 @@ final class Store {
         case .backgroundTasks(let n):
             tasks[key] = n
             if n == 0 && items[key]?.busy != true { strand(key) }
-        case .userMessage(let text, _, _, _, _):
+        case .userMessage(let text, _, _, _, _, _, _):
             queued[key]?.removeAll { $0.text == text }
         default:
             break
@@ -761,6 +986,28 @@ enum Keychain {
     }
 }
 
+/// Files under Caches, which the system may clear: everything here is read again from its server.
+enum Cache {
+    static let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appending(path: "dray", directoryHint: .isDirectory)
+    static func folder(_ server: UUID) -> URL { root.appending(path: server.uuidString, directoryHint: .isDirectory) }
+    static func list(_ server: UUID) -> URL { folder(server).appending(path: "list.json") }
+    /// The id is the server's to pick, so it is encoded down to one name that cannot leave the folder.
+    static func transcript(_ key: SessionKey) -> URL {
+        let name = key.id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "invalid"
+        return folder(key.server).appending(path: "t-\(name).json")
+    }
+
+    /// Encodes and writes off the main thread; a failed write costs the next cold open, nothing else.
+    static func write(_ url: URL, _ make: @escaping () throws -> Data) {
+        Task.detached(priority: .utility) {
+            guard let data = try? make() else { return }
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+}
+
 #if ISLAND_DEMO
 extension Store {
     /// The island demo's cases: sessions and the cards they wait on, with no
@@ -773,7 +1020,7 @@ extension Store {
 
     func seed(home server: UUID, bots: [Bot]) {
         home = server
-        self.bots = bots
+        self.bots = [server: bots]
     }
 }
 #endif

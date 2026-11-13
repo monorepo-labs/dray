@@ -6,8 +6,13 @@ import {
   chatItems,
   chatTime,
   drawnSegments,
+  earlierTurns,
   firstUnread,
+  hasText,
+  inReviewTurn,
   itemKey,
+  lastTurns,
+  lessonKind,
   sentMessages,
   startsTimeRun,
   taskContext,
@@ -45,6 +50,13 @@ describe("botItems", () => {
     ]);
     expect(items.map((i) => i.kind)).toEqual(["assistant", "user", "task", "assistant"]);
     expect(items[2]).toMatchObject({ kind: "task", sessionId: ID });
+  });
+
+  it("draws no bubble for a reply of whitespace and zero-width characters", () => {
+    const items = botItems([user("hi"), said("\u200b"), said(" \ufeff\u200d\n"), said("\u200bok")]);
+    expect(items.map((i) => i.kind)).toEqual(["user", "assistant"]);
+    expect(hasText("\u00a0\u2060\u00ad\u0085")).toBe(false);
+    expect(hasText("\u200d👍")).toBe(true);
   });
 
   it("marks unread from the first reply after the reader's last message", () => {
@@ -222,6 +234,35 @@ dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot pro
     ]);
   });
 
+  it("draws a hidden review as nothing and each lesson as its own row, undone once taken back", () => {
+    const rule = { path: "INSTRUCTIONS.md", kind: "instructions", change: "changed", summary: "Check the login first" };
+    const skill = { path: ".claude/skills/fork/SKILL.md", kind: "skill", change: "added", summary: "Fork a sandbox" };
+    const items = botItems([
+      user("Review: The user just corrected you.", true),
+      said("Nothing to keep; that was a one-off."),
+      ev({ type: "learned", commit: "abc1234", files: [rule, skill] } as AgentEventPayload),
+      ev({ type: "learned_undone", commit: "abc1234", path: skill.path } as AgentEventPayload),
+    ]);
+    expect(items.map((i) => (i.kind === "learned" ? [i.file.path, i.undone] : i.kind))).toEqual([
+      ["INSTRUCTIONS.md", false],
+      [".claude/skills/fork/SKILL.md", true],
+    ]);
+  });
+
+  it("knows a turn a review opened while it streams", () => {
+    expect(inReviewTurn([user("hi"), said("hello"), user("Review: x", true)])).toBe(true);
+    expect(inReviewTurn([user("Review: x", true), said("…"), user("thanks")])).toBe(false);
+    expect(inReviewTurn([user("start", true)])).toBe(false);
+  });
+
+  it("names each lesson's kind, and a new or removed one as such", () => {
+    const file = (kind: string, change: string) => ({ path: "p", kind, change, summary: "s" });
+    expect(lessonKind(file("instructions", "changed"))).toBe("Rule");
+    expect(lessonKind(file("skill", "added"))).toBe("New skill");
+    expect(lessonKind(file("memory", "removed"))).toBe("Removed memory");
+    expect(lessonKind(file("routine", "changed"))).toBe("Lesson");
+  });
+
   it("draws no task for a create that failed", () => {
     const items = botItems([call("c", "dray session new x"), result("c", `no project ${ID}`, true)]);
     expect(items).toEqual([]);
@@ -294,6 +335,44 @@ describe("drawnSegments", () => {
 
   it("draws nothing for no sessions", () => {
     expect(drawnSegments([])).toEqual([]);
+  });
+});
+
+describe("lastTurns", () => {
+  // Three turns, the middle one with a subagent's own prompt inside it.
+  const events = [
+    said("hi"),
+    user("one"),
+    said("a"),
+    user("two"),
+    ev({ type: "user_message", text: "sub", images: [], issues: [], from: null } as unknown as AgentEventPayload, "s1"),
+    call("c1", "dray session new x"),
+    result("c1", ID),
+    user("three"),
+    said("c"),
+  ];
+
+  it("cuts at the main thread's message opening the oldest turn kept", () => {
+    expect(lastTurns(events, 1)).toBe(7);
+    expect(lastTurns(events, 2)).toBe(3);
+  });
+
+  it("keeps everything with fewer turns held", () => {
+    expect(lastTurns(events, 3)).toBe(1);
+    expect(lastTurns(events, 4)).toBe(0);
+    expect(lastTurns(events, 9)).toBe(0);
+  });
+
+  it("never cuts at a queued message, which lands between a call and its result", () => {
+    const queued = ev({ type: "user_message", text: "report", images: [], issues: [], queued: true, from: null } as unknown as AgentEventPayload);
+    const run = [user("go"), call("c2", "dray session new y"), queued, result("c2", ID), said("started")];
+    expect(lastTurns(run, 1)).toBe(0);
+  });
+
+  it("grows a window by whole turns above it", () => {
+    expect(earlierTurns(events, 7, 1)).toBe(3);
+    expect(earlierTurns(events, 3, 1)).toBe(1);
+    expect(earlierTurns(events, 1, 1)).toBe(0);
   });
 });
 

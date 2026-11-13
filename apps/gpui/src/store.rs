@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+
 use dray_core::projects::Project;
 use dray_core::store::{SessionIndexItem, SessionStatus};
 use serde_json::Value;
@@ -37,9 +38,11 @@ pub struct Store {
     pub items: Vec<SessionIndexItem>,
     pub projects: Vec<Project>,
     pub live: Live,
-    /// Open permission and question requests by session, so a decision retires
-    /// its own request and the row stops reading as asking only with the last.
-    asks: HashMap<String, HashSet<String>>,
+    /// Open permission and question requests by session, in arrival order and
+    /// keyed by request id, so a decision retires its own request and the row
+    /// stops reading as asking only with the last. The whole frame is kept, as
+    /// the open session's cards draw from it.
+    asks: HashMap<String, Vec<(String, Value)>>,
     /// Sessions holding background tasks, whose asks outlive the turn.
     tasked: HashSet<String>,
     /// Index events seen while a list read is in flight, laid over its answer.
@@ -83,7 +86,7 @@ impl Store {
                     let session = payload["sessionId"].as_str().unwrap_or_default();
                     let request = payload["payload"]["requestId"].as_str().unwrap_or_default();
                     if let Some(open) = self.asks.get_mut(session) {
-                        open.remove(request);
+                        open.retain(|(id, _)| id != request);
                     }
                     self.sync_asking();
                     redraw
@@ -232,7 +235,14 @@ impl Store {
     fn note_ask(&mut self, frame: &Value) {
         let session = frame["sessionId"].as_str().unwrap_or_default().to_string();
         let request = frame["payload"]["requestId"].as_str().unwrap_or_default().to_string();
-        self.asks.entry(session).or_default().insert(request);
+        let open = self.asks.entry(session).or_default();
+        open.retain(|(id, _)| *id != request);
+        open.push((request, frame.clone()));
+    }
+
+    /// A session's open requests, oldest first, as the frames that raised them.
+    pub fn asks(&self, session: &str) -> impl Iterator<Item = &Value> {
+        self.asks.get(session).into_iter().flatten().map(|(_, frame)| frame)
     }
 
     fn sync_asking(&mut self) {
@@ -280,6 +290,19 @@ mod tests {
             json!({ "sessionId": "a", "payload": { "type": "permission_decided", "requestId": "r1" } }),
         );
         assert!(asking(&s, "a"));
+    }
+
+    #[test]
+    fn the_open_frames_are_kept_in_order_for_the_cards() {
+        let mut s = Store::default();
+        s.apply("agent_event", ask("a", "r1"));
+        s.apply("agent_event", ask("a", "r2"));
+        s.apply(
+            "agent_event",
+            json!({ "sessionId": "a", "payload": { "type": "permission_decided", "requestId": "r1" } }),
+        );
+        let open: Vec<_> = s.asks("a").map(|f| f["payload"]["requestId"].as_str().unwrap()).collect();
+        assert_eq!(open, ["r2"]);
     }
 
     #[test]

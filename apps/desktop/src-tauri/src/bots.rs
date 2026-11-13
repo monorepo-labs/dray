@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use ts_rs::TS;
 
+pub mod learn;
+
 use crate::{
     events::ApprovalPolicy,
     models::{Effort, ModelId},
@@ -248,6 +250,155 @@ pub fn restore_handover(session_id: &str, text: String) {
     }
 }
 
+/// What the reader did to a bot's tasks since the bot's last prompt, per bot
+/// folder: each task's id, title and acts, oldest first. Sent ahead of the
+/// next prompt the bot gets anyway, since waking it for each would cost a turn.
+// ponytail: in memory, so a server restart drops what was not yet sent; a
+// file beside bots.json if that ever matters.
+static SINCE: std::sync::Mutex<Vec<(String, Vec<(String, String, Vec<String>)>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Tasks kept per bot, newest kept: the list rides a prompt, so it stays short.
+const SINCE_CAP: usize = 8;
+
+/// An act of the reader's on a session, through a client.
+pub enum Act {
+    Settled,
+    Stopped,
+    Deleted,
+}
+
+/// Runs `run`, the reader's own `act` on `session_id`, and notes it for the
+/// bot whose task that is. Called from the client wire alone, never from
+/// `dray`, which is how the bot itself settles and stops its tasks.
+pub async fn reader_did<T, E>(
+    session_id: &str,
+    act: Option<Act>,
+    run: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, E> {
+    let Some(act) = act else { return run.await };
+    let item = crate::store::get_session_index_item(session_id).await.ok().flatten();
+    // Only an act that changes something: settling a settled task or stopping
+    // an idle one tells the bot nothing.
+    let counts = match act {
+        Act::Settled => item.as_ref().is_some_and(|i| !i.archived),
+        Act::Stopped => manager().turn_in_flight(session_id).await,
+        Act::Deleted => true,
+    };
+    let text = match act {
+        Act::Settled => "settled it",
+        Act::Stopped => "stopped its turn",
+        Act::Deleted => "deleted it",
+    };
+    // A stop is noted ahead of the act: the stopped task reports at once, and
+    // that report has to carry why the turn ended. Anything else once it landed,
+    // since a note already sent cannot be taken back.
+    let early = matches!(act, Act::Stopped);
+    let noted = match (counts && early, &item) {
+        (true, Some(item)) => note_since(item, text.to_string()).await,
+        _ => None,
+    };
+    let out = run.await;
+    if let (Ok(_), true, false, Some(item)) = (&out, counts, early, &item) {
+        note_since(item, text.to_string()).await;
+    }
+    if let (Err(_), Some(bot), Some(item)) = (&out, noted, &item) {
+        let mut since = SINCE.lock().unwrap();
+        if let Some((_, tasks)) = since.iter_mut().find(|(path, _)| *path == bot) {
+            for (_, _, acts) in tasks.iter_mut().filter(|(id, ..)| *id == item.session_id) {
+                acts.retain(|a| a != text);
+            }
+            tasks.retain(|(_, _, acts)| !acts.is_empty());
+        }
+    }
+    out
+}
+
+/// Notes `act` against `task` for its bot, folded into the task's line, and
+/// answers the bot's folder where it was noted.
+pub async fn note_since(task: &SessionIndexItem, act: String) -> Option<String> {
+    let chat = bot_chat_of(task).await?;
+    // The bot's own chat: the reader acting there is a turn the bot sees.
+    if chat.session_id == task.session_id {
+        return None;
+    }
+    let mut since = SINCE.lock().unwrap();
+    let at = match since.iter().position(|(path, _)| same_dir(path, &chat.cwd)) {
+        Some(at) => at,
+        None => {
+            since.push((chat.cwd.clone(), Vec::new()));
+            since.len() - 1
+        }
+    };
+    // The title is the one piece of free text, and it sits inside a list the
+    // bot is told to trust: kept to one line that cannot close the list.
+    let title = task.title.replace(['\n', '\r', ']', '"'], " ");
+    fold_since(&mut since[at].1, &task.session_id, &title, act);
+    Some(since[at].0.clone())
+}
+
+fn fold_since(tasks: &mut Vec<(String, String, Vec<String>)>, id: &str, title: &str, act: String) {
+    match tasks.iter_mut().find(|(task, ..)| task == id) {
+        Some((_, _, acts)) if acts.contains(&act) => {}
+        Some((_, _, acts)) => acts.push(act),
+        None => tasks.push((id.to_string(), title.to_string(), vec![act])),
+    }
+    if tasks.len() > SINCE_CAP {
+        tasks.remove(0);
+    }
+}
+
+/// Notes the reader's merge of PR `number` against the bot task whose branch
+/// it is. `cwd` is the repo root or the task's own tree, whichever the client
+/// merged from. Asks GitHub for the branch only where a bot task could match.
+pub async fn note_merge(cwd: &str, number: u64) {
+    let items = crate::store::list_session_index_items(false).await.unwrap_or_default();
+    let mut tasks = Vec::new();
+    for item in items {
+        if (same_dir(&item.project_path, cwd) || same_dir(&item.cwd, cwd)) && in_bot_tree(&item).await {
+            tasks.push(item);
+        }
+    }
+    if tasks.is_empty() {
+        return;
+    }
+    let Ok(out) = crate::github::gh(cwd, &["pr", "view", &number.to_string(), "--json", "headRefName,isCrossRepository"]).await
+    else {
+        return;
+    };
+    let pr: serde_json::Value = serde_json::from_str(&out).unwrap_or_default();
+    // A fork's branch can share a task's name; unknown counts as a fork.
+    let (Some(branch), Some(false)) = (pr["headRefName"].as_str(), pr["isCrossRepository"].as_bool()) else { return };
+    for task in tasks {
+        // The tree's own HEAD first: a task can move off the branch it was made on.
+        let observed = if task.worktree_removed { None } else { crate::git::current_branch(&task.cwd).await };
+        if crate::store::session_branch(&task, observed.as_deref()).as_deref() == Some(branch) {
+            // No PR title: it is the PR author's text, and this list is trusted.
+            note_since(&task, format!("merged its PR #{number}")).await;
+        }
+    }
+}
+
+/// The list for the bot chat `session_id` belongs to, taken once, as the
+/// hidden lines that go ahead of its next prompt.
+pub async fn take_since(session_id: &str) -> Option<String> {
+    if SINCE.lock().unwrap().is_empty() {
+        return None;
+    }
+    let item = crate::store::get_session_index_item(session_id).await.ok().flatten()?;
+    let mut since = SINCE.lock().unwrap();
+    let at = since.iter().position(|(path, _)| same_dir(path, &item.cwd))?;
+    Some(since_text(&since.remove(at).1))
+}
+
+fn since_text(tasks: &[(String, String, Vec<String>)]) -> String {
+    let lines: Vec<String> = tasks
+        .iter()
+        .map(|(id, title, acts)| format!("- Task \"{title}\" ({id}): the user {}.", acts.join(", then ")))
+        .collect();
+    format!("[Since your last turn, outside this chat:\n{}]\n\n", lines.join("\n"))
+}
+
 /// The other sessions of the bot chat `item` belongs to, unsettled. A switch
 /// leaves the earlier ones open, so settling the chat has to settle them all,
 /// or the previous agent's session becomes the bot's chat again.
@@ -365,13 +516,14 @@ fn replay(events: &[crate::events::AgentEvent]) -> Vec<String> {
     use crate::events::AgentEventPayload as P;
     events
         .iter()
-        .filter(|e| e.subagent.is_none())
-        .filter_map(|e| match &e.payload {
+        .zip(learn::in_review(events))
+        .filter(|(e, review)| e.subagent.is_none() && !review)
+        .filter_map(|(e, _)| match &e.payload {
             P::UserMessage { kickoff: true, .. } => None,
             // Already prefixed with who sent it, as the bot first read it.
             P::UserMessage { text, from: Some(_), .. } => Some(text.trim().to_string()),
             P::UserMessage { text, .. } => Some(format!("User: {}", text.trim())),
-            P::AssistantText { text, .. } if !text.trim().is_empty() => Some(format!("You: {}", text.trim())),
+            P::AssistantText { text, .. } if crate::events::has_text(text) => Some(format!("You: {}", text.trim())),
             _ => None,
         })
         .collect()
@@ -606,16 +758,23 @@ pub async fn bot_previews(
     Ok(previews)
 }
 
-/// Sessions whose next prompt is a bot's kickoff, which the transcript draws no
-/// bubble for. Read where the prompt's event is built: threading a flag through
-/// `send_msg`'s twenty parameters for one caller would touch every other one.
-static KICKOFFS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// Dray's own prompts on their way into a bot's chat, as (session, text): a
+/// kickoff, or a review (#973). The transcript draws no bubble for either.
+/// Read where the prompt's event is built: threading a flag through
+/// `send_msg`'s twenty parameters for two callers would touch every other one.
+/// Keyed on the text too, so a message the reader sends meanwhile is never
+/// taken for one.
+static DRAY_PROMPTS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
-/// Whether `session_id`'s prompt now being logged is a kickoff, and forgets it.
-pub fn take_kickoff(session_id: &str) -> bool {
-    let mut kickoffs = KICKOFFS.lock().unwrap();
-    let at = kickoffs.iter().position(|k| k == session_id);
-    at.map(|i| kickoffs.remove(i)).is_some()
+pub fn mark_dray_prompt(session_id: &str, prompt: &str) {
+    DRAY_PROMPTS.lock().unwrap().push((session_id.to_string(), prompt.to_string()));
+}
+
+/// Whether `prompt`, now being logged in `session_id`, is Dray's own, and forgets it.
+pub fn take_dray_prompt(session_id: &str, prompt: &str) -> bool {
+    let mut marks = DRAY_PROMPTS.lock().unwrap();
+    let at = marks.iter().position(|(s, p)| s == session_id && p == prompt);
+    at.map(|i| marks.remove(i)).is_some()
 }
 
 /// Opens a bot's chat with the bot speaking first: a prompt the reader never
@@ -640,7 +799,7 @@ pub async fn start_bot(
         .ok_or_else(|| anyhow::anyhow!("no bot {id}"))?;
     let session_id = uuid::Uuid::now_v7().to_string();
     let prompt = kickoff_prompt(&bot).await;
-    KICKOFFS.lock().unwrap().push(session_id.clone());
+    mark_dray_prompt(&session_id, &prompt);
     let sent = manager()
         .send_msg(
             &session_id, &prompt, &[], &[], harness, model, effort, permission_mode, fast,
@@ -648,7 +807,7 @@ pub async fn start_bot(
         )
         .await;
     // A send that failed before logging the prompt left the mark behind.
-    take_kickoff(&session_id);
+    take_dray_prompt(&session_id, &prompt);
     let item = sent?
         .snapshot
         .map(|s| s.index_item)
@@ -774,6 +933,7 @@ pub async fn system_prompt(base: &str, session_id: &str, cwd: &str) -> String {
     // A bot made before memory was a folder has none, and the prompt sends it
     // straight to one. Its old `MEMORY.md` is left alone: bots had no users yet.
     tokio::fs::create_dir_all(dir.join(MEMORY)).await.ok();
+    learn::ensure_skills(dir).await;
     let instructions = capped(read_file(&dir.join(INSTRUCTIONS)).await);
     format!("{base}\n\n{}", bot_block(bot, &others, &instructions))
 }
@@ -840,40 +1000,113 @@ async fn start_history(bot: &Bot) -> Result<()> {
         return Ok(());
     }
     git(dir, &["init", "-q", "-b", "main"]).await?;
-    commit_all(bot, Some("Start history")).await
+    commit_all(bot, Some("Start history")).await.map(drop)
 }
 
 /// Commits what a turn of the bot at `cwd` changed in its folder, where `cwd`
-/// is a bot's. Dray does it rather than the bot, which could forget.
-pub async fn commit_turn(cwd: &str) {
-    let Some(bot) = bot_at(cwd).await else { return };
-    if let Err(e) = start_history(&bot).await {
-        eprintln!("[bot history] {e:#}");
-        return;
-    }
-    let _guard = HISTORY_LOCK.lock().await;
-    if let Err(e) = commit_all(&bot, None).await {
-        eprintln!("[bot history] {e:#}");
-    }
+/// is a bot's, and reads back the lessons in it. Dray does it rather than the
+/// bot, which could forget. `None` where `cwd` is no bot's.
+pub async fn commit_turn(cwd: &str, notes: learn::TurnNotes) -> Option<learn::Turn> {
+    let bot = bot_at(cwd).await?;
+    Some(commit_bot_turn(&bot, notes).await)
 }
 
-/// Stages everything and commits it, where anything changed. `None` names the
-/// files changed instead.
-async fn commit_all(bot: &Bot, message: Option<&str>) -> Result<()> {
+async fn commit_bot_turn(bot: &Bot, notes: learn::TurnNotes) -> learn::Turn {
+    let mut turn = learn::Turn { notes, ..Default::default() };
+    if let Err(e) = start_history(bot).await {
+        eprintln!("[bot history] {e:#}");
+        return turn;
+    }
+    let dir = Path::new(&bot.path);
+    let _guard = HISTORY_LOCK.lock().await;
+    if turn.notes.reviewing() {
+        match learn::keep_rules(dir).await {
+            Ok(true) => eprintln!("[bot learn] a review took a rule away from {}; put back", bot.name),
+            Ok(false) => {}
+            Err(e) => eprintln!("[bot learn] {e:#}"),
+        }
+    }
+    turn.commit = match commit_all(bot, None).await {
+        Ok(commit) => commit,
+        Err(e) => {
+            eprintln!("[bot history] {e:#}");
+            None
+        }
+    };
+    if let Some(commit) = &turn.commit {
+        match learn::read_commit(dir, commit).await {
+            Ok((files, oversize)) => (turn.files, turn.oversize) = (files, oversize),
+            Err(e) => eprintln!("[bot learn] {e:#}"),
+        }
+    }
+    turn
+}
+
+/// Stages everything and commits it, where anything changed, answering the
+/// commit. `None` names the files changed instead.
+async fn commit_all(bot: &Bot, message: Option<&str>) -> Result<Option<String>> {
     let dir = Path::new(&bot.path);
     git(dir, &["add", "-A"]).await?;
     let changed = git(dir, &["diff", "--cached", "--name-only", "-z"]).await?;
     let files: Vec<&str> = changed.split('\0').filter(|f| !f.is_empty()).collect();
     if files.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let message = message.map_or_else(|| turn_message(&files), str::to_string);
-    // The bot's own name on every commit, so its history needs no global
-    // identity and reads as its own. Given each time rather than written to
-    // the repo's config once, which a setup cut off after `init` would skip.
+    commit_as(bot, &["commit", "-q", "-m", &message]).await?;
+    Ok(Some(git(dir, &["rev-parse", "HEAD"]).await?.trim().to_string()))
+}
+
+/// Commits `paths` alone, staged first, leaving anything else in the folder
+/// for the turn's own commit.
+async fn commit_paths(bot: &Bot, message: &str, paths: &[&str]) -> Result<()> {
+    let mut add = vec!["add", "-A", "--"];
+    add.extend_from_slice(paths);
+    git(Path::new(&bot.path), &add).await?;
+    let mut commit = vec!["commit", "-q", "-m", message, "--"];
+    commit.extend_from_slice(paths);
+    commit_as(bot, &commit).await
+}
+
+/// Runs a commit as the bot: its own name on every one, so its history needs
+/// no global identity and reads as its own. Given each time rather than
+/// written to the repo's config once, which a setup cut off after `init`
+/// would skip.
+async fn commit_as(bot: &Bot, args: &[&str]) -> Result<()> {
     let name = format!("user.name={}", bot.name);
     let email = format!("user.email={}@bots.dray.local", bot.id);
-    git(dir, &["-c", &name, "-c", &email, "commit", "-q", "-m", &message]).await.map(drop)
+    let mut all = vec!["-c", name.as_str(), "-c", email.as_str()];
+    all.extend_from_slice(args);
+    git(Path::new(&bot.path), &all).await.map(drop)
+}
+
+/// The two halves of one file of a "Learned" row, for View diff.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn bot_learned_diff(session_id: String, commit: String, path: String) -> Result<learn::LearnedDiff, Fail> {
+    let bot = bot_of_session(&session_id).await?;
+    Ok(learn::diff(&bot, &commit, &path).await?)
+}
+
+/// Undo on a "Learned" row: reverts that one file of the commit and says so in
+/// the chat, where the row reads it back as undone.
+///
+/// The bot is told too, hidden like a review: a running child read its
+/// instructions at spawn and still follows the rule the file no longer holds.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn bot_undo_learned(session_id: String, commit: String, path: String, sink: Sink) -> Result<(), Fail> {
+    let bot = bot_of_session(&session_id).await?;
+    learn::undo(&bot, &commit, &path).await?;
+    let item = crate::store::get_session_index_item(&session_id).await?.context("no such session")?;
+    let told = learn::undone_prompt(&path, &commit);
+    let payload = crate::events::AgentEventPayload::LearnedUndone { commit, path };
+    manager().log_event(&session_id, item.harness, payload, &sink).await?;
+    crate::orchestration::send_review(session_id, told, sink).await?;
+    Ok(())
+}
+
+async fn bot_of_session(session_id: &str) -> Result<Bot> {
+    let item = crate::store::get_session_index_item(session_id).await?.context("no such session")?;
+    bot_at(&item.cwd).await.context("that session is no bot's chat")
 }
 
 fn turn_message(files: &[&str]) -> String {
@@ -910,7 +1143,7 @@ fn capped(text: String) -> String {
     while !text.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}\n\n[cut at {FILE_CAP} characters — trim this file]", &text[..end])
+    format!("{}\n\n[cut at {FILE_CAP} characters — ask the user which rules to cut or merge]", &text[..end])
 }
 
 fn bot_block(bot: &Bot, others: &[&str], instructions: &str) -> String {
@@ -955,7 +1188,7 @@ mod tests {
         assert!(block.contains("/h/bots/b"));
         assert!(block.contains(&format!("`{MEMORY}/`")));
         assert!(block.contains("YYYY-MM-DD-short-title.md"));
-        assert!(block.contains("never ask one to report back"));
+        assert!(block.contains("never ask it to report back"));
         assert!(block.contains("dray session settle <id> --delete-worktree"));
         assert!(block.contains("The other bots now: \"Research\"."));
         assert!(bot_block(&bot(), &[], "").contains("There are no other bots yet."));
@@ -1063,7 +1296,8 @@ mod tests {
     fn every_template_is_filled_whole() {
         let block = bot_block(&bot(), &[], "a");
         let kickoff = fill(KICKOFF_PROMPT, &[("name", "Ops"), ("projects", "dray")]);
-        for text in [&block, &kickoff] {
+        let review = fill(include_str!("bots/review_prompt.md"), &[("reason", "The user just corrected you.")]);
+        for text in [&block, &kickoff, &review] {
             assert!(!text.contains('{'), "{text}");
         }
         assert!(block.contains(INSTRUCTIONS));
@@ -1096,6 +1330,23 @@ mod tests {
         commit_all(&bot, None).await.unwrap();
         assert_eq!(log().await.lines().next(), Some("Ops|Update memory/tea.md"));
         tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[test]
+    fn since_folds_acts_per_task_and_keeps_the_newest_tasks() {
+        let mut tasks = Vec::new();
+        fold_since(&mut tasks, "a", "Boat", "merged its PR #980 (Boat)".into());
+        fold_since(&mut tasks, "a", "Boat", "settled it".into());
+        fold_since(&mut tasks, "a", "Boat", "settled it".into());
+        assert_eq!(
+            since_text(&tasks),
+            "[Since your last turn, outside this chat:\n- Task \"Boat\" (a): the user merged its PR #980 (Boat), then settled it.]\n\n"
+        );
+        for i in 0..SINCE_CAP {
+            fold_since(&mut tasks, &i.to_string(), "t", "stopped its turn".into());
+        }
+        assert_eq!(tasks.len(), SINCE_CAP);
+        assert_eq!(tasks[0].0, "0");
     }
 
     #[test]

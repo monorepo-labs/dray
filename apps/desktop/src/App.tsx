@@ -125,7 +125,7 @@ import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { closeActiveTab, ItemTab, type ViewTab } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { attachmentKey, clearAttachments, pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
+import { attachmentKey, clearAttachments, pickAttachments, readAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
 import {
@@ -170,8 +170,10 @@ import { useAgentAvailability, useMissingAgent } from "@/hooks/useAgentAvailabil
 import AgentMissingNotice from "@/components/composer/AgentMissingNotice";
 import ServerOfflineNotice from "@/components/composer/ServerOfflineNotice";
 import BoatNotice from "@/components/composer/BoatNotice";
+import { CloudFailedNotice, CloudNotice } from "@/components/composer/CloudNotice";
 import BoatWarnings from "@/components/BoatWarnings";
 import { boatAsleep, restoreHeld } from "@/lib/boat";
+import { onCloud, setCloudFailure, useCloud, useCloudFailure, useCloudPicks, usePlacing } from "@/lib/cloud";
 import TranscriptSkeleton from "@/components/chat/TranscriptSkeleton";
 import { checkoutsOf, groupProjects, keyOfPath, lastUsedCheckout, nextCheckout } from "@/lib/projectGroups";
 import { serverConnected, serverName, useServers } from "@/lib/servers";
@@ -246,6 +248,7 @@ import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import { useHandoffConfig } from "@/hooks/useHandoffConfig";
 import { buildTranscript, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
+import { onUnhandledEscape } from "@/lib/escape";
 import { playSwipeTick } from "@/lib/tick";
 
 /// Commits only with its Suspense siblings, so its layout effect says the lazy
@@ -369,6 +372,25 @@ function App() {
     if (openDraftId && !drafts.some((d) => d.id === openDraftId)) setOpenDraftId(null);
   }, [drafts, openDraftId]);
   const composerKey = selectedSessionId ?? (openDraftId ? draftKey(openDraftId) : null);
+  // Esc takes the sidebar back to the active list, the way the toggles do —
+  // closing the open draft with its view. Last in line for the key, so
+  // anything else on screen that answers Escape keeps it.
+  useEffect(
+    () =>
+      onUnhandledEscape(() => {
+        if (draftsShown) {
+          setOpenDraftId(null);
+          setDraftsShown(false);
+          return true;
+        }
+        if (archivedRequested) {
+          setShowArchived(false);
+          return true;
+        }
+        return false;
+      }),
+    [draftsShown, archivedRequested, setShowArchived],
+  );
 
   useEffect(
     () =>
@@ -455,6 +477,18 @@ function App() {
     }
   };
 
+  /// Sends what a failed cloud step left in the composer, as Enter would.
+  const retryCloud = () => {
+    const trayKey = attachmentKey(selectedSessionId, composerCwd);
+    const text = readDraft(composerKey).trim();
+    const attachments = readAttachments(trayKey);
+    setCloudFailure(null);
+    if (!text && !attachments.length) return;
+    writeDraft(composerKey, "");
+    clearAttachments(trayKey);
+    void sendFromComposer(text, attachments);
+  };
+
   // ⌘S inside a draft has nothing to do, so the "Changes auto-saved" hint
   // lights up for a moment to say why.
   const [draftNudge, setDraftNudge] = useState(false);
@@ -506,11 +540,19 @@ function App() {
   // The open session's server, while it cannot be reached. Shown in place of
   // the error a read or send would raise, and cleared by the reconnect itself.
   const allServers = useServers();
+  // A cloud machine is neither: it is Dray's own, and a send wakes it.
   const offlineServer = allServers.find(
-    (s) => !!selectedSessionId && s.id === activeServer && s.status !== "connected",
+    (s) => !!selectedSessionId && s.id === activeServer && s.status !== "connected" && !s.cloud,
   );
   // Stopped or waking, which a send can do something about, unlike offline.
-  const sleepingBoat = allServers.find((s) => s.id === activeServer && boatAsleep(s));
+  const sleepingBoat = allServers.find((s) => s.id === activeServer && boatAsleep(s) && !s.cloud);
+  const placing = usePlacing();
+  const cloudFailure = useCloudFailure();
+  useCloud();
+  useCloudPicks();
+  // A new task bound for Cloud runs wherever placement puts it, so an agent
+  // missing from the picked checkout's machine says nothing about it.
+  const cloudTask = !selectedSessionId && onCloud(projects, projectPath);
   useEffect(restoreHeld, []);
   // A turn or a background task on that server, which auto-extend keeps alive.
   // Read off the live maps, which hold every session whatever the sidebar
@@ -1225,8 +1267,8 @@ function App() {
   // Every server's list is first read with its projects, in `readServer`.
   useEffect(() => listenForBots(), []);
   const searchedSessions = useMemo(
-    () => filterSessions(inSidebar(visibleSessions, bots), search),
-    [visibleSessions, bots, search],
+    () => filterSessions(inSidebar(visibleSessions, bots, sessionIndexItems), search),
+    [visibleSessions, bots, sessionIndexItems, search],
   );
   // Off every session held, not the space-filtered list: a bot is no project and
   // belongs to no space, so filtering would hide its chat and open a new one.
@@ -1592,15 +1634,25 @@ function App() {
     sessionTodos !== null ||
     sessionAttachments.length > 0;
 
+  const taskSources = useRef({ crew, sessionIndexItems });
+  taskSources.current = { crew, sessionIndexItems };
+  const taskTitles = useMemo(
+    () => sessionIndexItems.map((i) => `${i.sessionId}${i.title}`).join("\n"),
+    [sessionIndexItems],
+  );
   // A task a bot started, named in the bot's chat. Takes an id prefix, as
-  // `dray session send` does, so a message the bot sent finds its task.
+  // `dray session send` does, so a message the bot sent finds its task. A new
+  // function only when a session or a title changes: every row of a bot's chat
+  // is redrawn when it does, and `crew` moves on every status change.
   const taskOf = useCallback(
     (id: string) => {
+      const { crew, sessionIndexItems } = taskSources.current;
       const match = (sessionId: string) => sessionId === id || (id.length >= 8 && sessionId.startsWith(id));
       const item = crew.find((r) => match(r.item.sessionId))?.item ?? sessionIndexItems.find((i) => match(i.sessionId));
       return item && { sessionId: item.sessionId, title: item.title };
     },
-    [crew, sessionIndexItems],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [taskTitles],
   );
 
   const earlierLoaded = sessions.filter((s) => earlierIds.includes(s.sessionId));
@@ -2211,9 +2263,10 @@ function App() {
 
   // A link in the transcript opens as a new tab in the browser of the chat it
   // was clicked in and flips the main column to the Browser view, leaving the
-  // side panel alone. In a bot's row the main column is the row's, so there
-  // it opens in the side panel instead, beside that chat — the bot's or the
-  // lit task's. ⌘-click, or no session to hold one, goes to the system browser.
+  // side panel alone — in a bot chat too, where that tab joins the bot's row.
+  // A task lit in a bot's row is the exception: the row's tabs are the bot's,
+  // so its link opens in the side panel, in the task's own browser. ⌘-click,
+  // or no session to hold one, goes to the system browser.
   useEffect(() => {
     setLinkOpener((url, { external }) => {
       if (!selectedSessionId || !browserSession) {
@@ -2224,14 +2277,14 @@ function App() {
       // then the reader may be on another session whose pane must stay put.
       const sessionId = selectedSessionId;
       const browser = browserSession;
-      const inBotRow = !!selectedBotId || rowOf(sessionId) !== sessionId;
+      const inTaskTab = rowOf(sessionId) !== sessionId;
       const gen = navGen.current;
       void reachableUrl(sessionId, url).then(
         (reached) => {
           if (external) return void openUrl(reached).catch(console.error);
           void openInBrowser(browser, reached, true)
             .then(() => {
-              if (inBotRow) showPanel("browser", sessionId);
+              if (inTaskTab) showPanel("browser", sessionId);
               else setBrowserWanted(sessionId);
               trackBrowserOpen(reached);
             })
@@ -2249,7 +2302,7 @@ function App() {
       );
     });
     return () => setLinkOpener(null);
-  }, [selectedSessionId, browserSession, selectedBotId, rowOf, showPanel, navGen, setError]);
+  }, [selectedSessionId, browserSession, rowOf, showPanel, navGen, setError]);
 
   // An element picked in the page lands in that session's draft, and the
   // composer is brought on screen to show it — off the full view and onto
@@ -2921,7 +2974,7 @@ function App() {
   useHotkey("worktree.toggle", () => setUseWorktree((v) => !v), {
     // A worktree has nothing to fork from until a project is picked, which is
     // the same condition the toggle itself is drawn under.
-    enabled: composingNewSession && projectPath !== null,
+    enabled: composingNewSession && projectPath !== null && !cloudTask,
   });
   // No accelerator: Shift+Tab on its own, and the model gets it because the
   // model is the pick reached for most often. The CLI spends this chord on
@@ -3111,6 +3164,7 @@ function App() {
   ) => {
     // From the repo root: a task's worktree may already be gone.
     await invoke("merge_pr", { cwd: projectPath, number, method });
+    prMarks.markMerged(projectPath, number);
     prMarks.refreshAfterWrite();
     // Landed, so the task is done — unless it is still working,
     // which settling would kill mid-turn.
@@ -3241,6 +3295,51 @@ function App() {
 
   // Pages with no tabs for the strip: the sheet reaches up behind the header.
   const tallSheet = issuesOpen || !shownSession;
+
+  // The composer is drawn under the transcript alone; a bot's chat moves its
+  // pickers into the titlebar, so they show and hide with it.
+  const composerShown = !(issuesOpen || (shownSession && viewTab !== "chat"));
+  // Not on a settled chat, whose composer is the Unsettle bar alone.
+  const toolbarInTitlebar = composerShown && !!composerBot && !selectedSession?.archived;
+  const composerToolbar = (inTitlebar: boolean) => (
+    <ComposerToolbar
+      server={activeServer}
+      harness={harness}
+      onHarnessChange={setHarness}
+      models={models}
+      modelId={modelId}
+      effort={effort}
+      fast={fast}
+      onFastChange={setFast}
+      fastNote={fastNote}
+      onModelChange={handleModelChange}
+      onRefreshModels={refreshModels}
+      onReloadModels={reloadModels}
+      onSeedProvider={seedFxModels}
+      loadingModels={loadingModels}
+      permissionMode={permissionMode}
+      onPermissionModeChange={setPermissionMode}
+      projects={spaceProjects}
+      projectPath={projectPath}
+      onSelectProject={handleSelectProject}
+      onAttachProject={handleAttachProject}
+      branches={branches}
+      branch={branch}
+      onSelectBranch={handleSelectBranch}
+      pendingBranch={pendingBranch}
+      onConfirmBranchSwitch={(stash) => pendingBranch && runCheckout(pendingBranch, stash)}
+      onCancelBranchSwitch={() => setPendingBranch(null)}
+      useWorktree={useWorktree}
+      onToggleWorktree={() => setUseWorktree((v) => !v)}
+      onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
+      contextUsage={contextUsage}
+      isNewSession={!selectedSessionId}
+      agentSwitch={!!selectedBot}
+      bot={newBot}
+      inTitlebar={inTitlebar}
+      busy={busy}
+    />
+  );
 
   return (
     <TooltipProvider>
@@ -3509,10 +3608,11 @@ function App() {
                         // The task last at work, which is most often the one
                         // the reader came to look at.
                         const target = newestSession(botTasks) ?? (kind === "files" ? strip.bot : null);
-                        if (!target) return;
+                        if (!target) return null;
                         const id = crypto.randomUUID();
                         setPickTabs((prev) => addPickTab(prev, strip.bot, { id, kind, target }));
                         showPick(strip.bot, strip.owner, id);
+                        return id;
                       },
                       onClose: (id) => {
                         forgetOpenFilesUnder(`pick:${id}:`);
@@ -3532,6 +3632,8 @@ function App() {
           )}
           {/* Keeps the far end at the far end on pages with no tab row. */}
           {(issuesOpen || !shownSession) && <div className="min-w-0 flex-1" />}
+
+          {toolbarInTitlebar && <div className="shrink-0">{composerToolbar(true)}</div>}
 
 
           {issuesOpen
@@ -3750,7 +3852,7 @@ function App() {
         // `shownSession`, like the rest of the layout: gated on the snapshot,
         // the composer came up under Files or Diff for as long as a transcript
         // took to load.
-        issuesOpen || (shownSession && viewTab !== "chat") ? null : (
+        !composerShown ? null : (
         <ChatInput
           onSend={(message, attachments) => void sendFromComposer(message, attachments)}
           commands={slashCommands}
@@ -3828,7 +3930,7 @@ function App() {
           notice={
             sleepingBoat ? null : offlineServer ? (
               <ServerOfflineNotice server={offlineServer} />
-            ) : !selectedSessionId && missingAgent ? (
+            ) : !selectedSessionId && missingAgent && !cloudTask ? (
               <AgentMissingNotice agent={missingAgent} />
             ) : loggedOutAgent && authTurn && selectedSession ? (
               <LoginExpiredNotice
@@ -3840,7 +3942,15 @@ function App() {
             ) : null
           }
           pending={
-            sleepingBoat ? (
+            cloudFailure && cloudFailure.sessionId === selectedSessionId ? (
+              <CloudFailedNotice
+                message={cloudFailure.message}
+                onRetry={retryCloud}
+                onDismiss={() => setCloudFailure(null)}
+              />
+            ) : placing && !selectedSessionId ? (
+              <CloudNotice step={placing} />
+            ) : sleepingBoat ? (
               <BoatNotice server={sleepingBoat} />
             ) : selectedBot && selectedSession && harness !== selectedSession.harness ? (
               // A bot chat picked onto another agent: the send moves it there.
@@ -3881,46 +3991,8 @@ function App() {
               />
             )
           }
-          toolbar={
-            <ComposerToolbar
-              server={activeServer}
-              harness={harness}
-              onHarnessChange={setHarness}
-              models={models}
-              modelId={modelId}
-              effort={effort}
-              fast={fast}
-              onFastChange={setFast}
-              fastNote={fastNote}
-              onModelChange={handleModelChange}
-              onRefreshModels={refreshModels}
-              onReloadModels={reloadModels}
-              onSeedProvider={seedFxModels}
-              loadingModels={loadingModels}
-              permissionMode={permissionMode}
-              onPermissionModeChange={setPermissionMode}
-              projects={spaceProjects}
-              projectPath={projectPath}
-              onSelectProject={handleSelectProject}
-              onAttachProject={handleAttachProject}
-              branches={branches}
-              branch={branch}
-              onSelectBranch={handleSelectBranch}
-              pendingBranch={pendingBranch}
-              onConfirmBranchSwitch={(stash) =>
-                pendingBranch && runCheckout(pendingBranch, stash)
-              }
-              onCancelBranchSwitch={() => setPendingBranch(null)}
-              useWorktree={useWorktree}
-              onToggleWorktree={() => setUseWorktree((v) => !v)}
-              onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
-              contextUsage={contextUsage}
-              isNewSession={!selectedSessionId}
-              agentSwitch={!!selectedBot}
-              bot={newBot}
-              busy={busy}
-            />
-          }
+          toolbar={toolbarInTitlebar ? undefined : composerToolbar(false)}
+          attachInCard={toolbarInTitlebar}
         />
         )
       }

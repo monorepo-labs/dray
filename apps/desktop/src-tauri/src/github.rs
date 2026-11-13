@@ -1158,8 +1158,11 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
 pub async fn merge_pr(cwd: String, number: u64, method: MergeMethod) -> Result<(), String> {
     let arg = number.to_string();
 
+    // Only ever the reader's merge, from a client: a bot and its tasks merge
+    // with `gh` and never reach this, so the bot is told of it.
     let Err(e) = gh(&cwd, &["pr", "merge", &arg, method.flag()]).await else {
         crate::analytics::feature_used("pr_merged");
+        crate::bots::note_merge(&cwd, number).await;
         return Ok(());
     };
 
@@ -1169,6 +1172,7 @@ pub async fn merge_pr(cwd: String, number: u64, method: MergeMethod) -> Result<(
         // reported failure and turned out to have worked.
         Some(true) => {
             crate::analytics::feature_used("pr_merged");
+            crate::bots::note_merge(&cwd, number).await;
             Ok(())
         }
         // Either it genuinely didn't merge, or we couldn't find out — and an

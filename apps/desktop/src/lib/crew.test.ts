@@ -175,6 +175,11 @@ describe("hidden sessions", () => {
     expect(inSidebar(withBot, [bot]).map((i) => i.sessionId)).toEqual(["a", "shown", "orphan"]);
   });
 
+  it("leaves a hidden child out when a filter has dropped its parent", () => {
+    const filtered = items.filter((i) => i.sessionId !== "a");
+    expect(inSidebar(filtered, [], items).map((i) => i.sessionId)).toEqual(["shown", "orphan"]);
+  });
+
   it("keeps a bot's settled chat in the history", () => {
     const bot = { id: "b", name: "Ops", path: "/h/bots/b", created: "" };
     const settled = [item("old", null, { cwd: "/h/bots/b", archived: true })];

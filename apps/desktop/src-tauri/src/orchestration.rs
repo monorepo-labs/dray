@@ -489,8 +489,29 @@ async fn on_machine(machine: &str, request: Request) -> Result<Response> {
         return elsewhere::list_everywhere(list).await;
     }
     let creates = matches!(request, Request::CreateSession(_));
+    if machine == elsewhere::CLOUD && !creates {
+        bail!("only `dray session new` takes --machine cloud — a cloud task's own machine is named on its row");
+    }
     let forward = elsewhere::prepare(request).await?;
-    let response = elsewhere::forward(machine, &forward).await?;
+    let placed = match machine == elsewhere::CLOUD {
+        true => Some(elsewhere::start_cloud(forward.origin.as_deref()).await?),
+        false => None,
+    };
+    let machine = placed.as_deref().unwrap_or(machine);
+    let response = elsewhere::forward(machine, &forward).await;
+    // Its machine is the task's alone, so one that never got the task goes.
+    // A lost reply proves nothing, so the machine is asked before it goes.
+    if let Some(id) = &placed {
+        let unused = match &response {
+            Ok(Response::Created { .. }) => false,
+            Ok(_) => true,
+            Err(_) => elsewhere::holds_nothing(id).await,
+        };
+        if unused {
+            elsewhere::drop_cloud(id).await;
+        }
+    }
+    let response = response?;
     // The task's server keeps its reports, and this server holds the link to
     // collect them by; the other way round usually does not exist.
     if let (true, Some(caller), Response::Created { session, .. }) = (creates, &forward.caller, &response) {
@@ -620,6 +641,48 @@ mod elsewhere {
     use crate::machines;
     use anyhow::anyhow;
     use serde_json::json;
+
+    /// `--machine cloud`: a fresh Dray Cloud machine for one task, as the
+    /// composer's Cloud pick starts one.
+    pub const CLOUD: &str = "cloud";
+
+    /// Starts a cloud machine and clones the project there, answering the
+    /// machine's id. The app starts it, since it holds Dray Cloud's key and
+    /// connections and writes the machine into `servers.json` once connected.
+    pub async fn start_cloud(origin: Option<&str>) -> Result<String> {
+        let slug = origin
+            .and_then(|o| o.strip_prefix("github.com/"))
+            .filter(|slug| slug.split('/').count() == 2)
+            .ok_or_else(|| anyhow!("Cloud runs projects with a GitHub remote — pass --project <repo path> for one"))?;
+        let id = match crate::serve::host_call("start_cloud_machine", serde_json::Value::Null).await {
+            Some(Ok(id)) => id.as_str().unwrap_or_default().to_string(),
+            Some(Err(e)) => bail!("couldn't start a cloud machine: {}", e.as_str().unwrap_or(&e.to_string())),
+            None => bail!("Dray Cloud starts machines through the Dray app — open it and try again"),
+        };
+        let cloned = async {
+            let saved = machines::on(&id).await?;
+            machines::call(&saved, "clone_github_repo", json!({ "slug": slug })).await
+        };
+        if let Err(e) = cloned.await {
+            drop_cloud(&id).await;
+            bail!("couldn't clone {slug} onto its cloud machine: {e}");
+        }
+        Ok(id)
+    }
+
+    /// Whether machine `id` answers with no sessions at all. One that does not
+    /// answer may hold a task, so it counts as holding one.
+    pub async fn holds_nothing(id: &str) -> bool {
+        let Ok(saved) = machines::on(id).await else { return false };
+        let rows = machines::call(&saved, "list_session_index_items", json!({ "archived": false })).await;
+        matches!(rows, Ok(serde_json::Value::Array(rows)) if rows.is_empty())
+    }
+
+    /// Deletes cloud machine `id`, best effort: a machine left behind still
+    /// goes when the app settles what runs on it, or by hand in Settings.
+    pub async fn drop_cloud(id: &str) {
+        let _ = crate::serve::host_call("drop_cloud_machine", json!({ "id": id })).await;
+    }
 
     /// The machine holding session `id`, where one does. Every machine is
     /// asked at once, each given [`machines::SWEEP`].
@@ -981,6 +1044,18 @@ pub async fn answer_host(cmd: &str, args: serde_json::Value) -> Result<serde_jso
             Ok(serde_json::Value::Null)
         }
         "island_links" => serde_json::to_value(crate::servers::island_links()).map_err(|e| e.to_string()),
+        // `dray session new --machine cloud`, which the server cannot start
+        // itself: the cloud connections and their `servers.json` rows are the app's.
+        // Refused while off, since a machine started then is never listed and
+        // its start would only time out.
+        "start_cloud_machine" => match crate::servers::cloud_info().await.on {
+            true => crate::servers::start_cloud_machine().await.map(serde_json::Value::from),
+            false => Err("Dray Cloud is off. Turn it on in Settings, Servers.".into()),
+        },
+        "drop_cloud_machine" => {
+            let id = args["id"].as_str().ok_or("drop_cloud_machine wants an id")?.to_string();
+            crate::servers::drop_cloud_machine(id).await.map(|()| serde_json::Value::Null)
+        }
         // The island's Extend, on a timer only the app is reading.
         "extend_boat" => {
             let id = args["id"].as_str().ok_or("extend_boat wants an id")?.to_string();
@@ -2075,18 +2150,22 @@ const NUDGE_TAIL: usize = 4000;
 /// so the bot can name what to try first. Without either the task waits on the
 /// reader. Bar a problem, the task's last message rides along, since the bot
 /// has no way to read it.
+///
+/// Sent to the task's server, which for a task on another machine holds no
+/// bot: there the nudge waits with the task's reports for the bot's server to
+/// collect (#958). True once sent or kept, false where nobody will read it, so
+/// the app never says a task is fixing what its bot never heard of.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn nudge_bot(
     session_id: String,
     problem: Option<String>,
     ready: Option<u32>,
     sink: Sink,
-) -> Result<(), crate::Fail> {
+) -> Result<bool, crate::Fail> {
     let task = store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
-    let Some(chat) = bots::bot_chat_of(&task).await else { return Ok(()) };
-    if task.archived || chat.archived || chat.session_id == task.session_id {
-        return Ok(());
-    }
+    let chat = bots::bot_chat_of(&task).await;
+    let owed = chat.is_none() && crate::remote_reports::owed(&session_id).await;
+    let Some(route) = nudge_route(&task, chat.as_ref(), owed) else { return Ok(false) };
     // A need written while the PR waited on review would outlive the review
     // on the ready row, since approving a PR does not move its task.
     if ready.is_some() && problem.is_none() && task.need.is_some() {
@@ -2105,9 +2184,38 @@ pub async fn nudge_bot(
             last_message_tail(&session_id).await?
         ),
     };
-    let send = SendMessage { session_id: chat.session_id, prompt, from_session_id: Some(session_id) };
-    send_message(send, None, &sink).await?;
-    Ok(())
+    match route {
+        NudgeRoute::Chat(chat) => {
+            let send = SendMessage { session_id: chat, prompt, from_session_id: Some(session_id) };
+            send_message(send, None, &sink).await?;
+        }
+        NudgeRoute::Outbox => {
+            let parent = task.parent_session_id.as_deref().unwrap_or_default();
+            crate::remote_reports::keep(&session_id, parent, &task.title, prompt).await?;
+        }
+    }
+    Ok(true)
+}
+
+/// Where a stall nudge goes: into the bot's chat on this server, or into the
+/// outbox for a bot on another machine, which `owed` says the task reports to.
+#[derive(Debug, PartialEq)]
+enum NudgeRoute {
+    Chat(String),
+    Outbox,
+}
+
+/// None for a task set aside, a chat settled, the bot's own chat, or a task
+/// with no bot anywhere.
+fn nudge_route(task: &SessionIndexItem, chat: Option<&SessionIndexItem>, owed: bool) -> Option<NudgeRoute> {
+    if task.archived {
+        return None;
+    }
+    match chat {
+        Some(chat) if chat.archived || chat.session_id == task.session_id => None,
+        Some(chat) => Some(NudgeRoute::Chat(chat.session_id.clone())),
+        None => owed.then_some(NudgeRoute::Outbox),
+    }
 }
 
 /// The last [NUDGE_TAIL] characters of a task's last message.
@@ -2195,6 +2303,31 @@ pub fn deliver_report(
             manager().settle(&parent_id).await?;
         }
         Ok(())
+    })
+}
+
+/// Dray's hidden review into a bot's chat (#973): sent like the reader's own
+/// message, signed by nobody, and drawn as nothing, as the kickoff is. Boxed
+/// for the reason [`report_to_parent`] is.
+pub fn send_review(
+    session_id: String,
+    prompt: String,
+    app: Sink,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+    Box::pin(async move {
+        let Some(chat) = store::get_session_index_item(&session_id).await? else { return Ok(()) };
+        // A settled chat stays settled: a review must not resume it.
+        let chat = crate::bots::current_chat(chat).await;
+        if chat.archived {
+            return Ok(());
+        }
+        crate::bots::mark_dray_prompt(&chat.session_id, &prompt);
+        let send = SendMessage { session_id: chat.session_id.clone(), prompt: prompt.clone(), from_session_id: None };
+        let sent = send_message(send, None, &app).await;
+        if sent.is_err() {
+            crate::bots::take_dray_prompt(&chat.session_id, &prompt);
+        }
+        sent.map(drop)
     })
 }
 
@@ -2406,6 +2539,26 @@ mod tests {
         assert!(!resolve_fast(Some(false), Some(&parent), Harness::ClaudeCode));
         // No parent at all is the ordinary terminal call: off.
         assert!(!resolve_fast(None, None, Harness::ClaudeCode));
+    }
+
+    /// A task on another machine finds no bot on its own server, and was
+    /// answered as nudged with nothing sent, so the Tasks row said "Fixing"
+    /// for a conflict nobody was told about.
+    #[test]
+    fn a_nudge_for_a_task_on_another_machine_waits_for_its_bot() {
+        let task = item("t", Some("bot-chat"));
+        let chat = item("bot-chat", None);
+        assert_eq!(nudge_route(&task, Some(&chat), false), Some(NudgeRoute::Chat("bot-chat".into())));
+        assert_eq!(nudge_route(&task, None, true), Some(NudgeRoute::Outbox));
+        assert_eq!(nudge_route(&task, None, false), None);
+
+        let mut settled = chat.clone();
+        settled.archived = true;
+        assert_eq!(nudge_route(&task, Some(&settled), false), None);
+        assert_eq!(nudge_route(&chat, Some(&chat), false), None);
+        let mut aside = task.clone();
+        aside.archived = true;
+        assert_eq!(nudge_route(&aside, None, true), None);
     }
 
     #[test]

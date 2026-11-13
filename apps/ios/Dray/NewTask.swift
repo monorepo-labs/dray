@@ -23,8 +23,10 @@ final class NewTask {
     }
     /// One of two same-named projects on a machine, by path; `nil` where the name is enough.
     var projectPath: String?
-    /// The machine picked for this project; `nil` takes the first that has it.
-    var pickedServer: UUID?
+    /// The machine picked; `nil` or one not connected takes the first holding the last project.
+    var pickedServer: UUID? = UserDefaults.standard.string(forKey: "new.server").flatMap(UUID.init(uuidString:)) {
+        didSet { UserDefaults.standard.set(pickedServer?.uuidString, forKey: "new.server") }
+    }
     var harness = UserDefaults.standard.string(forKey: "new.harness") ?? "claude_code" {
         didSet { UserDefaults.standard.set(harness, forKey: "new.harness") }
     }
@@ -63,48 +65,67 @@ final class NewTask {
 
     var connected: [Server] { store.live.filter { store.serverState[$0.id] == .connected } }
 
-    /// Every project name a connected machine holds, newest pick first.
+    /// The server comes first and the project is picked from what it holds, so a
+    /// machine with nothing attached yet is still a place to start: it attaches one.
+    var server: UUID? {
+        // A bot's folder is on its own machine: down, there is nowhere to send, never another machine.
+        if let bot { return connected.contains { $0.id == bot.server } ? bot.server : nil }
+        return connected.first { $0.id == pickedServer }?.id
+            ?? connected.first { s in (store.projects[s.id] ?? []).contains { $0.name == projectName } }?.id
+            ?? connected.first?.id
+    }
+    /// The picked server's projects by name, newest pick first.
     var projectNames: [String] {
         var seen = Set<String>()
-        return connected.flatMap { store.projects[$0.id] ?? [] }
-            .sorted { $0.lastSelected > $1.lastSelected }
-            .map(\.name).filter { seen.insert($0).inserted }
+        return held.sorted { $0.lastSelected > $1.lastSelected }.map(\.name).filter { seen.insert($0).inserted }
     }
-    /// The picked project, else the one picked last anywhere.
-    var project: String? { projectName.flatMap { projectNames.contains($0) ? $0 : nil } ?? projectNames.first }
-    /// The machines holding the picked project.
-    var machines: [Server] { connected.filter { s in (store.projects[s.id] ?? []).contains { $0.name == project } } }
-    /// With no project yet, the machine picked to attach one on.
-    var server: UUID? {
-        machines.first { $0.id == pickedServer }?.id ?? machines.first?.id
-            ?? connected.first { $0.id == pickedServer }?.id ?? connected.first?.id
-    }
+    private var held: [Project] { server.flatMap { store.projects[$0] } ?? [] }
+    /// The picked project where this server has it, else the one picked last here.
+    var project: String? { bot?.bot.name ?? projectName.flatMap { projectNames.contains($0) ? $0 : nil } ?? projectNames.first }
     var cwd: String? {
-        guard let server, let held = store.projects[server]?.filter({ $0.name == project }) else { return nil }
-        return held.first { $0.path == projectPath }?.path ?? held.first?.path
+        if let bot { return bot.bot.path }
+        let named = held.filter { $0.name == project }
+        return named.first { $0.path == projectPath }?.path ?? named.first?.path
     }
 
-    /// The project menu: a name per repo, split by folder where one machine holds two of that name.
+    /// The project menu: a name per repo, split by folder where the server holds two of that name.
     var projectChoices: [ProjectChoice] {
         projectNames.flatMap { name -> [ProjectChoice] in
-            let held = connected.flatMap { s in (store.projects[s.id] ?? []).filter { $0.name == name }.map { (s.id, $0.path) } }
-            let clash = Dictionary(grouping: held, by: \.0).values.contains { $0.count > 1 }
-            return clash ? held.map { ProjectChoice(name: name, path: $0.1, server: $0.0) } : [ProjectChoice(name: name, path: nil, server: nil)]
+            let paths = held.filter { $0.name == name }.map(\.path)
+            return paths.count > 1 ? paths.map { ProjectChoice(name: name, path: $0) } : [ProjectChoice(name: name, path: nil)]
         }
     }
     var projectChoice: ProjectChoice? {
         projectChoices.first { $0.name == project && $0.path == cwd } ?? projectChoices.first { $0.name == project && $0.path == nil }
     }
 
+    /// A new server keeps the project by name where it has one, as the old pick did across machines.
+    /// A bot with no chat yet: the send goes to its folder, which is what starts
+    /// the chat, the desktop's empty composer aimed at a bot. Any other pick leaves it.
+    var bot: (server: UUID, bot: Bot)?
+
+    func aim(at bot: Bot, on server: UUID) {
+        self.bot = (server, bot)
+    }
+
+    func pick(server: UUID?) {
+        bot = nil
+        pickedServer = server
+        projectPath = nil
+    }
+
     func pick(_ choice: ProjectChoice?) {
         guard let choice else { return }
+        // The menu lists the bot's machine's projects, so leaving the bot stays on that machine.
+        if let bot { pickedServer = bot.server }
+        bot = nil
         projectName = choice.name
         projectPath = choice.path
-        pickedServer = choice.server
     }
 
     /// Opens a saved draft with the picks it was saved on, so starting it or saving it again keeps them.
     func open(_ draft: DraftItem, on server: UUID) {
+        bot = nil
         text = draft.prompt
         draftId = (server, draft.id)
         if let name = draft.project { projectName = name }
@@ -200,12 +221,13 @@ final class NewTask {
                 "fast": .bool(fast && Picks.offersFast(harness, model)),
                 "cwd": .string(cwd),
                 "branch": nil,
-                "useWorktree": .bool(worktree),
+                "useWorktree": .bool(worktree && bot == nil),
                 "worktreeName": nil,
                 "baseRef": nil,
                 "isNewSession": true,
             ])
             if let item = outcome.snapshot { store.created(server, item) }
+            bot = nil
             await dropDraft(opened)
             // Words added while the start was out were never sent, so they stay.
             if text == sent { text = "" }
@@ -272,9 +294,8 @@ final class NewTask {
 /// One entry in the dock's project menu.
 struct ProjectChoice: Hashable {
     let name: String
-    /// Set only where a machine holds two projects of this name.
+    /// Set only where the server holds two projects of this name.
     let path: String?
-    let server: UUID?
 
     var label: String { path.map { "\(name) — \((($0 as NSString).deletingLastPathComponent as NSString).lastPathComponent)" } ?? name }
 }

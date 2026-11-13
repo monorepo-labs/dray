@@ -13,8 +13,10 @@ import WorktreeToggle from "@/components/composer/WorktreeToggle";
 import { Button } from "@/components/ui/button";
 import type { ServerId } from "@/lib/transport";
 import ShortcutKeys from "@/components/ShortcutKeys";
+import { onCloud, useCloud, useCloudPicks } from "@/lib/cloud";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { botPicksStance } from "@/lib/permission";
+import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type {
   ApprovalPolicy,
@@ -89,6 +91,9 @@ type ComposerToolbarProps = {
   /// A bot's first chat, which draws no project pickers: it runs in its own
   /// folder rather than in a repo, and the header already names the bot.
   bot?: Bot;
+  /// Drawn in the titlebar rather than under the composer: a bot's chat. + goes
+  /// into the card there (`ChatInput`'s `attachInCard`), leaving the pickers.
+  inTitlebar?: boolean;
 
   /// Whether this session's turn is in flight. Only the fx provider switch
   /// reads it — it is the one control here that moves the child on the click
@@ -135,13 +140,19 @@ export default function ComposerToolbar({
   isNewSession,
   agentSwitch = false,
   bot,
+  inTitlebar = false,
   busy,
 }: ComposerToolbarProps) {
+  useCloud();
+  useCloudPicks();
+  // Placement picks the checkout, so a branch checked out here would be one
+  // the task never runs on.
+  const cloud = onCloud(projects, projectPath);
   return (
-    <div className="flex min-w-0 items-center gap-0.5 px-1">
+    <div className={cn("flex min-w-0 items-center gap-0.5", !inTitlebar && "px-1")}>
       {/* No radius override: `icon-sm` already carries the app's rounded-square,
           and a circle here would be the one round control in a row of them. */}
-      <Tooltip>
+      {!inTitlebar && <Tooltip>
         <TooltipTrigger asChild>
           <Button
             type="button"
@@ -158,7 +169,7 @@ export default function ComposerToolbar({
           Attach files
           <ShortcutKeys ids={["attach"]} />
         </TooltipContent>
-      </Tooltip>
+      </Tooltip>}
 
       <ModelSelector
         server={server}
@@ -178,6 +189,7 @@ export default function ComposerToolbar({
         onReloadModels={onReloadModels}
         onSeedProvider={onSeedProvider}
         loadingModels={loadingModels}
+        inTitlebar={inTitlebar}
       />
 
       {isNewSession && !bot && (
@@ -194,12 +206,13 @@ export default function ComposerToolbar({
               picked — and a worktree has nothing to fork from. */}
           {projectPath && (
             <>
-              <WorktreeToggle on={useWorktree} onToggle={onToggleWorktree} />
+              {/* A cloud task always runs in a worktree, so there is nothing to toggle. */}
+              {!cloud && <WorktreeToggle on={useWorktree} onToggle={onToggleWorktree} />}
 
               {/* A worktree forks from the remote's default branch no matter
                   what is checked out, so offering a branch here would promise
                   something the CLI doesn't honour. State the real base instead. */}
-              {useWorktree ? (
+              {useWorktree || cloud ? (
                 branches?.defaultBase && (
                   <span className="truncate px-1.5 text-ui text-muted-foreground/60">
                     from {branches.defaultBase}
@@ -237,6 +250,7 @@ export default function ComposerToolbar({
           value={permissionMode}
           onChange={onPermissionModeChange}
           locked={lockedMidTurn(harness, "stance", busy)}
+          inTitlebar={inTitlebar}
         />
       )}
 

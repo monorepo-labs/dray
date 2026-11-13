@@ -1,0 +1,4 @@
+# gpui-pre-macos 0.3.12 calls `Option::map_or_default`, stable from 1.98.
+[toolchain]
+channel = "1.100.0"
+profile = "minimal"

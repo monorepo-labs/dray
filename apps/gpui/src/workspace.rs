@@ -4,15 +4,17 @@
 use std::time::Duration;
 
 use dray_core::projects::Project;
+use dray_core::events::AgentEvent;
 use dray_core::store::SessionIndexItem;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::{
-    App, Context, IntoElement, MouseButton, ParentElement, PathBuilder, Pixels, Point, Render, ScrollHandle, Styled,
+    App, Context, Entity, IntoElement, MouseButton, ParentElement, PathBuilder, Pixels, Point, Render, ScrollHandle, Styled,
     Task, Window, canvas, div, point, prelude::*, px,
 };
 use serde_json::json;
 
+use crate::chat::Chat;
 use crate::store::{Read, Store};
 use crate::theme::{Mode, Theme};
 use crate::wire::{Signal, Wire};
@@ -28,6 +30,17 @@ const RIM: f32 = 8.;
 /// The sheet's corner (`rounded-[8px]`).
 const SHEET_RADIUS: f32 = 8.;
 
+gpui::actions!(dray, [NewTask, NextSession, PrevSession]);
+
+/// The window's chords, as shortcuts.ts names them.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        gpui::KeyBinding::new("cmd-n", NewTask, None),
+        gpui::KeyBinding::new("cmd-shift-down", NextSession, None),
+        gpui::KeyBinding::new("cmd-shift-up", PrevSession, None),
+    ]);
+}
+
 pub enum Connection {
     Connecting,
     Up,
@@ -41,6 +54,11 @@ pub struct Workspace {
     pub connection: Connection,
     pub sidebar_open: bool,
     pub sidebar_scroll: ScrollHandle,
+    /// The open session's transcript, made on selecting it.
+    chat: Option<Entity<Chat>>,
+    /// The root's focus, so the window's chords reach it with nothing else
+    /// focused.
+    focus: gpui::FocusHandle,
     _tasks: Vec<Task<()>>,
 }
 
@@ -68,6 +86,8 @@ impl Workspace {
             cx.notify();
         })
         .detach();
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
         Workspace {
             wire,
             store: Store::default(),
@@ -75,6 +95,8 @@ impl Workspace {
             connection: Connection::Connecting,
             sidebar_open: true,
             sidebar_scroll: ScrollHandle::new(),
+            chat: None,
+            focus,
             _tasks: vec![listen, tick],
         }
     }
@@ -90,9 +112,16 @@ impl Workspace {
                 true
             }
             Signal::Event { name, payload } => {
+                if name == "agent_event" {
+                    self.to_chat(&payload, cx);
+                }
                 let applied = self.store.apply(&name, payload);
                 if applied.reload {
                     self.reload(cx);
+                    // A drop may have cost the open transcript events.
+                    if let Some(chat) = &self.chat {
+                        chat.update(cx, |chat, cx| chat.read(cx));
+                    }
                 }
                 applied.redraw
             }
@@ -144,9 +173,55 @@ impl Workspace {
         .detach();
     }
 
+    /// Hands an event to the open transcript when it is that session's. Only
+    /// then is it parsed, since deltas for every session stream through here.
+    fn to_chat(&self, payload: &serde_json::Value, cx: &mut Context<Self>) {
+        let Some(chat) = &self.chat else { return };
+        if payload["sessionId"].as_str() != Some(chat.read(cx).session_id.as_str()) {
+            return;
+        }
+        match serde_json::from_value::<AgentEvent>(payload.clone()) {
+            Ok(event) => chat.update(cx, |chat, cx| chat.on_event(event, cx)),
+            Err(e) => log::warn!("an agent_event this build cannot read: {e}"),
+        }
+    }
+
     pub fn select(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        if self.selected.as_deref() == Some(session_id) {
+            // Clicking a transcript that failed to open tries it again.
+            if let Some(chat) = &self.chat
+                && chat.read(cx).failed()
+            {
+                chat.update(cx, |chat, cx| chat.read(cx));
+            }
+            return;
+        }
         self.selected = Some(session_id.to_string());
+        // One transcript at a time: reopening reads it again, so nothing
+        // missed while it was closed has to be caught up.
+        let wire = self.wire.clone();
+        let id = session_id.to_string();
+        self.chat = Some(cx.new(|cx| Chat::new(id, &wire, cx)));
         cx.notify();
+    }
+
+    /// New Task: closes the open session, leaving the sheet to the new-task
+    /// screen.
+    pub fn new_task(&mut self, cx: &mut Context<Self>) {
+        self.selected = None;
+        self.chat = None;
+        cx.notify();
+    }
+
+    /// Steps the selection through the sidebar's rows, in its order.
+    fn step(&mut self, delta: i32, cx: &mut Context<Self>) {
+        let refs: Vec<&SessionIndexItem> = self.store.items.iter().filter(|i| !i.hidden).collect();
+        let groups = crate::sessions::session_groups(&refs, &self.store.live, chrono::Utc::now().timestamp_millis());
+        let order: Vec<&str> =
+            groups.iter().flat_map(|g| g.rows().iter().map(|r| r.item.session_id.as_str())).collect();
+        if let Some(id) = crate::sessions::step(&order, self.selected.as_deref(), delta).map(str::to_string) {
+            self.select(&id, cx);
+        }
     }
 
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
@@ -174,6 +249,10 @@ impl Render for Workspace {
             .size_full()
             .relative()
             .bg(theme.body)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &NewTask, _, cx| this.new_task(cx)))
+            .on_action(cx.listener(|this, _: &NextSession, _, cx| this.step(1, cx)))
+            .on_action(cx.listener(|this, _: &PrevSession, _, cx| this.step(-1, cx)))
             .font_family(crate::assets::SANS)
             // `--text-ui--line-height`. GPUI's own default is 1.618, which
             // pushes every row of text down a few pixels against the web app.
@@ -227,7 +306,22 @@ impl Render for Workspace {
                     .rounded(px(SHEET_RADIUS))
                     .bg(theme.sheet)
                     .overflow_hidden()
-                    .child(self.empty_state(&theme)),
+                    .map(|sheet| match &self.chat {
+                        Some(chat) => {
+                            let id = chat.read(cx).session_id.clone();
+                            let asks: Vec<_> = self.store.asks(&id).collect();
+                            sheet
+                                .flex()
+                                .flex_col()
+                                .child(div().flex_1().min_h_0().child(chat.clone()))
+                                .children(crate::slots::cards(&id, &asks, &theme))
+                                .children(crate::slots::composer(&id, &theme, window, cx))
+                        }
+                        None => match crate::slots::new_task(&theme) {
+                            Some(screen) if matches!(self.connection, Connection::Up) => sheet.child(screen),
+                            _ => sheet.child(self.empty_state(&theme)),
+                        },
+                    }),
             )
             .child(self.header(&theme, cx))
     }
@@ -335,6 +429,7 @@ pub fn open(cx: &mut App) {
         },
         |window, cx| {
             crate::glass::apply(window);
+            bind_keys(cx);
             cx.set_global(Theme::new(Mode::of(window.appearance())));
             cx.new(|cx| Workspace::new(wire, signals, window, cx))
         },

@@ -2,6 +2,7 @@
 //! this Mac already runs; see apps/gpui/README.md.
 
 mod assets;
+mod chat;
 // Not wired into the transcript yet; examples/code.rs draws it.
 #[allow(dead_code)]
 #[path = "code/code.rs"]
@@ -10,8 +11,10 @@ mod color;
 mod glass;
 mod sessions;
 mod sidebar;
+mod slots;
 mod store;
 mod theme;
+mod transcript;
 mod ui;
 mod wire;
 mod workspace;
