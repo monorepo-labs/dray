@@ -161,15 +161,26 @@ pub fn undone_prompt(path: &str, commit: &str) -> String {
 /// bot says there is for nobody: told to write no reply, it sometimes still
 /// explains itself, and that must not reach the chat, the sidebar's preview
 /// or a new agent's replay.
+///
+/// Only a turn a review opened *alone*, as [`TurnNotes::reviewing`] reads it:
+/// a review queued behind the reader's message joins their turn, and the
+/// reply there is theirs.
 pub fn in_review(events: &[crate::events::AgentEvent]) -> Vec<bool> {
-    let mut on = false;
+    let (mut review, mut other) = (false, false);
     events
         .iter()
         .map(|e| {
-            if let AgentEventPayload::UserMessage { text, kickoff, .. } = &e.payload {
-                on = *kickoff && text.starts_with(REVIEW);
+            if e.subagent.is_none() {
+                match &e.payload {
+                    AgentEventPayload::UserMessage { text, kickoff: true, .. } if text.starts_with(REVIEW) => {
+                        review = true
+                    }
+                    AgentEventPayload::UserMessage { .. } => other = true,
+                    AgentEventPayload::TurnCompleted { .. } => (review, other) = (false, false),
+                    _ => {}
+                }
             }
-            on
+            review && !other
         })
         .collect()
 }
@@ -452,6 +463,24 @@ mod tests {
         note_prompt(id, "remove the second rule", None, false);
         note_prompt(id, "Review: x", None, true);
         assert!(!take_notes(id).reviewing());
+    }
+
+    #[test]
+    fn only_a_turn_a_review_opened_alone_is_hidden() {
+        let event = |payload: serde_json::Value| -> crate::events::AgentEvent {
+            serde_json::from_value(serde_json::json!({
+                "id": "e", "sessionId": "s", "harness": "claude_code", "seq": 0, "ts": "", "payload": payload
+            }))
+            .unwrap()
+        };
+        let prompt = |text: &str, kickoff: bool| event(serde_json::json!({"type": "user_message", "text": text, "kickoff": kickoff}));
+        let said = || event(serde_json::json!({"type": "assistant_text", "text": "x"}));
+        let done = || event(serde_json::json!({"type": "turn_completed", "status": "success"}));
+        let events = [
+            prompt("Review: a", true), said(), done(),
+            prompt("rename it", false), prompt("Review: b", true), said(), done(), said(),
+        ];
+        assert_eq!(in_review(&events), [true, true, false, false, false, false, false, false]);
     }
 
     #[test]

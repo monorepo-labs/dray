@@ -24,6 +24,7 @@ const user = (text: string, kickoff = false) =>
   ev({ type: "user_message", text, images: [], issues: [], baseline: null, queued: false, from: null, cwd: null, kickoff } as AgentEventPayload);
 const said = (text: string, subagent: string | null = null) =>
   ev({ type: "assistant_text", block: null, text } as AgentEventPayload, subagent);
+const done = () => ev({ type: "turn_completed", status: "success" } as unknown as AgentEventPayload);
 const call = (callId: string, command: string) =>
   ev({ type: "tool_call_started", callId, name: "Bash", input: { command } } as unknown as AgentEventPayload);
 const result = (callId: string, text: string, isError = false) =>
@@ -239,9 +240,19 @@ dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot pro
   });
 
   it("knows a turn a review opened while it streams", () => {
-    expect(inReviewTurn([user("hi"), said("hello"), user("Review: x", true)])).toBe(true);
+    expect(inReviewTurn([user("hi"), said("hello"), done(), user("Review: x", true)])).toBe(true);
     expect(inReviewTurn([user("Review: x", true), said("…"), user("thanks")])).toBe(false);
     expect(inReviewTurn([user("start", true)])).toBe(false);
+    // Queued behind the reader's message, a review joins their turn.
+    expect(inReviewTurn([user("Review: x", true), said("…"), done(), user("rename it"), user("Review: y", true)])).toBe(
+      false,
+    );
+    expect(inReviewTurn([user("rename it"), said("done"), done(), user("Review: y", true)])).toBe(true);
+  });
+
+  it("keeps the reply to a turn a review joined", () => {
+    const items = botItems([user("rename it"), user("Review: y", true), said("Renamed.")]);
+    expect(items.map((i) => i.kind)).toEqual(["user", "assistant"]);
   });
 
   it("draws no task for a create that failed", () => {
