@@ -398,10 +398,15 @@ mockIPC(
 );
 
 // Stalls already nudged and fixes already asked, from an earlier load, would
-// change what the card and the Tasks tab draw.
-localStorage.removeItem("ade.nudgedStalls");
-localStorage.removeItem("ade.dismissedStalls");
-localStorage.removeItem("ade.fixAsks");
+// change what the card and the Tasks tab draw. Only this page's own: the app
+// on the same origin keeps its history.
+const mine = (key: string) => key.startsWith(id(0).slice(0, 24));
+for (const key of ["ade.nudgedStalls", "ade.dismissedStalls"]) {
+  const kept = (JSON.parse(localStorage.getItem(key) ?? "[]") as string[]).filter((k) => !mine(k));
+  localStorage.setItem(key, JSON.stringify(kept));
+}
+const asks = JSON.parse(localStorage.getItem("ade.fixAsks") ?? "{}") as Record<string, unknown>;
+localStorage.setItem("ade.fixAsks", JSON.stringify(Object.fromEntries(Object.entries(asks).filter(([k]) => !mine(k)))));
 
 // After the mock: the app's modules reach for Tauri as they load.
 const { setMode, setTheme } = await import("@/hooks/useTheme");
