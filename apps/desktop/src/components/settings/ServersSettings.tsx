@@ -127,7 +127,8 @@ export default function ServersSettings() {
 
       <div className="flex flex-col">
         <ThisMacRow />
-        <CloudRow machines={all.filter((s) => s.cloud)} />
+        {/* Off is parked under another account, or Cloud switched off. */}
+        <CloudRow machines={all.filter((s) => s.cloud && s.on)} />
         {servers.map((server) => (
           // The row stays laid out under the field, hidden, so renaming moves
           // nothing: the row is as tall as its detail and fix make it, which a
@@ -248,13 +249,16 @@ function CloudRow({ machines }: { machines: ServerInfo[] }) {
   const cloud = useCloud();
   const [changing, setChanging] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   // The service, never its machines: each one stops when its task goes idle,
   // and that is Dray's business, not a state to show.
   const status: ServerStatus = cloud.on && cloud.keyed && !cloud.error ? "connected" : "disconnected";
   const switchToAccount = () => {
     setSwitching(true);
+    setSwitchError(null);
+    // Refused, the key stays in use, so the reason is the only sign of it.
     invoke("set_cloud_key", { key: "" }, LOCAL)
-      .catch(console.error)
+      .catch((err) => setSwitchError(String(err)))
       .finally(() => setSwitching(false));
   };
   const detail = !cloud.keyed
@@ -288,6 +292,7 @@ function CloudRow({ machines }: { machines: ServerInfo[] }) {
       }
     >
       {changing && <CloudKeyField onCancel={() => setChanging(false)} onSaved={() => setChanging(false)} />}
+      {switchError && cloud.key && <p className="text-ui text-destructive">{switchError}</p>}
     </Row>
   );
 }

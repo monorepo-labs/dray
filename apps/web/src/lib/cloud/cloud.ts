@@ -197,31 +197,30 @@ function capped(cap: number) {
   );
 }
 
-/// Runs `fn` alone among one account's starts and resumes, so two at once
-/// can't both pass the cap. Postgres's lock rather than one in memory, since
-/// two requests can land on two instances. The key is one person and needs
-/// no database.
-async function oneAtATime(owner: Owner, fn: () => Promise<Response>): Promise<Response> {
-  if (owner === null) return fn();
-  const db = await pool.connect();
-  try {
-    await db.query("begin");
-    await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`dray-cloud:${owner}`]);
-    return await fn();
-  } finally {
-    await db.query("commit").catch(() => {});
-    db.release();
-  }
-}
+/// Oldest first, so of starts that raced past the cap the earliest are kept.
+const byAge = (a: Sandbox, b: Sandbox) =>
+  (a.createdAt ?? "").localeCompare(b.createdAt ?? "") || a.id.localeCompare(b.id);
 
 /// A new machine for one task, created from the saved snapshot. Never shared,
 /// so a task's checkout, agents and memory are its own.
+///
+/// The cap is checked again once the machine exists, rather than under a lock:
+/// a lock held across boat's calls tied up a database connection per waiting
+/// start. Starts that raced past it keep the oldest and delete the rest.
 export async function startMachine(origin: string, caller: Caller): Promise<Response> {
-  return oneAtATime(caller.owner, async () => {
-    const cap = awakeCap();
-    if ((await listMachines(caller.owner)).filter(awake).length >= cap) return capped(cap);
-    return Response.json({ machine: await create(origin, caller) });
-  });
+  const cap = awakeCap();
+  if ((await listMachines(caller.owner)).filter(awake).length >= cap) return capped(cap);
+  const made = await create(origin, caller);
+  const ranked = (await listMachines(caller.owner)).filter(awake).sort(byAge);
+  if (ranked.findIndex((s) => s.id === made.id) >= cap) {
+    await boat("DELETE", `/sandboxes/${made.id}`, undefined, false, { "X-Ascii-Confirm-Delete": made.id });
+    return capped(cap);
+  }
+  // Always, not only where hosting failed: a create's `localhost` relay never
+  // starts (the sandbox's relay list stays `[]`), so the URL answers 502 until
+  // the port is hosted again on the running machine (#1003).
+  hostWhenUp(made.id);
+  return Response.json({ machine: made });
 }
 
 async function create(origin: string, caller: Caller) {
@@ -247,10 +246,6 @@ async function create(origin: string, caller: Caller) {
     true,
   );
   const hosted = res.hostedPorts?.[0];
-  // Always, not only where hosting failed: a create's `localhost` relay never
-  // starts (the sandbox's relay list stays `[]`), so the URL answers 502 until
-  // the port is hosted again on the running machine (#1003).
-  hostWhenUp(res.sandbox.id);
   const fromUrl = hosted?.url?.match(/^https:\/\/([a-z0-9-]+)-\d+\.on\.boat\.dev/)?.[1];
   // Labels as asked, so the token answered never rests on boat echoing them.
   return machine({ ...res.sandbox, labels }, caller.secret, res.sandbox.subdomain ?? fromUrl);
@@ -260,9 +255,6 @@ async function resume(s: Sandbox, secret: string) {
   const res = await boat<{ sandbox?: Sandbox | null }>("POST", `/sandboxes/${s.id}/resume`, {
     ttlSeconds: TTL_SECONDS,
   });
-  // Boat keeps a hosted port across a resume, so this is only a repair: a
-  // create whose hosting failed gets a second chance on its next start.
-  hostWhenUp(s.id);
   return machine({ ...s, state: res.sandbox?.state ?? "provisioning" }, secret);
 }
 
@@ -289,17 +281,27 @@ function hostWhenUp(id: string) {
 }
 
 /// Resumes one of the caller's machines. One already awake answers as it is
-/// and never counts against the cap.
+/// and never counts against the cap. Checked again after, as a start is:
+/// resumes that raced past the cap stop again, every one of them, since a
+/// resume leaves no time to rank them by.
 export async function resumeMachine(id: string, caller: Caller): Promise<Response> {
-  return oneAtATime(caller.owner, async () => {
-    const all = SANDBOX_ID.test(id) ? await listMachines(caller.owner) : [];
-    const s = all.find((s) => s.id === id);
-    if (!s) return error(404, "not_found");
-    if (awake(s)) return Response.json({ machine: machine(s, caller.secret) });
-    const cap = awakeCap();
-    if (all.filter(awake).length >= cap) return capped(cap);
-    return Response.json({ machine: await resume(s, caller.secret) });
-  });
+  const all = SANDBOX_ID.test(id) ? await listMachines(caller.owner) : [];
+  const s = all.find((s) => s.id === id);
+  if (!s) return error(404, "not_found");
+  if (awake(s)) return Response.json({ machine: machine(s, caller.secret) });
+  const cap = awakeCap();
+  if (all.filter(awake).length >= cap) return capped(cap);
+  const resumed = await resume(s, caller.secret);
+  // Counted as awake whether or not boat's list has caught up with it yet.
+  const others = (await listMachines(caller.owner)).filter((m) => m.id !== s.id && awake(m));
+  if (others.length + 1 > cap) {
+    await boat("POST", `/sandboxes/${s.id}/stop`);
+    return capped(cap);
+  }
+  // Boat keeps a hosted port across a resume, so this is only a repair: a
+  // create whose hosting failed gets a second chance on its next start.
+  hostWhenUp(s.id);
+  return Response.json({ machine: resumed });
 }
 
 export async function stopMachine(id: string, caller: Caller): Promise<Response> {

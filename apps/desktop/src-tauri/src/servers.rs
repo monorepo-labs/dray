@@ -525,6 +525,7 @@ pub async fn start(sink: Sink) {
             ignored: None,
             boat: None,
             cloud: None,
+            cloud_owner: None,
             unknown: Default::default(),
         };
         list.push(Conn::new(this_mac));
@@ -1293,7 +1294,7 @@ async fn sync_cloud() -> Result<(), String> {
         }
         *CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = listed.as_ref().err().cloned();
         announce_cloud().await;
-        apply_listing(listed?).await;
+        apply_listing(listed?, cred.owner.clone()).await;
         return Ok(());
     }
     Ok(())
@@ -1308,9 +1309,32 @@ async fn sync_cloud_soon() {
     }
 }
 
-/// Called under [`CLOUD_SYNC`].
-async fn apply_listing(listing: cloud::Listing) {
+#[derive(Debug, PartialEq)]
+enum Unlisted {
+    Keep,
+    Park,
+    Drop,
+}
+
+/// What a listing for `owner` does to a saved row: anything it lists, or that
+/// is no cloud machine, stays; a missing machine of `owner`'s goes; another
+/// owner's missing machine is parked.
+fn unlisted_fate(saved: &Saved, listed: &[String], owner: &Option<String>) -> Unlisted {
+    match &saved.cloud {
+        None => Unlisted::Keep,
+        Some(sandbox) if listed.contains(sandbox) => Unlisted::Keep,
+        Some(_) if saved.cloud_owner != *owner => Unlisted::Park,
+        Some(_) => Unlisted::Drop,
+    }
+}
+
+/// Called under [`CLOUD_SYNC`], with the owner the listing is for
+/// (`cloud::Cred::owner`). A machine missing from it goes only where it is
+/// that owner's; another account's is parked, off, until its own account
+/// lists it again, so a sign-in as someone else costs no kept transcripts.
+async fn apply_listing(listing: cloud::Listing, owner: Option<String>) {
     CLOUD_GENERATION.fetch_add(1, Ordering::SeqCst);
+    let on = crate::settings::read().await.dray_cloud;
     let known: HashMap<String, String> =
         conns().iter().filter_map(|c| Some((c.saved.cloud.clone()?, c.saved.id.clone()))).collect();
     // Every machine listed keeps its row, but one boat has given no address
@@ -1340,24 +1364,38 @@ async fn apply_listing(listing: cloud::Listing) {
     let (gone, saved) = {
         let mut list = conns();
         let mut gone = Vec::new();
-        let mut saved = false;
-        list.retain_mut(|conn| {
-            let listed = conn.saved.cloud.as_ref().is_none_or(|s| listed.contains(s));
-            if !listed {
+        let mut parked = false;
+        list.retain_mut(|conn| match unlisted_fate(&conn.saved, &listed, &owner) {
+            Unlisted::Keep => true,
+            Unlisted::Park => {
+                if !conn.saved.off {
+                    conn.saved.off = true;
+                    conn.restart();
+                    parked = true;
+                }
+                true
+            }
+            Unlisted::Drop => {
                 if let Some(task) = conn.task.take() {
                     task.abort();
                 }
                 gone.push(conn.saved.id.clone());
+                false
             }
-            listed
         });
+        let mut saved = parked;
         for (machine, url, id) in machines {
             match list.iter_mut().find(|c| c.saved.id == id) {
                 Some(conn) => {
                     let was = conn.boat.as_ref().map(|row| row.phase);
                     let phase = cloud_phase(was, machine.state);
-                    saved |= conn.saved.url != url;
-                    let moved = conn.saved.url != url || rekeyed.contains(&id);
+                    // Taken over by this owner, as an heir takes the key's, or
+                    // back from being parked under another.
+                    let claimed = conn.saved.cloud_owner != owner || conn.saved.off == on;
+                    saved |= conn.saved.url != url || claimed;
+                    let moved = conn.saved.url != url || rekeyed.contains(&id) || claimed;
+                    conn.saved.cloud_owner = owner.clone();
+                    conn.saved.off = !on;
                     conn.saved.url = url;
                     let row = conn.boat.get_or_insert_with(|| BoatRow::new(phase));
                     row.phase = phase;
@@ -1380,11 +1418,12 @@ async fn apply_listing(listing: cloud::Listing) {
                         name,
                         url,
                         ssh: None,
-                        off: false,
+                        off: !on,
                         beta: false,
                         ignored: None,
                         boat: None,
                         cloud: Some(machine.id),
+                        cloud_owner: owner.clone(),
                         unknown: Default::default(),
                     };
                     // Under the lock, so `run` reads the phase before it connects.
@@ -1421,16 +1460,16 @@ async fn watch_cloud() {
 
 /// Saves the Dray Cloud key once the control plane takes it, and turns Dray
 /// Cloud on. An empty key removes it: signed in, that is the switch to the
-/// account, whose listing is applied, and the key's machines stay only where
-/// the control plane hands them to the account. Signed out, every cloud
-/// machine is forgotten with the key.
+/// account, whose listing is applied: the key's machines it lists become the
+/// account's, and the rest are parked. Signed out, the key's machines are
+/// forgotten with it.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_cloud_key(key: String) -> Result<(), String> {
     let key = key.trim();
-    let listing = match (key.is_empty(), cloud::account().await) {
-        (true, None) => cloud::Listing { token: String::new(), machines: Vec::new() },
-        (true, Some(account)) => cloud::list(&account).await?,
-        (false, _) => cloud::list(&cloud::Cred { token: key.into(), base: cloud::base(), account: false }).await?,
+    let (listing, owner) = match (key.is_empty(), cloud::account().await) {
+        (true, None) => (cloud::Listing { token: String::new(), machines: Vec::new() }, None),
+        (true, Some(account)) => (cloud::list(&account).await?, account.owner),
+        (false, _) => (cloud::list(&cloud::Cred { token: key.into(), base: cloud::base(), owner: None }).await?, None),
     };
     let one = CLOUD_SYNC.lock().await;
     crate::issues::set_credential(cloud::KEY, Some(key).filter(|k| !k.is_empty())).await?;
@@ -1438,7 +1477,7 @@ pub async fn set_cloud_key(key: String) -> Result<(), String> {
     if !key.is_empty() {
         switch_cloud(true).await?;
     }
-    apply_listing(listing).await;
+    apply_listing(listing, owner).await;
     drop(one);
     announce_cloud().await;
     Ok(())
@@ -1462,10 +1501,16 @@ pub async fn set_cloud_on(on: bool) -> Result<(), String> {
 async fn switch_cloud(on: bool) -> Result<(), String> {
     CLOUD_GENERATION.fetch_add(1, Ordering::SeqCst);
     crate::settings::update(|s| s.dray_cloud = on).await.map_err(|e| format!("{e:#}"))?;
+    // On wakes only the machines whoever calls now owns; another account's
+    // stay parked.
+    let owner = cloud::cred().await.map(|c| c.owner);
     let touched = {
         let mut list = conns();
         let mut touched = false;
-        for conn in list.iter_mut().filter(|c| c.saved.cloud.is_some() && c.saved.off == on) {
+        let flips = |c: &&mut Conn| {
+            c.saved.cloud.is_some() && c.saved.off == on && (!on || owner.as_ref() == Some(&c.saved.cloud_owner))
+        };
+        for conn in list.iter_mut().filter(flips) {
             conn.saved.off = !on;
             conn.restart();
             touched = true;
@@ -1518,12 +1563,17 @@ async fn reach_new_machine(sandbox: &str) -> Result<String, String> {
 /// its row, token, kept lists and kept transcripts.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn drop_cloud_machine(id: String) -> Result<(), String> {
-    let sandbox = conns()
+    let (sandbox, owner) = conns()
         .iter()
         .find(|c| c.saved.id == id)
-        .and_then(|c| c.saved.cloud.clone())
+        .and_then(|c| Some((c.saved.cloud.clone()?, c.saved.cloud_owner.clone())))
         .ok_or("That is not a Dray Cloud machine.")?;
     let cred = cloud::cred().await.ok_or(NO_CLOUD_KEY)?;
+    // Another account's delete answers 204 untouched, and forgetting the row
+    // on that would strand the machine where its owner can never delete it.
+    if cred.owner != owner {
+        return Err("That machine belongs to another Dray account. Sign in to it to remove it.".into());
+    }
     cloud::delete(&cred, &sandbox).await?;
     crate::analytics::track("feature_used", json!({ "feature": "cloud_machine_dropped" }));
     forget_cloud_machine(Some(id), sandbox).await
@@ -1842,7 +1892,7 @@ pub async fn add_server(url: String, token: String, name: Option<String>, ticket
                 conn.saved.name = name;
                 conn.restart();
             } else {
-                list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() }));
+                list.push(Conn::new(Saved { id: id.clone(), name, url, ssh: None, off: false, beta: false, ignored: None, boat: None, cloud: None, cloud_owner: None, unknown: Default::default() }));
             }
         })
     };
@@ -2025,7 +2075,7 @@ pub async fn add_ssh_server(line: String, name: Option<String>, ticket: Option<S
             conn.saved.id.clone()
         } else {
             let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
-            list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() }));
+            list.push(Conn::new(Saved { id: id.clone(), name, url: String::new(), ssh: Some(target), off: false, beta: false, ignored: None, boat: None, cloud: None, cloud_owner: None, unknown: Default::default() }));
             id
         }
     };
@@ -2780,6 +2830,27 @@ mod tests {
         assert_eq!(cloud_phase(None, State::Unknown), BoatPhase::Running);
     }
 
+    /// Signing in as someone else must not cost the last account its machines'
+    /// rows and kept transcripts; a machine its own owner stops listing goes.
+    #[test]
+    fn a_listing_drops_only_its_own_owners_machines() {
+        let row = |cloud: Option<&str>, owner: Option<&str>| {
+            let mut saved: Saved = serde_json::from_value(json!({ "id": "a", "name": "x", "url": "wss://x" })).unwrap();
+            saved.cloud = cloud.map(Into::into);
+            saved.cloud_owner = owner.map(Into::into);
+            saved
+        };
+        let ada = Some("https://www.drayhq.com#ada".to_string());
+        let listed = vec!["bx_listed".to_string()];
+        assert_eq!(unlisted_fate(&row(None, None), &listed, &ada), Unlisted::Keep);
+        assert_eq!(unlisted_fate(&row(Some("bx_listed"), None), &listed, &ada), Unlisted::Keep);
+        assert_eq!(unlisted_fate(&row(Some("bx_gone"), ada.as_deref()), &listed, &ada), Unlisted::Drop);
+        assert_eq!(unlisted_fate(&row(Some("bx_gone"), Some("https://www.drayhq.com#bob")), &listed, &ada), Unlisted::Park);
+        // The key's rows, from before accounts, are the key's own.
+        assert_eq!(unlisted_fate(&row(Some("bx_gone"), None), &listed, &None), Unlisted::Drop);
+        assert_eq!(unlisted_fate(&row(Some("bx_gone"), None), &listed, &ada), Unlisted::Park);
+    }
+
     #[test]
     fn a_sandbox_id_cannot_leave_its_path() {
         assert!(valid_sandbox("bx_ab23cdef"));
@@ -2927,7 +2998,7 @@ mod tests {
     /// or a re-add after rotating a token. This Mac's row is no name to route to.
     #[test]
     fn a_name_belongs_to_one_server() {
-        let saved = |id: &str, name: &str| Saved { id: id.into(), name: name.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
+        let saved = |id: &str, name: &str| Saved { id: id.into(), name: name.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, cloud_owner: None, unknown: Default::default() };
         let list = vec![Conn::new(saved("a", "vps")), Conn::new(saved(LOCAL, "This Mac"))];
         assert!(refuse_taken(&list, "vps", None).is_err());
         assert!(refuse_taken(&list, "vps", Some("b")).is_err());
@@ -2939,7 +3010,7 @@ mod tests {
     /// loop is left to drain them, so they would wait for ever.
     #[test]
     fn turning_off_answers_calls_in_flight() {
-        let saved = Saved { id: "s".into(), name: "box".into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
+        let saved = Saved { id: "s".into(), name: "box".into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, cloud_owner: None, unknown: Default::default() };
         let mut conn = Conn::new(saved);
         let (reply, mut answer) = oneshot::channel();
         conn.pending.insert(1, reply);
@@ -3040,7 +3111,7 @@ mod tests {
         let (url, remote) = forwarding_server().await;
         // A row with no login, the way a Mac added by address is one.
         let id = "forward-no-ssh";
-        let saved = Saved { id: id.into(), name: "box".into(), url: url.clone(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
+        let saved = Saved { id: id.into(), name: "box".into(), url: url.clone(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, cloud_owner: None, unknown: Default::default() };
         let mut conn = Conn::new(saved);
         conn.status = ServerStatus::Connected;
         conn.live = Some((url, "t".into()));
@@ -3098,7 +3169,7 @@ mod tests {
     }
 
     async fn served_for(id: &str, answers: bool) -> Option<()> {
-        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, unknown: Default::default() };
+        let saved = Saved { id: id.into(), name: id.into(), url: String::new(), ssh: None, off: true, beta: false, ignored: None, boat: None, cloud: None, cloud_owner: None, unknown: Default::default() };
         conns().push(Conn::new(saved));
         let (ws, _) = admit(&fake_server(answers).await, "t").await.unwrap();
         let served = tokio::time::timeout(SILENCE * 3, serve(id, ws)).await.ok();

@@ -20,23 +20,30 @@ pub const KEY: &str = "dray-cloud";
 pub struct Cred {
     pub token: String,
     pub base: String,
-    /// The signed-in account's, rather than the shared key.
-    pub account: bool,
+    /// Whose machines it lists: `<site>#<user id>` for a signed-in account,
+    /// `None` for the shared key. What `Saved::cloud_owner` records.
+    pub owner: Option<String>,
 }
 
 /// The fields of `<home>/account.json` this reads: the app credential the
-/// local server collects at sign-in (#889), and the site it is good on.
+/// local server collects at sign-in (#889), the site it is good on, and who.
 #[derive(Deserialize)]
 struct Account {
     token: String,
     site: String,
+    user: AccountUser,
+}
+
+#[derive(Deserialize)]
+struct AccountUser {
+    id: String,
 }
 
 /// The saved key, where there is one, since a key holder's machines stay the
 /// key's until the switch. Else the signed-in account.
 pub async fn cred() -> Option<Cred> {
     if let Some(token) = crate::issues::credential(KEY).await {
-        return Some(Cred { token, base: base(), account: false });
+        return Some(Cred { token, base: base(), owner: None });
     }
     account().await
 }
@@ -54,8 +61,10 @@ pub async fn account() -> Option<Cred> {
 /// `account.json`'s credential, sent to `url` where one is set.
 fn account_cred(file: &[u8], url: Option<String>) -> Option<Cred> {
     let held: Account = serde_json::from_slice(file).ok()?;
-    let base = url.unwrap_or_else(|| format!("{}/api/cloud", held.site.trim_end_matches('/')));
-    (!held.token.is_empty()).then_some(Cred { token: held.token, base, account: true })
+    let site = held.site.trim_end_matches('/');
+    let base = url.unwrap_or_else(|| format!("{site}/api/cloud"));
+    let owner = Some(format!("{site}#{}", held.user.id));
+    (!held.token.is_empty()).then_some(Cred { token: held.token, base, owner })
 }
 
 const DEFAULT_URL: &str = "https://www.drayhq.com/api/cloud";
@@ -127,7 +136,7 @@ async fn call(cred: &Cred, method: reqwest::Method, path: &str, wait: Duration) 
     let body: Value = answer.json().await.unwrap_or(Value::Null);
     match status {
         200..=299 => Ok(body),
-        _ => Err(refusal(status, &body, cred.account)),
+        _ => Err(refusal(status, &body, cred.owner.is_some())),
     }
 }
 
@@ -221,9 +230,10 @@ mod tests {
     fn the_account_goes_to_the_site_it_signed_in_to() {
         let file = br#"{"token":"dra_x","site":"http://localhost:3000/","user":{"id":"u","name":"A","username":null,"image":null}}"#;
         let cred = account_cred(file, None).unwrap();
-        assert_eq!(cred, Cred { token: "dra_x".into(), base: "http://localhost:3000/api/cloud".into(), account: true });
+        let owner = Some("http://localhost:3000#u".into());
+        assert_eq!(cred, Cred { token: "dra_x".into(), base: "http://localhost:3000/api/cloud".into(), owner });
         assert_eq!(account_cred(file, Some("https://x/api/cloud".into())).unwrap().base, "https://x/api/cloud");
-        assert_eq!(account_cred(br#"{"token":"","site":"https://www.drayhq.com"}"#, None), None);
+        assert_eq!(account_cred(br#"{"token":"","site":"https://www.drayhq.com","user":{"id":"u"}}"#, None), None);
         assert_eq!(account_cred(b"not json", None), None);
     }
 
