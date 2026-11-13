@@ -3199,8 +3199,11 @@ async fn deliver_prompt(
     let text = prepared.text;
     // A bot chat taking over from another agent: the conversation so far goes
     // ahead of the first prompt, sent and never logged, so the chat draws only
-    // what the reader typed.
-    let mut handover = HandoverGuard { session_id, text: crate::bots::take_handover(session_id) };
+    // what the reader typed. What the reader did to the bot's tasks meanwhile
+    // rides the same way, and a failed send keeps it for the retry with the rest.
+    let hidden = [crate::bots::take_handover(session_id), crate::bots::take_since(session_id).await];
+    let hidden: String = hidden.into_iter().flatten().collect();
+    let mut handover = HandoverGuard { session_id, text: (!hidden.is_empty()).then_some(hidden) };
     let given = match &handover.text {
         Some(handover) => format!("{handover}{text}"),
         None => text.clone(),

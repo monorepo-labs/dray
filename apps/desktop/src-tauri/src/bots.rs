@@ -248,6 +248,131 @@ pub fn restore_handover(session_id: &str, text: String) {
     }
 }
 
+/// What the reader did to a bot's tasks since the bot's last prompt, per bot
+/// folder: each task's id, title and acts, oldest first. Sent ahead of the
+/// next prompt the bot gets anyway, since waking it for each would cost a turn.
+// ponytail: in memory, so a server restart drops what was not yet sent; a
+// file beside bots.json if that ever matters.
+static SINCE: std::sync::Mutex<Vec<(String, Vec<(String, String, Vec<String>)>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Tasks kept per bot, newest kept: the list rides a prompt, so it stays short.
+const SINCE_CAP: usize = 8;
+
+/// An act of the reader's on a session, through a client.
+pub enum Act {
+    Settled,
+    Stopped,
+    Deleted,
+}
+
+/// Runs `run`, the reader's own `act` on `session_id`, and notes it for the
+/// bot whose task that is. Called from the client wire alone, never from
+/// `dray`, which is how the bot itself settles and stops its tasks.
+pub async fn reader_did<T, E>(
+    session_id: &str,
+    act: Option<Act>,
+    run: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, E> {
+    let Some(act) = act else { return run.await };
+    let item = crate::store::get_session_index_item(session_id).await.ok().flatten();
+    // Only an act that changes something: settling a settled task or stopping
+    // an idle one tells the bot nothing.
+    let counts = match act {
+        Act::Settled => item.as_ref().is_some_and(|i| !i.archived),
+        Act::Stopped => manager().turn_in_flight(session_id).await,
+        Act::Deleted => true,
+    };
+    let out = run.await;
+    if let (true, true, Some(item)) = (out.is_ok(), counts, item) {
+        let text = match act {
+            Act::Settled => "settled it",
+            Act::Stopped => "stopped its turn",
+            Act::Deleted => "deleted it",
+        };
+        note_since(&item, text.to_string()).await;
+    }
+    out
+}
+
+/// Notes `act` against `task` for its bot, folded into the task's line.
+pub async fn note_since(task: &SessionIndexItem, act: String) {
+    let Some(chat) = bot_chat_of(task).await else { return };
+    // The bot's own chat: the reader acting there is a turn the bot sees.
+    if chat.session_id == task.session_id {
+        return;
+    }
+    let mut since = SINCE.lock().unwrap();
+    let at = match since.iter().position(|(path, _)| same_dir(path, &chat.cwd)) {
+        Some(at) => at,
+        None => {
+            since.push((chat.cwd.clone(), Vec::new()));
+            since.len() - 1
+        }
+    };
+    fold_since(&mut since[at].1, &task.session_id, &task.title, act);
+}
+
+fn fold_since(tasks: &mut Vec<(String, String, Vec<String>)>, id: &str, title: &str, act: String) {
+    match tasks.iter_mut().find(|(task, ..)| task == id) {
+        Some((_, _, acts)) if acts.contains(&act) => {}
+        Some((_, _, acts)) => acts.push(act),
+        None => tasks.push((id.to_string(), title.to_string(), vec![act])),
+    }
+    if tasks.len() > SINCE_CAP {
+        tasks.remove(0);
+    }
+}
+
+/// Notes the reader's merge of PR `number` against the bot task whose branch
+/// it is. `cwd` is the repo root or the task's own tree, whichever the client
+/// merged from. Asks GitHub for the branch only where a bot task could match.
+pub async fn note_merge(cwd: &str, number: u64) {
+    let items = crate::store::list_session_index_items(false).await.unwrap_or_default();
+    let mut tasks = Vec::new();
+    for item in items {
+        if (same_dir(&item.project_path, cwd) || same_dir(&item.cwd, cwd)) && in_bot_tree(&item).await {
+            tasks.push(item);
+        }
+    }
+    if tasks.is_empty() {
+        return;
+    }
+    let Ok(out) = crate::github::gh(cwd, &["pr", "view", &number.to_string(), "--json", "headRefName,title"]).await
+    else {
+        return;
+    };
+    let pr: serde_json::Value = serde_json::from_str(&out).unwrap_or_default();
+    let (Some(branch), Some(title)) = (pr["headRefName"].as_str(), pr["title"].as_str()) else { return };
+    for task in tasks {
+        // The tree's own HEAD first: a task can move off the branch it was made on.
+        let observed = if task.worktree_removed { None } else { crate::git::current_branch(&task.cwd).await };
+        if crate::store::session_branch(&task, observed.as_deref()).as_deref() == Some(branch) {
+            note_since(&task, format!("merged its PR #{number} ({title})")).await;
+        }
+    }
+}
+
+/// The list for the bot chat `session_id` belongs to, taken once, as the
+/// hidden lines that go ahead of its next prompt.
+pub async fn take_since(session_id: &str) -> Option<String> {
+    if SINCE.lock().unwrap().is_empty() {
+        return None;
+    }
+    let item = crate::store::get_session_index_item(session_id).await.ok().flatten()?;
+    let mut since = SINCE.lock().unwrap();
+    let at = since.iter().position(|(path, _)| same_dir(path, &item.cwd))?;
+    Some(since_text(&since.remove(at).1))
+}
+
+fn since_text(tasks: &[(String, String, Vec<String>)]) -> String {
+    let lines: Vec<String> = tasks
+        .iter()
+        .map(|(id, title, acts)| format!("- Task \"{title}\" ({id}): the user {}.", acts.join(", then ")))
+        .collect();
+    format!("[Since your last turn, outside this chat:\n{}]\n\n", lines.join("\n"))
+}
+
 /// The other sessions of the bot chat `item` belongs to, unsettled. A switch
 /// leaves the earlier ones open, so settling the chat has to settle them all,
 /// or the previous agent's session becomes the bot's chat again.
@@ -1096,6 +1221,23 @@ mod tests {
         commit_all(&bot, None).await.unwrap();
         assert_eq!(log().await.lines().next(), Some("Ops|Update memory/tea.md"));
         tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[test]
+    fn since_folds_acts_per_task_and_keeps_the_newest_tasks() {
+        let mut tasks = Vec::new();
+        fold_since(&mut tasks, "a", "Boat", "merged its PR #980 (Boat)".into());
+        fold_since(&mut tasks, "a", "Boat", "settled it".into());
+        fold_since(&mut tasks, "a", "Boat", "settled it".into());
+        assert_eq!(
+            since_text(&tasks),
+            "[Since your last turn, outside this chat:\n- Task \"Boat\" (a): the user merged its PR #980 (Boat), then settled it.]\n\n"
+        );
+        for i in 0..SINCE_CAP {
+            fold_since(&mut tasks, &i.to_string(), "t", "stopped its turn".into());
+        }
+        assert_eq!(tasks.len(), SINCE_CAP);
+        assert_eq!(tasks[0].0, "0");
     }
 
     #[test]
