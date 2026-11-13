@@ -6,8 +6,8 @@ import type { PrMark, SessionIndexItem } from "@/types/events";
 
 const T0 = Date.parse("2026-11-12T10:00:00Z");
 
-/// Marks read just after the task last moved.
-const fresh = () => T0 + 1;
+/// Marks read since the task last moved.
+const fresh = () => true;
 
 function row(id: string, over: Partial<CrewRow> = {}, item: Partial<SessionIndexItem> = {}): CrewRow {
   return {
@@ -106,10 +106,9 @@ describe("stalledTasks", () => {
 
   it("waits out the stall on a fix judged by a mark older than the task's last move", () => {
     const failing = () => pr({ checksState: "FAILING" });
-    const before = () => T0 - 1;
-    expect(stalledTasks([row("a")], failing, new Map(), T0 + 60_000, before)).toEqual([]);
-    expect(stalledTasks([row("a")], failing, new Map(), T0 + 60_000, () => undefined)).toEqual([]);
-    expect(stalledTasks([row("a")], failing, new Map(), T0 + STALL_MS, before)[0].kind).toBe("fix");
+    const stale = () => false;
+    expect(stalledTasks([row("a")], failing, new Map(), T0 + 60_000, stale)).toEqual([]);
+    expect(stalledTasks([row("a")], failing, new Map(), T0 + STALL_MS, stale)[0].kind).toBe("fix");
   });
 
   it("reads a need only where the bot wrote it since the task moved", () => {

@@ -40,10 +40,10 @@ const FIXABLE: Partial<Record<PrStatusKey, (n: number) => string>> = {
 /// the task's last activity — waiting another [STALL_MS] of watching would hide
 /// one that has sat for a day.
 ///
-/// `readAt` is when the PR marks a task is judged by were asked for. A fix is
-/// called at once only on a mark asked for after the task last moved, and
-/// otherwise after [STALL_MS]: a mark read before the task's push would nudge
-/// the bot about checks the task had just fixed.
+/// `markFresh` says whether a task's PR mark was asked for after the task last
+/// moved. A fix is called at once only on a fresh mark, and otherwise after
+/// [STALL_MS]: a mark read before the task's push would nudge the bot about
+/// checks the task had just fixed.
 ///
 /// Left out: a task mid-turn or with a background shell or subagent still
 /// running, one behind a card (the card is in the chat already), one set aside
@@ -55,7 +55,7 @@ export function stalledTasks(
   prOf: (row: CrewRow) => PrMark | undefined,
   readySince: Map<string, number>,
   now: number,
-  readAt: (row: CrewRow) => number | undefined,
+  markFresh: (row: CrewRow) => boolean,
 ): Stall[] {
   const stalls: Stall[] = [];
   for (const row of rows) {
@@ -86,7 +86,7 @@ export function stalledTasks(
     const idle = now - touched >= STALL_MS;
     const fix = pr && status && FIXABLE[status];
     if (fix) {
-      if (idle || (readAt(row) ?? 0) > touched)
+      if (idle || markFresh(row))
         stalls.push({ row, pr, kind: "fix", problem: fix(pr.number), since: touched, key: `${id}:${status}:${item.modified}` });
     } else if (idle) stalls.push({ row, pr, kind: "waiting", since: touched, key: `${id}:waiting:${item.modified}` });
   }
