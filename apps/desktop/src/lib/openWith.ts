@@ -75,8 +75,8 @@ export function fileOpenerChoices(apps: ExternalApp[]): ExternalApp[] {
 /// what it did before the setting existed, instead of silently reseating on
 /// whichever editor happens to lead the table.
 ///
-/// `null` only where nothing was detected at all, which off macOS is every
-/// time.
+/// `null` only where nothing was detected at all, which off macOS and Linux
+/// is every time.
 export function pickFileOpener(
   apps: ExternalApp[],
   stored: string | null,
@@ -130,11 +130,15 @@ export type Opener = {
 
 export const DIR_OPENER: Opener = {
   key: OPEN_DIR_KEY,
-  // Everything detected, terminals included: handing a checkout to Ghostty is
-  // a thing the reader asks for.
-  choices: (apps) => apps,
+  // Everything detected that takes a folder, terminals included: handing a
+  // checkout to Ghostty is a thing the reader asks for, handing it to GNOME
+  // Text Editor is an error dialog.
+  choices: (apps) => apps.filter((app) => app.folders),
   // Any app beats none — this button has to open *something*.
-  pick: (apps, stored) => apps.find((app) => app.path === stored) ?? apps[0] ?? null,
+  pick: (apps, stored) => {
+    const dirs = DIR_OPENER.choices(apps);
+    return dirs.find((app) => app.path === stored) ?? dirs[0] ?? null;
+  },
   open: (app, path) => invoke("open_in_app", { appPath: app.path, path }),
 };
 

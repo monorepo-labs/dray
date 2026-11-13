@@ -19,6 +19,100 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.2 · 2026-11-13
+
+### New
+
+- **Tasks on another machine report back.** A bot that starts a task on
+  a remote server now hears from it when it finishes, like any other
+  task. Update the server too.
+- **Merge cards post themselves.** Once a task's PR can merge and its
+  review is clean, a merge card shows in the chat that started it.
+
+### Improved
+
+- Large bot chats open at once and load older messages as you scroll.
+- A task's failing checks or merge conflict reach its bot right away,
+  and a task waiting on you shows in the bot's chat after 5 minutes,
+  not 15.
+- The Tasks tab says what a task is fixing on its PR, and for how long.
+- Tasks running on another machine carry a server mark on their row and
+  tab.
+- A ready-to-merge row says what to check first when the task asked
+  you to try something before merging.
+- Bots stay quiet on task reports that need nothing from you, so no
+  empty Done or unread mark.
+- Settle shows on a task row only once its PR is merged; it stays in
+  the row's menu otherwise.
+
+### Fixed
+
+- Sending a message always scrolls the chat to the bottom.
+- In a bot's chat, a queued message draws above the card waiting on
+  you.
+- Holding the jump key no longer shifts sidebar rows.
+
+## 0.30.1 · 2026-11-13 · notify
+
+### New
+
+- **Bots on any server.** Make a bot on a remote server and its tasks run
+  there too.
+- **Merge from the chat.** A bot's chat shows a card for each task's PR,
+  with Merge when it's ready and Fix conflicts when it isn't.
+- **Stalled tasks.** A task that sits idle for 15 minutes shows in its
+  bot's chat with what it needs from you.
+- **Squats break card.** Settings → Breaks picks which cards a break
+  shows, and I'm back waits 30 seconds.
+- In a bot's chat, @ lists other bots.
+
+### Improved
+
+- Bot rows in the sidebar read like an inbox, with an unread count.
+- The Tasks tab shows each task's PR state and groups tasks by status.
+- Each task gets its own browser, and a recording locks only its tab.
+- Bots keep replies short and stick to what you asked.
+- Hidden tasks no longer raise Done and ready-to-merge alerts.
+- A row with a background task still running no longer reads as done.
+- The Island draws bots with their face.
+
+### Fixed
+
+- The chat stays pinned to the bottom after scrolling an image or menu.
+- The browser's recording timer survives a tab switch.
+- A task's brief that quotes `dray session send` no longer draws a
+  message that was never sent.
+
+## 0.30.0 · 2026-11-12 · notify
+
+### New
+
+- **Bots.** A bot is one long-running chat with its own instructions
+  and memory. It starts tasks for you and hears back when each one
+  finishes. Find them at the top of the sidebar, starting with Dray Bot.
+- **Tasks open as tabs.** Click a task in a bot's Tasks list and it
+  opens as a tab beside the bot's chat. Add Diff and Files tabs with +.
+- **Switch a bot's agent.** Pick another agent mid-chat and the
+  conversation carries over.
+- **Bots message each other.** `dray bot send` reaches another bot by
+  name, and `dray bot new|ls|rename|rm` manage them from the terminal.
+- A bot's folder keeps its own git history, so lost notes can come back.
+
+### Improved
+
+- A server that drops keeps its sessions in the sidebar, faded, with
+  the reason on hover.
+- Idle agents stop after 15 minutes to free memory, and pick up where
+  they left off on your next message.
+- pi signs in and out from Settings → Accounts without opening its TUI.
+
+### Fixed
+
+- Break reminders count time spent outside Dray, and the window comes
+  forward when one is due.
+- Recordings from a remote server play at once instead of sitting at
+  0:00.
+
 ## 0.29.19 · 2026-11-09 · notify
 
 ### New

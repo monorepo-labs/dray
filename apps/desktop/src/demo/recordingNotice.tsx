@@ -108,8 +108,8 @@ let shot = 0;
 /// the recording itself. Off keeps the shutter open, so the pane goes on
 /// drawing the page picture where a browser would draw the page.
 function setRecording(on: boolean) {
-  emit("browser_shooting", { sessionId: SESSION, shooting: true, shot: ++shot });
-  emit("browser_recording", { sessionId: SESSION, recording: on });
+  emit("browser_shooting", { sessionId: SESSION, shooting: true, shot: ++shot, tab: TABS[0].id });
+  emit("browser_recording", { sessionId: SESSION, recording: on, tab: on ? TABS[0].id : null });
 }
 
 function Demo() {

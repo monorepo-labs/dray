@@ -125,6 +125,8 @@ pub struct TurnSettings {
     /// sticks to the thread (measured on 0.164: a turn after a `readOnly` one
     /// with no override still could not write), so it is kept and resent.
     sandbox_policy: Option<Value>,
+    /// Dray's rules, with a bot's own block where the session is a bot's.
+    developer_instructions: String,
 }
 
 /// Codex's id for the faster tier, as `model/list` names it in `serviceTiers`.
@@ -180,6 +182,7 @@ impl TurnSettings {
             opened_sandbox: sandbox,
             opened_policy: None,
             sandbox_policy: None,
+            developer_instructions: DEVELOPER_INSTRUCTIONS.to_string(),
         }
     }
 
@@ -229,7 +232,7 @@ impl TurnSettings {
             // `serviceTier` answered with whatever the thread's last turn had
             // set, not with what was asked for.
             "serviceTier": self.service_tier,
-            "developerInstructions": DEVELOPER_INSTRUCTIONS,
+            "developerInstructions": self.developer_instructions,
         })
     }
 }
@@ -251,6 +254,8 @@ pub async fn init(
     // returns leaving a child nothing can reach. An unreadable log is a
     // refusal that owes the caller no process.
     let mut settings = TurnSettings::new(model, effort, permission_mode, fast);
+    settings.developer_instructions =
+        crate::bots::system_prompt(DEVELOPER_INSTRUCTIONS, session_id, session_cwd).await;
     let seq_start = if is_new_session {
         0
     } else {

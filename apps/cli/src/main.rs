@@ -10,14 +10,15 @@
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
 
+mod bot;
 mod draft;
 mod machine;
 mod setup;
 use draft::DraftCommand;
 use dray_proto::{
-    encode_line, AddVideo, BrowserAction, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
+    encode_line, AddVideo, BrowserAction, MergeCard, BrowserRequest, CreateSession, Envelope, Get, Is, IssueInput,
     LinkIssues, ListSessions, Locator, OnMachine, RenameSession, Request, Response, SendMessage, SessionRef,
-    SessionSummary, SetAside, SettleSession, ShareAction, ShareRequest,
+    SessionSummary, SetAside, SetNeed, SettleSession, ShareAction, ShareRequest,
 };
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
@@ -65,6 +66,9 @@ enum Command {
     /// Save tasks for later, list them, and start or remove them.
     #[command(subcommand, arg_required_else_help = true)]
     Draft(DraftCommand),
+    /// Make, list, message, rename and delete bots.
+    #[command(subcommand, arg_required_else_help = true)]
+    Bot(bot::BotCommand),
     /// Drive this session's browser: open pages, read them, click and type.
     Browser(BrowserCommand),
     /// Put a video where this session's chat plays it.
@@ -80,6 +84,10 @@ enum Command {
     /// This machine's Dray server: install, start, stop, run in the foreground.
     #[command(subcommand, arg_required_else_help = true)]
     Server(setup::ServerCommand),
+    /// Link this machine's Dray server to an org at drayhq.com.
+    Login,
+    /// Unlink this machine's Dray server from its org.
+    Logout,
     /// Upgrade this binary to the newest release.
     Update(Update),
     /// Manage the skill that documents this CLI.
@@ -129,12 +137,27 @@ enum SessionCommand {
     SetAside(SessionArg),
     /// Take a session out of set-aside.
     UnsetAside(SessionArg),
+    /// Post a card in this session's chat for a task's open pull request, so
+    /// the user can merge it from the chat.
+    MergeCard(SessionArg),
+    /// Say in one line what a stalled task needs from the user, for the "Waiting
+    /// on you" card in this bot's chat. Cleared when the task moves; no text
+    /// clears it now.
+    Need(Need),
 }
 
 #[derive(Args)]
 struct SessionArg {
     /// The session, as printed by `dray session ls`.
     session_id: String,
+}
+
+#[derive(Args)]
+struct Need {
+    /// The task, as printed by `dray session ls`.
+    session_id: String,
+    /// What it needs, imperative and short: "Pick: keep or drop the rename button".
+    need: Option<String>,
 }
 
 #[derive(Args)]
@@ -430,11 +453,14 @@ fn run() -> Result<(), String> {
         Command::Issue(IssueCommand::Link(args)) => link_issues(args, false),
         Command::Issue(IssueCommand::Unlink(args)) => link_issues(args, true),
         Command::Draft(command) => draft::run(command),
+        Command::Bot(command) => bot::run(command),
         Command::Browser(args) => browser(args),
         Command::Video(VideoCommand::Add(args)) => add_video(args),
         Command::Share(args) => share(args),
         Command::Machine(command) => machine::run(command),
         Command::Server(command) => setup::server(command),
+        Command::Login => setup::login(),
+        Command::Logout => setup::logout(),
         Command::Update(args) => update(args),
         Command::Skill(SkillCommand::Install) => install_skill(),
         Command::Completion { shell } => {
@@ -456,6 +482,7 @@ fn session(command: SessionCommand) -> Result<(), String> {
         SessionCommand::New(args) => return new(args),
         SessionCommand::Ls(args) => return ls(args),
         SessionCommand::Send(args) => return send_message(args),
+        SessionCommand::MergeCard(args) => return merge_card(args),
         SessionCommand::Rename(args) => (
             Request::RenameSession(RenameSession { session_id: args.session_id, title: args.title }),
             "Renamed it",
@@ -475,6 +502,11 @@ fn session(command: SessionCommand) -> Result<(), String> {
         ),
         SessionCommand::SetAside(args) => {
             (Request::SetAside(SetAside { session_id: args.session_id, aside: true }), "Set aside")
+        }
+        SessionCommand::Need(args) => {
+            let need = args.need.unwrap_or_default();
+            let said = if need.trim().is_empty() { "Cleared the need line on" } else { "Set the need line on" };
+            (Request::SetNeed(SetNeed { session_id: args.session_id, need }), said)
         }
         SessionCommand::UnsetAside(args) => {
             (Request::SetAside(SetAside { session_id: args.session_id, aside: false }), "Brought back")
@@ -639,6 +671,19 @@ fn browser(args: BrowserCommand) -> Result<(), String> {
             } else {
                 println!("{output}");
             }
+            Ok(())
+        }
+        Response::Error { message } => Err(message),
+        other => Err(unexpected(other)),
+    }
+}
+
+fn merge_card(args: SessionArg) -> Result<(), String> {
+    let session_id = parent_session_id().ok_or("run this from inside a Dray session: the card goes in its chat.")?;
+    let request = Request::MergeCard(MergeCard { session_id, task_session_id: args.session_id });
+    match send(request)? {
+        Response::MergeCard { number, url, title } => {
+            eprintln!("Posted a merge card for #{number} \"{title}\": {url}");
             Ok(())
         }
         Response::Error { message } => Err(message),
@@ -1008,19 +1053,22 @@ fn print_table(sessions: &[SessionSummary]) {
 /// into a shell a failed download runs an empty script and reports success.
 /// curl or wget, the pair the installer itself accepts.
 fn update(args: Update) -> Result<(), String> {
-    // The app writes the CLI it ships to ~/.local/bin on every launch, so an
-    // update here would fight it: undone at the next launch, and until then
-    // a CLI the app was not released beside. A server on its own `DRAY_HOME`
-    // still updates its `dray-serve` here.
-    if setup::app_runs_this_home() {
-        eprintln!("The Dray app keeps this CLI up to date. Update the app to update it.");
-        return Ok(());
-    }
     let exe = std::env::current_exe()
         .map_err(|e| format!("could not find the running dray binary: {e}"))?;
     let dir = exe
         .parent()
         .ok_or("the running dray binary sits in no directory")?;
+
+    // The app writes the CLI it ships to ~/.local/bin on every launch, so an
+    // update here would fight it: undone at the next launch, and until then
+    // a CLI the app was not released beside. A server on its own `DRAY_HOME`
+    // still updates its `dray-serve` here, and so does one beside a Linux
+    // app, whose own server is its child and never this binary.
+    let own_server = cfg!(target_os = "linux") && dir.join("dray-serve").is_file();
+    if setup::app_updates_this_cli() && !own_server {
+        eprintln!("The Dray app keeps this CLI up to date. Update the app to update it.");
+        return Ok(());
+    }
 
     let mut sh = std::process::Command::new("sh");
     sh.args([
@@ -1037,7 +1085,7 @@ fn update(args: Update) -> Result<(), String> {
     .env("DRAY_UPDATING", "1")
     .env("DRAY_CHANNEL", args.channel.as_deref().unwrap_or(own_channel()));
 
-    let current = if setup::app_on_this_mac() { serve_tag_beside(dir) } else { Some(current_tag()) };
+    let current = if setup::app_ships_this_cli() { serve_tag_beside(dir) } else { Some(current_tag()) };
     match current.filter(|_| !args.force) {
         Some(tag) => {
             sh.env("DRAY_CURRENT_VERSION", tag);
@@ -1072,11 +1120,11 @@ fn update(args: Update) -> Result<(), String> {
     }
 }
 
-/// The release the `dray-serve` beside this binary was built as, for a Mac with
-/// the app: its launches rewrite `dray` and never `dray-serve`, so this binary's
-/// version would stop the installer at "already current" with the server left
-/// behind. No `dray-serve` there is no pair to keep, so this binary's tag; one
-/// too old to say is reinstalled.
+/// The release the `dray-serve` beside this binary was built as, for a machine
+/// whose app ships `dray`: its launches rewrite `dray` and never `dray-serve`,
+/// so this binary's version would stop the installer at "already current" with
+/// the server left behind. No `dray-serve` there is no pair to keep, so this
+/// binary's tag; one too old to say is reinstalled.
 fn serve_tag_beside(dir: &std::path::Path) -> Option<String> {
     let serve = dir.join("dray-serve");
     if !serve.exists() {
@@ -1585,6 +1633,8 @@ mod tests {
             &["dray", "session", "new", "x", "--base", "main", "--title", "T"][..],
             &["dray", "session", "settle", SESSION, "--delete-worktree"],
             &["dray", "session", "set-aside", SESSION],
+            &["dray", "session", "need", SESSION, "Pick: keep or drop the rename button"],
+            &["dray", "session", "need", SESSION],
             &["dray", "session", "rename", SESSION, "New name"],
             &["dray", "share", "start", "5173"],
             &["dray", "share", "ls", "--all", "--json"],

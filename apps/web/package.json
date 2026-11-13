@@ -8,12 +8,15 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node --test 'test/*.test.mjs'"
+    "test": "node --test 'test/*.test.mjs'",
+    "db:migrate": "auth migrate --config src/lib/auth.ts -y"
   },
   "dependencies": {
     "@yogesharc/thinking-orbs": "^0.1.2",
+    "better-auth": "^1.7.19",
     "lucide-react": "^1.60.0",
     "next": "^16.4.2",
+    "pg": "^8.23.1",
     "posthog-js": "^1.438.13",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
@@ -21,8 +24,10 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "auth": "1.7.19",
     "tailwindcss": "^4.3.3",
     "typescript": "~7.0.2"
   }

@@ -39,6 +39,18 @@ The new session has none of the calling conversation. A good prompt carries the 
 
 A session started with `--hidden` stays out of the sidebar. You see it only when it asks for permission or asks a question, as a card in the session that started it. The skill has agents hide review sessions by default.
 
+## Bots
+
+A bot is one ongoing chat you run everything from. It has its own instructions and its own memory, and everything it starts reports back to it on its own.
+
+- **Make one** with **New bot** in the sidebar: a name, a face, a colour, and the agent and model it runs on. Its chat opens with the bot introducing itself; tell it its job in reply. Bots sit above All Projects like an inbox, each with its face and its last message.
+- **It runs in its own folder**, not in a repository, and starts work in any project you name. Its folder holds `INSTRUCTIONS.md` and a `memory` folder, both empty at first. The bot writes down its job from what you tell it and reads it whenever its chat starts. It saves what is worth remembering as one dated file per memory, such as `2026-11-12-release-checklist.md`, and looks through them when it needs to.
+- **What it starts runs hidden.** Those sessions stay out of the sidebar. After every turn one of them ends, Dray sends its last message to the bot, so the bot always knows where its work stands. Their permission and question cards show in the bot's chat.
+- **The Tasks tab** in the bot's right panel lists everything it started, grouped Waiting on you, Working and Done. Click one to look inside.
+- **Right-click a bot** to start its chat fresh (instructions and memory stay) or to delete it.
+
+Bots live on this Mac.
+
 ## Review with a second model
 
 `--base` starts a session's worktree from existing work. Point it at a session id and the new session gets its own checkout of that session's branch:

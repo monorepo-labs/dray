@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { fileOpenerChoices, lineUrl, pickFileOpener } from "@/lib/openWith";
+import { DIR_OPENER, fileOpenerChoices, lineUrl, pickFileOpener } from "@/lib/openWith";
 import type { ExternalApp } from "@/types/events";
 
 function app(name: string, kind: ExternalApp["kind"]): ExternalApp {
-  return { path: `/Applications/${name}.app`, name, kind, icon: null };
+  return { path: `/Applications/${name}.app`, name, kind, icon: null, folders: true };
 }
 
 const ZED = app("Zed", "editor");
@@ -42,9 +42,25 @@ describe("pickFileOpener", () => {
     expect(pickFileOpener(DETECTED, GHOSTTY.path)).toBe(FINDER);
   });
 
-  /// Off macOS the scan detects nothing at all, Finder included.
+  /// Off macOS and Linux the scan detects nothing at all, Finder included.
   it("answers null when nothing was detected", () => {
     expect(pickFileOpener([], ZED.path)).toBeNull();
+  });
+});
+
+describe("DIR_OPENER", () => {
+  /// GNOME Text Editor opens files alone; a folder handed to it is an error
+  /// dialog, so the directory button neither lists nor falls back to it.
+  const TEXT_EDITOR: ExternalApp = { ...app("Text Editor", "editor"), folders: false };
+
+  it("leaves out an editor that cannot open a folder", () => {
+    expect(DIR_OPENER.choices([TEXT_EDITOR, GHOSTTY, FINDER])).toEqual([GHOSTTY, FINDER]);
+    expect(DIR_OPENER.pick([TEXT_EDITOR, GHOSTTY], null)).toBe(GHOSTTY);
+    expect(DIR_OPENER.pick([TEXT_EDITOR, GHOSTTY], TEXT_EDITOR.path)).toBe(GHOSTTY);
+  });
+
+  it("still offers it for a single file", () => {
+    expect(pickFileOpener([TEXT_EDITOR, FINDER], TEXT_EDITOR.path)).toBe(TEXT_EDITOR);
   });
 });
 

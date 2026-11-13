@@ -1,5 +1,5 @@
 import { basename } from "@/lib/format";
-import type { PrCheck, PrMark, PullRequest } from "@/types/events";
+import type { PrCheck, PrChecksState, PrMark, PullRequest } from "@/types/events";
 
 /// The branch a session's work lands on, for the PR lookup and the header.
 ///
@@ -77,7 +77,8 @@ export function sameMark(a: PrMark | undefined, b: PrMark | undefined): boolean 
     a.isDraft === b.isDraft &&
     a.checksState === b.checksState &&
     a.mergeable === b.mergeable &&
-    a.mergeStateStatus === b.mergeStateStatus
+    a.mergeStateStatus === b.mergeStateStatus &&
+    a.reviewDecision === b.reviewDecision
   );
 }
 
@@ -105,12 +106,14 @@ export function markDisagrees(mark: PrMark | undefined, prs: PullRequest[]): boo
   const pick = pickPrMark(
     seen.map((pr) => ({
       number: pr.number,
+      url: pr.url,
       headRefName: pr.headRefName,
       isDraft: pr.isDraft,
       state: pr.state as PrMark["state"],
       checksState: "CLEAR",
       mergeable: pr.state === "OPEN" ? pr.mergeable : null,
       mergeStateStatus: pr.state === "OPEN" ? pr.mergeStateStatus : null,
+      reviewDecision: pr.state === "OPEN" ? pr.reviewDecision : null,
     })),
   );
 
@@ -346,6 +349,49 @@ export function mergeReadiness(pr: PullRequest): Readiness {
     case "ready":
       return { tone: "ready", label: "Ready to merge" };
   }
+}
+
+const STATUS = {
+  merged: { tone: "neutral", label: "Merged" },
+  closed: { tone: "neutral", label: "Closed" },
+  conflict: { tone: "conflict", label: "Conflicts" },
+  checksFailing: { tone: "pending", label: "Checks failing" },
+  checksRunning: { tone: "pending", label: "Checks running" },
+  draft: { tone: "neutral", label: "Draft" },
+  changesRequested: { tone: "blocked", label: "Changes requested" },
+  needsReview: { tone: "blocked", label: "Needs review" },
+  behind: { tone: "blocked", label: "Behind base" },
+  blocked: { tone: "blocked", label: "Blocked" },
+  unknown: { tone: "neutral", label: "Checking…" },
+  ready: { tone: "ready", label: "Ready to merge" },
+} as const satisfies Record<string, Readiness>;
+
+export type PrStatusKey = keyof typeof STATUS;
+
+/// A pull request's state in a word or two, for a row or a card that has no
+/// room for the panel's sentence. What is in the way comes first, then what is
+/// still running, then what review says, then GitHub's own verdict — so a PR
+/// that is both conflicting and red says conflicts, the thing to fix first.
+///
+/// `key` lets a surface draw a state as an icon or an action instead of its
+/// words. Off the sidebar's mark rather than the panel's whole pull request,
+/// since that is the read every row and card already has.
+export function prStatus(
+  pr: MergeState & { checksState: PrChecksState; reviewDecision: string | null },
+): Readiness & { key: PrStatusKey } {
+  const key = statusKey(pr);
+  return { key, ...STATUS[key] };
+}
+
+function statusKey(pr: MergeState & { checksState: PrChecksState; reviewDecision: string | null }): PrStatusKey {
+  const verdict = mergeVerdict(pr);
+  if (verdict === "merged" || verdict === "closed" || verdict === "conflict") return verdict;
+  if (pr.checksState === "FAILING") return "checksFailing";
+  if (pr.checksState === "RUNNING") return "checksRunning";
+  if (verdict === "draft") return "draft";
+  if (pr.reviewDecision === "CHANGES_REQUESTED") return "changesRequested";
+  if (pr.reviewDecision === "REVIEW_REQUIRED") return "needsReview";
+  return verdict === "unstable" ? "checksFailing" : verdict;
 }
 
 type CheckSummary = {

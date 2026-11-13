@@ -63,6 +63,7 @@ pub async fn init(
     fork_from: Option<&str>,
     app: &Sink,
 ) -> Result<Session> {
+    let system_prompt = crate::bots::system_prompt(APPEND_SYSTEM_PROMPT, session_id, session_cwd).await;
     let mut args = vec![
         "-p",
         "--input-format",
@@ -94,7 +95,7 @@ pub async fn init(
         args.extend(["--settings", settings]);
     }
 
-    args.extend(["--append-system-prompt", APPEND_SYSTEM_PROMPT]);
+    args.extend(["--append-system-prompt", &system_prompt]);
 
     // The literal `stdio` is a special case, not a tool name: the flag otherwise
     // takes an MCP tool, and it is undocumented in `--help`. Without it the CLI

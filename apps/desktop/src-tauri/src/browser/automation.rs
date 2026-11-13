@@ -63,6 +63,10 @@ pub(super) static CAPTURING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_
 /// The recordings under way, one per session at most.
 static RECORDING: Mutex<std::collections::BTreeMap<String, Recording>> =
     Mutex::new(std::collections::BTreeMap::new());
+/// The tab a screenshot is laying out at its own size, kept off the pane like
+/// a recorded tab: the reader may pick it mid-shot, before the pane's cover
+/// for it lands.
+static SHOT_TAB: Mutex<Option<i32>> = Mutex::new(None);
 
 struct Recording {
     tab: i32,
@@ -146,6 +150,13 @@ pub(super) fn parked(tab: i32) -> Option<(u32, u32)> {
     RECORDING.lock().unwrap().values().find(|r| r.tab == tab).map(|r| r.size)
 }
 
+/// Whether `tab` must stay off the pane even while active: it is laid out at
+/// a recording's or a screenshot's size, not the pane's. See `apply_layout`.
+#[allow(dead_code)] // The headless copy of this module has no pane.
+pub(super) fn off_pane(tab: i32) -> bool {
+    parked(tab).is_some() || *SHOT_TAB.lock().unwrap() == Some(tab)
+}
+
 /// The tab a session is recording and the size it is laid out at.
 fn recording_of(session: &str) -> Option<(i32, (u32, u32))> {
     RECORDING.lock().unwrap().get(session).map(|r| (r.tab, r.size))
@@ -164,8 +175,8 @@ fn set_paused(session: &str, paused: bool) {
 /// writer.
 pub(super) fn drop_recording(session: &str) {
     if let Some(rec) = RECORDING.lock().unwrap().remove(session) {
-        emit_recording(session, false);
-        emit_shooting(session, false, rec.shot);
+        emit_recording(session, None);
+        emit_shooting(session, false, rec.shot, None);
         std::thread::spawn(move || rec.recorder.discard());
     }
 }
@@ -334,8 +345,8 @@ pub(super) fn forget(tab: i32) {
         (s.clone(), r.shot)
     });
     if let Some((session, shot)) = closed {
-        emit_recording(&session, false);
-        emit_shooting(&session, false, shot);
+        emit_recording(&session, None);
+        emit_shooting(&session, false, shot, None);
     }
 }
 
@@ -521,9 +532,7 @@ async fn resolve(session: &str) -> Result<(), String> {
     let tab = match tabs.iter().filter(|t| same_origin(&t.url, &url)).max_by_key(|t| t.active) {
         Some(t) => t.id,
         None if web_url(&url).is_ok() => {
-            let before: Vec<i32> = tabs.iter().map(|t| t.id).collect();
-            open_url(session, url, None).await?;
-            let tab = new_tab(session, &before).await?;
+            let tab = open_new(session, url).await?;
             wait_loaded(tab).await?;
             tab
         }
@@ -546,6 +555,17 @@ fn page(tab: i32) -> (String, Value) {
         }
         None => ("no tab".into(), json!({})),
     }
+}
+
+/// Opens `url` in a new tab and answers its id. Listing, opening and finding
+/// the new tab run under one lock: two opens interleaved, from one agent's
+/// parallel calls, would both find the first new tab and drive one page.
+async fn open_new(session: &str, url: String) -> Result<i32, String> {
+    static OPENING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one_at_a_time = OPENING.lock().await;
+    let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
+    open_url(session, url, None).await?;
+    new_tab(session, &before).await
 }
 
 /// Waits for a tab that was not there when `before` was read.
@@ -782,9 +802,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                     tab
                 }
                 None => {
-                    let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
-                    open_url(session, url, None).await?;
-                    let tab = new_tab(session, &before).await?;
+                    let tab = open_new(session, url).await?;
                     drive(session, tab);
                     // Marked before it loads: `run` had no tab to mark.
                     emit_driven(session, Some(tab), Some("open"));
@@ -836,9 +854,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         BrowserAction::TabNew { url } => {
             let url = url.unwrap_or_else(|| "about:blank".into());
             web_url(&url)?;
-            let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
-            open_url(session, url, None).await?;
-            let tab = new_tab(session, &before).await?;
+            let tab = open_new(session, url).await?;
             drive(session, tab);
             // Marked before it loads: `run` marked the tab it was opened from.
             emit_driven(session, Some(tab), Some("tab_new"));
@@ -1046,15 +1062,20 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let tab = driven_tab(session)?;
             let (w, h) = screenshot_size(session);
             let held = CAPTURING.lock().await;
-            // A recording already holds this session's shutter open, so the
-            // pane is covered: opening it again adds nothing, and closing it
-            // would uncover the page mid-recording.
-            let recording = recording_of(session);
-            let shot = if recording.is_some() { None } else { Some(cover(session).await) };
+            // A recording already holds its tab's shutter open, so that tab is
+            // covered: opening it again adds nothing. Any other tab is live
+            // and gets a shutter of its own.
             // The screenshot's size may not be the recording's — a phone shot
             // of a desktop recording — so the video holds its last frame for
             // the length of the capture rather than show the page reflowing.
-            let recorded = recording.filter(|(rec_tab, _)| *rec_tab == tab);
+            let recorded = recording_of(session).filter(|(rec_tab, _)| *rec_tab == tab);
+            let shot = if recorded.is_some() {
+                None
+            } else {
+                // One at a time, under `CAPTURING`.
+                *SHOT_TAB.lock().unwrap() = Some(tab);
+                Some(cover(session, tab).await)
+            };
             if recorded.is_some() {
                 set_paused(session, true);
             }
@@ -1073,6 +1094,10 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             }
             if let Some(shot) = shot {
                 uncover(session, shot).await;
+                *SHOT_TAB.lock().unwrap() = None;
+                // The reader may have picked it meanwhile, and the pane's
+                // layout call has already come and found it held off.
+                let _ = relayout();
             }
             drop(held);
             let bytes = bytes?;
@@ -1145,9 +1170,9 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             // page is laid out at w×h throughout, and the pane keeps its still
             // up rather than show that layout squeezed into itself. Its number
             // is also the recording's own, which `film` checks it is still for.
-            let shot = cover(session).await;
+            let shot = cover(session, tab).await;
             RECORDING.lock().unwrap().insert(session.into(), Recording { tab, size: (w, h), shot, paused: false, layout: 0, closed: false, recorder });
-            emit_recording(session, true);
+            emit_recording(session, Some(tab));
             let started = async {
                 relayout()?;
                 cdp(tab, "Emulation.setDeviceMetricsOverride", metrics(w, h)).await?;
@@ -1248,16 +1273,17 @@ async fn end_recording(session: &str, tab: i32, shot: u64) {
     let _ = cdp(tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
     let _ = relayout();
     tokio::time::sleep(SETTLE).await;
-    emit_recording(session, false);
-    emit_shooting(session, false, shot);
+    emit_recording(session, None);
+    emit_shooting(session, false, shot, None);
 }
 
-/// Tells the pane a session is recording, so it can say so over the still it
-/// holds meanwhile. Its own event rather than a reading of `browser_shooting`:
-/// a screenshot holds the same shutter for a moment, and a notice flashing
-/// up for every screenshot is the flash `Snapshot` exists to avoid.
-fn emit_recording(session: &str, recording: bool) {
-    emit("browser_recording", json!({ "sessionId": session, "recording": recording }));
+/// Tells the pane which tab a session is recording, so it covers that tab
+/// alone and says so over its still. Its own event rather than a reading of
+/// `browser_shooting`: a screenshot holds the same shutter for a moment, and
+/// a notice flashing up for every screenshot is the flash `Snapshot` exists
+/// to avoid.
+fn emit_recording(session: &str, tab: Option<i32>) {
+    emit("browser_recording", json!({ "sessionId": session, "recording": tab.is_some(), "tab": tab }));
 }
 
 /// The PNG of the page laid out at `w`×`h`. The widget is the pane's size,
@@ -1293,9 +1319,10 @@ async fn capture(tab: i32, w: u32, h: u32, full: bool) -> Result<Vec<u8>, String
 /// doing it — so the pane hides the view behind a still of the page for the
 /// length of the shot, rather than showing a page reflowing to a size
 /// nobody asked to look at. `shot` names it, so the pane's ack can name it
-/// back; see the Mac's `cover`.
-pub(super) fn emit_shooting(session: &str, shooting: bool, shot: u64) {
-    emit("browser_shooting", json!({ "sessionId": session, "shooting": shooting, "shot": shot }));
+/// back; see the Mac's `cover`. `tab` is the page being laid out, on open:
+/// the pane covers only while that tab is the one on screen.
+pub(super) fn emit_shooting(session: &str, shooting: bool, shot: u64, tab: Option<i32>) {
+    emit("browser_shooting", json!({ "sessionId": session, "shooting": shooting, "shot": shot, "tab": tab }));
 }
 
 /// Truncating write that refuses a symlink at the leaf, so a link planted

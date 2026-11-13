@@ -1,6 +1,8 @@
 import { invoke } from "@/lib/transport";
 
 import type { NoticeKind } from "@/hooks/useNotices";
+import { IS_LINUX } from "@/lib/platform";
+import { playNotification } from "@/lib/sound";
 
 /// Post a desktop notification that clicks back into its session.
 ///
@@ -13,6 +15,11 @@ import type { NoticeKind } from "@/hooks/useNotices";
 /// Fire-and-forget by design: this is the *secondary* channel — the sidebar rail
 /// survives it either way — so a failure must never surface as an error the
 /// reader has to deal with.
+///
+/// On Linux the banner is posted silent and the window plays the app's own
+/// clip: a server's sound is whatever that desktop chose, often nothing, and
+/// the Mac's banner sound has no Linux twin to name.
 export function notifyOS(sessionId: string, kind: NoticeKind, title: string, body: string) {
+  if (IS_LINUX) playNotification();
   void invoke("notify_session", { sessionId, kind, title, body }).catch(() => {});
 }

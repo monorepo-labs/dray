@@ -456,9 +456,9 @@ async fn local_address() -> Result<(String, String, bool), String> {
     let home = store::get_home_app_dir().await.map_err(|e| e.to_string())?;
     let port_file = tokio::fs::read_to_string(home.join(crate::serve::PORT_FILE)).await.unwrap_or_default();
     let mut lines = port_file.lines();
-    let port: u16 = lines.next().and_then(|p| p.trim().parse().ok()).ok_or("The server on this Mac is starting.")?;
+    let port: u16 = lines.next().and_then(|p| p.trim().parse().ok()).ok_or_else(|| format!("The server on {} is starting.", crate::ssh::HERE_MID))?;
     let stale = crate::serve::exe_stamp().is_some_and(|now| lines.next().map(str::trim) != Some(now.as_str()));
-    let token = tokio::fs::read_to_string(home.join("serve-token")).await.map_err(|_| "The server on this Mac is starting.")?;
+    let token = tokio::fs::read_to_string(home.join("serve-token")).await.map_err(|_| format!("The server on {} is starting.", crate::ssh::HERE_MID))?;
     Ok((format!("ws://127.0.0.1:{port}"), token.trim().to_string(), stale))
 }
 
@@ -472,6 +472,7 @@ async fn save() -> Result<(), String> {
 /// asks for this as the app connects, and after any write landing meanwhile.
 pub async fn reload() {
     let saved = crate::machines::load().await;
+    let mut dropped = Vec::new();
     {
         let mut list = conns();
         list.retain_mut(|conn| {
@@ -480,6 +481,7 @@ pub async fn reload() {
                 if let Some(task) = conn.task.take() {
                     task.abort();
                 }
+                dropped.push(conn.saved.id.clone());
             }
             kept
         });
@@ -495,6 +497,9 @@ pub async fn reload() {
                 None => list.push(Conn::new(saved)),
             }
         }
+    }
+    for id in dropped {
+        forget_cache(&id).await;
     }
     announce();
 }
@@ -603,7 +608,7 @@ async fn run(id: String) {
                             conn.live = Some((url, token));
                         }
                         serve(&id, ws).await;
-                        set_status(&id, ServerStatus::Disconnected, Some("The server on this Mac restarted.".into()));
+                        set_status(&id, ServerStatus::Disconnected, Some(format!("The server on {} restarted.", crate::ssh::HERE_MID)));
                         if let Err(e) = crate::launchd::reload_if_pending().await {
                             eprintln!("[launchd] could not load the new agent: {e:#}");
                         }
@@ -1406,8 +1411,69 @@ pub async fn remove_server(id: String) -> Result<(), String> {
     }
     save().await?;
     crate::issues::set_credential(&credential_name(&id), None).await?;
+    forget_cache(&id).await;
     announce();
     Ok(())
+}
+
+/// Where a remote's last known sessions and projects are kept, so its rows
+/// outlive the app while it cannot be reached (#871). The frontend owns the
+/// shape; this only files it. `None` for an id that could not be a file name.
+async fn cache_path(id: &str) -> Option<std::path::PathBuf> {
+    let safe = !id.is_empty() && id != LOCAL && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    let dir = store::app_subdir("server-cache").await.ok()?;
+    safe.then(|| dir.join(format!("{id}.json")))
+}
+
+async fn forget_cache(id: &str) {
+    if let Some(path) = cache_path(id).await {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+}
+
+/// Keeps `cache` as `server`'s last known lists. A server no longer on the
+/// list is refused, or a write racing its removal would bring the file back.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn save_server_cache(server: String, cache: Value) -> Result<(), String> {
+    if !conns().iter().any(|c| c.saved.id == server) {
+        return Err(format!("no server named {server}"));
+    }
+    let path = cache_path(&server).await.ok_or("no cache for that server")?;
+    store::write_atomic(&path, cache.to_string()).await.map_err(|e| e.to_string())
+}
+
+/// Every saved remote's kept lists, by id. A file whose server is gone is
+/// deleted on the way, which covers one removed by the CLI while the app was
+/// closed, or a write that lost the race with `remove_server`.
+///
+/// Listed means `servers.json`, not the connections: the webview asks at
+/// mount, which can beat `start` filling them, and judged against an empty
+/// list every cache would go.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn server_caches() -> HashMap<String, Value> {
+    // A file that failed to read must not count as "all removed".
+    let read = crate::machines::try_load().await;
+    let prune = read.is_ok();
+    let listed: Vec<String> = read.unwrap_or_default().into_iter().map(|s| s.id).collect();
+    let mut out = HashMap::new();
+    let Ok(dir) = store::app_subdir("server-cache").await else { return out };
+    let Ok(mut entries) = tokio::fs::read_dir(&dir).await else { return out };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        let Some(id) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".json")) else {
+            continue;
+        };
+        if prune && !listed.iter().any(|l| l == id) {
+            let _ = tokio::fs::remove_file(&path).await;
+            continue;
+        }
+        if let Ok(body) = tokio::fs::read_to_string(&path).await {
+            if let Ok(value) = serde_json::from_str::<Value>(&body) {
+                out.insert(id.to_string(), value);
+            }
+        }
+    }
+    out
 }
 
 /// Adds a server from the line the reader logs in with. One whole connect runs
@@ -1542,7 +1608,8 @@ pub async fn run_server_login(
     auth: Option<String>,
 ) -> Result<(), String> {
     let command = match auth {
-        Some(auth) => crate::accounts::login_command(harness, provider, &auth)?,
+        // Headless: the server's browser is nowhere the reader can see.
+        Some(auth) => crate::accounts::login_command(harness, provider, &auth, true)?,
         None => harness.login_command().to_string(),
     };
     run_on_server(&server, &command).await

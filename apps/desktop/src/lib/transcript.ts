@@ -97,7 +97,7 @@ export function isToolGroup(item: WorkItem): item is ToolGroup {
 /// under the agent's activity. That exemption is also why it is subtracted from
 /// `rows`: that count is what the toggle promises to reveal, and a row already
 /// visible is not part of the promise.
-function isQueuedPrompt(item: WorkItem): boolean {
+export function isQueuedPrompt(item: WorkItem): boolean {
   return !isToolGroup(item) && item.payload.type === "user_message";
 }
 
@@ -292,6 +292,9 @@ export type Turn = {
   /// subagent spawns, reasoning, and its intermediate messages. Runs of
   /// consecutive same-tool calls arrive pre-collapsed into a `ToolGroup`.
   work: WorkItem[];
+  /// Merge cards posted this turn. Kept out of `work` so no fold or live
+  /// window hides one: `MergeCard` decides when it shrinks.
+  cards: AgentEvent[];
   /// The closing `turn_completed`, absent while the turn is still running.
   completed: AgentEvent | null;
   /// `turn_completed.finalText`, which is a verbatim copy of the turn's last
@@ -617,6 +620,7 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
   const open = (prompt: AgentEvent | null, key: string): OpenTurn => ({
     prompt,
     work: [],
+    cards: [],
     completed: null,
     finalText: null,
     toolCalls: 0,
@@ -655,6 +659,10 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
       continue;
     }
 
+    if (event.payload.type === "merge_card") {
+      current.cards.push(event);
+      continue;
+    }
     if (event.payload.type === "tool_call_started") current.toolCalls += 1;
     if (event.payload.type === "assistant_text") current.messages += 1;
     // Only a *rendered* row unseats the flag. A replayed log carries trailing
@@ -993,7 +1001,8 @@ export function drawsSameTurn(a: TurnView, b: TurnView): boolean {
     t.prompt !== u.prompt ||
     t.completed !== u.completed ||
     t.finalText !== u.finalText ||
-    t.work.length !== u.work.length
+    t.work.length !== u.work.length ||
+    !sameItems(t.cards, u.cards)
   ) {
     return false;
   }

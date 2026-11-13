@@ -2,6 +2,12 @@
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
+ * What an assistant may do. Chosen when the code is made, carried by the
+ * grant for its life.
+ */
+export type Access = "full" | "read";
+
+/**
  * One credential a harness holds, which for two of them is one of several.
  */
 export type Account = { 
@@ -226,7 +232,13 @@ from: MessageSender | null,
  * Deliberately not overwritten on a fork of a fork: the first ancestor
  * to record one is the tree the message was actually written in.
  */
-cwd: string | null, } | { "type": "assistant_text", 
+cwd: string | null, 
+/**
+ * Dray's own prompt opening a new bot's chat, so the bot speaks first.
+ * The transcript draws no bubble for it; the log keeps it, being what
+ * the agent was actually given.
+ */
+kickoff?: boolean, } | { "type": "assistant_text", 
 /**
  * `Some` only when this content was also streamed, naming the preview
  * it supersedes. `None` — the common case, covering Claude Code
@@ -348,7 +360,22 @@ automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUse
  * notice says it did. The session layer records it, so the composer
  * stops naming the model the CLI left.
  */
-model: ModelId | null, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+model: ModelId | null, } | { "type": "merge_card", taskId: string, title: string, 
+/**
+ * The repo root, what the sidebar's PR marks are keyed by. The task's
+ * machine's path where `machine` is set.
+ */
+projectPath: string, branch: string, number: number, url: string, 
+/**
+ * The machine holding the task, where it is not the chat's. Such a card
+ * reads and merges by `repo` through `gh` here, since its checkout
+ * is there, and may be gone with a sandbox.
+ */
+machine?: string, 
+/**
+ * `owner/name`, set with `machine`.
+ */
+repo?: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.
@@ -408,7 +435,13 @@ transcription: TranscriptionSettings,
  * Whether this Mac serves itself through a quick tunnel. Here because
  * Rust starts it at launch, before any webview exists to ask.
  */
-remoteAccess: boolean, };
+remoteAccess: boolean, 
+/**
+ * Whether a client holding this server's token reaches the machines it
+ * lists through it (#847). Off by default: it hands that token every
+ * machine's reach, SSH logins included.
+ */
+shareMachines: boolean, };
 
 /**
  * Permission stance a session *runs under*, in roughly increasing order of
@@ -416,6 +449,20 @@ remoteAccess: boolean, };
  * sends — see [`PermissionMode`] for the wider set the CLI reports.
  */
 export type ApprovalPolicy = "plan" | "manual" | "auto" | "dontAsk" | "bypassPermissions";
+
+/**
+ * One connected assistant, as Settings → Servers and `dray server assistant
+ * ls` list it.
+ */
+export type AssistantSummary = { id: string, 
+/**
+ * What the client called itself when it registered: "Claude", "Grok".
+ */
+name: string, access: Access, created: string, 
+/**
+ * Moves on each token refresh, so it is right to the hour.
+ */
+lastUsed: string, };
 
 /**
  * One thing the user attached, as the composer needs to draw it.
@@ -469,9 +516,10 @@ needsKey: boolean,
  * option Dray cannot carry out.
  *
  * **Shown, copyable, and run by [`run_agent_login`] on the reader's say
- * so.** Every one of these is a literal in [`auth_options`], which is what
+ * so.** Every one of these is built in [`auth_options`], which is what
  * makes running it safe: the frontend names an option id and the string is
- * looked up here, so nothing anybody typed reaches a command line. The
+ * looked up here. The one typed word that reaches it, pi's provider, has
+ * passed [`plausible_provider`] first. The
  * string is still drawn, since a reader is owed sight of what a button is
  * about to run in their shell.
  */
@@ -530,6 +578,45 @@ warning: boolean,
  * Why the last resume didn't take, in boat's or Dray's words.
  */
 note: string | null, };
+
+/**
+ * A bot: one long-lived chat with instructions and memory of its own, which
+ * everything it spawns reports back to after every turn.
+ *
+ * It is a folder, `bots/<id>/` under the home, holding [`INSTRUCTIONS`] and
+ * [`MEMORY`]; the bot's session runs *in* that folder, which is how a session
+ * is known to be a bot's — no field on the index says so, so an older build
+ * reading the index loses nothing. `bots.json` holds only the list.
+ */
+export type Bot = { id: string, name: string, 
+/**
+ * The bot's folder: its session's cwd. Absolute, on the server holding it.
+ */
+path: string, created: string, 
+/**
+ * The face picked when it was made. `None` for a bot made before there
+ * was a pick, which then draws the face its id seeds.
+ */
+avatar?: BotAvatar | null, 
+/**
+ * What its chat opens on before any session exists, drawn by the app,
+ * and written to the log as the chat's first message when one starts.
+ * Dray Bot's alone; a bot made with New bot greets with a real turn.
+ */
+welcome?: string | null, };
+
+/**
+ * A Blobatar face: which silhouette and which hue. Strings and degrees rather
+ * than the library's 0–1 trait positions, so a later generation of the
+ * library moving its cut points cannot change a face somebody picked.
+ */
+export type BotAvatar = { shape: string, hue: number, };
+
+/**
+ * A bot chat's inbox row: its last reply, and the replies since the reader
+ * last wrote.
+ */
+export type BotPreview = { text: string | null, replies: number, };
 
 /**
  * What the composer's branch picker needs to render and guard itself.
@@ -704,7 +791,13 @@ path: string, name: string, kind: ExternalAppKind,
  * no `.icns` beside it — so the button falls back to a glyph rather than
  * treating this as a failure.
  */
-icon: string | null, };
+icon: string | null, 
+/**
+ * Takes a directory as well as a file. False for the editors that open
+ * files alone — GNOME Text Editor and gedit answer a folder with "Could
+ * not open file" — so the directory button leaves them out.
+ */
+folders: boolean, };
 
 /**
  * Which run of the menu an app belongs to. Not cosmetic: "open in Cursor" and
@@ -1142,6 +1235,30 @@ export type IssueUnavailable = { "kind": "not_connected" } | { "kind": "unauthor
 export type IssuesChangedEvent = { sessionId: string, issues: Array<IssueRef>, };
 
 /**
+ * Where this server stands, as the app and `dray login` read it.
+ */
+export type LinkState = { linked: Linked | null, pending: PendingLink | null, 
+/**
+ * Why the last link ended without linking: cancelled, expired, failed.
+ */
+error: string | null, };
+
+export type Linked = { 
+/**
+ * What the org calls this server.
+ */
+serverName: string, org: LinkedOrg, 
+/**
+ * The site that holds the link, `https://www.drayhq.com` outside testing.
+ */
+site: string, };
+
+/**
+ * The org a server is linked to.
+ */
+export type LinkedOrg = { id: string, name: string, slug: string, };
+
+/**
  * Shared with the harness parsers rather than duplicated — the wire shape
  * matches, so they deserialize straight into this.
  */
@@ -1173,7 +1290,12 @@ export type MessageSender = { sessionId: string, title: string,
  * The machine the sender runs on, where that is not this one. Stamped by
  * the forwarding app, so it names the machine it came from.
  */
-machine: string | null, };
+machine: string | null, 
+/**
+ * The bot whose chat sent it, where one did. `title` is then the bot's
+ * name, and the chat draws the bot's own face.
+ */
+botId?: string, };
 
 export type Model = { 
 /**
@@ -1277,6 +1399,36 @@ model: string, inputTokens: number | null, outputTokens: number | null, cachedIn
  */
 contextWindow: number | null, maxOutputTokens: number | null, };
 
+/**
+ * A code waiting to be typed into an assistant's sign-in page.
+ */
+export type Pairing = { 
+/**
+ * The MCP URL to paste into the assistant.
+ */
+url: string, 
+/**
+ * `ABCD-EFGH`.
+ */
+code: string, expiresInSecs: number, access: Access, };
+
+/**
+ * A code waiting for approval.
+ */
+export type PendingLink = { 
+/**
+ * The approve page with the code filled in.
+ */
+url: string, 
+/**
+ * The bare page, for typing the code on another device.
+ */
+shortUrl: string, 
+/**
+ * `ABCD-EFGH`.
+ */
+code: string, expiresInSecs: number, };
+
 export type PermissionBehavior = "allow" | "deny";
 
 /**
@@ -1377,6 +1529,10 @@ replies: Array<PrComment>, };
  */
 export type PrMark = { number: number, 
 /**
+ * Where the mark opens it. A scalar, so asking costs no rate-limit points.
+ */
+url: string, 
+/**
  * The branch it was opened from — what the caller matches a session by.
  */
 headRefName: string, isDraft: boolean, state: PrMarkState, checksState: PrChecksState, 
@@ -1390,7 +1546,12 @@ headRefName: string, isDraft: boolean, state: PrMarkState, checksState: PrChecks
  * `None` on the merged half, where they are not asked for. The frontend
  * reads that as *unknown* rather than as ready — see `mergeVerdict`.
  */
-mergeable: string | null, mergeStateStatus: string | null, };
+mergeable: string | null, mergeStateStatus: string | null, 
+/**
+ * `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `None` where the
+ * repo asks for no review, and on the merged half.
+ */
+reviewDecision: string | null, };
 
 /**
  * Which of the two connections a mark came from.
@@ -1824,7 +1985,13 @@ continueAt?: string,
  * The reader cancelled the continue above. Kept beside it rather than
  * clearing it, so they can turn it back on until the time passes.
  */
-continueOff: boolean, };
+continueOff: boolean, 
+/**
+ * What a bot's stalled task needs from the reader, one line the bot wrote
+ * with `dray session need`. Drawn only while `at` is no older than
+ * `modified`, so the task moving clears it without a write.
+ */
+need?: TaskNeed, };
 
 /**
  * Session-level facts, known at startup.
@@ -1981,7 +2148,13 @@ continueAt?: string,
  * The reader cancelled the continue above. Kept beside it rather than
  * clearing it, so they can turn it back on until the time passes.
  */
-continueOff: boolean, };
+continueOff: boolean, 
+/**
+ * What a bot's stalled task needs from the reader, one line the bot wrote
+ * with `dray session need`. Drawn only while `at` is no older than
+ * `modified`, so the task moving clears it without a write.
+ */
+need?: TaskNeed, };
 
 /**
  * Driven by [`StatusTracker`](crate::session::StatusTracker). `Completed`
@@ -2100,6 +2273,15 @@ distinctId: string,
  * work.
  */
 personProperties: Record<string, string | number | boolean>, };
+
+/**
+ * See [`SessionIndexItem::need`].
+ */
+export type TaskNeed = { text: string, 
+/**
+ * RFC3339, when the bot wrote it.
+ */
+at: string, };
 
 /**
  * A tool `dray setup --install` takes, as a server has it.
@@ -2258,6 +2440,16 @@ ready: boolean, };
  * captured.
  */
 export type TurnStatus = "success" | "error";
+
+/**
+ * What `dray logout` reports.
+ */
+export type Unlinked = { org: LinkedOrg, site: string, 
+/**
+ * Set when the site couldn't be told, so its Servers page still lists
+ * this server.
+ */
+warning: string | null, };
 
 export type Unreadable = "binary" | "too_large";
 

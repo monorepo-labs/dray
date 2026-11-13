@@ -18,7 +18,7 @@ use crate::{
     models::{find_model, resolve_effort, runs_on, Effort, Model, ModelId},
     store::{
         append_session_event, append_session_index_item, clear_fork_from, copy_session_log,
-        delete_session, get_session_index_item, link_session_issue, list_session_events,
+        delete_session, get_session_index_item, link_session_issue, list_session_events, next_seq_by_session_id,
         relocate_session_to_project, resolve_unclaimed_worktree_name, set_session_status,
         touch_session_index_item, worktree_path, SessionIndexItem, SessionSnapshot, SessionStatus,
     },
@@ -38,6 +38,7 @@ use std::{
         atomic::{AtomicU64, Ordering::Relaxed},
         Arc,
     },
+    time::{Duration, Instant},
 };
 use crate::sink::Sink;
 use tokio::{
@@ -112,11 +113,15 @@ pub struct QueueChangedEvent {
 /// sender, so without this a prompt queued from the island or `dray session
 /// send` showed nowhere until its flush. Emitted under the lock, so two
 /// changes racing each other can never arrive in the wrong order.
+///
+/// A relayed message — a task's report, another bot's or session's send — is
+/// left out: it is for the agent, and every client drew it as the reader's own
+/// bubble until its flush.
 pub async fn publish_queue(session_id: &str, queued: &QueuedMessages, app: &Sink) {
     let held = queued.lock().await;
     let event = QueueChangedEvent {
         session_id: session_id.to_string(),
-        queued: held.clone(),
+        queued: held.iter().filter(|m| m.from.is_none()).cloned().collect(),
     };
     if let Err(e) = app.emit("queue_changed", &event) {
         eprintln!("[queue emit err] {e}");
@@ -209,6 +214,9 @@ pub struct StatusTracker {
     /// Moves on every turn opening or closing. What Stop's watchdog compares,
     /// so it closes only a turn nothing has moved since the interrupt.
     epoch: u64,
+    /// When a turn last opened or closed or the task set last moved: what the
+    /// idle sweep counts from. `None` until the first send.
+    quiet_since: Option<Instant>,
 }
 
 impl StatusTracker {
@@ -216,6 +224,7 @@ impl StatusTracker {
     pub fn on_send(&mut self) -> Option<SessionStatus> {
         self.model_call_open = true;
         self.epoch += 1;
+        self.quiet_since = Some(Instant::now());
         self.set(SessionStatus::InProgress)
     }
 
@@ -235,6 +244,7 @@ impl StatusTracker {
             AgentEventPayload::TurnStarted(_) => {
                 self.model_call_open = true;
                 self.epoch += 1;
+                self.quiet_since = Some(Instant::now());
                 self.limit_reset = None;
                 self.set(SessionStatus::InProgress)
             }
@@ -254,6 +264,7 @@ impl StatusTracker {
             AgentEventPayload::TurnCompleted { auth_failed, .. } => {
                 self.model_call_open = false;
                 self.epoch += 1;
+                self.quiet_since = Some(Instant::now());
                 self.auth_failed = *auth_failed;
                 self.set(SessionStatus::Completed)
             }
@@ -261,6 +272,7 @@ impl StatusTracker {
             // and its own per-task Stop.
             AgentEventPayload::BackgroundTasksChanged { tasks } => {
                 self.background_tasks = tasks.iter().map(|t| t.task_id.clone()).collect();
+                self.quiet_since = Some(Instant::now());
                 None
             }
             _ => None,
@@ -295,6 +307,15 @@ impl StatusTracker {
     /// whole wait.
     pub fn turn_in_flight(&self) -> bool {
         self.model_call_open
+    }
+
+    /// How long nothing has run, or `None` while anything does — background
+    /// tasks included, since stopping the child would take them with it.
+    pub fn idle_for(&self, now: Instant) -> Option<Duration> {
+        if self.has_outstanding_work() {
+            return None;
+        }
+        Some(now.saturating_duration_since(self.quiet_since?))
     }
 
     /// When the usage limit that stopped the turn just completed resets, once.
@@ -574,7 +595,8 @@ pub async fn settle_dead_child(
         if !tracker.background_task_ids().is_empty() {
             closing.push(mint(AgentEventPayload::BackgroundTasksChanged { tasks: vec![] }));
         }
-        if tracker.turn_in_flight() {
+        let died_mid_turn = tracker.turn_in_flight();
+        if died_mid_turn {
             closing.push(mint(closing_turn("process_exited", Some(why))));
         }
         let mut next = None;
@@ -585,11 +607,38 @@ pub async fn settle_dead_child(
             tracker.note_tool_call(&event.payload);
             next = tracker.on_event(&event.payload).or(next);
         }
-        next
+        (next, died_mid_turn)
     };
+    let (next, died_mid_turn) = next;
     if let Some(next) = next {
         publish_status(session_id, next, app).await;
     }
+    // This close never passes through `ingest_event`, where a bot's child
+    // reports; without this the bot would wait on a turn that is over.
+    if died_mid_turn {
+        LAST_REPLY.lock().unwrap().remove(session_id);
+        POSTED.lock().unwrap().remove(session_id);
+        report(session_id, format!("(the session's process exited mid-turn: {why})"), app);
+    }
+}
+
+/// How long a child may sit with nothing running before [`SessionManager::reap_idle`]
+/// stops it.
+const IDLE_LIMIT: Duration = Duration::from_secs(15 * 60);
+
+/// Starts the idle sweep once, with the first child, so only a process that
+/// hosts sessions runs one.
+fn start_idle_sweep() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        tokio::spawn(async {
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                manager().reap_idle(Instant::now()).await;
+            }
+        });
+    });
 }
 
 /// One session's child, or `None` while it has none. The lock is what orders
@@ -612,6 +661,16 @@ pub fn manager() -> &'static SessionManager {
     static MANAGER: std::sync::LazyLock<SessionManager> =
         std::sync::LazyLock::new(SessionManager::default);
     &MANAGER
+}
+
+/// Refuses a folder that is gone. Spawned there, every harness fails with the
+/// OS's bare `No such file or directory`, pinned on the agent's name — read as
+/// "claude isn't installed" when the project was what went missing.
+async fn require_dir(dir: &str, what: &str) -> Result<()> {
+    if tokio::fs::metadata(dir).await.is_ok_and(|m| m.is_dir()) {
+        return Ok(());
+    }
+    bail!("{what} {dir} no longer exists. Restore it, or remove the project from Dray.")
 }
 
 /// The live session in a locked slot, or the error every caller answers a dead
@@ -712,9 +771,34 @@ impl SessionManager {
         false
     }
 
+    /// Stops every child idle past [`IDLE_LIMIT`]. Each holds ~250MB doing
+    /// nothing, and the next send resumes it as it does after a restart. A slot
+    /// or tracker locked right now is busy by definition, so it is skipped.
+    async fn reap_idle(&self, now: Instant) {
+        let slots: Vec<Slot> = self.sessions.lock().await.values().cloned().collect();
+        for slot in slots {
+            let Ok(mut guard) = slot.try_lock() else { continue };
+            if !guard.as_ref().is_some_and(|s| s.idle_past(now, IDLE_LIMIT)) {
+                continue;
+            }
+            // Plain `kill`, as a respawn does: the next send stands in for one.
+            if let Some(session) = guard.take() {
+                let _ = session.kill().await;
+            }
+        }
+    }
+
     /// Takes the live child out, leaving the slot empty for the next send.
     async fn take(&self, id: &str) -> Option<Session> {
         self.existing(id).await?.lock().await.take()
+    }
+
+    /// Stops a session's child the way the idle reaper does, leaving the
+    /// session as one that resumes on its next send.
+    pub async fn stop(&self, id: &str) {
+        if let Some(session) = self.take(id).await {
+            let _ = session.kill().await;
+        }
     }
 
     /// Routes a prompt to a session: spawns a new child, reuses a live one, or
@@ -883,6 +967,11 @@ impl SessionManager {
                     harness.install_command(),
                 );
             }
+            require_dir(cwd, "The project folder").await?;
+            // A bot whose chat opens on a welcome has it logged ahead of this
+            // first prompt; marked here, where "first" is known for certain.
+            // An agent switch is marked here too, for the hand-over.
+            crate::bots::mark_new_chat(session_id, cwd, harness).await;
 
             // Only Claude Code's `-w` makes its own tree. For everything else
             // the tree has to be one Dray makes — the same route `--from`
@@ -1178,6 +1267,12 @@ impl SessionManager {
             Some(item) => item.cwd.clone(),
             None => cwd.to_string(),
         };
+        // A fork into a new worktree has no folder until this send makes one,
+        // further down; only its project has to be there already.
+        match indexed.as_ref().filter(|i| i.fork_from.is_some() && i.worktree_name.is_some()) {
+            Some(unmade) => require_dir(&unmade.project_path, "The project folder").await?,
+            None => require_dir(&session_cwd, "This session's folder").await?,
+        }
 
         // Recorded before the prompt goes out, and before the queue branch
         // below returns: a tag on a prompt held behind a running turn still
@@ -1422,6 +1517,11 @@ impl SessionManager {
         let cli_fork = fork_from
             .as_deref()
             .filter(|_| harness.caps().fork_needs_cli);
+
+        // A bot chat whose first send failed before its welcome was written
+        // comes back here, not through creation, after a restart.
+        crate::bots::mark_welcome_if_unlogged(session_id, &session_cwd).await;
+        crate::bots::mark_handover_if_unanswered(session_id, &session_cwd, harness).await;
 
         let mut session = Session::init(
             session_id,
@@ -1793,6 +1893,23 @@ impl SessionManager {
         Ok((relocated, existed))
     }
 
+    /// Logs and emits an event Dray writes into a session's chat itself. Numbered
+    /// through the live child's counter where one runs — the agent posting a card
+    /// is mid-turn — and off the log otherwise, under the slot's lock either way
+    /// so a spawn cannot take the same `seq`.
+    pub async fn post_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<()> {
+        let slot = self.slot(session_id).await;
+        let guard = slot.lock().await;
+        let (harness, seq) = match guard.as_ref() {
+            Some(s) => (s.harness, s.seq.fetch_add(1, Relaxed)),
+            None => (harness, next_seq_by_session_id(session_id).await?),
+        };
+        let event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
+        POSTED.lock().unwrap().insert(session_id.to_string());
+        app.emit("agent_event", &event)?;
+        append_session_event(session_id, event).await
+    }
+
     /// The agent process's pid, for finding what it started (a dev server is a
     /// descendant). `None` while no child is running.
     pub async fn child_pid(&self, session_id: &str) -> Option<u32> {
@@ -2076,6 +2193,7 @@ impl Session {
         fork_from: Option<&str>,
         app: &Sink,
     ) -> Result<Session> {
+        start_idle_sweep();
         match harness {
             Harness::ClaudeCode => {
                 claude_code::init(
@@ -2350,9 +2468,14 @@ impl Session {
     ///
     /// `None` means the flush won the race, which needs no handling beyond
     /// leaving the composer alone: the prompt is on its way and the frontend
-    /// learns so from the `user_message` that follows.
+    /// learns so from the `user_message` that follows. A relayed message is
+    /// skipped: the reader never saw it, so Esc must not drop a task's report.
     pub async fn cancel_queued(&self, app: &Sink) -> Option<QueuedMessage> {
-        let cancelled = self.queued.lock().await.pop();
+        let cancelled = {
+            let mut held = self.queued.lock().await;
+            let newest = held.iter().rposition(|m| m.from.is_none());
+            newest.map(|i| held.remove(i))
+        };
         if cancelled.is_some() {
             publish_queue(&self.id, &self.queued, app).await;
         }
@@ -2924,6 +3047,15 @@ impl Session {
         Ok(())
     }
 
+    /// Whether nothing has run for `limit` and nothing waits on this child: no
+    /// card up, which only it can answer, and no prompt queued for it.
+    fn idle_past(&self, now: Instant, limit: Duration) -> bool {
+        let Ok(tracker) = self.status.try_lock() else { return false };
+        tracker.idle_for(now).is_some_and(|idle| idle >= limit)
+            && self.pending_permissions.try_lock().is_ok_and(|p| p.is_empty())
+            && self.queued.try_lock().is_ok_and(|q| q.is_empty())
+    }
+
     /// [`kill`](Self::kill), then everything the child had started — a
     /// background Bash, a dev server. `kill` alone signals the agent's own pid,
     /// so those were orphaned and kept running under launchd. Only delete and
@@ -3006,6 +3138,27 @@ impl std::fmt::Display for Undelivered {
     }
 }
 
+/// A bot chat's hand-over, taken for one send and put back unless that send
+/// reached the agent, so a retry still carries the conversation.
+struct HandoverGuard<'a> {
+    session_id: &'a str,
+    text: Option<String>,
+}
+
+impl HandoverGuard<'_> {
+    fn sent(&mut self) {
+        self.text = None;
+    }
+}
+
+impl Drop for HandoverGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(text) = self.text.take() {
+            crate::bots::restore_handover(self.session_id, text);
+        }
+    }
+}
+
 /// Persists the user's own prompt event, emits it, then writes it to the
 /// child's stdin — the CLI never echoes a prompt back, so this is the only
 /// place it enters the transcript.
@@ -3039,13 +3192,19 @@ async fn deliver_prompt(
     transport: &Transport,
     app: &Sink,
 ) -> Result<(String, bool)> {
-    let seq = seq.fetch_add(1, Relaxed);
-
     // Ahead of the event, because it is what decides the event's own text:
     // a non-image attachment becomes an `@path` mention on the prompt, and
     // the transcript has to show what the model was actually given.
     let prepared = attachments::prepare(session_id, prompt, attachment_paths, harness).await?;
     let text = prepared.text;
+    // A bot chat taking over from another agent: the conversation so far goes
+    // ahead of the first prompt, sent and never logged, so the chat draws only
+    // what the reader typed.
+    let mut handover = HandoverGuard { session_id, text: crate::bots::take_handover(session_id) };
+    let given = match &handover.text {
+        Some(handover) => format!("{handover}{text}"),
+        None => text.clone(),
+    };
 
     // Ahead of the event for a second reason, and this one is about failure
     // rather than content. Codex resolves a leading `/skill` by asking its own
@@ -3057,11 +3216,29 @@ async fn deliver_prompt(
         Transport::Rpc(thread) if send => {
             Some((
                 thread,
-                crate::harness::codex::turn_input(thread, &text, &prepared.images).await?,
+                crate::harness::codex::turn_input(thread, &given, &prepared.images).await?,
             ))
         }
         _ => None,
     };
+
+    // A bot whose chat opens on a welcome (Dray Bot) has it written down as
+    // the chat's first message, ahead of the prompt that started the session,
+    // so the chat reads after a restart as it did before the first send. Only
+    // logged: the agent is not given it.
+    if let Some(welcome) = crate::bots::take_welcome(session_id) {
+        let event = AgentEvent::mint(
+            session_id.to_string(),
+            harness,
+            seq.fetch_add(1, Relaxed),
+            None,
+            None,
+            AgentEventPayload::AssistantText { block: None, text: welcome },
+        );
+        app.emit("agent_event", &event)?;
+        append_session_event(session_id, event).await?;
+    }
+    let seq = seq.fetch_add(1, Relaxed);
 
     let payload = AgentEventPayload::UserMessage {
         text: text.clone(),
@@ -3081,6 +3258,7 @@ async fn deliver_prompt(
         // Absent means "this session's own cwd", which is the truth for every
         // message a session logs itself. Only a fork records one.
         cwd: None,
+        kickoff: crate::bots::take_kickoff(session_id),
     };
     // Nothing tracks turns yet; Claude Code opens one per `init`.
     let agent_event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
@@ -3102,7 +3280,8 @@ async fn deliver_prompt(
 
     // Logged, not sent: the caller holds the text and opens the turn itself.
     if !send {
-        return Ok((text, true));
+        handover.sent();
+        return Ok((given, true));
     }
 
     // Codex takes a prompt as a request that opens a turn, so the write is the
@@ -3111,30 +3290,34 @@ async fn deliver_prompt(
     // a no-op.
     if let Some((thread, input)) = codex {
         crate::harness::codex::start_turn(thread, input).await?;
-        return Ok((text, true));
+        handover.sent();
+        return Ok((given, true));
     }
     // pi takes a prompt as a command whose answer says it was accepted, so the
     // write is the send rather than a line the child picks up on its own
     // schedule.
     if let Transport::Pi(client) = transport {
-        let runs = crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images)
+        let runs = crate::harness::pi::send_prompt(client, &given, delivery, &prepared.images)
             .await
             .context(Undelivered)?;
-        return Ok((text, runs));
+        handover.sent();
+        return Ok((given, runs));
     }
     // grok takes a prompt into the running turn through a method of its own;
     // a second `session/prompt` would take over the id the turn settles on.
     if let (Transport::Grok(session), crate::harness::pi::Delivery::Steer) = (transport, delivery) {
-        crate::harness::grok::interject(session, &text, &prepared.images)
+        crate::harness::grok::interject(session, &given, &prepared.images)
             .await
             .context(Undelivered)?;
-        return Ok((text, true));
+        handover.sent();
+        return Ok((given, true));
     }
     // fx and grok take a prompt as a request that blocks for the turn, so the
     // write is the send and the reader settles the answer.
-    if let Some(sent) = transport.open_turn(&text, &prepared.images).await {
+    if let Some(sent) = transport.open_turn(&given, &prepared.images).await {
         sent?;
-        return Ok((text, true));
+        handover.sent();
+        return Ok((given, true));
     }
     let stdin = transport.lines()?;
 
@@ -3142,11 +3325,11 @@ async fn deliver_prompt(
     // shape every fixture captures, kept rather than always sending the
     // one-element block array it is sugar for.
     let content = if prepared.images.is_empty() {
-        json!(text)
+        json!(given)
     } else {
         let mut blocks = Vec::new();
-        if !text.is_empty() {
-            blocks.push(json!({"type": "text", "text": text}));
+        if !given.is_empty() {
+            blocks.push(json!({"type": "text", "text": given}));
         }
         for image in &prepared.images {
             blocks.push(json!({
@@ -3163,7 +3346,8 @@ async fn deliver_prompt(
 
     let line = json!({"type":"user","message":{"role":"user","content": content}});
     write_line(stdin, &line).await?;
-    Ok((text, true))
+    handover.sent();
+    Ok((given, true))
 }
 
 /// The handles a read loop needs once its harness has stopped being relevant.
@@ -3199,6 +3383,39 @@ pub async fn ingest(ctx: &Ingest<'_>, agent_event: AgentEvent, app: &Sink) {
 /// [`ingest`], with `tracked` false for an event whose status change the
 /// caller already made under its own lock — Stop's close, which has to check
 /// and close the turn in one step.
+/// Each session's last main-thread reply this turn. Only Claude Code fills
+/// `TurnCompleted.final_text`; Codex, fx, grok and pi say their answer in
+/// `AssistantText` alone, so a report reading the closing event found nothing.
+static LAST_REPLY: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Sessions something was posted into this turn, a merge card being the one
+/// kind: drawn with no reply beside it, so the turn is not a silent one.
+static POSTED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Sends `text` to the session that started `session_id`, where it is a bot's.
+fn report(session_id: &str, text: String, app: &Sink) {
+    let report = crate::orchestration::report_to_parent(session_id.to_string(), text, app.clone());
+    tokio::spawn(async move {
+        if let Err(e) = report.await {
+            eprintln!("[bot report err] {e:#}");
+        }
+    });
+}
+
+/// What a child's closing turn says to the bot: its last words, or what became
+/// of a turn that ended without any, so the bot is never left waiting on one.
+fn report_text(status: TurnStatus, stop_reason: Option<&str>, final_text: Option<&str>) -> String {
+    match final_text.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(text) => text.to_string(),
+        None if status == TurnStatus::Error => {
+            format!("(the turn failed: {})", stop_reason.unwrap_or("no reason given"))
+        }
+        None => "(the turn ended without a message)".to_string(),
+    }
+}
+
 async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink, tracked: bool) {
     // Filled here rather than in the mapper because only the session layer
     // knows the cwd. Freezing the tree id onto the closing event is what
@@ -3245,6 +3462,34 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
         eprintln!("[emit err] {err}");
     }
 
+    // A bot's child reports every turn it closes. Spawned: the send lands in
+    // the parent's session, which must not hold this one's read loop up.
+    let mut silent_bot_turn = false;
+    if agent_event.subagent.is_none() {
+        match &agent_event.payload {
+            AgentEventPayload::AssistantText { text, .. } if !text.trim().is_empty() => {
+                LAST_REPLY.lock().unwrap().insert(ctx.session_id.to_string(), text.clone());
+            }
+            AgentEventPayload::TurnCompleted { status, stop_reason, final_text, .. } => {
+                let last = LAST_REPLY.lock().unwrap().remove(ctx.session_id);
+                let said = final_text.as_deref().filter(|t| !t.trim().is_empty()).or(last.as_deref());
+                // A bot answering a report that needs nothing from the reader
+                // says nothing, and its chat draws nothing; a "Done" for it
+                // would point the reader at an empty turn.
+                let posted = POSTED.lock().unwrap().remove(ctx.session_id);
+                silent_bot_turn = said.is_none()
+                    && !posted
+                    && *status == TurnStatus::Success
+                    && crate::bots::bot_at(ctx.session_cwd).await.is_some();
+                report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
+                // Awaited, not spawned: the queued flush below would start the
+                // next turn, which could overwrite this one's notes unsaved.
+                crate::bots::commit_turn(ctx.session_cwd).await;
+            }
+            _ => {}
+        }
+    }
+
     // The CLI moved the session to another model for good. Recorded, or the
     // next send restates the model it left and the CLI goes back to it.
     if let AgentEventPayload::Notice { model: Some(model), .. } = &agent_event.payload {
@@ -3289,6 +3534,9 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
             tracker.note_tool_call(&agent_event.payload);
         }
         tracker.on_event(&agent_event.payload);
+        if silent_bot_turn {
+            tracker.mark_read(true);
+        }
         let limit_reset = matches!(agent_event.payload, AgentEventPayload::TurnCompleted { .. })
             .then(|| tracker.take_limit_reset())
             .flatten();
@@ -3936,6 +4184,7 @@ pub async fn strand_queue_on_exit(
                 queued: true,
                 from: message.from.clone(),
                 cwd: None,
+                kickoff: false,
             },
         );
         if let Err(err) = app.emit("agent_event", &bubble) {
@@ -3960,6 +4209,16 @@ pub async fn strand_queue_on_exit(
 mod tests {
     use super::*;
     use crate::harness::claude_code::{mapper::Mapper, parser};
+
+    #[test]
+    fn a_report_says_something_whatever_the_turn_left() {
+        assert_eq!(report_text(TurnStatus::Success, None, Some(" pong ")), "pong");
+        assert_eq!(
+            report_text(TurnStatus::Error, Some("max_tokens"), None),
+            "(the turn failed: max_tokens)"
+        );
+        assert_eq!(report_text(TurnStatus::Success, None, Some("  ")), "(the turn ended without a message)");
+    }
 
     /// `steer` tells a send that failed after the bubble was logged from one
     /// that failed before it by the marker alone, so it has to survive as
@@ -3990,6 +4249,142 @@ mod tests {
 
         let same = tokio::time::timeout(Duration::from_millis(50), manager.stop_task("busy", "t")).await;
         assert!(same.is_err(), "ran over its own session's send");
+    }
+
+    /// A live child over `cat`, its tracker as given.
+    async fn child_with(manager: &SessionManager, id: &str, tracker: StatusTracker) -> Slot {
+        let mut child = tokio::process::Command::new("cat")
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let slot = manager.slot(id).await;
+        *slot.lock().await = Some(Session {
+            id: id.to_string(),
+            child,
+            stdin: Transport::Lines(Arc::new(Mutex::new(stdin))),
+            harness: Harness::ClaudeCode,
+            model: ModelId::new("m"),
+            effort: None,
+            permission_mode: ApprovalPolicy::default(),
+            fast: false,
+            seq: Default::default(),
+            status: Arc::new(Mutex::new(tracker)),
+            pending_permissions: Default::default(),
+            queued: Default::default(),
+        });
+        slot
+    }
+
+    /// A task's report waits in the bot's queue unseen: no client draws it,
+    /// and Esc takes back the reader's own prompt from under it.
+    #[tokio::test]
+    async fn a_relayed_message_is_held_but_never_shown_or_cancelled() {
+        let manager = SessionManager::default();
+        let slot = child_with(&manager, "bot", StatusTracker::default()).await;
+        let shown = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let sink = {
+            let shown = shown.clone();
+            Sink::new(move |_, payload| shown.lock().unwrap().push(payload["queued"].clone()))
+        };
+        let guard = slot.lock().await;
+        let session = guard.as_ref().unwrap();
+        let report = MessageSender { session_id: "t".into(), title: "T".into(), machine: None, bot_id: None };
+        session.queue_msg("mine", &[], &[], None, &sink).await;
+        session.queue_msg("done", &[], &[], Some(report), &sink).await;
+
+        let last = shown.lock().unwrap().last().unwrap().clone();
+        assert_eq!(last.as_array().unwrap().len(), 1);
+        assert_eq!(last[0]["text"], "mine");
+
+        assert_eq!(session.cancel_queued(&sink).await.unwrap().text, "mine");
+        assert!(session.cancel_queued(&sink).await.is_none());
+        assert_eq!(session.queued.lock().await[0].text, "done", "the report still reaches the bot");
+        assert_eq!(shown.lock().unwrap().last().unwrap(), &serde_json::json!([]));
+    }
+
+    /// Only a child with nothing running and nothing waiting on it is stopped,
+    /// and its slot left empty for the next send to resume into.
+    #[tokio::test]
+    async fn the_idle_sweep_stops_only_a_quiet_child() {
+        let manager = SessionManager::default();
+        let done = || {
+            let mut tracker = StatusTracker::default();
+            tracker.on_send();
+            tracker.on_event(&turn_completed());
+            tracker
+        };
+        let idle = child_with(&manager, "idle", done()).await;
+        let mut with_task = done();
+        with_task.on_event(&AgentEventPayload::BackgroundTasksChanged {
+            tasks: vec![crate::events::BackgroundTask {
+                task_id: "b1".to_string(),
+                task_type: "local_bash".to_string(),
+                description: "pnpm dev".to_string(),
+            }],
+        });
+        let tasked = child_with(&manager, "tasked", with_task).await;
+        let mut running = StatusTracker::default();
+        running.on_send();
+        let running = child_with(&manager, "running", running).await;
+        let sending = child_with(&manager, "sending", done()).await;
+        let _held = sending.try_lock().unwrap();
+        let carded = child_with(&manager, "carded", done()).await;
+        carded.lock().await.as_ref().unwrap().pending_permissions.lock().unwrap().insert(
+            "r1".to_string(),
+            crate::harness::claude_code::permissions::PendingRequest {
+                tool_use_id: "t1".to_string(),
+                tool_name: "Write".to_string(),
+                input: serde_json::Value::Null,
+                options: HashMap::new(),
+                reply: crate::harness::claude_code::permissions::Reply::Control,
+            },
+        );
+        let queued = child_with(&manager, "queued", done()).await;
+        queued.lock().await.as_ref().unwrap().queued.lock().await.push(QueuedMessage {
+            id: "q1".to_string(),
+            session_id: "queued".to_string(),
+            text: "next".to_string(),
+            attachment_paths: vec![],
+            from: None,
+            issues: vec![],
+        });
+
+        manager.reap_idle(Instant::now()).await;
+        assert!(idle.lock().await.is_some(), "not idle long enough yet");
+
+        manager.reap_idle(Instant::now() + IDLE_LIMIT).await;
+        assert!(idle.lock().await.is_none());
+        assert!(tasked.lock().await.is_some(), "a dev server keeps its child");
+        assert!(running.lock().await.is_some(), "a turn in flight keeps its child");
+        assert!(carded.lock().await.is_some(), "an open card keeps the only child that can answer it");
+        assert!(queued.lock().await.is_some(), "a queued prompt keeps its child");
+        drop(_held);
+        assert!(sending.lock().await.is_some(), "a send holding the slot keeps its child");
+    }
+
+    /// The clock restarts when the task set drains, so a session is not stopped
+    /// the moment its last background task ends.
+    #[test]
+    fn idle_counts_from_the_last_thing_that_ran() {
+        let mut tracker = StatusTracker::default();
+        assert_eq!(tracker.idle_for(Instant::now()), None, "never sent to");
+        tracker.on_send();
+        assert_eq!(tracker.idle_for(Instant::now()), None, "turn running");
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged {
+            tasks: vec![crate::events::BackgroundTask {
+                task_id: "b1".to_string(),
+                task_type: "local_bash".to_string(),
+                description: "sleep 300".to_string(),
+            }],
+        });
+        tracker.on_event(&turn_completed());
+        assert_eq!(tracker.idle_for(Instant::now()), None, "task running");
+        let drained = Instant::now();
+        tracker.on_event(&AgentEventPayload::BackgroundTasksChanged { tasks: vec![] });
+        let idle = tracker.idle_for(drained + Duration::from_secs(60)).unwrap();
+        assert!(idle <= Duration::from_secs(60));
     }
 
     /// Drives the real capture through the counter that decides whether a

@@ -41,6 +41,12 @@ phone reads and drives it over the same WebSocket the desktop uses
   Bring or Stash first where files are uncommitted, as the desktop does.
 - **Pairing** by paste or by QR, and every server's name, token and removal
   in one Settings screen.
+- **Shared machines** (#847): a paired server that shares its list
+  (`share_machines`, `machines_shared`) adds each machine as a server of its
+  own, never saved, with a hello naming `via` its id and `/file`/`/upload`
+  carrying `via=`, under the paired server's token. Its id is hashed from the
+  pair, so transcripts survive a reconnect. The Island skips this: it follows
+  the app's links, which already name those machines.
 - **Pull request** sheet from the session view: readiness in the desktop's
   order with checks speaking first, checks failing-first, comments; every
   check and comment opens on GitHub. Merge is the desktop's split button —

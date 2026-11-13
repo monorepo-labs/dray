@@ -20,6 +20,13 @@ describe("stripSenderPrefix", () => {
     expect(stripSenderPrefix(other, from)).toBe(other);
   });
 
+  // Pinned against the string `attribute` builds for a bot sender.
+  it("takes off the line naming a bot", () => {
+    const bot = { sessionId: "abc-123", title: "Ops", machine: null, botId: "b1" };
+    expect(senderPrefix(bot)).toBe('[message from the Dray bot "Ops" (abc-123)]\n\n');
+    expect(stripSenderPrefix(`${senderPrefix(bot)}hi`, bot)).toBe("hi");
+  });
+
   it("survives a title holding brackets and quotes", () => {
     const odd = { sessionId: "xyz-789", title: 'Fix [the "thing"] (again)', machine: null };
     expect(stripSenderPrefix(`${senderPrefix(odd)}done`, odd)).toBe("done");

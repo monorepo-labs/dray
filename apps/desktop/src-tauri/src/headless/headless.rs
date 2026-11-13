@@ -104,10 +104,56 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 
 // --- What `dray browser` reads ----------------------------------------------
 
-fn browser_dir() -> PathBuf {
+/// Every Chromium's profiles, headless and CEF: `browser/` in the home, so two
+/// servers on two homes never share one.
+pub(crate) fn browser_dir() -> PathBuf {
     crate::store::home_override()
         .unwrap_or_else(|| std::env::home_dir().unwrap_or_default().join(".dray"))
         .join("browser")
+}
+
+/// Removes a profile lock another machine left, so Chromium starts.
+///
+/// `SingletonLock` is a symlink naming `<host>-<pid>`. Chromium clears a dead
+/// lock from its own host itself, but one naming another host it leaves, and
+/// refuses the profile as in use elsewhere — which is every lock a sandbox
+/// leaves behind, since a resume changes the hostname. Cleared only when no
+/// process of this binary's name holds that pid here, so a Dray still running
+/// across a hostname change keeps its lock.
+pub(crate) fn clear_stale_lock(dir: &Path) {
+    let Ok(target) = std::fs::read_link(dir.join("SingletonLock")) else { return };
+    let Some((host, pid)) = target.to_str().and_then(|t| t.rsplit_once('-')) else { return };
+    if host == hostname() || pid.parse().is_ok_and(holds_lock) {
+        return;
+    }
+    eprintln!("[browser] clearing {host}'s profile lock in {}", dir.display());
+    for name in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
+        let _ = std::fs::remove_file(dir.join(name));
+    }
+}
+
+fn hostname() -> String {
+    let mut buf = [0u8; 256];
+    // SAFETY: the buffer is writable for its whole length.
+    if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
+        return String::new();
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    String::from_utf8_lossy(&buf[..end]).into_owned()
+}
+
+/// Whether `pid` is alive and, where `/proc` can say, runs this binary: a
+/// resume reuses low pids, so a live pid alone is often someone else.
+fn holds_lock(pid: i32) -> bool {
+    // SAFETY: signal 0 only checks the pid.
+    if unsafe { libc::kill(pid, 0) } != 0 {
+        return false;
+    }
+    let comm = |p: &str| std::fs::read_to_string(format!("/proc/{p}/comm")).ok();
+    match (comm(&pid.to_string()), comm("self")) {
+        (Some(theirs), Some(ours)) => theirs == ours,
+        _ => true,
+    }
 }
 
 fn tabs_of(session: &str) -> Vec<TabInfo> {
@@ -267,7 +313,7 @@ fn relayout() -> Result<(), String> {
 
 /// No pane to cover. Still numbered, since a recording's number is what
 /// `film` checks it is still running for.
-async fn cover(_session: &str) -> u64 {
+async fn cover(_session: &str, _tab: i32) -> u64 {
     static SHOT: AtomicU64 = AtomicU64::new(0);
     SHOT.fetch_add(1, Ordering::Relaxed) + 1
 }
@@ -431,6 +477,7 @@ async fn chrome_for(session: &str) -> Result<(), String> {
 async fn launch(session: &str, exe: &Path, sandboxed: bool) -> Result<(), String> {
     let profile = browser_dir().join(session);
     std::fs::create_dir_all(&profile).map_err(|e| format!("could not create {}: {e}", profile.display()))?;
+    clear_stale_lock(&profile);
     let (to_chrome, chrome_reads) = {
         let (r, w) = std::io::pipe().map_err(|e| e.to_string())?;
         (w, r)

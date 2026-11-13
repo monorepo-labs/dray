@@ -109,6 +109,16 @@ dray server tunnel on
 
 It prints the address and token as one line, ready to paste into **Add server**. `dray server tunnel off` takes it down, and `dray server status` shows the address again.
 
+### Share your servers
+
+Your phone, or another Mac, can reach every server on this Mac's list through this Mac, with no pairing of their own. Pair with this Mac once, and its sandboxes and VPSes come with it, SSH ones included.
+
+**Where:** Settings → Servers → **Share these servers**, below the list. Off until you turn it on. From a terminal, `dray machine share on` and `dray machine share off` do the same, on a Mac or on a Linux server.
+
+- **Each one shows as its own server** on the phone, marked "via" the Mac it goes through. It has no token or Remove of its own: it comes and goes with this Mac's list and the switch.
+- **This Mac carries the connection.** While it sleeps or is off, the servers behind it are out of reach from the phone too.
+- **The token reaches further.** With sharing on, this Mac's token opens every server on its list. Their own tokens never leave this Mac.
+
 ## Share a dev server
 
 A public link lets anyone open one of your session's dev servers in their browser, such as a preview of the site your agent is building. The link is made on the machine the dev server runs on, so a link from a remote server keeps working with your Mac asleep.
