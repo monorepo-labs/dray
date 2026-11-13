@@ -82,10 +82,13 @@ export function useStalledTasks({
   }, [byBot, prOf]);
 
   const mountedAt = useRef(Date.now());
-  // Sent and not yet answered. A key is stored only once its nudge landed, so
-  // a dropped connection or a bot that failed to start is tried again on the
-  // next minute's tick rather than never.
+  // Sent and not yet answered. A key is stored only once its nudge reached a
+  // bot, so a dropped connection, a bot that failed to start or a server too
+  // old to deliver is tried again on the next minute's tick rather than never.
   const sending = useRef(new Set<string>());
+  // The tick each unsent nudge was last tried on, so a retry waits for the
+  // next one instead of going out on every index change.
+  const triedOn = useRef(new Map<string, number>());
   useEffect(() => {
     if (now - mountedAt.current < NUDGE_HOLD_MS) return;
     const nudged = new Set(readLocalStorage<string[]>(NUDGED_KEY, []));
@@ -93,9 +96,16 @@ export function useStalledTasks({
       .flatMap((b) => b.stalls)
       // A ready stall is nudged even under a need, which a waiting stall
       // wrote and `nudge_bot` clears for the bot to judge afresh.
-      .filter((s) => (s.kind === "ready" || !needLine(s)) && !nudged.has(s.key) && !sending.current.has(s.key));
+      .filter(
+        (s) =>
+          (s.kind === "ready" || !needLine(s)) &&
+          !nudged.has(s.key) &&
+          !sending.current.has(s.key) &&
+          triedOn.current.get(s.key) !== now,
+      );
     for (const s of due) {
       sending.current.add(s.key);
+      triedOn.current.set(s.key, now);
       invoke<boolean | null>("nudge_bot", {
         sessionId: s.row.item.sessionId,
         problem: s.problem ?? null,
@@ -105,8 +115,9 @@ export function useStalledTasks({
           // Only `true` reached a bot. A server from before it said so answers
           // null, and one holding no bot for a task on another machine dropped
           // every nudge that way.
-          if (sent === true && s.kind === "fix" && s.pr && s.status)
-            recordFixAsk(s.row.item.sessionId, s.pr.number, s.status);
+          if (sent !== true) return;
+          triedOn.current.delete(s.key);
+          if (s.kind === "fix" && s.pr && s.status) recordFixAsk(s.row.item.sessionId, s.pr.number, s.status);
           const stored = readLocalStorage<string[]>(NUDGED_KEY, []);
           writeLocalStorage(NUDGED_KEY, [...stored, s.key].slice(-NUDGED_CAP));
         })
