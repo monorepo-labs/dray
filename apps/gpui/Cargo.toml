@@ -66,11 +66,6 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSVisualEffectView", "NSView", "NSResponder", "NSWindow", "NSAppearance"] }
 objc2-foundation = "0.3"
 
-# With no windowing backend on, GPUI on Linux opens no window and says nothing.
-# X11 is what the boat sandbox runs.
-[target.'cfg(target_os = "linux")'.dependencies]
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["x11"] }
-
 # The spikes in examples/ that settled #856's open questions. Kept, so they
 # can be run again against the next GPUI pin.
 [dev-dependencies]
