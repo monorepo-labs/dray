@@ -63,6 +63,21 @@ const inFlight = new Map<string, { promise: Promise<void>; generation: number }>
 
 const EMPTY: Map<string, PrMark> = new Map();
 
+/// PRs this app merged, as `repo#number`, drawn merged until a read stops
+/// calling them open: `merge_pr` answering is proof, and GitHub's read can
+/// trail it, which drew the Merge button again for a beat.
+const mergedHere = new Set<string>();
+
+function held(path: string, pr: PrMark): PrMark {
+  const key = `${path}#${pr.number}`;
+  if (!mergedHere.has(key)) return pr;
+  if (pr.state !== "OPEN") {
+    mergedHere.delete(key);
+    return pr;
+  }
+  return { ...pr, state: "MERGED" };
+}
+
 /// Bumped by every write against a pull request — see `refreshAfterWrite`.
 ///
 /// A read captures this when it starts and checks it before writing what it
@@ -195,7 +210,7 @@ export function usePrMarks(
         let all: PrMark[];
         const asked = Date.now();
         try {
-          all = await invoke<PrMark[]>("pr_marks", { cwd: path });
+          all = (await invoke<PrMark[]>("pr_marks", { cwd: path })).map((pr) => held(path, pr));
           answer = marksByBranch(all);
         } catch {
           // A failed read changes nothing at all — it neither writes rows nor
@@ -371,6 +386,22 @@ export function usePrMarks(
       },
       [byRepo],
     ),
+    /// Draws a PR merged now, on `merge_pr` succeeding, rather than on the
+    /// read after it; see `mergedHere`.
+    markMerged: useCallback((repoPath: string, number: number) => {
+      mergedHere.add(`${repoPath}#${number}`);
+      const pr = numbered.get(repoPath)?.get(number);
+      if (!pr) return;
+      const merged = held(repoPath, pr);
+      numbered.set(repoPath, new Map(numbered.get(repoPath)).set(number, merged));
+      const branches = cache.get(repoPath);
+      if (branches?.get(pr.headRefName)?.number === number) {
+        cache.set(repoPath, new Map(branches).set(pr.headRefName, merged));
+      }
+      // The read that would have told the panel now finds nothing changed.
+      branchChanged.emit({ repo: repoPath, branch: pr.headRefName });
+      setByRepo(new Map(cache));
+    }, []),
     /// Re-reads every repo currently on screen. Called when a turn ends — that
     /// is when a pull request appears.
     refresh: useCallback(() => void load(true), [load]),
