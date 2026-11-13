@@ -288,13 +288,18 @@ pub async fn reader_did<T, E>(
         Act::Stopped => "stopped its turn",
         Act::Deleted => "deleted it",
     };
-    // Noted ahead of the act: a stopped task reports at once, and that report
-    // has to carry why the turn ended.
-    let noted = match (counts, &item) {
+    // A stop is noted ahead of the act: the stopped task reports at once, and
+    // that report has to carry why the turn ended. Anything else once it landed,
+    // since a note already sent cannot be taken back.
+    let early = matches!(act, Act::Stopped);
+    let noted = match (counts && early, &item) {
         (true, Some(item)) => note_since(item, text.to_string()).await,
         _ => None,
     };
     let out = run.await;
+    if let (Ok(_), true, false, Some(item)) = (&out, counts, early, &item) {
+        note_since(item, text.to_string()).await;
+    }
     if let (Err(_), Some(bot), Some(item)) = (&out, noted, &item) {
         let mut since = SINCE.lock().unwrap();
         if let Some((_, tasks)) = since.iter_mut().find(|(path, _)| *path == bot) {
