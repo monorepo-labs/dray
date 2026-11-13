@@ -41,6 +41,11 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSVisualEffectView", "NSView", "NSResponder", "NSWindow", "NSAppearance"] }
 objc2-foundation = "0.3"
 
+# Linux draws nothing without a windowing backend; X11 is what the boat
+# sandboxes run, where examples are screenshotted.
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["x11"] }
+
 # The spikes in examples/ that settled #856's open questions. Kept, so they
 # can be run again against the next GPUI pin.
 [dev-dependencies]

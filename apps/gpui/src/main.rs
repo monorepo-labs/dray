@@ -2,12 +2,17 @@
 //! this Mac already runs; see apps/gpui/README.md.
 
 mod assets;
+mod chat_tokens;
 mod color;
 mod glass;
+mod permission_card;
+mod question_card;
 mod sessions;
 mod sidebar;
 mod store;
 mod theme;
+mod tool_row;
+mod tools;
 mod ui;
 mod wire;
 mod workspace;
