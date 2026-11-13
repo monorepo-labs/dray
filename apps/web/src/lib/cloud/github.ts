@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-import { appConfigured, canPush, installationFor, repoToken } from "./github-app";
+import { appConfigured, canPush, GitHubError, installationFor, repoToken } from "./github-app";
 import { account } from "./github-store";
 import { sign, verify } from "./vault";
 
@@ -57,5 +57,13 @@ export const readKey = (key: string, keySecret: string) => {
 export async function mint(c: MachineClaims) {
   const who = await account(c.u);
   if (!(await canPush(who.access, c.r))) throw new RepoRefused(`${who.login} can no longer push to ${c.r}.`);
-  return repoToken(c.i, c.r);
+  try {
+    return await repoToken(c.i, c.r);
+  } catch (e) {
+    // The installation is gone, or no longer covers the repo.
+    if (e instanceof GitHubError && (e.status === 404 || e.status === 422)) {
+      throw new RepoRefused(`The Dray GitHub App no longer reaches ${c.r}. Add it again on drayhq.com.`);
+    }
+    throw e;
+  }
 }

@@ -104,5 +104,23 @@ export const drayTables = {
         connectedAt: { type: "date", required: true, defaultValue: () => new Date() },
       },
     },
+    // A user's own agent subscription login for Dray Cloud (#1013), sealed by
+    // `vault.ts` and written onto each of their machines at create. `agent`
+    // is `claude` alone today; `hint` is the token's last four characters.
+    agentLogin: {
+      modelName: "agent_login",
+      fields: {
+        userId: {
+          type: "string",
+          required: true,
+          references: { model: "user", field: "id", onDelete: "cascade" },
+        },
+        agent: { type: "string", required: true },
+        secret: { type: "string", required: true },
+        hint: { type: "string", required: true },
+        connectedAt: { type: "date", required: true, defaultValue: () => new Date() },
+      },
+      indexes: [{ fields: ["userId", "agent"], unique: true }],
+    },
   },
 } satisfies BetterAuthPlugin;

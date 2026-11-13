@@ -7,8 +7,8 @@ import { fakeBoat } from "./fake-boat.mjs";
 import { fakeGitHub } from "./fake-github.mjs";
 import { nextDev } from "./next-dev.mjs";
 
-/// Dray Cloud's repo access through the Dray GitHub App (#1013), under a real
-/// `next dev` against a faked boat and GitHub. Needs a scratch Postgres it may
+/// Dray Cloud's per-user logins (#1013) — repo access through the Dray GitHub
+/// App, and agent logins — under a real `next dev` against a faked boat and GitHub. Needs a scratch Postgres it may
 /// migrate and write to: `TEST_DATABASE_URL=postgres://… pnpm test`.
 
 const DB = process.env.TEST_DATABASE_URL;
@@ -22,7 +22,7 @@ const USER = `test-${randomBytes(4).toString("hex")}`;
 const SESSION = randomBytes(16).toString("hex");
 const OCTO = 42;
 
-describe("Dray GitHub App", { skip: !DB && "set TEST_DATABASE_URL to a scratch Postgres" }, () => {
+describe("Dray Cloud logins", { skip: !DB && "set TEST_DATABASE_URL to a scratch Postgres" }, () => {
   let app, boat, gh, db, cookie;
 
   before(async () => {
@@ -65,6 +65,7 @@ describe("Dray GitHub App", { skip: !DB && "set TEST_DATABASE_URL to a scratch P
       DRAY_CLOUD_KEY: KEY,
       DRAY_CLOUD_SECRET: "cloud-secret",
       DRAY_CLOUD_OWNER: USER,
+      DRAY_CLOUD_AGENT_LOGINS: "1",
       DRAY_VAULT_KEY: randomBytes(32).toString("base64"),
       BOAT_API_KEY: BOAT_KEY,
       BOAT_ORG: ORG,
@@ -214,6 +215,17 @@ describe("Dray GitHub App", { skip: !DB && "set TEST_DATABASE_URL to a scratch P
     gh.users.get(OCTO).push.add("acme/app");
   });
 
+  test("the app leaving the repo stops the mint, said plainly", async () => {
+    const live = cloudJson(creates().at(-1)).key;
+    gh.installations.get(7).repos.delete("acme/app");
+    gh.installations.set(8, { account: "acme", repos: new Set(["acme/app"]) });
+    const { status, json } = await call("POST", "/api/cloud/github/token", { key: live });
+    assert.equal(status, 409);
+    assert.match(json.message, /no longer reaches acme\/app/);
+    gh.installations.delete(8);
+    gh.installations.get(7).repos.add("acme/app");
+  });
+
   test("disconnecting ends the grant and every machine's mint", async () => {
     const live = cloudJson(creates().at(-1)).key;
     assert.equal((await go("/api/github/disconnect", { method: "POST" })).status, 401);
@@ -223,5 +235,40 @@ describe("Dray GitHub App", { skip: !DB && "set TEST_DATABASE_URL to a scratch P
     const { status, json } = await call("POST", "/api/cloud/github/token", { key: live });
     assert.equal(status, 409);
     assert.match(json.message, /Connect GitHub/);
+  });
+
+  const CLAUDE = `sk-ant-oat01-${"a1B2_c3-".repeat(6)}wxyz`;
+  const agents = (method, path, body, headers = { cookie }) =>
+    fetch(app.base + path, {
+      method,
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+  test("a Claude login is kept sealed and shown by its last four alone", async () => {
+    assert.equal((await agents("PUT", "/api/agents/claude", { token: CLAUDE }, {})).status, 401);
+    const bad = await agents("PUT", "/api/agents/claude", { token: "sk-ant-api03-not-a-setup-token" });
+    assert.equal(bad.status, 400);
+    assert.match((await bad.json()).message, /claude setup-token/);
+    assert.equal((await agents("PUT", "/api/agents/codex", { token: CLAUDE })).status, 404);
+    assert.equal((await agents("PUT", "/api/agents/claude", { token: ` ${CLAUDE}\n` })).status, 204);
+
+    const { rows } = await db.query(`select * from agent_login where "userId" = $1`, [USER]);
+    assert.equal(rows.length, 1);
+    assert.ok(!rows[0].secret.includes("sk-ant"));
+    const listed = await (await agents("GET", "/api/agents")).json();
+    assert.deepEqual(listed.logins.map(({ agent, hint }) => ({ agent, hint })), [{ agent: "claude", hint: "wxyz" }]);
+    assert.ok(!JSON.stringify(listed).includes("sk-ant"));
+  });
+
+  test("each new machine gets the owner's agent logins, until they disconnect", async () => {
+    const { status } = await call("POST", "/api/cloud/machines");
+    assert.equal(status, 200);
+    const file = creates().at(-1).body.files.find((f) => f.path === ".dray/agent-logins.json");
+    assert.deepEqual(JSON.parse(file.content), { claude: { oauthToken: CLAUDE } });
+
+    assert.equal((await agents("DELETE", "/api/agents/claude")).status, 204);
+    await call("POST", "/api/cloud/machines");
+    assert.ok(!creates().at(-1).body.files.some((f) => f.path === ".dray/agent-logins.json"));
   });
 });

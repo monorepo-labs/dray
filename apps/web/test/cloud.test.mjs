@@ -211,6 +211,11 @@ describe("with DRAY_CLOUD_KEY", () => {
     assert.equal(bad.status, 400);
   });
 
+  test("agent logins answer 404 while DRAY_CLOUD_AGENT_LOGINS is off", async () => {
+    assert.equal((await fetch(`${app.base}/api/agents`)).status, 404);
+    assert.equal((await fetch(`${app.base}/api/agents/claude`, { method: "PUT" })).status, 404);
+  });
+
   test("boat out of reach answers a JSON 502", async () => {
     boat.dropNext();
     const { status, json } = await call("GET", "/api/cloud/machines");

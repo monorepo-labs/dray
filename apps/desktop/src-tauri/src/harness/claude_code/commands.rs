@@ -150,6 +150,8 @@ async fn probe(cwd: &str) -> Result<Value> {
         // As every other spawn of it: an npm-installed `claude` is a node
         // script, and launchd's `PATH` holds no `node` to run it on.
         .env("PATH", crate::harness::agent_path(&bin))
+        // The models offered depend on the account, so the probe signs in too.
+        .envs(crate::harness::agent_env("claude").await)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

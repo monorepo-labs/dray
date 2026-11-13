@@ -1,13 +1,15 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { after } from "next/server";
 import { boat, BoatError, listByLabel, type Sandbox } from "./boat";
+import { machineLogins } from "./agent-logins";
 import { bind, isSlug, KEY_LABEL, mint, readKey, RepoRefused } from "./github";
 import { GitHubError } from "./github-app";
 import { NotConnected } from "./github-store";
 
 /// Dray Cloud's control plane: one boat sandbox per task, each labelled
-/// `dray=cloud` and listed by label, so nothing here keeps state. The contract
-/// is issue #857.
+/// `dray=cloud` and listed by label, so no machine is kept in a table. The
+/// contract is issue #857; each user's GitHub link and agent logins (#1013)
+/// are the only rows, read at create and at a token mint.
 
 const PORT = 7317;
 const TTL_SECONDS = 900;
@@ -139,12 +141,18 @@ export async function startMachine(req: Request, origin: string, secrets: Secret
   if (repo !== undefined && !isSlug(repo)) return error(400, "invalid_repo");
   const user = owner();
   const github = repo && user ? { ...(await bind(user, repo, secrets.keySecret)), repo } : null;
-  return Response.json({ machine: await create(origin, secrets, github) });
+  const logins = user ? await machineLogins(user) : null;
+  return Response.json({ machine: await create(origin, secrets, github, logins) });
 }
 
 type Bound = Awaited<ReturnType<typeof bind>> & { repo: string };
 
-async function create(origin: string, { serveToken, machineSecret }: Secrets, github: Bound | null) {
+async function create(
+  origin: string,
+  { serveToken, machineSecret }: Secrets,
+  github: Bound | null,
+  logins: Record<string, unknown> | null,
+) {
   const cloud: Record<string, unknown> = { url: `${origin}/api/cloud`, secret: machineSecret };
   if (github) {
     cloud.key = github.key;
@@ -165,6 +173,8 @@ async function create(origin: string, { serveToken, machineSecret }: Secrets, gi
           path: ".dray/cloud.json",
           content: JSON.stringify(cloud),
         },
+        // The user's own agent logins, on their own machine alone.
+        ...(logins ? [{ path: ".dray/agent-logins.json", content: JSON.stringify(logins) }] : []),
       ],
     },
     true,

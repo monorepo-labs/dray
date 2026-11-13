@@ -160,6 +160,7 @@ pub async fn init(
     if bot {
         command.env(no_reply::TERMINAL_TOOLS_ENV, no_reply::TOOL_NAME);
     }
+    command.envs(crate::harness::agent_env("claude").await);
 
     let mut child = command
         .args(args)

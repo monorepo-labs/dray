@@ -52,6 +52,39 @@ use std::{
 ///
 /// Shared by both harnesses because the trap is the bundle's, not the CLI's.
 ///
+/// Where Dray Cloud's control plane writes the machine owner's own agent
+/// logins at create (#1013). Absent everywhere else.
+pub const AGENT_LOGINS: &str = "agent-logins.json";
+
+/// The environment an agent's child takes from [`AGENT_LOGINS`]: Claude's
+/// `setup-token` as `CLAUDE_CODE_OAUTH_TOKEN`, the variable Claude Code reads
+/// for headless use. Read per spawn, so a file written after start counts.
+/// Empty off Dray Cloud and for any other agent.
+pub async fn agent_env(agent: &str) -> Vec<(&'static str, String)> {
+    match crate::store::get_home_app_dir().await {
+        Ok(home) => agent_env_in(&home, agent).await,
+        Err(_) => Vec::new(),
+    }
+}
+
+async fn agent_env_in(home: &std::path::Path, agent: &str) -> Vec<(&'static str, String)> {
+    let Ok(text) = tokio::fs::read_to_string(home.join(AGENT_LOGINS)).await else {
+        return Vec::new();
+    };
+    let Ok(logins) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let token = logins[agent]["oauthToken"].as_str().unwrap_or_default();
+    // A token is one printable word; anything else is not passed on.
+    if token.is_empty() || !token.bytes().all(|b| b.is_ascii_graphic()) {
+        return Vec::new();
+    }
+    match agent {
+        "claude" => vec![("CLAUDE_CODE_OAUTH_TOKEN", token.to_string())],
+        _ => Vec::new(),
+    }
+}
+
 /// The directory each resolved CLI was found in rides along too, and a `node`
 /// found the same way: an npm-installed CLI is a `node` script, and under a
 /// version manager `node` sits in a per-version `bin` the fixed list cannot
@@ -1007,5 +1040,27 @@ mod login_tests {
         let unknown = Harness::Other("opencode");
         assert!(unknown.login_command().is_empty());
         assert!(unknown.login_hint().is_none());
+    }
+}
+
+#[cfg(test)]
+mod agent_env_tests {
+    use super::{agent_env_in, AGENT_LOGINS};
+
+    #[tokio::test]
+    async fn a_cloud_machine_signs_claude_in_from_the_owners_login_alone() {
+        let home = std::env::temp_dir().join(format!("dray-agent-env-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&home).unwrap();
+        assert!(agent_env_in(&home, "claude").await.is_empty(), "no file, off Dray Cloud");
+
+        std::fs::write(home.join(AGENT_LOGINS), r#"{"claude":{"oauthToken":"sk-ant-oat01-abc"}}"#).unwrap();
+        assert_eq!(agent_env_in(&home, "claude").await, vec![("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-abc".to_string())]);
+        assert!(agent_env_in(&home, "codex").await.is_empty());
+
+        for bad in [r#"{"claude":{"oauthToken":"a\nb"}}"#, r#"{"claude":{"oauthToken":""}}"#, "not json"] {
+            std::fs::write(home.join(AGENT_LOGINS), bad).unwrap();
+            assert!(agent_env_in(&home, "claude").await.is_empty(), "{bad}");
+        }
+        std::fs::remove_dir_all(&home).unwrap();
     }
 }
