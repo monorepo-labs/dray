@@ -8,6 +8,7 @@ import { MERGE_FILL, METHOD_DETAIL, METHOD_LABEL, TONE_TEXT } from "@/components
 import PrStateIcon, { ChecksRunningIcon } from "@/components/PrStateIcon";
 import { RowAction, RowMenu, stageRuns } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
+import { useFixAsks } from "@/hooks/useFixAsks";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,6 +23,7 @@ import { isModClick } from "@/lib/platform";
 import { prStatus, readyToMerge, type PrStatusKey } from "@/lib/pr";
 import { serverName, useServers } from "@/lib/servers";
 import { LOCAL, serverOfPath } from "@/lib/transport";
+import { fixLine, type FixAsk } from "@/lib/stalled";
 import { cn } from "@/lib/utils";
 import type { MergeMethod, PrMark } from "@/types/events";
 
@@ -76,6 +78,7 @@ export default function TasksPanel({
   onDetach,
   onMerge,
   onFixConflicts,
+  now,
 }: {
   rows: CrewRow[];
   /// The pull request a task's branch carries, for the mark the sidebar draws.
@@ -89,7 +92,10 @@ export default function TasksPanel({
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
   /// Asks the task's own agent, which holds the branch, to resolve and push.
   onFixConflicts: (row: CrewRow, pr: PrMark) => Promise<void>;
+  /// The clock a fix's age is read against, ticking once a minute.
+  now: number;
 }) {
+  const fixAsks = useFixAsks();
   if (rows.length === 0) {
     return (
       <p className="px-4 py-6 text-ui text-muted-foreground">
@@ -111,6 +117,8 @@ export default function TasksPanel({
       onDetach={onDetach}
       onMerge={onMerge}
       onFixConflicts={onFixConflicts}
+      fixAsk={fixAsks[row.item.sessionId]}
+      now={now}
     />
   );
   return (
@@ -132,9 +140,10 @@ export default function TasksPanel({
 }
 
 /// States a row says without words: the PR glyph carries merged, closed, draft
-/// and red checks, the spinner running ones, Merge and Fix conflicts the rest.
+/// and red checks, the spinner running ones, Merge the rest. Conflicts take
+/// words while Fix conflicts is off; put `conflict` back here with it.
 /// `unknown` is a few seconds' recompute, not worth a flicker.
-const DRAWN = new Set<PrStatusKey>(["merged", "closed", "draft", "checksFailing", "checksRunning", "conflict", "ready", "unknown"]);
+const DRAWN = new Set<PrStatusKey>(["merged", "closed", "draft", "checksFailing", "checksRunning", "ready", "unknown"]);
 
 function TaskRow({
   row,
@@ -145,7 +154,8 @@ function TaskRow({
   onDelete,
   onDetach,
   onMerge,
-  onFixConflicts,
+  fixAsk,
+  now,
 }: {
   row: CrewRow;
   pr: PrMark | undefined;
@@ -156,6 +166,8 @@ function TaskRow({
   onDetach: (sessionId: string) => Promise<void>;
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
   onFixConflicts: (row: CrewRow, pr: PrMark) => Promise<void>;
+  fixAsk: FixAsk | undefined;
+  now: number;
 }) {
   const [hovered, setHovered] = useState(false);
   // Read for the re-render alone: a server renamed moves the name in the row's tooltip.
@@ -169,6 +181,7 @@ function TaskRow({
   const status = pr && prStatus(pr);
   // Words only where the glyph, the spinner or a button cannot say it.
   const words = status && !DRAWN.has(status.key) ? status : null;
+  const fixing = fixLine(fixAsk, pr, now);
 
   return (
     <RowMenu
@@ -193,10 +206,11 @@ function TaskRow({
         onPointerEnter={() => setHovered(true)}
         onPointerLeave={() => setHovered(false)}
         className={cn(
-          "group flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-ui text-muted-foreground outline-none hover:bg-muted/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-muted/50",
+          "group flex w-full cursor-pointer flex-col rounded-md px-2 text-left text-ui text-muted-foreground outline-none hover:bg-muted/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-muted/50",
           item.aside && "opacity-50",
         )}
       >
+        <span className="flex h-8 items-center gap-2">
         <span className="flex size-5 shrink-0 items-center justify-center">
           {working ? (
             <Orb state="working" label="Working" />
@@ -272,7 +286,11 @@ function TaskRow({
         )}
 
         {mergeable && pr && <MergeControl onMerge={(method) => onMerge(row, pr, method)} />}
-        {status?.key === "conflict" && pr && <FixConflicts onFix={() => onFixConflicts(row, pr)} />}
+        {/* Off while the bot fixes conflicts itself, on its nudge. */}
+        {/* {status?.key === "conflict" && pr && <FixConflicts onFix={() => onFixConflicts(row, pr)} />} */}
+        </span>
+        {/* Under the title, past the face's 20px and the 8px gap. */}
+        {fixing && <span className="-mt-1 truncate pb-1.5 pl-7 text-ui text-foreground/50">{fixing}</span>}
       </div>
     </RowMenu>
   );

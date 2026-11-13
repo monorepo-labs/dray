@@ -20,17 +20,38 @@ export type Stall = {
   pr?: PrMark;
   kind: "ready" | "fix" | "waiting";
   problem?: string;
+  /// The PR status a `fix` stall is about.
+  status?: PrStatusKey;
   since: number;
   key: string;
 };
 
-/// What a task can mend itself, by PR status, as its bot is told it.
-const FIXABLE: Partial<Record<PrStatusKey, (n: number) => string>> = {
-  conflict: (n) => `PR #${n} has merge conflicts.`,
-  checksFailing: (n) => `PR #${n} has failing checks.`,
-  behind: (n) => `PR #${n} is behind its base branch.`,
-  changesRequested: (n) => `A review on PR #${n} asked for changes.`,
+/// What a task can mend itself, by PR status: `problem` as its bot is told
+/// it, `fixing` as the Tasks row says it while the task is on it.
+const FIXABLE: Partial<Record<PrStatusKey, { problem: (n: number) => string; fixing: string }>> = {
+  conflict: { problem: (n) => `PR #${n} has merge conflicts.`, fixing: "Fixing merge conflicts" },
+  checksFailing: { problem: (n) => `PR #${n} has failing checks.`, fixing: "Fixing failing checks" },
+  behind: { problem: (n) => `PR #${n} is behind its base branch.`, fixing: "Updating from base" },
+  changesRequested: { problem: (n) => `A review on PR #${n} asked for changes.`, fixing: "Addressing review" },
 };
+
+/// A task asked to mend its PR: which PR, the status it was asked about, and
+/// when, in ms.
+export type FixAsk = { pr: number; status: PrStatusKey; at: number };
+
+/// Whether `pr` has moved off what `ask` was about, so the ask is done with.
+/// `unknown` holds: it is GitHub's recompute after a push, not an answer.
+export function fixAskDone(ask: FixAsk, pr: PrMark): boolean {
+  const key = prStatus(pr).key;
+  return pr.number !== ask.pr || (key !== ask.status && key !== "unknown");
+}
+
+/// A Tasks row's line while its task mends its PR: "Fixing merge conflicts ·
+/// 3m", timed from the ask. Nothing once the PR has moved on.
+export function fixLine(ask: FixAsk | undefined, pr: PrMark | undefined, now: number): string | undefined {
+  const fixing = ask && pr && !fixAskDone(ask, pr) && FIXABLE[ask.status]?.fixing;
+  return fixing ? `${fixing} · ${compactAge(new Date(ask.at).toISOString(), now)}` : undefined;
+}
 
 /// The bot's tasks that have stalled, oldest stall first.
 ///
@@ -87,7 +108,15 @@ export function stalledTasks(
     const fix = pr && status && FIXABLE[status];
     if (fix) {
       if (idle || markFresh(row))
-        stalls.push({ row, pr, kind: "fix", problem: fix(pr.number), since: touched, key: `${id}:${status}:${item.modified}` });
+        stalls.push({
+          row,
+          pr,
+          kind: "fix",
+          problem: fix.problem(pr.number),
+          status,
+          since: touched,
+          key: `${id}:${status}:${item.modified}`,
+        });
     } else if (idle) stalls.push({ row, pr, kind: "waiting", since: touched, key: `${id}:waiting:${item.modified}` });
   }
   return stalls.sort((a, b) => a.since - b.since);

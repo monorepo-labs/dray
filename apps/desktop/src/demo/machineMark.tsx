@@ -126,6 +126,7 @@ function Demo() {
               onDetach={async () => {}}
               onFixConflicts={async () => {}}
               onMerge={async () => {}}
+              now={Date.now()}
             />
           </div>
         </section>
