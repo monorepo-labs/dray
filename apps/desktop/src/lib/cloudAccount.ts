@@ -52,7 +52,10 @@ export function setupSteps(account: CloudAccount | null, slug: string | null): S
   const unknown = "Sign in first.";
   const plan = account?.plan && account.plan.status !== "canceled" ? account.plan : null;
   const github = account?.github;
-  const reaches = !!github?.installed && (github.repos === null || (!!slug && github.repos.includes(slug)));
+  const reaches = !!github?.installed && !!slug && reachesRepo(github, slug);
+  const owner = slug?.split("/")[0] ?? null;
+  // The repo's owner where the App's install sits on someone else.
+  const otherOwner = github?.account && owner && owner.toLowerCase() !== github.account.toLowerCase() ? owner : null;
   const agents = (["claude", "codex"] as const).filter((a) => account?.agents?.[a]?.connected);
   const connectUrl = account?.agents?.claude?.connectUrl ?? account?.agents?.codex?.connectUrl ?? links.dashboard;
   const left = plan ? plan.hours - (account?.usage?.hours ?? 0) : 0;
@@ -90,11 +93,13 @@ export function setupSteps(account: CloudAccount | null, slug: string | null): S
         ? unknown
         : reaches
           ? `The Dray GitHub App reaches ${slug ?? "your repos"}.`
-          : github?.installed
+          : github?.installed && !otherOwner
             ? `The Dray GitHub App is on ${github.account ?? "GitHub"} but can't reach ${slug ?? "this repo"}. Add it there.`
-            : `Install the Dray GitHub App so Cloud can clone and push ${slug ?? "your repos"}.`,
+            : github?.installed && otherOwner
+              ? `The Dray GitHub App is on ${github.account}, not ${otherOwner}. Install it on ${otherOwner} too.`
+              : `Install the Dray GitHub App so Cloud can clone and push ${slug ?? "your repos"}.`,
       url: user && !reaches ? (github?.installUrl ?? null) : null,
-      verb: github?.installed ? "Add repo" : "Install",
+      verb: github?.installed && !otherOwner ? "Add repo" : "Install",
     },
     {
       id: "agent",
@@ -111,6 +116,15 @@ export function setupSteps(account: CloudAccount | null, slug: string | null): S
       verb: "Connect",
     },
   ];
+}
+
+/// Whether the App's installation can clone `slug`. `repos: null` is every
+/// repo on the installation's own account, never another owner's. GitHub
+/// names are case-insensitive.
+function reachesRepo(github: NonNullable<CloudAccount["github"]>, slug: string): boolean {
+  const want = slug.toLowerCase();
+  if (github.repos !== null) return github.repos.some((r) => r.toLowerCase() === want);
+  return !!github.account && want.split("/")[0] === github.account.toLowerCase();
 }
 
 /// Every step done: the only state in which a task can start on Cloud.

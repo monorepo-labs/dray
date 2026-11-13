@@ -30,6 +30,12 @@ function start() {
     // A plan lapsing or a sign-out happens in the browser and says nothing
     // here, so coming back to the window is when the pick is rechecked.
     window.addEventListener("focus", () => void refreshCloudAccount(FOCUS_GAP_MS));
+    // A new snapshot, or `useCloud` hands React the same object and the
+    // composer keeps showing Cloud after the account stopped allowing it.
+    subscribeCloudAccount(() => {
+      info = { ...info };
+      changed.emit();
+    });
   }
   let heard = false;
   void listen<CloudInfo>("cloud_changed", ({ payload, server }) => {
@@ -52,11 +58,9 @@ function subscribe(listener: () => void): () => void {
   start();
   const off = changed.subscribe(listener);
   const offServers = subscribeServers(listener);
-  const offAccount = subscribeCloudAccount(listener);
   return () => {
     off();
     offServers();
-    offAccount();
   };
 }
 

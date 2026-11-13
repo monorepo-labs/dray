@@ -72,6 +72,15 @@ describe("setupSteps", () => {
     expect(step({ ...some, github: { ...some.github, repos: ["acme/widgets"] } }, "github").done).toBe(true);
   });
 
+  test("an install on every repo reaches only its own account's, in any case", () => {
+    expect(step(ready, "github", "other-org/private").done).toBe(false);
+    expect(step(ready, "github", "other-org/private").detail).toBe(
+      "The Dray GitHub App is on acme, not other-org. Install it on other-org too.",
+    );
+    expect(step(ready, "github", "other-org/private").verb).toBe("Install");
+    expect(step(ready, "github", "Acme/Widgets").done).toBe(true);
+  });
+
   test("no agent connected falls back to the dashboard to connect one", () => {
     const none = { ...ready, agents: { claude: { connected: false, connectUrl: null } } };
     const s = step(none, "agent");
