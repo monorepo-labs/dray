@@ -3457,6 +3457,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
 
     // A bot's child reports every turn it closes. Spawned: the send lands in
     // the parent's session, which must not hold this one's read loop up.
+    let mut silent_bot_turn = false;
     if agent_event.subagent.is_none() {
         match &agent_event.payload {
             AgentEventPayload::AssistantText { text, .. } if !text.trim().is_empty() => {
@@ -3465,6 +3466,12 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
             AgentEventPayload::TurnCompleted { status, stop_reason, final_text, .. } => {
                 let last = LAST_REPLY.lock().unwrap().remove(ctx.session_id);
                 let said = final_text.as_deref().filter(|t| !t.trim().is_empty()).or(last.as_deref());
+                // A bot answering a report that needs nothing from the reader
+                // says nothing, and its chat draws nothing; a "Done" for it
+                // would point the reader at an empty turn.
+                silent_bot_turn = said.is_none()
+                    && *status == TurnStatus::Success
+                    && crate::bots::bot_at(ctx.session_cwd).await.is_some();
                 report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
@@ -3518,6 +3525,9 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
             tracker.note_tool_call(&agent_event.payload);
         }
         tracker.on_event(&agent_event.payload);
+        if silent_bot_turn {
+            tracker.mark_read(true);
+        }
         let limit_reset = matches!(agent_event.payload, AgentEventPayload::TurnCompleted { .. })
             .then(|| tracker.take_limit_reset())
             .flatten();
