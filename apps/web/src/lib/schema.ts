@@ -81,5 +81,51 @@ export const drayTables = {
       },
       indexes: [{ fields: ["serverId", "userId"], unique: true }],
     },
+    // A user's Dray Cloud plan, mirrored from its Stripe subscription by the
+    // webhook. The overage switch and cap are Dray's own and live only here.
+    cloudBilling: {
+      modelName: "cloud_billing",
+      fields: {
+        userId: {
+          type: "string",
+          required: true,
+          unique: true,
+          references: { model: "user", field: "id", onDelete: "cascade" },
+        },
+        stripeCustomerId: { type: "string", required: true, unique: true },
+        stripeSubscriptionId: { type: "string", required: false, unique: true },
+        plan: { type: "string", required: false },
+        status: { type: "string", required: false },
+        periodStart: { type: "date", required: false },
+        periodEnd: { type: "date", required: false },
+        cancelAtPeriodEnd: { type: "boolean", required: true, defaultValue: false },
+        overage: { type: "boolean", required: true, defaultValue: false },
+        overageCapCents: { type: "number", required: false },
+        // Overage minutes already sent to Stripe for the period starting at
+        // `reportedFor`, so each report sends only what is new.
+        reportedMinutes: { type: "number", required: true, defaultValue: 0 },
+        reportedFor: { type: "date", required: false },
+      },
+    },
+    // Boat's meter for one machine over one billing period, as last read.
+    // Kept per period so a deleted machine's time still counts after boat
+    // forgets it.
+    cloudUsage: {
+      modelName: "cloud_usage",
+      fields: {
+        sandboxId: { type: "string", required: true },
+        userId: {
+          type: "string",
+          required: true,
+          index: true,
+          references: { model: "user", field: "id", onDelete: "cascade" },
+        },
+        periodStart: { type: "date", required: true },
+        seconds: { type: "number", required: true },
+        running: { type: "boolean", required: true },
+        readAt: { type: "date", required: true },
+      },
+      indexes: [{ fields: ["sandboxId", "periodStart"], unique: true }],
+    },
   },
 } satisfies BetterAuthPlugin;

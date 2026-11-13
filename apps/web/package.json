@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node --test 'test/*.test.mjs'",
+    "test": "node --test --test-concurrency=1 'test/*.test.mjs'",
     "db:migrate": "auth migrate --config src/lib/auth.ts -y"
   },
   "dependencies": {
@@ -19,7 +19,8 @@
     "pg": "^8.23.1",
     "posthog-js": "^1.438.13",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "stripe": "^23.1.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
