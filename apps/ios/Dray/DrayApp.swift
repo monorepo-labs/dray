@@ -50,14 +50,21 @@ struct RootView: View {
     @Environment(\.scenePhase) private var phase
     @State private var selection: SessionKey?
     @State private var sheet: RootSheet?
+    /// Tasks opened over a bot's chat, so Back walks back to the bot.
+    @State private var opened: [SessionKey] = []
 
     var body: some View {
         NavigationSplitView {
             SessionList(selection: $selection, sheet: $sheet)
         } detail: {
             if let selection {
-                TranscriptView(key: selection)
-                    .id(selection)
+                NavigationStack(path: $opened) {
+                    TranscriptView(key: selection)
+                        .id(selection)
+                        .navigationDestination(for: SessionKey.self) { TranscriptView(key: $0).id($0) }
+                }
+                .environment(\.openTask) { opened.append($0) }
+                .environment(\.openSession) { self.selection = $0 }
             } else {
                 EmptyState(title: "No session open", message: "Pick one from the list.") {
                     Orb(state: .idle, size: 40)
@@ -72,6 +79,7 @@ struct RootView: View {
             case .add(let link, let scan): AddServerView(link: link, scanFirst: scan)
             }
         }
+        .onChange(of: selection) { opened = [] }
         .onOpenURL { url in
             if let link = PairLink(url.absoluteString) { sheet = .add(link, scan: false) }
         }

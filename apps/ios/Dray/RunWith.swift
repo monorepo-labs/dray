@@ -68,12 +68,12 @@ struct RunWithSheet: View {
     }
 
     @ViewBuilder private var whereCard: some View {
-        let servers = task.project == nil ? task.connected : task.machines
+        // Server first: the project menu lists what the picked server holds.
         PickCard {
-            if servers.count > 1 {
+            if !task.connected.isEmpty {
                 PickMenu("Server", value: task.server.map(store.name(of:)) ?? "") {
-                    Picker("Server", selection: Binding(get: { task.server }, set: { task.pickedServer = $0 })) {
-                        ForEach(servers) { Text($0.name).tag(Optional($0.id)) }
+                    Picker("Server", selection: Binding(get: { task.server }, set: task.pick(server:))) {
+                        ForEach(task.connected) { Text($0.name).tag(Optional($0.id)) }
                     }
                 }
                 PickDivider()

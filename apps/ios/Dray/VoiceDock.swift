@@ -3,10 +3,10 @@ import SwiftUI
 /// Where the dock is: resting under the list, or open over it.
 enum DockPhase { case rest, recording, transcribing, ready }
 
-/// The bottom of the list: the voice orb, held to talk, and the picks a new
-/// task starts on. Holding it opens the dock over the list — recording, then
-/// transcribing, then the words ready to start or to keep adding to by holding
-/// again. The keyboard edits the same text in a sheet.
+/// The bottom of the list: the voice orb, tapped to talk, and the picks a new
+/// task starts on. A tap opens the dock over the list — recording until tapped
+/// again or Done, then transcribing, then the words ready to start or to add to
+/// with another tap. The keyboard edits the same text in a sheet.
 struct VoiceDock: View {
     @Environment(Store.self) private var store
     @Bindable var task: NewTask
@@ -50,7 +50,7 @@ struct VoiceDock: View {
                     .padding(.bottom, 14)
                     .transition(.opacity)
             }
-            DockOrb(draft: draft, size: open ? 120 : 76, hold: hold, tap: tapped)
+            DockOrb(draft: draft, size: open ? 120 : 76, tap: tapped)
             if open {
                 actions
                     .padding(.top, Theme.Space.xl)
@@ -93,16 +93,16 @@ struct VoiceDock: View {
     /// What dictation or the last start said instead of words.
     private var note: String? { Dictations.shared.notes[draft] ?? task.failure }
 
-    /// A tap is not a hold: say how, once, then let it go.
+    /// Tap to talk, tap again to stop: the orb is never held. A tap while it
+    /// transcribes waits on that, and words ready take more on the next tap.
     private func tapped() {
-        guard phase == .rest else { return }
-        flash(transcriber == nil ? "This server can't transcribe. Type instead." : "Hold to talk")
-    }
-
-    private func hold() {
+        if dictation == .recording {
+            Task { await Dictations.shared.stop(store, draft: draft) }
+            return
+        }
         guard !busy else { return }
         guard let transcriber else { return flash("This server can't transcribe. Type instead.") }
-        // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new hold.
+        // A kept recording is the only copy of what was said; it goes by Retry or Discard, never by a new tap.
         guard Dictations.shared.kept[draft] == nil else { return }
         Dictations.shared.dismiss(draft)
         task.failure = nil
@@ -219,20 +219,21 @@ struct VoiceDock: View {
                 .fixedSize()
             }
             .accessibilityLabel("Model")
+            // Machine before project: the project is one the machine holds.
             Button { picking = true } label: {
                 HStack(spacing: 5) {
-                    Image(systemName: "folder.fill").font(.system(size: 11))
-                    Text(task.project ?? "Project").font(Theme.Font.footnote)
-                }
-            }
-            .accessibilityLabel("Project")
-            Button { picking = true } label: {
-                HStack(spacing: 5) {
-                    ServerIcon().frame(width: 13, height: 13)
+                    ServerIcon().frame(width: 12, height: 12)
                     Text(task.server.map(store.name(of:)) ?? "Machine").font(Theme.Font.footnote)
                 }
             }
             .accessibilityLabel("Machine")
+            Button { picking = true } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "folder.fill").resizable().scaledToFit().frame(width: 12, height: 12)
+                    Text(task.project ?? "Project").font(Theme.Font.footnote)
+                }
+            }
+            .accessibilityLabel("Project")
             Button { picking = true } label: {
                 Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).frame(width: 24, height: 20)
             }
@@ -305,11 +306,10 @@ struct KeptNote: View {
     }
 }
 
-/// The voice orb both docks hold: held to talk, tapped for a hint.
+/// The voice orb both docks draw: tapped to talk, tapped again to stop.
 struct DockOrb: View {
     let draft: SessionKey
     let size: CGFloat
-    let hold: () -> Void
     let tap: () -> Void
 
     var body: some View {
@@ -322,13 +322,12 @@ struct DockOrb: View {
         .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1).padding(-0.5))
         .shadow(color: .black.opacity(0.6), radius: size > 76 ? 20 : 15, y: size > 76 ? 16 : 10)
         .contentShape(Circle())
-        .gesture(LongPressGesture(minimumDuration: 0.25).onEnded { _ in hold() }
-            .exclusively(before: TapGesture().onEnded { tap() }))
+        .onTapGesture(perform: tap)
         .accessibilityElement()
         .accessibilityLabel("Voice")
-        .accessibilityHint("Hold to talk")
+        .accessibilityHint(dictation == .recording ? "Stops recording" : "Starts recording")
         .accessibilityAddTraits(.isButton)
-        .accessibilityAction(named: "Talk") { hold() }
+        .accessibilityAction { tap() }
         .accessibilityIdentifier("orb")
     }
 }

@@ -29,6 +29,22 @@ struct SessionList: View {
     @State private var project: String?
     @State private var mode = ListMode.live
     @State private var drafts: [(server: UUID, draft: DraftItem)] = []
+    @State private var shown = Self.pageSize
+
+    private static let pageSize = 40
+
+    /// The runs cut to their first `limit` rows, a nest never split across the cut.
+    private func page(_ runs: [(stage: Stage, rows: [ListRow])], _ limit: Int) -> [(stage: Stage, rows: [ListRow])] {
+        var left = limit
+        var out: [(stage: Stage, rows: [ListRow])] = []
+        for run in runs where left > 0 {
+            var end = min(left, run.rows.count)
+            while end < run.rows.count && run.rows[end].depth > 0 { end += 1 }
+            out.append((run.stage, Array(run.rows[..<end])))
+            left -= end
+        }
+        return out
+    }
 
     var body: some View {
         // One entry per name: the same repo on two machines is one project here.
@@ -36,23 +52,26 @@ struct SessionList: View {
         let names = store.live.flatMap { store.projects[$0.id] ?? [] }.map(\.name).filter { seen.insert($0).inserted }
         // A picked project that left the list narrows nothing.
         let filter = names.contains { $0 == project } ? project : nil
-        let runs = mode == .drafts ? [] : store.runs(project: filter, settled: mode == .settled)
-        let problems = store.live.compactMap { s in store.health(s.id).map { (server: s, health: $0) } }
-        let blank = mode == .live && runs.isEmpty
-        // With nothing listed, a server's trouble is the whole screen, not a banner over it.
-        let whole = blank && !anyConnected
+        let all = mode == .drafts ? [] : store.runs(project: filter, settled: mode == .settled)
+        // Paged: only the first `shown` rows are drawn, more as the last one comes on screen.
+        let runs = page(all, shown)
+        let more = runs.reduce(0) { $0 + $1.rows.count } < all.reduce(0) { $0 + $1.rows.count }
+        // Bots lead the live list, as on the desktop: a bot belongs to no project, so no filter narrows them.
+        let botRows = mode == .live ? store.allBots.compactMap { b in
+            store.botChat(b.server, b.bot).last.map { (server: b.server, bot: b.bot, chat: $0) }
+        } : []
+        let blank = mode == .live && runs.isEmpty && botRows.isEmpty
         VStack(spacing: 0) {
             if names.count > 1 {
                 ProjectStrip(names: names, picked: filter) { project = $0 }
             }
             List(selection: $selection) {
-                if !store.online && !whole { HealthBanner(health: .offline("Tasks keep running on their servers.")).bannerRow() }
-                ForEach(whole ? [] : problems, id: \.server.id) { p in
-                    HealthBanner(health: p.health,
-                                 retry: { Task { await store.retry(p.server.id) } },
-                                 fix: { sheet = .settings(server: p.server.id) })
-                        .bannerRow()
+                ForEach(botRows, id: \.chat) { b in
+                    BotListRow(server: b.server, bot: b.bot, chat: b.chat)
+                        .tag(b.chat)
+                        .sessionRow(selected: selection == b.chat)
                 }
+                if !botRows.isEmpty && !runs.isEmpty { Color.clear.frame(height: Theme.Space.l).plainRow() }
                 if mode == .drafts {
                     draftRows(filter)
                 } else if runs.isEmpty && mode == .settled {
@@ -64,15 +83,13 @@ struct SessionList: View {
                 ForEach(Array(runs.enumerated()), id: \.element.stage) { i, run in
                     if i > 0 { Color.clear.frame(height: Theme.Space.l).plainRow() }
                     ForEach(Array(run.rows.enumerated()), id: \.element.id) { j, row in
-                        // A server in trouble dims its tasks and their cards, so the banner above says whose they are.
-                        let away = problems.contains { $0.server.id == row.key.server }
+                        // Set aside fades as the desktop sidebar's does, back to full once it is the open one.
                         SessionRow(key: row.key, item: row.item, lines: elbows(run.rows, j))
-                            .opacity(away ? 0.4 : 1)
+                            .opacity(run.stage == .aside && selection != row.key ? 0.3 : 1)
                             .tag(row.key)
                             .sessionRow(selected: selection == row.key)
                         if mode == .live, let ask = store.asks[row.key]?.first {
                             AskCard(key: row.key, event: ask)
-                                .opacity(away ? 0.4 : 1)
                                 .padding(EdgeInsets(top: 2, leading: 14, bottom: Theme.Space.m, trailing: Theme.Space.m))
                                 .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 8))
                                 .listRowSeparator(.hidden)
@@ -80,6 +97,11 @@ struct SessionList: View {
                                 .selectionDisabled()
                         }
                     }
+                }
+                if more {
+                    // Comes on screen as the reader nears the end, and draws the next page.
+                    Color.clear.frame(height: 1).plainRow()
+                        .onAppear { shown += Self.pageSize }
                 }
             }
             .listStyle(.plain)
@@ -104,6 +126,8 @@ struct SessionList: View {
                 VoiceDock(task: task) { selection = $0 }.opacity(blank && !anyConnected ? 0.3 : 1)
             }
         }
+        // A new view or filter starts on its first page.
+        .onChange(of: "\(mode)\(filter ?? "")") { shown = Self.pageSize }
         .page()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { header }
@@ -128,7 +152,7 @@ struct SessionList: View {
             if mode == .drafts || (anyConnected && !drafts.isEmpty) {
                 viewToggle(.drafts, label: "Drafts") { Image(systemName: "circle.dashed") }
             }
-            if mode == .settled || (anyConnected && !store.runs(project: nil, settled: true).isEmpty) {
+            if mode == .settled || (anyConnected && store.items.values.contains { $0.archived == true && $0.hidden != true }) {
                 viewToggle(.settled, label: "Settled") { CheckCheck().frame(width: 20, height: 20) }
             }
         }
@@ -209,7 +233,8 @@ struct SessionList: View {
             }
             .padding(.horizontal, Theme.Space.xxl)
             .padding(.bottom, 80)
-        } else if !anyConnected {
+        } else if !anyConnected || !store.live.contains(where: { store.listed.contains($0.id) }) {
+            // Connected but not read yet is still connecting: "No tasks yet" there was a flash of a lie.
             Group {
                 if store.live.allSatisfy({ if case .connecting(0)? = store.serverState[$0.id] { true } else { false } }) {
                     EmptyScreen(art: EmptyArt(kind: .connecting), title: "Connecting",
@@ -237,10 +262,10 @@ struct SessionList: View {
                                 title: "All clear", message: today.count == 1 ? "1 settled today." : "\(today.count) settled today.")
                 } else if let filter {
                     EmptyScreen(art: EmptyArt(kind: .project), title: "Nothing in \(filter)",
-                                message: "Hold the orb to start one.", pointsAtOrb: true)
+                                message: "Tap the orb to start one.", pointsAtOrb: true)
                 } else {
                     EmptyScreen(art: EmptyArt(kind: .tasks), title: "No tasks yet",
-                                message: "Hold the orb to start one.", pointsAtOrb: true)
+                                message: "Tap the orb to start one.", pointsAtOrb: true)
                 }
             }
             .padding(.horizontal, 40)
@@ -364,7 +389,8 @@ struct SessionRow: View {
         RowLine(title: item.title.isEmpty ? "Untitled" : item.title, time: parseDate(item.modified),
                 rail: store.isAsking(key) ? Theme.accent : item.status == "completed" ? Theme.add : nil,
                 lines: lines, pr: pr,
-                checks: pr?.state == "OPEN" && pr?.checksState == "RUNNING", working: item.busy)
+                checks: pr?.state == "OPEN" && pr?.checksState == "RUNNING", working: item.busy,
+                offline: store.lost.contains(key.server))
     }
 }
 
@@ -379,6 +405,8 @@ struct RowLine: View {
     var pr: PrMark? = nil
     var checks = false
     var working = false
+    /// Its server has been down a while: the row is what it last answered, so nothing on it is live.
+    var offline = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -397,7 +425,11 @@ struct RowLine: View {
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Group {
-                if checks {
+                if offline {
+                    // The desktop's offline mark, never the orb: nobody can say it is still working.
+                    Image(systemName: "wifi.slash").font(Theme.Font.footnote.font).foregroundStyle(Theme.tertiary)
+                        .accessibilityLabel("Server unreachable")
+                } else if checks {
                     ChecksSpinner().frame(width: 15, height: 15)
                 } else if working {
                     Orb(.working, label: "Working")

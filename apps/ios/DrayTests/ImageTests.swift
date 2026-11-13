@@ -8,12 +8,12 @@ final class ImageTests: XCTestCase {
     }
 
     func testPromptImagesDecodeLeniently() throws {
-        guard case .userMessage(_, _, _, _, let images) = try payload(
+        guard case .userMessage(_, _, _, _, let images, _, _) = try payload(
             #"{"type":"user_message","text":"hi","images":[{"path":"/a.png","url":null,"mimeType":"image/png"},{"path":5},"x"]}"#)
         else { return XCTFail("not a prompt") }
         XCTAssertEqual(images.map(\.path), ["/a.png"])
         for bad in [#""images":7,"#, #""images":null,"#, ""] {
-            guard case .userMessage(let text, _, _, _, let images) = try payload(#"{"type":"user_message",\#(bad)"text":"hi"}"#)
+            guard case .userMessage(let text, _, _, _, let images, _, _) = try payload(#"{"type":"user_message",\#(bad)"text":"hi"}"#)
             else { return XCTFail("not a prompt: \(bad)") }
             XCTAssertEqual(text, "hi")
             XCTAssertTrue(images.isEmpty)

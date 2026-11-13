@@ -104,12 +104,23 @@ struct EventFrame<T: Decodable>: Decodable {
 
 // MARK: Sessions
 
-func parseDate(_ s: String) -> Date? {
+/// Made once: a formatter per call was the list's costliest line, every row's
+/// time and every aside check building two.
+private let fractionalDates: ISO8601DateFormatter = {
     let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let d = f.date(from: s) { return d }
-    f.formatOptions = [.withInternetDateTime]
-    return f.date(from: s)
+    return f
+}()
+private let plainDates = ISO8601DateFormatter()
+/// Even shared, a parse cost about 0.5ms, and the list re-sorts every session's
+/// stamps on each redraw: 300 of them were half of a 350ms hang at launch.
+private let parsedDates = NSCache<NSString, NSDate>()
+
+func parseDate(_ s: String) -> Date? {
+    if let hit = parsedDates.object(forKey: s as NSString) { return hit as Date }
+    guard let d = fractionalDates.date(from: s) ?? plainDates.date(from: s) else { return nil }
+    parsedDates.setObject(d as NSDate, forKey: s as NSString)
+    return d
 }
 
 /// The server's first frame: what it can do and what it runs.
@@ -127,7 +138,7 @@ struct Welcome: Decodable {
 
 /// One index entry. Fields the phone does not read are left undecoded, so a
 /// newer server adding some costs nothing.
-struct SessionItem: Decodable, Hashable {
+struct SessionItem: Codable, Hashable {
     let sessionId: String
     let harness: String
     let cwd: String
@@ -147,22 +158,39 @@ struct SessionItem: Decodable, Hashable {
     /// Set aside by the reader: started, not wanted now.
     let aside: Bool?
     let parentSessionId: String?
+    let created: String?
+    /// A bot task's one line to the reader, written by its bot (`dray session need`).
+    let need: Need?
 
     var busy: Bool { status == "in_progress" }
     var project: String { (projectPath as NSString).lastPathComponent }
 }
 
+/// A bot task's need: drawn only while written after the task last moved.
+struct Need: Codable, Hashable {
+    let text: String
+    let at: String
+}
+
 /// A bot, as `list_bots` answers it. Its chat is any session whose `cwd` is `path`.
-struct Bot: Decodable, Hashable {
+struct Bot: Codable, Hashable {
     let id: String
     let name: String
     let path: String
     /// Absent for a bot made before there was a pick, which draws the face its id seeds.
     let avatar: BotAvatar?
+    /// Dray Bot's first words, drawn before its chat has a session.
+    var welcome: String? = nil
+}
+
+/// `bot_previews`' answer per chat: its newest reply and how many came since the reader last wrote.
+struct BotPreview: Codable, Hashable {
+    let text: String?
+    let replies: Int
 }
 
 /// A Blobatar face: a shape name and hue degrees.
-struct BotAvatar: Decodable, Hashable {
+struct BotAvatar: Codable, Hashable {
     let shape: String
     let hue: Double
 }
@@ -175,6 +203,11 @@ struct PrMark: Decodable, Hashable {
     let isDraft: Bool
     let state: String
     let checksState: String
+    var url: String? = nil
+    /// `MERGEABLE`, `CONFLICTING` or `UNKNOWN`; absent from an older server.
+    var mergeable: String? = nil
+    var mergeStateStatus: String? = nil
+    var reviewDecision: String? = nil
 }
 
 struct Snapshot: Decodable {
@@ -280,6 +313,7 @@ struct Queued: Decodable, Hashable {
 struct AgentEvent: Decodable, Identifiable {
     let id: String
     let sessionId: String
+    let ts: String?
     /// Set on a subagent's own events, which the chat does not draw.
     let subagent: JSON?
     let payload: Payload
@@ -357,7 +391,9 @@ struct ToolResult: Decodable {
 enum Payload: Decodable {
     case turnCompleted(failed: Bool, finalText: String?)
     /// `queued` is a prompt typed into a running turn, which answers it inside that turn.
-    case userMessage(text: String, fromTitle: String?, fromId: String?, queued: Bool, images: [ImageRef])
+    /// `kickoff` is Dray's own prompt (a bot's greeting or review), drawn as nothing; `fromBot` names a bot that sent it.
+    case userMessage(text: String, fromTitle: String?, fromId: String?, queued: Bool, images: [ImageRef],
+                     kickoff: Bool = false, fromBot: String? = nil)
     case assistantText(String)
     case toolStarted(callId: String, name: String, toolType: String, input: JSON, title: String?)
     case toolCompleted(callId: String, result: ToolResult)
@@ -365,6 +401,11 @@ enum Payload: Decodable {
     case questionsAsked(QuestionsRequest)
     case permissionDecided(requestId: String)
     case backgroundTasks(count: Int)
+    /// A merge card a bot posted, or Dray did once the PR was ready.
+    case mergeCard(MergeCard)
+    /// Lessons a bot turn filed, one per file, and one taken back.
+    case learned(commit: String, files: [Lesson])
+    case learnedUndone(commit: String, path: String)
     case error(String)
     case other(String)
 
@@ -390,7 +431,9 @@ enum Payload: Decodable {
                     text: try c.decode(String.self, forKey: "text"),
                     fromTitle: from?["title"] ?? nil, fromId: from?["sessionId"] ?? nil,
                     queued: (try? c.decode(Bool.self, forKey: "queued")) ?? false,
-                    images: decodeImages(c))
+                    images: decodeImages(c),
+                    kickoff: (try? c.decode(Bool.self, forKey: "kickoff")) ?? false,
+                    fromBot: from?["botId"] ?? nil)
             case "assistant_text":
                 self = .assistantText(try c.decode(String.self, forKey: "text"))
             case "tool_call_started":
@@ -414,6 +457,14 @@ enum Payload: Decodable {
                 self = .backgroundTasks(count: try c.decode([JSON].self, forKey: "tasks").count)
             case "error":
                 self = .error(try c.decode(String.self, forKey: "message"))
+            case "merge_card":
+                self = .mergeCard(try MergeCard(from: decoder))
+            case "learned":
+                self = .learned(commit: try c.decode(String.self, forKey: "commit"),
+                                files: try c.decode([Lesson].self, forKey: "files"))
+            case "learned_undone":
+                self = .learnedUndone(commit: try c.decode(String.self, forKey: "commit"),
+                                      path: try c.decode(String.self, forKey: "path"))
             default:
                 self = .other(type)
             }
@@ -435,4 +486,25 @@ enum Payload: Decodable {
         default: nil
         }
     }
+}
+
+/// `dray session merge-card`'s card: the task, its repo and the PR to land.
+struct MergeCard: Decodable, Hashable {
+    let taskId: String
+    let title: String
+    /// The repo root, where `pr_marks` and `merge_pr` run.
+    let projectPath: String
+    let branch: String
+    let number: Int
+    let url: String
+}
+
+/// One file a bot's turn changed under its instructions, skills or memory.
+struct Lesson: Decodable, Hashable {
+    let path: String
+    /// `instructions`, `skill` or `memory`.
+    let kind: String
+    /// `added`, `changed` or `removed`.
+    let change: String
+    let summary: String
 }
