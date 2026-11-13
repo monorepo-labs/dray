@@ -412,6 +412,7 @@ fn frame_path(window: gpui::Bounds<Pixels>, sheet: gpui::Bounds<Pixels>) -> Opti
 
 pub fn open(cx: &mut App) {
     let (wire, signals) = Wire::start();
+    install_modules(&wire, cx);
     let bounds = gpui::Bounds::centered(None, gpui::size(px(1200.), px(800.)), cx);
     cx.open_window(
         gpui::WindowOptions {
@@ -436,4 +437,40 @@ pub fn open(cx: &mut App) {
     )
     .expect("open the window");
     cx.activate(true);
+}
+
+/// Startup for the modules the slots draw: markdown's hooks, the cards'
+/// answers over the wire, and the new-task screen.
+fn install_modules(wire: &Wire, cx: &mut App) {
+    crate::markdown::init(cx);
+    // The highlighter runs off the main thread with no `App`, so it takes the
+    // mode the window opens in; a live appearance change keeps the old colours
+    // in fences until the next launch.
+    let mode = Mode::of(cx.window_appearance());
+    crate::markdown::set_code_highlighter(
+        cx,
+        std::sync::Arc::new(move |lang, code| crate::code::fence_highlights(lang.unwrap_or(""), code, mode)),
+    );
+    crate::markdown::set_link_handler(cx, std::sync::Arc::new(|url, _, _, cx| cx.open_url(url)));
+
+    let answers = wire.clone();
+    crate::cards::set_responder(cx, move |answer, cx| {
+        let (cmd, args) = match answer {
+            crate::cards::CardAnswer::Permission { session_id, request_id, option_id } => (
+                "respond_permission",
+                json!({ "sessionId": session_id, "requestId": request_id, "optionId": option_id }),
+            ),
+            crate::cards::CardAnswer::Questions { session_id, request_id, answers } => (
+                "answer_questions",
+                json!({ "sessionId": session_id, "requestId": request_id, "answers": answers }),
+            ),
+        };
+        let reply = answers.invoke(cmd, args);
+        cx.spawn(async move |_| {
+            reply.await;
+        })
+        .detach();
+    });
+
+    crate::new_task::install(dray_core::harness::Harness::ClaudeCode, cx);
 }

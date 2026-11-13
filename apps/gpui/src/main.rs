@@ -15,6 +15,8 @@ mod composer;
 mod glass;
 #[allow(dead_code)] // Until the transcript draws assistant text through it.
 mod markdown;
+#[allow(dead_code)] // Its pick events reach nothing yet; the window subscribes in a follow-up.
+mod new_task;
 mod cards;
 mod chat_tokens;
 mod permission_card;
