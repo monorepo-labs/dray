@@ -2,6 +2,7 @@ import { Check, ChevronDown, Ellipsis } from "lucide-react";
 import { useId, useState, useSyncExternalStore } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
+import MachineMark from "@/components/MachineMark";
 import Orb from "@/components/Orb";
 import { MERGE_FILL, METHOD_DETAIL, METHOD_LABEL, TONE_TEXT } from "@/components/PrPanel";
 import PrStateIcon, { ChecksRunningIcon } from "@/components/PrStateIcon";
@@ -19,6 +20,8 @@ import type { CrewRow } from "@/lib/crew";
 import { openLink } from "@/lib/openLink";
 import { isModClick } from "@/lib/platform";
 import { prStatus, readyToMerge, type PrStatusKey } from "@/lib/pr";
+import { serverName, useServers } from "@/lib/servers";
+import { LOCAL, serverOfPath } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type { MergeMethod, PrMark } from "@/types/events";
 
@@ -155,7 +158,11 @@ function TaskRow({
   onFixConflicts: (row: CrewRow, pr: PrMark) => Promise<void>;
 }) {
   const [hovered, setHovered] = useState(false);
+  // Read for the re-render alone: a server renamed moves the name in the row's tooltip.
+  useServers();
   const { item } = row;
+  const server = serverOfPath(item.projectPath);
+  const machine = server !== LOCAL ? serverName(server) : null;
   const id = item.sessionId;
   const working = row.busy && !row.asking;
   const mergeable = pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
@@ -243,6 +250,8 @@ function TaskRow({
             )}
           </span>
         </span>
+
+        <MachineMark machine={machine} />
 
         {words && <span className={cn("shrink-0 text-[12px]", TONE_TEXT[words.tone])}>{words.label}</span>}
 
