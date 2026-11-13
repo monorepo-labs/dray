@@ -380,6 +380,17 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
 
 const lessonKey = (commit: string, path: string) => `${commit}\0${path}`;
 
+const LESSON_KINDS: Record<string, string> = { instructions: "Rule", skill: "Skill", memory: "Memory" };
+
+/// The grey word a Learned line opens with: Rule, New skill, Removed memory.
+/// A kind a later server adds reads as a plain Lesson rather than nothing.
+export function lessonKind(file: LearnedFile): string {
+  const kind = LESSON_KINDS[file.kind] ?? "Lesson";
+  if (file.change === "added") return `New ${kind.toLowerCase()}`;
+  if (file.change === "removed") return `Removed ${kind.toLowerCase()}`;
+  return kind;
+}
+
 /// Every lesson the reader undid, by commit and path. Read whole before the
 /// rows, since the undo lands after the row it takes back.
 function undoneLessons(events: readonly AgentEvent[]): Set<string> {

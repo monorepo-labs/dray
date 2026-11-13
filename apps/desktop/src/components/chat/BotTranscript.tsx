@@ -1,4 +1,4 @@
-import { Lightbulb } from "lucide-react";
+import { Undo2 } from "lucide-react";
 import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
@@ -17,6 +17,7 @@ import {
   itemKey,
   itemTime,
   inReviewTurn,
+  lessonKind,
   startsTimeRun,
   taskContext,
   unreadStart,
@@ -499,10 +500,11 @@ function StartedLine({ party, onOpen }: { party: Party; onOpen: (alone: boolean)
   );
 }
 
-/// What a turn taught the bot, one file a line: the rule, skill or memory it
-/// wrote, which the reader can look at and take back. The bot says so in its
-/// reply too; this is the part it cannot forget to say.
-function LearnedLine({
+/// What a turn taught the bot, one file a line: the kind in grey, then the
+/// summary, plain in the chat. A click opens the diff beneath, and Undo lives
+/// only there, under it. The bot says so in its reply too; this is the part it
+/// cannot forget to say. Picked on [learned-chip.html](../../../demo/learned-chip.html).
+export function LearnedLine({
   sessionId,
   commit,
   file,
@@ -517,9 +519,8 @@ function LearnedLine({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const verb = file.change === "removed" ? "Forgot" : "Learned";
 
-  const view = async () => {
+  const toggle = async () => {
     if (open) return setOpen(false);
     setError(null);
     try {
@@ -534,7 +535,6 @@ function LearnedLine({
     setError(null);
     try {
       await invoke("bot_undo_learned", { sessionId, commit, path: file.path });
-      setOpen(false);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -543,36 +543,38 @@ function LearnedLine({
   };
 
   return (
-    <div className="group flex w-full flex-col gap-1.5 self-start">
-      <div className="flex max-w-full items-center gap-1.5 text-ui text-muted-foreground">
-        <Lightbulb className="size-3.5 shrink-0" strokeWidth={1.75} />
-        <span className="shrink-0">{verb}</span>
-        <span className={cn("min-w-0 truncate text-foreground/80", undone && "line-through opacity-60")}>
+    <div className="flex w-full flex-col items-start gap-2">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={toggle}
+        className="group flex max-w-full min-w-0 cursor-pointer items-baseline gap-2 text-left text-ui"
+      >
+        <span className="shrink-0 text-muted-foreground">{lessonKind(file)}</span>
+        <span
+          className={cn(
+            "min-w-0 truncate text-foreground/80 transition-colors group-hover:text-foreground",
+            undone && "line-through opacity-60",
+          )}
+        >
           {file.summary}
         </span>
-        {undone ? (
-          <span className="shrink-0 text-[12px] text-muted-foreground/70">Undone</span>
-        ) : (
-          <span
-            className={cn(
-              "flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100",
-              open && "opacity-100",
-            )}
-          >
-            <Button variant="ghost" size="xs" className="text-muted-foreground" aria-expanded={open} onClick={view}>
-              {open ? "Hide diff" : "View diff"}
-            </Button>
-            <Button variant="ghost" size="xs" className="text-muted-foreground" disabled={busy} onClick={undo}>
+      </button>
+      {error && <p className="text-[12px] text-destructive">{error}</p>}
+      {open && diff && (
+        <>
+          <div className="w-full overflow-hidden rounded-lg border border-border/60">
+            <DiffView sides={{ path: diff.path, oldText: diff.before, newText: diff.after }} />
+          </div>
+          {undone ? (
+            <span className="text-[12px] text-muted-foreground/70">Undone</span>
+          ) : (
+            <Button variant="ghost" size="xs" className="-ml-2 text-muted-foreground" disabled={busy} onClick={undo}>
+              <Undo2 data-icon="inline-start" />
               Undo
             </Button>
-          </span>
-        )}
-      </div>
-      {error && <p className="pl-5 text-[12px] text-destructive">{error}</p>}
-      {open && diff && (
-        <div className="w-full overflow-hidden rounded-lg border border-border/60">
-          <DiffView sides={{ path: diff.path, oldText: diff.before, newText: diff.after }} />
-        </div>
+          )}
+        </>
       )}
     </div>
   );
