@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { pruneFixAsks, recordFixAsk } from "@/hooks/useFixAsks";
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import type { CrewRow } from "@/lib/crew";
 import { isWindowFocused } from "@/lib/focus";
@@ -63,17 +64,22 @@ export function useStalledTasks({
   const movedAt = useRef(new Map<string, { modified: string; at: number }>());
   const byBot = useMemo(() => {
     const markFresh = (row: CrewRow) => (prReadAt(row) ?? 0) > (movedAt.current.get(row.item.sessionId)?.at ?? Infinity);
-    const out = new Map<string, { chatId: string; stalls: Stall[]; card: Stall[] }>();
+    const out = new Map<string, { chatId: string; rows: CrewRow[]; stalls: Stall[]; card: Stall[] }>();
     for (const { bot, chatId, rows } of botCrews(bots, items, { statusBySession, askingSessions, tasksBySession })) {
       for (const { item } of rows) {
         if (movedAt.current.get(item.sessionId)?.modified !== item.modified)
           movedAt.current.set(item.sessionId, { modified: item.modified, at: Date.now() });
       }
       const stalls = stalledTasks(rows, prOf, readySince.current, now, markFresh);
-      out.set(bot.id, { chatId, stalls, card: stalls.filter(onCard) });
+      out.set(bot.id, { chatId, rows, stalls, card: stalls.filter(onCard) });
     }
     return out;
   }, [bots, items, statusBySession, askingSessions, tasksBySession, prOf, prReadAt, now]);
+
+  // Here rather than in the Tasks tab, which is on screen for one bot at most.
+  useEffect(() => {
+    pruneFixAsks([...byBot.values()].flatMap((b) => b.rows.map((r) => [r.item.sessionId, prOf(r)] as const)));
+  }, [byBot, prOf]);
 
   const mountedAt = useRef(Date.now());
   // Sent and not yet answered. A key is stored only once its nudge landed, so
@@ -96,6 +102,7 @@ export function useStalledTasks({
         ready: s.kind === "ready" ? (s.pr?.number ?? null) : null,
       })
         .then(() => {
+          if (s.kind === "fix" && s.pr && s.status) recordFixAsk(s.row.item.sessionId, s.pr.number, s.status);
           const stored = readLocalStorage<string[]>(NUDGED_KEY, []);
           writeLocalStorage(NUDGED_KEY, [...stored, s.key].slice(-NUDGED_CAP));
         })
