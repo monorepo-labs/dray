@@ -38,6 +38,7 @@ export function useStalledTasks({
   askingSessions,
   tasksBySession,
   prOf,
+  prReadAt,
 }: {
   bots: readonly Bot[];
   items: SessionIndexItem[];
@@ -45,6 +46,7 @@ export function useStalledTasks({
   askingSessions: ReadonlySet<string>;
   tasksBySession: Record<string, BackgroundTask[]>;
   prOf: (row: CrewRow) => PrMark | undefined;
+  prReadAt: (row: CrewRow) => number | undefined;
 }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -57,11 +59,11 @@ export function useStalledTasks({
   const byBot = useMemo(() => {
     const out = new Map<string, { chatId: string; stalls: Stall[]; card: Stall[] }>();
     for (const { bot, chatId, rows } of botCrews(bots, items, { statusBySession, askingSessions, tasksBySession })) {
-      const stalls = stalledTasks(rows, prOf, readySince.current, now);
+      const stalls = stalledTasks(rows, prOf, readySince.current, now, prReadAt);
       out.set(bot.id, { chatId, stalls, card: stalls.filter(onCard) });
     }
     return out;
-  }, [bots, items, statusBySession, askingSessions, tasksBySession, prOf, now]);
+  }, [bots, items, statusBySession, askingSessions, tasksBySession, prOf, prReadAt, now]);
 
   const mountedAt = useRef(Date.now());
   // Sent and not yet answered. A key is stored only once its nudge landed, so
