@@ -75,7 +75,7 @@ One line per session: id, status, title, branch. A session created by another on
 
 Status is `idle`, `in_progress` or `completed`. `completed` means the turn finished and nobody has opened the session since. Settled sessions are not listed.
 
-Nothing reports back on its own when a session finishes. To find out, check `dray session ls`, or have the session [message you](#send-a-message).
+Nothing reports back on its own when a session finishes, except a bot's tasks, which Dray sends to the bot. See [Orchestration](/cli/orchestration#bots). To find out about any other session, check `dray session ls`, or have the session [message you](#send-a-message).
 
 ## Send a message
 

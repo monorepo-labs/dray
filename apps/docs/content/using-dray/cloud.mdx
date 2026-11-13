@@ -1,0 +1,64 @@
+---
+title: Dray Cloud
+description: Turn on Dray Cloud in Settings, pick Cloud for a project with a GitHub remote, and have each new task run on a machine Dray starts and removes.
+sidebar:
+  order: 7
+---
+
+Dray Cloud runs a new task on a machine of its own. Dray starts the machine when you send, clones the project there, and removes the machine when the task is settled. The task's checkout and files are not shared with any other task.
+
+{/* screenshot: the Dray Cloud row in Settings → Servers, with the key field and the switch */}
+
+## Turn it on
+
+**Where:** Settings → Servers, one row named **Dray Cloud**, however many tasks are running.
+
+<Steps>
+  <Step title="Paste your key">
+    The row reads "A machine of its own for each task, started by Dray and gone once the task settles. Paste your key to turn it on." Type the key into **Dray Cloud key** and press **Save**. The button reads **Checking…** while Dray asks Dray Cloud whether the key is good. A bad key is refused and nothing is saved. **Change key** replaces it later. The key is not shown again.
+  </Step>
+  <Step title="Turn the switch on">
+    The switch appears once a key is saved. Off, the row says **Off**. On, the dot says whether Dray Cloud answers, not whether a machine is running. With nothing running it says "No tasks on it yet. Pick Cloud beside a project to start one." With tasks running it says how many, such as "2 tasks on Dray Cloud". An error from Dray Cloud replaces that line.
+  </Step>
+</Steps>
+
+## Start a task
+
+**Where:** the server menu in the new-task composer, the same menu as [a server checkout](/using-dray/composer#pick-where-a-new-task-runs). **Cloud** is in that menu when Dray Cloud is on and the project has a GitHub remote. The menu is hidden on a project that lives only on this Mac until then.
+
+Pick **Cloud**. The pick is remembered for that project. Send.
+
+The composer says what it is doing:
+
+- **Starting a cloud machine** · This can take a minute. The task goes when it's up.
+- **Cloning onto its cloud machine** · The task goes once the clone lands.
+
+You can leave the new task while that runs. The task still starts.
+
+The **Worktree** switch stays. With Worktree off, the branch picker is hidden, because the task runs in the clone Dray just made. With Worktree on, the row names the base as usual, such as "from origin/main".
+
+A project with no GitHub remote cannot go to Cloud. Sending says "Cloud runs projects with a GitHub remote."
+
+## When it fails
+
+The reason is shown in full, with **Retry**. Retry sends the prompt again. The × dismisses the failure.
+
+- "Couldn't start a cloud machine: …" — Dray Cloud did not start one.
+- "Couldn't clone owner/repo onto its cloud machine: …" — the machine started and the clone failed. That machine is removed, so a retry starts clean.
+- A machine that starts and never connects is removed too.
+
+If you had already left the new task, the prompt is back in the new-task composer beside the failure.
+
+## After it starts
+
+A cloud machine has no stopped, sleeping or offline mark. Opening a task whose machine has stopped reads a copy of the transcript kept on this Mac, and does not wake the machine. Sending a message does wake it. The copy leaves out permission and question cards, since only the machine that asked can act on them.
+
+Settling the last live session on the machine deletes the machine, and the task leaves the sidebar with it. A fork, or a session the task started, can share the machine, and it stays until those are settled too. Settling from `dray session settle` counts the same as the sidebar. A machine that is already stopped is deleted without being woken to write the settle.
+
+## Limits
+
+- You do not pick a machine, and you do not SSH to it. Dray starts a new one for each task.
+- The project needs a GitHub remote.
+- The key is checked before it is saved, and it is never shown again.
+- Opening a stopped task does not wake its machine. Sending does.
+- The transcript kept on this Mac has no permission or question cards.

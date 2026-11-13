@@ -54,6 +54,8 @@ dray server stop
 
 On Linux, `start` installs a systemd user service, `dray.service`. If your user has no linger, the server stops when you log out, and `start` prints `sudo loginctl enable-linger <user>` to fix that. Read its log with `journalctl --user -u dray`. With no systemd user session at all, `start` refuses; run `dray server run` under tmux or nohup instead.
 
+One process running out of memory stops that process alone. The server and its other sessions keep running. `start` writes this into the service file and does not restart a server that is already up, so a running server picks it up the next time it starts.
+
 On a Mac with no Dray app, `start` installs a login agent. Its log is `~/.dray/server.log`. It runs only while your user is logged in, so a headless Mac wants automatic login. For the app on another Mac to reach it, turn on Remote Login in System Settings → General → Sharing.
 
 `run` passes what follows to the server. Its one option is `--port`: the port it listens on, 7317 by default, or `0` to pick a free one.

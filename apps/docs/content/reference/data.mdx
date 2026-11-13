@@ -13,13 +13,14 @@ The folder is readable by your user alone, and Dray uploads none of it. For what
 
 | Path | What it holds |
 |---|---|
-| `sessions/<session-id>.jsonl` | One file per session: the whole transcript, one event per line. The only copy Dray keeps. |
+| `sessions/<session-id>.jsonl` | One file per session: the whole transcript, one event per line. |
 | `sessions/index.json` | The session list: each session's title, project, working directory, agent, model and flags. |
 | `attachments/<session-id>/` | A copy of every image you sent in that session, so the transcript still shows it after you delete the original. Other files are not copied; the prompt names them by path. |
 | `drafts.json` | Tasks you saved with `⌘S` and have not started. |
 | `projects.json` | Attached projects, and which one was last selected. |
-| `settings.json` | The analytics install id, your dictation model and microphone, the Linear account name, and whether Remote access is on. |
-| `credentials.json` | Your Linear API key and the tokens for servers you added by address. Readable by your user alone (`0600`). |
+| `settings.json` | The analytics install id, your dictation model and microphone, the Linear account name, whether Remote access is on, and whether Dray Cloud is on. |
+| `credentials.json` | Your Linear API key, your Dray Cloud key, and the tokens for servers you added by address. Readable by your user alone (`0600`). The Cloud key is checked before it is saved and is never read back. |
+| `cloud-transcripts/<server>/<session>.json` | A copy of a [Dray Cloud](/using-dray/cloud) task's transcript, so the task opens on this Mac after its machine is gone. Permission and question cards are left out. |
 | `servers.json` | The remote servers in Settings → Servers: name, address, channel. Tokens are in `credentials.json`, not here. |
 | `models/` | Dictation models you downloaded in Settings → Transcription. |
 | `recordings/` | Dictation audio, kept only while a transcription failed so you can retry it. Removed once the model answers, and pruned after 7 days. |
