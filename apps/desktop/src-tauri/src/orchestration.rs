@@ -500,8 +500,16 @@ async fn on_machine(machine: &str, request: Request) -> Result<Response> {
     let machine = placed.as_deref().unwrap_or(machine);
     let response = elsewhere::forward(machine, &forward).await;
     // Its machine is the task's alone, so one that never got the task goes.
-    if let (Some(id), false) = (&placed, matches!(response, Ok(Response::Created { .. }))) {
-        elsewhere::drop_cloud(id).await;
+    // A lost reply proves nothing, so the machine is asked before it goes.
+    if let Some(id) = &placed {
+        let unused = match &response {
+            Ok(Response::Created { .. }) => false,
+            Ok(_) => true,
+            Err(_) => elsewhere::holds_nothing(id).await,
+        };
+        if unused {
+            elsewhere::drop_cloud(id).await;
+        }
     }
     let response = response?;
     // The task's server keeps its reports, and this server holds the link to
@@ -660,6 +668,14 @@ mod elsewhere {
             bail!("couldn't clone {slug} onto its cloud machine: {e}");
         }
         Ok(id)
+    }
+
+    /// Whether machine `id` answers with no sessions at all. One that does not
+    /// answer may hold a task, so it counts as holding one.
+    pub async fn holds_nothing(id: &str) -> bool {
+        let Ok(saved) = machines::on(id).await else { return false };
+        let rows = machines::call(&saved, "list_session_index_items", json!({ "archived": false })).await;
+        matches!(rows, Ok(serde_json::Value::Array(rows)) if rows.is_empty())
     }
 
     /// Deletes cloud machine `id`, best effort: a machine left behind still
