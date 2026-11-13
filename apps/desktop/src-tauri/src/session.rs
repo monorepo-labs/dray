@@ -1898,6 +1898,15 @@ impl SessionManager {
     /// is mid-turn — and off the log otherwise, under the slot's lock either way
     /// so a spawn cannot take the same `seq`.
     pub async fn post_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<()> {
+        self.log_event(session_id, harness, payload, app).await?;
+        POSTED.lock().unwrap().insert(session_id.to_string());
+        Ok(())
+    }
+
+    /// [`post_event`](Self::post_event) for a note made outside any turn, such
+    /// as an Undo: marked as posted it would leave the next silent turn
+    /// counted as an answered one.
+    pub async fn log_event(&self, session_id: &str, harness: Harness, payload: AgentEventPayload, app: &Sink) -> Result<()> {
         let slot = self.slot(session_id).await;
         let guard = slot.lock().await;
         let (harness, seq) = match guard.as_ref() {
@@ -1905,7 +1914,6 @@ impl SessionManager {
             None => (harness, next_seq_by_session_id(session_id).await?),
         };
         let event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
-        POSTED.lock().unwrap().insert(session_id.to_string());
         app.emit("agent_event", &event)?;
         append_session_event(session_id, event).await
     }
@@ -3159,6 +3167,28 @@ impl Drop for HandoverGuard<'_> {
     }
 }
 
+/// A bot chat's hidden lead-in for its next prompt: the hand-over, then what
+/// the reader did to its tasks. Taken once; put back with
+/// [`crate::bots::restore_handover`] where the send fails.
+async fn take_hidden(session_id: &str) -> Option<String> {
+    let hidden: String = [crate::bots::take_handover(session_id), crate::bots::take_since(session_id).await]
+        .into_iter()
+        .flatten()
+        .collect();
+    (!hidden.is_empty()).then_some(hidden)
+}
+
+/// `text` with the hidden lead-in ahead of it, or after it where `after`: a
+/// slash command only reads as one at the start, and fx's skills take the
+/// words that follow as theirs.
+fn lead_in_around(hidden: Option<&str>, text: &str, after: bool) -> String {
+    match hidden {
+        Some(hidden) if after => format!("{text}\n\n{}", hidden.trim_end()),
+        Some(hidden) => format!("{hidden}{text}"),
+        None => text.to_string(),
+    }
+}
+
 /// Persists the user's own prompt event, emits it, then writes it to the
 /// child's stdin — the CLI never echoes a prompt back, so this is the only
 /// place it enters the transcript.
@@ -3199,12 +3229,17 @@ async fn deliver_prompt(
     let text = prepared.text;
     // A bot chat taking over from another agent: the conversation so far goes
     // ahead of the first prompt, sent and never logged, so the chat draws only
-    // what the reader typed.
-    let mut handover = HandoverGuard { session_id, text: crate::bots::take_handover(session_id) };
-    let given = match &handover.text {
-        Some(handover) => format!("{handover}{text}"),
-        None => text.clone(),
-    };
+    // what the reader typed. What the reader did to the bot's tasks meanwhile
+    // rides the same way, and a failed send keeps it for the retry with the rest.
+    // A logged-only prompt leaves it for [`flush_one_per_turn`], which owns the
+    // send. So does a slash command, which only reads as one at the start,
+    // except on Codex, whose input carries the lead-in as an item of its own,
+    // and fx, whose commands are all skills that read the words after them.
+    let slash = text.starts_with('/');
+    let fx = matches!(transport, Transport::Fx(_));
+    let lead_in = send && (!slash || fx || matches!(transport, Transport::Rpc(_)));
+    let mut handover = HandoverGuard { session_id, text: if lead_in { take_hidden(session_id).await } else { None } };
+    let given = lead_in_around(handover.text.as_deref(), &text, slash && fx);
 
     // Ahead of the event for a second reason, and this one is about failure
     // rather than content. Codex resolves a leading `/skill` by asking its own
@@ -3214,10 +3249,14 @@ async fn deliver_prompt(
     // and the retry the error invites draws the reader's sentence twice.
     let codex = match transport {
         Transport::Rpc(thread) if send => {
-            Some((
-                thread,
-                crate::harness::codex::turn_input(thread, &given, &prepared.images).await?,
-            ))
+            // The skill is resolved off the reader's own text, so a lead-in
+            // cannot hide its leading `/`.
+            let mut input = crate::harness::codex::turn_input(thread, &text, &prepared.images).await?;
+            if let (Some(hidden), Some(items)) = (&handover.text, input.as_array_mut()) {
+                let at = usize::from(items.first().is_some_and(|i| i["type"] != "text"));
+                items.insert(at, json!({"type": "text", "text": hidden}));
+            }
+            Some((thread, input))
         }
         _ => None,
     };
@@ -3239,6 +3278,8 @@ async fn deliver_prompt(
         append_session_event(session_id, event).await?;
     }
     let seq = seq.fetch_add(1, Relaxed);
+    let dray = crate::bots::take_dray_prompt(session_id, prompt);
+    crate::bots::learn::note_prompt(session_id, prompt, from.as_ref(), dray);
 
     let payload = AgentEventPayload::UserMessage {
         text: text.clone(),
@@ -3258,7 +3299,7 @@ async fn deliver_prompt(
         // Absent means "this session's own cwd", which is the truth for every
         // message a session logs itself. Only a fork records one.
         cwd: None,
-        kickoff: crate::bots::take_kickoff(session_id),
+        kickoff: dray,
     };
     // Nothing tracks turns yet; Claude Code opens one per `init`.
     let agent_event = AgentEvent::mint(session_id.to_string(), harness, seq, None, None, payload);
@@ -3404,6 +3445,29 @@ fn report(session_id: &str, text: String, app: &Sink) {
     });
 }
 
+/// Logs what a bot's turn learned and asks for a review where one is owed
+/// (#973). Logged here rather than through `post_event`, whose slot lock a
+/// send can hold while it waits on this read loop.
+async fn after_bot_turn(ctx: &Ingest<'_>, turn: crate::bots::learn::Turn, app: &Sink) {
+    if let Some(payload) = turn.learned() {
+        let seq = ctx.flush_seq.fetch_add(1, Relaxed);
+        let event = AgentEvent::mint(ctx.session_id.to_string(), ctx.harness, seq, None, None, payload);
+        app.emit("agent_event", &event).ok();
+        if let Err(err) = append_session_event(ctx.session_id, event).await {
+            eprintln!("[learned write err] {err}");
+        }
+    }
+    if let Some(prompt) = turn.review(ctx.session_id) {
+        // Spawned: the send lands in this same session, whose read loop this is.
+        let review = crate::orchestration::send_review(ctx.session_id.to_string(), prompt, app.clone());
+        tokio::spawn(async move {
+            if let Err(e) = review.await {
+                eprintln!("[bot review err] {e:#}");
+            }
+        });
+    }
+}
+
 /// What a child's closing turn says to the bot: its last words, or what became
 /// of a turn that ended without any, so the bot is never left waiting on one.
 fn report_text(status: TurnStatus, stop_reason: Option<&str>, final_text: Option<&str>) -> String {
@@ -3465,26 +3529,30 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
     // A bot's child reports every turn it closes. Spawned: the send lands in
     // the parent's session, which must not hold this one's read loop up.
     let mut silent_bot_turn = false;
+    let mut bot_turn = None;
     if agent_event.subagent.is_none() {
         match &agent_event.payload {
-            AgentEventPayload::AssistantText { text, .. } if !text.trim().is_empty() => {
+            AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(text) => {
                 LAST_REPLY.lock().unwrap().insert(ctx.session_id.to_string(), text.clone());
             }
             AgentEventPayload::TurnCompleted { status, stop_reason, final_text, .. } => {
                 let last = LAST_REPLY.lock().unwrap().remove(ctx.session_id);
-                let said = final_text.as_deref().filter(|t| !t.trim().is_empty()).or(last.as_deref());
+                let said = final_text.as_deref().filter(|t| crate::events::has_text(t)).or(last.as_deref());
                 // A bot answering a report that needs nothing from the reader
                 // says nothing, and its chat draws nothing; a "Done" for it
                 // would point the reader at an empty turn.
                 let posted = POSTED.lock().unwrap().remove(ctx.session_id);
-                silent_bot_turn = said.is_none()
+                let notes = crate::bots::learn::take_notes(ctx.session_id);
+                // A review's words are hidden like its prompt, so it is silent
+                // whatever the bot said; its "Learned" rows wait unannounced.
+                silent_bot_turn = (said.is_none() || notes.reviewing())
                     && !posted
                     && *status == TurnStatus::Success
                     && crate::bots::bot_at(ctx.session_cwd).await.is_some();
                 report(ctx.session_id, report_text(*status, stop_reason.as_deref(), said), app);
                 // Awaited, not spawned: the queued flush below would start the
                 // next turn, which could overwrite this one's notes unsaved.
-                crate::bots::commit_turn(ctx.session_cwd).await;
+                bot_turn = crate::bots::commit_turn(ctx.session_cwd, notes).await;
             }
             _ => {}
         }
@@ -3611,6 +3679,12 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
 
     if let Err(err) = append_session_event(ctx.session_id, agent_event).await {
         eprintln!("[write err] {err}");
+    }
+
+    // After the turn's close in the log, so its "Learned" rows draw under the
+    // turn that made them, and ahead of any queued prompt.
+    if let Some(turn) = bot_turn {
+        after_bot_turn(ctx, turn, app).await;
     }
 
     // After the boundary event is logged, so the prompt that follows it
@@ -3999,12 +4073,18 @@ async fn flush_one_per_turn(
         // success the reservation stands as `InProgress` and the turn is this
         // batch's; on failure every message is already on screen and in the log,
         // so the sentence saying why is the only thing still owing.
-        if let (false, Some(sent)) = (
-            texts.is_empty(),
-            transport.open_turn(&texts.join("\n\n"), &[]).await,
-        ) {
+        let mut handover = HandoverGuard { session_id, text: None };
+        if !texts.is_empty() {
+            handover.text = take_hidden(session_id).await;
+        }
+        let joined = texts.join("\n\n");
+        let given = lead_in_around(handover.text.as_deref(), &joined, joined.starts_with('/'));
+        if let (false, Some(sent)) = (texts.is_empty(), transport.open_turn(&given, &[]).await) {
             match sent {
-                Ok(()) => return,
+                Ok(()) => {
+                    handover.sent();
+                    return;
+                }
                 Err(err) => {
                     eprintln!("[queued flush err] {err}");
                     report_send_failure(session_id, harness, &err.to_string(), seq, app)
@@ -4209,6 +4289,14 @@ pub async fn strand_queue_on_exit(
 mod tests {
     use super::*;
     use crate::harness::claude_code::{mapper::Mapper, parser};
+
+    #[test]
+    fn a_lead_in_never_hides_a_leading_slash() {
+        let hidden = Some("[Since your last turn: x]\n\n");
+        assert_eq!(lead_in_around(hidden, "hi", false), "[Since your last turn: x]\n\nhi");
+        assert_eq!(lead_in_around(hidden, "/hello", true), "/hello\n\n[Since your last turn: x]");
+        assert_eq!(lead_in_around(None, "/hello", true), "/hello");
+    }
 
     #[test]
     fn a_report_says_something_whatever_the_turn_left() {

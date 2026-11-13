@@ -3,7 +3,7 @@ import {
   DocumentPlusIcon,
 } from "@heroicons/react/16/solid";
 import { Folder, Plus, Server, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
 import AgentBeam from "@/components/browser/AgentBeam";
 import BotAvatar from "@/components/BotAvatar";
@@ -93,6 +93,36 @@ export function closeActiveTab(): boolean {
   return closeActive?.() ?? false;
 }
 
+export type TurnKind = "changes" | "files";
+
+/// What the new-tab page may turn its blank into, set by the row since the
+/// row's order and its Diff/Files state live here. Keyed on the browser it
+/// lists, `kinds` comma-joined so the snapshot only moves when they do.
+// ponytail: one row mounted, one slot, same as `closeActive`.
+let turnSlot: { browserId: string; kinds: string; turn: (kind: TurnKind) => void } | null = null;
+const turnListeners = new Set<() => void>();
+function setTurnSlot(next: typeof turnSlot) {
+  const moved = next?.browserId !== turnSlot?.browserId || next?.kinds !== turnSlot?.kinds;
+  turnSlot = next;
+  if (moved) for (const l of turnListeners) l();
+}
+
+/// The views a blank tab of `browserId`'s can become, and the call that
+/// turns the one on screen into one of them in its own slot.
+export function useTurnNewTab(browserId: string): { kinds: TurnKind[]; turn: (kind: TurnKind) => void } {
+  const kinds = useSyncExternalStore(
+    (l) => {
+      turnListeners.add(l);
+      return () => turnListeners.delete(l);
+    },
+    () => (turnSlot?.browserId === browserId ? turnSlot.kinds : ""),
+  );
+  return {
+    kinds: kinds ? (kinds.split(",") as TurnKind[]) : [],
+    turn: (kind) => turnSlot?.turn(kind),
+  };
+}
+
 /// Which of Diff and Files the reader has put in a session's row. Both start
 /// out, unlike the browser: + adds them, their cross takes them away again.
 type Added = { changes: boolean; files: boolean };
@@ -135,7 +165,8 @@ export type PickTabsProps = {
   /// Diff has a task to show. Files always has the bot's own folder.
   canDiff: boolean;
   onPick: (id: string) => void;
-  onAdd: (kind: "changes" | "files") => void;
+  /// Answers the new pick's id, or null where there was nothing to pick.
+  onAdd: (kind: "changes" | "files") => string | null;
   onClose: (id: string) => void;
   /// ⌘⇧T: back in the row on the same session, unlit. Answers the new id.
   onReopen: (kind: "changes" | "files", target: string) => string;
@@ -521,6 +552,35 @@ export default function ViewTabs({
     };
   });
 
+  // The new-tab page's Diff and Files cards. The blank on screen becomes the
+  // view in its own slot; a view the row already holds is lit instead of
+  // doubled, and the blank simply goes.
+  const turn = (kind: TurnKind) => {
+    const blank = blanks.active;
+    if (blank === null) return;
+    let key: TabKey | null = null;
+    if (picks) {
+      const id = picks.onAdd(kind);
+      if (!id) return;
+      key = `pick:${id}`;
+    } else {
+      if (kind === "changes" ? !shown.changes : !shown.files && files.length === 0) {
+        setShown(kind, true);
+        key = kind;
+      }
+      onChange(kind);
+    }
+    closeBlankTab(browserId, blank, false);
+    if (key) {
+      const at = `blank:${blank}`;
+      orders.set(sessionId, (orders.get(sessionId) ?? order).map((k) => (k === at ? key : k)));
+    }
+    bump();
+  };
+  const turnKinds = picks && !picks.canDiff ? "files" : "changes,files";
+  useEffect(() => setTurnSlot({ browserId, kinds: turnKinds, turn }));
+  useEffect(() => () => setTurnSlot(null), []);
+
   // What + can still add. With Diff and Files both in the row it is a plain
   // new-tab button, the one thing left to offer.
   // A bot's row offers Diff and Files every time, each a new pick; its own
@@ -531,10 +591,10 @@ export default function ViewTabs({
           key: "changes",
           icon: <DocumentPlusIcon className={MARK} />,
           label: "Diff",
-          add: () => picks.onAdd("changes"),
+          add: () => void picks.onAdd("changes"),
           disabled: !picks.canDiff,
         },
-        { key: "files", icon: FOLDER, label: "Files", add: () => picks.onAdd("files"), disabled: false },
+        { key: "files", icon: FOLDER, label: "Files", add: () => void picks.onAdd("files"), disabled: false },
       ]
     : [
     !shown.changes && {

@@ -556,10 +556,12 @@ export function activateBlankTab(sessionId: string, id: number) {
   }
 }
 
-export function closeBlankTab(sessionId: string, id: number) {
+/// `remember: false` is a blank turned into another view: it was never
+/// closed, so ⌘⇧T has nothing to bring back.
+export function closeBlankTab(sessionId: string, id: number, remember = true) {
   const b = blanks.get(sessionId) ?? NO_BLANKS;
   const page = parked.get(sessionId)?.[id];
-  pushClosedTab(sessionId, { key: `blank:${id}`, page });
+  if (remember) pushClosedTab(sessionId, { key: `blank:${id}`, page });
   if (page) setParked(sessionId, id, null);
   drafts.delete(`${sessionId}:blank:${id}`);
   if (b.active === id) openErrors.delete(sessionId);
