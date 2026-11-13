@@ -74,10 +74,16 @@ pub async fn owed(child: &str) -> bool {
     outbox.owed.iter().any(|c| c == child)
 }
 
+/// How long a report waits for collecting. A bot's server that removed this
+/// machine, or never came back, says nothing, so nothing else clears its share.
+const KEEP_FOR: u64 = 7 * 24 * 60 * 60;
+
 /// Holds a report until the bot's server collects it.
 pub async fn keep(child: &str, parent: &str, title: &str, text: String) -> anyhow::Result<()> {
     let _guard = OUTBOX.lock().await;
     let mut outbox: Outbox = store::read_json(&outbox_path().await?).await?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    outbox.expire(now);
     outbox.pending.push(Report {
         id: uuid::Uuid::now_v7().to_string(),
         child: child.to_string(),
@@ -88,9 +94,10 @@ pub async fn keep(child: &str, parent: &str, title: &str, text: String) -> anyho
     save_outbox(&outbox).await
 }
 
-/// The serve command `parent_reports`: drops what `ack` names, then answers the
-/// reports waiting for `children`.
-pub async fn take(children: Vec<String>, ack: Vec<String>) -> Result<Taken, String> {
+/// The serve command `parent_reports`: drops the reports `ack` names and the
+/// tasks `forget` names, whose bot chat was settled, then answers the reports
+/// waiting for `children`.
+pub async fn take(children: Vec<String>, ack: Vec<String>, forget: Vec<String>) -> Result<Taken, String> {
     let _guard = OUTBOX.lock().await;
     let path = outbox_path().await.map_err(|e| format!("{e:#}"))?;
     let mut outbox: Outbox = store::read_json(&path).await.map_err(|e| format!("{e:#}"))?;
@@ -101,7 +108,7 @@ pub async fn take(children: Vec<String>, ack: Vec<String>) -> Result<Taken, Stri
         }
     }
     let before = (outbox.owed.len(), outbox.pending.len());
-    let taken = outbox.take(&children, &ack, &live);
+    let taken = outbox.take(&children, &ack, &forget, &live);
     if (outbox.owed.len(), outbox.pending.len()) != before {
         save_outbox(&outbox).await.map_err(|e| format!("{e:#}"))?;
     }
@@ -112,14 +119,24 @@ impl Outbox {
     /// A task missing here, settled, or never owed is `gone`, and its reports
     /// with it, so the asking server stops asking. `live` is which of
     /// `children` this index holds unsettled.
-    fn take(&mut self, children: &[String], ack: &[String], live: &[String]) -> Taken {
+    fn take(&mut self, children: &[String], ack: &[String], forget: &[String], live: &[String]) -> Taken {
         self.pending.retain(|r| !ack.contains(&r.id));
+        self.owed.retain(|c| !forget.contains(c));
+        self.pending.retain(|r| !forget.contains(&r.child));
         let gone: Vec<String> =
             children.iter().filter(|c| !live.contains(c) || !self.owed.contains(c)).cloned().collect();
         self.owed.retain(|c| !gone.contains(c));
         self.pending.retain(|r| !gone.contains(&r.child));
         let reports = self.pending.iter().filter(|r| children.contains(&r.child)).cloned().collect();
         Taken { reports, gone }
+    }
+
+    /// Drops reports older than [`KEEP_FOR`], read off their v7 ids.
+    fn expire(&mut self, now: u64) {
+        self.pending.retain(|r| {
+            let made = uuid::Uuid::parse_str(&r.id).ok().and_then(|id| id.get_timestamp()).map(|t| t.to_unix().0);
+            made.is_none_or(|made| now.saturating_sub(made) < KEEP_FOR)
+        });
     }
 }
 
@@ -200,50 +217,63 @@ mod collect {
         if list.is_empty() {
             return;
         }
-        // The rule a local task's report follows: a settled chat takes none.
-        let mut closed = Vec::new();
-        for remote in &list {
-            let parent = store::get_session_index_item(&remote.parent).await.ok().flatten();
-            if parent.is_none_or(|p| p.archived) {
-                closed.push(remote.child.clone());
-            }
-        }
-        untrack(&closed).await;
-
         let machines = machines::load().await;
-        let mut by_machine: HashMap<&str, Vec<String>> = HashMap::new();
-        for remote in list.iter().filter(|r| !closed.contains(&r.child)) {
-            by_machine.entry(&remote.machine).or_default().push(remote.child.clone());
+        let mut by_machine: HashMap<&str, Vec<&Remote>> = HashMap::new();
+        for remote in &list {
+            by_machine.entry(&remote.machine).or_default().push(remote);
         }
         let now = Instant::now();
-        for (id, children) in by_machine {
+        for (id, mine) in by_machine {
             let Some(saved) = machines.iter().find(|m| m.id == id) else {
                 // Removed, token and all: nothing will ever reach it again.
-                untrack(&children).await;
+                untrack(&mine.iter().map(|r| r.child.clone()).collect::<Vec<_>>()).await;
                 continue;
             };
             if saved.off || backoff.get(id).is_some_and(|(at, _)| now < *at) {
                 continue;
             }
-            match ask(saved, &children, &[]).await {
+            // The rule a local task's report follows: a settled chat takes
+            // none. The task's server is told, or it keeps them for nobody.
+            let (mut open, mut closed) = (Vec::new(), Vec::new());
+            for remote in mine {
+                let parent = store::get_session_index_item(&remote.parent).await.ok().flatten();
+                match parent.is_none_or(|p| p.archived) {
+                    true => closed.push(remote.child.clone()),
+                    false => open.push(remote),
+                }
+            }
+            let children: Vec<String> = open.iter().map(|r| r.child.clone()).collect();
+            match ask(saved, &children, &[], &closed).await {
                 Ok(taken) => {
                     backoff.remove(id);
-                    untrack(&taken.gone).await;
+                    untrack(&closed).await;
+                    // Only this machine's own tasks: an answer naming another
+                    // machine's is not its to close.
+                    let gone: Vec<String> = taken.gone.into_iter().filter(|c| children.contains(c)).collect();
+                    untrack(&gone).await;
                     let mut acked = Vec::new();
                     for report in taken.reports {
-                        deliver(&report, &saved.name, app).await;
-                        acked.push(report.id);
+                        // Into the chat this server tracked the task under, never
+                        // one the answer names: that machine holds no token here,
+                        // so it must not pick which chat runs a turn.
+                        let Some(remote) = open.iter().find(|r| r.child == report.child) else { continue };
+                        if deliver(&report, &remote.parent, &saved.name, app).await {
+                            acked.push(report.id);
+                        }
                     }
                     if !acked.is_empty() {
                         // Lost, the reports come again next poll: a bot reading
                         // one twice beats a bot never reading it.
-                        if let Err(e) = ask(saved, &[], &acked).await {
+                        if let Err(e) = ask(saved, &[], &acked, &[]).await {
                             eprintln!("[remote reports ack err] {}: {e}", saved.name);
                         }
                     }
                 }
                 // A server from before #958 keeps no reports to collect.
-                Err(e) if e.contains("unknown command") => untrack(&children).await,
+                Err(e) if e.contains("unknown command") => {
+                    untrack(&closed).await;
+                    untrack(&children).await;
+                }
                 Err(e) => {
                     let wait = backoff.get(id).map_or(POLL, |(_, w)| (*w * 2).min(BACKOFF_CAP));
                     backoff.insert(id.to_string(), (now + wait, wait));
@@ -253,26 +283,32 @@ mod collect {
         }
     }
 
-    async fn ask(saved: &machines::Saved, children: &[String], ack: &[String]) -> Result<Taken, String> {
-        let args = json!({ "children": children, "ack": ack });
+    async fn ask(saved: &machines::Saved, children: &[String], ack: &[String], forget: &[String]) -> Result<Taken, String> {
+        let args = json!({ "children": children, "ack": ack, "forget": forget });
         let answer = tokio::time::timeout(machines::SWEEP, machines::call(saved, "parent_reports", args))
             .await
             .unwrap_or_else(|_| Err(format!("{} did not answer in time", saved.name)))?;
         serde_json::from_value(answer).map_err(|e| e.to_string())
     }
 
-    /// Into the bot's chat, the way a local task's report goes, named as the
-    /// task on `machine` so the bot can message it back with `dray session send`.
-    async fn deliver(report: &Report, machine: &str, app: &Sink) {
+    /// Into the bot's chat `parent`, the way a local task's report goes, named
+    /// as the task on `machine` so the bot can message it back with
+    /// `dray session send`. False where the send failed, so the report is not
+    /// acked and comes again next poll.
+    async fn deliver(report: &Report, parent: &str, machine: &str, app: &Sink) -> bool {
         let from = MessageSender {
             session_id: report.child.clone(),
             title: report.title.clone(),
             machine: Some(machine.to_string()),
             bot_id: None,
         };
-        let sent = crate::orchestration::deliver_report(report.parent.clone(), report.text.clone(), from, app.clone());
-        if let Err(e) = sent.await {
-            eprintln!("[remote reports deliver err] {e:#}");
+        let sent = crate::orchestration::deliver_report(parent.to_string(), report.text.clone(), from, app.clone());
+        match sent.await {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("[remote reports deliver err] {e:#}");
+                false
+            }
         }
     }
 }
@@ -300,13 +336,13 @@ mod tests {
         };
         let live = ["a".to_string(), "b".to_string()];
 
-        let taken = outbox.take(&["a".into()], &[], &live);
+        let taken = outbox.take(&["a".into()], &[], &[], &live);
         assert_eq!(ids(&taken), ["1", "3"]);
         assert!(taken.gone.is_empty());
         // Asked again unacked, the same reports come back.
-        assert_eq!(ids(&outbox.take(&["a".into()], &[], &live)), ["1", "3"]);
+        assert_eq!(ids(&outbox.take(&["a".into()], &[], &[], &live)), ["1", "3"]);
 
-        let taken = outbox.take(&[], &["1".into(), "3".into()], &live);
+        let taken = outbox.take(&[], &["1".into(), "3".into()], &[], &live);
         assert!(taken.reports.is_empty());
         assert_eq!(outbox.pending, [report("2", "b")]);
     }
@@ -315,11 +351,33 @@ mod tests {
     fn a_settled_missing_or_unowed_task_is_gone_with_its_reports() {
         let mut outbox = Outbox { owed: vec!["a".into(), "b".into()], pending: vec![report("1", "a"), report("2", "b")] };
         // `a` settled or deleted here; `c` never owed a report.
-        let taken = outbox.take(&["a".into(), "b".into(), "c".into()], &[], &["b".into(), "c".into()]);
+        let taken = outbox.take(&["a".into(), "b".into(), "c".into()], &[], &[], &["b".into(), "c".into()]);
         assert_eq!(taken.gone, ["a", "c"]);
         assert_eq!(ids(&taken), ["2"]);
         assert_eq!(outbox.owed, ["b"]);
         assert_eq!(outbox.pending, [report("2", "b")]);
+    }
+
+    /// The bot's chat was settled: the task owes nothing more and its waiting
+    /// reports go, or they would sit here for a server that stopped asking.
+    #[test]
+    fn a_forgotten_task_owes_nothing_more() {
+        let mut outbox = Outbox { owed: vec!["a".into(), "b".into()], pending: vec![report("1", "a"), report("2", "b")] };
+        let taken = outbox.take(&[], &[], &["a".into()], &["a".into(), "b".into()]);
+        assert!(taken.reports.is_empty() && taken.gone.is_empty());
+        assert_eq!(outbox.owed, ["b"]);
+        assert_eq!(outbox.pending, [report("2", "b")]);
+    }
+
+    #[test]
+    fn a_report_nobody_collects_expires() {
+        let id = uuid::Uuid::now_v7().to_string();
+        let mut outbox = Outbox { owed: vec!["a".into()], pending: vec![report(&id, "a")] };
+        let made = uuid::Uuid::parse_str(&id).unwrap().get_timestamp().unwrap().to_unix().0;
+        outbox.expire(made + KEEP_FOR - 1);
+        assert_eq!(outbox.pending.len(), 1);
+        outbox.expire(made + KEEP_FOR);
+        assert!(outbox.pending.is_empty());
     }
 
     #[test]

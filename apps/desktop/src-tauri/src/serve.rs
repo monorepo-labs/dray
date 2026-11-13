@@ -1772,8 +1772,8 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
             crate::orchestration::Forward { line, origin, caller, sender }, sink,
         ).await);
         // A bot's server collecting what its tasks here said (#958).
-        parent_reports(children: Vec<String>, ack: Vec<String>) =>
-            crate::remote_reports::take(children, ack).await;
+        parent_reports(children: Vec<String>, ack: Vec<String>, forget: Option<Vec<String>>) =>
+            crate::remote_reports::take(children, ack, forget.unwrap_or_default()).await;
         worktree_disposition(session_id: String) =>crate::worktree_disposition(&session_id).await;
         remove_session_worktree(session_id: String) => crate::remove_session_worktree(&session_id).await;
         detach_session(session_id: String) => store::detach_session(&session_id).await;
