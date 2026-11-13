@@ -98,6 +98,9 @@ pub enum ClaudeCodeEvent {
 #[serde(tag = "subtype", rename_all = "snake_case")]
 pub enum ControlRequest {
     CanUseTool(PermissionRequest),
+    /// One JSON-RPC message for the SDK MCP server a bot is spawned with. See
+    /// [no_reply](super::no_reply).
+    McpMessage { message: Value },
     /// A subtype this build doesn't answer. Distinct from a parse failure: the
     /// line is understood well enough to know it needs a reply we can't give,
     /// which the read loop turns into an automatic denial so the turn proceeds.

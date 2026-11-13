@@ -925,6 +925,24 @@ pub fn rfc3339_from_unix(secs: i64) -> String {
         .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+/// Whether `text` holds anything a reader could see. A bot forced to reply
+/// once wrote a lone zero-width space, which `trim` keeps, so format
+/// characters (Unicode `Cf`) count as blank too. Keep in step with `hasText`
+/// in botTranscript.ts, or the chat and the rail disagree on a silent turn.
+pub fn has_text(text: &str) -> bool {
+    text.chars().any(|c| !c.is_whitespace() && !is_format(c))
+}
+
+/// Unicode general category `Cf`, which std does not expose.
+fn is_format(c: char) -> bool {
+    matches!(c,
+        '\u{AD}' | '\u{600}'..='\u{605}' | '\u{61C}' | '\u{6DD}' | '\u{70F}' | '\u{890}'..='\u{891}'
+        | '\u{8E2}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}'
+        | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}'
+        | '\u{110BD}' | '\u{110CD}' | '\u{13430}'..='\u{1343F}' | '\u{1BCA0}'..='\u{1BCA3}'
+        | '\u{1D173}'..='\u{1D17A}' | '\u{E0001}' | '\u{E0020}'..='\u{E007F}')
+}
+
 impl AgentEvent {
     /// The fields every mapper mints the same way: a fresh id and the time now.
     /// The rest is the harness's own — its counter, its turn id,
@@ -953,6 +971,16 @@ impl AgentEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invisible_text_is_no_text() {
+        for blank in ["", " \n\t", "\u{200B}", "\u{FEFF}\u{200D} \u{2060}", "\u{00A0}\u{3000}\u{AD}"] {
+            assert!(!has_text(blank), "{blank:?}");
+        }
+        for seen in ["ok", "\u{200B}hi", "🙂", "\u{200D}👍"] {
+            assert!(has_text(seen), "{seen:?}");
+        }
+    }
 
     /// Rule 2: new code reads old lines. Flags and collections deserialize when
     /// absent instead of failing the line.

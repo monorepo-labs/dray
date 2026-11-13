@@ -3467,12 +3467,12 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
     let mut silent_bot_turn = false;
     if agent_event.subagent.is_none() {
         match &agent_event.payload {
-            AgentEventPayload::AssistantText { text, .. } if !text.trim().is_empty() => {
+            AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(text) => {
                 LAST_REPLY.lock().unwrap().insert(ctx.session_id.to_string(), text.clone());
             }
             AgentEventPayload::TurnCompleted { status, stop_reason, final_text, .. } => {
                 let last = LAST_REPLY.lock().unwrap().remove(ctx.session_id);
-                let said = final_text.as_deref().filter(|t| !t.trim().is_empty()).or(last.as_deref());
+                let said = final_text.as_deref().filter(|t| crate::events::has_text(t)).or(last.as_deref());
                 // A bot answering a report that needs nothing from the reader
                 // says nothing, and its chat draws nothing; a "Done" for it
                 // would point the reader at an empty turn.

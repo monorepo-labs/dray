@@ -291,6 +291,13 @@ export function botRows(items: readonly BotItem[]): BotRow[] {
   return rows;
 }
 
+/// Whether `text` holds anything a reader could see: whitespace and format
+/// characters (zero-width spaces and joiners) alone are no reply. Keep in step
+/// with `has_text` in events.rs, which decides Done, unread and the preview.
+export function hasText(text: string): boolean {
+  return !/^[\s\p{Cf}]*$/u.test(text);
+}
+
 /// The rows of a bot's chat, in log order.
 ///
 /// A task is found by its `dray session new` call and named by the id that
@@ -310,7 +317,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
       else if (p.from) items.push({ kind: "report", event, sessionId: p.from.sessionId, title: p.from.title });
       else if (!p.kickoff) items.push({ kind: "user", event });
     } else if (p.type === "assistant_text") {
-      if (p.text.trim()) items.push({ kind: "assistant", event });
+      if (hasText(p.text)) items.push({ kind: "assistant", event });
     } else if (p.type === "error") {
       items.push({ kind: "notice", event });
     } else if (p.type === "merge_card") {

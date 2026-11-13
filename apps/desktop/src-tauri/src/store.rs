@@ -1736,7 +1736,7 @@ pub async fn last_reply(session_id: &str) -> Result<(Option<String>, u32)> {
             continue;
         }
         match event.payload {
-            AgentEventPayload::AssistantText { text, .. } if !text.trim().is_empty() => {
+            AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(&text) => {
                 since += u32::from(counting);
                 last.get_or_insert(text);
             }

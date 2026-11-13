@@ -371,7 +371,7 @@ fn replay(events: &[crate::events::AgentEvent]) -> Vec<String> {
             // Already prefixed with who sent it, as the bot first read it.
             P::UserMessage { text, from: Some(_), .. } => Some(text.trim().to_string()),
             P::UserMessage { text, .. } => Some(format!("User: {}", text.trim())),
-            P::AssistantText { text, .. } if !text.trim().is_empty() => Some(format!("You: {}", text.trim())),
+            P::AssistantText { text, .. } if crate::events::has_text(text) => Some(format!("You: {}", text.trim())),
             _ => None,
         })
         .collect()
