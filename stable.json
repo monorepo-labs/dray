@@ -1,23 +1,23 @@
 {
-  "version": "0.30.2",
-  "notes": "### New\n\n- **Tasks on another machine report back.** A bot that starts a task on\n  a remote server now hears from it when it finishes, like any other\n  task. Update the server too.\n- **Merge cards post themselves.** Once a task's PR can merge and its\n  review is clean, a merge card shows in the chat that started it.\n\n### Improved\n\n- Large bot chats open at once and load older messages as you scroll.\n- A task's failing checks or merge conflict reach its bot right away,\n  and a task waiting on you shows in the bot's chat after 5 minutes,\n  not 15.\n- The Tasks tab says what a task is fixing on its PR, and for how long.\n- Tasks running on another machine carry a server mark on their row and\n  tab.\n- A ready-to-merge row says what to check first when the task asked\n  you to try something before merging.\n- Bots stay quiet on task reports that need nothing from you, so no\n  empty Done or unread mark.\n- Settle shows on a task row only once its PR is merged; it stays in\n  the row's menu otherwise.\n\n### Fixed\n\n- Sending a message always scrolls the chat to the bottom.\n- In a bot's chat, a queued message draws above the card waiting on\n  you.\n- Holding the jump key no longer shifts sidebar rows.",
-  "pub_date": "2026-11-13T07:51:55.922Z",
+  "version": "0.30.3",
+  "notes": "### New\n\n- **Bots learn from corrections.** When you correct a bot or a task\n  fails, it writes the lesson where it will be used next time: a rule,\n  a skill or a memory. Each lesson shows in the chat with View diff and\n  Undo.\n- **Bots hear what you did.** A bot is told which of its tasks you\n  merged, settled, stopped or deleted since its last turn.\n- New tab page has Diff and Files cards.\n\n### Improved\n\n- Long-open bot chats stay fast by keeping only recent turns drawn.\n- Bots stay quiet on task progress and can answer with lists and\n  tables.\n- A bot can end a turn without a reply, and blank replies no longer\n  draw.\n- Links in a bot's chat open as tabs in the bot's row.\n- Stalled tasks on another machine now reach their bot.\n- Merging goes straight to the merged row with no flash.\n- Boat sandbox stop warnings are off.",
+  "pub_date": "2026-11-13T13:27:47.690Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXROcTgweWFrSkZnSXZMd1lmb09XVUFNVkVXczlOSFY4RHdNVVozQjdNbEpTMFR1eFZNOGRaNXdWcnpralBibGxzb3Fhdko1WjViemdtbnN0TklhdkFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTU2MzA1CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4yCjFucXl5c1pCUlZuZjhQcE9KM0ZYTC9yYjAxdjl2QzNmMlhZSlNiOUM1eVd6VUhpWHlZMWlSRnl1YWJ6SVA2ZmV4QnN1NHh6LzZjZlIxREtNSk1ZWENBPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdLTnozVnB1UHJWOFBwKzVuYlBXdVFVaEY1LzkxL0NVeUhGOHVOWWJmTEc3cmo0TnoyeFgwbVluL0xrNFBDZHRFV3ZjS1cvYzZaZVVSYkFaZ3JRaUFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTc2NDUyCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4zCk9VVmRiZWhXQWk3TjVuTEtqdHNxbnNScVptRWJQQkZITlN2UTYrT2NUYm1jR2VtUmJnYVZXVHlQUWpGYU9iV1RmQlZaQ1haL2plN0lESFdvVFFqNkRnPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.3/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXROcTgweWFrSkZnSXZMd1lmb09XVUFNVkVXczlOSFY4RHdNVVozQjdNbEpTMFR1eFZNOGRaNXdWcnpralBibGxzb3Fhdko1WjViemdtbnN0TklhdkFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTU2MzA1CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4yCjFucXl5c1pCUlZuZjhQcE9KM0ZYTC9yYjAxdjl2QzNmMlhZSlNiOUM1eVd6VUhpWHlZMWlSRnl1YWJ6SVA2ZmV4QnN1NHh6LzZjZlIxREtNSk1ZWENBPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdLTnozVnB1UHJWOFBwKzVuYlBXdVFVaEY1LzkxL0NVeUhGOHVOWWJmTEc3cmo0TnoyeFgwbVluL0xrNFBDZHRFV3ZjS1cvYzZaZVVSYkFaZ3JRaUFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTc2NDUyCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4zCk9VVmRiZWhXQWk3TjVuTEtqdHNxbnNScVptRWJQQkZITlN2UTYrT2NUYm1jR2VtUmJnYVZXVHlQUWpGYU9iV1RmQlZaQ1haL2plN0lESFdvVFFqNkRnPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.3/Dray_universal.app.tar.gz"
     },
     "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXROcTgweWFrSkZnSXZMd1lmb09XVUFNVkVXczlOSFY4RHdNVVozQjdNbEpTMFR1eFZNOGRaNXdWcnpralBibGxzb3Fhdko1WjViemdtbnN0TklhdkFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTU2MzA1CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4yCjFucXl5c1pCUlZuZjhQcE9KM0ZYTC9yYjAxdjl2QzNmMlhZSlNiOUM1eVd6VUhpWHlZMWlSRnl1YWJ6SVA2ZmV4QnN1NHh6LzZjZlIxREtNSk1ZWENBPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdLTnozVnB1UHJWOFBwKzVuYlBXdVFVaEY1LzkxL0NVeUhGOHVOWWJmTEc3cmo0TnoyeFgwbVluL0xrNFBDZHRFV3ZjS1cvYzZaZVVSYkFaZ3JRaUFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTc2NDUyCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4zCk9VVmRiZWhXQWk3TjVuTEtqdHNxbnNScVptRWJQQkZITlN2UTYrT2NUYm1jR2VtUmJnYVZXVHlQUWpGYU9iV1RmQlZaQ1haL2plN0lESFdvVFFqNkRnPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.3/Dray_universal.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVXROcTgweWFrSkZnSXZMd1lmb09XVUFNVkVXczlOSFY4RHdNVVozQjdNbEpTMFR1eFZNOGRaNXdWcnpralBibGxzb3Fhdko1WjViemdtbnN0TklhdkFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTU2MzA1CWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4yCjFucXl5c1pCUlZuZjhQcE9KM0ZYTC9yYjAxdjl2QzNmMlhZSlNiOUM1eVd6VUhpWHlZMWlSRnl1YWJ6SVA2ZmV4QnN1NHh6LzZjZlIxREtNSk1ZWENBPT0K",
-      "url": "https://downloads.drayhq.com/v0.30.2/Dray_universal.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVZJUXEzQlQwVWdLTnozVnB1UHJWOFBwKzVuYlBXdVFVaEY1LzkxL0NVeUhGOHVOWWJmTEc3cmo0TnoyeFgwbVluL0xrNFBDZHRFV3ZjS1cvYzZaZVVSYkFaZ3JRaUFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NTc2NDUyCWZpbGU6RHJheS5hcHAudGFyLmd6CXZlcnNpb246MC4zMC4zCk9VVmRiZWhXQWk3TjVuTEtqdHNxbnNScVptRWJQQkZITlN2UTYrT2NUYm1jR2VtUmJnYVZXVHlQUWpGYU9iV1RmQlZaQ1haL2plN0lESFdvVFFqNkRnPT0K",
+      "url": "https://downloads.drayhq.com/v0.30.3/Dray_universal.app.tar.gz"
     }
   }
 }
