@@ -618,7 +618,22 @@ pub async fn settle_dead_child(
     if died_mid_turn {
         LAST_REPLY.lock().unwrap().remove(session_id);
         POSTED.lock().unwrap().remove(session_id);
+        crate::bots::learn::take_notes(session_id);
         report(session_id, format!("(the session's process exited mid-turn: {why})"), app);
+        // Reviews held for this turn's end, which `after_bot_turn` never sees
+        // now. Only while the slot holds this child: an emptied one is a chat
+        // being settled or deleted.
+        let held_reviews = if held.is_some() { crate::bots::learn::take_deferred(session_id) } else { Vec::new() };
+        if !held_reviews.is_empty() {
+            let (session_id, app) = (session_id.to_string(), app.clone());
+            tokio::spawn(async move {
+                for prompt in held_reviews {
+                    if let Err(e) = crate::orchestration::send_review(session_id.clone(), prompt, app.clone()).await {
+                        eprintln!("[bot review err] {e:#}");
+                    }
+                }
+            });
+        }
     }
 }
 
