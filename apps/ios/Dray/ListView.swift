@@ -62,9 +62,6 @@ struct SessionList: View {
         } : []
         let blank = mode == .live && runs.isEmpty && botRows.isEmpty
         VStack(spacing: 0) {
-            if names.count > 1 {
-                ProjectStrip(names: names, picked: filter) { project = $0 }
-            }
             List(selection: $selection) {
                 // Quiet about reconnects, never about a read that failed or a server waiting on the reader.
                 ForEach(store.live.filter { s in store.health(s.id).map { store.serverState[s.id] == .connected || $0.needsYou } ?? false }) { s in
@@ -89,7 +86,15 @@ struct SessionList: View {
                         .sessionRow(selected: task.bot?.bot.id == b.bot.id)
                     }
                 }
-                if !botRows.isEmpty && !runs.isEmpty { Color.clear.frame(height: Theme.Space.l).plainRow() }
+                // Under the bots, since no filter narrows them; its top padding is the gap after them.
+                if names.count > 1 {
+                    ProjectStrip(names: names, picked: filter) { project = $0 }
+                        .padding(.bottom, Theme.Space.m)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .selectionDisabled()
+                } else if !botRows.isEmpty && !runs.isEmpty { Color.clear.frame(height: Theme.Space.l).plainRow() }
                 if mode == .drafts {
                     draftRows(filter)
                 } else if runs.isEmpty && mode == .settled {

@@ -81,9 +81,9 @@ struct BotListRow: View {
         } else if unread {
             Text(replies > 0 ? "\(replies)" : "")
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .foregroundStyle(Theme.page)
+                .foregroundStyle(Theme.text)
                 .frame(minWidth: 18, minHeight: 18)
-                .background(Theme.text, in: Capsule())
+                .background(Theme.unread, in: Capsule())
                 .overlay(Capsule().stroke(Theme.page, lineWidth: 2.5))
                 .offset(x: 3, y: 3)
                 .accessibilityLabel(replies == 1 ? "1 new reply" : "\(replies) new replies")
@@ -675,6 +675,7 @@ struct BotTasksSheet: View {
             .contentShape(.rect)
         }
         .buttonStyle(RowButtonStyle())
+        .accessibilityIdentifier("botTask")
         .opacity(item.aside == true ? 0.5 : 1)
     }
 }
