@@ -749,6 +749,23 @@ export default function Chat({
 
   if (!session) return null;
 
+  // fx alone: it takes one prompt per turn, so a held message waits out the
+  // whole turn on screen. Every other harness hands its queue over at the next
+  // tool boundary, seconds away, where stopping the turn to save that wait
+  // costs more than the wait.
+  //
+  // Gated on `active` as well, which in a split is the focused pane and on
+  // screen. `onSendNow` interrupts the *selected* session, so an unfocused
+  // pane's button would stop somebody else's turn — and the chord rides the
+  // same prop, so four mounted transcripts would otherwise bind it four times.
+  const queued = (
+    <QueuedMessages
+      messages={queuedMessages}
+      onSendNow={session.harness === "fx" && active ? onSendNow : undefined}
+      active={active}
+    />
+  );
+
   return (
     // What decides whether the rail fits is the width of *this pane*, which the
     // sidebar and the right panel both take from. On a 1440px window with both
@@ -816,6 +833,11 @@ export default function Chat({
               </div>
             ))}
 
+            {/* A bot chat reads as a messenger: what the reader sent sits with
+                the conversation, and the card waiting on them comes last, by
+                the composer that answers it. */}
+            {bot && queued}
+
             {cards.map((ask) =>
               ask.type === "questions_asked" ? (
                 <QuestionRequest
@@ -856,21 +878,7 @@ export default function Chat({
               ),
             )}
 
-            {/* fx alone: it takes one prompt per turn, so a held message waits
-                out the whole turn on screen. Every other harness hands its queue
-                over at the next tool boundary, seconds away, where stopping the
-                turn to save that wait costs more than the wait.
-
-                Gated on `active` as well, which in a split is the focused pane
-                and on screen. `onSendNow` interrupts the *selected* session, so
-                an unfocused pane's button would stop somebody else's turn — and
-                the chord rides the same prop, so four mounted transcripts would
-                otherwise bind it four times. */}
-            <QueuedMessages
-              messages={queuedMessages}
-              onSendNow={session.harness === "fx" && active ? onSendNow : undefined}
-              active={active}
-            />
+            {!bot && queued}
 
             {backgroundTaskCount > 0 && (
               <BackgroundTasksIndicator
