@@ -483,7 +483,7 @@ export default function ModelSelector({
               // `aria-disabled`, never `disabled`: a disabled button opens no
               // tooltip, and the tooltip is where the reason lives.
               aria-disabled={modelLocked}
-              className="gap-1 px-1.5 text-ui text-muted-foreground aria-disabled:opacity-50"
+              className={`gap-1 px-1.5 text-ui text-muted-foreground aria-disabled:opacity-50 ${inTitlebar ? "max-w-64 min-w-0" : ""}`}
             >
               <AgentIcon harness={harness} brand className="size-3.5" />
               {/* Effort is a qualifier on the model, not part of its name, so it's
@@ -492,7 +492,11 @@ export default function ModelSelector({
                   draw, so the placeholder stands in. pi is the one harness
                   that reaches this: Dray names no default for it, and the
                   spawn omits the flag so pi's own settings decide. */}
-              <span>{selected?.label ?? (isUnsetModel(modelId) ? "Select Model" : modelId)}</span>
+              {/* Capped and truncated in the titlebar, where a gateway's
+                  `vendor/model` name would otherwise push the tabs out. */}
+              <span className="min-w-0 truncate">
+                {selected?.label ?? (isUnsetModel(modelId) ? "Select Model" : modelId)}
+              </span>
               {effort && (
                 <span className="text-muted-foreground/60">{EFFORT_LABELS[effort]}</span>
               )}
