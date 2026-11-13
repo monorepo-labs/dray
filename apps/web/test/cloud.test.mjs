@@ -150,6 +150,11 @@ describe("with DRAY_CLOUD_KEY", () => {
     first = boat.sandboxes.get(json.machine.id);
     assert.deepEqual(json.machine, { id: first.id, state: "starting", url: `wss://${first.subdomain}-7317.on.boat.dev` });
     assert.notEqual(MACHINE_SECRET, KEY);
+    // Hosted again once running though the create already hosted it: boat
+    // never starts a create's localhost relay (#1003).
+    const host = await waitFor("the port hosted again", () => callsTo("POST", `/sandboxes/${first.id}/host`)[0]);
+    assert.deepEqual(host.body, { port: 7317, public: true, localhost: true });
+    assert.equal(host.status, 200);
   });
 
   let second;
