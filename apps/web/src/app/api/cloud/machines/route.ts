@@ -1,4 +1,4 @@
-import { addRoom, machines, route } from "@/lib/cloud/cloud";
+import { machines, route, startMachine } from "@/lib/cloud/cloud";
 
 export const runtime = "nodejs";
 // Without it a GET that answers 404 before touching the request is prerendered
@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export const GET = route("client", async (_req, { serveToken }) => Response.json(await machines(serveToken)));
 
-export const POST = route("client", async (req, secrets) => addRoom(origin(req), secrets));
+export const POST = route("client", async (req, secrets) => startMachine(origin(req), secrets));
 
 /// The origin the client reached, which a new machine heartbeats back to.
 /// Read off the headers: Next rewrites `req.url`'s host to its own idea of it.

@@ -31,10 +31,12 @@ export async function boat<T>(
   path: string,
   body?: unknown,
   org = false,
+  extra: Record<string, string> = {},
 ): Promise<T> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${process.env.BOAT_API_KEY}`,
     "Content-Type": "application/json",
+    ...extra,
   };
   if (org && process.env.BOAT_ORG) headers["X-Boat-Org"] = process.env.BOAT_ORG;
   const res = await fetch(`${process.env.BOAT_API_URL || "https://boat.dev/api/v1"}${path}`, {

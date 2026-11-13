@@ -146,6 +146,16 @@ export async function fakeBoat({ key, org, pageSize = 2 }) {
       if (s.state === "provisioning") s.state = "ready";
       return ok(res, 200, { ok: true, type: "sandbox.info", sandbox: view(s) });
     }
+    if (!action && req.method === "DELETE") {
+      // Boat takes a delete only where the confirm header names the sandbox.
+      if (req.headers["x-ascii-confirm-delete"] !== s.id) return fail(res, 409, "delete_confirmation_required");
+      sandboxes.delete(s.id);
+      return ok(res, 202, {
+        ok: true,
+        type: "sandbox.deleting",
+        operation: { id: `bdop_${"0".repeat(32)}`, kind: "sandbox", targetId: s.id, reason: "explicit", status: "pending" },
+      });
+    }
     if (!action && req.method === "PATCH") {
       const bad = unknown(body, PATCH_KEYS);
       if (bad) return fail(res, 400, "invalid_request", bad);

@@ -2,12 +2,12 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { after } from "next/server";
 import { boat, BoatError, listByLabel, type Sandbox } from "./boat";
 
-/// Dray Cloud's control plane: a pool of boat sandboxes labelled `dray=cloud`,
-/// listed by label, so nothing here keeps state. The contract is issue #857.
+/// Dray Cloud's control plane: one boat sandbox per task, each labelled
+/// `dray=cloud` and listed by label, so nothing here keeps state. The contract
+/// is issue #857.
 
 const PORT = 7317;
 const TTL_SECONDS = 900;
-const CAP = 3;
 const LABEL = { dray: "cloud" };
 const SNAPSHOT = "dray-cloud";
 const SANDBOX_ID = /^bx_[23456789abcdefghjkmnpqrstuvwxyz]{8}$/;
@@ -111,21 +111,9 @@ export async function machines(serveToken: string) {
   return { token: serveToken, machines: all.map((s) => machine(s)) };
 }
 
-const newest = (key: "createdAt" | "stoppedAt") => (a: Sandbox, b: Sandbox) =>
-  (Date.parse(b[key] ?? "") || 0) - (Date.parse(a[key] ?? "") || 0);
-
-/// Adds room: resume the most recently stopped machine, else fork the newest,
-/// else create one from the saved snapshot.
-export async function addRoom(origin: string, secrets: Secrets): Promise<Response> {
-  const all = await listMachines();
-  const up = all.filter((s) => ["starting", "running", "stopping"].includes(stateOf(s)));
-  if (up.length >= CAP) return error(409, "cap");
-  // Resume and fork both fail once boat has deleted a stopped disk.
-  const usable = all.filter((s) => !s.dataExpiredAt);
-  const stopped = usable.filter((s) => stateOf(s) === "stopped").sort(newest("stoppedAt"))[0];
-  if (stopped) return Response.json({ machine: await resume(stopped) });
-  const source = usable.filter((s) => stateOf(s) !== "error").sort(newest("createdAt"))[0];
-  if (source) return Response.json({ machine: await fork(source) });
+/// A new machine for one task, created from the saved snapshot. Never shared,
+/// so a task's checkout, agents and memory are its own.
+export async function startMachine(origin: string, secrets: Secrets): Promise<Response> {
   return Response.json({ machine: await create(origin, secrets.serveToken, secrets.machineSecret) });
 }
 
@@ -156,24 +144,12 @@ async function create(origin: string, serveToken: string, machineSecret: string)
   return machine(res.sandbox, res.sandbox.subdomain ?? fromUrl);
 }
 
-async function fork(source: Sandbox) {
-  // Fork takes no `hostedPorts`, and a fork keeps neither the localhost relay
-  // nor the route, so the port is hosted again once the fork has a machine.
-  const res = await boat<{ id: string; sandbox?: Sandbox | null }>(
-    "POST",
-    `/sandboxes/${source.id}/fork`,
-    { labels: LABEL, ttlSeconds: TTL_SECONDS },
-  );
-  hostWhenUp(res.id);
-  return machine(res.sandbox ?? { id: res.id, state: "provisioning" });
-}
-
 async function resume(s: Sandbox) {
   const res = await boat<{ sandbox?: Sandbox | null }>("POST", `/sandboxes/${s.id}/resume`, {
     ttlSeconds: TTL_SECONDS,
   });
-  // Boat keeps a hosted port across a resume, so this is only a repair: a fork
-  // whose hosting failed gets a second chance on its next start.
+  // Boat keeps a hosted port across a resume, so this is only a repair: a
+  // create whose hosting failed gets a second chance on its next start.
   hostWhenUp(s.id);
   return machine({ ...s, state: res.sandbox?.state ?? "provisioning" });
 }
@@ -213,6 +189,17 @@ export async function stopMachine(id: string): Promise<Response> {
   if (!s) return error(404, "not_found");
   const res = await boat<{ sandbox?: Sandbox | null }>("POST", `/sandboxes/${s.id}/stop`);
   return Response.json({ machine: machine({ ...s, state: res.sandbox?.state ?? "archiving" }) });
+}
+
+/// Deletes a settled task's machine for good. One already gone answers the
+/// same, so the app can ask again after a failure without reading the list.
+export async function deleteMachine(id: string): Promise<Response> {
+  const s = await find(id);
+  if (s) {
+    // Boat refuses a delete whose confirm header does not name the sandbox.
+    await boat("DELETE", `/sandboxes/${s.id}`, undefined, false, { "X-Ascii-Confirm-Delete": s.id });
+  }
+  return new Response(null, { status: 204 });
 }
 
 /// A busy machine pushes its auto-stop out again; an idle one lets it run.

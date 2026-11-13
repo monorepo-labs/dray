@@ -60,6 +60,7 @@ const ROUTES = [
   ["POST", "/api/cloud/machines"],
   ["POST", "/api/cloud/machines/bx_23456789/resume"],
   ["POST", "/api/cloud/machines/bx_23456789/stop"],
+  ["DELETE", "/api/cloud/machines/bx_23456789"],
   ["POST", "/api/cloud/heartbeat"],
 ];
 
@@ -122,7 +123,7 @@ describe("with DRAY_CLOUD_KEY", () => {
     assert.equal(beat.status, 401);
   });
 
-  test("an empty pool lists no machines and the derived token", async () => {
+  test("no machines yet lists none, and the derived token", async () => {
     const { status, json } = await call("GET", "/api/cloud/machines");
     assert.equal(status, 200);
     assert.deepEqual(json, { token: SERVE_TOKEN, machines: [] });
@@ -130,7 +131,7 @@ describe("with DRAY_CLOUD_KEY", () => {
   });
 
   let first;
-  test("the first room is created from the saved snapshot", async () => {
+  test("a task's machine is created from the saved snapshot", async () => {
     const { status, json } = await call("POST", "/api/cloud/machines");
     assert.equal(status, 200);
     const [create] = callsTo("POST", "/sandboxes");
@@ -151,24 +152,23 @@ describe("with DRAY_CLOUD_KEY", () => {
     assert.notEqual(MACHINE_SECRET, KEY);
   });
 
-  let forked;
-  test("the next room forks the newest machine and hosts its port", async () => {
+  let second;
+  test("every task gets a new machine, never a running or stopped one", async () => {
+    first.state = "archived";
     const { status, json } = await call("POST", "/api/cloud/machines");
     assert.equal(status, 200);
-    const [fork] = callsTo("POST", `/sandboxes/${first.id}/fork`);
-    assert.deepEqual(fork.body, { labels: { dray: "cloud" }, ttlSeconds: 900 });
-    forked = boat.sandboxes.get(json.machine.id);
-    assert.equal(forked.forkOf, first.id);
-    assert.equal(json.machine.state, "starting");
-    const host = await waitFor("the fork's port", () => callsTo("POST", `/sandboxes/${forked.id}/host`)[0]);
-    assert.deepEqual(host.body, { port: 7317, public: true, localhost: true });
+    assert.notEqual(json.machine.id, first.id);
+    second = boat.sandboxes.get(json.machine.id);
+    assert.equal(callsTo("POST", "/sandboxes").length, 2);
+    assert.ok(!boat.calls.some((c) => c.path.endsWith("/fork") || c.path.endsWith("/resume")));
   });
 
   test("lists every machine across pages", async () => {
     await call("POST", "/api/cloud/machines");
+    await call("POST", "/api/cloud/machines");
     const other = boat.add({ labels: { other: "x" }, state: "ready" });
     const { json } = await call("GET", "/api/cloud/machines");
-    assert.equal(json.machines.length, 3);
+    assert.equal(json.machines.length, 4);
     assert.ok(!json.machines.some((m) => m.id === other.id));
     for (const m of json.machines) {
       const s = boat.sandboxes.get(m.id);
@@ -177,60 +177,55 @@ describe("with DRAY_CLOUD_KEY", () => {
     assert.ok(boat.calls.some((c) => c.path === "/sandboxes" && c.query.includes("cursor=")));
   });
 
-  test("a fourth machine up is refused", async () => {
-    const { status, json } = await call("POST", "/api/cloud/machines");
-    assert.equal(status, 409);
-    assert.deepEqual(json, { error: "cap" });
-  });
-
   test("stop stops a machine", async () => {
-    const { status, json } = await call("POST", `/api/cloud/machines/${forked.id}/stop`);
+    second.state = "ready";
+    const { status, json } = await call("POST", `/api/cloud/machines/${second.id}/stop`);
     assert.equal(status, 200);
     assert.equal(json.machine.state, "stopping");
-    assert.equal(boat.sandboxes.get(forked.id).state, "archiving");
-  });
-
-  test("adding room resumes the most recently stopped machine", async () => {
-    // forked stopped first, first stopped later, a third stopped last but its disk is gone.
-    Object.assign(boat.sandboxes.get(forked.id), { state: "archived", stoppedAt: boat.now() });
-    Object.assign(first, { state: "archived", stoppedAt: boat.now() });
-    const expired = [...boat.sandboxes.values()].find((s) => s.labels.dray && s !== first && s !== forked);
-    Object.assign(expired, { state: "archived", stoppedAt: boat.now(), dataExpiredAt: boat.now() });
-    const before = boat.calls.length;
-    const { status, json } = await call("POST", "/api/cloud/machines");
-    assert.equal(status, 200);
-    assert.equal(json.machine.id, first.id);
-    const resumes = boat.calls.slice(before).filter((c) => c.path.endsWith("/resume"));
-    assert.deepEqual(resumes.map((c) => [c.path, c.body]), [[`/sandboxes/${first.id}/resume`, { ttlSeconds: 900 }]]);
+    assert.equal(second.state, "archiving");
   });
 
   test("resume resumes a stopped machine and leaves a running one", async () => {
-    const stopped = await call("POST", `/api/cloud/machines/${forked.id}/resume`);
+    second.state = "archived";
+    const stopped = await call("POST", `/api/cloud/machines/${second.id}/resume`);
     assert.equal(stopped.status, 200);
-    assert.equal(stopped.json.machine.id, forked.id);
-    assert.equal(callsTo("POST", `/sandboxes/${forked.id}/resume`).length, 1);
-    boat.sandboxes.get(forked.id).state = "running";
-    const running = await call("POST", `/api/cloud/machines/${forked.id}/resume`);
+    assert.equal(stopped.json.machine.id, second.id);
+    assert.deepEqual(callsTo("POST", `/sandboxes/${second.id}/resume`).map((c) => c.body), [{ ttlSeconds: 900 }]);
+    second.state = "running";
+    const running = await call("POST", `/api/cloud/machines/${second.id}/resume`);
     assert.equal(running.json.machine.state, "running");
-    assert.equal(callsTo("POST", `/sandboxes/${forked.id}/resume`).length, 1);
+    assert.equal(callsTo("POST", `/sandboxes/${second.id}/resume`).length, 1);
   });
 
   test("boat's own refusal reaches the client", async () => {
-    const expired = [...boat.sandboxes.values()].find((s) => s.dataExpiredAt);
-    const { status, json } = await call("POST", `/api/cloud/machines/${expired.id}/resume`);
+    Object.assign(first, { state: "archived", stoppedAt: boat.now(), dataExpiredAt: boat.now() });
+    const { status, json } = await call("POST", `/api/cloud/machines/${first.id}/resume`);
     assert.equal(status, 409);
     assert.equal(json.error, "snapshot_data_expired");
   });
 
-  test("a sandbox outside the pool is not found", async () => {
+  test("delete deletes a settled task's machine, and again is no error", async () => {
+    const third = [...boat.sandboxes.values()].find((s) => s.labels.dray && s !== first && s !== second);
+    const { status } = await call("DELETE", `/api/cloud/machines/${third.id}`);
+    assert.equal(status, 204);
+    const [del] = callsTo("DELETE", `/sandboxes/${third.id}`);
+    assert.equal(del.status, 202);
+    assert.ok(!boat.sandboxes.has(third.id));
+    assert.equal((await call("DELETE", `/api/cloud/machines/${third.id}`)).status, 204);
+    assert.equal(callsTo("DELETE", `/sandboxes/${third.id}`).length, 1);
+  });
+
+  test("a sandbox outside Dray Cloud is not found", async () => {
     const other = [...boat.sandboxes.values()].find((s) => s.labels.other);
     assert.equal((await call("POST", `/api/cloud/machines/${other.id}/stop`)).status, 404);
     assert.equal((await call("POST", "/api/cloud/machines/not-an-id/resume")).status, 404);
+    assert.equal((await call("DELETE", `/api/cloud/machines/${other.id}`)).status, 204);
     assert.equal(callsTo("POST", `/sandboxes/${other.id}/stop`).length, 0);
+    assert.equal(callsTo("DELETE", `/sandboxes/${other.id}`).length, 0);
   });
 
   test("a busy heartbeat pushes auto-stop out, an idle one does not", async () => {
-    const s = boat.sandboxes.get(forked.id);
+    const s = second;
     s.ttlSeconds = 60;
     const idle = await call("POST", "/api/cloud/heartbeat", { key: MACHINE_SECRET, body: { sandbox: s.id, busy: false } });
     assert.equal(idle.status, 204);
@@ -259,7 +254,6 @@ describe("with DRAY_CLOUD_KEY", () => {
 
   test("boat refused nothing but the expired resume", () => {
     const refused = boat.calls.filter((c) => c.status >= 400).map((c) => `${c.method} ${c.path} ${c.status}`);
-    const expired = [...boat.sandboxes.values()].find((s) => s.dataExpiredAt);
-    assert.deepEqual(refused, [`POST /sandboxes/${expired.id}/resume 409`]);
+    assert.deepEqual(refused, [`POST /sandboxes/${first.id}/resume 409`]);
   });
 });
