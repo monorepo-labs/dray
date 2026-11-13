@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { cardRepos, lastSentId, readerMessagesAfter } from "@/lib/mergeCard";
+import { cardRepos, readerMessagesAfter } from "@/lib/mergeCard";
 import { buildTranscript } from "@/lib/transcript";
 import type { AgentEvent } from "@/types/events";
 
@@ -26,15 +26,6 @@ describe("readerMessagesAfter", () => {
   it("reads zero for a card nothing followed", () => {
     const only = card();
     expect(readerMessagesAfter([said(), only]).get(only.id)).toBe(0);
-  });
-});
-
-describe("lastSentId", () => {
-  it("names the reader's newest send, past relays, kickoffs and queue flushes", () => {
-    const mine = said();
-    const events = [said(), mine, said({ from: { sessionId: "t", title: "Fix" } }), said({ kickoff: true }), said({ queued: true }), card()];
-    expect(lastSentId(events)).toBe(mine.id);
-    expect(lastSentId([said({ kickoff: true })])).toBeNull();
   });
 });
 

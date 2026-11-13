@@ -6,6 +6,7 @@ import Chat from "@/components/Chat";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import DemoThemeBar from "@/demo/ThemeBar";
+import { provisionalId } from "@/lib/provisional";
 import type { AgentEvent, MessageSender, SessionSnapshot } from "@/types/events";
 import "../App.css";
 
@@ -43,6 +44,10 @@ const prompt = (text: string, from: MessageSender | null = null) =>
     from,
     cwd: null,
   } as AgentEvent["payload"]);
+
+/// What a send draws at once, as `handleSendMsg` does: a provisional row the
+/// real message replaces once it is back.
+const send = (text: string): AgentEvent => ({ ...prompt(text), id: provisionalId() });
 
 const reply = (n: number) => [
   event({ type: "assistant_text", block: null, text: `Reply ${n}. ${LOREM}\n\n${LOREM}` }),
@@ -92,6 +97,9 @@ function Demo() {
     return Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
   };
   const add = (...more: AgentEvent[]) => flushSync(() => setEvents((all) => [...all, ...more]));
+  // The real message coming back, under an id of its own.
+  const land = (row: AgentEvent) =>
+    flushSync(() => setEvents((all) => all.map((e) => (e === row ? { ...row, id: `real-${row.id}` } : e))));
 
   // Lets the pin go the way a reader would, and checks it really did go.
   const unpin = async (leg: Leg) => {
@@ -121,9 +129,11 @@ function Demo() {
         const name = `${isBot ? "bot" : "session"} ${leg}`;
         try {
           await unpin(leg);
-          add(prompt(`Sent after ${leg}`));
+          const row = send(`Sent after ${leg}`);
+          add(row);
           await frames(3);
           const sent = gap();
+          land(row);
           // Following on: the reply to the send lands in view too.
           add(...reply(seq));
           await frames(3);
@@ -135,15 +145,23 @@ function Demo() {
           results.push(`${name}: ${(e as Error).message}`);
         }
       }
-      // A task's report is not the reader's send: a reader reading back stays put.
-      const name = `${isBot ? "bot" : "session"} relayed`;
-      try {
-        await unpin("scrolled up");
-        add(prompt("A report from a task", TASK), ...reply(seq));
-        await frames(3);
-        results.push(`${name}: ${gap() >= 40 ? "kept place" : "pulled to the bottom"}`);
-      } catch (e) {
-        results.push(`${name}: ${(e as Error).message}`);
+      // Neither a task's report nor a send's real message landing is a new
+      // send: a reader who scrolled up meanwhile stays where they are.
+      for (const leg of ["relayed", "landed late"] as const) {
+        const name = `${isBot ? "bot" : "session"} ${leg}`;
+        try {
+          const row = send("Sent, then scrolled up");
+          if (leg === "landed late") add(row);
+          await unpin("scrolled up");
+          const el = scroller()!;
+          const top = el.scrollTop;
+          if (leg === "relayed") add(prompt("A report from a task", TASK), ...reply(seq));
+          else land(row);
+          await frames(3);
+          results.push(`${name}: ${Math.abs(el.scrollTop - top) < 2 ? "kept place" : `moved ${Math.round(el.scrollTop - top)}px`}`);
+        } catch (e) {
+          results.push(`${name}: ${(e as Error).message}`);
+        }
       }
     }
     const pass = results.every((r) => r.endsWith("pinned") || r.endsWith("kept place"));
@@ -171,7 +189,7 @@ function Demo() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" onClick={() => add(prompt(`Sent ${seq}`))}>
+          <Button size="sm" variant="outline" onClick={() => add(send(`Sent ${seq}`))}>
             Send
           </Button>
           <Button size="sm" variant="outline" onClick={() => add(...reply(seq))}>

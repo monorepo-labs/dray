@@ -15,24 +15,10 @@ export function readerMessagesAfter(events: readonly AgentEvent[]): Map<string, 
   let count = 0;
   for (let i = events.length - 1; i >= 0; i--) {
     const { payload } = events[i];
-    if (isReaderMessage(events[i])) count++;
+    if (payload.type === "user_message" && !payload.from && !payload.kickoff) count++;
     else if (payload.type === "merge_card") after.set(events[i].id, count);
   }
   return after;
-}
-
-const isReaderMessage = ({ payload }: AgentEvent) =>
-  payload.type === "user_message" && !payload.from && !payload.kickoff;
-
-/// The id of the newest message the reader sent, for the chat to follow a send
-/// by. A queued one's delivery is skipped: its send already drew a provisional
-/// row, and the flush can land long after, while the reader reads further up.
-export function lastSentId(events: readonly AgentEvent[]): string | null {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i];
-    if (isReaderMessage(e) && !(e.payload.type === "user_message" && e.payload.queued)) return e.id;
-  }
-  return null;
 }
 
 /// The repos the cards in a chat name, so their pull requests are read even
