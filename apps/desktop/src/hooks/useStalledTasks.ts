@@ -82,9 +82,9 @@ export function useStalledTasks({
   }, [byBot, prOf]);
 
   const mountedAt = useRef(Date.now());
-  // Sent and not yet answered. A key is stored only once its nudge reached a
-  // bot, so a dropped connection, a bot that failed to start or a server too
-  // old to deliver is tried again on the next minute's tick rather than never.
+  // Sent and not yet answered. A key is stored only once its nudge was taken,
+  // so a dropped connection, a bot that failed to start or a nudge nobody can
+  // read yet is tried again on the next minute's tick rather than never.
   const sending = useRef(new Set<string>());
   // The tick each unsent nudge was last tried on, so a retry waits for the
   // next one instead of going out on every index change.
@@ -112,12 +112,15 @@ export function useStalledTasks({
         ready: s.kind === "ready" ? (s.pr?.number ?? null) : null,
       })
         .then((sent) => {
-          // Only `true` reached a bot. A server from before it said so answers
-          // null, and one holding no bot for a task on another machine dropped
-          // every nudge that way.
-          if (sent !== true) return;
+          // `false`: nobody will read it yet, so try again. `null` is a server
+          // from before it said so, which may have sent it — a retry there
+          // could cost the bot a turn every minute, so it stands as nudged —
+          // but it may also have held no bot for a task on another machine,
+          // so only `true` says a fix is under way.
+          if (sent === false) return;
           triedOn.current.delete(s.key);
-          if (s.kind === "fix" && s.pr && s.status) recordFixAsk(s.row.item.sessionId, s.pr.number, s.status);
+          if (sent === true && s.kind === "fix" && s.pr && s.status)
+            recordFixAsk(s.row.item.sessionId, s.pr.number, s.status);
           const stored = readLocalStorage<string[]>(NUDGED_KEY, []);
           writeLocalStorage(NUDGED_KEY, [...stored, s.key].slice(-NUDGED_CAP));
         })
