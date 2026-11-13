@@ -45,7 +45,7 @@ pub enum ServerCommand {
     Pair,
     /// Connect Grok, Claude or ChatGPT to this server over MCP, list the
     /// ones connected, or sign one out.
-    #[command(subcommand)]
+    #[command(subcommand, hide = !dray_proto::REMOTE_MCP)]
     Assistant(AssistantCommand),
 }
 
@@ -881,9 +881,12 @@ fn service_start() -> Result<String, String> {
             .into());
     }
     let serve = beside("dray-serve")?;
+    // Agents run in the server's cgroup, being its children, so under the
+    // default `OOMPolicy=stop` the kernel killing one agent's compiler stopped
+    // the server and every session (#708). `continue` costs that one process.
     let unit = format!(
         "[Unit]\nDescription=Dray server\n\n[Service]\nExecStart=\"{}\"\nEnvironment=\"PATH={}\"\n\
-         Restart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
+         Restart=on-failure\nRestartSec=2\nOOMPolicy=continue\n\n[Install]\nWantedBy=default.target\n",
         unit_escape(&serve.display().to_string()),
         unit_escape(&unit_env_path(&serve)?),
     );

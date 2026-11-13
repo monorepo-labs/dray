@@ -14,6 +14,7 @@
 //! [`serve`](serve) for why the socket's own mode cannot be the boundary.
 
 use crate::{
+    bots,
     events::{ApprovalPolicy, MessageSender},
     issues::{self, IssueRef, IssueTracker},
     models::{default_model_for, id_for_arg, models_for, runs_on, Effort, ModelId},
@@ -25,7 +26,7 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use dray_proto::{
     encode_line, CreateDraft, CreateSession, DraftSummary, Envelope, StartDraft, IssueInput, IssueLink, LinkIssues, ListSessions, Request,
-    Response, SendMessage, SessionSummary, MAX_LINE, OLDEST_SPOKEN, PROTOCOL_VERSION,
+    Response, SendMessage, SendToBot, SessionSummary, MAX_LINE, OLDEST_SPOKEN, PROTOCOL_VERSION,
 };
 use std::path::Path;
 use tokio::{
@@ -446,6 +447,8 @@ fn session_named(request: &Request) -> Option<&str> {
         Request::SetAside(r) => Some(&r.session_id),
         Request::Share(r) => Some(&r.session_id),
         Request::Browser(r) => Some(&r.session_id),
+        Request::MergeCard(r) => Some(&r.session_id),
+        Request::SetNeed(r) => Some(&r.session_id),
         // Never `AddVideo`: its path is this machine's, and forwarded it would
         // name a file the other machine does not have, or a different one.
         _ => None,
@@ -485,7 +488,18 @@ async fn on_machine(machine: &str, request: Request) -> Result<Response> {
         };
         return elsewhere::list_everywhere(list).await;
     }
-    elsewhere::forward(machine, &elsewhere::prepare(request).await?).await
+    let creates = matches!(request, Request::CreateSession(_));
+    let forward = elsewhere::prepare(request).await?;
+    let response = elsewhere::forward(machine, &forward).await?;
+    // The task's server keeps its reports, and this server holds the link to
+    // collect them by; the other way round usually does not exist.
+    if let (true, Some(caller), Response::Created { session, .. }) = (creates, &forward.caller, &response) {
+        if caller.bot_tree {
+            let saved = crate::machines::on(machine).await.map_err(anyhow::Error::msg)?;
+            crate::remote_reports::track(&saved.id, &session.session_id, &caller.session.session_id).await?;
+        }
+    }
+    Ok(response)
 }
 
 /// A build with no serve wire has no client half to reach one with.
@@ -517,6 +531,11 @@ pub struct Forward {
 pub struct Caller {
     pub session: SessionIndexItem,
     pub depth: usize,
+    /// The caller is a bot's chat or under one, so the child's reports are
+    /// kept for the forwarding server to collect (#958). Absent from an
+    /// older one, whose tasks report nowhere.
+    #[serde(default)]
+    pub bot_tree: bool,
 }
 
 /// The serve command `orchestrate`: a request a Mac forwarded, answered as the
@@ -615,6 +634,35 @@ mod elsewhere {
         futures_util::future::join_all(asks).await.into_iter().flatten().next()
     }
 
+    /// Session `id`'s row on the machine holding it, with that machine's id and
+    /// name. Asked the way [`locate`] asks.
+    pub async fn session_row(id: &str) -> Option<((String, String), SessionIndexItem)> {
+        let list: Vec<_> = machines::load().await.into_iter().filter(|m| !m.off).collect();
+        let asks = list.iter().map(|m| async move {
+            let row = tokio::time::timeout(
+                machines::SWEEP,
+                machines::call(m, "session_index_item", json!({ "sessionId": id })),
+            )
+            .await;
+            let row: SessionIndexItem = serde_json::from_value(row.ok()?.ok()?).ok()?;
+            Some(((m.id.clone(), m.name.clone()), row))
+        });
+        futures_util::future::join_all(asks).await.into_iter().flatten().next()
+    }
+
+    /// The open pull request on `branch` of `project` on machine `id`: number
+    /// and URL, read through that machine's own `gh` and checkout.
+    pub async fn open_pr(id: &str, project: &str, branch: &str) -> Result<Option<(u64, String)>> {
+        let saved = machines::on(id).await.map_err(anyhow::Error::msg)?;
+        let prs = machines::call(&saved, "prs_for_branch", json!({ "cwd": project, "branch": branch }))
+            .await
+            .map_err(|e| anyhow!("could not read pull requests on {}: {e}", saved.name))?;
+        Ok(prs.as_array().into_iter().flatten().find_map(|pr| {
+            (pr.get("state")?.as_str()? == "OPEN").then_some(())?;
+            Some((pr.get("number")?.as_u64()?, pr.get("url")?.as_str()?.to_string()))
+        }))
+    }
+
     /// Runs a prepared request on `machine`, a name or an id, and marks every
     /// session it answers with as that machine's.
     pub async fn forward(machine: &str, forward: &Forward) -> Result<Response> {
@@ -662,7 +710,7 @@ mod elsewhere {
                 forward.caller = caller(parent_of(start.parent_session_id.as_deref()).await?.as_ref()).await?;
             }
             Request::SendMessage(send) => {
-                if let Some(from) = sender(send).await {
+                if let Some(from) = sender(send.from_session_id.as_deref()).await {
                     forward.sender = Some(MessageSender { machine: Some(this_machine().await), ..from });
                 }
             }
@@ -685,7 +733,11 @@ mod elsewhere {
 
     async fn caller(parent: Option<&SessionIndexItem>) -> Result<Option<Caller>> {
         let Some(parent) = parent else { return Ok(None) };
-        Ok(Some(Caller { session: parent.clone(), depth: depth_of(parent).await? }))
+        Ok(Some(Caller {
+            session: parent.clone(),
+            depth: depth_of(parent).await?,
+            bot_tree: crate::bots::in_bot_tree(parent).await,
+        }))
     }
 
     /// A `--base` naming a session here means its branch there, which the far
@@ -760,6 +812,11 @@ fn assistants(list: Result<Vec<crate::mcp::AssistantSummary>, String>) -> Result
 }
 
 async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
+    if !dray_proto::REMOTE_MCP
+        && matches!(request, Request::PairAssistant(_) | Request::ListAssistants | Request::RevokeAssistant(_))
+    {
+        anyhow::bail!("Assistants are not available in this build yet.");
+    }
     match request {
         Request::CreateSession(create) => create_session(create, None, app).await,
         Request::ListSessions(list) => list_sessions(list).await,
@@ -770,6 +827,15 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
         Request::RemoveDraft(draft) => remove_draft(&draft.id, app).await,
         Request::StartDraft(start) => start_draft(start, None, app).await,
         Request::AddVideo(video) => add_video(video).await,
+        Request::MergeCard(card) => post_merge_card(card, app).await,
+        Request::SetNeed(need) => {
+            let text = Some(need.need.trim().to_string()).filter(|t| !t.is_empty());
+            crate::store::set_session_need(&need.session_id, text)
+                .await?
+                .with_context(|| format!("no session {}", need.session_id))?;
+            announce_change(std::slice::from_ref(&need.session_id), app).await;
+            answer_session(&need.session_id).await
+        }
         Request::Share(share) => share_port(share).await,
         Request::ListShares(list) => list_shares(list).await,
         Request::RenameSession(rename) => {
@@ -781,6 +847,32 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             answer_session(&stop.session_id).await
         }
         Request::SettleSession(settle) => settle_session(settle, app).await,
+        Request::CreateBot(create) => {
+            let avatar = bots::face(create.shape.as_deref(), create.hue)?;
+            let bot = bots::create_bot(create.name, Some(avatar)).await?;
+            app.emit(bots::BOTS_CHANGED, ()).ok();
+            Ok(Response::Bot { bot: bots::summary(bot).await })
+        }
+        Request::ListBots => {
+            let mut summaries = Vec::new();
+            for bot in bots::list_bots().await? {
+                summaries.push(bots::summary(bot).await);
+            }
+            Ok(Response::Bots { bots: summaries })
+        }
+        Request::RenameBot(rename) => {
+            let bot = bots::rename_bot(&rename.bot, &rename.name, app).await?;
+            app.emit(bots::BOTS_CHANGED, ()).ok();
+            Ok(Response::Bot { bot: bots::summary(bot).await })
+        }
+        Request::RemoveBot(remove) => {
+            let bot = bots::find_bot(&remove.bot).await?;
+            let summary = bots::summary(bot.clone()).await;
+            bots::delete_bot(bot.id, app.clone()).await?;
+            app.emit(bots::BOTS_CHANGED, ()).ok();
+            Ok(Response::Bot { bot: summary })
+        }
+        Request::SendToBot(send) => send_to_bot(send, app).await,
         #[cfg(any(feature = "serve", feature = "desktop"))]
         Request::SetRemoteAccess(set) => {
             let now = crate::remote_access::set_remote_access(app.clone(), set.on).await.map_err(anyhow::Error::msg)?;
@@ -835,7 +927,12 @@ async fn dispatch(request: Request, app: &Sink) -> Result<Response> {
             crate::set_session_flags(&aside.session_id, None, None, None, Some(aside.aside), app.clone()).await?;
             answer_session(&aside.session_id).await
         }
-        on_screen => {
+        mut on_screen => {
+            // Resolved here, where the index lives, before the step goes to
+            // the app's CEF or a headless Chromium.
+            if let Request::Browser(step) = &mut on_screen {
+                step.session_id = crate::bots::browser_owner(&step.session_id).await;
+            }
             #[cfg(feature = "desktop")]
             if crate::is_server() {
                 return ask_app(on_screen).await;
@@ -1148,6 +1245,150 @@ async fn add_video(request: dray_proto::AddVideo) -> Result<Response> {
     })
 }
 
+/// Posts a merge card for a task's open pull request into the calling chat.
+/// The PR is looked up now, so an agent posting too early is told so rather
+/// than leaving a card with nothing to merge.
+async fn post_merge_card(card: dray_proto::MergeCard, app: &Sink) -> Result<Response> {
+    let chat = store::get_session_index_item(&card.session_id)
+        .await?
+        .with_context(|| format!("no session {}", card.session_id))?;
+    let task_id = &card.task_session_id;
+    let task = CardTask::find(task_id).await?.with_context(|| format!("no session {task_id}"))?;
+    let branch = task.branch().await.with_context(|| format!("session {task_id} has no branch"))?;
+    let (number, url) = task.open_pr(&branch).await?;
+    let title = task.row.title.clone();
+    let payload = task.card(branch, number, url.clone());
+    let _held = POSTING_CARD.lock().await;
+    manager().post_event(&card.session_id, chat.harness, payload, app).await?;
+    Ok(Response::MergeCard { number, url, title })
+}
+
+/// Held over every merge card's post, by hand or automatic, so the automatic
+/// one's check of the log and its append cannot straddle another post.
+static POSTING_CARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The task a merge card names: its row, and the machine holding it (id, name)
+/// where that is not this one — a bot's task run in a sandbox of its own.
+struct CardTask {
+    row: SessionIndexItem,
+    machine: Option<(String, String)>,
+}
+
+impl CardTask {
+    /// Here first; a miss asks every machine this server reaches.
+    async fn find(id: &str) -> Result<Option<Self>> {
+        if let Some(row) = store::get_session_index_item(id).await? {
+            return Ok(Some(Self { row, machine: None }));
+        }
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        if let Some((machine, row)) = elsewhere::session_row(id).await {
+            return Ok(Some(Self { row, machine: Some(machine) }));
+        }
+        Ok(None)
+    }
+
+    /// The frontend's `sessionBranch`: git's own HEAD while a tree here exists,
+    /// since an agent may have pushed from a branch it named itself.
+    async fn branch(&self) -> Option<String> {
+        let row = &self.row;
+        let observed = match self.machine.is_none() && !row.worktree_removed {
+            true => crate::git::current_branch(&row.cwd).await,
+            false => None,
+        };
+        observed.or_else(|| row.worktree_name.as_deref().map(crate::git::worktree_branch)).or(row.branch.clone())
+    }
+
+    /// The open pull request on `branch`, read where the task's checkout is.
+    async fn open_pr(&self, branch: &str) -> Result<(u64, String)> {
+        let open = match &self.machine {
+            None => crate::github::prs_for_branch(self.row.project_path.clone(), branch.to_string())
+                .await
+                .map_err(|e| anyhow::anyhow!("could not read pull requests: {e:?}"))?
+                .into_iter()
+                .find(|pr| pr.state == "OPEN")
+                .map(|pr| (pr.number, pr.url)),
+            #[cfg(any(feature = "serve", feature = "desktop"))]
+            Some((id, _)) => elsewhere::open_pr(id, &self.row.project_path, branch).await?,
+            #[cfg(not(any(feature = "serve", feature = "desktop")))]
+            Some(_) => None,
+        };
+        open.with_context(|| format!("no open pull request on {branch}; open one first"))
+    }
+
+    fn card(self, branch: String, number: u64, url: String) -> crate::events::AgentEventPayload {
+        let repo = self.machine.as_ref().and_then(|_| crate::github::slug_from_pr_url(&url));
+        crate::events::AgentEventPayload::MergeCard {
+            task_id: self.row.session_id,
+            title: self.row.title,
+            project_path: self.row.project_path,
+            branch,
+            number,
+            url,
+            machine: self.machine.map(|(_, name)| name),
+            repo,
+        }
+    }
+}
+
+/// The chat a merge card goes in for a task `parent` started, as its sessions
+/// oldest first: the card is posted in the last, and a card in any of them
+/// counts. A normal task's is `parent` itself. A bot's task goes to the bot's
+/// chat, since Start fresh settles the session that started it, and an agent
+/// switch leaves earlier sessions on screen in the same conversation. Empty
+/// where there is none.
+async fn card_chat(parent: SessionIndexItem) -> Result<Vec<SessionIndexItem>> {
+    Ok(match bots::bot_at(&parent.cwd).await {
+        Some(bot) => bots::chat_sessions(&bot.path).await?,
+        None if parent.archived => Vec::new(),
+        None => vec![parent],
+    })
+}
+
+/// Posts a merge card for task `task_id`'s pull request in the chat that its
+/// parent `session_id` belongs to, once the app judges the PR ready, unless
+/// that chat already holds a card for it — one the agent posted by hand
+/// counts. Answers the chat the card is in, or `None` where there is no chat
+/// to post in yet, which the caller asks again about.
+///
+/// Called on the parent's server, so a task on another machine finds its chat
+/// here; the task itself is looked up here or on the machines this server
+/// reaches. The PR comes from the app's own marks read, so no `gh` runs. The
+/// log is the record of what was posted, so a restart or a second client
+/// never posts twice.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn auto_merge_card(
+    session_id: String,
+    task_id: String,
+    number: u64,
+    url: String,
+    branch: String,
+    sink: Sink,
+) -> Result<Option<String>, crate::Fail> {
+    let _held = POSTING_CARD.lock().await;
+
+    let Some(parent) = store::get_session_index_item(&session_id).await? else {
+        return Ok(None);
+    };
+    let sessions = card_chat(parent).await?;
+    let Some(chat) = sessions.last() else {
+        return Ok(None);
+    };
+    for session in &sessions {
+        let events = store::list_session_events(&session.session_id).await?;
+        if events.iter().any(|e| matches!(&e.payload, crate::events::AgentEventPayload::MergeCard { url: u, .. } if *u == url)) {
+            return Ok(Some(chat.session_id.clone()));
+        }
+    }
+    let Some(task) = CardTask::find(&task_id).await? else {
+        return Ok(None);
+    };
+    if task.row.archived {
+        return Ok(None);
+    }
+    manager().post_event(&chat.session_id, chat.harness, task.card(branch, number, url), &sink).await?;
+    Ok(Some(chat.session_id.clone()))
+}
+
 /// Tags a session that already exists, or untags it.
 ///
 /// **Written down as given, with nothing asked of the tracker.** A link is a
@@ -1276,12 +1517,10 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
     let hidden = create.hidden || in_bot_tree;
 
     let project_path = resolve_project(&create, parent.as_ref())?;
-    // A bot's folder is not a repository, so inheriting it as the project
-    // would fail at the worktree with git's own words instead of these.
-    if parent.as_ref().is_some_and(|p| p.cwd == project_path)
-        && crate::bots::bot_at(&project_path).await.is_some()
-    {
-        bail!("a bot's folder is not a repository — pass --project <repo path>");
+    // A bot's folder is its own notes, not a project to work in. Its history
+    // makes it a repository, so a task there would start in a worktree of it.
+    if crate::bots::bot_holding(&project_path).await.is_some() {
+        bail!("a bot's folder is not a project — pass --project <repo path>");
     }
 
     // The project is deliberately *not* attached here. The sidebar's filter
@@ -1308,6 +1547,10 @@ async fn create_session(create: CreateSession, caller: Option<&Caller>, app: &Si
     };
 
     let session_id = uuid::Uuid::now_v7().to_string();
+    // Before the spawn, which reads it for the task's own prompt.
+    if caller.is_some_and(|c| c.bot_tree) {
+        crate::remote_reports::owe(&session_id).await?;
+    }
     let manager = manager();
 
     let outcome = manager
@@ -1715,6 +1958,7 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
     let target = store::get_session_index_item(&send.session_id)
         .await?
         .with_context(|| format!("no session {}", send.session_id))?;
+    let target = crate::bots::current_chat(target).await;
 
     if target.session_id == send.from_session_id.clone().unwrap_or_default() {
         bail!("a session cannot send a message to itself");
@@ -1722,7 +1966,7 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
 
     let from = match carried {
         Some(from) => Some(from),
-        None => sender(&send).await,
+        None => sender(send.from_session_id.as_deref()).await,
     };
     let prompt = attribute(&send.prompt, from.as_ref());
 
@@ -1762,6 +2006,162 @@ async fn send_message(send: SendMessage, carried: Option<MessageSender>, app: &S
     })
 }
 
+/// `dray bot send`: a message into a bot's chat, by the bot's name.
+///
+/// Nothing reports back, unlike a task's turns: the bot answers, if it wants
+/// to, with a send of its own. A bot nobody has written to yet has no chat, so
+/// the message opens one, on the agent its last chat ran — else the sender's.
+async fn send_to_bot(send: SendToBot, app: &Sink) -> Result<Response> {
+    if send.prompt.trim().is_empty() {
+        bail!("a message needs some text");
+    }
+    let bot = bots::find_bot(&send.bot).await?;
+    let from = sender(send.from_session_id.as_deref()).await;
+    if from.as_ref().is_some_and(|f| f.bot_id.as_deref() == Some(&bot.id)) {
+        bail!("a bot cannot message itself");
+    }
+    // Held from the lookup until a new chat is on the index, or two first
+    // messages would each start an agent in the one folder.
+    let lock = bots::first_chat_lock(&bot.id);
+    let first = lock.lock().await;
+    // Deleted while this waited: its folder is gone, and a chat started there
+    // would outlive the bot.
+    if !bots::list_bots().await?.iter().any(|b| b.id == bot.id) {
+        bail!("bot {:?} was just deleted", bot.name);
+    }
+    if let Some(chat) = bots::chat_of(&bot).await {
+        drop(first);
+        let send = SendMessage { session_id: chat.session_id, prompt: send.prompt, from_session_id: send.from_session_id };
+        let queued = matches!(send_message(send, None, app).await?, Response::Sent { queued: true });
+        return Ok(Response::BotSent { bot: bots::summary(bot).await, queued });
+    }
+
+    let calling = match send.from_session_id.as_deref() {
+        Some(id) => store::get_session_index_item(id).await?,
+        None => None,
+    };
+    let own = bots::last_session_of(&bot).await;
+    let like = own.clone().or(calling);
+    let harness = like.as_ref().map_or(Harness::ClaudeCode, |l| l.harness);
+    let model = resolve_model(None, like.as_ref(), harness).await?;
+    let effort = resolve_effort(None, like.as_ref(), harness)?;
+    // The bot's own stance, never the sender's: a bot chat runs on Auto and
+    // its toolbar has no picker, so a Plan or bypass sender would leave it
+    // on a stance nobody could see.
+    let permission_mode = own.map_or(ApprovalPolicy::Auto, |o| o.permission_mode);
+    let fast = resolve_fast(None, like.as_ref(), harness);
+    let prompt = attribute(&send.prompt, from.as_ref());
+    let session_id = uuid::Uuid::now_v7().to_string();
+    let outcome = manager()
+        .send_msg(
+            &session_id, &prompt, &[], &[], harness, model, effort, permission_mode, fast, &bot.path, None, false,
+            None, None, true, None, false, Some(&bot.name), from, None, app,
+        )
+        .await?;
+    let item = outcome.snapshot.map(|s| s.index_item).context("the bot's chat started but returned no index entry")?;
+    app.emit(SESSION_CREATED, &item).ok();
+    Ok(Response::BotSent { bot: bots::summary(bot).await, queued: false })
+}
+
+/// How much of a task's last message a stall nudge carries; the tail, where an
+/// agent puts its question.
+const NUDGE_TAIL: usize = 4000;
+
+/// Wakes the bot a stalled task belongs to, once per stall, as the app judges
+/// it (`stalledTasks`). Sent from the task, the way its reports are, so the
+/// bot's queue view and transcript treat it as one and the reader never sees
+/// it. `problem` is what stands in the bot's way to fix through the task (a
+/// conflict, failing checks); `ready` the number of a PR the reader can merge,
+/// so the bot can name what to try first. Without either the task waits on the
+/// reader. Bar a problem, the task's last message rides along, since the bot
+/// has no way to read it.
+///
+/// Sent to the task's server, which for a task on another machine holds no
+/// bot: there the nudge waits with the task's reports for the bot's server to
+/// collect (#958). True once sent or kept, false where nobody will read it, so
+/// the app never says a task is fixing what its bot never heard of.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn nudge_bot(
+    session_id: String,
+    problem: Option<String>,
+    ready: Option<u32>,
+    sink: Sink,
+) -> Result<bool, crate::Fail> {
+    let task = store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
+    let chat = bots::bot_chat_of(&task).await;
+    let owed = chat.is_none() && crate::remote_reports::owed(&session_id).await;
+    let Some(route) = nudge_route(&task, chat.as_ref(), owed) else { return Ok(false) };
+    // A need written while the PR waited on review would outlive the review
+    // on the ready row, since approving a PR does not move its task.
+    if ready.is_some() && problem.is_none() && task.need.is_some() {
+        store::set_session_need(&session_id, None).await?;
+        announce_change(std::slice::from_ref(&session_id), &sink).await;
+    }
+    let idle = idle_since(&task.modified);
+    let prompt = match (problem, ready) {
+        (Some(problem), _) => format!("Stall nudge: this task has sat untouched for {idle}. {problem}"),
+        (None, Some(n)) => format!(
+            "Stall nudge: this task's PR #{n} is ready to merge and has sat for {idle}; the user merges it from the card. Its last message:\n\n{}",
+            last_message_tail(&session_id).await?
+        ),
+        (None, None) => format!(
+            "Stall nudge: this task has sat idle for {idle}, waiting on the user. Its last message:\n\n{}",
+            last_message_tail(&session_id).await?
+        ),
+    };
+    match route {
+        NudgeRoute::Chat(chat) => {
+            let send = SendMessage { session_id: chat, prompt, from_session_id: Some(session_id) };
+            send_message(send, None, &sink).await?;
+        }
+        NudgeRoute::Outbox => {
+            let parent = task.parent_session_id.as_deref().unwrap_or_default();
+            crate::remote_reports::keep(&session_id, parent, &task.title, prompt).await?;
+        }
+    }
+    Ok(true)
+}
+
+/// Where a stall nudge goes: into the bot's chat on this server, or into the
+/// outbox for a bot on another machine, which `owed` says the task reports to.
+#[derive(Debug, PartialEq)]
+enum NudgeRoute {
+    Chat(String),
+    Outbox,
+}
+
+/// None for a task set aside, a chat settled, the bot's own chat, or a task
+/// with no bot anywhere.
+fn nudge_route(task: &SessionIndexItem, chat: Option<&SessionIndexItem>, owed: bool) -> Option<NudgeRoute> {
+    if task.archived {
+        return None;
+    }
+    match chat {
+        Some(chat) if chat.archived || chat.session_id == task.session_id => None,
+        Some(chat) => Some(NudgeRoute::Chat(chat.session_id.clone())),
+        None => owed.then_some(NudgeRoute::Outbox),
+    }
+}
+
+/// The last [NUDGE_TAIL] characters of a task's last message.
+async fn last_message_tail(session_id: &str) -> Result<String> {
+    let last = store::last_reply(session_id).await?.0.unwrap_or_else(|| "(it wrote none)".into());
+    let chars: Vec<char> = last.chars().collect();
+    Ok(chars[chars.len().saturating_sub(NUDGE_TAIL)..].iter().collect())
+}
+
+/// "45m", "2h", "3d" since an RFC3339 time; the app's `compactAge`.
+fn idle_since(at: &str) -> String {
+    let min = chrono::DateTime::parse_from_rfc3339(at)
+        .map(|t| (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_minutes().max(1))
+        .unwrap_or(1);
+    match min {
+        ..60 => format!("{min}m"),
+        60..1440 => format!("{}h", min / 60),
+        _ => format!("{}d", min / 1440),
+    }
+}
+
 /// Sends what a bot's child closed its turn with to the session that started it.
 ///
 /// Every turn, not only the last one, and mechanical rather than left to the
@@ -1784,21 +2184,42 @@ pub fn report_to_parent(
         let Some(parent_id) = child.parent_session_id.clone() else {
             return Ok(());
         };
+        if child.archived {
+            return Ok(());
+        }
+        let Some(parent) = store::get_session_index_item(&parent_id).await? else {
+            // A bot's task started from another machine: its bot's server
+            // collects this, since this one rarely holds a way back to it.
+            if crate::remote_reports::owed(&child_id).await {
+                crate::remote_reports::keep(&child_id, &parent_id, &child.title, text).await?;
+            }
+            return Ok(());
+        };
+        if parent.archived || !crate::bots::in_bot_tree(&child).await {
+            return Ok(());
+        }
+        let Some(from) = sender(Some(&child_id)).await else { return Ok(()) };
+        deliver_report(parent_id, text, from, app).await
+    })
+}
+
+/// A task's report into the bot chat `parent_id`, from this machine's task or
+/// one collected from another (#958). The same path as `dray session send`, so
+/// the bot sees it exactly as it would a message the task sent itself.
+pub fn deliver_report(
+    parent_id: String,
+    text: String,
+    from: MessageSender,
+    app: Sink,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+    Box::pin(async move {
         // A settled chat — Start fresh, or the child put away — takes no more
         // reports: sending would resume a conversation the reader closed.
-        let parent = store::get_session_index_item(&parent_id).await?;
-        if child.archived || parent.is_none_or(|p| p.archived) {
+        if store::get_session_index_item(&parent_id).await?.is_none_or(|p| p.archived) {
             return Ok(());
         }
-        if !crate::bots::in_bot_tree(&child).await {
-            return Ok(());
-        }
-        send_message(
-            SendMessage { session_id: parent_id.clone(), prompt: text, from_session_id: Some(child_id) },
-            None,
-            &app,
-        )
-        .await?;
+        let send = SendMessage { session_id: parent_id.clone(), prompt: text, from_session_id: Some(from.session_id.clone()) };
+        send_message(send, Some(from), &app).await?;
         // Settling writes the flag and then stops the child, so a Start fresh
         // landing between the check above and this send resumed the chat it
         // had just closed. Read again and stop it: one landing after this read
@@ -1807,6 +2228,31 @@ pub fn report_to_parent(
             manager().settle(&parent_id).await?;
         }
         Ok(())
+    })
+}
+
+/// Dray's hidden review into a bot's chat (#973): sent like the reader's own
+/// message, signed by nobody, and drawn as nothing, as the kickoff is. Boxed
+/// for the reason [`report_to_parent`] is.
+pub fn send_review(
+    session_id: String,
+    prompt: String,
+    app: Sink,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+    Box::pin(async move {
+        let Some(chat) = store::get_session_index_item(&session_id).await? else { return Ok(()) };
+        // A settled chat stays settled: a review must not resume it.
+        let chat = crate::bots::current_chat(chat).await;
+        if chat.archived {
+            return Ok(());
+        }
+        crate::bots::mark_dray_prompt(&chat.session_id, &prompt);
+        let send = SendMessage { session_id: chat.session_id.clone(), prompt: prompt.clone(), from_session_id: None };
+        let sent = send_message(send, None, &app).await;
+        if sent.is_err() {
+            crate::bots::take_dray_prompt(&chat.session_id, &prompt);
+        }
+        sent.map(drop)
     })
 }
 
@@ -1836,15 +2282,12 @@ pub fn report_to_parent(
 /// A sender on another machine is named with it. `dray session send <id>`
 /// finds that machine where this one holds a token for it.
 fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
-    match from {
-        Some(MessageSender { session_id, title, machine: None }) => {
-            format!("[message from the Dray session \"{title}\" ({session_id})]\n\n{prompt}")
-        }
-        Some(MessageSender { session_id, title, machine: Some(machine) }) => {
-            format!("[message from the Dray session \"{title}\" ({session_id}) on {machine}]\n\n{prompt}")
-        }
-        None => prompt.to_string(),
-    }
+    let Some(MessageSender { session_id, title, machine, bot_id }) = from else {
+        return prompt.to_string();
+    };
+    let kind = if bot_id.is_some() { "bot" } else { "session" };
+    let on = machine.as_deref().map(|m| format!(" on {m}")).unwrap_or_default();
+    format!("[message from the Dray {kind} \"{title}\" ({session_id}){on}]\n\n{prompt}")
 }
 
 /// Who this message is from, as data the transcript can draw.
@@ -1853,18 +2296,18 @@ fn attribute(prompt: &str, from: Option<&MessageSender>) -> String {
 /// it — and for one whose sender has since been deleted. One lookup answers for
 /// both readers, so neither the prefix nor the card claims a session the index
 /// can no longer name.
-async fn sender(send: &SendMessage) -> Option<MessageSender> {
-    let from = send.from_session_id.as_deref()?;
-
-    store::get_session_index_item(from)
-        .await
-        .ok()
-        .flatten()
-        .map(|item| MessageSender {
-            session_id: item.session_id,
-            title: item.title,
-            machine: None,
-        })
+async fn sender(from_session_id: Option<&str>) -> Option<MessageSender> {
+    let from = from_session_id?;
+    let item = store::get_session_index_item(from).await.ok().flatten()?;
+    // A bot is named as the bot rather than by its chat's title, so the reader
+    // and the receiving agent both know which bot wrote.
+    let bot = crate::bots::bot_at(&item.cwd).await;
+    Some(MessageSender {
+        session_id: item.session_id,
+        title: bot.as_ref().map_or(item.title, |b| b.name.clone()),
+        machine: None,
+        bot_id: bot.map(|b| b.id),
+    })
 }
 
 /// The caller's pick, else the parent's, else Claude Code.
@@ -2023,6 +2466,26 @@ mod tests {
         assert!(!resolve_fast(None, None, Harness::ClaudeCode));
     }
 
+    /// A task on another machine finds no bot on its own server, and was
+    /// answered as nudged with nothing sent, so the Tasks row said "Fixing"
+    /// for a conflict nobody was told about.
+    #[test]
+    fn a_nudge_for_a_task_on_another_machine_waits_for_its_bot() {
+        let task = item("t", Some("bot-chat"));
+        let chat = item("bot-chat", None);
+        assert_eq!(nudge_route(&task, Some(&chat), false), Some(NudgeRoute::Chat("bot-chat".into())));
+        assert_eq!(nudge_route(&task, None, true), Some(NudgeRoute::Outbox));
+        assert_eq!(nudge_route(&task, None, false), None);
+
+        let mut settled = chat.clone();
+        settled.archived = true;
+        assert_eq!(nudge_route(&task, Some(&settled), false), None);
+        assert_eq!(nudge_route(&chat, Some(&chat), false), None);
+        let mut aside = task.clone();
+        aside.archived = true;
+        assert_eq!(nudge_route(&aside, None, true), None);
+    }
+
     #[test]
     fn summary_spells_status_the_way_the_index_does() {
         let summary = summarize(item("a", None));
@@ -2051,6 +2514,7 @@ mod tests {
             session_id: "abc-123".into(),
             title: "Fix the login redirect".into(),
             machine: None,
+            bot_id: None,
         };
         let prompt = attribute("review is done", Some(&from));
 
@@ -2068,11 +2532,25 @@ mod tests {
             session_id: "abc-123".into(),
             title: "Fan out".into(),
             machine: Some("Yogesh's Mac".into()),
+            bot_id: None,
         };
         assert_eq!(
             attribute("go", Some(&from)),
             "[message from the Dray session \"Fan out\" (abc-123) on Yogesh's Mac]\n\ngo"
         );
+    }
+
+    /// A bot is named as one, so the receiving agent knows a bot wrote rather
+    /// than one of its tasks.
+    #[test]
+    fn a_bot_sender_is_named_as_a_bot() {
+        let from = MessageSender {
+            session_id: "abc-123".into(),
+            title: "Ops".into(),
+            machine: None,
+            bot_id: Some("b1".into()),
+        };
+        assert_eq!(attribute("hi", Some(&from)), "[message from the Dray bot \"Ops\" (abc-123)]\n\nhi");
     }
 
     /// A prompt from the user's own terminal has no sender, and must reach the

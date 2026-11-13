@@ -1,5 +1,6 @@
 import { botAt } from "@/lib/bots";
-import type { Bot, SessionIndexItem, SessionStatus } from "@/types/events";
+import type { NoticeKind } from "@/hooks/useNotices";
+import type { BackgroundTask, Bot, SessionIndexItem, SessionStatus } from "@/types/events";
 
 /// One session the selected one started, and what it is doing.
 export type CrewRow = {
@@ -11,6 +12,16 @@ export type CrewRow = {
   asking: boolean;
   /// A turn finished and nobody has read it. The sidebar's green.
   unread: boolean;
+  /// No turn running, but a background shell or subagent still is: the same
+  /// set the chat's Background Tasks row counts.
+  background: boolean;
+};
+
+/// The live maps a row is read off.
+type Live = {
+  statusBySession: Record<string, SessionStatus>;
+  askingSessions: ReadonlySet<string>;
+  tasksBySession?: Record<string, BackgroundTask[]>;
 };
 
 /// Everything the selected session started, at any depth: depth-first, each
@@ -27,10 +38,10 @@ export type CrewRow = {
 export function crewRows(
   items: SessionIndexItem[],
   parentId: string | null,
-  live: {
-    statusBySession: Record<string, SessionStatus>;
-    askingSessions: ReadonlySet<string>;
-  },
+  live: Live,
+  /// More sessions whose children count as the parent's: a bot chat's earlier
+  /// sessions, from before it switched agent, whose tasks are still its own.
+  also: readonly string[] = [],
 ): CrewRow[] {
   if (!parentId) return [];
   const byParent = new Map<string, SessionIndexItem[]>();
@@ -41,20 +52,21 @@ export function crewRows(
     byParent.set(i.parentSessionId, siblings);
   }
   const out: CrewRow[] = [];
+  const roots = [parentId, ...also];
   // A cycle in the index costs a short list rather than a hung render.
-  const seen = new Set([parentId]);
-  const walk = (id: string) => {
-    const kids = [...(byParent.get(id) ?? [])].sort(
+  const seen = new Set(roots);
+  const walk = (ids: readonly string[]) => {
+    const kids = ids.flatMap((id) => byParent.get(id) ?? []).sort(
       (a, b) => Date.parse(b.created) - Date.parse(a.created),
     );
     for (const kid of kids) {
       if (seen.has(kid.sessionId)) continue;
       seen.add(kid.sessionId);
       out.push(rowState(kid, live));
-      walk(kid.sessionId);
+      walk([kid.sessionId]);
     }
   };
-  walk(parentId);
+  walk(roots);
   return out;
 }
 
@@ -65,20 +77,16 @@ export function crewRows(
 /// ahead of status and is not folded into it: the backend reports a session
 /// blocked on a card as `in_progress` and is right to — the turn *is* still
 /// open — so the two are separate questions and this one is the reader's.
-function rowState(
-  item: SessionIndexItem,
-  live: {
-    statusBySession: Record<string, SessionStatus>;
-    askingSessions: ReadonlySet<string>;
-  },
-): CrewRow {
+function rowState(item: SessionIndexItem, live: Live): CrewRow {
   const status = live.statusBySession[item.sessionId] ?? item.status;
   const asking = live.askingSessions.has(item.sessionId);
+  const busy = !asking && status === "in_progress";
   return {
     item,
     asking,
-    busy: !asking && status === "in_progress",
+    busy,
     unread: status === "completed",
+    background: !asking && !busy && (live.tasksBySession?.[item.sessionId]?.length ?? 0) > 0,
   };
 }
 
@@ -108,8 +116,16 @@ export function crewSeen(rows: CrewRow[], drawn: boolean): string[] {
 /// session surfaces through its cards beside that parent and the bot's Tasks
 /// tab. One whose parent is missing stays listed, since it would surface
 /// nowhere. Settled ones too: unsettling the parent lists them again.
-export function inSidebar(items: SessionIndexItem[], bots: readonly Bot[] = []): SessionIndexItem[] {
-  const ids = new Set(items.map((i) => i.sessionId));
+///
+/// `all` is every session held, which is where the parent is looked for: a
+/// bot's chat sits in the bot's folder, so a project filter on `items` drops it
+/// and its tasks would read as orphans.
+export function inSidebar(
+  items: SessionIndexItem[],
+  bots: readonly Bot[] = [],
+  all: readonly SessionIndexItem[] = items,
+): SessionIndexItem[] {
+  const ids = new Set(all.map((i) => i.sessionId));
   return items.filter(
     (i) =>
       !(i.hidden && i.parentSessionId && ids.has(i.parentSessionId)) &&
@@ -135,6 +151,17 @@ export function withHiddenAsks(
     }
   }
   return out;
+}
+
+/// Whether a session's news of this kind is left to the session that started
+/// it. A hidden one is a bot's task or a reviewer, and its parent already
+/// reports on it, so its finishing and its PR turning ready raise nothing here.
+/// A card is the exception: only the reader can answer it.
+export function leftToParent(
+  item: Pick<SessionIndexItem, "hidden"> | undefined,
+  kind: NoticeKind | undefined,
+): boolean {
+  return !!item?.hidden && (kind === "completed" || kind === "pr");
 }
 
 /// The hidden sessions `parentId` started directly. Settle, delete and worktree

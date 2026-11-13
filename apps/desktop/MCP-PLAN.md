@@ -2,8 +2,8 @@
 
 monorepo-labs/dray#858. Every Dray server — the Mac's background server, a
 Linux `dray-serve` — answers the Model Context Protocol at `/mcp`, so Grok Bot,
-Claude or ChatGPT can list, start, message, follow and stop sessions, and
-answer their cards, by chat or voice. The app and the iPhone app stay the place
+Claude or ChatGPT can list, start, message, follow and stop sessions, answer
+their cards, and read and message the server's bots, by chat or voice. The app and the iPhone app stay the place
 to watch and steer; MCP is for firing work off and checking on it.
 
 **MCP sits on top of the server, never in place of it.** Something on the
@@ -144,8 +144,9 @@ its own OAuth; drayhq.com only answers "who is this, and may they".
 ## Tools
 
 [tools.rs](src-tauri/src/mcp/tools.rs). Read: `list_projects`,
-`list_sessions`, `read_session`, `wait_for_session`. Full adds
-`start_session`, `send_message`, `stop_session`, `answer_card`.
+`list_sessions`, `read_session`, `wait_for_session`, `list_bots`, `read_bot`,
+`wait_for_bot`. Full adds `start_session`, `send_message`, `stop_session`,
+`answer_card`, `send_to_bot`.
 
 - **Start, send and stop take the socket's own path**
   (`orchestration::answer_here`), so a session started from a chat gets its
@@ -168,6 +169,19 @@ its own OAuth; drayhq.com only answers "who is this, and may they".
   outcome. Subagent text is left out, being no answer of the session's.
 - **A tool's failure is a result with `isError`**, so the model reads it and
   tries again; only a malformed call is a protocol error.
+- **A bot is read as its chat** (#944), named by name or id. Its chat is an
+  ordinary session in its folder, so `read_bot` and `wait_for_bot` are
+  `read_session` and `wait_for_session` on the chat's newest session. The
+  latest message into the chat may be a task's report rather than the user's,
+  since every task turn reports back.
+- **A bot's cards are its tree's**: its chat's and every task's under it, at
+  any depth, each naming the session `answer_card` takes. Its tasks run hidden
+  and `list_sessions` never shows them, so this is the only way an assistant
+  learns one is blocked; a task's card also ends `wait_for_bot`, as the app's
+  crew column surfaces it.
+- **`send_to_bot` is `dray bot send` with no sender**, so it lands as the
+  user's own message, unsigned, and starts the bot's chat where it has none.
+  No creating, renaming or deleting bots.
 
 ## Not built
 

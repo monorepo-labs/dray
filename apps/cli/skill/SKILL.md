@@ -288,6 +288,27 @@ unpushed work included, and nothing asks. Before passing it, check the tree
 yourself — `git -C <cwd> status --short` and `git -C <cwd> log @{u}..` or
 against `origin/<default>` — and ask the user, naming what would be lost.
 
+## Handing a pull request to the user
+
+```bash
+dray session merge-card <task-id>   # a card in your chat for that task's open PR
+```
+
+Dray posts this card in your chat on its own once GitHub says a task you started
+has a pull request ready to merge, on this machine or another. So don't post one
+yourself; run the command only when the user asks for a card. It lands in your own chat with the task's
+title, the PR number, its live status, a Merge button and an Open on GitHub
+link. It is refused when the task's branch has no open pull request.
+
+```bash
+dray session need <task-id> "Pick: keep the button or drop it"   # no text clears it
+```
+
+When a task you started is waiting on the user and you cannot answer it
+yourself, write what it needs in one short line. The user sees it on the task's
+row in the "Waiting on you" card at the foot of your chat, and it clears as soon
+as the task moves.
+
 ## Saving work for later
 
 ```bash
@@ -312,6 +333,31 @@ it as a session spawned by yours, so the depth limit and `dray session ls`'s
 starts in the project checkout, and the line `start` prints says so.
 
 Start or remove only drafts the user named. The list is theirs.
+
+## Bots
+
+```bash
+dray bot new "Ops" --shape sun --colour teal   # prints the bot id; shape and colour optional
+dray bot ls                                    # id, chat session id, name; --json
+dray bot send "Ops" "<message>"                # by name or id
+dray bot rename "Ops" "Release Ops"
+dray bot rm "Ops"                              # settles its chat, deletes its folder
+```
+
+A bot is one long-lived chat with instructions and memory of its own, listed
+at the top of the user's sidebar. A bot is named by its name, in any case, or
+by its id; two bots cannot share a name.
+
+`dray bot send` lands in the bot's chat, signed as you, and starts its turn
+(or queues behind the one running). A bot nobody has written to yet starts its
+chat with your message. **Nothing comes back on its own**: the bot answers
+only if it chooses to, with `dray bot send` of its own, and its answer arrives
+in your chat as a new message. Say so when you want one.
+
+Shapes: round, organic, boxy, capsule, nub, cloud, hexagon, sun, triangle.
+Colours: red, orange, amber, green, teal, blue, purple, pink, or a hue in
+degrees. Make, rename or delete a bot only when the user asks: the list is
+theirs, and `rm` deletes the bot's instructions and memory with it.
 
 ## Driving the browser
 
@@ -463,17 +509,12 @@ dray server run          # in this terminal instead
 dray server status       # running or not, and its tunnel address
 dray server tunnel on    # a public address in front of it, the same across restarts; off takes it down
 dray server pair         # a QR code the Dray iPhone app scans to add this server
-dray server assistant add   # a URL and one-time code to connect Grok, Claude or ChatGPT over MCP; --read-only
-dray server assistant ls    # the assistants signed in; revoke <id> signs one out
 dray server stop         # stop it and remove it from the background
 ```
 
 What makes a machine with no Dray app — Linux, or a headless Mac — a Dray
 server. On a Mac with the app, the app runs the server and these are refused,
-apart from `tunnel`, which is the Remote access button in Settings → Servers,
-and `assistant`, which is Connect an assistant there. The code `assistant add`
-prints is a sign-in for the user's own assistant: hand it to the user, never
-to a service yourself.
+apart from `tunnel`, which is the Remote access button in Settings → Servers.
 
 ## Reporting back to the user
 

@@ -178,6 +178,12 @@ pub struct SessionIndexItem {
     /// clearing it, so they can turn it back on until the time passes.
     #[serde(default)]
     pub continue_off: bool,
+    /// What a bot's stalled task needs from the reader, one line the bot wrote
+    /// with `dray session need`. Drawn only while `at` is no older than
+    /// `modified`, so the task moving clears it without a write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub need: Option<TaskNeed>,
     /// Every key this build does not know, carried through untouched.
     ///
     /// The index is rewritten **whole**, and `INDEX_LOCK` is an in-process
@@ -200,6 +206,25 @@ pub struct SessionIndexItem {
     #[serde(flatten)]
     #[ts(skip)]
     pub unknown: serde_json::Map<String, Value>,
+}
+
+/// See [`SessionIndexItem::need`].
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "events.ts")]
+pub struct TaskNeed {
+    pub text: String,
+    /// RFC3339, when the bot wrote it.
+    pub at: String,
+}
+
+/// Writes or clears a task's need line. `None` where the session is unknown.
+/// `modified` is left alone: the line is about the task, not activity in it.
+pub async fn set_session_need(session_id: &str, text: Option<String>) -> Result<Option<SessionIndexItem>> {
+    update_item(session_id, |item| {
+        item.need = text.map(|text| TaskNeed { text, at: now_rfc3339() });
+        item.clone()
+    })
+    .await
 }
 
 /// What crosses the IPC boundary for one session: its index entry plus the
@@ -696,6 +721,7 @@ impl SessionIndexItem {
             aside: false,
             continue_at: None,
             continue_off: false,
+            need: None,
             unknown: Default::default(),
         }
     }
@@ -789,6 +815,7 @@ impl SessionIndexItem {
             aside: false,
             continue_at: None,
             continue_off: false,
+            need: None,
             unknown: Default::default(),
         }
     }
@@ -1704,12 +1731,13 @@ pub async fn last_reply(session_id: &str) -> Result<(Option<String>, u32)> {
     // The count stops at the reader's own last message; the preview reads on
     // past it, or a turn still running would blank the row.
     let mut counting = true;
-    for event in page.events.into_iter().rev() {
-        if event.subagent.is_some() {
+    let review = crate::bots::learn::in_review(&page.events);
+    for (event, review) in page.events.into_iter().zip(review).rev() {
+        if event.subagent.is_some() || review {
             continue;
         }
         match event.payload {
-            AgentEventPayload::AssistantText { text, .. } if !text.trim().is_empty() => {
+            AgentEventPayload::AssistantText { text, .. } if crate::events::has_text(&text) => {
                 since += u32::from(counting);
                 last.get_or_insert(text);
             }

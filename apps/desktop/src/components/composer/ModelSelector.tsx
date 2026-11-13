@@ -35,7 +35,7 @@ import {
 import { invoke, type ServerId } from "@/lib/transport";
 import { fastRetired, offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
-import { FX_PROVIDERS, isUnsetModel } from "@/lib/model";
+import { AGENT_LABELS, FX_PROVIDERS, isUnsetModel } from "@/lib/model";
 import { useEnabledAgents } from "@/hooks/useEnabledAgents";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
@@ -46,21 +46,6 @@ const EFFORT_LABELS: Record<Effort, string> = {
   xhigh: "Extra High",
   ultra: "Ultra",
   max: "Max",
-};
-
-/// Named as the reader knows them, not as the wire spells them. The label is
-/// the screen reader's alone — the row is marks, since two of them side by side
-/// say "pick one" in less space than two words do, and a tooltip repeating the
-/// name is longer than the row it hangs off.
-const AGENT_LABELS: Record<Harness, string> = {
-  claude_code: "Claude Code",
-  codex: "Codex",
-  pi: "pi",
-  fx: "fx",
-  // xAI's own name for the CLI. Not "grok", which is the chat assistant every
-  // one of these models is also served by — the installer calls this one Grok
-  // Build and the picker is naming an agent, not a model.
-  grok: "Grok",
 };
 
 /// Next effort level for `model`, wrapping — what ⌘⇧E lands on. `null`
@@ -199,6 +184,7 @@ export default function ModelSelector({
   onFastChange,
   fastNote,
   isNewSession,
+  agentSwitch = false,
   busy,
   onChange,
   onRefreshModels,
@@ -226,6 +212,9 @@ export default function ModelSelector({
   /// agent a session runs is worth a glyph whether or not it can change. fx's
   /// fast mode is settled the same way, so its row goes too.
   isNewSession: boolean;
+  /// A bot chat keeps the row: picking another agent there moves the chat at
+  /// the next send. Held while a turn runs, since the move ends this session.
+  agentSwitch?: boolean;
   /// Whether this session's turn is in flight. The provider switch waits on it,
   /// since it moves the child the moment it is clicked; model, effort and fast
   /// wait on it only where the harness cannot apply them mid-turn.
@@ -554,7 +543,7 @@ export default function ModelSelector({
             models is one visit rather than two. `mb-1` is the whole separation
             from the list below: a rule there drew a box round a control that is
             already a different shape. */}
-        {(isNewSession || harness === "fx") && (
+        {(isNewSession || agentSwitch || harness === "fx") && (
           <div className="mb-1 flex items-center gap-1 rounded-md bg-surface-well p-1">
             {/* The one moving part. A thumb under the marks, placed by index,
                 so switching reads as the selection sliding across rather than
@@ -565,7 +554,7 @@ export default function ModelSelector({
                 come up *past* the surface the menu is drawn at, out of the well
                 the track cuts. `--accent` is a white veil on glass, which over
                 a scrim is a few percent of light and read as nothing. */}
-            {isNewSession && (
+            {(isNewSession || agentSwitch) && (
               <div role="radiogroup" aria-label="Agent" className="relative flex items-center">
                 <span
                   aria-hidden
@@ -590,8 +579,9 @@ export default function ModelSelector({
                       aria-label={
                         missing ? `${agent.label} (not installed)` : agent.label
                       }
+                      disabled={!isNewSession && busy}
                       onClick={() => onHarnessChange(agent.id)}
-                      className="relative flex size-6 items-center justify-center rounded-sm opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
+                      className="relative flex size-6 disabled:pointer-events-none items-center justify-center rounded-sm opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
                     >
                       <AgentIcon harness={agent.id} brand className="size-3.5" />
                       {/* Marked, not disabled. Disabling leaves nowhere to say

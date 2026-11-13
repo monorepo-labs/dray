@@ -58,6 +58,10 @@ pub struct Saved {
     /// The boat sandbox this machine is, once it has said and boat agreed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boat: Option<BoatLink>,
+    /// The Dray Cloud machine this is, by its sandbox id (#857). Listed by the
+    /// control plane, never added by hand, and drawn as no row of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud: Option<String>,
     /// Fields a newer build wrote, carried back untouched — the index's own
     /// `unknown` bargain, since this file is rewritten whole too.
     #[serde(flatten)]
@@ -264,6 +268,9 @@ impl Welcome {
     }
 }
 
+/// How `admit_with` opens a refusal: the server answered, so retrying cannot help.
+pub const REFUSED: &str = "the server refused: ";
+
 /// Connects and says `hello`. Answers the admitted socket, or why not.
 pub async fn admit_with(url: &str, hello: Value) -> Result<(Socket, Welcome), String> {
     let attempt = async {
@@ -278,7 +285,7 @@ pub async fn admit_with(url: &str, hello: Value) -> Result<(Socket, Welcome), St
                 Some(Ok(Message::Text(text))) => {
                     let frame: Value = serde_json::from_str(&text).unwrap_or_default();
                     return match frame.get("err").and_then(Value::as_str) {
-                        Some(err) => Err(format!("the server refused: {err}")),
+                        Some(err) => Err(format!("{REFUSED}{err}")),
                         None => Ok((ws, serde_json::from_value(frame).unwrap_or_default())),
                     };
                 }
@@ -548,6 +555,7 @@ pub async fn add(name: String, address: String, token: Option<String>) -> Result
                 beta: false,
                 ignored: None,
                 boat: None,
+                cloud: None,
                 unknown: Default::default(),
             };
             (saved, Some(token))
@@ -573,6 +581,7 @@ pub async fn add(name: String, address: String, token: Option<String>) -> Result
                 beta: false,
                 ignored: None,
                 boat: None,
+                cloud: None,
                 unknown: Default::default(),
             };
             (saved, token)
@@ -686,6 +695,7 @@ mod tests {
             beta: false,
             ignored: None,
             boat: None,
+            cloud: None,
             unknown: Default::default(),
         };
         let list = [saved("a1", "vps"), saved("b2", "box"), saved("c3", "box"), saved("d4", "a1")];

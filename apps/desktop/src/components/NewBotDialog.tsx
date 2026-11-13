@@ -1,12 +1,21 @@
 import { useState, type ReactNode } from "react";
 
 import BotAvatar from "@/components/BotAvatar";
+import ServerFilledIcon from "@/components/icons/ServerFilledIcon";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { DEFAULT_AVATAR, HUES, SHAPES, swatch } from "@/lib/botAvatar";
-import { refreshBots } from "@/lib/bots";
-import { invoke } from "@/lib/transport";
+import { refreshBots, serverOfBot } from "@/lib/bots";
+import { serverName, useServers } from "@/lib/servers";
+import { invoke, LOCAL, type ServerId } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import type {
   ApprovalPolicy,
@@ -32,12 +41,17 @@ export type BotPick = {
 export default function NewBotDialog({
   open,
   onOpenChange,
+  server,
+  onServerChange,
   picker,
   pick,
   onStarted,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /// Where the bot is made and runs: its folder, its chat and its tasks.
+  server: ServerId;
+  onServerChange: (server: ServerId) => void;
   /// The composer's own agent and model picker, bound to `pick`.
   picker: ReactNode;
   pick: BotPick;
@@ -67,11 +81,11 @@ export default function NewBotDialog({
     try {
       let bot = made;
       if (!bot) {
-        bot = await invoke<Bot>("create_bot", { name: name.trim(), avatar });
+        bot = await invoke<Bot>("create_bot", { name: name.trim(), avatar }, server);
         setMade(bot);
-        await refreshBots();
+        await refreshBots(server);
       }
-      const chat = await invoke<SessionIndexItem>("start_bot", { id: bot.id, ...pick });
+      const chat = await invoke<SessionIndexItem>("start_bot", { id: bot.id, ...pick }, serverOfBot(bot));
       close(false);
       onStarted(chat);
     } catch (e) {
@@ -144,7 +158,12 @@ export default function NewBotDialog({
           ))}
         </div>
 
-        <div className="flex justify-center">{picker}</div>
+        <div className="flex justify-center gap-1">
+          {/* Locked from Create on: the bot lives on the server it was made
+              on, and a retry starts that one. */}
+          <ServerPicker value={server} onChange={onServerChange} disabled={busy || !!made} />
+          {picker}
+        </div>
 
         {error && <p className="text-ui text-destructive">{error}</p>}
 
@@ -158,5 +177,50 @@ export default function NewBotDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/// Which server the bot is made on: This Mac and every remote turned on, an
+/// unreachable one disabled. Draws nothing with no remote to choose from.
+function ServerPicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: ServerId;
+  onChange: (server: ServerId) => void;
+  disabled: boolean;
+}) {
+  const remotes = useServers().filter((s) => s.on);
+  if (remotes.length === 0) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={disabled}
+          aria-label="Server"
+          className="max-w-40 gap-1.5 px-1.5 text-ui text-muted-foreground"
+        >
+          <ServerFilledIcon className="size-3.5 shrink-0" />
+          <span className="truncate">{serverName(value)}</span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-auto max-w-96 min-w-40">
+        <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
+          <DropdownMenuRadioItem value={LOCAL} className="text-ui">
+            {serverName(LOCAL)}
+          </DropdownMenuRadioItem>
+          {remotes.map((s) => (
+            <DropdownMenuRadioItem key={s.id} value={s.id} disabled={s.status !== "connected"} className="text-ui">
+              <span className="truncate">{s.name}</span>
+              {s.status !== "connected" && <span className="ml-auto shrink-0 pl-3 opacity-70">disconnected</span>}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

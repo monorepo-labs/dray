@@ -66,6 +66,10 @@ function start() {
     }
     tabsBySession.set(sessionId, tabs);
     fetched.add(sessionId);
+    // The reader moving on or off a tab under a shot moves the cover with them.
+    // Here rather than at the click: the Rust side has switched by now, so
+    // the still is taken of the tab that is really on screen.
+    if ([...shooting.values()].some((s) => s.sessionId === sessionId)) present();
     notify();
   });
   void listen<{ sessionId: string; element: PickedElement | null }>("browser_pick", (e) => {
@@ -99,17 +103,18 @@ function start() {
   // reflow the capture needs happens where nobody is looking. Nothing is
   // drawn on top of that still: it is the page pixel for pixel, so the
   // whole shot is invisible, which is the point.
-  void listen<{ sessionId: string; shooting: boolean; shot: number }>("browser_shooting", (e) => {
-    const { sessionId, shooting: on } = e.payload;
-    if (on) shooting.add(sessionId);
-    else shooting.delete(sessionId);
+  void listen<{ sessionId: string; shooting: boolean; shot: number; tab?: number | null }>("browser_shooting", (e) => {
+    const { sessionId, shooting: on, tab = null } = e.payload;
+    if (on) shooting.set(e.payload.shot, { sessionId, tab });
+    else shooting.delete(e.payload.shot);
     shot = e.payload.shot;
     const winner = presenter();
     // Nothing of this session's page is on screen, so there is no reflow to
     // hide and nothing to wait for. Answered before `present`, which in
     // that case does no work and would leave the shot waiting on a hide
     // that is never going to happen.
-    if (on && (!shown || winner?.sessionId !== sessionId)) shutterReady(shot);
+    // Nor where the shot is of a tab the reader is not on.
+    if (on && (!shown || winner?.sessionId !== sessionId || !hiding())) shutterReady(shot);
     present();
     notify();
   });
@@ -143,9 +148,15 @@ function start() {
     }
     notify();
   });
-  void listen<{ sessionId: string; recording: boolean }>("browser_recording", (e) => {
-    if (e.payload.recording) recording.add(e.payload.sessionId);
-    else recording.delete(e.payload.sessionId);
+  void listen<{ sessionId: string; tab: number | null }>("browser_recording", (e) => {
+    const { sessionId, tab } = e.payload;
+    if (tab !== null) {
+      recording.set(sessionId, tab);
+      if (!recordingSince.has(sessionId)) recordingSince.set(sessionId, Date.now());
+    } else {
+      recording.delete(sessionId);
+      recordingSince.delete(sessionId);
+    }
     notify();
   });
   // Whether Chromium is on disk yet. The first read fails in a build without
@@ -336,11 +347,22 @@ export function setPickHandler(fn: typeof pickHandler) {
   pickHandler = fn;
 }
 
-/// Sessions `dray browser record` is recording, as `browser_recording` says.
-const recording = new Set<string>();
+/// The tab `dray browser record` is recording in each session, as
+/// `browser_recording` says. That tab alone is covered and kept from being
+/// closed; the reader goes on using the rest.
+const recording = new Map<string, number>();
 
-export function useRecording(sessionId: string): boolean {
-  return useSyncExternalStore(subscribe, () => recording.has(sessionId));
+/// When this app first heard of each session's recording. The notice counts
+/// from here, not its own mount: the reader can switch off the recorded tab
+/// and back, which remounts it.
+const recordingSince = new Map<string, number>();
+
+export function useRecordedTab(sessionId: string): number | null {
+  return useSyncExternalStore(subscribe, () => recording.get(sessionId) ?? null);
+}
+
+export function recordingStart(sessionId: string): number | undefined {
+  return recordingSince.get(sessionId);
 }
 
 /// Tabs a `dray browser` verb touched within `DRIVEN_HOLD`, keyed by tab id,
@@ -401,8 +423,8 @@ export function useDriven(tab: number | undefined): string | null {
 }
 
 /// Read at a keypress, where a hook's copy would be the last render's.
-export function isRecording(sessionId: string): boolean {
-  return recording.has(sessionId);
+export function recordedTab(sessionId: string): number | null {
+  return recording.get(sessionId) ?? null;
 }
 
 export function usePicking(sessionId: string): boolean {
@@ -534,10 +556,12 @@ export function activateBlankTab(sessionId: string, id: number) {
   }
 }
 
-export function closeBlankTab(sessionId: string, id: number) {
+/// `remember: false` is a blank turned into another view: it was never
+/// closed, so ⌘⇧T has nothing to bring back.
+export function closeBlankTab(sessionId: string, id: number, remember = true) {
   const b = blanks.get(sessionId) ?? NO_BLANKS;
   const page = parked.get(sessionId)?.[id];
-  pushClosedTab(sessionId, { key: `blank:${id}`, page });
+  if (remember) pushClosedTab(sessionId, { key: `blank:${id}`, page });
   if (page) setParked(sessionId, id, null);
   drafts.delete(`${sessionId}:blank:${id}`);
   if (b.active === id) openErrors.delete(sessionId);
@@ -750,10 +774,11 @@ let capturing = false;
 /// watching — so the view hides and the page's own still is drawn in its
 /// place. The still is what makes it a cover rather than a hole: the shutter
 /// opens *before* the override lands, so what is photographed is the page as
-/// the reader last saw it, and the swap is invisible. A set, since a
-/// recording holds its session's shutter open for its whole length and
-/// another session's screenshot must not close it.
-const shooting = new Set<string>();
+/// the reader last saw it, and the swap is invisible. Keyed by shot, since a
+/// recording holds its shutter open for its whole length and a screenshot of
+/// another tab or session must not close it. Each names the tab it lays out,
+/// and only that tab is covered; `null` covers the whole session.
+const shooting = new Map<number, { sessionId: string; tab: number | null }>();
 /// The newest shot, as `browser_shooting` numbered it.
 let shot = 0;
 
@@ -782,7 +807,9 @@ export function browserHistory(sessionId: string): Promise<BrowserVisit[]> {
 function hiding(): boolean {
   if (occluded || suggesting) return true;
   const winner = presenter();
-  return !!winner && shooting.has(winner.sessionId);
+  if (!winner) return false;
+  const active = tabsBySession.get(winner.sessionId)?.find((t) => t.active)?.id;
+  return [...shooting.values()].some((s) => s.sessionId === winner.sessionId && (s.tab === null || s.tab === active));
 }
 
 export function useBrowserSnapshot(sessionId: string): Snapshot | null {

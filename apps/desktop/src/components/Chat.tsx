@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDown } from "lucide-react";
 
 import AssistantMessage from "@/components/chat/AssistantMessage";
 import BotTranscript, { type BotTask } from "@/components/chat/BotTranscript";
 import BackgroundTasksIndicator from "@/components/chat/BackgroundTasksIndicator";
 import CheckpointRail, { type Checkpoint } from "@/components/chat/CheckpointRail";
+import { MergeCardChatContext } from "@/components/chat/MergeCard";
 import ApiRetryIndicator from "@/components/chat/ApiRetryIndicator";
 import PermissionRequest from "@/components/chat/PermissionRequest";
 import QueuedMessages from "@/components/chat/QueuedMessages";
@@ -28,17 +29,21 @@ import { RANK_OWN } from "@/lib/cardKeys";
 import { planAsked, setPlan } from "@/lib/plan";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
-import { loadOlder } from "@/lib/olderPages";
+import { drawnSegments, earlierTurns, lastTurns } from "@/lib/botTranscript";
+import { readerMessagesAfter } from "@/lib/mergeCard";
+import { isProvisional } from "@/lib/provisional";
+import { dropOlder, loadOlder } from "@/lib/olderPages";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
-import type { SessionSnapshot } from "@/types/events";
+import type { Bot, SessionSnapshot } from "@/types/events";
 
 type ChatProps = {
   session: SessionSnapshot | null;
   onOpenSubagent: (id: string) => void;
   /// Opens the session that relayed a prompt into this one, for the avatar a
   /// `dray send` message draws. Selecting the session is all it does — the same
-  /// thing clicking its sidebar row does.
-  onOpenSession: (sessionId: string) => void;
+  /// thing clicking its sidebar row does. `alone` is a bot chat's ⌘-click on a
+  /// task, which opens it in place of the chat rather than as a tab beside it.
+  onOpenSession: (sessionId: string, alone?: boolean) => void;
   /// Opens the subagent panel on no particular run — what the background-task
   /// notice needs, since it stands for the whole set rather than for one of them.
   onOpenSubagentPanel: () => void;
@@ -93,11 +98,24 @@ type ChatProps = {
   /// A bot's chat: messages and the tasks it started, tool calls only as the
   /// live line while it works. See [BotTranscript].
   bot?: boolean;
+  /// A bot chat's earlier sessions, oldest first, from before it switched
+  /// agent. Drawn above this one as one conversation.
+  earlier?: SessionSnapshot[];
+  /// An earlier session still loading, older than every one in `earlier`.
+  earlierLoading?: boolean;
   /// Names a task the bot started, for its card.
   taskOf?: (sessionId: string) => BotTask | undefined;
+  /// Opens another bot's chat, from a message between it and this one.
+  onOpenBot?: (bot: Bot) => void;
   /// The session had unread replies, for a bot chat's NEW divider.
   unread?: boolean;
+  /// Drawn under a bot chat's conversation: its stalled tasks.
+  botFooter?: ReactNode;
+  /// A task picked from that card, scrolled to. See [BotTranscript]'s `focus`.
+  botFocus?: { sessionId: string; at: number } | null;
 };
+
+const NO_EARLIER: SessionSnapshot[] = [];
 
 /// How long an answered permission card holds its place before going.
 ///
@@ -121,6 +139,20 @@ const ACTIVE_LINE_PX = 24;
 /// The gap left above a turn jumped to from the rail, so the prompt doesn't sit
 /// flush against the header.
 const JUMP_PAD_PX = 12;
+
+/// Turns per page while a bot chat reads back to a picked task's reply. Each
+/// page lands as one render of the whole app, which costs far more than the
+/// read, so a long way back is taken in few of them.
+const FOCUS_PAGE_TURNS = 64;
+
+/// Turns a bot chat draws while the reader follows its bottom: the tail it
+/// opens on and a page above it.
+const BOT_WINDOW_TURNS = 24;
+/// Turns drawn above at a time as the reader nears the top of what is drawn, as
+/// many as a page read from the log holds.
+const OLDER_TURNS = 16;
+/// A bot chat's window drawing everything held.
+const ALL_HELD = "all";
 
 /// Below this the rail is one or two ticks describing what is already on screen,
 /// which is chrome for nothing.
@@ -198,8 +230,13 @@ export default function Chat({
   rail = true,
   active = true,
   bot = false,
+  earlier = NO_EARLIER,
+  earlierLoading = false,
   taskOf,
+  onOpenBot,
   unread = false,
+  botFooter,
+  botFocus,
 }: ChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -239,11 +276,61 @@ export default function Chat({
   // growing under a reader who sat still fires no scroll event, and that is
   // exactly when there is newly something below to go to.
   const [atBottom, setAtBottom] = useState(true);
+
+  // How much of a bot chat's newest session is drawn. A chat left open grows by
+  // every turn, and each row it holds cost every event that landed: with the
+  // whole log read back, an event took ~40ms. So while the reader follows the
+  // bottom (`null`) it draws the last `BOT_WINDOW_TURNS` alone, sliding as turns
+  // land; scrolled up, the top holds on an event id, grown a page at a time as
+  // they near it, or on `ALL_HELD`, where pages read from the log are drawn as
+  // they land. Back at the bottom it slides again, and what was above goes.
+  const [botWindow, setBotWindow] = useState<{ sessionId: string | null; from: string | null }>({
+    sessionId: null,
+    from: null,
+  });
+  const held = bot && botWindow.sessionId === session?.sessionId ? botWindow.from : null;
+  const holdWindow = (from: string | null) => {
+    if (held !== from) setBotWindow({ sessionId: session?.sessionId ?? null, from });
+  };
+  const drawFrom = useMemo(() => {
+    if (!bot || !session || held === ALL_HELD) return 0;
+    const at = held ? session.events.findIndex((e) => e.id === held) : -1;
+    return at >= 0 ? at : lastTurns(session.events, BOT_WINDOW_TURNS);
+  }, [bot, session?.events, held]);
+  // Pages read above a sliding window are let go, so a chat read back and left
+  // holds its tail again. Turns that landed live stay held, since only a page
+  // read says where in the log it began.
+  const keepFrom = bot && held === null && drawFrom > 0 ? session?.events[drawFrom]?.id : undefined;
+  useEffect(() => {
+    if (session && keepFrom) dropOlder(session.sessionId, keepFrom);
+  }, [session?.sessionId, keepFrom]);
+  // The sessions before an agent switch go back to the tails they opened on.
+  const following = bot && held === null;
+  useEffect(() => {
+    if (following) for (const s of earlier) dropOlder(s.sessionId);
+  }, [following, earlier]);
+  // A bot chat's sessions as drawn. Held across renders: a fresh array would
+  // rebuild the bot chat's rows on every event. A windowed session says it has
+  // more above, so the sessions before it stay undrawn and the unread divider
+  // waits, as they do for a session not yet read back to its start.
+  const segments = useMemo(() => {
+    const live =
+      session && drawFrom > 0
+        ? { ...session, events: session.events.slice(drawFrom), olderBefore: session.olderBefore ?? 0 }
+        : session;
+    return drawnSegments(live ? [...earlier, live] : earlier);
+  }, [earlier, session, drawFrom]);
+  const oldest = segments[0];
+  const more = !!bot && (oldest?.olderBefore != null || earlierLoading);
+  // Moves when a page lands above, which is what the anchor below answers.
+  const oldestKey = oldest ? `${oldest.sessionId}:${oldest.events[0]?.id}` : "";
   const syncAtBottom = () => {
     const el = scrollRef.current;
     if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX);
   };
 
+  // Every held event, never a bot chat's window: a card can wait on the reader
+  // longer than 24 turns, and App builds this same array, whose cache it shares.
   const { events, turns, subagentById, resultByCallId, editsByCallId, pendingAsks } = useMemo(
     () => buildTranscript(session?.events ?? [], busy, liveTaskIds),
     [session?.events, busy, liveTaskIds],
@@ -392,12 +479,24 @@ export default function Chat({
   // counts must still land at the bottom. A preview *growing* is not a key: the
   // ResizeObserver below re-pins on every height it adds, where keying on the
   // text wrote `scrollTop` and read layout back on every delta.
+  //
+  // A send re-arms the pin first, whatever left it down: a scroll that stopped
+  // short of the end, a jump from the rail or the "Waiting on you" card, a
+  // smooth scroll cut short. Only the pin ever brought a send into view, so any
+  // of those left the reader's own message below the fold. A send is told by
+  // its provisional row *arriving*: every send here draws one, and the real
+  // message replacing it, or a queue or failure taking it back, only ever
+  // lowers the count, so a reader who scrolled up meanwhile stays put.
+  const sent = useMemo(() => session?.events.filter(isProvisional).length ?? 0, [session?.events]);
+  const sentRef = useRef(sent);
   useLayoutEffect(() => {
+    if (sent > sentRef.current) followRef.current = true;
+    sentRef.current = sent;
     const el = scrollRef.current;
     if (el && followRef.current) pin(el);
     syncAtBottom();
     syncActive();
-  }, [session?.sessionId, events.length, streamingKind]);
+  }, [session?.sessionId, events.length, streamingKind, sent]);
 
   // How many of the newest turns are drawn. Opening a long session mounts only
   // what fits on screen and backfills the rest above it in deferred steps, so
@@ -415,8 +514,11 @@ export default function Chat({
     sessionId: null,
     key: null,
   });
-  const mounted =
-    mount.sessionId === session?.sessionId
+  // A bot chat draws everything it holds and reads further back on scroll
+  // instead — see `askOlder`.
+  const mounted = bot
+    ? 0
+    : mount.sessionId === session?.sessionId
       ? Math.max(0, turns.findIndex((turn) => turn.key === mount.key))
       : firstMount(turns.length);
   const shownTurns = mountedTurns(turns, mounted);
@@ -439,7 +541,7 @@ export default function Chat({
   // above it, and each page lands as more to backfill.
   const olderBefore = session?.olderBefore;
   useEffect(() => {
-    if (!session) return;
+    if (!session || bot) return;
     if (!backfilling) {
       if (olderBefore != null) loadOlder(session.sessionId);
       return;
@@ -454,7 +556,7 @@ export default function Chat({
       setMount({ sessionId, key: turns[grow(mounted)].key });
     }, 0);
     return () => clearTimeout(timer);
-  }, [backfilling, mounted, session?.sessionId, olderBefore]);
+  }, [backfilling, mounted, session?.sessionId, olderBefore, bot]);
 
   // A step mounts turns *above* everything on screen, so left alone it would
   // shove what the reader is looking at down by their height. Pinned, the
@@ -550,6 +652,84 @@ export default function Chat({
     scroller.scrollTo({ top: Math.max(top, 0), behavior: "smooth" });
   };
 
+  // A bot chat is one conversation that grows forever, and drawing all of it
+  // was the whole cost of opening one: it opens on its tail and reads a page
+  // further back whenever the reader comes within a screen of the top. The
+  // pane must also hold a screen above the bottom, or a short tail leaves
+  // nothing to scroll and nothing is ever asked for. What is already held is
+  // drawn before the log is read further.
+  const askOlder = () => {
+    const el = scrollRef.current;
+    if (!el || !session || el.scrollTop >= el.clientHeight) return;
+    if (drawFrom > 0) {
+      const from = earlierTurns(session.events, drawFrom, OLDER_TURNS);
+      holdWindow(from > 0 ? session.events[from].id : ALL_HELD);
+    } else if (oldest?.olderBefore != null) {
+      loadOlder(oldest.sessionId);
+    }
+  };
+
+  // The rows at the top of the view and where they sat, taken on every scroll
+  // near the top, so a page landing above can put the reader back on them.
+  // Only near the top: the walk is short there, and nothing lands above
+  // anywhere else. Never a time label or the NEW divider, which a page landing
+  // above can take away; the next rows stand in for one gone some other way.
+  const botAnchor = useRef<{ node: Element; top: number }[]>([]);
+  const noteAnchor = () => {
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    botAnchor.current = [];
+    if (!bot || !el || !content || el.scrollTop > 2 * el.clientHeight) return;
+    const top = el.getBoundingClientRect().top;
+    for (const node of content.children) {
+      if (node.hasAttribute("data-bot-passing")) continue;
+      const box = node.getBoundingClientRect();
+      if (box.bottom <= top) continue;
+      botAnchor.current.push({ node, top: box.top - top });
+      if (botAnchor.current.length === 3) return;
+    }
+  };
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const anchor = botAnchor.current.find((a) => a.node.isConnected);
+    if (!bot || !el) return;
+    if (followRef.current) {
+      pin(el);
+    } else if (anchor) {
+      el.scrollTop += anchor.node.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top;
+    }
+    noteAnchor();
+    askOlder();
+  }, [bot, oldestKey]);
+
+  // A task picked from the bot's "Waiting on you" card: the bot's reply about
+  // it, at the top of the pane, once the lit block is laid out. The pin drops
+  // as a jump to a turn's does. A reply above what is loaded is read back to,
+  // a page at a time, until it is drawn or the chat runs out.
+  const focusedAt = useRef<number | null>(null);
+  useEffect(() => {
+    if (!botFocus || focusedAt.current === botFocus.at) return;
+    if (!contentRef.current?.querySelector("[data-bot-focus]")) {
+      if (drawFrom > 0) holdWindow(ALL_HELD);
+      else if (oldest?.olderBefore != null) loadOlder(oldest.sessionId, FOCUS_PAGE_TURNS);
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const scroller = scrollRef.current;
+      const node = contentRef.current?.querySelector<HTMLElement>("[data-bot-focus]");
+      if (!scroller || !node) return;
+      focusedAt.current = botFocus.at;
+      const top = node.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      const to = Math.max(top - JUMP_PAD_PX, 0);
+      followRef.current = false;
+      // Within a screen of the top the scroll reads the next page, and putting
+      // the reader back on their row cuts a smooth one short.
+      scroller.scrollTo({ top: to, behavior: to < scroller.clientHeight ? "auto" : "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [botFocus, oldestKey]);
+
   useEffect(() => () => cancelAnimationFrame(spyFrame.current), []);
 
   // The rail overlays the scroller as a sibling rather than sitting inside it,
@@ -598,8 +778,19 @@ export default function Chat({
   // scrolls land at the bottom and pinning writes land at the bottom, so
   // position alone re-confirms the pin — but a wheel-up during streaming must
   // win instantly, before the next delta's pin can yank the view back down.
+  //
+  // Only a wheel that will move *this* scroller, though: React bubbles wheels
+  // from portals (the image viewer, menus) and from nested scrollers, none of
+  // which move the chat, and with no scroll event after them nothing re-armed
+  // the pin — the chat sat at the bottom unpinned, and whatever landed next,
+  // seen or behind another tab, was left below the view.
   const onWheel = (e: React.WheelEvent) => {
-    if (e.deltaY < 0) followRef.current = false;
+    const el = scrollRef.current;
+    if (!el || e.deltaY >= 0 || el.scrollTop <= 0) return;
+    for (let n = e.target as Element | null; n !== el; n = n.parentElement) {
+      if (!n || n.scrollTop > 0) return;
+    }
+    followRef.current = false;
   };
 
   const onScroll = () => {
@@ -633,6 +824,16 @@ export default function Chat({
     }
     setAtBottom(atEnd);
     syncActive();
+    if (bot) {
+      // Turns landing must not move the top out from under a reader who left
+      // the bottom, so it holds where it is until they come back.
+      if (atEnd) holdWindow(null);
+      else if (!followRef.current && held === null && session) {
+        holdWindow(drawFrom > 0 ? session.events[drawFrom].id : ALL_HELD);
+      }
+      noteAnchor();
+      askOlder();
+    }
   };
 
   // Re-arms the pin as well as scrolling: pressing this is the reader saying they
@@ -669,16 +870,42 @@ export default function Chat({
 
   // The shell hands these down as fresh arrows on every render, which would
   // defeat `TurnBlock`'s memo; the rows only need whichever is current.
-  const callbacks = useRef({ onOpenSubagent, onOpenSession });
-  callbacks.current = { onOpenSubagent, onOpenSession };
+  const callbacks = useRef({ onOpenSubagent, onOpenSession, onOpenBot });
+  callbacks.current = { onOpenSubagent, onOpenSession, onOpenBot };
   const openSubagent = useCallback((id: string) => callbacks.current.onOpenSubagent(id), []);
-  const openSession = useCallback((id: string) => callbacks.current.onOpenSession(id), []);
+  const openSession = useCallback(
+    (id: string, alone?: boolean) => callbacks.current.onOpenSession(id, alone),
+    [],
+  );
+  const openBot = useCallback((bot: Bot) => callbacks.current.onOpenBot?.(bot), []);
 
   // With no session there is no transcript to draw; AppShell centers the
   // composer and skips this pane entirely. A session still being read draws the
   // same nothing, but inside the arrangement it is about to fill — see
   // `shownSession` in App.
+  const cardChat = useMemo(
+    () => ({ after: readerMessagesAfter(segments.flatMap((s) => s.events)), bot: !!bot }),
+    [segments, bot],
+  );
+
   if (!session) return null;
+
+  // fx alone: it takes one prompt per turn, so a held message waits out the
+  // whole turn on screen. Every other harness hands its queue over at the next
+  // tool boundary, seconds away, where stopping the turn to save that wait
+  // costs more than the wait.
+  //
+  // Gated on `active` as well, which in a split is the focused pane and on
+  // screen. `onSendNow` interrupts the *selected* session, so an unfocused
+  // pane's button would stop somebody else's turn — and the chord rides the
+  // same prop, so four mounted transcripts would otherwise bind it four times.
+  const queued = (
+    <QueuedMessages
+      messages={queuedMessages}
+      onSendNow={session.harness === "fx" && active ? onSendNow : undefined}
+      active={active}
+    />
+  );
 
   return (
     // What decides whether the rail fits is the width of *this pane*, which the
@@ -689,6 +916,7 @@ export default function Chat({
     // The session rides a context because the things that read it are leaves — a
     // `@mention` and a file link, several components down. See `useChatSession`.
     <ChatSessionContext value={chatSession}>
+      <MergeCardChatContext value={cardChat}>
       <div className="relative h-full">
         <div
           ref={scrollRef}
@@ -705,16 +933,22 @@ export default function Chat({
             data-bot-chat={bot || undefined}
           >
             {bot ? (
-              <BotTranscript
-                key={session.sessionId}
-                unread={unread}
-                events={session.events}
-                busy={busy}
-                preview={previewShown ? <StreamingPreview sessionId={session.sessionId} /> : undefined}
-                taskOf={taskOf}
-                onOpenSession={openSession}
-              />
-            ) : shownTurns.map((turn, i) => (
+              <>
+                <BotTranscript
+                  key={session.sessionId}
+                  unread={unread}
+                  segments={segments}
+                  more={more}
+                  busy={busy}
+                  preview={previewShown ? <StreamingPreview sessionId={session.sessionId} /> : undefined}
+                  taskOf={taskOf}
+                  onOpenSession={openSession}
+                  onOpenBot={openBot}
+                  focus={botFocus}
+                />
+                {botFooter}
+              </>
+            ) :shownTurns.map((turn, i) => (
               // The wrapper is what the rail measures and scrolls to. It carries
               // no styles of its own — it stands in for the block as the flex item.
               <div
@@ -740,6 +974,11 @@ export default function Chat({
                 />
               </div>
             ))}
+
+            {/* A bot chat reads as a messenger: what the reader sent sits with
+                the conversation, and the card waiting on them comes last, by
+                the composer that answers it. */}
+            {bot && queued}
 
             {cards.map((ask) =>
               ask.type === "questions_asked" ? (
@@ -781,21 +1020,7 @@ export default function Chat({
               ),
             )}
 
-            {/* fx alone: it takes one prompt per turn, so a held message waits
-                out the whole turn on screen. Every other harness hands its queue
-                over at the next tool boundary, seconds away, where stopping the
-                turn to save that wait costs more than the wait.
-
-                Gated on `active` as well, which in a split is the focused pane
-                and on screen. `onSendNow` interrupts the *selected* session, so
-                an unfocused pane's button would stop somebody else's turn — and
-                the chord rides the same prop, so four mounted transcripts would
-                otherwise bind it four times. */}
-            <QueuedMessages
-              messages={queuedMessages}
-              onSendNow={session.harness === "fx" && active ? onSendNow : undefined}
-              active={active}
-            />
+            {!bot && queued}
 
             {backgroundTaskCount > 0 && (
               <BackgroundTasksIndicator
@@ -862,6 +1087,7 @@ export default function Chat({
           />
         )}
       </div>
+      </MergeCardChatContext>
     </ChatSessionContext>
   );
 }
@@ -871,7 +1097,7 @@ export default function Chat({
 ///
 /// Told apart by the type `block_start` declared, not by content — thinking
 /// deltas are plain text on the wire. Only one block streams at a time.
-function StreamingPreview({ sessionId }: { sessionId: string }) {
+export function StreamingPreview({ sessionId }: { sessionId: string }) {
   const block = useStreamingBlock(sessionId);
   if (!block) return null;
 

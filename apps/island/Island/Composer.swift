@@ -674,7 +674,11 @@ final class Composer {
         return store.items
             .filter { _, item in item.hidden != true && item.archived != true && item.aside != true && item.modified > stale }
             .map { (key: $0.key, item: $0.value) }
-            .filter { q.isEmpty || $0.item.title.lowercased().contains(q) || $0.item.project.lowercased().contains(q) }
+            .filter { s in
+                // A bot's row shows its name, not the session's title or folder.
+                if let bot = store.bot(s.key) { return q.isEmpty || bot.name.lowercased().contains(q) }
+                return q.isEmpty || s.item.title.lowercased().contains(q) || s.item.project.lowercased().contains(q)
+            }
             .sorted { $0.item.modified > $1.item.modified }
     }
 

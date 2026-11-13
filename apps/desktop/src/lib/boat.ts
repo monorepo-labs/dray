@@ -23,6 +23,10 @@ export const resumeBoat = (id: ServerId): Promise<void> => invoke("resume_boat",
 export const extendBoat = (id: ServerId, minutes: number): Promise<void> =>
   invoke("extend_boat", { id, minutes }, LOCAL);
 
+/// Off while readers find them noisy; `true` brings the sidebar's card back.
+/// Its twin of the same name in `servers.rs` gates the island's warning.
+export const BOAT_STOP_WARNINGS = false;
+
 /// How long before auto-stop the warning comes, `servers.rs`'s `WARN`.
 export const WARN_MINUTES = 10;
 

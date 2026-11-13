@@ -11,6 +11,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ArrowUp, CornerDownLeft, Paperclip, Square, X } from "lucide-react";
 
 import AttachmentTray from "@/components/composer/AttachmentTray";
+import BotMentionMenu from "@/components/composer/BotMentionMenu";
 import FileMentionMenu from "@/components/composer/FileMentionMenu";
 import IssueMentionMenu from "@/components/composer/IssueMentionMenu";
 import RichInput from "@/components/composer/RichInput";
@@ -48,7 +49,7 @@ import { registerComposer, typeIntoComposer } from "@/lib/composerFocus";
 import { continueList } from "@/lib/list";
 import { selectionRange } from "@/lib/richDom";
 import { applyMention, mentionSpan } from "@/lib/mention";
-import { applySession, filterSessions, sessionSpan } from "@/lib/sessionTag";
+import { applyBot, applySession, filterSessions, sessionSpan } from "@/lib/sessionTag";
 import {
   applyCommand,
   filterCommands,
@@ -59,6 +60,7 @@ import {
 import { cn } from "@/lib/utils";
 import type {
   Attachment,
+  Bot,
   FileMatch,
   Issue,
   QueuedMessage,
@@ -96,6 +98,9 @@ type ChatInputProps = {
   /// What the `&` picker offers, already narrowed by `App` to this project's
   /// sessions an agent here could reach.
   sessions?: SessionIndexItem[];
+  /// The other bots, set only in a bot's chat: there `@` lists these in place
+  /// of files, since the bot's folder holds its notes and nobody mentions them.
+  bots?: Bot[];
   /// The `&` picker opened, so what a remote machine reaches is worth asking
   /// again. Rows it adds arrive into the open list.
   onSessionPickerOpen?: () => void;
@@ -234,6 +239,8 @@ const NO_COMMANDS_NOTE = "This agent publishes no slash commands";
 /// empty, which it plainly is not.
 const NO_SESSIONS_NOTE = "No other tasks in this project";
 
+const NO_BOTS_NOTE = "No other bots";
+
 export default function ChatInput({
   onSend,
   commands = [],
@@ -242,6 +249,7 @@ export default function ChatInput({
   issuesConnected = false,
   issueTrackers = { linear: false, github: false },
   sessions = [],
+  bots,
   onSessionPickerOpen,
   onStop,
   onCancelQueued,
@@ -366,7 +374,12 @@ export default function ChatInput({
   // position zero is not one opening with `@`. Kept as two independent reads so
   // neither has to know the other exists.
   const mention = mentionSpan(message, caret);
-  const files = useFileSearch(cwd, mention?.query ?? null);
+  // No index at all in a bot's chat, which would only watch its notes.
+  const files = useFileSearch(bots ? null : cwd, bots ? null : (mention?.query ?? null));
+  const botQuery = mention?.query.toLowerCase() ?? "";
+  const botMatches = mention && bots ? bots.filter((b) => b.name.toLowerCase().includes(botQuery)) : [];
+  // `@` in a bot's chat with no other bot, said for the reason `noSessions` is.
+  const noBots = mention !== null && bots?.length === 0;
 
   // The third of the same shape, and mutually exclusive with the other two for
   // the same reason: the caret sits in exactly one token, and a token opening
@@ -436,7 +449,9 @@ export default function ChatInput({
   // separate all the way to the pick, so nothing has to be narrowed back out of
   // a union that `mention` already decided.
   const rowCount = mention
-    ? files.length
+    ? bots
+      ? botMatches.length
+      : files.length
     : issue
       ? issues.length
       : session
@@ -464,7 +479,7 @@ export default function ChatInput({
   // has neither state.
   const menuOpen =
     !dismissed &&
-    (rowCount > 0 || issuesLoading || noCommands || noSessions || noIssues) &&
+    (rowCount > 0 || issuesLoading || noCommands || noSessions || noBots || noIssues) &&
     (query !== null || mention !== null || issue !== null || session !== null);
   // Clamped rather than trusted: both lists arrive asynchronously, so a list
   // that shrinks under an already-moved selection would otherwise index past
@@ -495,6 +510,15 @@ export default function ChatInput({
     if (!mention) return;
 
     const next = applyMention(message, mention, file.path);
+    setMessage(next.text);
+    setCaret(next.caret);
+    editorRef.current?.focus();
+  };
+
+  const pickBot = (bot: Bot) => {
+    if (!mention) return;
+
+    const next = applyBot(message, mention, bot.name, bot.id);
     setMessage(next.text);
     setCaret(next.caret);
     editorRef.current?.focus();
@@ -543,6 +567,11 @@ export default function ChatInput({
   /// functions directly, so the two routes cannot diverge.
   const pickRow = (index: number, keepOpen = false) => {
     if (mention) {
+      if (bots) {
+        const bot = botMatches[index];
+        if (bot) pickBot(bot);
+        return;
+      }
       const file = files[index];
       if (file) pickFile(file);
       return;
@@ -930,6 +959,16 @@ export default function ChatInput({
               the list drops its own to match. */}
           {menuOpen &&
             (mention ? (
+              bots ? (
+                <BotMentionMenu
+                  bots={botMatches}
+                  emptyNote={noBots ? NO_BOTS_NOTE : undefined}
+                  activeIndex={active}
+                  onPick={pickBot}
+                  onHover={setActiveIndex}
+                  bare={isNewTask}
+                />
+              ) : (
               <FileMentionMenu
                 files={files}
                 activeIndex={active}
@@ -937,6 +976,7 @@ export default function ChatInput({
                 onHover={setActiveIndex}
                 bare={isNewTask}
               />
+              )
             ) : issue ? (
               <IssueMentionMenu
                 issues={issues}
@@ -1061,7 +1101,7 @@ export default function ChatInput({
                       ? target
                       : [
                           isNewTask ? "Describe a task." : "Follow-up.",
-                          "@files.",
+                          bots ? "@bots." : "@files.",
                           "/skills.",
                           canMentionSession && "&tasks.",
                           issuesConnected && "#issues.",
