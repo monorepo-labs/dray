@@ -536,6 +536,11 @@ async fn run(harness: Harness, args: &[&str], cwd: &str) -> anyhow::Result<Said>
         .stdin(Stdio::null())
         // A timeout drops the future, and without this the child outlives it.
         .kill_on_drop(true);
+    // A Dray Cloud machine signs Claude in through the environment, so the
+    // check must see the same login its sessions run on.
+    if matches!(harness, Harness::ClaudeCode) {
+        command.envs(crate::harness::agent_env("claude").await);
+    }
 
     // Only where it is still there. A session whose worktree was removed keeps
     // its recorded `cwd`, and spawning into a directory that no longer exists

@@ -90,13 +90,15 @@ export async function installationFor(repo: string): Promise<number | null> {
   }
 }
 
-/// A token for `repo` alone, with `MACHINE_PERMISSIONS`, valid an hour.
-export async function repoToken(installation: number, repo: string) {
+/// A token for the repo with GitHub's id `repoId` alone, with
+/// `MACHINE_PERMISSIONS`, valid an hour. By id, never by name: a name can be
+/// renamed away and taken by a new repo the user can't reach.
+export async function repoToken(installation: number, repoId: number) {
   const res = await call<{ token: string; expires_at: string }>(
     "POST",
     `${api()}/app/installations/${installation}/access_tokens`,
     `Bearer ${appJwt()}`,
-    { repositories: [repo.split("/")[1]], permissions: MACHINE_PERMISSIONS },
+    { repository_ids: [repoId], permissions: MACHINE_PERMISSIONS },
   );
   return { token: res.token, expiresAt: res.expires_at };
 }
@@ -145,14 +147,16 @@ export const refreshUserToken = (refresh: string) =>
 export const githubUser = (access: string) =>
   call<{ id: number; login: string }>("GET", `${api()}/user`, `Bearer ${access}`);
 
-/// Whether the user can push to `repo` today. Asked with their own token, so
-/// someone removed from an org stops getting machine tokens for its repos.
-export async function canPush(access: string, repo: string): Promise<boolean> {
+/// The repo's GitHub id where the user can push to it today, else null. `repo`
+/// is `owner/name` at create and the id afterwards. Asked with their own
+/// token, so someone removed from an org stops getting machine tokens for it.
+export async function pushable(access: string, repo: string | number): Promise<number | null> {
+  const path = typeof repo === "number" ? `/repositories/${repo}` : `/repos/${repo}`;
   try {
-    const r = await call<{ permissions?: { push?: boolean } }>("GET", `${api()}/repos/${repo}`, `Bearer ${access}`);
-    return r.permissions?.push === true;
+    const r = await call<{ id: number; permissions?: { push?: boolean } }>("GET", `${api()}${path}`, `Bearer ${access}`);
+    return r.permissions?.push === true ? r.id : null;
   } catch (e) {
-    if (e instanceof GitHubError && (e.status === 404 || e.status === 403)) return false;
+    if (e instanceof GitHubError && (e.status === 404 || e.status === 403)) return null;
     throw e;
   }
 }

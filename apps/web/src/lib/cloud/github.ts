@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-import { appConfigured, canPush, GitHubError, installationFor, repoToken } from "./github-app";
+import { appConfigured, GitHubError, installationFor, pushable, repoToken } from "./github-app";
 import { account } from "./github-store";
 import { sign, verify } from "./vault";
 
@@ -13,9 +13,11 @@ import { sign, verify } from "./vault";
 const SLUG = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
 export const isSlug = (s: unknown): s is string => typeof s === "string" && SLUG.test(s) && !s.endsWith("/..") && !s.endsWith("/.");
 
-/// What a machine's credential says about it. `n` is also a label on its
-/// sandbox, which is how a deleted machine's credential stops working.
-export type MachineClaims = { v: 1; u: string; i: number; r: string; n: string };
+/// What a machine's credential says about it. `d` is the repo's GitHub id,
+/// which every later check and mint goes by; `r`, its name at create, is only
+/// for messages. `n` is also a label on its sandbox, which is how a deleted
+/// machine's credential stops working.
+export type MachineClaims = { v: 1; u: string; i: number; d: number; r: string; n: string };
 
 const PREFIX = "dmk1";
 export const KEY_LABEL = "dray-key";
@@ -28,7 +30,8 @@ export class RepoRefused extends Error {}
 export async function bind(userId: string, repo: string, keySecret: string) {
   if (!appConfigured()) throw new RepoRefused("Dray Cloud has no GitHub App set up yet.");
   const who = await account(userId);
-  if (!(await canPush(who.access, repo))) {
+  const repoId = await pushable(who.access, repo);
+  if (repoId === null) {
     throw new RepoRefused(`${who.login} can't push to ${repo}, or the Dray GitHub App isn't installed there.`);
   }
   const installation = await installationFor(repo);
@@ -36,7 +39,7 @@ export async function bind(userId: string, repo: string, keySecret: string) {
     throw new RepoRefused(`The Dray GitHub App isn't installed on ${repo}. Add it on drayhq.com.`);
   }
   const nonce = randomBytes(12).toString("hex");
-  const claims: MachineClaims = { v: 1, u: userId, i: installation, r: repo, n: nonce };
+  const claims: MachineClaims = { v: 1, u: userId, i: installation, d: repoId, r: repo, n: nonce };
   return {
     nonce,
     key: sign(claims, keySecret, PREFIX),
@@ -47,7 +50,12 @@ export async function bind(userId: string, repo: string, keySecret: string) {
 
 export const readKey = (key: string, keySecret: string) => {
   const c = verify<MachineClaims>(key, keySecret, PREFIX);
-  return c?.v === 1 && typeof c.u === "string" && Number.isInteger(c.i) && isSlug(c.r) && typeof c.n === "string"
+  return c?.v === 1 &&
+    typeof c.u === "string" &&
+    Number.isInteger(c.i) &&
+    Number.isInteger(c.d) &&
+    isSlug(c.r) &&
+    typeof c.n === "string"
     ? c
     : null;
 };
@@ -56,9 +64,11 @@ export const readKey = (key: string, keySecret: string) => {
 /// disconnected GitHub (`account` finds no row) or lost push access, and when the app has left the repo.
 export async function mint(c: MachineClaims) {
   const who = await account(c.u);
-  if (!(await canPush(who.access, c.r))) throw new RepoRefused(`${who.login} can no longer push to ${c.r}.`);
+  if ((await pushable(who.access, c.d)) === null) {
+    throw new RepoRefused(`${who.login} can no longer push to ${c.r}.`);
+  }
   try {
-    return await repoToken(c.i, c.r);
+    return await repoToken(c.i, c.d);
   } catch (e) {
     // The installation is gone, or no longer covers the repo.
     if (e instanceof GitHubError && (e.status === 404 || e.status === 422)) {

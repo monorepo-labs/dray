@@ -15,6 +15,15 @@ export async function fakeGitHub({ appId, clientId, clientSecret, publicKey }) {
   const codes = new Map(); // code -> user id
   const access = new Map(); // access token -> { user, expiresAt }
   const refresh = new Map(); // refresh token -> user id, deleted on use
+  // "owner/name" -> repo id. A rename keeps the id; a new repo at a freed
+  // name gets a fresh one, as on GitHub.
+  const ids = new Map();
+  let nextRepo = 1000;
+  const idOf = (slug) => {
+    if (!ids.has(slug)) ids.set(slug, nextRepo++);
+    return ids.get(slug);
+  };
+  const slugOf = (id) => [...ids].find(([, v]) => v === id)?.[0];
   let n = 0;
 
   function issue(user, accessLife = 28800) {
@@ -84,14 +93,15 @@ export async function fakeGitHub({ appId, clientId, clientSecret, publicKey }) {
       return ok(404, { message: "Not Found" });
     }
 
-    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)$/);
+    m = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)$/) ?? url.pathname.match(/^\/repositories\/(\d+)$/);
     if (m && req.method === "GET") {
       const user = userOf(auth);
       if (user === null) return ok(401, { message: "Bad credentials" });
+      const slug = /^\d+$/.test(m[1]) ? slugOf(Number(m[1])) : m[1];
       // A user-to-server token sees only repos the app is installed on.
-      const installed = [...installations.values()].some((i) => i.repos.has(m[1]));
+      const installed = slug && [...installations.values()].some((i) => i.repos.has(slug));
       if (!installed) return ok(404, { message: "Not Found" });
-      return ok(200, { full_name: m[1], permissions: { pull: true, push: users.get(user).push.has(m[1]) } });
+      return ok(200, { id: idOf(slug), full_name: slug, permissions: { pull: true, push: users.get(user).push.has(slug) } });
     }
 
     m = url.pathname.match(/^\/app\/installations\/(\d+)\/access_tokens$/);
@@ -99,12 +109,13 @@ export async function fakeGitHub({ appId, clientId, clientSecret, publicKey }) {
       if (!appJwtOk(auth)) return ok(401, { message: "A JSON web token could not be decoded" });
       const i = installations.get(Number(m[1]));
       if (!i) return ok(404, { message: "Not Found" });
-      const names = new Set([...i.repos].map((r) => r.split("/")[1]));
-      if (!body.repositories?.every((r) => names.has(r))) {
+      const held = new Set([...i.repos].map(idOf));
+      if (body.repositories || !body.repository_ids?.every((r) => held.has(r))) {
         return ok(422, { message: "There is at least one repository that does not exist or is not accessible to the parent installation." });
       }
       n++;
-      return ok(201, { token: `ghs_${n}`, expires_at: new Date(Date.now() + 3600_000).toISOString(), permissions: body.permissions });
+      const repositories = body.repository_ids.map((id) => ({ id, full_name: slugOf(id) }));
+      return ok(201, { token: `ghs_${n}`, expires_at: new Date(Date.now() + 3600_000).toISOString(), permissions: body.permissions, repositories });
     }
 
     m = url.pathname.match(/^\/applications\/([^/]+)\/grant$/);
@@ -129,6 +140,16 @@ export async function fakeGitHub({ appId, clientId, clientSecret, publicKey }) {
       const c = `code_${++n}`;
       codes.set(c, user);
       return c;
+    },
+    idOf,
+    /// Renames a repo: same id, new name, its installation and push access move
+    /// with it, and the old name is free for a new repo.
+    rename(from, to) {
+      const id = idOf(from);
+      ids.delete(from);
+      ids.set(to, id);
+      for (const i of installations.values()) if (i.repos.delete(from)) i.repos.add(to);
+      for (const u of users.values()) if (u.push.delete(from)) u.push.add(to);
     },
     /// Ages every user token past expiry, so the next use must refresh.
     expireUserTokens() {

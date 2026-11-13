@@ -177,7 +177,7 @@ describe("Dray Cloud logins", { skip: !DB && "set TEST_DATABASE_URL to a scratch
     assert.equal(json.repo, "acme/app");
     assert.ok(Date.parse(json.expiresAt) > Date.now());
     const mint = gh.calls.filter((c) => c.path === "/app/installations/7/access_tokens").at(-1);
-    assert.deepEqual(mint.body.repositories, ["app"]);
+    assert.deepEqual(mint.body.repository_ids, [gh.idOf("acme/app")]);
     assert.equal(mint.body.permissions.contents, "write");
     assert.equal(mint.body.permissions.workflows, undefined);
   });
@@ -213,6 +213,25 @@ describe("Dray Cloud logins", { skip: !DB && "set TEST_DATABASE_URL to a scratch
     assert.equal(status, 409);
     assert.match(json.message, /can no longer push to acme\/app/);
     gh.users.get(OCTO).push.add("acme/app");
+  });
+
+  test("a renamed repo's name, taken by a new repo, is never reached", async () => {
+    await call("POST", "/api/cloud/machines", { body: { repo: "acme/app" } });
+    const bound = cloudJson(creates().at(-1)).key;
+    const original = gh.idOf("acme/app");
+    gh.rename("acme/app", "other/app");
+    gh.installations.get(7).repos.add("acme/app");
+    const newcomer = gh.idOf("acme/app");
+    assert.notEqual(newcomer, original);
+
+    const { status } = await call("POST", "/api/cloud/github/token", { key: bound });
+    assert.equal(status, 200);
+    const mint = gh.calls.filter((c) => c.path === "/app/installations/7/access_tokens").at(-1);
+    assert.deepEqual(mint.body.repository_ids, [original]);
+
+    gh.installations.get(7).repos.delete("acme/app");
+    gh.rename("other/app", "acme/app");
+    assert.equal(gh.idOf("acme/app"), original);
   });
 
   test("the app leaving the repo stops the mint, said plainly", async () => {
