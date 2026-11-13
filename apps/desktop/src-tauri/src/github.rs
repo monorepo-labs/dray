@@ -771,7 +771,10 @@ pub(crate) const NO_CLI: &str = "GitHub CLI (gh) not found.";
 /// merges through one, since no checkout of the repo need exist here.
 pub const SLUG_PREFIX: &str = "github:";
 
+/// A leading `/` is taken too: the app qualifies a remote server's key as a
+/// path, `dray://<server>/github:…`, and unwraps it to `/github:…`.
 fn slug_of(cwd: &str) -> Option<&str> {
+    let cwd = cwd.strip_prefix('/').unwrap_or(cwd);
     cwd.strip_prefix(SLUG_PREFIX).filter(|slug| slug.contains('/'))
 }
 
@@ -1769,6 +1772,7 @@ mod tests {
     #[test]
     fn a_slug_cwd_is_told_from_a_path() {
         assert_eq!(slug_of("github:monorepo-labs/dray"), Some("monorepo-labs/dray"));
+        assert_eq!(slug_of("/github:monorepo-labs/dray"), Some("monorepo-labs/dray"));
         assert_eq!(slug_of("/home/me/dray"), None);
         assert_eq!(slug_of("github:nothing"), None);
     }

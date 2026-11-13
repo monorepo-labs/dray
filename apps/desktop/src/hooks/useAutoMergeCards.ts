@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { readyForCard } from "@/lib/autoMergeCard";
 import { botAt } from "@/lib/bots";
 import { sessionBranch } from "@/lib/pr";
-import { invoke, serverOfSession } from "@/lib/transport";
+import { invoke, LOCAL, serverOfPath, serverOfSession } from "@/lib/transport";
 import type { Bot, PrMark, SessionIndexItem } from "@/types/events";
 
 /// How long a ready PR whose card could not go up waits before it is tried
@@ -40,6 +40,7 @@ export function useAutoMergeCards({ items, bots, prFor }: Args) {
     [items],
   );
   const listed = useMemo(() => new Set(items.map((i) => i.sessionId)), [items]);
+  const botServers = useMemo(() => [...new Set(bots.map((b) => serverOfPath(b.path)))], [bots]);
   const botChats = useMemo(
     () => items.filter((i) => !i.archived && botAt(bots, i.cwd)).map((i) => i.sessionId).sort().join("\n"),
     [items, bots],
@@ -61,23 +62,25 @@ export function useAutoMergeCards({ items, bots, prFor }: Args) {
       inFlight.current.add(key);
       tried.current.set(key, now);
       // To the chat's server, which finds a task on another machine itself. A
-      // parent no list here holds is likeliest on the task's own server.
+      // parent no list here holds — a bot chat Start fresh settled — is asked
+      // of each server that could own it, until one answers with a chat.
       const parentId = task.parentSessionId as string;
-      const server = serverOfSession(listed.has(parentId) ? parentId : task.sessionId);
-      void invoke<string | null>(
-        "auto_merge_card",
-        { sessionId: parentId, taskId: task.sessionId, number: mark.number, url: mark.url, branch },
-        server,
-      )
+      const servers = listed.has(parentId)
+        ? [serverOfSession(parentId)]
+        : [...new Set([serverOfSession(task.sessionId), ...botServers, LOCAL])];
+      const args = { sessionId: parentId, taskId: task.sessionId, number: mark.number, url: mark.url, branch };
+      void (async () => {
+        for (const server of servers) {
+          const chat = await invoke<string | null>("auto_merge_card", args, server).catch(() => null);
+          if (chat) return done.current.add(key);
+        }
         // No chat to post in yet is tried again later, as is a failed call.
-        .then((chat) => chat && done.current.add(key))
-        .catch(() => {})
-        .finally(() => inFlight.current.delete(key));
+      })().finally(() => inFlight.current.delete(key));
     }
     // A PR that stops being ready is tried at once when it comes back.
     for (const key of tried.current.keys()) if (!ready.has(key)) tried.current.delete(key);
     setPending(ready.size > 0);
-  }, [tasks, listed, prFor, tick]);
+  }, [tasks, listed, botServers, prFor, tick]);
 
   useEffect(() => {
     if (!pending) return;

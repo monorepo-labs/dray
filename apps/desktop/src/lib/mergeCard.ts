@@ -1,4 +1,4 @@
-import { qualify, serverOfSession } from "@/lib/transport";
+import { LOCAL, qualify, serverOfSession } from "@/lib/transport";
 import type { AgentEvent } from "@/types/events";
 
 export type MergeCardPayload = Extract<AgentEvent["payload"], { type: "merge_card" }>;
@@ -25,7 +25,11 @@ export function readerMessagesAfter(events: readonly AgentEvent[]): Map<string, 
 /// chat's server; for a task on another machine, the repo's GitHub slug,
 /// read through `gh` here, since the checkout is there and may be gone.
 export function cardRepo(payload: MergeCardPayload, chatId: string): string {
-  return payload.repo ? `github:${payload.repo}` : qualify(payload.projectPath, serverOfSession(chatId));
+  const server = serverOfSession(chatId);
+  if (!payload.repo) return qualify(payload.projectPath, server);
+  // Qualified as a path so it routes to the chat's server, whose `gh` reads it.
+  const slug = `github:${payload.repo}`;
+  return server === LOCAL ? slug : qualify(`/${slug}`, server);
 }
 
 /// The repos the cards in a chat name, so their pull requests are read even

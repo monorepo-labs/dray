@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { cardRepos, readerMessagesAfter } from "@/lib/mergeCard";
 import { buildTranscript } from "@/lib/transcript";
+import { noteSession } from "@/lib/transport";
 import type { AgentEvent } from "@/types/events";
 
 let seq = 0;
@@ -40,6 +41,9 @@ describe("cardRepos", () => {
       machine: "sandbox", repo: "o/r",
     });
     expect(cardRepos([elsewhere, card("/a")])).toEqual(["github:o/r", "/a"]);
+    // A remote chat keeps its server, whose `gh` reads the card.
+    noteSession("remote-chat", "vps");
+    expect(cardRepos([{ ...elsewhere, sessionId: "remote-chat" }])).toEqual(["dray://vps/github:o/r"]);
   });
 });
 
