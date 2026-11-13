@@ -8,6 +8,10 @@ mod chat;
 #[path = "code/code.rs"]
 mod code;
 mod color;
+// Built apart and shown by examples/composer.rs; the Mac task wires it in (#856).
+#[allow(dead_code)]
+#[path = "composer/composer.rs"]
+mod composer;
 mod glass;
 #[allow(dead_code)] // Until the transcript draws assistant text through it.
 mod markdown;
