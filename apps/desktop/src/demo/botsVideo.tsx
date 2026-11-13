@@ -458,14 +458,13 @@ async function type(text: string) {
   else
     for (const ch of text) {
       document.execCommand("insertText", false, ch);
-      await sleep(ch === " " ? 45 : 28 + Math.random() * 30);
+      await beat(ch === " " ? 45 : 28 + Math.random() * 30);
     }
-  await sleep(STILL ? 0 : 400);
+  await beat(400);
   const taken = new Promise<string>((r) => sent.push(r));
   editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
   await taken;
 }
-
 
 /// The bot replying: works a moment, then each payload lands.
 async function bot(...payloads: object[]) {
