@@ -1109,8 +1109,9 @@ function SizeBar({ sessionId, viewport }: { sessionId: string; viewport: Viewpor
 function EmptyState({ sessionId, active, turnable }: { sessionId: string; active: boolean; turnable: boolean }) {
   const chromium = useChromium();
   // Nothing to open pages with yet: the download stands where the page would.
+  // Diff and Files need no Chromium, so the cards stay above it.
   if (chromium && chromium.state !== "ready") {
-    return <ChromiumState status={chromium} />;
+    return <ChromiumState status={chromium} cards={turnable && <TurnCards sessionId={sessionId} />} />;
   }
   // Keyed, so one session's servers and its share in flight are never drawn
   // under another: the list is read on a timer and a failed read keeps the old.
@@ -1120,11 +1121,12 @@ function EmptyState({ sessionId, active, turnable }: { sessionId: string; active
 /// Chromium is fetched after install (see chromium.rs), and this is where the
 /// reader watches it land. Failed and removed both offer the download; the
 /// bar is only drawn while bytes are moving.
-function ChromiumState({ status }: { status: ChromiumStatus }) {
+function ChromiumState({ status, cards }: { status: ChromiumStatus; cards?: React.ReactNode }) {
   const percent = chromiumPercent(status);
   return (
     <div className="flex h-full items-center justify-center p-8 text-ui">
       <div className="flex w-full max-w-sm flex-col gap-3">
+        {cards}
         <p className="text-muted-foreground">{describeChromium(status)}</p>
         {status.state === "downloading" && (
           <div className="h-1 overflow-hidden rounded-full bg-foreground/20">
