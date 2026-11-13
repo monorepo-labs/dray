@@ -19,6 +19,31 @@ reads:
   `![](changelog/servers.mp4)`. The file lives in `apps/web/public/changelog/`
   and is served by drayhq.com.
 
+## 0.30.2 · 2026-11-13
+
+### New
+
+- **Tasks on another machine report back.** A bot that starts a task on
+  a remote server now hears from it when it finishes, like any other
+  task. Update the server too.
+
+### Improved
+
+- A task's failing checks or merge conflict reach its bot right away,
+  and a task waiting on you shows in the bot's chat after 5 minutes,
+  not 15.
+- A ready-to-merge row says what to check first when the task asked
+  you to try something before merging.
+- Bots stay quiet on task reports that need nothing from you, so no
+  empty Done or unread mark.
+
+### Fixed
+
+- Sending a message always scrolls the chat to the bottom.
+- In a bot's chat, a queued message draws above the card waiting on
+  you.
+- Holding the jump key no longer shifts sidebar rows.
+
 ## 0.30.1 · 2026-11-13 · notify
 
 ### New
