@@ -420,11 +420,21 @@ async fn tick(sink: &Sink, firing: &std::sync::Arc<std::sync::Mutex<HashSet<Stri
                 .and_then(|n| DateTime::parse_from_rfc3339(n).ok())
                 .is_some_and(|n| n <= now)
     };
-    let candidates: Vec<Routine> = list(None)
-        .await?
-        .into_iter()
-        .filter(|r| (is_due(r) || forced.contains(&r.id)) && !firing.lock().unwrap().contains(&r.bot_id))
-        .collect();
+    let mut candidates = Vec::new();
+    for r in list(None).await? {
+        if !is_due(&r) && !forced.contains(&r.id) {
+            continue;
+        }
+        if firing.lock().unwrap().contains(&r.bot_id) {
+            // Its bot is mid-run: a Run now waits for the next tick rather than
+            // being dropped, since a paused routine has no schedule to bring it back.
+            if forced.contains(&r.id) {
+                FORCED.lock().unwrap().insert(r.id.clone());
+            }
+            continue;
+        }
+        candidates.push(r);
+    }
     // Asked outside the lock: a turn's end records its result under it, and
     // this question waits on that session's slot.
     let mut ready = HashSet::new();
