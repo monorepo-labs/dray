@@ -361,9 +361,14 @@ async function answer(cmd: string, a: Record<string, unknown>): Promise<unknown>
       return change(String(a.sessionId), { worktreeRemoved: true, cwd: REPO });
     case "send_msg": {
       const sid = String(a.sessionId);
-      live(sid, user(String(a.prompt)));
-      setStatus(sid, "in_progress");
-      sent.shift()?.(String(a.prompt));
+      // After the reply, as the server's lands: the app retires its
+      // provisional row on the logged prompt, and one landing first is drawn
+      // beside it.
+      setTimeout(() => {
+        live(sid, user(String(a.prompt)));
+        setStatus(sid, "in_progress");
+        sent.shift()?.(String(a.prompt));
+      }, 150);
       return { snapshot: null, queued: null, issues: [] };
     }
     case "browser_tabs":
