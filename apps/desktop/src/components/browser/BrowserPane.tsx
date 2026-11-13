@@ -1161,7 +1161,7 @@ function TurnCards({ sessionId }: { sessionId: string }) {
   const cards = TURN_CARDS.filter((c) => kinds.includes(c.kind));
   if (cards.length === 0) return null;
   return (
-    <section className="grid grid-cols-2 gap-2">
+    <section className={cn("grid gap-2", cards.length > 1 && "grid-cols-2")}>
       {cards.map((c) => (
         <button
           key={c.kind}
