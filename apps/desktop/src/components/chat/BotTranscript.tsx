@@ -412,7 +412,13 @@ function partyColours(party: Party): CSSProperties {
 
 /// The time a run of messages began, centred and quiet, as a messenger draws it.
 function TimeLabel({ at }: { at: string }) {
-  return <p className="self-center pt-2 text-[12px] text-muted-foreground/70">{chatTime(at)}</p>;
+  // `data-bot-passing`: a page landing above can take it away, so the chat
+  // never keeps the reader's place on it.
+  return (
+    <p data-bot-passing className="self-center pt-2 text-[12px] text-muted-foreground/70">
+      {chatTime(at)}
+    </p>
+  );
 }
 
 /// A bot's reply as a messenger draws the other side: a bubble on the left,
@@ -438,7 +444,7 @@ function SwitchLine({ harness }: { harness: Harness }) {
 /// Where the replies the reader has not seen begin, as a messenger marks it.
 function NewDivider() {
   return (
-    <div role="separator" aria-label="New messages" className="flex items-center gap-3">
+    <div role="separator" aria-label="New messages" data-bot-passing className="flex items-center gap-3">
       <span className="h-px flex-1 bg-border" />
       <span className="text-[11px] font-medium tracking-wide text-muted-foreground">NEW</span>
       <span className="h-px flex-1 bg-border" />

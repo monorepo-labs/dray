@@ -598,33 +598,34 @@ export default function Chat({
     if (el && oldest?.olderBefore != null && el.scrollTop < el.clientHeight) loadOlder(oldest.sessionId);
   };
 
-  // The row at the top of the view and where it sat, taken on every scroll
-  // near the top, so a page landing above can put the reader back on it.
+  // The rows at the top of the view and where they sat, taken on every scroll
+  // near the top, so a page landing above can put the reader back on them.
   // Only near the top: the walk is short there, and nothing lands above
-  // anywhere else.
-  const botAnchor = useRef<{ node: Element; top: number } | null>(null);
+  // anywhere else. Never a time label or the NEW divider, which a page landing
+  // above can take away; the next rows stand in for one gone some other way.
+  const botAnchor = useRef<{ node: Element; top: number }[]>([]);
   const noteAnchor = () => {
     const el = scrollRef.current;
     const content = contentRef.current;
-    botAnchor.current = null;
+    botAnchor.current = [];
     if (!bot || !el || !content || el.scrollTop > 2 * el.clientHeight) return;
     const top = el.getBoundingClientRect().top;
     for (const node of content.children) {
+      if (node.hasAttribute("data-bot-passing")) continue;
       const box = node.getBoundingClientRect();
-      if (box.bottom > top) {
-        botAnchor.current = { node, top: box.top - top };
-        return;
-      }
+      if (box.bottom <= top) continue;
+      botAnchor.current.push({ node, top: box.top - top });
+      if (botAnchor.current.length === 3) return;
     }
   };
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    const anchor = botAnchor.current;
+    const anchor = botAnchor.current.find((a) => a.node.isConnected);
     if (!bot || !el) return;
     if (followRef.current) {
       pin(el);
-    } else if (anchor?.node.isConnected) {
+    } else if (anchor) {
       el.scrollTop += anchor.node.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top;
     }
     noteAnchor();
