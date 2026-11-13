@@ -4,6 +4,6 @@ export const runtime = "nodejs";
 
 export const DELETE = route(
   "client",
-  async (_req, _secrets, ctx: { params: Promise<{ id: string }> }) =>
-    deleteMachine((await ctx.params).id),
+  async (_req, caller, ctx: { params: Promise<{ id: string }> }) =>
+    deleteMachine((await ctx.params).id, caller),
 );

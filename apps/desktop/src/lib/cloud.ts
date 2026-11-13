@@ -10,7 +10,7 @@ import type { CloudInfo, Project } from "@/types/events";
 /// Dray Cloud (#857): hosted machines, each a server marked `cloud`, one per
 /// task. A new task on Cloud starts its own and clones its repo there.
 
-let info: CloudInfo = { on: false, keyed: false, error: null };
+let info: CloudInfo = { on: false, keyed: false, key: false, signedIn: false, error: null };
 let started = false;
 const changed = channel<void>();
 

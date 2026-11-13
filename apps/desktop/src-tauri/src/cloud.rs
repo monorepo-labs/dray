@@ -4,6 +4,9 @@
 //!
 //! The contract is fixed in the issue and shared with `apps/web` and
 //! `dray-serve`, so a field here changes there too.
+//!
+//! Calls carry the Dray account this machine is signed in to, or the shared
+//! key that predates accounts while one is still saved.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -11,6 +14,49 @@ use std::time::Duration;
 
 /// Where the client key sits in `credentials.json`.
 pub const KEY: &str = "dray-cloud";
+
+/// What a call to the control plane carries, and where it goes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cred {
+    pub token: String,
+    pub base: String,
+    /// The signed-in account's, rather than the shared key.
+    pub account: bool,
+}
+
+/// The fields of `<home>/account.json` this reads: the app credential the
+/// local server collects at sign-in (#889), and the site it is good on.
+#[derive(Deserialize)]
+struct Account {
+    token: String,
+    site: String,
+}
+
+/// The saved key, where there is one, since a key holder's machines stay the
+/// key's until the switch. Else the signed-in account.
+pub async fn cred() -> Option<Cred> {
+    if let Some(token) = crate::issues::credential(KEY).await {
+        return Some(Cred { token, base: base(), account: false });
+    }
+    account().await
+}
+
+/// The signed-in account's credential, read off the file on every call: the
+/// server writes it, so a sign-in or out lands here with nothing sent between
+/// them. Its calls go to the site it signed in to, unless `DRAY_CLOUD_URL`
+/// says otherwise.
+pub async fn account() -> Option<Cred> {
+    let path = crate::store::get_home_app_dir().await.ok()?.join("account.json");
+    let set = std::env::var("DRAY_CLOUD_URL").is_ok_and(|u| !u.trim().is_empty());
+    account_cred(&tokio::fs::read(path).await.ok()?, set.then(base))
+}
+
+/// `account.json`'s credential, sent to `url` where one is set.
+fn account_cred(file: &[u8], url: Option<String>) -> Option<Cred> {
+    let held: Account = serde_json::from_slice(file).ok()?;
+    let base = url.unwrap_or_else(|| format!("{}/api/cloud", held.site.trim_end_matches('/')));
+    (!held.token.is_empty()).then_some(Cred { token: held.token, base, account: true })
+}
 
 const DEFAULT_URL: &str = "https://www.drayhq.com/api/cloud";
 
@@ -50,11 +96,15 @@ pub struct Machine {
     /// first answer and its first listings can come before.
     #[serde(default)]
     pub url: Option<String>,
+    /// The serve token it holds. An account lists the key's machines beside
+    /// its own at the switch, and the two hold different tokens.
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Listing {
-    /// Every machine's serve token, derived from one secret.
+    /// The caller's serve token, for a machine that names none of its own.
     pub token: String,
     pub machines: Vec<Machine>,
 }
@@ -65,10 +115,10 @@ struct One {
 }
 
 /// One authorized call, answered as JSON or a sentence the Settings row can show.
-async fn call(key: &str, method: reqwest::Method, path: &str, wait: Duration) -> Result<Value, String> {
+async fn call(cred: &Cred, method: reqwest::Method, path: &str, wait: Duration) -> Result<Value, String> {
     let answer = crate::http()
-        .request(method, format!("{}{path}", base()))
-        .bearer_auth(key)
+        .request(method, format!("{}{path}", cred.base))
+        .bearer_auth(&cred.token)
         .timeout(wait)
         .send()
         .await
@@ -77,40 +127,45 @@ async fn call(key: &str, method: reqwest::Method, path: &str, wait: Duration) ->
     let body: Value = answer.json().await.unwrap_or(Value::Null);
     match status {
         200..=299 => Ok(body),
-        _ => Err(refusal(status, &body)),
+        _ => Err(refusal(status, &body, cred.account)),
     }
 }
 
-/// What a refused call says. Every route answers 404 while the control plane has
-/// no key set, so 404 and 401 both read as the key being wrong.
-pub fn refusal(status: u16, body: &Value) -> String {
+/// What a refused call says. Every route answers 404 while the control plane is
+/// off, so 404 and 401 both read as the credential being refused.
+pub fn refusal(status: u16, body: &Value, account: bool) -> String {
     match (status, body["error"].as_str()) {
         // A machine already deleted; a key it doesn't take is a bare 404.
         (404, Some("not_found")) => "Dray Cloud no longer has that machine.".into(),
+        (401 | 403 | 404, _) if account => "Dray Cloud isn't open to your account.".into(),
         (401 | 403 | 404, _) => "Dray Cloud didn't accept this key.".into(),
+        // Worded by the control plane, so a plan's own cap reads right.
+        (429, Some("machine_limit")) => {
+            body["message"].as_str().unwrap_or("Too many Dray Cloud machines are running at once.").into()
+        }
         (500.., None) => format!("Dray Cloud isn't answering right now ({status})."),
         (_, Some(error)) => format!("Dray Cloud said: {error}"),
         _ => format!("Dray Cloud answered {status}."),
     }
 }
 
-pub async fn list(key: &str) -> Result<Listing, String> {
-    let body = call(key, reqwest::Method::GET, "/machines", READ).await?;
+pub async fn list(cred: &Cred) -> Result<Listing, String> {
+    let body = call(cred, reqwest::Method::GET, "/machines", READ).await?;
     serde_json::from_value(body).map_err(|e| format!("Dray Cloud answered in a shape this build can't read: {e}"))
 }
 
 /// A new machine for one task, created from the saved snapshot.
-pub async fn start(key: &str) -> Result<Machine, String> {
-    one(call(key, reqwest::Method::POST, "/machines", START).await?)
+pub async fn start(cred: &Cred) -> Result<Machine, String> {
+    one(call(cred, reqwest::Method::POST, "/machines", START).await?)
 }
 
 /// Deletes a machine for good. One already gone answers the same.
-pub async fn delete(key: &str, id: &str) -> Result<(), String> {
-    call(key, reqwest::Method::DELETE, &format!("/machines/{id}"), READ).await.map(drop)
+pub async fn delete(cred: &Cred, id: &str) -> Result<(), String> {
+    call(cred, reqwest::Method::DELETE, &format!("/machines/{id}"), READ).await.map(drop)
 }
 
-pub async fn resume(key: &str, id: &str) -> Result<Machine, String> {
-    one(call(key, reqwest::Method::POST, &format!("/machines/{id}/resume"), START).await?)
+pub async fn resume(cred: &Cred, id: &str) -> Result<Machine, String> {
+    one(call(cred, reqwest::Method::POST, &format!("/machines/{id}/resume"), START).await?)
 }
 
 fn one(body: Value) -> Result<Machine, String> {
@@ -152,9 +207,33 @@ mod tests {
 
     #[test]
     fn refusals_read_as_sentences() {
-        assert_eq!(refusal(404, &Value::Null), "Dray Cloud didn't accept this key.");
-        assert_eq!(refusal(404, &json!({ "error": "not_found" })), "Dray Cloud no longer has that machine.");
-        assert_eq!(refusal(500, &json!({ "error": "boat down" })), "Dray Cloud said: boat down");
-        assert_eq!(refusal(502, &Value::Null), "Dray Cloud isn't answering right now (502).");
+        assert_eq!(refusal(404, &Value::Null, false), "Dray Cloud didn't accept this key.");
+        assert_eq!(refusal(401, &Value::Null, true), "Dray Cloud isn't open to your account.");
+        assert_eq!(refusal(404, &json!({ "error": "not_found" }), true), "Dray Cloud no longer has that machine.");
+        assert_eq!(refusal(500, &json!({ "error": "boat down" }), false), "Dray Cloud said: boat down");
+        assert_eq!(refusal(502, &Value::Null, false), "Dray Cloud isn't answering right now (502).");
+        let limit = json!({ "error": "machine_limit", "message": "8 Dray Cloud machines are already running." });
+        assert_eq!(refusal(429, &limit, true), "8 Dray Cloud machines are already running.");
+    }
+
+    /// The file as #889's `dray_account::Held` writes it.
+    #[test]
+    fn the_account_goes_to_the_site_it_signed_in_to() {
+        let file = br#"{"token":"dra_x","site":"http://localhost:3000/","user":{"id":"u","name":"A","username":null,"image":null}}"#;
+        let cred = account_cred(file, None).unwrap();
+        assert_eq!(cred, Cred { token: "dra_x".into(), base: "http://localhost:3000/api/cloud".into(), account: true });
+        assert_eq!(account_cred(file, Some("https://x/api/cloud".into())).unwrap().base, "https://x/api/cloud");
+        assert_eq!(account_cred(br#"{"token":"","site":"https://www.drayhq.com"}"#, None), None);
+        assert_eq!(account_cred(b"not json", None), None);
+    }
+
+    #[test]
+    fn a_machine_can_name_its_own_token() {
+        let listing: Listing = serde_json::from_value(json!({
+            "token": "ab".repeat(32),
+            "machines": [{ "id": "bx_23456789", "state": "running", "url": null, "token": "cd".repeat(32) }],
+        }))
+        .unwrap();
+        assert_eq!(listing.machines[0].token.as_deref(), Some("cd".repeat(32).as_str()));
     }
 }

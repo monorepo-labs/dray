@@ -241,16 +241,24 @@ export default function ServersSettings() {
 }
 
 /// Dray Cloud, as one row however many machines it runs: one per task, coming
-/// and going on their own, so a row each would be a list nobody acts on. The key
-/// is written once and never read back.
+/// and going on their own, so a row each would be a list nobody acts on. It runs
+/// on the Dray account; the shared key from before accounts still works, is
+/// written once and never read back, and Switch to account drops it.
 function CloudRow({ machines }: { machines: ServerInfo[] }) {
   const cloud = useCloud();
   const [changing, setChanging] = useState(false);
+  const [switching, setSwitching] = useState(false);
   // The service, never its machines: each one stops when its task goes idle,
   // and that is Dray's business, not a state to show.
   const status: ServerStatus = cloud.on && cloud.keyed && !cloud.error ? "connected" : "disconnected";
+  const switchToAccount = () => {
+    setSwitching(true);
+    invoke("set_cloud_key", { key: "" }, LOCAL)
+      .catch(console.error)
+      .finally(() => setSwitching(false));
+  };
   const detail = !cloud.keyed
-    ? "A machine of its own for each task, started by Dray and gone once the task settles. Paste your key to turn it on."
+    ? "A machine of its own for each task, started by Dray and gone once the task settles. Sign in to Dray in Account to turn it on."
     : !cloud.on
       ? "Off"
       : (cloud.error ??
@@ -266,16 +274,20 @@ function CloudRow({ machines }: { machines: ServerInfo[] }) {
       on={cloud.on}
       onToggle={cloud.keyed ? (on) => void invoke("set_cloud_on", { on }, LOCAL).catch(console.error) : undefined}
       action={
-        cloud.keyed && !changing ? (
-          <Button variant="ghost" size="sm" onClick={() => setChanging(true)}>
-            Change key
+        changing ? undefined : cloud.key && cloud.signedIn ? (
+          <Button variant="ghost" size="sm" disabled={switching} onClick={switchToAccount}>
+            {switching ? "Switching…" : "Switch to account"}
           </Button>
-        ) : undefined
+        ) : (
+          !cloud.signedIn && (
+            <Button variant="ghost" size="sm" onClick={() => setChanging(true)}>
+              {cloud.key ? "Change key" : "Use a key"}
+            </Button>
+          )
+        )
       }
     >
-      {(!cloud.keyed || changing) && (
-        <CloudKeyField onCancel={cloud.keyed ? () => setChanging(false) : undefined} onSaved={() => setChanging(false)} />
-      )}
+      {changing && <CloudKeyField onCancel={() => setChanging(false)} onSaved={() => setChanging(false)} />}
     </Row>
   );
 }

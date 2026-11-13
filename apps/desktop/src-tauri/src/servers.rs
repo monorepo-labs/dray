@@ -1100,8 +1100,8 @@ async fn wake_boat(id: String, sleeper: Sleeper) {
         }
         Sleeper::Cloud { started: true, .. } => {}
         Sleeper::Cloud { sandbox, started: false } => {
-            let resumed = match cloud_key().await {
-                Some(key) => cloud::resume(&key, sandbox).await,
+            let resumed = match cloud::cred().await {
+                Some(cred) => cloud::resume(&cred, sandbox).await,
                 None => Err(NO_CLOUD_KEY.into()),
             };
             match resumed {
@@ -1167,16 +1167,24 @@ pub async fn extend_boat(id: String, minutes: u32) -> Result<(), String> {
 
 /// The Dray Cloud row in Settings. The machines themselves ride
 /// `servers_changed`, each a server marked `cloud`.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[ts(export, export_to = "events.ts")]
 #[serde(rename_all = "camelCase")]
 pub struct CloudInfo {
     pub on: bool,
-    /// A key is saved. The key itself never leaves Rust.
+    /// Something to call Dray Cloud with: a key, or a signed-in account.
     pub keyed: bool,
+    /// The shared key from before accounts is saved, and wins over the
+    /// account until removed. The key itself never leaves Rust.
+    pub key: bool,
+    pub signed_in: bool,
     /// Why the last listing failed.
     pub error: Option<String>,
 }
+
+/// What `cloud_changed` last said, so a listing announces a sign-in or out it
+/// noticed, and only that.
+static CLOUD_SAID: Mutex<Option<CloudInfo>> = Mutex::new(None);
 
 static CLOUD_ERROR: Mutex<Option<String>> = Mutex::new(None);
 /// When the control plane was last listed, which paces the listings a failed
@@ -1191,28 +1199,32 @@ static CLOUD_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// listed a while, and a listing must not bring its row back.
 static CLOUD_DROPPED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-const NO_CLOUD_KEY: &str = "Dray Cloud has no key. Add it in Settings, Servers.";
+const NO_CLOUD_KEY: &str = "Sign in to Dray in Settings, Account, to use Dray Cloud.";
 
 /// How often the machines are listed while Dray Cloud is on. A stopped one is
 /// noticed resuming from elsewhere within this, as a parked boat row is.
 const CLOUD_READ: Duration = Duration::from_secs(30);
 const CLOUD_RETRY_GAP: Duration = Duration::from_secs(10);
 
-async fn cloud_key() -> Option<String> {
-    crate::issues::credential(cloud::KEY).await
-}
-
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn cloud_info() -> CloudInfo {
+    let key = crate::issues::credential(cloud::KEY).await.is_some();
+    let signed_in = cloud::account().await.is_some();
     CloudInfo {
         on: crate::settings::read().await.dray_cloud,
-        keyed: cloud_key().await.is_some(),
+        keyed: key || signed_in,
+        key,
+        signed_in,
         error: CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()).clone(),
     }
 }
 
 async fn announce_cloud() {
     let info = cloud_info().await;
+    let said = std::mem::replace(&mut *CLOUD_SAID.lock().unwrap_or_else(|e| e.into_inner()), Some(info.clone()));
+    if said.as_ref() == Some(&info) {
+        return;
+    }
     if let Some(sink) = SINK.get() {
         let _ = sink.emit("cloud_changed", info);
     }
@@ -1266,21 +1278,21 @@ async fn sync_cloud() -> Result<(), String> {
     // waits on the lock. So an answer may be stale by the time it lands: a
     // key changed or cleared, the switch turned off, or a newer listing
     // applied. Any of those moved the generation, and the list is read again.
+    // A sign-in or out moves no generation, since the server makes it, so the
+    // credential itself is compared.
     for _ in 0..3 {
         let generation = CLOUD_GENERATION.load(Ordering::SeqCst);
-        let (Some(key), true) = (cloud_key().await, crate::settings::read().await.dray_cloud) else {
+        let (Some(cred), true) = (cloud::cred().await, crate::settings::read().await.dray_cloud) else {
+            announce_cloud().await;
             return Ok(());
         };
-        let listed = cloud::list(&key).await;
+        let listed = cloud::list(&cred).await;
         let _one = CLOUD_SYNC.lock().await;
-        if CLOUD_GENERATION.load(Ordering::SeqCst) != generation {
+        if CLOUD_GENERATION.load(Ordering::SeqCst) != generation || cloud::cred().await.as_ref() != Some(&cred) {
             continue;
         }
-        let error = listed.as_ref().err().cloned();
-        let changed = std::mem::replace(&mut *CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()), error.clone()) != error;
-        if changed {
-            announce_cloud().await;
-        }
+        *CLOUD_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = listed.as_ref().err().cloned();
+        announce_cloud().await;
         apply_listing(listed?).await;
         return Ok(());
     }
@@ -1318,9 +1330,10 @@ async fn apply_listing(listing: cloud::Listing) {
         .collect();
     // Before any row exists: `run` reads the token the moment one does.
     let mut rekeyed = Vec::new();
-    for (_, _, id) in &machines {
-        if crate::issues::credential(&credential_name(id)).await.as_deref() != Some(listing.token.as_str()) {
-            let _ = crate::issues::set_credential(&credential_name(id), Some(&listing.token)).await;
+    for (machine, _, id) in &machines {
+        let token = machine.token.as_deref().unwrap_or(&listing.token);
+        if crate::issues::credential(&credential_name(id)).await.as_deref() != Some(token) {
+            let _ = crate::issues::set_credential(&credential_name(id), Some(token)).await;
             rekeyed.push(id.clone());
         }
     }
@@ -1407,13 +1420,17 @@ async fn watch_cloud() {
 }
 
 /// Saves the Dray Cloud key once the control plane takes it, and turns Dray
-/// Cloud on. An empty key forgets it and every cloud machine with it.
+/// Cloud on. An empty key removes it: signed in, that is the switch to the
+/// account, whose listing is applied, and the key's machines stay only where
+/// the control plane hands them to the account. Signed out, every cloud
+/// machine is forgotten with the key.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn set_cloud_key(key: String) -> Result<(), String> {
     let key = key.trim();
-    let listing = match key.is_empty() {
-        true => cloud::Listing { token: String::new(), machines: Vec::new() },
-        false => cloud::list(key).await?,
+    let listing = match (key.is_empty(), cloud::account().await) {
+        (true, None) => cloud::Listing { token: String::new(), machines: Vec::new() },
+        (true, Some(account)) => cloud::list(&account).await?,
+        (false, _) => cloud::list(&cloud::Cred { token: key.into(), base: cloud::base(), account: false }).await?,
     };
     let one = CLOUD_SYNC.lock().await;
     crate::issues::set_credential(cloud::KEY, Some(key).filter(|k| !k.is_empty())).await?;
@@ -1466,13 +1483,13 @@ async fn switch_cloud(on: bool) -> Result<(), String> {
 /// so the task can clone onto it straight away.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn start_cloud_machine() -> Result<String, String> {
-    let key = cloud_key().await.ok_or(NO_CLOUD_KEY)?;
-    let machine = cloud::start(&key).await?;
+    let cred = cloud::cred().await.ok_or(NO_CLOUD_KEY)?;
+    let machine = cloud::start(&cred).await?;
     crate::analytics::track("feature_used", json!({ "feature": "cloud_machine_started" }));
     let reached = reach_new_machine(&machine.id).await;
     // Started but never reached: kept, it would run on unseen, and every
     // Retry would start another beside it.
-    if reached.is_err() && cloud::delete(&key, &machine.id).await.is_ok() {
+    if reached.is_err() && cloud::delete(&cred, &machine.id).await.is_ok() {
         let row = conns().iter().find(|c| c.saved.cloud.as_deref() == Some(machine.id.as_str())).map(|c| c.saved.id.clone());
         let _ = forget_cloud_machine(row, machine.id).await;
     }
@@ -1506,8 +1523,8 @@ pub async fn drop_cloud_machine(id: String) -> Result<(), String> {
         .find(|c| c.saved.id == id)
         .and_then(|c| c.saved.cloud.clone())
         .ok_or("That is not a Dray Cloud machine.")?;
-    let key = cloud_key().await.ok_or(NO_CLOUD_KEY)?;
-    cloud::delete(&key, &sandbox).await?;
+    let cred = cloud::cred().await.ok_or(NO_CLOUD_KEY)?;
+    cloud::delete(&cred, &sandbox).await?;
     crate::analytics::track("feature_used", json!({ "feature": "cloud_machine_dropped" }));
     forget_cloud_machine(Some(id), sandbox).await
 }

@@ -699,9 +699,14 @@ export type CloneProgress = { slug: string, line: string, };
  */
 export type CloudInfo = { on: boolean, 
 /**
- * A key is saved. The key itself never leaves Rust.
+ * Something to call Dray Cloud with: a key, or a signed-in account.
  */
 keyed: boolean, 
+/**
+ * The shared key from before accounts is saved, and wins over the
+ * account until removed. The key itself never leaves Rust.
+ */
+key: boolean, signedIn: boolean, 
 /**
  * Why the last listing failed.
  */
