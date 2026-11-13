@@ -6,9 +6,9 @@ import { ChecksRunningIcon } from "@/components/PrPanel";
 import PrStateIcon from "@/components/PrStateIcon";
 import { MergeControl } from "@/components/TasksPanel";
 import { seededAvatar } from "@/lib/botAvatar";
-import { FULL_FOR, type MergeCardPayload } from "@/lib/mergeCard";
+import { cardRepo, FULL_FOR, type MergeCardPayload } from "@/lib/mergeCard";
 import { openLink } from "@/lib/openLink";
-import { noteSession, qualify, serverOfSession } from "@/lib/transport";
+import { noteSession, serverOfSession } from "@/lib/transport";
 import { isModClick } from "@/lib/platform";
 import { mergeVerdict, readyToMerge } from "@/lib/pr";
 import { cn } from "@/lib/utils";
@@ -82,18 +82,16 @@ export default function MergeCard({ event }: { event: AgentEvent }) {
   const host = useContext(MergeCardHostContext);
   const chat = useContext(MergeCardChatContext);
   const payload = event.payload.type === "merge_card" ? event.payload : null;
-  // The server wrote its own bare path; qualified, a remote chat's card reads
-  // and merges on that server rather than on a local checkout of the same path.
-  const repo = payload ? qualify(payload.projectPath, serverOfSession(event.sessionId)) : "";
+  const repo = payload ? cardRepo(payload, event.sessionId) : "";
   const found = payload ? host?.prNumbered(repo, payload.number) : undefined;
   useEffect(() => {
     if (payload && found === null) host?.missing(repo, payload.number);
   }, [host, repo, payload, found]);
   if (!payload) return null;
   const card = { ...payload, projectPath: repo };
-  // The server only posts a card for a task on its own machine, so the task
-  // lives where the chat does, even where no list has told us yet.
-  noteSession(card.taskId, serverOfSession(event.sessionId));
+  // Without `machine`, the task lives where the chat does, even where no list
+  // has told us yet.
+  if (!card.machine) noteSession(card.taskId, serverOfSession(event.sessionId));
 
   const pr = found ?? undefined;
   const merged = pr?.state === "MERGED";

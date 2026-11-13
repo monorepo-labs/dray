@@ -31,6 +31,7 @@ import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
 import { drawnSegments } from "@/lib/botTranscript";
 import { readerMessagesAfter } from "@/lib/mergeCard";
+import { isProvisional } from "@/lib/provisional";
 import { loadOlder } from "@/lib/olderPages";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
 import type { Bot, SessionSnapshot } from "@/types/events";
@@ -427,12 +428,24 @@ export default function Chat({
   // counts must still land at the bottom. A preview *growing* is not a key: the
   // ResizeObserver below re-pins on every height it adds, where keying on the
   // text wrote `scrollTop` and read layout back on every delta.
+  //
+  // A send re-arms the pin first, whatever left it down: a scroll that stopped
+  // short of the end, a jump from the rail or the "Waiting on you" card, a
+  // smooth scroll cut short. Only the pin ever brought a send into view, so any
+  // of those left the reader's own message below the fold. A send is told by
+  // its provisional row *arriving*: every send here draws one, and the real
+  // message replacing it, or a queue or failure taking it back, only ever
+  // lowers the count, so a reader who scrolled up meanwhile stays put.
+  const sent = useMemo(() => session?.events.filter(isProvisional).length ?? 0, [session?.events]);
+  const sentRef = useRef(sent);
   useLayoutEffect(() => {
+    if (sent > sentRef.current) followRef.current = true;
+    sentRef.current = sent;
     const el = scrollRef.current;
     if (el && followRef.current) pin(el);
     syncAtBottom();
     syncActive();
-  }, [session?.sessionId, events.length, streamingKind]);
+  }, [session?.sessionId, events.length, streamingKind, sent]);
 
   // How many of the newest turns are drawn. Opening a long session mounts only
   // what fits on screen and backfills the rest above it in deferred steps, so
@@ -812,6 +825,23 @@ export default function Chat({
 
   if (!session) return null;
 
+  // fx alone: it takes one prompt per turn, so a held message waits out the
+  // whole turn on screen. Every other harness hands its queue over at the next
+  // tool boundary, seconds away, where stopping the turn to save that wait
+  // costs more than the wait.
+  //
+  // Gated on `active` as well, which in a split is the focused pane and on
+  // screen. `onSendNow` interrupts the *selected* session, so an unfocused
+  // pane's button would stop somebody else's turn — and the chord rides the
+  // same prop, so four mounted transcripts would otherwise bind it four times.
+  const queued = (
+    <QueuedMessages
+      messages={queuedMessages}
+      onSendNow={session.harness === "fx" && active ? onSendNow : undefined}
+      active={active}
+    />
+  );
+
   return (
     // What decides whether the rail fits is the width of *this pane*, which the
     // sidebar and the right panel both take from. On a 1440px window with both
@@ -880,6 +910,11 @@ export default function Chat({
               </div>
             ))}
 
+            {/* A bot chat reads as a messenger: what the reader sent sits with
+                the conversation, and the card waiting on them comes last, by
+                the composer that answers it. */}
+            {bot && queued}
+
             {cards.map((ask) =>
               ask.type === "questions_asked" ? (
                 <QuestionRequest
@@ -920,21 +955,7 @@ export default function Chat({
               ),
             )}
 
-            {/* fx alone: it takes one prompt per turn, so a held message waits
-                out the whole turn on screen. Every other harness hands its queue
-                over at the next tool boundary, seconds away, where stopping the
-                turn to save that wait costs more than the wait.
-
-                Gated on `active` as well, which in a split is the focused pane
-                and on screen. `onSendNow` interrupts the *selected* session, so
-                an unfocused pane's button would stop somebody else's turn — and
-                the chord rides the same prop, so four mounted transcripts would
-                otherwise bind it four times. */}
-            <QueuedMessages
-              messages={queuedMessages}
-              onSendNow={session.harness === "fx" && active ? onSendNow : undefined}
-              active={active}
-            />
+            {!bot && queued}
 
             {backgroundTaskCount > 0 && (
               <BackgroundTasksIndicator
