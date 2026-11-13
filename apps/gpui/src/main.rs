@@ -3,6 +3,10 @@
 
 mod assets;
 mod color;
+// Built apart and shown by examples/composer.rs; the Mac task wires it in (#856).
+#[allow(dead_code)]
+#[path = "composer/composer.rs"]
+mod composer;
 mod glass;
 mod sessions;
 mod sidebar;
