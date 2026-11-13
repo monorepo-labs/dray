@@ -82,8 +82,8 @@ function Demo() {
           #912 and #915 are ready, so they draw Merge. The PR glyph carries draft, merged and failing checks, a spinner
           running ones; words for conflicts and review. #917, #919 and #920 were nudged to fix their PRs, so each says
           what it is fixing and for how long. Merge waits a second and
-          settles the task, as the app does once the merge lands. Hover a row for ⋯ and Settle; right-click for the
-          menu.
+          settles the task, as the app does once the merge lands. Hover a row for ⋯; #901, merged elsewhere, adds
+          Settle. Right-click for the menu, which settles any idle row.
         </p>
         {/* The side panel's width at its default. */}
         <div className="flex flex-col rounded-xl border border-border bg-card" style={{ width: 420, height: 480 }}>
