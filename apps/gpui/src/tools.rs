@@ -394,6 +394,33 @@ pub fn count_changes(sides: &EditSides) -> Changes {
     Changes { added: new.len() - common, removed: old.len() - common }
 }
 
+thread_local! {
+    static COUNTS: std::cell::RefCell<std::collections::HashMap<u64, Changes>> = Default::default();
+}
+
+/// [count_changes] memoised on the sides' contents, since a row redraws on
+/// every transcript change and a large edit's count is millions of compares.
+/// Keyed by a hash, so an entry can only go stale by being unreachable; the
+/// cap clears it whole rather than tracking age.
+pub fn count_changes_cached(sides: &EditSides) -> Changes {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (&sides.old, &sides.new).hash(&mut h);
+    let key = h.finish();
+    if let Some(c) = COUNTS.with(|m| m.borrow().get(&key).copied()) {
+        return c;
+    }
+    let c = count_changes(sides);
+    COUNTS.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() >= 512 {
+            m.clear();
+        }
+        m.insert(key, c);
+    });
+    c
+}
+
 /// The same for a harness that reports a unified diff (`countUnifiedChanges`).
 pub fn count_unified_changes<'a>(diffs: impl IntoIterator<Item = &'a str>) -> Changes {
     let mut c = Changes::default();
@@ -494,6 +521,8 @@ mod tests {
         let write = edit_sides(&json!({"file_path": "/a.rs", "content": "x\ny"})).unwrap();
         assert_eq!(write.old, None);
         assert_eq!(count_changes(&write), Changes { added: 2, removed: 0 });
+        assert_eq!(count_changes_cached(&sides), Changes { added: 2, removed: 1 });
+        assert_eq!(count_changes_cached(&sides), Changes { added: 2, removed: 1 });
     }
 
     #[test]
