@@ -6,10 +6,12 @@ import {
   chatItems,
   chatTime,
   drawnSegments,
+  earlierTurns,
   firstUnread,
   hasText,
   inReviewTurn,
   itemKey,
+  lastTurns,
   lessonKind,
   sentMessages,
   startsTimeRun,
@@ -333,6 +335,44 @@ describe("drawnSegments", () => {
 
   it("draws nothing for no sessions", () => {
     expect(drawnSegments([])).toEqual([]);
+  });
+});
+
+describe("lastTurns", () => {
+  // Three turns, the middle one with a subagent's own prompt inside it.
+  const events = [
+    said("hi"),
+    user("one"),
+    said("a"),
+    user("two"),
+    ev({ type: "user_message", text: "sub", images: [], issues: [], from: null } as unknown as AgentEventPayload, "s1"),
+    call("c1", "dray session new x"),
+    result("c1", ID),
+    user("three"),
+    said("c"),
+  ];
+
+  it("cuts at the main thread's message opening the oldest turn kept", () => {
+    expect(lastTurns(events, 1)).toBe(7);
+    expect(lastTurns(events, 2)).toBe(3);
+  });
+
+  it("keeps everything with fewer turns held", () => {
+    expect(lastTurns(events, 3)).toBe(1);
+    expect(lastTurns(events, 4)).toBe(0);
+    expect(lastTurns(events, 9)).toBe(0);
+  });
+
+  it("never cuts at a queued message, which lands between a call and its result", () => {
+    const queued = ev({ type: "user_message", text: "report", images: [], issues: [], queued: true, from: null } as unknown as AgentEventPayload);
+    const run = [user("go"), call("c2", "dray session new y"), queued, result("c2", ID), said("started")];
+    expect(lastTurns(run, 1)).toBe(0);
+  });
+
+  it("grows a window by whole turns above it", () => {
+    expect(earlierTurns(events, 7, 1)).toBe(3);
+    expect(earlierTurns(events, 3, 1)).toBe(1);
+    expect(earlierTurns(events, 1, 1)).toBe(0);
   });
 });
 
