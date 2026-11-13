@@ -11,12 +11,18 @@ mod color;
 mod glass;
 #[allow(dead_code)] // Until the transcript draws assistant text through it.
 mod markdown;
+mod cards;
+mod chat_tokens;
+mod permission_card;
+mod question_card;
 mod sessions;
 mod sidebar;
 mod slots;
 mod store;
 mod theme;
 mod transcript;
+mod tool_row;
+mod tools;
 mod ui;
 mod wire;
 mod workspace;
