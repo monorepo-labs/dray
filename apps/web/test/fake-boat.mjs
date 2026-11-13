@@ -26,6 +26,8 @@ export async function fakeBoat({ key, org, pageSize = 2 }) {
   const calls = [];
   let n = 0;
   let drops = 0;
+  /// Seen by every call; the first it answers true for is dropped, once.
+  let dropWhen = null;
   let clock = Date.parse("2026-11-01T00:00:00Z");
   const now = () => new Date((clock += 1000)).toISOString();
   const mint = () => {
@@ -81,6 +83,10 @@ export async function fakeBoat({ key, org, pageSize = 2 }) {
     res.on("finish", () => (call.status = res.statusCode));
     if (drops > 0) {
       drops--;
+      return req.socket.destroy();
+    }
+    if (dropWhen?.(call)) {
+      dropWhen = null;
       return req.socket.destroy();
     }
 
@@ -207,6 +213,7 @@ export async function fakeBoat({ key, org, pageSize = 2 }) {
     /// Hangs up on the next call without answering, the way a refused
     /// connection or a dropped socket looks to fetch.
     dropNext: () => drops++,
+    dropOnce: (when) => (dropWhen = when),
     close: () => new Promise((r) => server.close(r)),
   };
 }

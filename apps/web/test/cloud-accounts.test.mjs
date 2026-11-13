@@ -86,7 +86,7 @@ describe("accounts", { skip: !DB && "DRAY_TEST_DATABASE_URL unset" }, () => {
     assert.equal(status, 200);
     ada = sandbox(json.machine.id);
     const create = callsTo("POST", "/sandboxes")[before];
-    assert.deepEqual(create.body.labels, { dray: "cloud", "dray-user": ADA.id });
+    assert.deepEqual(create.body.labels, { dray: "cloud", user: ADA.id });
     assert.deepEqual(create.body.files, [
       { path: ".dray/serve-token", content: serveToken(ADA.id) },
       {
@@ -165,12 +165,12 @@ describe("accounts", { skip: !DB && "DRAY_TEST_DATABASE_URL unset" }, () => {
   });
 
   test("starts at once can't pass the cap together", async () => {
-    const before = [...boat.sandboxes.values()].filter((s) => s.labels["dray-user"] === BOB.id).length;
+    const before = [...boat.sandboxes.values()].filter((s) => s.labels.user === BOB.id).length;
     const answers = await Promise.all(
       Array.from({ length: 4 }, () => call("POST", "/api/cloud/machines", { key: BOB.token })),
     );
     assert.deepEqual(answers.map((a) => a.status).sort(), [200, 429, 429, 429]);
-    const after = [...boat.sandboxes.values()].filter((s) => s.labels["dray-user"] === BOB.id).length;
+    const after = [...boat.sandboxes.values()].filter((s) => s.labels.user === BOB.id).length;
     assert.equal(after - before, 1);
   });
 
@@ -179,5 +179,19 @@ describe("accounts", { skip: !DB && "DRAY_TEST_DATABASE_URL unset" }, () => {
     assert.ok(!boat.sandboxes.has(ada.id));
     assert.equal((await call("DELETE", `/api/cloud/machines/${legacy.id}`, { key: ADA.token })).status, 204);
     assert.ok(!boat.sandboxes.has(legacy.id));
+  });
+
+  test("a start whose recheck fails deletes its machine", async () => {
+    const before = new Set(boat.sandboxes.keys());
+    let created = false;
+    boat.dropOnce((c) => {
+      if (c.method === "POST" && c.path === "/sandboxes") created = true;
+      return created && c.method === "GET" && c.path === "/sandboxes";
+    });
+    const { status, json } = await call("POST", "/api/cloud/machines", { key: ADA.token });
+    assert.equal(status, 502);
+    assert.equal(json.error, "boat_unreachable");
+    assert.ok(created);
+    assert.deepEqual([...boat.sandboxes.keys()].filter((id) => !before.has(id)), []);
   });
 });

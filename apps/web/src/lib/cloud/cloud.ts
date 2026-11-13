@@ -8,14 +8,15 @@ import { boat, BoatError, listByLabel, type Sandbox } from "./boat";
 /// `dray=cloud` and listed by label, so nothing here keeps state. The contract
 /// is issue #857.
 ///
-/// A machine belongs to the account that started it, named by its `dray-user`
+/// A machine belongs to the account that started it, named by its `user`
 /// label. One without that label belongs to the shared `DRAY_CLOUD_KEY`,
 /// which predates accounts and goes once its machines are gone.
 
 const PORT = 7317;
 const TTL_SECONDS = 900;
 const LABEL = { dray: "cloud" };
-const USER_LABEL = "dray-user";
+/// The label billing (#1014) meters by too, so one name serves both.
+const USER_LABEL = "user";
 const SNAPSHOT = "dray-cloud";
 const SANDBOX_ID = /^bx_[23456789abcdefghjkmnpqrstuvwxyz]{8}$/;
 
@@ -211,9 +212,15 @@ export async function startMachine(origin: string, caller: Caller): Promise<Resp
   const cap = awakeCap();
   if ((await listMachines(caller.owner)).filter(awake).length >= cap) return capped(cap);
   const made = await create(origin, caller);
-  const ranked = (await listMachines(caller.owner)).filter(awake).sort(byAge);
-  if (ranked.findIndex((s) => s.id === made.id) >= cap) {
-    await boat("DELETE", `/sandboxes/${made.id}`, undefined, false, { "X-Ascii-Confirm-Delete": made.id });
+  const drop = () => boat("DELETE", `/sandboxes/${made.id}`, undefined, false, { "X-Ascii-Confirm-Delete": made.id });
+  // A recheck that fails deletes the machine: the app learns no id from a
+  // failed start, so nothing would ever delete it, and it would hold a slot.
+  const ranked = await listMachines(caller.owner).catch(async (e) => {
+    await drop().catch((d) => console.error(`boat ${made.id}: delete after a failed recheck failed`, d));
+    throw e;
+  });
+  if (ranked.filter(awake).sort(byAge).findIndex((s) => s.id === made.id) >= cap) {
+    await drop();
     return capped(cap);
   }
   // Always, not only where hosting failed: a create's `localhost` relay never
@@ -292,8 +299,10 @@ export async function resumeMachine(id: string, caller: Caller): Promise<Respons
   const cap = awakeCap();
   if (all.filter(awake).length >= cap) return capped(cap);
   const resumed = await resume(s, caller.secret);
-  // Counted as awake whether or not boat's list has caught up with it yet.
-  const others = (await listMachines(caller.owner)).filter((m) => m.id !== s.id && awake(m));
+  // Counted as awake whether or not boat's list has caught up with it yet. A
+  // recheck that fails lets the resume stand: the machine is the caller's
+  // task, already up, and the app asked for it.
+  const others = (await listMachines(caller.owner).catch(() => [])).filter((m) => m.id !== s.id && awake(m));
   if (others.length + 1 > cap) {
     await boat("POST", `/sandboxes/${s.id}/stop`);
     return capped(cap);

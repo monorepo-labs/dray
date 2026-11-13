@@ -125,6 +125,14 @@ struct One {
 
 /// One authorized call, answered as JSON or a sentence the Settings row can show.
 async fn call(cred: &Cred, method: reqwest::Method, path: &str, wait: Duration) -> Result<Value, String> {
+    match send(cred, method, path, wait).await? {
+        (200..=299, body) => Ok(body),
+        (status, body) => Err(refusal(status, &body, cred.owner.is_some())),
+    }
+}
+
+/// The status and body of one call, refused or not.
+async fn send(cred: &Cred, method: reqwest::Method, path: &str, wait: Duration) -> Result<(u16, Value), String> {
     let answer = crate::http()
         .request(method, format!("{}{path}", cred.base))
         .bearer_auth(&cred.token)
@@ -133,11 +141,7 @@ async fn call(cred: &Cred, method: reqwest::Method, path: &str, wait: Duration) 
         .await
         .map_err(|e| format!("Couldn't reach Dray Cloud: {e}"))?;
     let status = answer.status().as_u16();
-    let body: Value = answer.json().await.unwrap_or(Value::Null);
-    match status {
-        200..=299 => Ok(body),
-        _ => Err(refusal(status, &body, cred.owner.is_some())),
-    }
+    Ok((status, answer.json().await.unwrap_or(Value::Null)))
 }
 
 /// What a refused call says. Every route answers 404 while the control plane is
@@ -152,6 +156,9 @@ pub fn refusal(status: u16, body: &Value, account: bool) -> String {
         (429, Some("machine_limit")) => {
             body["message"].as_str().unwrap_or("Too many Dray Cloud machines are running at once.").into()
         }
+        // Billing (#1014): `out_of_hours` or `no_plan`, its sentence carrying
+        // the billing page's link.
+        (402, _) => body["message"].as_str().unwrap_or("Dray Cloud needs a plan with hours left.").into(),
         (500.., None) => format!("Dray Cloud isn't answering right now ({status})."),
         (_, Some(error)) => format!("Dray Cloud said: {error}"),
         _ => format!("Dray Cloud answered {status}."),
@@ -168,10 +175,28 @@ pub async fn start(cred: &Cred) -> Result<Machine, String> {
     one(call(cred, reqwest::Method::POST, "/machines", START).await?)
 }
 
-/// Deletes a machine for good. One already gone answers the same.
+/// Deletes a machine for good. One already gone answers the same. A 503 is
+/// the control plane keeping the machine until it has read its meter, which
+/// boat forgets on delete (#1014), so it is asked again a few times.
 pub async fn delete(cred: &Cred, id: &str) -> Result<(), String> {
-    call(cred, reqwest::Method::DELETE, &format!("/machines/{id}"), READ).await.map(drop)
+    let path = format!("/machines/{id}");
+    let mut last = (503, Value::Null);
+    for wait in DELETE_RETRIES {
+        tokio::time::sleep(wait).await;
+        last = send(cred, reqwest::Method::DELETE, &path, READ).await?;
+        if last.0 != 503 {
+            break;
+        }
+    }
+    match last {
+        (200..=299, _) => Ok(()),
+        (status, body) => Err(refusal(status, &body, cred.owner.is_some())),
+    }
 }
+
+/// Before each delete try: at once, then backing off.
+const DELETE_RETRIES: [Duration; 4] =
+    [Duration::ZERO, Duration::from_secs(2), Duration::from_secs(5), Duration::from_secs(15)];
 
 pub async fn resume(cred: &Cred, id: &str) -> Result<Machine, String> {
     one(call(cred, reqwest::Method::POST, &format!("/machines/{id}/resume"), START).await?)
@@ -223,6 +248,8 @@ mod tests {
         assert_eq!(refusal(502, &Value::Null, false), "Dray Cloud isn't answering right now (502).");
         let limit = json!({ "error": "machine_limit", "message": "8 Dray Cloud machines are already running." });
         assert_eq!(refusal(429, &limit, true), "8 Dray Cloud machines are already running.");
+        let hours = json!({ "error": "out_of_hours", "message": "This month's Dray Cloud hours are used up." });
+        assert_eq!(refusal(402, &hours, true), "This month's Dray Cloud hours are used up.");
     }
 
     /// The file as #889's `dray_account::Held` writes it.
