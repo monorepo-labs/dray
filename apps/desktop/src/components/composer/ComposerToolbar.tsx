@@ -15,6 +15,7 @@ import type { ServerId } from "@/lib/transport";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { botPicksStance } from "@/lib/permission";
+import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type {
   ApprovalPolicy,
@@ -89,6 +90,9 @@ type ComposerToolbarProps = {
   /// A bot's first chat, which draws no project pickers: it runs in its own
   /// folder rather than in a repo, and the header already names the bot.
   bot?: Bot;
+  /// Drawn in the titlebar rather than under the composer: a bot's chat. + goes
+  /// into the card there (`ChatInput`'s `attachInCard`), leaving the pickers.
+  inTitlebar?: boolean;
 
   /// Whether this session's turn is in flight. Only the fx provider switch
   /// reads it — it is the one control here that moves the child on the click
@@ -135,13 +139,14 @@ export default function ComposerToolbar({
   isNewSession,
   agentSwitch = false,
   bot,
+  inTitlebar = false,
   busy,
 }: ComposerToolbarProps) {
   return (
-    <div className="flex min-w-0 items-center gap-0.5 px-1">
+    <div className={cn("flex min-w-0 items-center gap-0.5", !inTitlebar && "px-1")}>
       {/* No radius override: `icon-sm` already carries the app's rounded-square,
           and a circle here would be the one round control in a row of them. */}
-      <Tooltip>
+      {!inTitlebar && <Tooltip>
         <TooltipTrigger asChild>
           <Button
             type="button"
@@ -158,7 +163,7 @@ export default function ComposerToolbar({
           Attach files
           <ShortcutKeys ids={["attach"]} />
         </TooltipContent>
-      </Tooltip>
+      </Tooltip>}
 
       <ModelSelector
         server={server}
@@ -178,6 +183,7 @@ export default function ComposerToolbar({
         onReloadModels={onReloadModels}
         onSeedProvider={onSeedProvider}
         loadingModels={loadingModels}
+        inTitlebar={inTitlebar}
       />
 
       {isNewSession && !bot && (
@@ -237,6 +243,7 @@ export default function ComposerToolbar({
           value={permissionMode}
           onChange={onPermissionModeChange}
           locked={lockedMidTurn(harness, "stance", busy)}
+          inTitlebar={inTitlebar}
         />
       )}
 

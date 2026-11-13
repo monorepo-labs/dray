@@ -191,6 +191,7 @@ export default function ModelSelector({
   onReloadModels,
   onSeedProvider,
   loadingModels,
+  inTitlebar = false,
 }: {
   /// The server the composer sends to, whose installs the picker marks.
   server: ServerId;
@@ -230,6 +231,9 @@ export default function ModelSelector({
   /// fresh read lands. A provider never visited seeds nothing and waits.
   onSeedProvider: (provider: string) => void;
   loadingModels: boolean;
+  /// Drawn at the titlebar's right end (a bot's chat), so its tooltip opens
+  /// below it and the menu lines up on its right edge instead of running off.
+  inTitlebar?: boolean;
 }) {
   // Controlled so a click on a submenu trigger can close the whole menu; Radix
   // otherwise keeps the parent open for the submenu it just opened on hover.
@@ -508,7 +512,7 @@ export default function ModelSelector({
             its own chord there, so listing both here made a tooltip that read
             as a menu of shortcuts — hence `max-w-none`, which the default
             `max-w-xs` would wrap. */}
-        <TooltipContent side="top" className="max-w-none whitespace-nowrap">
+        <TooltipContent side={inTitlebar ? "bottom" : "top"} className="max-w-none whitespace-nowrap">
           {modelLocked ? (
             "Model can't be changed mid-turn"
           ) : (
@@ -521,7 +525,7 @@ export default function ModelSelector({
       </Tooltip>
 
       <DropdownMenuContent
-        align="start"
+        align={inTitlebar ? "end" : "start"}
         // Fixed, not `min-w`: the base class sizes the menu to
         // `--radix-dropdown-menu-trigger-width`, so the trigger's own label set
         // the width — and fx's gateway names a model by its vendor too
