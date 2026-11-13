@@ -61,7 +61,7 @@ import { basename, isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
 import { sessionBranch } from "@/lib/pr";
 import { checkoutsOf, groupProjects, keyOfPath, leadPath, soleServer } from "@/lib/projectGroups";
-import { offlineLine, projectLabel, serverConnected, serverName, useServers } from "@/lib/servers";
+import { offlineLine, projectLabel, serverName, shownOffline, useServers } from "@/lib/servers";
 import { LOCAL, serverOfPath } from "@/lib/transport";
 import { useResizable } from "@/components/ResizeHandle";
 import { useJumpDigit } from "@/lib/digitChords";
@@ -1174,7 +1174,7 @@ export default function Sidebar({
   // Read for the re-render alone: a server dropping or coming back moves the
   // dimming on its rows and headings.
   useServers();
-  const offline = (path: string) => !serverConnected(serverOfPath(path));
+  const offline = (path: string) => shownOffline(serverOfPath(path));
   // A heading stands for every checkout of its project. It names a machine only
   // where there is just one to name, and dims only once all of them are gone.
   const headingServer = (path: string) => {

@@ -141,6 +141,9 @@ pub async fn run(port: u16) -> Result<()> {
     }
     let sink = Sink::new(|event, payload| HUB.publish(event, &payload));
     let home = start_core(sink.clone()).await?;
+    if let Some(sandbox) = crate::cloud_machine::boat_id().await {
+        tokio::spawn(crate::cloud_machine::heartbeat(home.clone(), sandbox));
+    }
 
     let (token, token_path) = mint_token().await?;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));

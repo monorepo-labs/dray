@@ -87,8 +87,12 @@ pub mod org_link;
 // Every server reaches other machines on its own (#760).
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod machines;
+#[cfg(any(feature = "serve", feature = "desktop"))]
+pub mod cloud_machine;
 #[cfg(feature = "desktop")]
 pub mod boat;
+#[cfg(feature = "desktop")]
+pub mod cloud;
 #[cfg(feature = "desktop")]
 pub mod servers;
 pub mod session;
@@ -946,6 +950,13 @@ pub fn run() {
             servers::upload_attachment,
             servers::resume_boat,
             servers::extend_boat,
+            servers::cloud_info,
+            servers::set_cloud_key,
+            servers::set_cloud_on,
+            servers::start_cloud_machine,
+            servers::drop_cloud_machine,
+            servers::save_cloud_transcript,
+            servers::cloud_transcript,
             attachments::paste_attachments,
             // Here and not on the server: a video plays through this
             // webview's asset protocol, which only this process can widen.
