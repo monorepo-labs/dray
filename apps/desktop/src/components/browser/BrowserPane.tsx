@@ -1167,9 +1167,10 @@ function TurnCards({ sessionId }: { sessionId: string }) {
           key={c.kind}
           type="button"
           onClick={() => turn(c.kind)}
-          className="flex min-h-9 items-center gap-2 rounded-lg border border-border px-3 text-left transition-colors hover:bg-foreground/5"
+          className="flex flex-col items-start gap-1.5 rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:bg-foreground/5"
         >
-          {c.icon}
+          {/* The two marks differ in size; one box keeps the labels level. */}
+          <span className="flex size-4 items-center justify-center">{c.icon}</span>
           {c.label}
         </button>
       ))}
