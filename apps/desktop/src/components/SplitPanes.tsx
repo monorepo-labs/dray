@@ -75,7 +75,7 @@ function PaneHeader({ sessionId, paneKey, onClose }: { sessionId: string; paneKe
 /// pane's own scope, since the Files view may not be mounted to watch it.
 export function SplitFile({ sessionId, path }: { sessionId: string; path: string }) {
   const file = useOpenFiles(sessionId).open.find((f) => f.path === path) ?? null;
-  useOpenFilesWatcher(sessionId, `filepane:${path}`);
+  useOpenFilesWatcher(sessionId, `filepane:${path}`, path);
   // Closed from elsewhere: nothing left to show.
   useEffect(() => {
     if (!file) removeSplit(sessionId, `file:${path}`);

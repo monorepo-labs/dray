@@ -25,6 +25,7 @@ import {
   useOpenFilesWatcher,
   type FilesScope,
 } from "@/hooks/useOpenFiles";
+import { useSplitPanes } from "@/lib/splitPanes";
 import { cn } from "@/lib/utils";
 
 type Side = "left" | "right";
@@ -138,8 +139,11 @@ export default function FilesView({
   // the Docs panel's chips are stepped with. Clamped rather than wrapped, and
   // given up inside a text field — the filter box is one, and ⌘⇧← selects to
   // the start of a line there.
+  const split = useSplitPanes(picker ? null : sessionId);
   const step = (delta: number) => {
-    const next = open[open.findIndex((it) => it.path === activePath) + delta];
+    // A split file is a pane's, not the row's, so the chord steps past it.
+    const row = open.filter((it) => !split.includes(`file:${it.path}`));
+    const next = row[row.findIndex((it) => it.path === activePath) + delta];
     if (next) activateFile(sessionId, next.path);
   };
   const chord = { enabled: active, skipInTextField: true };

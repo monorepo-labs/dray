@@ -282,22 +282,26 @@ function watch(scope: FilesScope, paths: string[]): Promise<unknown> {
 }
 
 /// Keeps the open files current with the files underneath them.
-export function useOpenFilesWatcher(sid: string | null, scope: FilesScope = "files") {
+///
+/// `only` narrows it to one of the session's files, for a split file's pane:
+/// watching the whole list there re-read every file once per pane.
+export function useOpenFilesWatcher(sid: string | null, scope: FilesScope = "files", only?: string) {
   const { open } = useOpenFiles(sid);
   // A joined key rather than the array, so a render that rebuilds the list
   // without changing the set does not re-arm the watcher. Only ever a
   // dependency — the paths sent are read off the store, never split back out of
   // this, since a newline is legal in a path.
-  const key = open.map((file) => file.path).join("\n");
+  const key = open.filter((file) => !only || file.path === only).map((file) => file.path).join("\n");
 
   useEffect(() => {
     // A tab put back from the last run has had no read issued yet.
     if (sid) {
       for (const file of state(sid).open) {
+        if (only && file.path !== only) continue;
         if (!seqByPath.has(`${sid}\n${file.path}`)) read(sid, file.path);
       }
     }
-    void watch(scope, openFilesFor(sid).open.map((file) => file.path));
+    void watch(scope, openFilesFor(sid).open.map((file) => file.path).filter((p) => !only || p === only));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, sid, scope]);
 
@@ -311,11 +315,11 @@ export function useOpenFilesWatcher(sid: string | null, scope: FilesScope = "fil
   // even have open.
   useEffect(() => {
     const un = listen<string>("doc_changed", (event) => {
-      if (!sid) return;
+      if (!sid || (only && event.payload !== only)) return;
       if (state(sid).open.some((file) => file.path === event.payload)) {
         read(sid, event.payload);
       }
     });
     return () => void un.then((off) => off());
-  }, [sid]);
+  }, [sid, only]);
 }
