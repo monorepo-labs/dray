@@ -17,6 +17,7 @@ fn main() {
 /// Where the bundle puts the libraries, relative to the binary: Tauri installs
 /// resources under `/usr/lib/<productName>/` beside `/usr/bin/<binary>`, in the
 /// `.deb` and inside the AppImage alike. See `tauri.linux.conf.json`.
+/// `bundled_modules` in transcription/engine.rs names the same directory.
 const BUNDLED_RPATH: &str = "$ORIGIN/../lib/Dray/transcribe";
 
 /// Copies the shared libtranscribe and its backend modules (Linux's

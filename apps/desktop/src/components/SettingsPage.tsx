@@ -46,6 +46,8 @@ import { chordFor, useShortcutOverrides } from "@/hooks/useShortcuts";
 import { useTheme } from "@/hooks/useTheme";
 import { type ManualCheck, updateFailure } from "@/hooks/useUpdater";
 import { downloadChromium, removeChromium, useChromium } from "@/lib/browser";
+import { BreakTile } from "@/components/BreakOverlay";
+import { BREAK_CARDS } from "@/components/breakScenes";
 import { BREAK_INTERVALS, setBreakDue, setBreakSettings, useBreakSettings } from "@/lib/breaks";
 import { chromiumBusy, chromiumPercent, describeChromium } from "@/lib/chromium";
 import {
@@ -57,6 +59,7 @@ import {
 } from "@/lib/openWith";
 import AccountsSettings from "@/components/settings/AccountsSettings";
 import AppShell from "@/components/layout/AppShell";
+import WindowControls from "@/components/layout/WindowControls";
 import { SettingsHeaderSlot } from "@/components/settings/headerAction";
 import ServersSettings from "@/components/settings/ServersSettings";
 import HandoffSettings from "@/components/settings/HandoffSettings";
@@ -65,7 +68,7 @@ import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
 import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
 import { useTranscriptionSettings } from "@/hooks/useTranscription";
-import { HAS_DICTATION, IS_MAC } from "@/lib/platform";
+import { HAS_DICTATION, IS_LINUX, IS_MAC } from "@/lib/platform";
 import { applyIsland, ISLAND_ENABLED, ISLAND_KEY, ISLAND_KEYS, type IslandKey } from "@/lib/island";
 import { captureCaps, captureFrom, decodeCapture, DEFAULT_CAPTURE, encodeCapture } from "@/lib/islandCapture";
 import { useWindowFocused } from "@/lib/focus";
@@ -398,11 +401,13 @@ function OpenFilesRow() {
   const choices = fileOpenerChoices(apps ?? []);
   const pick = pickFileOpener(apps ?? [], stored);
   const editors = choices.filter((app) => app.kind === "editor");
+  // Finder on a Mac; on Linux whichever file manager the scan listed.
+  const files = choices.find((app) => app.kind === "files")?.name ?? (IS_MAC ? "Finder" : "the file manager");
 
-  const unavailable = !IS_MAC
-    ? "Opening a file in another app is macOS-only for now."
+  const unavailable = !IS_MAC && !IS_LINUX
+    ? "Opening a file in another app needs macOS or Linux for now."
     : apps !== null && editors.length === 0
-      ? "No editor Dray knows about is installed, so filenames open in Finder."
+      ? `No editor Dray knows about is installed, so filenames open in ${files}.`
       : null;
 
   return (
@@ -411,7 +416,7 @@ function OpenFilesRow() {
       label="Open files with"
       description={
         unavailable ??
-        "Where a filename in the chat opens. Markdown opens in the panel instead, and Finder selects a file rather than opening it."
+        `Where a filename in the chat opens. Markdown opens in the panel instead, and ${files} selects a file rather than opening it.`
       }
     >
       {/* Opening the menu re-reads the list — see `refresh`. */}
@@ -754,12 +759,14 @@ function AutoHideRow({
 
 const BREAK_OPTIONS = BREAK_INTERVALS.map((m) => ({ id: String(m), label: `${m} min` }));
 
-/// The hourly break reminder: whether it runs, how often, and a way to see it
-/// without waiting the interval out.
-function BreakRows() {
+/// The hourly break reminder: whether it runs, how often, which cards it can
+/// show, and a way to see it without waiting the interval out.
+export function BreakRows() {
   const switchId = useId();
   const everyId = useId();
+  const cardsId = useId();
   const settings = useBreakSettings();
+  const onCount = BREAK_CARDS.filter((c) => !settings.off.includes(c.name)).length;
 
   return (
     <>
@@ -786,6 +793,46 @@ function BreakRows() {
           onPick={(m) => setBreakSettings({ ...settings, minutes: Number(m) })}
           labelledBy={everyId}
         />
+      </SettingRow>
+      <SettingRow
+        id={cardsId}
+        asGroup
+        stacked
+        label="Cards"
+        description="Click a card to turn it on or off. Each break picks one at random, and the last one on stays on."
+      >
+        <div role="group" aria-labelledby={cardsId} className="grid grid-cols-3 gap-3">
+          {BREAK_CARDS.map(({ name, text, Scene }) => {
+            const on = !settings.off.includes(name);
+            return (
+              <button
+                key={name}
+                type="button"
+                aria-pressed={on}
+                disabled={on && onCount === 1}
+                onClick={() =>
+                  setBreakSettings({
+                    ...settings,
+                    off: on ? [...settings.off, name] : settings.off.filter((n) => n !== name),
+                  })
+                }
+                aria-label={name}
+                className={cn(
+                  "relative rounded-lg outline-none transition-[opacity,filter] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                  "cursor-pointer disabled:cursor-not-allowed",
+                  !on && "opacity-35 grayscale hover:opacity-55",
+                )}
+              >
+                <BreakTile text={text} Scene={Scene} />
+                {on && (
+                  <span className="absolute top-2 right-2 grid size-5 place-items-center rounded-full bg-(--break-ink,var(--foreground)) text-(--break-card,var(--background))">
+                    <Check className="size-3" strokeWidth={3} />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       </SettingRow>
     </>
   );
@@ -1117,28 +1164,34 @@ function IslandSettings() {
             </DropdownMenuContent>
           </DropdownMenu>
         </SettingRow>
-        <SettingRow
-          id={tapId}
-          asGroup
-          label="Open with"
-          description={
-            double
-              ? "Two quick taps open it, so a stray tap never does. One tap in the open panel dictates."
-              : "One tap opens it. Two quick taps open it listening."
-          }
-        >
-          <SegmentedRadio
-            options={ISLAND_TAPS}
-            value={double ? "double" : "single"}
-            onPick={(v) => save("island.tap", v)}
-            labelledBy={tapId}
+        {/* Linux's island opens on one tap, two opening it listening, and
+            takes its screenshot on Super+Shift+2: neither is a pick there. */}
+        {IS_MAC && (
+          <SettingRow
+            id={tapId}
+            asGroup
+            label="Open with"
+            description={
+              double
+                ? "Two quick taps open it, so a stray tap never does. One tap in the open panel dictates."
+                : "One tap opens it. Two quick taps open it listening."
+            }
+          >
+            <SegmentedRadio
+              options={ISLAND_TAPS}
+              value={double ? "double" : "single"}
+              onPick={(v) => save("island.tap", v)}
+              labelledBy={tapId}
+            />
+          </SettingRow>
+        )}
+        {IS_MAC && (
+          <CaptureKeyRow
+            value={prefs["island.captureKey"]}
+            taken={on && prefs["island.captureTaken"] === "1"}
+            onChange={(v) => save("island.captureKey", v)}
           />
-        </SettingRow>
-        <CaptureKeyRow
-          value={prefs["island.captureKey"]}
-          taken={on && prefs["island.captureTaken"] === "1"}
-          onChange={(v) => save("island.captureKey", v)}
-        />
+        )}
       </Section>
       <Section>
         <SettingRow id={placeId} asGroup stacked label="Position">
@@ -1157,17 +1210,20 @@ function IslandSettings() {
             labelledBy={layoutId}
           />
         </SettingRow>
-        <SettingRow
-          id={messagesId}
-          label="Messages"
-          description="Pinch on the island to hide them, spread two fingers to bring them back."
-        >
-          <Switch
+        {/* The Linux island draws no transcript above the draft yet. */}
+        {IS_MAC && (
+          <SettingRow
             id={messagesId}
-            checked={prefs["island.transcript"] !== "hidden"}
-            onCheckedChange={(next) => save("island.transcript", next ? "shown" : "hidden")}
-          />
-        </SettingRow>
+            label="Messages"
+            description="Pinch on the island to hide them, spread two fingers to bring them back."
+          >
+            <Switch
+              id={messagesId}
+              checked={prefs["island.transcript"] !== "hidden"}
+              onCheckedChange={(next) => save("island.transcript", next ? "shown" : "hidden")}
+            />
+          </SettingRow>
+        )}
       </Section>
     </>
   );
@@ -1270,9 +1326,14 @@ function PositionPicture({ bottom }: { bottom: boolean }) {
   );
 }
 
+/// The Mac's `notch` is the top of the screen on Linux, which has none.
 const ISLAND_PLACEMENTS = [
-  { id: "notch", label: "Notch", hint: "Hanging from the notch.", picture: <PositionPicture bottom={false} /> },
-  { id: "bottom", label: "Bottom", hint: "Above the Dock.", picture: <PositionPicture bottom /> },
+  IS_LINUX
+    ? { id: "notch", label: "Top", hint: "At the top of the screen.", picture: <PositionPicture bottom={false} /> }
+    : { id: "notch", label: "Notch", hint: "Hanging from the notch.", picture: <PositionPicture bottom={false} /> },
+  IS_LINUX
+    ? { id: "bottom", label: "Bottom", hint: "At the bottom of the screen.", picture: <PositionPicture bottom /> }
+    : { id: "bottom", label: "Bottom", hint: "Above the Dock.", picture: <PositionPicture bottom /> },
 ] as const;
 const ISLAND_LAYOUTS = [
   { id: "compact", label: "Compact", hint: "The orb beside the input.", picture: <LayoutPicture expanded={false} /> },
@@ -1405,9 +1466,9 @@ const ALL_TABS = [
 
 export type SettingsTab = (typeof ALL_TABS)[number]["id"];
 
-/// Dray Island is a Mac app, so elsewhere its tab would be a page of controls for nothing.
+/// Dray Island runs on a Mac and on Linux, so elsewhere its tab would be a page of controls for nothing.
 const SETTINGS_TABS = ALL_TABS.filter(
-  (t) => (IS_MAC || t.id !== "island") && (HAS_DICTATION || t.id !== "transcription"),
+  (t) => (IS_MAC || IS_LINUX || t.id !== "island") && (HAS_DICTATION || t.id !== "transcription"),
 );
 
 /// A line under a tab's title saying what the tab is for. Accounts has one
@@ -1482,7 +1543,7 @@ function SettingsTabs({
       // header to hold over the sheet.
       tall
       header={
-        <header className="relative h-(--titlebar-h)" data-tauri-drag-region="deep">
+        <header className="relative flex h-(--titlebar-h) items-center justify-end px-3" data-tauri-drag-region="deep">
           {/* Where the gear that opened this sits: the sidebar's right end. */}
           <div className="absolute top-1/2 right-[calc(100%-15rem+0.5rem)] -translate-y-1/2">
             <Tooltip>
@@ -1503,6 +1564,7 @@ function SettingsTabs({
               </TooltipContent>
             </Tooltip>
           </div>
+          <WindowControls />
         </header>
       }
       sidebar={

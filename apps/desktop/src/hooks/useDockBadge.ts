@@ -1,8 +1,11 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { attentionCount } from "@/lib/attention";
+import { isWindowFocused, onFocusChange } from "@/lib/focus";
+import { IS_LINUX } from "@/lib/platform";
+import { invoke } from "@/lib/transport";
 import type { SessionIndexItem, SessionStatus } from "@/types/events";
 
 /// Mirror the attention count onto the dock icon's badge.
@@ -30,6 +33,7 @@ export function useDockBadge(
     try {
       // Best-effort like the desktop banner: the rail is the signal that has to
       // work, and a dock icon that failed to update is not worth raising.
+      // On Linux this reaches a launcher only where libunity is installed.
       void getCurrentWindow()
         .setBadgeCount(count === 0 ? undefined : count)
         .catch(() => {});
@@ -38,4 +42,20 @@ export function useDockBadge(
       // than rejecting there.
     }
   }, [count]);
+
+  // Linux's other half: the window's urgency hint. Raised only by a count
+  // rising while the reader is away, and dropped on their return, since a
+  // taskbar entry flashing at someone looking at the window says nothing.
+  const seen = useRef(count);
+  useEffect(() => {
+    if (!IS_LINUX) return;
+    if (count === 0) setUrgent(false);
+    else if (count > seen.current && !isWindowFocused()) setUrgent(true);
+    seen.current = count;
+  }, [count]);
+  useEffect(() => (IS_LINUX ? onFocusChange((focused) => focused && setUrgent(false)) : undefined), []);
+}
+
+function setUrgent(urgent: boolean) {
+  void invoke("set_window_urgent", { urgent }).catch(() => {});
 }

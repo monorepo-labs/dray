@@ -14,6 +14,7 @@ import DiffWorkerPool from "@/components/DiffWorkerPool";
 import NoticeStack from "@/components/NoticeStack";
 import BreakOverlay from "@/components/BreakOverlay";
 import { useBreakDue } from "@/lib/breaks";
+import { askToFixConflicts } from "@/lib/fixConflicts";
 import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
 import type { SettingsTab } from "@/components/SettingsPage";
@@ -38,7 +39,7 @@ import {
   clearOpenError,
   closeTab,
   describePick,
-  isRecording,
+  recordedTab,
   navigate,
   openInBrowser,
   reachableUrl,
@@ -55,6 +56,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useChanges } from "@/hooks/useChanges";
 import { usePrMarks } from "@/hooks/usePrMarks";
 import { usePrReady } from "@/hooks/usePrReady";
+import { useAutoMergeCards } from "@/hooks/useAutoMergeCards";
 import { useWorkStatus } from "@/hooks/useWorkStatus";
 import HandoffRow from "@/components/composer/HandoffRow";
 import { trackFeature } from "@/lib/analytics";
@@ -90,6 +92,11 @@ import Sidebar, {
 import { useChord } from "@/hooks/useShortcuts";
 import { type Chord, formatChords } from "@/lib/shortcuts";
 import Crew, { CREW_BESIDE, CREW_STACK_WITH_PANEL_W, CREW_W } from "@/components/Crew";
+import TasksPanel from "@/components/TasksPanel";
+import StalledTasks from "@/components/chat/StalledTasks";
+import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/MergeCard";
+import { cardRepos } from "@/lib/mergeCard";
+import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
@@ -107,12 +114,13 @@ import {
 } from "@/lib/groups";
 import ComposerToolbar from "@/components/composer/ComposerToolbar";
 import DictateControl from "@/components/composer/DictateControl";
-import { HAS_DICTATION } from "@/lib/platform";
+import { HAS_DICTATION, IS_MAC } from "@/lib/platform";
 import AppShell from "@/components/layout/AppShell";
+import WindowControls from "@/components/layout/WindowControls";
 import { offersFast } from "@/lib/fastMode";
 import { lockedMidTurn } from "@/lib/liveControls";
 import { nextEffort } from "@/components/composer/ModelSelector";
-import { nextHarness } from "@/lib/model";
+import { AGENT_LABELS, HARNESS_ORDER, nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { closeActiveTab, ItemTab, type ViewTab } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
@@ -120,7 +128,17 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { attachmentKey, clearAttachments, pickAttachments, restoreAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
 import { refreshActiveDoc, saveActiveDoc, useDocs } from "@/hooks/useDocs";
-import { closeFile, useOpenFiles } from "@/hooks/useOpenFiles";
+import {
+  closeFile,
+  forgetOpenFiles,
+  forgetOpenFilesUnder,
+  openFilesFor,
+  useOpenFiles,
+} from "@/hooks/useOpenFiles";
+import BotAvatar from "@/components/BotAvatar";
+import Orb from "@/components/Orb";
+import PickTarget, { type PickOption } from "@/components/PickTarget";
+import { seededAvatar } from "@/lib/botAvatar";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { useGlass } from "@/hooks/useGlass";
 import { warmHighlighter } from "@/hooks/useHighlighter";
@@ -166,7 +184,7 @@ import { useAgentUpdates, useAutoUpdateAgents } from "@/hooks/useAgentUpdates";
 import { overwritesInPlace, turnRunningOn } from "@/lib/agentUpdates";
 import LoginExpiredNotice from "@/components/composer/LoginExpiredNotice";
 import AutoContinueNotice from "@/components/composer/AutoContinueNotice";
-import type { Attachment, Harness, IssueRef, SessionIndexItem, WorktreeDisposition } from "@/types/events";
+import type { Attachment, Bot, BotPreview, Harness, IssueRef, MergeMethod, SessionIndexItem, SessionSnapshot, WorktreeDisposition } from "@/types/events";
 import { useSlashCommands } from "@/hooks/useSlashCommands";
 import { useRecorder } from "@/hooks/useTranscription";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -180,7 +198,39 @@ import { changeRange, lastToolResult } from "@/lib/changes";
 import { usePlan } from "@/lib/plan";
 import { currentTodos, startsNewList, type Todo } from "@/lib/todos";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { crewRows, crewSeen, inSidebar, withHiddenAsks } from "@/lib/crew";
+import { botAt, botBrowser, botChat, botEntries, botSession, inBotTree, listenForBots, readPreviews, refreshBots, serverOfBot, useBots } from "@/lib/bots";
+import NewBotDialog from "@/components/NewBotDialog";
+import AgentIcon from "@/components/AgentIcon";
+import ModelSelector from "@/components/composer/ModelSelector";
+import { botStance } from "@/lib/permission";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { crewRows, crewSeen, inSidebar, withHiddenAsks, type CrewRow } from "@/lib/crew";
+import type { Stall } from "@/lib/stalled";
+import { useStalledTasks } from "@/hooks/useStalledTasks";
+import {
+  addPickTab,
+  closePickTab,
+  closePicksOn,
+  closeTaskTab,
+  newestSession,
+  openTaskTab,
+  pickFilesKey,
+  repickTab,
+  rowBotOf,
+  stripOf,
+  type PickTab,
+  type PickTabs,
+  type TaskTabs,
+} from "@/lib/taskTabs";
 import { panelMove } from "@/lib/sidebarAuto";
 import { playCelebration, playNotification } from "@/lib/sound";
 import {
@@ -207,6 +257,7 @@ function SettingsReady({ onReady }: { onReady: (ready: boolean) => void }) {
   return null;
 }
 
+const NO_STALLS: Stall[] = [];
 
 function App() {
   const {
@@ -215,6 +266,7 @@ function App() {
     sessions,
     sessionIndexItems,
     statusBySession,
+    unreadWorking,
     askingSessions,
     archivedShown,
     archivedRequested,
@@ -267,6 +319,7 @@ function App() {
     handleSelectSessionIndexItem,
     navGen,
     handleNewSession,
+    handleNewBotSession,
     restoreDraftControls,
     markSessionUnread,
     setSessionFlags,
@@ -283,6 +336,8 @@ function App() {
     paneState,
     indexSide,
     activeServer,
+    botServer,
+    setBotServer,
     tasksBySession,
   } = useSessions();
 
@@ -592,6 +647,25 @@ function App() {
   // the app onto a repo view for every session would be wrong more often than
   // right.
   const [viewTabs, setViewTabs] = useState<Record<string, ViewTab>>({});
+  // A bot's tasks open as tabs in its row, and the bot a task tab was last
+  // picked from — see `stripOf`. Both by bot id. In memory, like `viewTabs`.
+  const [taskTabs, setTaskTabs] = useState<TaskTabs>({});
+  const [taskTabVia, setTaskTabVia] = useState<string | null>(null);
+  // A bot's Diff and Files tabs, each on a session it picked (#892), and
+  // which one is on screen while its chat's view is `pick`. By bot id, like
+  // `taskTabs`; a target equal to the bot id is the bot's own folder.
+  const [pickTabs, setPickTabs] = useState<PickTabs>({});
+  const [pickLit, setPickLit] = useState<Record<string, string>>({});
+  const pickSeen = useRef(new Map<string, SessionIndexItem>());
+  const bots = useBots();
+  /// A bot's current chat session: its newest, since an agent switch starts one.
+  const chatOfBot = useCallback(
+    (id: string) => {
+      const bot = bots.find((b) => b.id === id);
+      return bot && botSession(sessionIndexItems, bot)?.sessionId;
+    },
+    [bots, sessionIndexItems],
+  );
   // Whether the issues page is what the main column is showing. Not a session
   // and not a per-session tab, so it is neither in `viewTabs` nor in the
   // selection: it is a place the reader goes and comes back from, and the
@@ -614,7 +688,14 @@ function App() {
   /// on it.
   const [pickedIssue, setPickedIssue] = useState<IssueRef | null>(null);
 
-  const viewTab: ViewTab = selectedSessionId ? viewTabs[selectedSessionId] ?? "chat" : "chat";
+  const storedViewTab: ViewTab = selectedSessionId ? viewTabs[selectedSessionId] ?? "chat" : "chat";
+  const selectedBotId = botAt(bots, sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.cwd ?? "")?.id;
+  const litPick =
+    storedViewTab === "pick" && selectedBotId
+      ? pickTabs[selectedBotId]?.find((t) => t.id === pickLit[selectedBotId])
+      : undefined;
+  // A pick closed while it was on screen leaves its session on Chat.
+  const viewTab: ViewTab = storedViewTab === "pick" && !litPick ? "chat" : storedViewTab;
 
   /// The picked issue as the one-element list the panel reads.
   ///
@@ -807,11 +888,15 @@ function App() {
     [selectedSession?.events, busy, liveTaskIds],
   );
 
+  // A bot's folder is a git repository only for its own history, which Dray
+  // commits — so no Commit button, no branch and no pull request lookup.
+  const inBotFolder = !!selectedSession && !!botAt(bots, selectedSession.cwd);
+
   // What the composer's handoff row draws itself from, and — one line down —
   // which branch the pull requests are looked up by. Read on the same falling
   // edge as those, since a turn is what moves all of it.
   const { status: workStatus, refresh: refreshWorkStatus } = useWorkStatus(
-    selectedSession?.cwd ?? "",
+    inBotFolder ? "" : selectedSession?.cwd ?? "",
     busy,
   );
   const handoffConfig = useHandoffConfig();
@@ -899,12 +984,23 @@ function App() {
   // `activeTab`.
   const [panelOpens, setPanelOpens] = useState<Record<string, boolean>>({});
   const [panelTabs, setPanelTabs] = useState<Record<string, PanelTab | null>>({});
+  // A bot's row is one arrangement too (#881): its chat and every task open
+  // in it share one pane, open flag and tab pick alike, so the pane stays put
+  // across the row and shows whatever tab is lit. A pick the lit session does
+  // not draw falls back to its default, as anywhere — see `activeTab`.
+  const rowOf = useCallback(
+    (id: string) => {
+      const bot = rowBotOf(taskTabs, id, taskTabVia);
+      return (bot && chatOfBot(bot)) || id;
+    },
+    [taskTabs, taskTabVia, chatOfBot],
+  );
   const openKey = useCallback(
     (id: string) => {
       const group = groupOf(spaceGroups, id);
-      return group ? `group:${group.id}` : id;
+      return group ? `group:${group.id}` : rowOf(id);
     },
-    [spaceGroups],
+    [spaceGroups, rowOf],
   );
   useEffect(() => {
     if (!activeGroup || !selectedSessionId) return;
@@ -913,14 +1009,14 @@ function App() {
       key in prev ? prev : { ...prev, [key]: prev[selectedSessionId] ?? false },
     );
   }, [activeGroup, selectedSessionId]);
-  const panelTab = selectedSessionId ? (panelTabs[selectedSessionId] ?? null) : null;
+  const panelTab = selectedSessionId ? (panelTabs[rowOf(selectedSessionId)] ?? null) : null;
   // Both take the session because one caller opens a session and its pane in
   // the same breath, before the selection has moved.
   const setPanelTab = useCallback(
     (tab: PanelTab | null, id = selectedSessionId) => {
-      if (id) setPanelTabs((prev) => ({ ...prev, [id]: tab }));
+      if (id) setPanelTabs((prev) => ({ ...prev, [rowOf(id)]: tab }));
     },
-    [selectedSessionId],
+    [selectedSessionId, rowOf],
   );
 
   const memberKey = activeGroup ? members(activeGroup).join("\n") : "";
@@ -935,12 +1031,16 @@ function App() {
   // What the composer names as its target in a grid: the focused session's
   // title, with its project in front where the panes span projects and a
   // title alone could belong to either.
+  // A bot's chat is titled with the bot's name, so "<bot> / <title>" says it twice.
+  const withProject = (s: SessionIndexItem, project: string) =>
+    botAt(bots, s.cwd)?.name ?? `${project} / ${s.title}`;
+
   const splitTarget = (() => {
     if (!activeGroup || !selectedSession) return null;
     const projects = new Set(paneColumns.flat().map((i) => i.projectPath));
     const named =
       projects.size > 1
-        ? `${basename(selectedSession.projectPath)} / ${selectedSession.title}`
+        ? withProject(selectedSession, basename(selectedSession.projectPath))
         : selectedSession.title;
     const server = serverOfPath(selectedSession.projectPath);
     return server === LOCAL ? named : `${named} · ${serverName(server)}`;
@@ -993,11 +1093,33 @@ function App() {
   /// preference is kept, so coming back restores the pane exactly as it was;
   /// everything that draws or reads reads this instead.
   const panelShown = panelOpen && !issuesOpen;
+
+  const selectedBot = useMemo(() => {
+    // The held transcript answers too: a session an agent switch just started
+    // reaches the index only once the send returns, and the chat must stay a
+    // bot's chat for that while.
+    const cwd = sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.cwd ?? selectedSession?.cwd;
+    return cwd ? botAt(bots, cwd) : undefined;
+  }, [bots, sessionIndexItems, selectedSessionId, selectedSession?.cwd]);
+
+  // A bot chat's sessions from before the selected one: each agent switch
+  // started a new one, and the chat draws them all as one conversation. A
+  // selected session not on the index yet is the newest, just started.
+  const earlierIds = useMemo(() => {
+    if (!selectedBot) return [];
+    const chat = botChat(sessionIndexItems, selectedBot).map((i) => i.sessionId);
+    const at = chat.indexOf(selectedSessionId ?? "");
+    return at >= 0 ? chat.slice(0, at) : chat;
+  }, [selectedBot, sessionIndexItems, selectedSessionId]);
+
   // Every session the selected one started, at any depth. The crew column
-  // draws only the ones holding a card, and only while one is.
+  // draws only the ones holding a card, and only while one is; a bot's Tasks
+  // tab lists them all, its earlier sessions' tasks included. Off every held
+  // session, not the space's: a bot hands work to whichever project it likes,
+  // in any space.
   const crew = useMemo(
-    () => crewRows(visibleSessions, selectedSessionId, { statusBySession, askingSessions }),
-    [visibleSessions, selectedSessionId, statusBySession, askingSessions],
+    () => crewRows(sessionIndexItems, selectedSessionId, { statusBySession, askingSessions, tasksBySession }, earlierIds),
+    [sessionIndexItems, selectedSessionId, statusBySession, askingSessions, tasksBySession, earlierIds],
   );
   const crewAsks = useMemo(() => crew.filter((r) => r.asking), [crew]);
   // A split has no crew column: it is already several conversations side by
@@ -1040,7 +1162,8 @@ function App() {
   // as on screen. One effect for the grid and the crew together, since
   // `setOnScreen` takes the whole set rather than adding to it — two callers
   // would each wipe the other's.
-  const onScreenKey = [mainGroup ? memberKey : "", crewShown].filter(Boolean).join("\n");
+  // A bot chat's earlier sessions are drawn with it, so they are on screen too.
+  const onScreenKey = [mainGroup ? memberKey : earlierIds.join("\n"), crewShown].filter(Boolean).join("\n");
   useEffect(() => {
     const ids = [...new Set(onScreenKey.split("\n").filter(Boolean))];
     setOnScreen(ids);
@@ -1107,10 +1230,65 @@ function App() {
   // the sidebar, since ⌘F has to open it from a collapsed one, which is not
   // mounted at all.
   const [searchOpen, setSearchOpen] = useState(false);
+  // Every server's list is first read with its projects, in `readServer`.
+  useEffect(() => listenForBots(), []);
   const searchedSessions = useMemo(
-    () => filterSessions(inSidebar(visibleSessions), search),
-    [visibleSessions, search],
+    () => filterSessions(inSidebar(visibleSessions, bots), search),
+    [visibleSessions, bots, search],
   );
+  // Off every session held, not the space-filtered list: a bot is no project and
+  // belongs to no space, so filtering would hide its chat and open a new one.
+  // Chatless while the settled side is loaded: the active chat is not in it, so
+  // an entry built there would open a second one — `openBot` switches back first.
+  const botChats = useMemo(
+    () => botEntries(bots, archivedShown ? [] : sessionIndexItems).flatMap((b) => (b.session ? [b.session] : [])),
+    [archivedShown, bots, sessionIndexItems],
+  );
+  // Each chat's last reply, read off the end of its log rather than loading the
+  // transcript. Read again whenever a chat's status or last activity moves.
+  const [botPreviews, setBotPreviews] = useState<Record<string, BotPreview>>({});
+  const previewKey = botChats
+    .map((c) => `${c.sessionId}:${statusBySession[c.sessionId] ?? c.status}:${c.modified}`)
+    .join("|");
+  useEffect(() => {
+    const sessionIds = botChats.map((c) => c.sessionId);
+    if (sessionIds.length === 0) return;
+    void readPreviews(sessionIds).then(setBotPreviews);
+    // The key carries everything that moves a preview.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewKey]);
+  const botList = useMemo(
+    () => botEntries(bots, archivedShown ? [] : sessionIndexItems, botPreviews),
+    [archivedShown, bots, sessionIndexItems, botPreviews],
+  );
+  const [newBotOpen, setNewBotOpen] = useState(false);
+  const [botToDelete, setBotToDelete] = useState<Bot | null>(null);
+  // A bot clicked while the settled list was up, opened once the active side lands.
+  const [botWaiting, setBotWaiting] = useState<Bot | null>(null);
+  const openBot = (bot: Bot) => {
+    if (archivedShown) {
+      setShowArchived(false);
+      setBotWaiting(bot);
+      return;
+    }
+    const chat = botList.find((b) => b.bot.id === bot.id)?.session;
+    // Read before the select: opening the chat marks it read, and the NEW
+    // divider has to know it was not.
+    setOpenedUnread(
+      chat && (statusBySession[chat.sessionId] ?? chat.status) === "completed" ? chat.sessionId : null,
+    );
+    goToSession(() =>
+      chat ? void handleSelectSessionIndexItem(chat.sessionId) : handleNewBotSession(bot.path),
+    );
+  };
+  const [openedUnread, setOpenedUnread] = useState<string | null>(null);
+  useEffect(() => {
+    if (!botWaiting || archivedShown) return;
+    setBotWaiting(null);
+    openBot(botWaiting);
+    // `openBot` is rebuilt every render; the side landing is what this waits on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [botWaiting, archivedShown]);
   // Narrowed the way the sessions above are, so a draft never sits under a
   // project the list is not drawing.
   const sidebarDrafts = useMemo(() => {
@@ -1134,17 +1312,87 @@ function App() {
   // nowhere but the archived list is one nobody is waiting to land. Marks
   // already fetched still draw over there, since the cache outlives this — what
   // is dropped is the spending, not the answer.
-  const repoPaths = useMemo(
-    () => (archivedShown ? [] : [...new Set(visibleSessions.map((i) => i.projectPath))]),
-    [archivedShown, visibleSessions],
+  // A bot's tasks run hidden, so their repos are added while their Tasks tab
+  // can be on screen: that tab draws their marks.
+  // A merge card's task may be settled and out of every list, so the repos the
+  // cards on screen name are read too: the open chat's, and every split pane's.
+  const cardRepoKey = useMemo(
+    () =>
+      cardRepos(
+        sessions
+          .filter(
+            (s) =>
+              s.sessionId === selectedSessionId ||
+              earlierIds.includes(s.sessionId) ||
+              memberKey.split("\n").includes(s.sessionId),
+          )
+          .flatMap((s) => s.events),
+      ).join("\n"),
+    [sessions, selectedSessionId, earlierIds, memberKey],
   );
-  const prMarks = usePrMarks(repoPaths);
+  // Every task's too, wherever the reader is, hidden or filtered away: its PR
+  // turning ready posts a merge card in the chat that started it, and a bot's
+  // stalled task is judged by its PR. A bot's tasks are tasks like any other.
+  const botRepoKey = useMemo(
+    () =>
+      [
+        ...new Set(
+          sessionIndexItems
+            .filter((i) => !i.archived && i.parentSessionId && i.parentSessionId !== i.sessionId)
+            .map((i) => i.projectPath),
+        ),
+      ].join("\n"),
+    [sessionIndexItems],
+  );
+  // Whichever sidebar list is up: a card on screen is still being read.
+  const repoPaths = useMemo(
+    () => [
+      ...new Set([
+        ...(archivedShown ? [] : [...visibleSessions, ...crew.map((r) => r.item)].map((i) => i.projectPath)),
+        ...(cardRepoKey ? cardRepoKey.split("\n") : []),
+        ...(botRepoKey ? botRepoKey.split("\n") : []),
+      ]),
+    ],
+    [archivedShown, visibleSessions, crew, cardRepoKey, botRepoKey],
+  );
+  const botRepos = useMemo(() => (botRepoKey ? botRepoKey.split("\n") : []), [botRepoKey]);
+  const prMarks = usePrMarks(repoPaths, botRepos);
 
   // "This can land now" — raised off the sidebar's marks rather than the
   // panel's own read, which is the only way it can be noticed at all: the
   // panel's poll is gated on its tab being on screen, and a tab on screen is
   // exactly the case with nothing to announce.
-  usePrReady({ sessions: visibleSessions, prFor: prMarks.prFor });
+  usePrReady({ sessions: visibleSessions, prFor: prMarks.prFor, canAnnounce });
+  // The same marks, turned into a merge card in the chat that started a task,
+  // so landing it never waits on an agent remembering to post one.
+  useAutoMergeCards({ items: sessionIndexItems, bots, prFor: prMarks.prFor });
+
+  // Each bot's tasks that have sat untouched: drawn at the foot of its chat,
+  // and a banner per bot when new ones land while the window is away.
+  const taskPr = useCallback(
+    (row: CrewRow) => prMarks.prFor(row.item.projectPath, sessionBranch(row.item)),
+    [prMarks.prFor],
+  );
+  const taskPrReadAt = useCallback((row: CrewRow) => prMarks.readAt(row.item.projectPath), [prMarks.readAt]);
+  const stalled = useStalledTasks({
+    bots,
+    items: sessionIndexItems,
+    statusBySession,
+    askingSessions,
+    tasksBySession,
+    prOf: taskPr,
+    prReadAt: taskPrReadAt,
+  });
+  const stalls = (selectedBot && stalled.byBot.get(selectedBot.id)?.card) || NO_STALLS;
+  // The card's row the reader last picked, which the bot's chat scrolls to.
+  // Named with its bot, so another bot's chat never acts on it.
+  const [stallFocus, setStallFocus] = useState<{ botId: string; sessionId: string; at: number } | null>(null);
+  const botFocus = stallFocus && stallFocus.botId === selectedBot?.id ? stallFocus : null;
+  // A pick is honoured once. Kept past leaving its bot, it came back as a new
+  // `botFocus` on every return and the chat jumped to it again.
+  useEffect(() => {
+    setStallFocus((focus) => (focus && focus.botId !== selectedBot?.id ? null : focus));
+  }, [selectedBot?.id]);
 
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it
@@ -1153,7 +1401,7 @@ function App() {
   // `workStatus.branch` is git's own reading of HEAD and outranks the name the
   // index carries, which is only ever a guess made at creation — see
   // `sessionBranch`. It lands a frame late and the fallback covers that frame.
-  const prBranch = selectedSession
+  const prBranch = selectedSession && !inBotFolder
     ? sessionBranch(selectedSession, workStatus?.branch)
     : null;
   // The header's way back from a hidden session, which has no sidebar row. The
@@ -1185,15 +1433,8 @@ function App() {
     selectedSession?.cwd ?? "",
     prBranch,
     panelShown && (panelTab === "pr" || panelTab === null),
-    // A pull request appearing is the moment the session stops being about the
-    // turn and starts being about landing, so the pane opens onto it rather
-    // than waiting to be asked. Fires at most once per PR — see `onOpened`.
-    //
-    // It moves the pick as well as opening the pane, and has to: `activeTab`
-    // honours a standing pick over the derived default, so opening alone lands
-    // on whichever tab the reader last chose.
-    // A fresh closure each render is fine: the hook holds it in a ref.
-    () => showPanel("pr"),
+    // No opening the pane when a PR appears: an agent posts a merge card in
+    // the chat for that (`dray session merge-card`), and the pane opens by hand.
     // A merge or a reopen changes what the sidebar's mark should say, and that
     // mark comes from a different read with a two-minute freshness window — so
     // without this the row keeps its open-PR glyph until the window expires or
@@ -1294,8 +1535,13 @@ function App() {
 
   const activeDoc = docs.find((doc) => doc.path === activeDocPath) ?? null;
 
-  const browserTabs = useBrowserTabs(selectedSessionId);
-  const blankTabs = useBlankTabs(selectedSessionId ?? "");
+  // Every session browses in its own browser, a bot's tasks included. A bot
+  // chat is the exception only in name: an agent switch makes it several
+  // sessions, and its pages live on the oldest, as the server routes them.
+  const browserOf = (id: string) => botBrowser(bots, sessionIndexItems, id) ?? id;
+  const browserSession = selectedSessionId ? browserOf(selectedSessionId) : null;
+  const browserTabs = useBrowserTabs(browserSession);
+  const blankTabs = useBlankTabs(browserSession ?? "");
   const pendingBrowserTab = blankTabs.active !== null;
   const hasBrowserTabs = browserTabs && browserTabs.length > 0;
   // A link's tab is answered for before the strip lists it, and the Browser
@@ -1354,19 +1600,134 @@ function App() {
     sessionTodos !== null ||
     sessionAttachments.length > 0;
 
+  // A task a bot started, named in the bot's chat. Takes an id prefix, as
+  // `dray session send` does, so a message the bot sent finds its task.
+  const taskOf = useCallback(
+    (id: string) => {
+      const match = (sessionId: string) => sessionId === id || (id.length >= 8 && sessionId.startsWith(id));
+      const item = crew.find((r) => match(r.item.sessionId))?.item ?? sessionIndexItems.find((i) => match(i.sessionId));
+      return item && { sessionId: item.sessionId, title: item.title };
+    },
+    [crew, sessionIndexItems],
+  );
+
+  const earlierLoaded = sessions.filter((s) => earlierIds.includes(s.sessionId));
+  const earlierKey = earlierLoaded.map((s) => `${s.sessionId}:${s.olderBefore}:${s.events.length}`).join();
+  // Loaded and held as on screen (`onScreenKey`), and read further back only
+  // as the reader scrolls (`Chat`). Only the run of loaded ones just before the
+  // selected session is passed: one still loading would leave a gap the chat
+  // could not tell from the conversation.
+  const earlier = useMemo(
+    () => {
+      const run: SessionSnapshot[] = [];
+      for (const id of [...earlierIds].reverse()) {
+        const held = earlierLoaded.find((s) => s.sessionId === id);
+        if (!held) break;
+        run.unshift(held);
+      }
+      return run;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [earlierIds.join(), earlierKey],
+  );
+
+  // The bot chat whose row the titlebar draws, and the task lit in it.
+  const strip = stripOf(taskTabs, selectedSessionId, selectedBot?.id ?? null, taskTabVia, chatOfBot);
+  const stripOwner = strip && strip.owner !== selectedSessionId
+    ? sessionIndexItems.find((i) => i.sessionId === strip.owner)
+    : undefined;
+
+  // What a bot row's Diff and Files picks choose from: the bot's tasks as the
+  // Tasks tab lists them, read off the row's owner rather than the selection,
+  // which is a task while a task tab is lit.
+  const stripBot = strip ? bots.find((b) => b.id === strip.bot) : undefined;
+  const botTasks = useMemo(
+    () =>
+      strip && stripBot
+        ? crewRows(
+            sessionIndexItems,
+            strip.owner,
+            { statusBySession, askingSessions },
+            botChat(sessionIndexItems, stripBot)
+              .map((i) => i.sessionId)
+              .filter((id) => id !== strip.owner),
+          )
+            .map((r) => r.item)
+            .sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified))
+        : [],
+    [strip?.owner, stripBot, sessionIndexItems, statusBySession, askingSessions],
+  );
+  // The index lists one side of the sidebar, so a task settled under a pick
+  // leaves it while its folder may still be there to show. Each target's
+  // entry is kept as last seen, and the lit one is asked for again on every
+  // index change, since settling can delete the worktree after it leaves.
+  for (const t of Object.values(pickTabs).flat()) {
+    const live = sessionIndexItems.find((i) => i.sessionId === t.target);
+    if (live) pickSeen.current.set(t.target, live);
+  }
+  const [pickAsked, setPickAsked] = useState<SessionIndexItem | null>(null);
+  const [pickTick, setPickTick] = useState(0);
+  const litPickBusy =
+    litPick?.kind === "changes" && statusBySession[litPick.target] === "in_progress" && !issuesOpen;
+  useEffect(() => {
+    if (!litPickBusy) return;
+    const t = setInterval(() => setPickTick((n) => n + 1), 15_000);
+    return () => clearInterval(t);
+  }, [litPickBusy]);
+  const unlistedPick =
+    litPick && litPick.target !== selectedBotId && !sessionIndexItems.some((i) => i.sessionId === litPick.target)
+      ? litPick.target
+      : null;
+  useEffect(() => {
+    if (!unlistedPick) return;
+    let live = true;
+    void invoke<SessionIndexItem | null>("session_index_item", { sessionId: unlistedPick })
+      .catch(() => null)
+      .then((item) => {
+        if (!live || !item) return;
+        pickSeen.current.set(unlistedPick, item);
+        setPickAsked(item);
+      });
+    return () => {
+      live = false;
+    };
+  }, [unlistedPick, sessionIndexItems]);
+  // The bot's own folder is whichever chat session it has now.
+  const pickItem = (target: string) =>
+    sessionIndexItems.find((i) => i.sessionId === (target === strip?.bot ? strip.owner : target)) ??
+    (pickAsked?.sessionId === target ? pickAsked : undefined) ??
+    pickSeen.current.get(target);
+  const pickTitle = (target: string) =>
+    target === strip?.bot ? (stripBot?.name ?? "Bot") : (pickItem(target)?.title ?? "Task gone");
+  const pickFace = (target: string) =>
+    target === strip?.bot ? (
+      <BotAvatar seed={stripBot?.id ?? target} avatar={stripBot?.avatar} className="block size-4 shrink-0" />
+    ) : statusBySession[target] === "in_progress" ? (
+      <Orb state="working" label="Working" size={16} />
+    ) : (
+      <BotAvatar seed={target} avatar={seededAvatar(target)} className="block size-4 shrink-0 scale-[1.18]" />
+    );
+  /// Puts a pick on screen in its bot's row, stepping out of a lit task tab.
+  const showPick = (bot: string, owner: string, id: string) => {
+    setPickLit((prev) => ({ ...prev, [bot]: id }));
+    setViewTabs((prev) => ({ ...prev, [owner]: "pick" }));
+    if (selectedSessionId !== owner) void handleSelectSessionIndexItem(owner);
+  };
+
   const tabs = tabOrder({
     pr: hasPrTab,
     docs: hasDocsTab,
     issue: hasIssueTab,
     more: hasMoreTab,
     plan: hasPlanTab,
+    tasks: !!selectedBot,
   });
 
   // One rule, read rather than written back: an explicit pick wins wherever it
   // still names a tab this session draws, and otherwise the derived default
   // stands in. Not written back, so switching to a session without a PR keeps
   // the reader's pick for when they switch to one that has it.
-  const activeTab: PanelTab = panelTab && tabs.includes(panelTab) ? panelTab : defaultTab;
+  const activeTab: PanelTab = panelTab && tabs.includes(panelTab) ? panelTab : selectedBot ? "tasks" : defaultTab;
 
 
   // Drops the Browser view's claim, `toggleSidebar`'s reason: a pane moved by
@@ -1411,9 +1772,13 @@ function App() {
   const composerServer = composerProject ? serverOfPath(composerProject) : LOCAL;
   const { reachable: reachableSessions, refresh: refreshReachableSessions } = useReachableSessions(composerServer);
   const connectedServers = useServers();
+  // In a bot's chat, `&` offers its own tasks, which run hidden and live in no
+  // project the composer is on: every one still active, set-aside ones aside.
   const composerSessions = useMemo(
     () =>
-      sessionIndexItems.filter(
+      selectedBot
+        ? crew.map((r) => r.item).filter((i) => !i.archived && !i.aside)
+        : sessionIndexItems.filter(
         (i) =>
           sessionInSpace(projects, space, i.projectPath) &&
           (!composerProject || sameProject(i.projectPath, composerProject)) &&
@@ -1422,7 +1787,7 @@ function App() {
       ),
     // `sameProject` follows `projects`, and `serverConnected` follows the list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionIndexItems, projects, space, composerProject, composerServer, reachableSessions, connectedServers],
+    [selectedBot, crew, sessionIndexItems, projects, space, composerProject, composerServer, reachableSessions, connectedServers],
   );
   const { commands: slashCommands, loading: slashCommandsLoading } = useSlashCommands(
     composerCwd,
@@ -1589,7 +1954,7 @@ function App() {
   // Same order the sidebar draws, so the walk matches the list even when the
   // sidebar is collapsed and there is nothing on screen to follow — project
   // list included, since that is what orders the groups it steps through.
-  const ordered = useMemo(
+  const sidebarOrder = useMemo(
     () =>
       sortSessions(
         searchedSessions,
@@ -1601,6 +1966,12 @@ function App() {
         archivedShown ? [] : spaceGroups,
       ),
     [searchedSessions, projects, archivedShown, statusBySession, sidebarAsking, prMarks.prFor, spaceGroups],
+  );
+  // What ⌘⇧↑/↓ and the jump digits walk: the bots' chats first, as the sidebar
+  // draws them above every project, then the sidebar's own order.
+  const ordered = useMemo(
+    () => [...botList.flatMap((b) => (b.session ? [b.session] : [])), ...sidebarOrder],
+    [botList, sidebarOrder],
   );
 
   // Wraps downward only. Falling off the bottom returns to the newest session,
@@ -1846,25 +2217,30 @@ function App() {
     return () => setIssueOpener(null);
   }, []);
 
-  // A link in the transcript opens as a new tab in the session's browser and
-  // flips the main column to the Browser view, leaving the side panel alone.
-  // ⌘-click, or no session to hold one, goes to the system browser.
+  // A link in the transcript opens as a new tab in the browser of the chat it
+  // was clicked in and flips the main column to the Browser view, leaving the
+  // side panel alone. In a bot's row the main column is the row's, so there
+  // it opens in the side panel instead, beside that chat — the bot's or the
+  // lit task's. ⌘-click, or no session to hold one, goes to the system browser.
   useEffect(() => {
     setLinkOpener((url, { external }) => {
-      if (!selectedSessionId) {
+      if (!selectedSessionId || !browserSession) {
         void openUrl(url).catch(console.error);
         return;
       }
       // The session is named outright: the read lands after an await, and by
       // then the reader may be on another session whose pane must stay put.
       const sessionId = selectedSessionId;
+      const browser = browserSession;
+      const inBotRow = !!selectedBotId || rowOf(sessionId) !== sessionId;
       const gen = navGen.current;
       void reachableUrl(sessionId, url).then(
         (reached) => {
           if (external) return void openUrl(reached).catch(console.error);
-          void openInBrowser(sessionId, reached, true)
+          void openInBrowser(browser, reached, true)
             .then(() => {
-              setBrowserWanted(sessionId);
+              if (inBotRow) showPanel("browser", sessionId);
+              else setBrowserWanted(sessionId);
               trackBrowserOpen(reached);
             })
             .catch(() => {
@@ -1881,7 +2257,7 @@ function App() {
       );
     });
     return () => setLinkOpener(null);
-  }, [selectedSessionId, navGen, setError]);
+  }, [selectedSessionId, browserSession, selectedBotId, rowOf, showPanel, navGen, setError]);
 
   // An element picked in the page lands in that session's draft, and the
   // composer is brought on screen to show it — off the full view and onto
@@ -2179,7 +2555,12 @@ function App() {
   /// exist. The body is two array scans, which is what makes blocking paint on
   /// it affordable.
   useLayoutEffect(() => {
-    if (projectPath && !spaceProjects.some((p) => p.path === projectPath)) {
+    // A bot's folder is in no space and every space: it is no project.
+    if (
+      projectPath &&
+      !botAt(bots, projectPath) &&
+      !spaceProjects.some((p) => p.path === projectPath)
+    ) {
       handleSelectProject(spaceProjects[0]?.path ?? null);
     }
 
@@ -2187,14 +2568,23 @@ function App() {
     const openPath =
       selectedSession?.projectPath ??
       sessionIndexItems.find((i) => i.sessionId === selectedSessionId)?.projectPath;
-    if (openPath && !sessionInSpace(projects, space, openPath)) {
+    // A bot's chat and its tasks belong to every space: a bot hands work to any
+    // project, and a task opened from its Tasks tab must not be closed again.
+    // A settled task lit in its bot's row is in no loaded index, so the row
+    // says what `inBotTree` cannot.
+    if (
+      openPath &&
+      !strip?.lit &&
+      !inBotTree(bots, sessionIndexItems, selectedSessionId) &&
+      !sessionInSpace(projects, space, openPath)
+    ) {
       goToSession(handleNewSession);
     }
     // The membership question and its two answers. `handleSelectProject` and
     // `handleNewSession` are rebuilt every render, so listing them would run
     // this on every one.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [space, projects, spaceProjects, projectPath, selectedSessionId, selectedSession, sessionIndexItems]);
+  }, [space, projects, spaceProjects, projectPath, selectedSessionId, selectedSession, sessionIndexItems, bots, strip?.lit]);
 
   /// The sidebar's own "New space", which is a request for the field rather
   /// than for a space — naming it is Settings' job, so this only opens the tab.
@@ -2388,12 +2778,12 @@ function App() {
   // arbitration — bar the last arm, which is the reader on Chat with the
   // browser beside it in the panel and no grid to close a pane out of.
   const closeBrowserTab = () => {
-    if (!selectedSessionId || isRecording(selectedSessionId)) return;
+    if (!browserSession) return;
     // A blank tab has no browser behind it, so it is dropped rather than
     // closed — and it is what the reader is looking at while it is up.
-    if (blankTabs.active !== null) return closeBlankTab(selectedSessionId, blankTabs.active);
+    if (blankTabs.active !== null) return closeBlankTab(browserSession, blankTabs.active);
     const open = browserTabs?.find((tab) => tab.active);
-    if (open) void closeTab(selectedSessionId, open.id);
+    if (open && open.id !== recordedTab(browserSession)) void closeTab(browserSession, open.id);
   };
   // `viewTab` is per session and the issues page does not clear it, so a
   // reader who opened Issues from the Files view still has `activeFile`
@@ -2402,8 +2792,15 @@ function App() {
   // `gridShown` both hold `!issuesOpen`, and `panelShown` is the pane the
   // page hides.
   const fileShown = !issuesOpen && viewTab === "files" && !!activeFile;
+  const litPickFile = (() => {
+    if (issuesOpen || litPick?.kind !== "files") return undefined;
+    const { open, active } = openFilesFor(pickFilesKey(litPick));
+    return open.find((f) => f.path === active);
+  })();
   const rowTabOnScreen =
-    !issuesOpen && !!selectedSessionId && (viewTab === "files" || viewTab === "changes" || fullBrowserOpen);
+    !issuesOpen &&
+    !!selectedSessionId &&
+    (viewTab === "files" || viewTab === "changes" || viewTab === "pick" || fullBrowserOpen || !!strip?.lit);
   const closeTabOrPane = () => {
     if (!selectedSessionId) return;
     // The row's own close, so the chord lands where the cross would — and
@@ -2461,9 +2858,9 @@ function App() {
       if (pickedIssue) return pickedIssueData.refresh();
       return issuesRefreshRef.current?.();
     }
-    if (browserShown && selectedSessionId) {
+    if (browserShown && browserSession) {
       if (!pendingBrowserTab && browserTabs?.some((tab) => tab.active)) {
-        void navigate(selectedSessionId, "reload");
+        void navigate(browserSession, "reload");
       }
       return;
     }
@@ -2472,12 +2869,12 @@ function App() {
   // ⌘⇧← / ⌘⇧→ step the browser's strip, clamped like every other subtab row.
   // The pending tab sits at the end of it, which is where the strip draws it.
   const stepBrowserTab = (delta: number) => {
-    if (!selectedSessionId || !browserTabs || isRecording(selectedSessionId)) return;
+    if (!browserSession || !browserTabs) return;
     const from = pendingBrowserTab ? browserTabs.length : browserTabs.findIndex((tab) => tab.active);
     const next = browserTabs[from + delta];
     if (!next) return;
-    if (pendingBrowserTab) setPendingTab(selectedSessionId, false);
-    if (!next.active) void activateTab(selectedSessionId, next.id);
+    if (pendingBrowserTab) setPendingTab(browserSession, false);
+    if (!next.active) void activateTab(browserSession, next.id);
   };
   // The Diff view and an open file step their own strip on this chord, and the
   // main column's row wins over a browser sitting beside it in the panel.
@@ -2588,6 +2985,8 @@ function App() {
   useHotkey("issues.open", () => setIssuesOpen(true));
   const fullscreen = useFullscreen();
   useGlass(fullscreen);
+  // Only a windowed Mac has traffic lights over the strip to clear.
+  const lights = IS_MAC && !fullscreen;
 
   // The session on screen, whether or not its transcript has landed. A session
   // just selected is not in memory for the round trip that reads it, and
@@ -2601,14 +3000,188 @@ function App() {
   // empty pane until it lands rather than a different screen.
   const shownSession =
     selectedSession ?? sessionIndexItems.find((i) => i.sessionId === selectedSessionId) ?? null;
+  // The session whose row the titlebar draws: the bot's chat over its lit task.
+  const rowSession = stripOwner ?? shownSession;
+  // The way back from a hidden session, where its bot's row is not drawn.
+  const crumb = strip ? undefined : hiddenParent;
   // Off the index, never the snapshot: `session_changed` writes only there.
-  const selectedItem = sessionIndexItems.find((i) => i.sessionId === selectedSessionId);
+  const selectedItem =sessionIndexItems.find((i) => i.sessionId === selectedSessionId);
+  // The empty composer is a bot's first chat when it is aimed at the bot's folder.
+  const newBot = !shownSession && projectPath ? botAt(bots, projectPath) : undefined;
+  // A bot whose empty chat opens on a welcome (Dray Bot) draws as a chat
+  // already under way: the welcome in the transcript, the composer below it.
+  const welcomeBot = newBot?.welcome ? newBot : undefined;
+  // In a bot's chat `@` lists the other bots instead of files: those on its
+  // own server, the only ones `dray bot send` reaches from there.
+  const composerBot = selectedBot ?? newBot;
+  const composerBots = useMemo(() => {
+    if (!composerBot) return undefined;
+    const server = serverOfBot(composerBot);
+    return bots.filter((b) => b.id !== composerBot.id && serverOfBot(b) === server);
+  }, [bots, composerBot]);
+  // Its agent is the reader's own where that one is installed, else the first
+  // installed in the picker's order, Claude Code first.
+  useEffect(() => {
+    if (!welcomeBot || !agents) return;
+    if (agents.find((a) => a.harness === harness)?.available) return;
+    const installed = HARNESS_ORDER.find((h) => agents.find((a) => a.harness === h)?.available);
+    if (installed) setHarness(installed);
+    // Once per open bot and per availability answer, never on the reader's own pick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [welcomeBot?.id, agents]);
 
   // What every transcript on screen reports back through: the main column, a
   // split pane and a crew card alike.
+  /// Steps into a task tab: its chat on screen, the bot's row kept above it.
+  const pickTaskTab = (bot: string, id: string) => {
+    setTaskTabVia(bot);
+    setViewTabs((prev) => ({ ...prev, [id]: "chat" }));
+    void handleSelectSessionIndexItem(id);
+  };
+
+  /// A task clicked in a bot's chat or its Tasks tab opens as a tab in the
+  /// bot's row (#881). ⌘-click, or a session that is no task of this bot,
+  /// switches to it alone, the way it always did.
+  const openTask = async (id: string, alone = false) => {
+    const bot = selectedBot;
+    // A settled task is in no crew, so it is asked for and its parents walked
+    // up to the bot's folder — any of its chat's sessions, since a task
+    // started before an agent switch names the old one. Its chat still names
+    // it, so a settled task opens as a tab again. Bounded like `inBotTree`.
+    const indexItem = (sid: string) =>
+      sessionIndexItems.find((i) => i.sessionId === sid) ??
+      invoke<SessionIndexItem | null>("session_index_item", { sessionId: sid }).catch(() => null);
+    let task = crew.find((r) => r.item.sessionId === id)?.item;
+    if (!task && bot && !alone) {
+      const found = await indexItem(id);
+      let at = found;
+      for (let hops = 0; at?.parentSessionId && hops < 8; hops++) {
+        const parent = await indexItem(at.parentSessionId);
+        if (parent && botAt(bots, parent.cwd)?.id === bot.id) {
+          task = found ?? undefined;
+          break;
+        }
+        at = parent;
+      }
+    }
+    if (alone || !bot || !task) {
+      setTaskTabVia(null);
+      void handleSelectSessionIndexItem(id);
+      return;
+    }
+    setTaskTabs((prev) => openTaskTab(prev, bot.id, { sessionId: id, title: task.title }));
+    pickTaskTab(bot.id, id);
+  };
+
+
+  /// Closes the picks on `target` — every kind, or only `kind` — and frees
+  /// the file stores they and any other pick held for it.
+  const dropPicksOn = (target: string, kind?: PickTab["kind"]) => {
+    for (const t of Object.values(pickTabsRef.current).flat()) {
+      if (t.target === target && (!kind || t.kind === kind)) forgetOpenFilesUnder(`pick:${t.id}:`);
+      else forgetOpenFiles(pickFilesKey({ ...t, target }));
+    }
+    if (!kind) pickSeen.current.delete(target);
+    setPickTabs((prev) => closePicksOn(prev, target, kind));
+  };
+  const pickTabsRef = useRef(pickTabs);
+  pickTabsRef.current = pickTabs;
+  const dropPicksOnRef = useRef(dropPicksOn);
+  dropPicksOnRef.current = dropPicksOn;
+  // Settling leaves a task's work to review but nothing to open, so its Files
+  // picks close; deleting its worktree leaves no diff either. Its tab in the
+  // bot's row closes too: done work is reopened from a card, not kept open.
+  // Read off the index event, since the bot settles tasks itself as often as
+  // the reader, and every settle, Merge's included, announces one.
+  useEffect(() => {
+    const un = listen<SessionIndexItem>("session_changed", ({ payload }) => {
+      if (payload.archived) setTaskTabs((prev) => closeTaskTab(prev, payload.sessionId));
+      if (payload.worktreeRemoved) dropPicksOnRef.current(payload.sessionId);
+      else if (payload.archived) dropPicksOnRef.current(payload.sessionId, "files");
+    });
+    return () => void un.then((off) => off());
+  }, []);
+
+  const deleteTask = async (id: string) => {
+    if (await deleteSession(id)) {
+      setTaskTabs((prev) => closeTaskTab(prev, id));
+      dropPicksOn(id);
+    }
+  };
+
+  /// Merges a task's pull request, then settles the task where `task` is
+  /// given — the Tasks tab's Merge, and a merge card's in a bot's chat.
+  const mergeTask = async (
+    projectPath: string,
+    number: number,
+    method: MergeMethod,
+    task: { item: SessionIndexItem; busy: boolean } | null,
+  ) => {
+    // From the repo root: a task's worktree may already be gone.
+    await invoke("merge_pr", { cwd: projectPath, number, method });
+    prMarks.refreshAfterWrite();
+    // Landed, so the task is done — unless it is still working,
+    // which settling would kill mid-turn.
+    if (!task) return;
+    const { item } = task;
+    if (task.busy || !(await setSessionFlags(item.sessionId, { archived: true }))) return;
+    if (!item.worktreeName || item.worktreeRemoved) return;
+    // The tree goes without a word only where it holds nothing
+    // the merge did not take; anything else is the settle notice's
+    // question, never a silent delete.
+    const left = await invoke<WorktreeDisposition>("worktree_disposition", { sessionId: item.sessionId }).catch(
+      () => null,
+    );
+    if (left && (!left.exists || (left.changedFiles === 0 && left.unpushedCommits === 0))) {
+      removeWorktree(item.sessionId, "tidy");
+    } else {
+      void askAboutWorktree(item.sessionId, item.worktreeName, item.title, "notice");
+    }
+  };
+
+  const cardsReread = useRef(new Set<string>());
+  const rereadQueued = useRef(false);
+  const mergeCardHost: MergeCardHost = {
+    prNumbered: prMarks.prNumbered,
+    // Every card missing in one commit shares one read of the repos on screen:
+    // a long chat of old cards must not spend the `gh` budget once per card.
+    missing: (repo, number) => {
+      const key = `${repo}#${number}`;
+      if (cardsReread.current.has(key)) return;
+      cardsReread.current.add(key);
+      if (rereadQueued.current) return;
+      rereadQueued.current = true;
+      queueMicrotask(() => {
+        rereadQueued.current = false;
+        prMarks.refresh();
+      });
+    },
+    titleOf: (id) => sessionIndexItems.find((i) => i.sessionId === id)?.title,
+    merge: async (card, method, settle) => {
+      const item = settle
+        ? (sessionIndexItems.find((i) => i.sessionId === card.taskId) ??
+          (await invoke<SessionIndexItem | null>("session_index_item", { sessionId: card.taskId }).catch(() => null)))
+        : null;
+      const busy = (statusBySession[card.taskId] ?? item?.status) === "in_progress";
+      // A task moved off the card's branch holds work this merge did not land.
+      const landed = item && !item.archived && sessionBranch(item) === card.branch;
+      return mergeTask(card.projectPath, card.number, method, landed ? { item, busy } : null);
+    },
+    open: (id, alone) => paneChat.onOpenSession(id, alone),
+    fixConflicts: async (card) => {
+      // The loaded list is one side of the sidebar; the settled side may be up.
+      const task =
+        sessionIndexItems.find((i) => i.sessionId === card.taskId) ??
+        (await invoke<SessionIndexItem | null>("session_index_item", { sessionId: card.taskId }));
+      if (!task) throw new Error("This task is gone.");
+      await askToFixConflicts(task, card.number);
+    },
+  };
+
   const paneChat: PaneChat = {
     onOpenSubagent: openSubagent,
-    onOpenSession: (id) => void handleSelectSessionIndexItem(id),
+    onOpenSession: (id, alone) =>
+      selectedBot ? void openTask(id, alone) : void handleSelectSessionIndexItem(id),
     onOpenSubagentPanel: () => showPanel("more"),
     onOpenPlan: () => showPanel("plan"),
     onRespondPermission: handleRespondPermission,
@@ -2616,11 +3189,70 @@ function App() {
     onSendNow: handleInterrupt,
   };
 
+  /// A lit Diff or Files pick: the view on the picked session, its side
+  /// column led by the picker. Keyed on tab and target, so a repick or another
+  /// pick of the same kind opens fresh rather than on the last one's place.
+  const pickBody = (tab: (typeof litPick) & object, bot: string) => {
+    const options: PickOption[] = [
+      ...(tab.kind === "files" ? [bot] : []),
+      ...botTasks.map((t) => t.sessionId),
+    ].map((sessionId) => ({ sessionId, title: pickTitle(sessionId), face: pickFace(sessionId) }));
+    const picker = (
+      <PickTarget
+        options={options}
+        value={tab.target}
+        current={{ sessionId: tab.target, title: pickTitle(tab.target), face: pickFace(tab.target) }}
+        onPick={(target) => setPickTabs((prev) => repickTab(prev, bot, tab.id, target))}
+      />
+    );
+    const item = pickItem(tab.target);
+    // A deleted worktree leaves `cwd` on the project root, whose tree is not
+    // this task's work.
+    if (!item || item.worktreeRemoved) {
+      return (
+        <div className="flex min-h-0 flex-1">
+          <div className="flex w-72 shrink-0 flex-col border-r border-border">{picker}</div>
+          <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-ui text-muted-foreground">
+            {item ? "This task's worktree was deleted." : "This task is gone."} Pick another.
+          </div>
+        </div>
+      );
+    }
+    // The task's turns are what move its tree; its transcript is not loaded
+    // here, so its index entry's activity stamp and status stand in, and a
+    // tick moves the working tree's reads mid-turn, at `useChanges`'s own gap.
+    const status = statusBySession[tab.target] ?? item.status;
+    const revision = `${item.modified}:${status}`;
+    const writeRevision = `${revision}:${pickTick}`;
+    const key = `${tab.id}:${tab.target}`;
+    return tab.kind === "changes" ? (
+      <ChangesView
+        key={key}
+        cwd={item.cwd}
+        active={!issuesOpen}
+        revision={revision}
+        writeRevision={writeRevision}
+        busy={status === "in_progress"}
+        picker={picker}
+      />
+    ) : (
+      <FilesView
+        key={key}
+        sessionId={pickFilesKey(tab)}
+        cwd={item.cwd}
+        active={!issuesOpen}
+        revision={revision}
+        picker={picker}
+      />
+    );
+  };
+
   // Pages with no tabs for the strip: the sheet reaches up behind the header.
   const tallSheet = issuesOpen || !shownSession;
 
   return (
     <TooltipProvider>
+    <MergeCardHostContext value={mergeCardHost}>
     <DiffWorkerPool pair={codeThemePair}>
     {/* Hidden, not unmounted, while settings take the window: transcripts,
         scroll pins and drafts wait here. `display: none` is also what takes
@@ -2631,7 +3263,7 @@ function App() {
       tall={tallSheet}
       // The issues page fills the column, so the centred empty-composer state
       // is wrong there even with no session selected.
-      centered={!shownSession && !issuesOpen}
+      centered={!shownSession && !issuesOpen && !welcomeBot}
       panelLeft={panelSide === "left"}
       panelOpen={issuesOpen ? !!pickedIssue : !!shownSession && panelShown}
       overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
@@ -2654,6 +3286,16 @@ function App() {
       sidebar={
         <Sidebar
           items={searchedSessions}
+          bots={botList}
+          onOpenBot={openBot}
+          // The new-task composer first: the dialog shares its picker, which on
+          // an open chat would change that chat's model instead.
+          onNewBot={() => {
+            goToSession(handleNewSession);
+            setBotServer(LOCAL);
+            setNewBotOpen(true);
+          }}
+          onDeleteBot={setBotToDelete}
           search={search}
           onSearchChange={setSearch}
           searchOpen={searchOpen}
@@ -2664,12 +3306,15 @@ function App() {
           onProjectFilterChange={changeProjectFilter}
           onStepProjectFilter={stepProjectFilter}
           statusBySession={statusBySession}
+          unreadWorking={unreadWorking}
           askingSessions={sidebarAsking}
           prFor={prMarks.prFor}
           // Cleared while the page is up. The column is showing issues, so a
           // lit row would name a session that is nowhere on screen — and the
           // selection itself is kept, which is what makes coming back free.
-          selectedSessionId={issuesOpen ? null : selectedSessionId}
+          // A task lit in a bot's row keeps the bot's row marked: the task
+          // has none, and the bot's chat is one tab away.
+          selectedSessionId={issuesOpen ? null : strip?.owner ?? selectedSessionId}
           collapsed={collapsed}
           onSelect={(sessionId) => goToSession(() => void handleSelectSessionIndexItem(sessionId))}
           onPrefetch={(sessionId) => void ensureLoaded(sessionId)}
@@ -2696,7 +3341,7 @@ function App() {
           onDetach={detachSession}
           onSetFlags={handleSetSessionFlags}
           onFork={forkSession}
-          onDelete={deleteSession}
+          onDelete={deleteTask}
           onMarkUnread={markSessionUnread}
           archivedShown={archivedShown}
           archivedRequested={archivedRequested}
@@ -2725,17 +3370,17 @@ function App() {
           // decides that it has to.
           //
           // It spans the window, sidebar and panes below it, so it is the row
-          // that clears the traffic lights — fullscreen has none. A step darker
+          // that clears the traffic lights — fullscreen and Linux have none. A step darker
           // than the window, so the active tab can stand out of it the way a
           // browser's does.
           className={cn(
             // No fill of its own: it floats over the frame, whose strip above
             // the sheet is what gives this row its colour.
             "relative flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-3",
-            !fullscreen && "pl-(--traffic-lights-w)",
+            lights && "pl-(--traffic-lights-w)",
             // What sits before the tab row: this padding, the 28px sidebar
             // toggle and one gap. `ViewTabs` lines its row up from it.
-            fullscreen ? "[--tabs-lead:3rem]" : "[--tabs-lead:calc(var(--traffic-lights-w)+2.25rem)]",
+            lights ? "[--tabs-lead:calc(var(--traffic-lights-w)+2.25rem)]" : "[--tabs-lead:3rem]",
           )}
           // `deep`, not bare: bare drags only on direct hits, so every label
           // inside this row was a dead strip in a titlebar that looks uniform.
@@ -2751,7 +3396,7 @@ function App() {
               move. It belongs to the sidebar, so it goes when the sidebar does —
               and on a hidden session, whose way back to its parent runs
               through this same strip. ⌘, still opens settings there. */}
-          {sidebarDrawn > 0 && !(!issuesOpen && shownSession && hiddenParent) && (
+          {sidebarDrawn > 0 && !(!issuesOpen && shownSession && crumb) && (
           <div
             className="absolute top-1/2 flex shrink-0 -translate-y-1/2 items-center gap-1"
             style={{ right: `calc(100% - ${sidebarDrawn}px + 0.5rem)` }}
@@ -2778,20 +3423,23 @@ function App() {
               not a session — the issues page, a new task. */}
           {/* A hidden session has no sidebar row, so this is the way back to
               the session that started it. */}
-          {!issuesOpen && shownSession && hiddenParent && (
+          {!issuesOpen && shownSession && crumb && (
             <button
               type="button"
               onClick={() =>
-                goToSession(() => void handleSelectSessionIndexItem(hiddenParent.sessionId))
+                goToSession(() => void handleSelectSessionIndexItem(crumb.sessionId))
               }
               className="max-w-40 shrink-0 cursor-pointer truncate text-ui text-muted-foreground transition-colors hover:text-foreground"
             >
-              {hiddenParent.title} /
+              {crumb.title} /
             </button>
           )}
-          {!issuesOpen && shownSession && (
+          {!issuesOpen && shownSession && rowSession && (
             <ViewTabs
-              sessionId={shownSession.sessionId}
+              // With a task tab lit, still the bot's row: its chat, pages and
+              // files, the task tabs after them.
+              sessionId={rowSession.sessionId}
+              browserId={browserOf(rowSession.sessionId)}
               // The group's name over a grid, for the reason the header gave:
               // each pane already names its own session. The project is left
               // off where the sidebar is already filtered down to it.
@@ -2799,28 +3447,95 @@ function App() {
                 mainGroup
                   ? groupName(mainGroup)
                   : projectFilter
-                    ? shownSession.title
-                    : `${basename(shownSession.projectPath)} / ${shownSession.title}`
+                    ? rowSession.title
+                    : withProject(rowSession, botAt(bots, rowSession.projectPath)?.name ?? basename(rowSession.projectPath))
               }
+              // The lit task's, over a bot's row: a bot's task can run on
+              // another machine than the bot.
               machine={mainGroup ? undefined : serverOfPath(shownSession.projectPath)}
+              // A bot chat's header is the bot's name, renamed with the bot.
               rename={
-                mainGroup
+                mainGroup || botAt(bots, rowSession.cwd)
                   ? undefined
                   : {
-                      title: shownSession.title,
+                      title: rowSession.title,
                       save: (title) =>
-                        void invoke("rename_session", { sessionId: shownSession.sessionId, title }).catch(
+                        void invoke("rename_session", { sessionId: rowSession.sessionId, title }).catch(
                           (e) => console.error("rename failed", e),
                         ),
                     }
               }
-              tab={viewTab}
-              onChange={setViewTab}
-              working={busy}
+              tab={stripOwner ? viewTabs[stripOwner.sessionId] ?? "chat" : viewTab}
+              onChange={
+                stripOwner
+                  ? (tab) => {
+                      setViewTabs((prev) => ({ ...prev, [stripOwner.sessionId]: tab }));
+                      void handleSelectSessionIndexItem(stripOwner.sessionId);
+                    }
+                  : setViewTab
+              }
+              working={stripOwner ? statusBySession[stripOwner.sessionId] === "in_progress" : busy}
               branch={prBranch}
               cwd={shownSession.cwd}
+              tasks={
+                strip
+                  ? {
+                      items: (taskTabs[strip.bot] ?? []).map((t) => {
+                        const item = sessionIndexItems.find((i) => i.sessionId === t.sessionId);
+                        return {
+                          sessionId: t.sessionId,
+                          title: item?.title ?? t.title,
+                          working: statusBySession[t.sessionId] === "in_progress",
+                          machine: item ? serverOfPath(item.projectPath) : serverOfSession(t.sessionId),
+                        };
+                      }),
+                      lit: strip.lit,
+                      onPick: (id) => pickTaskTab(strip.bot, id),
+                      onClose: (id) => setTaskTabs((prev) => closeTaskTab(prev, id)),
+                      onReopen: (id) =>
+                        setTaskTabs((prev) =>
+                          openTaskTab(prev, strip.bot, {
+                            sessionId: id,
+                            title: sessionIndexItems.find((i) => i.sessionId === id)?.title ?? "Task",
+                          }),
+                        ),
+                    }
+                  : undefined
+              }
+              picks={
+                strip
+                  ? {
+                      items: (pickTabs[strip.bot] ?? []).map((t) => ({
+                        ...t,
+                        title: pickTitle(t.target),
+                        filesKey: pickFilesKey(t),
+                      })),
+                      lit: pickLit[strip.bot] ?? null,
+                      canDiff: botTasks.length > 0,
+                      onPick: (id) => showPick(strip.bot, strip.owner, id),
+                      onAdd: (kind) => {
+                        // The task last at work, which is most often the one
+                        // the reader came to look at.
+                        const target = newestSession(botTasks) ?? (kind === "files" ? strip.bot : null);
+                        if (!target) return;
+                        const id = crypto.randomUUID();
+                        setPickTabs((prev) => addPickTab(prev, strip.bot, { id, kind, target }));
+                        showPick(strip.bot, strip.owner, id);
+                      },
+                      onClose: (id) => {
+                        forgetOpenFilesUnder(`pick:${id}:`);
+                        setPickTabs((prev) => closePickTab(prev, strip.bot, id));
+                      },
+                      onReopen: (kind, target) => {
+                        const id = crypto.randomUUID();
+                        setPickTabs((prev) => addPickTab(prev, strip.bot, { id, kind, target }));
+                        return id;
+                      },
+                    }
+                  : undefined
+              }
               // Not past a parent's breadcrumb, whose width the lead leaves out.
-              alignX={hiddenParent ? 0 : sidebarDrawn}
+              alignX={crumb ? 0 : sidebarDrawn}
             />
           )}
           {/* Keeps the far end at the far end on pages with no tab row. */}
@@ -2839,8 +3554,17 @@ function App() {
                   <PanelActions
                     // In the Files view alone: the file on screen, or the
                     // session's directory where no file is open.
-                    cwd={viewTab === "files" ? shownSession.cwd : null}
-                    file={fileShown ? openFiles.find((f) => f.path === activeFile) : undefined}
+                    cwd={
+                      viewTab === "files"
+                        ? shownSession.cwd
+                        : litPick?.kind === "files"
+                          ? (pickItem(litPick.target)?.cwd ?? null)
+                          : null
+                    }
+                    file={
+                      fileShown
+                        ? openFiles.find((f) => f.path === activeFile)
+                        : litPickFile}
                   />
                   {/* A pull request, open or merged, stands in for the toggle and opens
                       the pane on itself; the pane's own tabs are inside it. */}
@@ -2866,6 +3590,7 @@ function App() {
                   )}
                 </>
               )}
+          <WindowControls />
         </header>
       }
       panel={
@@ -2943,7 +3668,7 @@ function App() {
             <TabBody active={activeTab === "browser"}>
               <MountOnce when={panelShown && activeTab === "browser"}>
               <BrowserPane
-                sessionId={shownSession.sessionId}
+                sessionId={browserSession ?? shownSession.sessionId}
                 active={panelShown && activeTab === "browser"}
                 mode="panel"
                 fullOpen={fullBrowserOpen}
@@ -2951,6 +3676,20 @@ function App() {
                 onCollapse={collapseBrowser}
               />
               </MountOnce>
+            </TabBody>
+            <TabBody active={activeTab === "tasks"}>
+              <TasksPanel
+                rows={crew}
+                prOf={(row) => prMarks.prFor(row.item.projectPath, sessionBranch(row.item))}
+                onOpen={(id, alone) => void openTask(id, alone)}
+                onSetFlags={handleSetSessionFlags}
+                onFork={forkSession}
+                onDelete={deleteTask}
+                onDetach={detachSession}
+                onFixConflicts={(row, pr) => askToFixConflicts(row.item, pr.number)}
+                onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
+                now={stalled.now}
+              />
             </TabBody>
             <TabBody active={activeTab === "more"}>
               <MorePanel
@@ -3053,11 +3792,12 @@ function App() {
           queuedCount={queuedMessages.length}
           busy={busy}
           sessionId={composerKey}
-          isNewTask={!shownSession}
+          isNewTask={!shownSession && !welcomeBot}
           target={composerTarget}
           issuesConnected={issuesConnected}
           issueTrackers={integrations.connected}
           sessions={composerSessions}
+          bots={composerBots}
           onSessionPickerOpen={refreshReachableSessions}
           modelTakesImages={modelTakesImages}
           error={error}
@@ -3078,14 +3818,17 @@ function App() {
                   )
               : undefined
           }
+          // None in a bot's chat: its folder holds notes, not work to hand off.
           handoff={
-            <HandoffRow
-              actions={handoffActions(workStatus, sessionHasPr, !!selectedSessionId, handoffConfig)}
-              // Straight out as a prompt, exactly as if it had been typed. A
-              // turn already running queues it, like any other send.
-              onSend={(prompt) => void handleSendMsg(prompt)}
-              disabled={!selectedSessionId || !!sendHeld}
-            />
+            inBotFolder ? null : (
+              <HandoffRow
+                actions={handoffActions(workStatus, sessionHasPr, !!selectedSessionId, handoffConfig)}
+                // Straight out as a prompt, exactly as if it had been typed. A
+                // turn already running queues it, like any other send.
+                onSend={(prompt) => void handleSendMsg(prompt)}
+                disabled={!selectedSessionId || !!sendHeld}
+              />
+            )
           }
           // Only on a new task. An agent is fixed at creation, so a live
           // session cannot be pointed at one that is missing — and a session
@@ -3109,6 +3852,15 @@ function App() {
               <CloudNotice step={placing} />
             ) : sleepingBoat ? (
               <BoatNotice server={sleepingBoat} />
+            ) : selectedBot && selectedSession && harness !== selectedSession.harness ? (
+              // A bot chat picked onto another agent: the send moves it there.
+              <div className="mb-2 flex min-h-7 items-center gap-2 px-1">
+                <AgentIcon harness={harness} brand className="size-3.5 shrink-0" />
+                <p className="min-w-0 flex-1 truncate text-ui text-foreground">
+                  Moving to {AGENT_LABELS[harness]}
+                  <span className="text-muted-foreground"> · Your next message goes to it, with this conversation.</span>
+                </p>
+              </div>
             ) : selectedItem?.continueAt && (
               <AutoContinueNotice
                 at={selectedItem.continueAt}
@@ -3174,6 +3926,8 @@ function App() {
               onAttach={() => void pickAttachments(attachmentKey(composerKey, composerCwd))}
               contextUsage={contextUsage}
               isNewSession={!selectedSessionId}
+              agentSwitch={!!selectedBot}
+              bot={newBot}
               busy={busy}
             />
           }
@@ -3228,11 +3982,31 @@ function App() {
         {/* A transcript its server has not answered for yet; the reconnect
             loads it. One already loaded keeps drawing what it has. */}
         {offlineServer && !selectedSession ? (
-          <TranscriptSkeleton />
+          <TranscriptSkeleton still={offlineServer.status !== "connecting"} />
+        ) : welcomeBot?.welcome && !selectedSessionId ? (
+          <BotWelcome text={welcomeBot.welcome} />
         ) : (
           <Chat
             {...paneState(selectedSessionId ?? "")}
             {...paneChat}
+            bot={!!selectedBot}
+            earlier={earlier}
+            earlierLoading={earlier.length < earlierIds.length}
+            taskOf={taskOf}
+            onOpenBot={openBot}
+            botFooter={
+              <StalledTasks
+                stalls={stalls}
+                now={stalled.now}
+                onFocus={(sessionId) =>
+                  selectedBot && setStallFocus({ botId: selectedBot.id, sessionId, at: Date.now() })
+                }
+                onOpen={(id, alone) => void openTask(id, alone)}
+                onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
+              />
+            }
+            botFocus={botFocus}
+            unread={!!selectedSessionId && openedUnread === selectedSessionId}
             crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
             // Its own chords only while the chat tab is on screen.
             active={!issuesOpen && viewTab === "chat"}
@@ -3266,7 +4040,7 @@ function App() {
         <TabBody active={!issuesOpen && viewTab === "browser"}>
           <MountOnce when={fullBrowserOpen}>
           <BrowserPane
-            sessionId={selectedSession.sessionId}
+            sessionId={browserSession ?? selectedSession.sessionId}
             active={fullBrowserOpen}
             mode="full"
             onCollapse={collapseBrowser}
@@ -3289,6 +4063,11 @@ function App() {
             revision={turnRevision}
           />
           </MountOnce>
+        </TabBody>
+      )}
+      {litPick && selectedBotId && (
+        <TabBody active={!issuesOpen}>
+          <MountOnce when>{pickBody(litPick, selectedBotId)}</MountOnce>
         </TabBody>
       )}
     </AppShell>
@@ -3375,7 +4154,74 @@ function App() {
       onClose={() => setWorktreePrompt(null)}
     />
     {serverUpdateDialog}
+    <NewBotDialog
+      open={newBotOpen}
+      onOpenChange={(open) => {
+        setNewBotOpen(open);
+        if (!open) setBotServer(null);
+      }}
+      server={botServer ?? LOCAL}
+      onServerChange={setBotServer}
+      picker={
+        <ModelSelector
+          server={activeServer}
+          harness={harness}
+          onHarnessChange={setHarness}
+          models={models}
+          modelId={modelId}
+          effort={effort}
+          fast={fast}
+          fastNote={fastNote}
+          onFastChange={setFast}
+          isNewSession
+          busy={false}
+          onChange={handleModelChange}
+          onRefreshModels={refreshModels}
+          onReloadModels={reloadModels}
+          onSeedProvider={seedFxModels}
+          loadingModels={loadingModels}
+        />
+      }
+      pick={{
+        harness,
+        model: modelId,
+        effort,
+        permissionMode: botStance(harness, permissionMode),
+        fast,
+      }}
+      onStarted={(chat) => goToSession(() => void handleSelectSessionIndexItem(chat.sessionId))}
+    />
+    <AlertDialog open={!!botToDelete} onOpenChange={(open) => !open && setBotToDelete(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete {botToDelete?.name}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Its instructions and memory go with it, and its chat is settled.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            destructive
+            onClick={() => {
+              const bot = botToDelete;
+              if (!bot) return;
+              void (async () => {
+                // `delete_bot` settles the bot's open chat itself: with the
+                // settled list up, the open one is not held here to settle.
+                const server = serverOfBot(bot);
+                await invoke("delete_bot", { id: bot.id }, server).catch((e) => setError(String(e)));
+                await refreshBots(server);
+              })();
+            }}
+          >
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
     </DiffWorkerPool>
+    </MergeCardHostContext>
     </TooltipProvider>
   );
 }

@@ -26,6 +26,11 @@ fn main() {
                     None => std::env::remove_var(key),
                 }
             }
+        } else {
+            // Before GTK reads it, and before Chromium inherits it.
+            for (key, value) in ade_lib::ibus::fallback() {
+                std::env::set_var(key, value);
+            }
         }
     }
     run()

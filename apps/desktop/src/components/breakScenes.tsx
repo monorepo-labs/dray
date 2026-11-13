@@ -1,26 +1,26 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, createContext, useContext, useEffect, useState } from "react";
 
-type Pt = [number, number];
+export type Pt = [number, number];
 type V3 = [number, number, number];
 /// A two-bone limb: forward angles (upper, then the bend relative to it), or a
 /// target the end reaches for with the middle joint bent to `flip`'s side.
-type Limb = { fk: [number, number] } | { ik: Pt; flip: 1 | -1 };
+export type Limb = { fk: [number, number] } | { ik: Pt; flip: 1 | -1 };
 /// `shoulders` is half the shoulder width; left out, both arms leave one point,
 /// which reads fine side on and crowds the head face on. `nod` turns the head
 /// off the spine's line.
 type Pose = { hip: Pt; spine: number; look?: number; nod?: number; shoulders?: number; arms: [Limb, Limb]; legs: [Limb, Limb] };
 
 const NECK = 36;
-const SHOULDER = 32;
+export const SHOULDER = 32;
 const HEAD = 46;
 const ARM: [number, number] = [17, 16];
 const LEG: [number, number] = [17, 17];
 
 const rad = (d: number) => (d * Math.PI) / 180;
 /** Angles are degrees clockwise from straight up: 90 is right, 180 is down. */
-const at = (p: Pt, a: number, len: number): Pt => [p[0] + Math.sin(rad(a)) * len, p[1] - Math.cos(rad(a)) * len];
-const lerp = (a: number, b: number, w: number) => a + (b - a) * w;
-const ease = (x: number) => {
+export const at = (p: Pt, a: number, len: number): Pt => [p[0] + Math.sin(rad(a)) * len, p[1] - Math.cos(rad(a)) * len];
+export const lerp = (a: number, b: number, w: number) => a + (b - a) * w;
+export const ease = (x: number) => {
   const c = Math.min(1, Math.max(0, x));
   return c * c * (3 - 2 * c);
 };
@@ -64,7 +64,7 @@ function Head({ c: [hx, hy], look = 0 }: { c: Pt; look?: number }) {
 
 /// The stick figure, drawn from a pose so every scene shares one body and
 /// limbs keep their length however they move.
-function Figure({ pose }: { pose: Pose }) {
+export function Figure({ pose }: { pose: Pose }) {
   const { hip, spine, look = 0, nod = 0, shoulders = 0, arms, legs } = pose;
   const shoulder = at(hip, spine, SHOULDER);
   const sl = at(shoulder, spine - 90, shoulders);
@@ -88,11 +88,17 @@ function Figure({ pose }: { pose: Pose }) {
 
 const REDUCED = "(prefers-reduced-motion: reduce)";
 
+/// Holds every scene inside it on its best pose, as reduced motion does: a
+/// page of previews would otherwise re-render each one every frame.
+export const StillScenes = createContext(false);
+
 /// Seconds since the scene mounted, one render a frame; null under reduced
 /// motion, where each scene holds its best pose instead. Follows the setting
 /// live, so turning it on mid-break stops the figure.
-function useClock(): number | null {
-  const [still, setStill] = useState(() => matchMedia(REDUCED).matches);
+export function useClock(): number | null {
+  const held = useContext(StillScenes);
+  const [reduced, setStill] = useState(() => matchMedia(REDUCED).matches);
+  const still = held || reduced;
   const [t, setT] = useState(0);
   useEffect(() => {
     const mq = matchMedia(REDUCED);
@@ -114,7 +120,7 @@ function useClock(): number | null {
 
 /// One drawing for the break card's tile: a 160×110 box, ground at y≈102,
 /// drawn in the card's ink so every palette colours it.
-function Scene({ children }: { children: ReactNode }) {
+export function Scene({ children }: { children: ReactNode }) {
   return (
     <svg aria-hidden viewBox="0 0 160 110" className="h-32" fill="none" stroke="currentColor" strokeWidth={3.5} strokeLinecap="round" strokeLinejoin="round">
       {children}
@@ -123,7 +129,7 @@ function Scene({ children }: { children: ReactNode }) {
 }
 
 /// A plus that twinkles, slowly and out of step with its neighbours.
-function Sparkle({ x, y, r = 5, t, phase = 0 }: { x: number; y: number; r?: number; t: number; phase?: number }) {
+export function Sparkle({ x, y, r = 5, t, phase = 0 }: { x: number; y: number; r?: number; t: number; phase?: number }) {
   const q = r * (0.7 + 0.3 * Math.sin(2 * Math.PI * (t / 1.8 + phase)));
   return <path d={`M${x} ${y - q} L${x} ${y + q} M${x - q} ${y} L${x + q} ${y}`} strokeWidth={2.5} />;
 }
@@ -176,7 +182,7 @@ function PullUp() {
     <Scene>
       {/* Drawn larger than the box and scaled in, so the chin over the bar and the hang both fit. */}
       <g transform="translate(12 4.85) scale(0.85)" strokeWidth={4.1}>
-        <path d={`M34 ${bar} L126 ${bar} M40 -10 L40 ${bar} M120 -10 L120 ${bar}`} strokeWidth={4.6} />
+        <path d={`M34 ${bar} L126 ${bar} M40 0 L40 ${bar} M120 0 L120 ${bar}`} strokeWidth={4.6} />
         <Figure
           pose={{
             hip: [80, lerp(bar + 28.5, bar + 1, up) + SHOULDER],
@@ -250,8 +256,9 @@ function SideBend() {
   const draw = (arm: Arm) => line(arm.map(([x, y]) => [shoulder[0] + x, shoulder[1] + y]));
   return (
     <Scene>
-      {/* Every other bend is the first one mirrored; at the hand-over both drawings are the same. */}
-      <g transform={Math.floor(t / 3) % 2 ? "matrix(-1 0 0 1 160 0)" : undefined}>
+      {/* Every other bend is the first one mirrored; at the hand-over both drawings are the same.
+          Scaled to 0.9 about the feet, stroke kept, or the arm over the head leaves the box. */}
+      <g transform={`${Math.floor(t / 3) % 2 ? "matrix(-1 0 0 1 160 0) " : ""}translate(8 10.1) scale(0.9)`} strokeWidth={3.9}>
         <Head c={at(neck, bend, 10)} look={-0.6 * w} />
         <path
           d={[
@@ -265,29 +272,6 @@ function SideBend() {
       </g>
       <Sparkle x={30} y={46} t={t} />
       <Sparkle x={130} y={46} r={4} t={t} phase={0.5} />
-    </Scene>
-  );
-}
-
-/// Stepping into a lunge as the arms sweep up overhead, and back.
-function Lunge() {
-  const t = useClock() ?? 1.6;
-  const w = swing(t, 3.2);
-  return (
-    <Scene>
-      <Figure
-        pose={{
-          hip: [80, lerp(67, 77, w)],
-          spine: 0,
-          arms: [{ fk: [lerp(-168, -42, w), lerp(0, 8, w)] }, { fk: [lerp(168, 42, w), lerp(0, -8, w)] }],
-          legs: [
-            { ik: [lerp(74, 56, w), 101], flip: -1 },
-            { ik: [lerp(86, 100, w), 101], flip: -1 },
-          ],
-        }}
-      />
-      <Sparkle x={34} y={36} t={t} />
-      <Sparkle x={128} y={30} r={4} t={t} phase={0.4} />
     </Scene>
   );
 }
@@ -353,28 +337,35 @@ function PushUp() {
   );
 }
 
-/// Each line with its drawings; the card picks one of a line's at random.
-export const BREAK_LINES: { text: string; scenes: { name: string; Scene: () => ReactNode }[] }[] = [
-  {
-    text: "Your agents can wait. Your spine can't.",
-    scenes: [
-      { name: "Twist", Scene: Twist },
-      { name: "Pull-up", Scene: PullUp },
-    ],
-  },
-  {
-    text: "Stretch, you gorgeous workaholic.",
-    scenes: [
-      { name: "Side bend", Scene: SideBend },
-      { name: "Lunge", Scene: Lunge },
-    ],
-  },
-  {
-    text: "Legs exist. Go use them.",
-    scenes: [{ name: "Strut", Scene: Strut }],
-  },
-  {
-    text: "Give me ten push‑ups. Right now.",
-    scenes: [{ name: "Push-up", Scene: PushUp }],
-  },
+/// Squats, side on: hips back and down until the thighs are level, knees over
+/// the toes, chest leaning in and arms raised straight out front to balance.
+/// Down slow, a beat at the bottom, up quicker, a breath at the top.
+export function Squat() {
+  const t = useClock() ?? 1.35;
+  const c = (t % 2.4) / 2.4;
+  const down = c < 0.12 ? 0 : c < 0.5 ? ease((c - 0.12) / 0.38) : c < 0.62 ? 1 : 1 - ease((c - 0.62) / 0.3);
+  const feet: Pt = [86, 102];
+  const spine = lerp(2, 38, down);
+  // Side on, so each pair is drawn as one: two lines a hair apart read as a smudge.
+  const arm: Limb = { fk: [lerp(162, 92, down), lerp(-24, 0, down)] };
+  const leg: Limb = { ik: feet, flip: -1 };
+  return (
+    <Scene>
+      <path d="M40 104 L132 104" strokeWidth={2.5} />
+      <Figure pose={{ hip: [lerp(85, 72, down), lerp(68, 84, down)], spine, look: 0.7, nod: 4 - spine, arms: [arm, arm], legs: [leg, leg] }} />
+      <Sparkle x={42} y={44} t={t} />
+      <Sparkle x={130} y={30} r={4} t={t} phase={0.5} />
+    </Scene>
+  );
+}
+
+/// Every card a break can open on. `name` is also what Settings stores to turn
+/// one off, so renaming a card turns it back on for whoever had it off.
+export const BREAK_CARDS: { name: string; text: string; Scene: () => ReactNode }[] = [
+  { name: "Twist", text: "Your agents can wait. Your spine can't.", Scene: Twist },
+  { name: "Pull-ups", text: "Your agents can wait. Your spine can't.", Scene: PullUp },
+  { name: "Side bend", text: "Stretch, you gorgeous workaholic.", Scene: SideBend },
+  { name: "Walk", text: "Legs exist. Go use them.", Scene: Strut },
+  { name: "Squats", text: "Micro-dose ten squats. No prescription.", Scene: Squat },
+  { name: "Push-ups", text: "Give me ten push\u2011ups. Right now.", Scene: PushUp },
 ];

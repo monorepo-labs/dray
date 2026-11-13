@@ -1,6 +1,24 @@
 import { describe, expect, it } from "vitest";
 
-import { moveKey, reconcile } from "./tabOrder";
+import { forgetClosedTabs, moveKey, popClosedTab, pushClosedTab, reconcile } from "./tabOrder";
+
+describe("forgetClosedTabs", () => {
+  it("drops a deleted task's tab from its bot's closed list", () => {
+    pushClosedTab("bot", { key: "task:t1" });
+    pushClosedTab("bot", { key: "task:t2" });
+    forgetClosedTabs("t2");
+    expect(popClosedTab("bot")?.key).toBe("task:t1");
+    expect(popClosedTab("bot")).toBeUndefined();
+  });
+
+  it("drops a closed pick on a deleted task, keeping others", () => {
+    pushClosedTab("bot", { key: "pick:1", pick: { kind: "changes", target: "t1" } });
+    pushClosedTab("bot", { key: "pick:2", pick: { kind: "files", target: "t2" } });
+    forgetClosedTabs("t2");
+    expect(popClosedTab("bot")?.key).toBe("pick:1");
+    expect(popClosedTab("bot")).toBeUndefined();
+  });
+});
 
 describe("reconcile", () => {
   it("keeps the reader's order and appends what is new", () => {
@@ -19,6 +37,16 @@ describe("reconcile", () => {
 
   it("puts Files back where the last file was", () => {
     expect(reconcile(["file:/a", "chat"], ["chat", "files"])).toEqual(["files", "chat"]);
+  });
+
+  it("trades a pick's slot with its own files and no other pick's", () => {
+    expect(reconcile(["pick:1", "pick:2", "chat"], ["chat", "pick:2", "pickfile:1:/a:b"])).toEqual([
+      "pickfile:1:/a:b",
+      "pick:2",
+      "chat",
+    ]);
+    expect(reconcile(["pickfile:1:/a", "chat"], ["chat", "pick:1"])).toEqual(["pick:1", "chat"]);
+    expect(reconcile(["pick:1", "chat"], ["chat", "pickfile:2:/a"])).toEqual(["chat", "pickfile:2:/a"]);
   });
 
   it("never lets one kind take another's slot", () => {

@@ -2,9 +2,9 @@ use std::io::{BufRead, IsTerminal};
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
-use dray_proto::{AddServer, RenameServer, Request, Response, ServerRef, ServerSummary, SetServerOn};
+use dray_proto::{AddServer, RenameServer, Request, Response, ServerRef, ServerSummary, SetServerOn, ShareMachines};
 
-use super::{send, unexpected};
+use super::{send, setup::OnOff, unexpected};
 
 #[derive(Subcommand)]
 pub enum MachineCommand {
@@ -29,6 +29,13 @@ dray machine add --token-file token mac wss://….opentunnel.xyz")]
     /// Stop connecting to a machine. It stays on the list with its token, and
     /// its agents keep running there.
     Disconnect(Named),
+    /// Let whoever holds this machine's token — your phone, another Mac —
+    /// reach every machine on its list through it, with no pairing of their
+    /// own. Off until turned on.
+    Share {
+        #[arg(value_enum)]
+        state: OnOff,
+    },
 }
 
 #[derive(Args)]
@@ -130,6 +137,20 @@ pub fn run(command: MachineCommand) -> Result<(), String> {
             let server = acted_on(Request::SetServerOn(SetServerOn { name: args.name, on: false }))?;
             eprintln!("{} is disconnected. `dray machine connect {}` connects it again.", server.name, server.name);
             Ok(())
+        }
+        MachineCommand::Share { state } => {
+            let on = matches!(state, OnOff::On);
+            match send(Request::ShareMachines(ShareMachines { on }))? {
+                Response::MachinesShared { on: false, .. } => Ok(eprintln!("Machines are not shared.")),
+                Response::MachinesShared { machines, .. } if machines.is_empty() => {
+                    Ok(eprintln!("Sharing is on. There are no machines to share yet."))
+                }
+                Response::MachinesShared { machines, .. } => {
+                    Ok(eprintln!("Sharing {} with whoever holds this machine's token.", machines.join(", ")))
+                }
+                Response::Error { message } => Err(message),
+                other => Err(unexpected(other)),
+            }
         }
     }
 }

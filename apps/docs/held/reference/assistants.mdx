@@ -1,0 +1,72 @@
+---
+title: Connect an assistant
+description: Start and follow Dray sessions from Grok, Claude or ChatGPT by chat or voice, through each server's MCP connector.
+sidebar:
+  order: 2
+---
+
+Every Dray server speaks MCP, the protocol AI assistants use to reach other apps. Add one as a custom connector in Grok, Claude or ChatGPT, and you can ask it to start a task, check how it is going, answer the agent's questions and stop it, from your phone or by voice.
+
+Each machine is its own connector: your Mac, and each Linux server you run.
+
+## Connect one
+
+**Where:** Settings → Servers → a server's `⋯` menu → **Connect an assistant…**. This Mac has one too.
+
+<Steps>
+  <Step title="Get a URL and a code">
+    The dialog shows the connector URL (`https://….opentunnel.xyz/mcp`) and a one-time code like `ABCD-EFGH`. If Remote access is off, this turns it on first. The first time takes about 30 seconds.
+  </Step>
+  <Step title="Add the connector">
+    In the assistant, add a custom connector and paste the URL. In Grok, open grok.com/connectors → **New Connector** → **Custom**; in Grok Bot, ask it to "add a custom MCP server" with the URL. In Claude, use Settings → Connectors → **Add custom connector**. In ChatGPT, turn on developer mode and create an app with the URL.
+  </Step>
+  <Step title="Sign in with the code">
+    The assistant opens a Dray page asking for the code. Type it and press **Connect**. The code works once, for 10 minutes.
+  </Step>
+</Steps>
+
+On a server with no app, run this on the server instead:
+
+```bash
+dray server assistant add
+```
+
+It prints the URL and the code. `--read-only` makes a read-only one.
+
+## What it can do
+
+| Tool | What it does |
+|---|---|
+| `list_projects` | Lists the projects on that machine. |
+| `list_sessions` | Lists recent sessions, with their status and whether one is waiting on you. |
+| `read_session` | Shows a session's latest prompt, what the agent said since, and any open question or permission. |
+| `wait_for_session` | Waits up to 50 seconds for a session to finish or to need you. |
+| `start_session` | Starts an agent on a task, in its own worktree and branch, like `dray session new`. |
+| `send_message` | Sends a session a follow-up. |
+| `stop_session` | Stops a session's running turn. |
+| `answer_card` | Answers a permission or question the agent is blocked on. |
+
+A session started this way shows in your sidebar like any other. It uses the same defaults as a new task: agent, model and permission mode.
+
+When an agent stops to ask for permission, the assistant sees the card the next time it checks, asks you, and answers it. It is told never to answer for you.
+
+**Read only.** Turn on **Read only** in the dialog, or pass `--read-only`, and the assistant can list and read sessions but not start, message or stop them.
+
+## See and sign out assistants
+
+Each server's row in Settings → Servers lists the assistants signed in to it, with when each was last used. **Sign out** cuts one off at once.
+
+From a terminal on the server:
+
+```bash
+dray server assistant ls
+dray server assistant revoke <id>
+```
+
+What to know:
+
+- **It needs Remote access.** The assistant runs in its company's cloud, not on your phone, so it reaches your machine through Remote access's public address. **Stop remote access** cuts every assistant off until you turn it back on.
+- **A Mac must be awake.** Same as Remote access.
+- **Sign-in lasts while it is used.** An assistant stays signed in as long as it uses the connector at least once every 30 days.
+- **The code is not the server's token.** An assistant never gets the token that gives full access to the server. Sign out one assistant without touching the others or your paired phones.
+- **The assistant can't watch live.** It checks in when you ask it, or while it waits on a session. It is not told when a session finishes.

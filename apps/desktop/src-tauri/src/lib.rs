@@ -34,7 +34,9 @@ pub mod cef;
 pub mod chromium;
 #[cfg(all(feature = "desktop", target_os = "macos"))]
 mod trackpad;
-#[cfg(all(feature = "desktop", target_os = "macos"))]
+#[cfg(all(feature = "desktop", target_os = "linux"))]
+mod island;
+#[cfg(all(feature = "desktop", any(target_os = "macos", target_os = "linux")))]
 mod cli;
 // `dray browser` on a server: a headless Chromium under the same verbs the
 // Mac's CEF answers. In the desktop build too, since that binary is also the
@@ -55,6 +57,8 @@ pub mod git;
 pub mod github;
 #[path = "harness/harness.rs"]
 pub mod harness;
+#[cfg(target_os = "linux")]
+pub mod ibus;
 #[path = "issues/issues.rs"]
 pub mod issues;
 #[path = "models/models.rs"]
@@ -62,8 +66,10 @@ pub mod models;
 #[cfg(feature = "desktop")]
 pub mod notifications;
 pub mod orchestration;
+pub mod bots;
 pub mod drafts;
 pub mod projects;
+pub mod remote_reports;
 #[cfg(feature = "desktop")]
 pub mod quit;
 #[cfg(feature = "desktop")]
@@ -73,6 +79,11 @@ pub mod launchd;
 pub mod serve;
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod remote_access;
+#[cfg(any(feature = "serve", feature = "desktop"))]
+#[path = "mcp/mcp.rs"]
+pub mod mcp;
+#[cfg(any(feature = "serve", feature = "desktop"))]
+pub mod org_link;
 // Every server reaches other machines on its own (#760).
 #[cfg(any(feature = "serve", feature = "desktop"))]
 pub mod machines;
@@ -583,6 +594,10 @@ async fn set_session_flags(
     aside: Option<bool>,
     sink: Sink,
 ) -> Result<Option<SessionIndexItem>, Fail> {
+    // Read first: settling an already settled session from an older chat must
+    // not reach the chat the bot moved on to.
+    let was_open = archived == Some(true)
+        && store::get_session_index_item(session_id).await?.is_some_and(|i| !i.archived);
     let updated = store::set_session_flags(session_id, archived, pinned, hidden, aside).await?;
     if updated.is_none() {
         return Ok(None);
@@ -591,8 +606,20 @@ async fn set_session_flags(
     // screen lists it. Here off the whole index, where the frontend
     // holds one side of the split and can miss a child on the other.
     let mut settling = vec![session_id.to_string()];
+    // A bot chat that switched agent spans several sessions, and settling it
+    // settles them all: left open, the previous one would be the chat again.
+    if was_open {
+        if let Some(item) = &updated {
+            for id in bots::rest_of_chat(item).await {
+                store::set_session_flags(&id, Some(true), None, None, None).await?;
+                settling.push(id);
+            }
+        }
+    }
     if let Some(archived) = archived {
-        settling.extend(store::archive_hidden_descendants(session_id, archived).await?);
+        for id in settling.clone() {
+            settling.extend(store::archive_hidden_descendants(&id, archived).await?);
+        }
     }
     // The answer reaches the caller alone, and a server has other clients.
     // Ahead of the stop, which can take seconds.
@@ -788,22 +815,30 @@ pub fn run() {
             // window already exists here for it to parent a view into.
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             cef::init(app.handle());
+            // Mac only: X11 reports a two-finger scroll with no phases, so a
+            // swipe's start and lift could only be guessed from timing, the
+            // route #445 took out.
             #[cfg(target_os = "macos")]
             trackpad::watch(app.handle());
             // GTK draws the menu as a bar inside the window, over the app's own
             // titlebar strip. The webview answers the edit chords without it.
+            // The window manager's bar sat above that strip too, so it goes and
+            // `WindowControls` draws its buttons. tauri.linux.conf.json already
+            // says so; this is for the window-state plugin, which restores a
+            // `decorated` flag saved by a build that still had the bar.
             #[cfg(target_os = "linux")]
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.remove_menu();
+                let _ = window.set_decorations(false);
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             cli::install();
             // Dictations kept past a failure. Pruning on write alone left the
             // last one on disk forever, since nothing else sweeps them and a
             // reader who gives up after one failure writes no more.
             tauri::async_runtime::spawn(transcription::recordings::prune());
             transcription::serve_host(app.handle());
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             transcription::stop_on_sleep(app.handle());
 
             // Sessions live in the background server launchd runs from this
@@ -889,6 +924,8 @@ pub fn run() {
             servers::local_server,
             servers::add_server,
             servers::remove_server,
+            servers::save_server_cache,
+            servers::server_caches,
             servers::reconnect_servers,
             servers::server_invoke,
             servers::update_server,
@@ -950,6 +987,7 @@ pub fn run() {
             #[cfg(all(feature = "cef", any(target_os = "macos", target_os = "linux")))]
             chromium::chromium_remove,
             notifications::notify_session,
+            notifications::set_window_urgent,
             updater::check_update,
             updater::install_update,
             quit::confirm_quit,

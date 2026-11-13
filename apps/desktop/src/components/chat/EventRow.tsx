@@ -3,10 +3,11 @@ import Reasoning from "@/components/chat/Reasoning";
 import ToolCall from "@/components/chat/ToolCall";
 import UserMessage from "@/components/chat/UserMessage";
 import FileEdits from "@/components/chat/FileEdits";
+import MergeCard from "@/components/chat/MergeCard";
 import { compactTokens, resetTime } from "@/lib/format";
 import { drawsFailure } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
-import type { AgentEvent, FileEdit, ToolResult } from "@/types/events";
+import type { AgentEvent, Bot, FileEdit, ToolResult } from "@/types/events";
 
 /// A quiet single line for the events that are context rather than content.
 function Notice({
@@ -43,6 +44,7 @@ export default function EventRow({
   hideToolLabel = false,
   openTool = false,
   onOpenSession,
+  onOpenBot,
 }: {
   event: AgentEvent;
   /// Results keyed by call id, so a started call renders its own outcome without
@@ -59,11 +61,14 @@ export default function EventRow({
   /// Opens the session that relayed a prompt. Only a `user_message` reads it,
   /// and only one that came over the orchestration socket.
   onOpenSession?: (sessionId: string) => void;
+  /// Opens a bot a `user_message` tags. Only a bot's chat has bots to tag.
+  onOpenBot?: (bot: Bot) => void;
 }) {
   const { payload } = event;
 
   switch (payload.type) {
     case "user_message":
+      if (payload.kickoff) return null;
       return (
         <UserMessage
           eventId={event.id}
@@ -73,6 +78,7 @@ export default function EventRow({
           from={payload.from}
           cwd={payload.cwd}
           onOpenSession={onOpenSession}
+          onOpenBot={onOpenBot}
         />
       );
 
@@ -148,6 +154,9 @@ export default function EventRow({
           {payload.finalText?.trim() || "Turn failed"}
         </Notice>
       );
+
+    case "merge_card":
+      return <MergeCard event={event} />;
 
     // The harness's own sentence — a refusal, a safeguard notice — as written.
     case "notice":

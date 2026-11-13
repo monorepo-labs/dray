@@ -120,7 +120,46 @@ export function applySession(
   title: string,
   id: string,
 ): { text: string; caret: number } {
-  const tag = sessionTag(title, id);
+  return applyTag(text, span, sessionTag(title, id));
+}
+
+/// A bot tag, the session tag's shape behind `@`: in a bot's composer `@` names
+/// bots, not files. The id is in the text for the reason a session's is —
+/// `dray bot send` matches it exactly, where a name stops naming the bot once
+/// it is renamed. The name loses any `@`, `&`, newline or parenthesised id of
+/// its own, since each would end or misdirect the tag `BOT_TAG` reads back.
+export function botTag(name: string, id: string): string {
+  return `@${name.replace(INNER_ID, "").replace(/[@&]/g, "").replace(/\s+/g, " ").trim()} (${id})`;
+}
+
+/// `[^@&]` rather than `.`, so a file mention earlier in the sentence is never
+/// read as the start of a bot's name running up to a later bot's or task's id.
+const BOT_TAG = new RegExp(`^@([^@&\\n]+?) \\((${ID})\\)`);
+
+/// A placed bot tag at `text[i]`, in `parseSessionTag`'s shape.
+export function parseBotTag(
+  text: string,
+  i: number,
+): { text: string; head: string; trail: string; id: string } | null {
+  const match = BOT_TAG.exec(text.slice(i));
+  if (!match) return null;
+
+  const [whole, name, id] = match;
+
+  return { text: whole, head: `@${name}`, trail: whole.slice(name.length + 1), id };
+}
+
+/// The text with the `@` token at `span` replaced by a tag for that bot.
+export function applyBot(
+  text: string,
+  span: SessionSpan,
+  name: string,
+  id: string,
+): { text: string; caret: number } {
+  return applyTag(text, span, botTag(name, id));
+}
+
+function applyTag(text: string, span: SessionSpan, tag: string): { text: string; caret: number } {
   const after = text.slice(span.end);
   const spaced = after.startsWith(" ") ? after : ` ${after}`;
 

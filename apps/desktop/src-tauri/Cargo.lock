@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "dray"
-version = "0.29.19"
+version = "0.30.2"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1424,6 +1424,7 @@ dependencies = [
  "futures-util",
  "gdkx11",
  "gtk",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "libc",
@@ -1455,6 +1456,7 @@ dependencies = [
  "ts-rs",
  "uuid",
  "x11",
+ "zbus",
  "zip 9.0.5",
 ]
 
