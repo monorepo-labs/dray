@@ -1097,7 +1097,7 @@ async fn wake_boat(id: String, sleeper: Sleeper) {
                 None => Err("Dray Cloud has no key. Add it in Settings, Servers.".into()),
             };
             match resumed {
-                Ok(machine) => cloud_moved(&id, &machine.url).await,
+                Ok(machine) => cloud_moved(&id, machine.url.as_deref()).await,
                 Err(why) => {
                     settle(BoatPhase::Stopped, Some(why), true);
                     return;
@@ -1199,8 +1199,8 @@ fn cloud_parked(id: &str) -> bool {
 
 /// A resume may answer a new address. It survives a resume today, but the
 /// contract does not promise it, and a stale one would only ever fail.
-async fn cloud_moved(id: &str, url: &str) {
-    let Ok(url) = normalize(url) else { return };
+async fn cloud_moved(id: &str, url: Option<&str>) {
+    let Some(Ok(url)) = url.map(normalize) else { return };
     let moved = match conns().iter_mut().find(|c| c.saved.id == id) {
         Some(conn) if conn.saved.url != url => {
             conn.saved.url = url;
@@ -1274,12 +1274,15 @@ async fn apply_listing(listing: cloud::Listing) {
     CLOUD_GENERATION.fetch_add(1, Ordering::SeqCst);
     let known: HashMap<String, String> =
         conns().iter().filter_map(|c| Some((c.saved.cloud.clone()?, c.saved.id.clone()))).collect();
+    // Every machine listed keeps its row, but one boat has given no address
+    // yet gets none until it has one: a fork's first listings come before it.
+    let listed: Vec<String> = listing.machines.iter().map(|m| m.id.clone()).collect();
     let machines: Vec<(cloud::Machine, String, String)> = listing
         .machines
         .into_iter()
         .filter(|m| valid_sandbox(&m.id))
         .filter_map(|m| {
-            let url = normalize(&m.url).ok()?;
+            let url = normalize(m.url.as_deref()?).ok()?;
             let id = known.get(&m.id).cloned().unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
             Some((m, url, id))
         })
@@ -1297,7 +1300,7 @@ async fn apply_listing(listing: cloud::Listing) {
         let mut gone = Vec::new();
         let mut saved = false;
         list.retain_mut(|conn| {
-            let listed = conn.saved.cloud.as_ref().is_none_or(|s| machines.iter().any(|(m, _, _)| &m.id == s));
+            let listed = conn.saved.cloud.as_ref().is_none_or(|s| listed.contains(s));
             if !listed {
                 if let Some(task) = conn.task.take() {
                     task.abort();
@@ -1431,12 +1434,18 @@ pub async fn add_cloud_room() -> Result<String, String> {
     let key = cloud_key().await.ok_or("Dray Cloud has no key. Add it in Settings, Servers.")?;
     let machine = cloud::add(&key).await?;
     crate::analytics::track("feature_used", json!({ "feature": "cloud_room_added" }));
-    sync_cloud().await?;
-    let id = conns()
-        .iter()
-        .find(|c| c.saved.cloud.as_deref() == Some(machine.id.as_str()))
-        .map(|c| c.saved.id.clone())
-        .ok_or("Dray Cloud started a machine it then didn't list.")?;
+    // A fork answers before boat gives it an address, and a machine without
+    // one draws no row, so the list is read until it has one.
+    let deadline = tokio::time::Instant::now() + cloud::START;
+    let id = loop {
+        sync_cloud().await?;
+        let found = conns().iter().find(|c| c.saved.cloud.as_deref() == Some(machine.id.as_str())).map(|c| c.saved.id.clone());
+        match found {
+            Some(id) => break id,
+            None if tokio::time::Instant::now() < deadline => tokio::time::sleep(Duration::from_secs(2)).await,
+            None => return Err("Dray Cloud started a machine but never gave it an address.".into()),
+        }
+    };
     wake(id.clone(), true).await?;
     Ok(id)
 }

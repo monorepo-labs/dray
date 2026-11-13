@@ -46,7 +46,10 @@ pub enum State {
 pub struct Machine {
     pub id: String,
     pub state: State,
-    pub url: String,
+    /// `None` until boat assigns the sandbox its subdomain, which a fork's
+    /// first answer and its first listings can come before.
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,6 +86,8 @@ async fn call(key: &str, method: reqwest::Method, path: &str, wait: Duration) ->
 pub fn refusal(status: u16, body: &Value) -> String {
     match (status, body["error"].as_str()) {
         (409, Some("cap")) => "Dray Cloud is at its limit of 3 running machines. Try again once one stops.".into(),
+        // A machine gone from the pool; a key it doesn't take is a bare 404.
+        (404, Some("not_found")) => "Dray Cloud no longer has that machine.".into(),
         (401 | 403 | 404, _) => "Dray Cloud didn't accept this key.".into(),
         (_, Some(error)) => format!("Dray Cloud said: {error}"),
         _ => format!("Dray Cloud answered {status}."),
@@ -129,9 +134,22 @@ mod tests {
     }
 
     #[test]
+    fn a_machine_with_no_address_yet_costs_nothing() {
+        let listing: Listing = serde_json::from_value(json!({
+            "token": "ab".repeat(32),
+            "machines": [{ "id": "bx_23456789", "state": "starting", "url": null }],
+        }))
+        .unwrap();
+        assert_eq!(listing.machines[0].url, None);
+        let one = one(json!({ "machine": { "id": "bx_23456789", "state": "starting", "url": null } })).unwrap();
+        assert_eq!(one.url, None);
+    }
+
+    #[test]
     fn cap_and_bad_key_read_as_sentences() {
         assert!(refusal(409, &json!({ "error": "cap" })).contains("limit of 3"));
         assert_eq!(refusal(404, &Value::Null), "Dray Cloud didn't accept this key.");
+        assert_eq!(refusal(404, &json!({ "error": "not_found" })), "Dray Cloud no longer has that machine.");
         assert_eq!(refusal(500, &json!({ "error": "boat down" })), "Dray Cloud said: boat down");
     }
 }
