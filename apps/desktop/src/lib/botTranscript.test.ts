@@ -7,6 +7,7 @@ import {
   chatTime,
   drawnSegments,
   firstUnread,
+  inReviewTurn,
   itemKey,
   sentMessages,
   startsTimeRun,
@@ -235,6 +236,12 @@ dray session new --project /Users/yogesh/Documents/ade --hidden --title "Bot pro
       ["INSTRUCTIONS.md", false],
       [".claude/skills/fork/SKILL.md", true],
     ]);
+  });
+
+  it("knows a turn a review opened while it streams", () => {
+    expect(inReviewTurn([user("hi"), said("hello"), user("Review: x", true)])).toBe(true);
+    expect(inReviewTurn([user("Review: x", true), said("…"), user("thanks")])).toBe(false);
+    expect(inReviewTurn([user("start", true)])).toBe(false);
   });
 
   it("draws no task for a create that failed", () => {

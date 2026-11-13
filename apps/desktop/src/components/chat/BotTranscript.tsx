@@ -16,6 +16,7 @@ import {
   chatTime,
   itemKey,
   itemTime,
+  inReviewTurn,
   startsTimeRun,
   taskContext,
   unreadStart,
@@ -95,6 +96,7 @@ export default function BotTranscript({
   // still composing would read as a message, so the orb line names it instead.
   const sessionId = segments.at(-1)?.sessionId ?? null;
   const streaming = useStreamingKind(sessionId);
+  const review = useMemo(() => (busy && events ? inReviewTurn(events) : false), [busy, events]);
 
   const drawn = rows.map((item, i) => {
     // A time label opens the chat and follows every pause, as a messenger's.
@@ -156,7 +158,7 @@ export default function BotTranscript({
     <>
       {shown}
       {busy &&
-        (preview && streaming === "text" ? (
+        (preview && streaming === "text" && !review ? (
           <BotBubble tight={rows[rows.length - 1]?.kind === "assistant"}>{preview}</BotBubble>
         ) : (
           <OrbLine

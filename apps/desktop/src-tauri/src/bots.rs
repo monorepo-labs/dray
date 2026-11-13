@@ -870,7 +870,7 @@ async fn commit_bot_turn(bot: &Bot, notes: learn::TurnNotes) -> learn::Turn {
     }
     let dir = Path::new(&bot.path);
     let _guard = HISTORY_LOCK.lock().await;
-    if turn.notes.reviewing {
+    if turn.notes.reviewing() {
         match learn::keep_rules(dir).await {
             Ok(true) => eprintln!("[bot learn] a review took a rule away from {}; put back", bot.name),
             Ok(false) => {}
@@ -940,13 +940,18 @@ pub async fn bot_learned_diff(session_id: String, commit: String, path: String) 
 
 /// Undo on a "Learned" row: reverts that one file of the commit and says so in
 /// the chat, where the row reads it back as undone.
+///
+/// The bot is told too, hidden like a review: a running child read its
+/// instructions at spawn and still follows the rule the file no longer holds.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn bot_undo_learned(session_id: String, commit: String, path: String, sink: Sink) -> Result<(), Fail> {
     let bot = bot_of_session(&session_id).await?;
     learn::undo(&bot, &commit, &path).await?;
     let item = crate::store::get_session_index_item(&session_id).await?.context("no such session")?;
+    let told = learn::undone_prompt(&path, &commit);
     let payload = crate::events::AgentEventPayload::LearnedUndone { commit, path };
     manager().log_event(&session_id, item.harness, payload, &sink).await?;
+    crate::orchestration::send_review(session_id, told, sink).await?;
     Ok(())
 }
 
@@ -989,7 +994,7 @@ fn capped(text: String) -> String {
     while !text.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}\n\n[cut at {FILE_CAP} characters — trim this file]", &text[..end])
+    format!("{}\n\n[cut at {FILE_CAP} characters — ask the user which rules to cut or merge]", &text[..end])
 }
 
 fn bot_block(bot: &Bot, others: &[&str], instructions: &str) -> String {

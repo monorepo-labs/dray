@@ -424,5 +424,16 @@ export const itemKey = (item: BotItem): string => ("key" in item ? item.key : it
 /// How Dray opens every review it sends (`learn::REVIEW`).
 const REVIEW = "Review:";
 
+/// Whether the turn now open was started by Dray's review, whose reply is
+/// hidden, so nothing it streams may draw a bubble either.
+export function inReviewTurn(events: readonly AgentEvent[]): boolean {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const { payload, subagent } = events[i];
+    if (subagent || payload.type !== "user_message") continue;
+    return !!payload.kickoff && payload.text.startsWith(REVIEW);
+  }
+  return false;
+}
+
 /// How `nudge_bot` opens every nudge it sends.
 const NUDGE = "Stall nudge:";

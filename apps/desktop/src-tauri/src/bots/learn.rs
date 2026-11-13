@@ -16,7 +16,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use ts_rs::TS;
 
-use super::{commit_paths, git, Bot, FILE_CAP, HISTORY_LOCK, INSTRUCTIONS, MEMORY};
+use super::{commit_paths, git, Bot, HISTORY_LOCK, INSTRUCTIONS, MEMORY};
 use crate::events::{AgentEventPayload, LearnedFile, MessageSender};
 
 /// Where a bot's skills live: Claude Code reads them there since the bot runs
@@ -47,8 +47,20 @@ pub struct TurnNotes {
     corrected: bool,
     /// Tasks whose report says they failed, as (id, title).
     failed: Vec<(String, String)>,
-    /// Opened by a review alone: nothing from the reader or a task joined it.
-    pub reviewing: bool,
+    /// A review is among the turn's prompts.
+    review: bool,
+    /// Anything not Dray's is too: the reader, a task or another bot. Kept
+    /// apart from `review` so arrival order cannot hide it: a review queued
+    /// behind the reader's message joins that same turn.
+    joined: bool,
+}
+
+impl TurnNotes {
+    /// Opened by a review alone: nothing from the reader or a task joined it,
+    /// so the add-only rule for instructions applies.
+    pub fn reviewing(&self) -> bool {
+        self.review && !self.joined
+    }
 }
 
 static NOTES: LazyLock<Mutex<HashMap<String, TurnNotes>>> = LazyLock::new(Default::default);
@@ -60,10 +72,10 @@ pub fn note_prompt(session_id: &str, prompt: &str, from: Option<&MessageSender>,
     let mut notes = NOTES.lock().unwrap();
     let notes = notes.entry(session_id.to_string()).or_default();
     if dray {
-        notes.reviewing |= prompt.starts_with(REVIEW);
+        notes.review |= prompt.starts_with(REVIEW);
         return;
     }
-    notes.reviewing = false;
+    notes.joined = true;
     match from {
         None => notes.corrected |= is_correction(prompt),
         // Another bot's message is a colleague's, not a report.
@@ -103,12 +115,12 @@ impl Turn {
 
     /// The review to ask for after this turn, if one is owed.
     ///
-    /// Never after a review, or a review would beget another. A correction or
+    /// Never after a turn a review was in, or a review would beget another. A correction or
     /// failure is owed one only where the turn learned nothing itself: the
     /// prompt asks the bot to fix the cause in the same turn, and one that did
     /// needs no second look. A file over its cap always is.
     pub fn review(&self, session_id: &str) -> Option<String> {
-        if self.notes.reviewing {
+        if self.notes.review {
             return None;
         }
         let mut reasons = Vec::new();
@@ -131,6 +143,18 @@ impl Turn {
         last.insert(session_id.to_string(), Instant::now());
         Some(super::fill(REVIEW_PROMPT, &[("reason", &reasons.join(" "))]))
     }
+}
+
+/// What the bot is told when the reader undoes a lesson. Opened like a review,
+/// so it is hidden the same way, its words are dropped, and it may only add
+/// to the instructions it is about.
+pub fn undone_prompt(path: &str, commit: &str) -> String {
+    let short = commit.get(..7).unwrap_or(commit);
+    format!(
+        "{REVIEW} The user undid what your commit {short} changed in `{path}` (`git show {short}` has it). \
+         Stop following what that change said, even where your instructions as you started still hold it, \
+         and never add it back. Change nothing else, and end your turn without writing a word."
+    )
 }
 
 /// Whether each event sits in a turn a review opened, in order. Whatever the
@@ -216,10 +240,11 @@ pub async fn read_commit(dir: &Path, commit: &str) -> Result<(Vec<LearnedFile>, 
     Ok((files, oversize))
 }
 
+/// The cap a review is asked to trim a file to. None for the instructions: a
+/// review may only add there, and trimming rules is the user's call, so the
+/// cut notice in the prompt (`capped`) asks the user instead.
 fn cap(path: &str) -> Option<usize> {
-    if path == INSTRUCTIONS {
-        Some(FILE_CAP)
-    } else if path.starts_with(MEMORY) {
+    if path.starts_with(MEMORY) {
         Some(MEMORY_CAP)
     } else if path.ends_with("/SKILL.md") {
         Some(SKILL_CAP)
@@ -418,11 +443,15 @@ mod tests {
     fn notes_mark_a_review_turn_only_while_nothing_else_joins_it() {
         let id = "learn-notes-test";
         note_prompt(id, "Review: The user just corrected you.", None, true);
-        assert!(take_notes(id).reviewing);
+        assert!(take_notes(id).reviewing());
         note_prompt(id, "Review: x", None, true);
         note_prompt(id, "no, the other one", None, false);
         let notes = take_notes(id);
-        assert!(!notes.reviewing && notes.corrected);
+        assert!(!notes.reviewing() && notes.corrected);
+        // A review queued behind the reader's message joins that turn too.
+        note_prompt(id, "remove the second rule", None, false);
+        note_prompt(id, "Review: x", None, true);
+        assert!(!take_notes(id).reviewing());
     }
 
     #[test]
@@ -444,7 +473,7 @@ mod tests {
         let learned = LearnedFile { path: INSTRUCTIONS.into(), kind: "instructions".into(), change: "changed".into(), summary: "x".into() };
         let turn = Turn { files: vec![learned], notes: corrected(), ..Default::default() };
         assert!(turn.review("learn-review-test-2").is_none());
-        let turn = Turn { notes: TurnNotes { reviewing: true, corrected: true, ..Default::default() }, ..Default::default() };
+        let turn = Turn { notes: TurnNotes { review: true, corrected: true, ..Default::default() }, ..Default::default() };
         assert!(turn.review("learn-review-test-3").is_none());
     }
 
@@ -521,13 +550,13 @@ mod tests {
         std::fs::write(dir.as_path().join(INSTRUCTIONS), "- Rule the user wrote\n").unwrap();
         super::super::start_history(&bot).await.unwrap();
         std::fs::write(dir.as_path().join(INSTRUCTIONS), "- A rewritten rule\n").unwrap();
-        let review = TurnNotes { reviewing: true, ..Default::default() };
+        let review = TurnNotes { review: true, ..Default::default() };
         let turn = super::super::commit_bot_turn(&bot, review).await;
         assert!(turn.files.is_empty());
         assert_eq!(std::fs::read_to_string(dir.as_path().join(INSTRUCTIONS)).unwrap(), "- Rule the user wrote\n");
 
         std::fs::write(dir.as_path().join(INSTRUCTIONS), "- Rule the user wrote\n- Check the login first\n").unwrap();
-        let review = TurnNotes { reviewing: true, ..Default::default() };
+        let review = TurnNotes { review: true, ..Default::default() };
         let turn = super::super::commit_bot_turn(&bot, review).await;
         assert_eq!(turn.files[0].summary, "Check the login first");
         std::fs::remove_dir_all(&dir).ok();

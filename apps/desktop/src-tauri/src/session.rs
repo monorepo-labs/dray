@@ -3514,7 +3514,7 @@ async fn ingest_event(ctx: &Ingest<'_>, mut agent_event: AgentEvent, app: &Sink,
                 let notes = crate::bots::learn::take_notes(ctx.session_id);
                 // A review's words are hidden like its prompt, so it is silent
                 // whatever the bot said; its "Learned" rows wait unannounced.
-                silent_bot_turn = (said.is_none() || notes.reviewing)
+                silent_bot_turn = (said.is_none() || notes.reviewing())
                     && !posted
                     && *status == TurnStatus::Success
                     && crate::bots::bot_at(ctx.session_cwd).await.is_some();
