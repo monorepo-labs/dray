@@ -329,12 +329,11 @@ export default function Chat({
     if (el) setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX);
   };
 
-  // A bot chat draws no turns, only its cards, which sit at the end: the window
-  // alone holds them.
-  const transcriptEvents = bot ? segments.at(-1)?.events : session?.events;
+  // Every held event, never a bot chat's window: a card can wait on the reader
+  // longer than 24 turns, and App builds this same array, whose cache it shares.
   const { events, turns, subagentById, resultByCallId, editsByCallId, pendingAsks } = useMemo(
-    () => buildTranscript(transcriptEvents ?? [], busy, liveTaskIds),
-    [transcriptEvents, busy, liveTaskIds],
+    () => buildTranscript(session?.events ?? [], busy, liveTaskIds),
+    [session?.events, busy, liveTaskIds],
   );
 
   const sessionId = session?.sessionId ?? null;
