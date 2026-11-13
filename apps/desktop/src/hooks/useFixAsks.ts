@@ -53,5 +53,5 @@ const subscribe = (listener: () => void) => {
 
 /// Every standing ask, by session id.
 export function useFixAsks(): Record<string, FixAsk> {
-  return useSyncExternalStore(subscribe, current);
+  return useSyncExternalStore(subscribe, current, current);
 }
