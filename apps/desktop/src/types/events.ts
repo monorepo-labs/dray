@@ -362,9 +362,20 @@ automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUse
  */
 model: ModelId | null, } | { "type": "merge_card", taskId: string, title: string, 
 /**
- * The repo root, what the sidebar's PR marks are keyed by.
+ * The repo root, what the sidebar's PR marks are keyed by. The task's
+ * machine's path where `machine` is set.
  */
-projectPath: string, branch: string, number: number, url: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+projectPath: string, branch: string, number: number, url: string, 
+/**
+ * The machine holding the task, where it is not the chat's. Such a card
+ * reads and merges by `repo` through `gh` here, since its checkout
+ * is there, and may be gone with a sandbox.
+ */
+machine?: string, 
+/**
+ * `owner/name`, set with `machine`.
+ */
+repo?: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.

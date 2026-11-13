@@ -634,6 +634,35 @@ mod elsewhere {
         futures_util::future::join_all(asks).await.into_iter().flatten().next()
     }
 
+    /// Session `id`'s row on the machine holding it, with that machine's id and
+    /// name. Asked the way [`locate`] asks.
+    pub async fn session_row(id: &str) -> Option<((String, String), SessionIndexItem)> {
+        let list: Vec<_> = machines::load().await.into_iter().filter(|m| !m.off).collect();
+        let asks = list.iter().map(|m| async move {
+            let row = tokio::time::timeout(
+                machines::SWEEP,
+                machines::call(m, "session_index_item", json!({ "sessionId": id })),
+            )
+            .await;
+            let row: SessionIndexItem = serde_json::from_value(row.ok()?.ok()?).ok()?;
+            Some(((m.id.clone(), m.name.clone()), row))
+        });
+        futures_util::future::join_all(asks).await.into_iter().flatten().next()
+    }
+
+    /// The open pull request on `branch` of `project` on machine `id`: number
+    /// and URL, read through that machine's own `gh` and checkout.
+    pub async fn open_pr(id: &str, project: &str, branch: &str) -> Result<Option<(u64, String)>> {
+        let saved = machines::on(id).await.map_err(anyhow::Error::msg)?;
+        let prs = machines::call(&saved, "prs_for_branch", json!({ "cwd": project, "branch": branch }))
+            .await
+            .map_err(|e| anyhow!("could not read pull requests on {}: {e}", saved.name))?;
+        Ok(prs.as_array().into_iter().flatten().find_map(|pr| {
+            (pr.get("state")?.as_str()? == "OPEN").then_some(())?;
+            Some((pr.get("number")?.as_u64()?, pr.get("url")?.as_str()?.to_string()))
+        }))
+    }
+
     /// Runs a prepared request on `machine`, a name or an id, and marks every
     /// session it answers with as that machine's.
     pub async fn forward(machine: &str, forward: &Forward) -> Result<Response> {
@@ -1224,43 +1253,140 @@ async fn post_merge_card(card: dray_proto::MergeCard, app: &Sink) -> Result<Resp
         .await?
         .with_context(|| format!("no session {}", card.session_id))?;
     let task_id = &card.task_session_id;
-    let Some(task) = store::get_session_index_item(task_id).await? else {
-        // ponytail: a card reads and merges on the chat's machine, so a task on
-        // another one is refused by name. Carrying the task's machine on the
-        // event is the upgrade, if tasks spread across machines.
-        #[cfg(any(feature = "serve", feature = "desktop"))]
-        if let Some(machine) = elsewhere::locate(task_id).await {
-            bail!("session {task_id} runs on {machine}; a merge card needs the task on the same machine as this chat");
-        }
-        bail!("no session {task_id}");
-    };
-    // The frontend's `sessionBranch`: git's own HEAD while the tree exists,
-    // since an agent may have pushed from a branch it named itself.
-    let observed = match task.worktree_removed {
-        true => None,
-        false => crate::git::current_branch(&task.cwd).await,
-    };
-    let branch = observed
-        .or_else(|| task.worktree_name.as_deref().map(crate::git::worktree_branch))
-        .or(task.branch.clone())
-        .with_context(|| format!("session {task_id} has no branch"))?;
-    let prs = crate::github::prs_for_branch(task.project_path.clone(), branch.clone())
-        .await
-        .map_err(|e| anyhow::anyhow!("could not read pull requests: {e:?}"))?;
-    let pr = prs
-        .into_iter()
-        .find(|pr| pr.state == "OPEN")
-        .with_context(|| format!("no open pull request on {branch}; open one first"))?;
-    let payload = crate::events::AgentEventPayload::MergeCard {
-        task_id: task_id.clone(),
-        title: task.title.clone(),
-        project_path: task.project_path,
-        branch,
-        number: pr.number,
-        url: pr.url.clone(),
-    };
+    let task = CardTask::find(task_id).await?.with_context(|| format!("no session {task_id}"))?;
+    let branch = task.branch().await.with_context(|| format!("session {task_id} has no branch"))?;
+    let (number, url) = task.open_pr(&branch).await?;
+    let title = task.row.title.clone();
+    let payload = task.card(branch, number, url.clone());
+    let _held = POSTING_CARD.lock().await;
     manager().post_event(&card.session_id, chat.harness, payload, app).await?;
-    Ok(Response::MergeCard { number: pr.number, url: pr.url, title: task.title })
+    Ok(Response::MergeCard { number, url, title })
+}
+
+/// Held over every merge card's post, by hand or automatic, so the automatic
+/// one's check of the log and its append cannot straddle another post.
+static POSTING_CARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The task a merge card names: its row, and the machine holding it (id, name)
+/// where that is not this one — a bot's task run in a sandbox of its own.
+struct CardTask {
+    row: SessionIndexItem,
+    machine: Option<(String, String)>,
+}
+
+impl CardTask {
+    /// Here first; a miss asks every machine this server reaches.
+    async fn find(id: &str) -> Result<Option<Self>> {
+        if let Some(row) = store::get_session_index_item(id).await? {
+            return Ok(Some(Self { row, machine: None }));
+        }
+        #[cfg(any(feature = "serve", feature = "desktop"))]
+        if let Some((machine, row)) = elsewhere::session_row(id).await {
+            return Ok(Some(Self { row, machine: Some(machine) }));
+        }
+        Ok(None)
+    }
+
+    /// The frontend's `sessionBranch`: git's own HEAD while a tree here exists,
+    /// since an agent may have pushed from a branch it named itself.
+    async fn branch(&self) -> Option<String> {
+        let row = &self.row;
+        let observed = match self.machine.is_none() && !row.worktree_removed {
+            true => crate::git::current_branch(&row.cwd).await,
+            false => None,
+        };
+        observed.or_else(|| row.worktree_name.as_deref().map(crate::git::worktree_branch)).or(row.branch.clone())
+    }
+
+    /// The open pull request on `branch`, read where the task's checkout is.
+    async fn open_pr(&self, branch: &str) -> Result<(u64, String)> {
+        let open = match &self.machine {
+            None => crate::github::prs_for_branch(self.row.project_path.clone(), branch.to_string())
+                .await
+                .map_err(|e| anyhow::anyhow!("could not read pull requests: {e:?}"))?
+                .into_iter()
+                .find(|pr| pr.state == "OPEN")
+                .map(|pr| (pr.number, pr.url)),
+            #[cfg(any(feature = "serve", feature = "desktop"))]
+            Some((id, _)) => elsewhere::open_pr(id, &self.row.project_path, branch).await?,
+            #[cfg(not(any(feature = "serve", feature = "desktop")))]
+            Some(_) => None,
+        };
+        open.with_context(|| format!("no open pull request on {branch}; open one first"))
+    }
+
+    fn card(self, branch: String, number: u64, url: String) -> crate::events::AgentEventPayload {
+        let repo = self.machine.as_ref().and_then(|_| crate::github::slug_from_pr_url(&url));
+        crate::events::AgentEventPayload::MergeCard {
+            task_id: self.row.session_id,
+            title: self.row.title,
+            project_path: self.row.project_path,
+            branch,
+            number,
+            url,
+            machine: self.machine.map(|(_, name)| name),
+            repo,
+        }
+    }
+}
+
+/// The chat a merge card goes in for a task `parent` started, as its sessions
+/// oldest first: the card is posted in the last, and a card in any of them
+/// counts. A normal task's is `parent` itself. A bot's task goes to the bot's
+/// chat, since Start fresh settles the session that started it, and an agent
+/// switch leaves earlier sessions on screen in the same conversation. Empty
+/// where there is none.
+async fn card_chat(parent: SessionIndexItem) -> Result<Vec<SessionIndexItem>> {
+    Ok(match bots::bot_at(&parent.cwd).await {
+        Some(bot) => bots::chat_sessions(&bot.path).await?,
+        None if parent.archived => Vec::new(),
+        None => vec![parent],
+    })
+}
+
+/// Posts a merge card for task `task_id`'s pull request in the chat that its
+/// parent `session_id` belongs to, once the app judges the PR ready, unless
+/// that chat already holds a card for it — one the agent posted by hand
+/// counts. Answers the chat the card is in, or `None` where there is no chat
+/// to post in yet, which the caller asks again about.
+///
+/// Called on the parent's server, so a task on another machine finds its chat
+/// here; the task itself is looked up here or on the machines this server
+/// reaches. The PR comes from the app's own marks read, so no `gh` runs. The
+/// log is the record of what was posted, so a restart or a second client
+/// never posts twice.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn auto_merge_card(
+    session_id: String,
+    task_id: String,
+    number: u64,
+    url: String,
+    branch: String,
+    sink: Sink,
+) -> Result<Option<String>, crate::Fail> {
+    let _held = POSTING_CARD.lock().await;
+
+    let Some(parent) = store::get_session_index_item(&session_id).await? else {
+        return Ok(None);
+    };
+    let sessions = card_chat(parent).await?;
+    let Some(chat) = sessions.last() else {
+        return Ok(None);
+    };
+    for session in &sessions {
+        let events = store::list_session_events(&session.session_id).await?;
+        if events.iter().any(|e| matches!(&e.payload, crate::events::AgentEventPayload::MergeCard { url: u, .. } if *u == url)) {
+            return Ok(Some(chat.session_id.clone()));
+        }
+    }
+    let Some(task) = CardTask::find(&task_id).await? else {
+        return Ok(None);
+    };
+    if task.row.archived {
+        return Ok(None);
+    }
+    manager().post_event(&chat.session_id, chat.harness, task.card(branch, number, url), &sink).await?;
+    Ok(Some(chat.session_id.clone()))
 }
 
 /// Tags a session that already exists, or untags it.

@@ -294,12 +294,11 @@ against `origin/<default>` — and ask the user, naming what would be lost.
 dray session merge-card <task-id>   # a card in your chat for that task's open PR
 ```
 
-When a task you started reports its pull request is ready to merge, post a merge
-card rather than asking the user in text. It lands in your own chat with the
-task's title, the PR number, its live status, a Merge button and an Open on
-GitHub link, so the user merges in one click without opening the task. It is
-refused when the task's branch has no open pull request, so post it once the PR
-exists. Post one card per PR; it stays in the chat until the PR is merged.
+Dray posts this card in your chat on its own once GitHub says a task you started
+has a pull request ready to merge, on this machine or another. So don't post one
+yourself; run the command only when the user asks for a card. It lands in your own chat with the task's
+title, the PR number, its live status, a Merge button and an Open on GitHub
+link. It is refused when the task's branch has no open pull request.
 
 ```bash
 dray session need <task-id> "Pick: keep the button or drop it"   # no text clears it
