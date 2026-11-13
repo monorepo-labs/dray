@@ -874,7 +874,14 @@ pub enum Response {
     /// Where a video landed, the path the chat plays.
     Video { path: String },
     /// The pull request a merge card was posted for, and the task's title.
-    MergeCard { number: u64, url: String, title: String },
+    /// `existing` where the chat already held a card for it, so none was posted.
+    MergeCard {
+        number: u64,
+        url: String,
+        title: String,
+        #[serde(default)]
+        existing: bool,
+    },
     /// The session's live links after the change, whichever verb asked.
     Shared { shares: Vec<SharedPort> },
     /// The session a verb acted on, as it stands after.

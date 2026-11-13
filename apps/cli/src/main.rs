@@ -682,7 +682,11 @@ fn merge_card(args: SessionArg) -> Result<(), String> {
     let session_id = parent_session_id().ok_or("run this from inside a Dray session: the card goes in its chat.")?;
     let request = Request::MergeCard(MergeCard { session_id, task_session_id: args.session_id });
     match send(request)? {
-        Response::MergeCard { number, url, title } => {
+        Response::MergeCard { number, url, title, existing: true } => {
+            eprintln!("A merge card for #{number} \"{title}\" is already in this chat: {url}");
+            Ok(())
+        }
+        Response::MergeCard { number, url, title, existing: false } => {
             eprintln!("Posted a merge card for #{number} \"{title}\": {url}");
             Ok(())
         }

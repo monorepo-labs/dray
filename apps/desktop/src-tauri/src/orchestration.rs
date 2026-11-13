@@ -1259,8 +1259,36 @@ async fn post_merge_card(card: dray_proto::MergeCard, app: &Sink) -> Result<Resp
     let title = task.row.title.clone();
     let payload = task.card(branch, number, url.clone());
     let _held = POSTING_CARD.lock().await;
-    manager().post_event(&card.session_id, chat.harness, payload, app).await?;
-    Ok(Response::MergeCard { number, url, title })
+    let sessions = chat_sessions_of(chat.clone()).await?;
+    let existing = chat_holds_card(&sessions, task_id, number, &url).await?;
+    if !existing {
+        manager().post_event(&card.session_id, chat.harness, payload, app).await?;
+    }
+    Ok(Response::MergeCard { number, url, title, existing })
+}
+
+/// Whether any of a chat's `sessions` already holds a merge card for this pull
+/// request. The app's post and the agent's both ask first, under
+/// [`POSTING_CARD`], so whichever comes second is the one dropped.
+async fn chat_holds_card(sessions: &[SessionIndexItem], task_id: &str, number: u64, url: &str) -> Result<bool> {
+    for session in sessions {
+        if holds_card(&store::list_session_events(&session.session_id).await?, task_id, number, url) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether `events` hold a merge card for this pull request. The app's URL
+/// comes from its marks read and the agent's from `gh`, so the task's own PR
+/// number counts as well as the URL; the frontend's `cardKey` matches alike.
+fn holds_card(events: &[crate::events::AgentEvent], task_id: &str, number: u64, url: &str) -> bool {
+    events.iter().any(|e| match &e.payload {
+        crate::events::AgentEventPayload::MergeCard { task_id: t, number: n, url: u, .. } => {
+            u == url || (t == task_id && *n == number)
+        }
+        _ => false,
+    })
 }
 
 /// Held over every merge card's post, by hand or automatic, so the automatic
@@ -1337,10 +1365,18 @@ impl CardTask {
 /// switch leaves earlier sessions on screen in the same conversation. Empty
 /// where there is none.
 async fn card_chat(parent: SessionIndexItem) -> Result<Vec<SessionIndexItem>> {
-    Ok(match bots::bot_at(&parent.cwd).await {
+    if parent.archived && bots::bot_at(&parent.cwd).await.is_none() {
+        return Ok(Vec::new());
+    }
+    chat_sessions_of(parent).await
+}
+
+/// The sessions of the chat `session` is drawn in, oldest first: a bot's
+/// every session, anything else alone.
+async fn chat_sessions_of(session: SessionIndexItem) -> Result<Vec<SessionIndexItem>> {
+    Ok(match bots::bot_at(&session.cwd).await {
         Some(bot) => bots::chat_sessions(&bot.path).await?,
-        None if parent.archived => Vec::new(),
-        None => vec![parent],
+        None => vec![session],
     })
 }
 
@@ -1373,11 +1409,8 @@ pub async fn auto_merge_card(
     let Some(chat) = sessions.last() else {
         return Ok(None);
     };
-    for session in &sessions {
-        let events = store::list_session_events(&session.session_id).await?;
-        if events.iter().any(|e| matches!(&e.payload, crate::events::AgentEventPayload::MergeCard { url: u, .. } if *u == url)) {
-            return Ok(Some(chat.session_id.clone()));
-        }
+    if chat_holds_card(&sessions, &task_id, number, &url).await? {
+        return Ok(Some(chat.session_id.clone()));
     }
     let Some(task) = CardTask::find(&task_id).await? else {
         return Ok(None);
@@ -2406,6 +2439,37 @@ mod tests {
         assert!(!resolve_fast(Some(false), Some(&parent), Harness::ClaudeCode));
         // No parent at all is the ordinary terminal call: off.
         assert!(!resolve_fast(None, None, Harness::ClaudeCode));
+    }
+
+    /// The app posts its card off its marks read, the agent off `gh`; either
+    /// may land first and the other must find it, even where the two spell
+    /// the URL differently.
+    #[test]
+    fn a_card_is_held_whichever_post_came_first() {
+        let card = |url: &str| {
+            let payload = crate::events::AgentEventPayload::MergeCard {
+                task_id: "task".into(),
+                title: "Fix".into(),
+                project_path: "/p".into(),
+                branch: "b".into(),
+                number: 980,
+                url: url.into(),
+                machine: None,
+                repo: None,
+            };
+            vec![crate::events::AgentEvent::mint("chat".into(), Harness::ClaudeCode, 0, None, None, payload)]
+        };
+        let app = "https://github.com/o/r/pull/980";
+        let agent = "https://github.com/O/R/pull/980/";
+
+        // The app first, then the agent's `dray session merge-card`.
+        assert!(holds_card(&card(app), "task", 980, agent));
+        // The agent first, then the app.
+        assert!(holds_card(&card(agent), "task", 980, app));
+        // A new PR on the task, or another task's, is a card of its own.
+        assert!(!holds_card(&card(app), "task", 981, "https://github.com/o/r/pull/981"));
+        assert!(!holds_card(&card(app), "other", 980, "https://github.com/o/s/pull/980"));
+        assert!(!holds_card(&[], "task", 980, app));
     }
 
     #[test]

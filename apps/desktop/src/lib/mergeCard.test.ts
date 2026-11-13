@@ -54,4 +54,18 @@ describe("buildTranscript", () => {
     expect(turn.cards).toEqual([posted]);
     expect(turn.work.some((w) => "id" in w && w.id === posted.id)).toBe(false);
   });
+
+  // The app's own card and the agent's, either first: logs from before the
+  // server refused a second post hold both.
+  it("draws one card per pull request whoever posted first", () => {
+    const pr = (url: string) =>
+      event({ type: "merge_card", taskId: "t", title: "Fix", projectPath: "/repo", branch: "b", number: 980, url });
+    const app = "https://github.com/o/r/pull/980";
+    const agent = "https://github.com/O/R/pull/980/";
+    for (const [first, second] of [[app, agent], [agent, app]]) {
+      const kept = pr(first);
+      const { turns } = buildTranscript([said(), kept, said(), pr(second), pr(first)], false);
+      expect(turns.flatMap((t) => t.cards)).toEqual([kept]);
+    }
+  });
 });

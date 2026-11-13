@@ -1,5 +1,5 @@
 import { stripSenderPrefix } from "@/lib/relay";
-import { drawsFailure } from "@/lib/transcript";
+import { cardRepeats, drawsFailure } from "@/lib/transcript";
 import type { AgentEvent, Harness } from "@/types/events";
 import type { JsonValue } from "@/types/serde_json/JsonValue";
 
@@ -39,10 +39,11 @@ export function drawnSegments<T extends { olderBefore?: number | null }>(segment
 }
 
 /// The rows of a bot's whole chat, its sessions oldest first, with a line where
-/// the agent changed.
+/// the agent changed. One card per pull request across all of them.
 export function chatItems(segments: readonly BotSegment[]): BotItem[] {
+  const repeated = cardRepeats();
   return segments.flatMap((segment, i) => {
-    const items = botItems(segment.events);
+    const items = botItems(segment.events, repeated);
     if (i === 0 || segments[i - 1].harness === segment.harness) return items;
     const ts = segment.events[0]?.ts ?? segment.created;
     return [{ kind: "switch" as const, key: `switch:${segment.sessionId}`, harness: segment.harness, ts }, ...items];
@@ -295,8 +296,9 @@ export function botRows(items: readonly BotItem[]): BotRow[] {
 ///
 /// A task is found by its `dray session new` call and named by the id that
 /// command prints alone on its first stdout line — printed that way so a shell
-/// can capture it, which is what makes reading it back here safe.
-export function botItems(events: readonly AgentEvent[]): BotItem[] {
+/// can capture it, which is what makes reading it back here safe. `repeated`
+/// is shared across a chat's sessions, so a card is drawn once in all of them.
+export function botItems(events: readonly AgentEvent[], repeated = cardRepeats()): BotItem[] {
   const starts = new Set<string>();
   const sends = new Map<string, ReturnType<typeof sentMessages>>();
   const items: BotItem[] = [];
@@ -314,7 +316,7 @@ export function botItems(events: readonly AgentEvent[]): BotItem[] {
     } else if (p.type === "error") {
       items.push({ kind: "notice", event });
     } else if (p.type === "merge_card") {
-      items.push({ kind: "card", event });
+      if (!repeated(p)) items.push({ kind: "card", event });
     } else if (p.type === "turn_completed" && drawsFailure(p)) {
       // The harness says the failure twice, as text and on the turn; the red
       // row wins, as in the transcript.

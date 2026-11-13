@@ -119,7 +119,7 @@ dray session merge-card <task-id>
 
 Run from inside a session, this posts a card in that session's chat for the open pull request on another session's branch, usually a task it started. The card shows the task, the PR number, its live status, a **Merge** button and an **Open on GitHub** link, so you can merge without opening the task or the side panel. It is refused when the branch has no open pull request.
 
-Dray also posts the card on its own, once per pull request, in the chat of the session that started the task, as soon as GitHub says the PR can merge: its branch protection, required checks and required reviews pass, and no check is still running. A card already in the chat for that PR, by hand or not, stops a second.
+Dray also posts the card on its own, once per pull request, in the chat of the session that started the task, as soon as GitHub says the PR can merge: its branch protection, required checks and required reviews pass, and no check is still running. A chat holds one card per pull request: whichever post comes second is skipped, and `merge-card` says a card is already there.
 
 The task can run on another machine, such as a sandbox of its own. The card then reads and merges the pull request through the GitHub CLI on the chat's machine, so it keeps working after that machine is gone.
 

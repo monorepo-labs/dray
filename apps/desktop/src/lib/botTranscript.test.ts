@@ -249,6 +249,23 @@ describe("chatItems", () => {
     const items = chatItems([segment("a", "codex", [said("one")]), segment("b", "codex", [said("two")])]);
     expect(items.map((i) => i.kind)).toEqual(["assistant", "assistant"]);
   });
+
+  // The app's own card and the bot's `dray session merge-card`, either first,
+  // across an agent switch, and with the URL spelled differently.
+  it("draws one card per pull request whoever posted first", () => {
+    const card = (url: string) =>
+      ev({ type: "merge_card", taskId: "t", title: "Fix", projectPath: "/p", branch: "b", number: 980, url } as AgentEventPayload);
+    const app = "https://github.com/o/r/pull/980";
+    const agent = "https://github.com/O/R/pull/980/";
+    for (const [first, second] of [[app, agent], [agent, app]]) {
+      const kept = card(first);
+      const items = chatItems([
+        segment("a", "claude_code", [said("done"), kept]),
+        segment("b", "codex", [card(second), said("merge it?")]),
+      ]);
+      expect(items.filter((i) => i.kind === "card")).toEqual([{ kind: "card", event: kept }]);
+    }
+  });
 });
 
 describe("taskContext", () => {

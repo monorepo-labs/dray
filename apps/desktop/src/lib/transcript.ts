@@ -629,6 +629,7 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
     lastWasAssistantText: false,
   });
 
+  const repeated = cardRepeats();
   for (const event of events) {
     // A queued prompt does not open a turn: it was typed into one already
     // running, and the CLI answers both inside it and emits a single
@@ -660,7 +661,7 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
     }
 
     if (event.payload.type === "merge_card") {
-      current.cards.push(event);
+      if (!repeated(event.payload)) current.cards.push(event);
       continue;
     }
     if (event.payload.type === "tool_call_started") current.toolCalls += 1;
@@ -681,6 +682,21 @@ function groupTurns(events: AgentEvent[], subagentIds: Set<string>): Turn[] {
   // reader would see anyway.
   if (current) close(current);
   return turns;
+}
+
+/// A check answering true for a merge card whose pull request an earlier card
+/// already named, so a chat draws one card per PR: the server refuses a second
+/// post, but logs from before it did hold two. The app's URL and the agent's
+/// come from different reads, so the task's PR number counts as well, as in
+/// the server's `holds_card`.
+export function cardRepeats(): (card: Extract<AgentEvent["payload"], { type: "merge_card" }>) => boolean {
+  const seen = new Set<string>();
+  return (card) => {
+    const keys = [`url:${card.url}`, `pr:${card.taskId}#${card.number}`];
+    const repeat = keys.some((k) => seen.has(k));
+    for (const k of keys) seen.add(k);
+    return repeat;
+  };
 }
 
 /// The live-task set of a session with none. One shared instance, because
