@@ -294,10 +294,9 @@ against `origin/<default>` — and ask the user, naming what would be lost.
 dray session merge-card <task-id>   # a card in your chat for that task's open PR
 ```
 
-Dray posts this card in your chat on its own once a task you started has a pull
-request ready to merge: mergeable, checks passing, and Greptile's score high
-enough where the repo uses Greptile. So don't post one yourself; run the command
-only when the user asks for a card. It lands in your own chat with the task's
+Dray posts this card in your chat on its own once GitHub says a task you started
+has a pull request ready to merge, on this machine or another. So don't post one
+yourself; run the command only when the user asks for a card. It lands in your own chat with the task's
 title, the PR number, its live status, a Merge button and an Open on GitHub
 link. It is refused when the task's branch has no open pull request.
 

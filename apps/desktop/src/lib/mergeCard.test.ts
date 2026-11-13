@@ -33,6 +33,14 @@ describe("cardRepos", () => {
   it("names each repo once", () => {
     expect(cardRepos([card("/a"), said(), card("/a"), card("/b")])).toEqual(["/a", "/b"]);
   });
+
+  it("names a task on another machine by its GitHub slug", () => {
+    const elsewhere = event({
+      type: "merge_card", taskId: "t", title: "Fix", projectPath: "/srv/repo", branch: "b", number: 7, url: "u",
+      machine: "sandbox", repo: "o/r",
+    });
+    expect(cardRepos([elsewhere, card("/a")])).toEqual(["github:o/r", "/a"]);
+  });
 });
 
 describe("buildTranscript", () => {

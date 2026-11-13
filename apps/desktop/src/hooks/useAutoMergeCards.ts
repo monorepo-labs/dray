@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { greptileClears, useMinGreptileScore } from "@/lib/autoMergeCard";
+import { readyForCard } from "@/lib/autoMergeCard";
 import { botAt } from "@/lib/bots";
-import { prStatus, sessionBranch } from "@/lib/pr";
-import { invoke } from "@/lib/transport";
-import type { Bot, GreptileReview, PrMark, SessionIndexItem } from "@/types/events";
+import { sessionBranch } from "@/lib/pr";
+import { invoke, serverOfSession } from "@/lib/transport";
+import type { Bot, PrMark, SessionIndexItem } from "@/types/events";
 
-/// How long a ready PR Greptile has not cleared waits before Greptile is asked
-/// again. Its re-review lands minutes after a push and moves no mark, so only
-/// this finds it; every ask spends the `gh` budget agents share.
-const RECHECK_MS = 3 * 60_000;
-/// How often pending PRs are looked at, so a recheck comes due without a mark moving.
+/// How long a ready PR whose card could not go up waits before it is tried
+/// again: a failed call, or a task whose chat is settled for now.
+const RETRY_MS = 3 * 60_000;
+/// How often pending PRs are looked at, so a retry comes due without a mark moving.
 const TICK_MS = 60_000;
 
 type Args = {
@@ -19,8 +18,8 @@ type Args = {
   prFor: (repoPath: string, branch: string | null) => PrMark | undefined;
 };
 
-/// Posts a merge card in the chat that started a task once the task's PR is
-/// ready: `prStatus` says ready and Greptile clears it (`greptileClears`).
+/// Posts a merge card in the chat that started a task once GitHub says the
+/// task's PR can merge (`readyForCard`).
 ///
 /// **State, not transition**, unlike the Ready to merge notice: a PR that turned
 /// ready while the app was closed still gets its card. The server picks the
@@ -29,10 +28,9 @@ type Args = {
 /// only saves the call, so it is dropped when a bot's chat changes: a fresh
 /// chat holds no card yet.
 export function useAutoMergeCards({ items, bots, prFor }: Args) {
-  const minScore = useMinGreptileScore();
   const done = useRef(new Set<string>());
-  /// When Greptile was last asked about each ready PR, while it stays ready.
-  const asked = useRef(new Map<string, number>());
+  /// When each ready PR was last tried, while it stays ready.
+  const tried = useRef(new Map<string, number>());
   const inFlight = useRef(new Set<string>());
   const [tick, setTick] = useState(0);
   const [pending, setPending] = useState(false);
@@ -41,6 +39,7 @@ export function useAutoMergeCards({ items, bots, prFor }: Args) {
     () => items.filter((i) => !i.archived && i.parentSessionId && i.parentSessionId !== i.sessionId),
     [items],
   );
+  const listed = useMemo(() => new Set(items.map((i) => i.sessionId)), [items]);
   const botChats = useMemo(
     () => items.filter((i) => !i.archived && botAt(bots, i.cwd)).map((i) => i.sessionId).sort().join("\n"),
     [items, bots],
@@ -53,37 +52,32 @@ export function useAutoMergeCards({ items, bots, prFor }: Args) {
     for (const task of tasks) {
       const branch = sessionBranch(task);
       const mark = prFor(task.projectPath, branch);
-      if (!branch || !mark || mark.state !== "OPEN" || prStatus(mark).key !== "ready") continue;
-      const key = `${task.projectPath}#${mark.number}`;
+      if (!branch || !mark || !readyForCard(mark)) continue;
+      const key = mark.url;
       if (done.current.has(key)) continue;
       ready.add(key);
-      if (inFlight.current.has(key) || now - (asked.current.get(key) ?? 0) < RECHECK_MS) continue;
+      if (inFlight.current.has(key) || now - (tried.current.get(key) ?? 0) < RETRY_MS) continue;
 
       inFlight.current.add(key);
-      asked.current.set(key, now);
-      void (async () => {
-        try {
-          const review = await invoke<GreptileReview>("greptile_review", { cwd: task.projectPath, number: mark.number });
-          if (!greptileClears(review, minScore)) return;
-          const chat = await invoke<string | null>("auto_merge_card", {
-            sessionId: task.sessionId,
-            number: mark.number,
-            url: mark.url,
-            branch,
-          });
-          // No chat to post in yet is asked again at the next recheck.
-          if (chat) done.current.add(key);
-        } catch {
-          // A failed read or post is asked again at the next recheck.
-        } finally {
-          inFlight.current.delete(key);
-        }
-      })();
+      tried.current.set(key, now);
+      // To the chat's server, which finds a task on another machine itself. A
+      // parent no list here holds is likeliest on the task's own server.
+      const parentId = task.parentSessionId as string;
+      const server = serverOfSession(listed.has(parentId) ? parentId : task.sessionId);
+      void invoke<string | null>(
+        "auto_merge_card",
+        { sessionId: parentId, taskId: task.sessionId, number: mark.number, url: mark.url, branch },
+        server,
+      )
+        // No chat to post in yet is tried again later, as is a failed call.
+        .then((chat) => chat && done.current.add(key))
+        .catch(() => {})
+        .finally(() => inFlight.current.delete(key));
     }
-    // A PR that stops being ready is asked about at once when it comes back.
-    for (const key of asked.current.keys()) if (!ready.has(key)) asked.current.delete(key);
+    // A PR that stops being ready is tried at once when it comes back.
+    for (const key of tried.current.keys()) if (!ready.has(key)) tried.current.delete(key);
     setPending(ready.size > 0);
-  }, [tasks, prFor, minScore, tick]);
+  }, [tasks, listed, prFor, tick]);
 
   useEffect(() => {
     if (!pending) return;

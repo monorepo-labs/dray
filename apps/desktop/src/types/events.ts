@@ -362,9 +362,20 @@ automatic: boolean, } | { "type": "permission_denied", toolName: string, toolUse
  */
 model: ModelId | null, } | { "type": "merge_card", taskId: string, title: string, 
 /**
- * The repo root, what the sidebar's PR marks are keyed by.
+ * The repo root, what the sidebar's PR marks are keyed by. The task's
+ * machine's path where `machine` is set.
  */
-projectPath: string, branch: string, number: number, url: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
+projectPath: string, branch: string, number: number, url: string, 
+/**
+ * The machine holding the task, where it is not the chat's. Such a card
+ * reads and merges by `repo` through `gh` here, since its checkout
+ * is there, and may be gone with a sandbox.
+ */
+machine?: string, 
+/**
+ * `owner/name`, set with `machine`.
+ */
+repo?: string, } | { "type": "repo_changed", pullRequest: boolean, } | { "type": "model_request_started" } | { "type": "context_compaction_started" } | { "type": "api_retry", attempt: number, maxRetries: number, 
 /**
  * HTTP status, where the harness knew one. 529 (overloaded) and 500
  * are the only two observed.
@@ -868,33 +879,6 @@ slug: string, description: string | null,
  * attaches it rather than cloning again.
  */
 path: string | null, };
-
-/**
- * What Greptile has said about one pull request, read before a task's merge
- * card is posted, beside GitHub's own verdict.
- */
-export type GreptileReview = { 
-/**
- * Whether Greptile reviews this repo: it commented here or on one of the
- * repo's ten newest pull requests. A repo without it is judged on GitHub's
- * verdict alone; one with it waits for a score.
- */
-present: boolean, 
-/**
- * The confidence out of 5 in its newest summary; `None` until it has
- * reviewed this pull request.
- */
-score: number | null, 
-/**
- * The summary names a commit other than the head: a push it has not
- * reviewed yet, so the score is about code that has since moved.
- */
-stale: boolean, 
-/**
- * Its inline threads nobody has resolved. Resolving one is how the reader
- * or the task marks a finding seen and set aside.
- */
-unresolved: number, };
 
 /**
  * Which agent runs a session.

@@ -119,7 +119,9 @@ dray session merge-card <task-id>
 
 Run from inside a session, this posts a card in that session's chat for the open pull request on another session's branch, usually a task it started. The card shows the task, the PR number, its live status, a **Merge** button and an **Open on GitHub** link, so you can merge without opening the task or the side panel. It is refused when the branch has no open pull request.
 
-Dray also posts the card on its own, once per pull request, in the chat of the session that started the task. It waits until GitHub says the PR can merge, its checks pass, and, in a repo Greptile reviews, Greptile's latest review of the head commit scores at least the minimum set in **Settings → Integrations** (5/5 by default). One point below also passes once every Greptile thread is resolved. A card already in the chat for that PR, by hand or not, stops a second.
+Dray also posts the card on its own, once per pull request, in the chat of the session that started the task, as soon as GitHub says the PR can merge: its branch protection, required checks and required reviews pass, and no check is still running. A card already in the chat for that PR, by hand or not, stops a second.
+
+The task can run on another machine, such as a sandbox of its own. The card then reads and merges the pull request through the GitHub CLI on the chat's machine, so it keeps working after that machine is gone.
 
 In a bot's chat, Merge also settles the task and deletes its worktree when that holds nothing the merge did not take. In any other chat it only merges. The card shrinks to one line once the PR is merged, or after you have sent three more messages.
 

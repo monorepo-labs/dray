@@ -21,13 +21,19 @@ export function readerMessagesAfter(events: readonly AgentEvent[]): Map<string, 
   return after;
 }
 
+/// Where a card reads and merges its PR. Its own path, qualified with the
+/// chat's server; for a task on another machine, the repo's GitHub slug,
+/// read through `gh` here, since the checkout is there and may be gone.
+export function cardRepo(payload: MergeCardPayload, chatId: string): string {
+  return payload.repo ? `github:${payload.repo}` : qualify(payload.projectPath, serverOfSession(chatId));
+}
+
 /// The repos the cards in a chat name, so their pull requests are read even
-/// once the task is settled and no sidebar row asks for them. Qualified with
-/// the chat's server, as the card reads them.
+/// once the task is settled and no sidebar row asks for them.
 export function cardRepos(events: readonly AgentEvent[]): string[] {
   const repos = new Set<string>();
   for (const { sessionId, payload } of events) {
-    if (payload.type === "merge_card") repos.add(qualify(payload.projectPath, serverOfSession(sessionId)));
+    if (payload.type === "merge_card") repos.add(cardRepo(payload, sessionId));
   }
   return [...repos];
 }

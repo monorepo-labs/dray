@@ -766,12 +766,44 @@ impl PrUnavailable {
 /// it back to tell "no CLI" from a CLI that answered badly.
 pub(crate) const NO_CLI: &str = "GitHub CLI (gh) not found.";
 
+/// Where a `cwd` names a repo by GitHub slug rather than by checkout:
+/// `github:owner/name`. A merge card for a task on another machine reads and
+/// merges through one, since no checkout of the repo need exist here.
+pub const SLUG_PREFIX: &str = "github:";
+
+fn slug_of(cwd: &str) -> Option<&str> {
+    cwd.strip_prefix(SLUG_PREFIX).filter(|slug| slug.contains('/'))
+}
+
+/// `owner/name` out of a pull request's URL, `https://github.com/owner/name/pull/7`.
+pub fn slug_from_pr_url(url: &str) -> Option<String> {
+    let path = url.split_once("://")?.1.split_once('/')?.1;
+    let mut parts = path.split('/');
+    let (owner, name) = (parts.next()?, parts.next()?);
+    (parts.next() == Some("pull") && !owner.is_empty() && !name.is_empty()).then(|| format!("{owner}/{name}"))
+}
+
 /// Runs `gh` in `cwd`. `Err` is the message to put on screen: `gh` writes a
 /// readable sentence to stderr for every failure that matters here — not
 /// logged in, no remote, no such repo — and rewording them would only make them
 /// less like what the user sees in their own terminal.
 pub(crate) async fn gh(cwd: &str, args: &[&str]) -> Result<String, String> {
     let bin = binpath::gh().await.ok_or(NO_CLI)?;
+
+    // A repo named by slug has no checkout here: `gh pr` is told which one,
+    // and runs from home.
+    let mut args = args.to_vec();
+    let home;
+    let cwd = match slug_of(cwd) {
+        Some(slug) => {
+            if args.first() == Some(&"pr") {
+                args.extend(["--repo", slug]);
+            }
+            home = std::env::home_dir().ok_or("no home directory")?;
+            home.to_str().ok_or("home directory is not UTF-8")?
+        }
+        None => cwd,
+    };
 
     // A worktree removed outside Dray leaves the session's `cwd` naming a
     // directory that is gone, and the spawn then fails with ENOENT *before*
@@ -782,7 +814,7 @@ pub(crate) async fn gh(cwd: &str, args: &[&str]) -> Result<String, String> {
     }
 
     let out = Command::new(bin)
-        .args(args)
+        .args(&args)
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")
         // `gh` prompts when it can't decide something on its own, and a prompt
@@ -811,6 +843,9 @@ async fn repo_slug(cwd: &str) -> Result<(String, String), String> {
     static SLUGS: LazyLock<Mutex<HashMap<String, (String, String)>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
 
+    if let Some((owner, name)) = slug_of(cwd).and_then(|slug| slug.split_once('/')) {
+        return Ok((owner.to_string(), name.to_string()));
+    }
     if let Some(hit) = SLUGS.lock().await.get(cwd) {
         return Ok(hit.clone());
     }
@@ -830,20 +865,16 @@ async fn repo_slug(cwd: &str) -> Result<(String, String), String> {
 /// `gh api graphql` against the repo `cwd` sits in, with `owner` and `repo`
 /// filled in and `branch` where the query takes one.
 async fn graphql(cwd: &str, query: &str, branch: Option<&str>) -> Result<String, String> {
-    let vars: Vec<String> = branch.map(|b| vec!["-f".into(), format!("branch={b}")]).unwrap_or_default();
-    graphql_with(cwd, query, &vars).await
-}
-
-/// [`graphql`] with the caller's own variable flags: `-F` where a variable is
-/// typed, as a PR number is.
-async fn graphql_with(cwd: &str, query: &str, vars: &[String]) -> Result<String, String> {
     let (owner, repo) = repo_slug(cwd).await?;
     let owner = format!("owner={owner}");
     let repo = format!("repo={repo}");
     let query = format!("query={query}");
+    let branch = branch.map(|b| format!("branch={b}"));
 
     let mut args = vec!["api", "graphql", "-f", &owner, "-f", &repo, "-f", &query];
-    args.extend(vars.iter().map(String::as_str));
+    if let Some(branch) = &branch {
+        args.extend(["-f", branch]);
+    }
     gh(cwd, &args).await
 }
 
@@ -1106,160 +1137,6 @@ fn read_pr_marks(out: &str) -> Result<Vec<PrMark>, String> {
             review_decision: pr.review_decision.filter(|d| !d.is_empty()),
         })
         .collect())
-}
-
-/// What Greptile has said about one pull request, read before a task's merge
-/// card is posted, beside GitHub's own verdict.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
-#[ts(export, export_to = "events.ts")]
-#[serde(rename_all = "camelCase")]
-pub struct GreptileReview {
-    /// Whether Greptile reviews this repo: it commented here or on one of the
-    /// repo's ten newest pull requests. A repo without it is judged on GitHub's
-    /// verdict alone; one with it waits for a score.
-    pub present: bool,
-    /// The confidence out of 5 in its newest summary; `None` until it has
-    /// reviewed this pull request.
-    pub score: Option<u8>,
-    /// The summary names a commit other than the head: a push it has not
-    /// reviewed yet, so the score is about code that has since moved.
-    pub stale: bool,
-    /// Its inline threads nobody has resolved. Resolving one is how the reader
-    /// or the task marks a finding seen and set aside.
-    pub unresolved: u32,
-}
-
-/// One pull request's Greptile summary and threads, plus who commented on the
-/// repo's ten newest — what tells "no Greptile here" from "Greptile has not
-/// got to this one yet". Leaves only, so it costs 1 point.
-const QUERY_GREPTILE: &str = r#"
-query($owner:String!,$repo:String!,$number:Int!){
- repository(owner:$owner,name:$repo){
-  pullRequest(number:$number){
-   headRefOid
-   comments(last:50){nodes{author{login} body}}
-   reviewThreads(first:100){totalCount nodes{isResolved comments(first:1){nodes{author{login}}}}}
-  }
-  recent: pullRequests(last:10){nodes{comments(first:20){nodes{author{login}}}}}
- }}
-"#;
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GreptileRepository {
-    pull_request: Option<GreptilePr>,
-    recent: Option<Nodes<GreptileRecent>>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GreptilePr {
-    #[serde(default)]
-    head_ref_oid: String,
-    comments: Option<Nodes<GreptileComment>>,
-    review_threads: Option<GreptileThreads>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GreptileThreads {
-    #[serde(default)]
-    total_count: u32,
-    nodes: Option<Vec<GreptileThread>>,
-}
-
-#[derive(Deserialize)]
-struct GreptileComment {
-    author: Option<RawAuthor>,
-    #[serde(default)]
-    body: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GreptileThread {
-    #[serde(default)]
-    is_resolved: bool,
-    comments: Option<Nodes<GreptileComment>>,
-}
-
-impl GreptileThread {
-    fn by_greptile(&self) -> bool {
-        let first = self.comments.as_ref().and_then(|n| n.nodes.as_ref()).and_then(|n| n.first());
-        first.is_some_and(|c| by_greptile(&c.author))
-    }
-}
-
-#[derive(Deserialize)]
-struct GreptileRecent {
-    comments: Option<Nodes<GreptileComment>>,
-}
-
-/// Greptile comments as `greptile-apps`; the prefix takes a `[bot]` spelling too.
-fn by_greptile(author: &Option<RawAuthor>) -> bool {
-    author.as_ref().is_some_and(|a| a.login.to_ascii_lowercase().starts_with("greptile"))
-}
-
-/// The `N` of "Confidence Score: N/5", past whatever markup sits between.
-fn confidence_score(body: &str) -> Option<u8> {
-    const PHRASE: &str = "confidence score";
-    let at = body.to_ascii_lowercase().find(PHRASE)?;
-    let tail: String = body[at + PHRASE.len()..].chars().take(60).collect();
-    let digit = tail.find(|c: char| c.is_ascii_digit())?;
-    let score = tail[digit..].chars().next()?.to_digit(10)? as u8;
-    (tail[digit + 1..].starts_with("/5") && (1..=5).contains(&score)).then_some(score)
-}
-
-/// The sha in the summary's "Last reviewed commit" link, where it has one.
-fn reviewed_commit(body: &str) -> Option<&str> {
-    let rest = &body[body.find("Last reviewed commit")?..];
-    let sha = &rest[rest.find("/commit/")? + "/commit/".len()..];
-    let end = sha.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(sha.len());
-    (end >= 7).then_some(&sha[..end])
-}
-
-/// What Greptile has said about pull request `number` in the repo `cwd` sits in.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn greptile_review(cwd: String, number: u64) -> Result<GreptileReview, String> {
-    let vars = ["-F".to_string(), format!("number={number}")];
-    read_greptile(&graphql_with(&cwd, QUERY_GREPTILE, &vars).await?)
-}
-
-/// Splits parsing off the spawn, like [`read_prs`].
-fn read_greptile(out: &str) -> Result<GreptileReview, String> {
-    let repo = Response::<GreptileRepository>::repository(out)?.ok_or("no such repository")?;
-    let pr = repo.pull_request.ok_or("no such pull request")?;
-    let comments = Nodes::take(pr.comments);
-    let (total, threads) = pr.review_threads.map_or((0, Vec::new()), |t| (t.total_count, t.nodes.unwrap_or_default()));
-
-    // Greptile's own comments alone: the PR body is the author's to write, and
-    // a score typed there would pass for a review. Newest first, since a
-    // re-trigger can leave a second summary beside the one it edits in place.
-    let summary = comments
-        .iter()
-        .rev()
-        .filter(|c| by_greptile(&c.author))
-        .map(|c| c.body.as_str())
-        .find(|body| confidence_score(body).is_some());
-    let score = summary.and_then(confidence_score);
-    let head = pr.head_ref_oid.as_str();
-    let stale = summary
-        .and_then(reviewed_commit)
-        .is_some_and(|sha| !head.is_empty() && !head.starts_with(sha));
-
-    // Threads past the hundred read are counted open: one of them may be
-    // Greptile's, and reading them as resolved would let one-below pass.
-    let unread = total.saturating_sub(threads.len() as u32);
-    let unresolved = threads.iter().filter(|t| !t.is_resolved && t.by_greptile()).count() as u32 + unread;
-    let present = score.is_some()
-        || comments.iter().any(|c| by_greptile(&c.author))
-        || threads.iter().any(GreptileThread::by_greptile)
-        || Nodes::take(repo.recent)
-            .into_iter()
-            .flat_map(|pr| Nodes::take(pr.comments))
-            .any(|c| by_greptile(&c.author));
-
-    Ok(GreptileReview { present, score, stale, unresolved })
 }
 
 /// Merges the PR. Returns once `gh` has, so the caller can refetch and show
@@ -1882,85 +1759,17 @@ mod tests {
         assert_eq!(MergeMethod::Merge.flag(), "--merge");
     }
 
-    /// The fixture's Greptile summary, the shape the score is read from.
     #[test]
-    fn greptile_score_reads_through_markup() {
-        let summary = FIXTURE
-            .split("Confidence Score")
-            .nth(1)
-            .map(|rest| format!("<h3>Confidence Score{}", &rest[..40]))
-            .expect("fixture carries a Greptile score");
-        assert_eq!(confidence_score(&summary), Some(4));
-        assert_eq!(confidence_score("**Confidence score: 5/5**"), Some(5));
-        assert_eq!(confidence_score("Confidence Score: 9/10"), None);
-        assert_eq!(confidence_score("no score here"), None);
+    fn a_pr_url_names_its_repo() {
+        assert_eq!(slug_from_pr_url("https://github.com/monorepo-labs/dray/pull/954").as_deref(), Some("monorepo-labs/dray"));
+        assert_eq!(slug_from_pr_url("https://github.com/monorepo-labs/dray/issues/9"), None);
+        assert_eq!(slug_from_pr_url("not a url"), None);
     }
 
     #[test]
-    fn greptile_reviewed_commit_is_read_off_the_link() {
-        let body = r#"<sub>Reviews (2): Last reviewed commit: ["fix(x)"](https://github.com/o/r/commit/b30aaf267437dbc6cee37081568d9c8cb7e1d82e) | [Re-trigger](x)</sub>"#;
-        assert_eq!(reviewed_commit(body), Some("b30aaf267437dbc6cee37081568d9c8cb7e1d82e"));
-        assert_eq!(reviewed_commit("Confidence Score: 5/5"), None);
-    }
-
-    /// A real capture of `QUERY_GREPTILE` on a merged PR: 5/5 on its head,
-    /// thirteen Greptile threads, every one resolved.
-    #[test]
-    fn greptile_review_reads_a_real_capture() {
-        let review = read_greptile(include_str!("fixtures/greptile_review.json")).unwrap();
-        assert_eq!(review, GreptileReview { present: true, score: Some(5), stale: false, unresolved: 0 });
-    }
-
-    fn greptile_answer(head: &str, comments: &str, threads: &str, recent: &str) -> String {
-        format!(
-            r#"{{"data":{{"repository":{{"pullRequest":{{"body":"","headRefOid":"{head}","comments":{{"nodes":[{comments}]}},"reviewThreads":{{"nodes":[{threads}]}}}},"recent":{{"nodes":[{recent}]}}}}}}}}"#
-        )
-    }
-
-    const SUMMARY_4: &str = r#"{"author":{"login":"greptile-apps"},"body":"<h3>Confidence Score: 4/5</h3> Last reviewed commit: [x](https://github.com/o/r/commit/abc1234def)"}"#;
-
-    #[test]
-    fn greptile_review_counts_only_its_own_open_threads() {
-        let threads = [
-            r#"{"isResolved":false,"comments":{"nodes":[{"author":{"login":"greptile-apps"}}]}}"#,
-            r#"{"isResolved":true,"comments":{"nodes":[{"author":{"login":"greptile-apps"}}]}}"#,
-            r#"{"isResolved":false,"comments":{"nodes":[{"author":{"login":"devin-ai-integration"}}]}}"#,
-        ]
-        .join(",");
-        let review = read_greptile(&greptile_answer("abc1234def", SUMMARY_4, &threads, "")).unwrap();
-        assert_eq!(review, GreptileReview { present: true, score: Some(4), stale: false, unresolved: 1 });
-    }
-
-    /// The author writes the PR body, so a score typed there is no review.
-    #[test]
-    fn greptile_review_ignores_a_score_in_the_pr_body() {
-        let answer = greptile_answer("a", "", "", "").replace(r#""body":"""#, r#""body":"Confidence Score: 5/5""#);
-        assert_eq!(read_greptile(&answer).unwrap().score, None);
-        let by_author = r#"{"author":{"login":"someone"},"body":"Confidence Score: 5/5"}"#;
-        assert_eq!(read_greptile(&greptile_answer("a", by_author, "", "")).unwrap().score, None);
-    }
-
-    /// Threads past the hundred read may hold an open one of Greptile's.
-    #[test]
-    fn greptile_threads_past_the_page_count_as_open() {
-        let answer = greptile_answer("abc1234def", SUMMARY_4, "", "").replace(r#""reviewThreads":{"#, r#""reviewThreads":{"totalCount":102,"#);
-        assert_eq!(read_greptile(&answer).unwrap().unresolved, 102);
-    }
-
-    #[test]
-    fn greptile_review_is_stale_after_a_push() {
-        let review = read_greptile(&greptile_answer("fff0000", SUMMARY_4, "", "")).unwrap();
-        assert!(review.stale);
-    }
-
-    /// Greptile on the repo's other pull requests but not yet on this one is a
-    /// wait, not a repo without it.
-    #[test]
-    fn greptile_presence_is_read_off_the_repo() {
-        let recent = r#"{"comments":{"nodes":[{"author":{"login":"greptile-apps"},"body":""}]}}"#;
-        let waiting = read_greptile(&greptile_answer("a", "", "", recent)).unwrap();
-        assert_eq!(waiting, GreptileReview { present: true, score: None, stale: false, unresolved: 0 });
-        let none = r#"{"comments":{"nodes":[{"author":{"login":"vercel"},"body":""}]}}"#;
-        assert!(!read_greptile(&greptile_answer("a", "", "", none)).unwrap().present);
+    fn a_slug_cwd_is_told_from_a_path() {
+        assert_eq!(slug_of("github:monorepo-labs/dray"), Some("monorepo-labs/dray"));
+        assert_eq!(slug_of("/home/me/dray"), None);
+        assert_eq!(slug_of("github:nothing"), None);
     }
 }
