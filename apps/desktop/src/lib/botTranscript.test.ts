@@ -7,6 +7,7 @@ import {
   chatTime,
   drawnSegments,
   firstUnread,
+  hasText,
   inReviewTurn,
   itemKey,
   lessonKind,
@@ -47,6 +48,13 @@ describe("botItems", () => {
     ]);
     expect(items.map((i) => i.kind)).toEqual(["assistant", "user", "task", "assistant"]);
     expect(items[2]).toMatchObject({ kind: "task", sessionId: ID });
+  });
+
+  it("draws no bubble for a reply of whitespace and zero-width characters", () => {
+    const items = botItems([user("hi"), said("\u200b"), said(" \ufeff\u200d\n"), said("\u200bok")]);
+    expect(items.map((i) => i.kind)).toEqual(["user", "assistant"]);
+    expect(hasText("\u00a0\u2060\u00ad\u0085")).toBe(false);
+    expect(hasText("\u200d👍")).toBe(true);
   });
 
   it("marks unread from the first reply after the reader's last message", () => {
