@@ -283,24 +283,37 @@ pub async fn reader_did<T, E>(
         Act::Stopped => manager().turn_in_flight(session_id).await,
         Act::Deleted => true,
     };
+    let text = match act {
+        Act::Settled => "settled it",
+        Act::Stopped => "stopped its turn",
+        Act::Deleted => "deleted it",
+    };
+    // Noted ahead of the act: a stopped task reports at once, and that report
+    // has to carry why the turn ended.
+    let noted = match (counts, &item) {
+        (true, Some(item)) => note_since(item, text.to_string()).await,
+        _ => None,
+    };
     let out = run.await;
-    if let (true, true, Some(item)) = (out.is_ok(), counts, item) {
-        let text = match act {
-            Act::Settled => "settled it",
-            Act::Stopped => "stopped its turn",
-            Act::Deleted => "deleted it",
-        };
-        note_since(&item, text.to_string()).await;
+    if let (Err(_), Some(bot), Some(item)) = (&out, noted, &item) {
+        let mut since = SINCE.lock().unwrap();
+        if let Some((_, tasks)) = since.iter_mut().find(|(path, _)| *path == bot) {
+            for (_, _, acts) in tasks.iter_mut().filter(|(id, ..)| *id == item.session_id) {
+                acts.retain(|a| a != text);
+            }
+            tasks.retain(|(_, _, acts)| !acts.is_empty());
+        }
     }
     out
 }
 
-/// Notes `act` against `task` for its bot, folded into the task's line.
-pub async fn note_since(task: &SessionIndexItem, act: String) {
-    let Some(chat) = bot_chat_of(task).await else { return };
+/// Notes `act` against `task` for its bot, folded into the task's line, and
+/// answers the bot's folder where it was noted.
+pub async fn note_since(task: &SessionIndexItem, act: String) -> Option<String> {
+    let chat = bot_chat_of(task).await?;
     // The bot's own chat: the reader acting there is a turn the bot sees.
     if chat.session_id == task.session_id {
-        return;
+        return None;
     }
     let mut since = SINCE.lock().unwrap();
     let at = match since.iter().position(|(path, _)| same_dir(path, &chat.cwd)) {
@@ -310,7 +323,11 @@ pub async fn note_since(task: &SessionIndexItem, act: String) {
             since.len() - 1
         }
     };
-    fold_since(&mut since[at].1, &task.session_id, &task.title, act);
+    // The title is the one piece of free text, and it sits inside a list the
+    // bot is told to trust: kept to one line that cannot close the list.
+    let title = task.title.replace(['\n', '\r', ']', '"'], " ");
+    fold_since(&mut since[at].1, &task.session_id, &title, act);
+    Some(since[at].0.clone())
 }
 
 fn fold_since(tasks: &mut Vec<(String, String, Vec<String>)>, id: &str, title: &str, act: String) {
@@ -338,17 +355,19 @@ pub async fn note_merge(cwd: &str, number: u64) {
     if tasks.is_empty() {
         return;
     }
-    let Ok(out) = crate::github::gh(cwd, &["pr", "view", &number.to_string(), "--json", "headRefName,title"]).await
+    let Ok(out) = crate::github::gh(cwd, &["pr", "view", &number.to_string(), "--json", "headRefName,isCrossRepository"]).await
     else {
         return;
     };
     let pr: serde_json::Value = serde_json::from_str(&out).unwrap_or_default();
-    let (Some(branch), Some(title)) = (pr["headRefName"].as_str(), pr["title"].as_str()) else { return };
+    // A fork's branch can share a task's name; unknown counts as a fork.
+    let (Some(branch), Some(false)) = (pr["headRefName"].as_str(), pr["isCrossRepository"].as_bool()) else { return };
     for task in tasks {
         // The tree's own HEAD first: a task can move off the branch it was made on.
         let observed = if task.worktree_removed { None } else { crate::git::current_branch(&task.cwd).await };
         if crate::store::session_branch(&task, observed.as_deref()).as_deref() == Some(branch) {
-            note_since(&task, format!("merged its PR #{number} ({title})")).await;
+            // No PR title: it is the PR author's text, and this list is trusted.
+            note_since(&task, format!("merged its PR #{number}")).await;
         }
     }
 }

@@ -3159,6 +3159,17 @@ impl Drop for HandoverGuard<'_> {
     }
 }
 
+/// A bot chat's hidden lead-in for its next prompt: the hand-over, then what
+/// the reader did to its tasks. Taken once; put back with
+/// [`crate::bots::restore_handover`] where the send fails.
+async fn take_hidden(session_id: &str) -> Option<String> {
+    let hidden: String = [crate::bots::take_handover(session_id), crate::bots::take_since(session_id).await]
+        .into_iter()
+        .flatten()
+        .collect();
+    (!hidden.is_empty()).then_some(hidden)
+}
+
 /// Persists the user's own prompt event, emits it, then writes it to the
 /// child's stdin — the CLI never echoes a prompt back, so this is the only
 /// place it enters the transcript.
@@ -3201,9 +3212,8 @@ async fn deliver_prompt(
     // ahead of the first prompt, sent and never logged, so the chat draws only
     // what the reader typed. What the reader did to the bot's tasks meanwhile
     // rides the same way, and a failed send keeps it for the retry with the rest.
-    let hidden = [crate::bots::take_handover(session_id), crate::bots::take_since(session_id).await];
-    let hidden: String = hidden.into_iter().flatten().collect();
-    let mut handover = HandoverGuard { session_id, text: (!hidden.is_empty()).then_some(hidden) };
+    // A logged-only prompt leaves it for [`flush_one_per_turn`], which owns the send.
+    let mut handover = HandoverGuard { session_id, text: if send { take_hidden(session_id).await } else { None } };
     let given = match &handover.text {
         Some(handover) => format!("{handover}{text}"),
         None => text.clone(),
@@ -4002,12 +4012,17 @@ async fn flush_one_per_turn(
         // success the reservation stands as `InProgress` and the turn is this
         // batch's; on failure every message is already on screen and in the log,
         // so the sentence saying why is the only thing still owing.
-        if let (false, Some(sent)) = (
-            texts.is_empty(),
-            transport.open_turn(&texts.join("\n\n"), &[]).await,
-        ) {
+        let mut handover = HandoverGuard { session_id, text: None };
+        if !texts.is_empty() {
+            handover.text = take_hidden(session_id).await;
+        }
+        let given = format!("{}{}", handover.text.as_deref().unwrap_or(""), texts.join("\n\n"));
+        if let (false, Some(sent)) = (texts.is_empty(), transport.open_turn(&given, &[]).await) {
             match sent {
-                Ok(()) => return,
+                Ok(()) => {
+                    handover.sent();
+                    return;
+                }
                 Err(err) => {
                     eprintln!("[queued flush err] {err}");
                     report_send_failure(session_id, harness, &err.to_string(), seq, app)
