@@ -49,10 +49,19 @@ pub fn write_pasted(image: &gpui::Image) -> anyhow::Result<PathBuf> {
         ImageFormat::Tiff => "tiff",
         _ => "img",
     };
-    let dir = std::env::temp_dir().join("dray-paste");
-    std::fs::create_dir_all(&dir)?;
+    // Under home rather than the shared temp dir, where another user could make
+    // the folder first and read every screenshot written into it.
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("no HOME"))?;
+    let dir = PathBuf::from(home).join(".cache/dray-gpui/pasted");
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(&dir)?;
     let path = dir.join(format!("pasted-{}.{ext}", chrono::Local::now().format("%Y%m%d-%H%M%S%3f")));
-    std::fs::write(&path, &image.bytes)?;
+    // `create_new` refuses an existing file or link rather than writing through it.
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+    std::io::Write::write_all(&mut file, &image.bytes)?;
     Ok(path)
 }
 

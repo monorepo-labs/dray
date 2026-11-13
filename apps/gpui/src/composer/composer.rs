@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use gpui::{
     AnyElement, App, ClipboardEntry, Context, Entity, EntityInputHandler, EventEmitter, ExternalPaths, FocusHandle,
     Focusable, InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, deferred, div, prelude::*, px, relative, rems, svg,
+    StatefulInteractiveElement, Styled, Subscription, ScrollHandle, Window, deferred, div, prelude::*, px, relative, rems, svg,
 };
 use gpui_base::input::{
     Enter, Escape, IndentInline, InlineToken, InlineTokenContext, InputEvent, MoveDown, MoveUp, Paste, Textarea,
@@ -108,7 +108,7 @@ impl PickerRow {
             id: id.to_string().into(),
             title: title.to_string().into(),
             detail: None,
-            run: format!("&{title} ({id})").into(),
+            run: segments::task_run(title, id).into(),
             face: Some(title.to_string().into()),
         }
     }
@@ -152,6 +152,7 @@ pub struct Composer {
     input: Entity<TextareaState>,
     rows: HashMap<Sigil, Vec<PickerRow>>,
     trigger: Option<Trigger>,
+    picker_scroll: ScrollHandle,
     active: usize,
     /// The token Esc closed the picker on, by its start, so it stays shut until
     /// the caret leaves it.
@@ -191,6 +192,7 @@ impl Composer {
             input,
             rows: HashMap::new(),
             trigger: None,
+            picker_scroll: ScrollHandle::new(),
             active: 0,
             dismissed: None,
             attachments: Vec::new(),
@@ -296,6 +298,7 @@ impl Composer {
         let moved = next.as_ref().map(|t| (t.sigil, &t.query)) != self.trigger.as_ref().map(|t| (t.sigil, &t.query));
         if moved {
             self.active = 0;
+            self.picker_scroll.scroll_to_item(0);
             if let Some(t) = &next {
                 cx.emit(ComposerEvent::Query { sigil: t.sigil, query: t.query.clone() });
             }
@@ -312,8 +315,14 @@ impl Composer {
             .iter()
             .enumerate()
             .filter_map(|(i, row)| {
-                let best = score(&trigger.query, &row.title)
-                    .max(row.detail.as_ref().and_then(|d| score(&trigger.query, d)).map(|s| s.saturating_sub(1)));
+                let q = &trigger.query;
+                // The run too, sigil off: `@src/main` names a path the title
+                // and directory each hold only half of.
+                let run = row.run.strip_prefix(trigger.sigil.char()).unwrap_or(&row.run);
+                let quiet = |s: Option<u32>| s.map(|s| s.saturating_sub(1));
+                let best = score(q, &row.title)
+                    .max(quiet(row.detail.as_ref().and_then(|d| score(q, d))))
+                    .max(quiet(score(q, run)));
                 best.map(|s| (s, i, row))
             })
             .collect();
@@ -329,6 +338,7 @@ impl Composer {
         let count = self.matches().len() as isize;
         if count > 0 {
             self.active = (self.active as isize + by).rem_euclid(count) as usize;
+            self.picker_scroll.scroll_to_item(self.active);
             cx.notify();
         }
     }
@@ -411,11 +421,10 @@ impl Render for Composer {
         let colors = Colors::new(&theme);
         let matches = self.matches();
         let menu = self.trigger.as_ref().filter(|_| !matches.is_empty()).map(|t| {
-            picker::menu(t.sigil, &matches, self.active, &theme, &colors, cx.listener(|this, ix: &usize, window, cx| {
+            picker::menu(t.sigil, &matches, self.active, &self.picker_scroll, &theme, &colors, cx.listener(|this, ix: &usize, window, cx| {
                 this.pick(*ix, window, cx)
             }))
         });
-        let menu_open = menu.is_some();
         let can_send = self.can_send(cx);
 
         let chip_colors = colors.clone();
@@ -539,7 +548,7 @@ impl Render for Composer {
                             })
                             .child(card),
                     )
-                    .child(div().pt(px(6.)).child(self.toolbar(menu_open, &theme, cx))),
+                    .child(div().pt(px(6.)).child(self.toolbar(&theme, cx))),
             )
     }
 }
@@ -602,8 +611,7 @@ impl Composer {
 
     /// The row under the card. Holds only the composer's own `+` here; the
     /// model, effort and stance pickers are the toolbar's, wired by the owner.
-    fn toolbar(&self, menu_open: bool, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let _ = menu_open;
+    fn toolbar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
         div().flex().items_center().gap_1().px_1().child(
             crate::ui::icon_button("attach", "icons/plus.svg", 16., theme)
                 .on_click(cx.listener(|this, _, _, cx| this.pick_files(cx))),

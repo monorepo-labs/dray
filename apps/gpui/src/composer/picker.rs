@@ -3,8 +3,8 @@
 //! filtering, and the composer answers the keys.
 
 use gpui::{
-    AnyElement, App, FontWeight, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
-    Window, div, prelude::*, px, svg,
+    AnyElement, App, FontWeight, InteractiveElement, IntoElement, ParentElement, ScrollHandle,
+    StatefulInteractiveElement, Styled, Window, div, prelude::*, px, svg,
 };
 
 use super::colors::Colors;
@@ -16,6 +16,7 @@ pub fn menu(
     sigil: Sigil,
     rows: &[PickerRow],
     active: usize,
+    scroll: &ScrollHandle,
     theme: &Theme,
     colors: &Colors,
     on_pick: impl Fn(&usize, &mut Window, &mut App) + 'static,
@@ -59,6 +60,8 @@ pub fn menu(
         .id("picker-list")
         .max_h(px(232.))
         .overflow_y_scroll()
+        // Rows are this list's direct children, which `scroll_to_item` indexes.
+        .track_scroll(scroll)
         .p_1()
         .children(rows.iter().enumerate().map(|(i, row)| {
             let on_pick = on_pick.clone();

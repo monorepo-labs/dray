@@ -126,6 +126,36 @@ pub fn score(query: &str, candidate: &str) -> Option<u32> {
     q.chars().all(|qc| chars.any(|cc| cc == qc)).then_some(1)
 }
 
+/// A task tag as `sessionTag` writes it: `&Title (uuid)`. Any ` (uuid)` already
+/// inside the title is dropped, since the backend takes the first id it finds
+/// and that one would address some other task.
+pub fn task_run(title: &str, id: &str) -> String {
+    format!("&{} ({id})", strip_inner_ids(title))
+}
+
+fn strip_inner_ids(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    let mut rest = title;
+    while let Some(at) = rest.find(" (") {
+        let after = &rest[at + 2..];
+        let is_id = after.len() > 36 && after.as_bytes()[36] == b')' && is_uuid(&after[..36]);
+        out.push_str(&rest[..at]);
+        if is_id {
+            rest = &after[37..];
+        } else {
+            out.push_str(" (");
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.char_indices().all(|(i, c)| if matches!(i, 8 | 13 | 18 | 23) { c == '-' } else { c.is_ascii_hexdigit() })
+}
+
 /// A mention's face: the filename alone (`splitMention`'s `name`).
 pub fn file_face(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
@@ -191,6 +221,14 @@ mod tests {
     fn placeholder_grows_at_its_end() {
         assert_eq!(placeholder(true, false, false), "Describe a task. @files. /skills.");
         assert_eq!(placeholder(false, true, true), "Follow-up. @files. /skills. &tasks. #issues.");
+    }
+
+    #[test]
+    fn task_run_drops_ids_inside_the_title() {
+        let other = "11111111-2222-3333-4444-555555555555";
+        let id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        assert_eq!(task_run(&format!("Investigate ({other}) failure"), id), format!("&Investigate failure ({id})"));
+        assert_eq!(task_run("Fix (the) bug", id), format!("&Fix (the) bug ({id})"));
     }
 
     #[test]
