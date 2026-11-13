@@ -3221,8 +3221,9 @@ async fn deliver_prompt(
     // what the reader typed. What the reader did to the bot's tasks meanwhile
     // rides the same way, and a failed send keeps it for the retry with the rest.
     // A logged-only prompt leaves it for [`flush_one_per_turn`], which owns the
-    // send, and so does a slash command, which only reads as one at the start.
-    let lead_in = send && !text.starts_with('/');
+    // send. So does a slash command, which only reads as one at the start,
+    // except on Codex, whose input carries the lead-in as an item of its own.
+    let lead_in = send && (matches!(transport, Transport::Rpc(_)) || !text.starts_with('/'));
     let mut handover = HandoverGuard { session_id, text: if lead_in { take_hidden(session_id).await } else { None } };
     let given = match &handover.text {
         Some(handover) => format!("{handover}{text}"),
@@ -3237,10 +3238,14 @@ async fn deliver_prompt(
     // and the retry the error invites draws the reader's sentence twice.
     let codex = match transport {
         Transport::Rpc(thread) if send => {
-            Some((
-                thread,
-                crate::harness::codex::turn_input(thread, &given, &prepared.images).await?,
-            ))
+            // The skill is resolved off the reader's own text, so a lead-in
+            // cannot hide its leading `/`.
+            let mut input = crate::harness::codex::turn_input(thread, &text, &prepared.images).await?;
+            if let (Some(hidden), Some(items)) = (&handover.text, input.as_array_mut()) {
+                let at = usize::from(items.first().is_some_and(|i| i["type"] != "text"));
+                items.insert(at, json!({"type": "text", "text": hidden}));
+            }
+            Some((thread, input))
         }
         _ => None,
     };
