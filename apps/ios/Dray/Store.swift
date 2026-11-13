@@ -61,6 +61,8 @@ final class Store {
     private(set) var transcripts: [SessionKey: Transcript] = [:]
     private(set) var asks: [SessionKey: [AgentEvent]] = [:] { didSet { asksChanged() } }
     private(set) var queued: [SessionKey: [Queued]] = [:]
+    /// Counts the phone's own sends per session: a send brings its chat back to the bottom.
+    private(set) var sends: [SessionKey: Int] = [:]
     private(set) var boatAlerts: [BoatAlert] = [] { didSet { boatChanged() } }
     private(set) var projects: [UUID: [Project]] = [:] { didSet { keepList() } }
     /// Each repo's PR marks by branch, as `pr_marks` last answered.
@@ -462,19 +464,25 @@ final class Store {
 
     /// A bot's tasks at any depth under any of its chat's sessions, newest
     /// created first at each level; settled ones drop with everything under them (`crewRows`).
+    /// Every live server's, since `--machine` puts a task on another one, which
+    /// still names the bot's session as its parent; ids are UUIDs, so they join across servers.
     func botTasks(_ chat: [SessionKey]) -> [SessionKey] {
-        guard let server = chat.first?.server else { return [] }
-        var kids: [String: [SessionItem]] = [:]
-        for (key, item) in items where key.server == server && item.archived != true {
-            if let p = item.parentSessionId, p != item.sessionId { kids[p, default: []].append(item) }
+        // One copy per id: a machine paired directly and shared too lists a task twice,
+        // and the one to open is the one whose connection is up.
+        var copies: [String: (key: SessionKey, item: SessionItem)] = [:]
+        for (key, item) in items where item.archived != true && item.parentSessionId.map({ $0 != item.sessionId }) == true {
+            if let held = copies[item.sessionId], serverState[held.key.server] == .connected { continue }
+            copies[item.sessionId] = (key, item)
         }
+        var kids: [String: [(key: SessionKey, item: SessionItem)]] = [:]
+        for copy in copies.values { if let p = copy.item.parentSessionId { kids[p, default: []].append(copy) } }
         var out: [SessionKey] = []
         var seen = Set(chat.map(\.id))
         func walk(_ ids: [String]) {
-            let level = ids.flatMap { kids[$0] ?? [] }.sorted { ($0.created ?? $0.modified) > ($1.created ?? $1.modified) }
-            for item in level where seen.insert(item.sessionId).inserted {
-                out.append(SessionKey(server: server, id: item.sessionId))
-                walk([item.sessionId])
+            let level = ids.flatMap { kids[$0] ?? [] }.sorted { ($0.item.created ?? $0.item.modified) > ($1.item.created ?? $1.item.modified) }
+            for kid in level where seen.insert(kid.item.sessionId).inserted {
+                out.append(kid.key)
+                walk([kid.item.sessionId])
             }
         }
         walk(chat.reversed().map(\.id))
@@ -793,6 +801,7 @@ final class Store {
             ])
             // By id: the server's `queue_changed` usually lands before this reply.
             if let q = outcome.queued, !(queued[key]?.contains(q) ?? false) { queued[key, default: []].append(q) }
+            sends[key, default: 0] += 1
             return true
         } catch {
             lastError = error.localizedDescription
