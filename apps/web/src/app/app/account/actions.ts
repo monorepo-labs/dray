@@ -30,3 +30,24 @@ export async function saveAccount(input: { name: string; username: string }): Pr
   revalidatePath("/app", "layout");
   return null;
 }
+
+/// Signs one of the reader's apps out. The app learns on its next check,
+/// a 401, and forgets the account; the machine stays linked.
+export async function revokeAppSession(id: string): Promise<string | null> {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return "Sign in again.";
+  await pool.query(`delete from app_session where id = $1 and "userId" = $2`, [id, session.user.id]);
+  revalidatePath("/app/account");
+  return null;
+}
+
+/// Unlinks a server the reader linked, whatever their role in its org now:
+/// the link is what lets that org's people reach their machine, so it stays
+/// theirs to cut. Deleting the row revokes the server's credential.
+export async function unlinkOwnServer(id: string): Promise<string | null> {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return "Sign in again.";
+  await pool.query(`delete from server where id = $1 and "linkedBy" = $2`, [id, session.user.id]);
+  revalidatePath("/app", "layout");
+  return null;
+}
