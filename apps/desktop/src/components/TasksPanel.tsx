@@ -120,6 +120,14 @@ function TaskRow({
   const id = item.sessionId;
   const working = row.busy && !row.asking;
   const mergeable = pr?.state === "OPEN" && !pr.isDraft && readyToMerge(pr) === true;
+  // Merging here or from a merge card settles already, so the button is only
+  // for a PR merged elsewhere, say the PR panel in the task's own tab. Never
+  // mid-turn either way: settling kills the child.
+  const settleShown = pr?.state === "MERGED" && !row.busy;
+  const settle = (from?: HTMLElement) => {
+    if (from) burstConfetti(from);
+    void onSetFlags(id, { archived: true });
+  };
 
   return (
     <RowMenu
@@ -127,6 +135,7 @@ function TaskRow({
       forkDisabled={row.busy}
       onDelete={() => void onDelete(id)}
       onDetach={() => void onDetach(id)}
+      onSettle={row.busy ? undefined : () => settle()}
       aside={!!item.aside}
       // Setting aside unpins, or the row would stay up top.
       onSetAside={(v) => void onSetFlags(id, v ? { aside: true, pinned: false } : { aside: false })}
@@ -161,7 +170,10 @@ function TaskRow({
         <span className="relative flex min-w-0 flex-1 items-center">
           <span
             className={cn(
-              "min-w-0 flex-1 truncate row-reached:[mask-image:linear-gradient(to_left,transparent_52px,black_76px)]",
+              "min-w-0 flex-1 truncate",
+              settleShown
+                ? "row-reached:[mask-image:linear-gradient(to_left,transparent_52px,black_76px)]"
+                : "row-reached:[mask-image:linear-gradient(to_left,transparent_26px,black_50px)]",
               row.asking && "text-accent-command",
             )}
           >
@@ -184,16 +196,8 @@ function TaskRow({
             >
               <Ellipsis />
             </Button>
-            {/* No Settle mid-turn: settling kills the child. */}
-            {!row.busy && (
-              <RowAction
-                label="Settle"
-                active={false}
-                onClick={(e) => {
-                  burstConfetti(e.currentTarget);
-                  void onSetFlags(id, { archived: true });
-                }}
-              >
+            {settleShown && (
+              <RowAction label="Settle" active={false} onClick={(e) => settle(e.currentTarget)}>
                 <Check />
               </RowAction>
             )}

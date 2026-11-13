@@ -2348,6 +2348,7 @@ export function RowMenu({
   onDelete,
   onDetach,
   onMarkUnread,
+  onSettle,
   pin,
   children,
 }: {
@@ -2367,6 +2368,8 @@ export function RowMenu({
   /// row with no Completed run to rejoin, and one already unread or mid-turn
   /// has nothing to take back.
   onMarkUnread?: () => void;
+  /// Absent where the row draws Settle itself, as every sidebar row does.
+  onSettle?: () => void;
   pin?: { pinned: boolean; toggle: () => void };
   /// Whether the row reads as set aside, and so which way the item turns.
   /// Absent where the item would move nothing.
@@ -2493,6 +2496,13 @@ export function RowMenu({
               <ContextMenuItem className="text-ui" onSelect={onMarkUnread}>
                 <Circle />
                 Mark unread
+              </ContextMenuItem>
+            )}
+
+            {onSettle && (
+              <ContextMenuItem className="text-ui" onSelect={onSettle}>
+                <Check />
+                Settle
               </ContextMenuItem>
             )}
 

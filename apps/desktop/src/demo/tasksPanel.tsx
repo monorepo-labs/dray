@@ -67,7 +67,8 @@ function Demo() {
         <h1 className="text-lg font-medium">Bot Tasks tab</h1>
         <p className="max-w-xl text-ui text-muted-foreground">
           #912 and #915 are ready, so they draw Merge. Merge here waits a second and then settles the task, as the
-          app does once the merge lands. Hover a row for ⋯ and Settle; right-click for the menu.
+          app does once the merge lands. Hover a row for ⋯; #901, merged elsewhere, adds Settle. Right-click for the menu,
+          which settles any idle row.
         </p>
         {/* The side panel's width at its default. */}
         <div className="flex flex-col rounded-xl border border-border bg-card" style={{ width: 420, height: 400 }}>
