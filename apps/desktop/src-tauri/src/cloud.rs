@@ -85,9 +85,10 @@ async fn call(key: &str, method: reqwest::Method, path: &str, wait: Duration) ->
 /// no key set, so 404 and 401 both read as the key being wrong.
 pub fn refusal(status: u16, body: &Value) -> String {
     match (status, body["error"].as_str()) {
-        // A machine gone from the pool; a key it doesn't take is a bare 404.
+        // A machine already deleted; a key it doesn't take is a bare 404.
         (404, Some("not_found")) => "Dray Cloud no longer has that machine.".into(),
         (401 | 403 | 404, _) => "Dray Cloud didn't accept this key.".into(),
+        (500.., None) => format!("Dray Cloud isn't answering right now ({status})."),
         (_, Some(error)) => format!("Dray Cloud said: {error}"),
         _ => format!("Dray Cloud answered {status}."),
     }
@@ -154,5 +155,6 @@ mod tests {
         assert_eq!(refusal(404, &Value::Null), "Dray Cloud didn't accept this key.");
         assert_eq!(refusal(404, &json!({ "error": "not_found" })), "Dray Cloud no longer has that machine.");
         assert_eq!(refusal(500, &json!({ "error": "boat down" })), "Dray Cloud said: boat down");
+        assert_eq!(refusal(502, &Value::Null), "Dray Cloud isn't answering right now (502).");
     }
 }
