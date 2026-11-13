@@ -10,13 +10,23 @@ pub struct Assets;
 const ICONS: &[(&str, &[u8])] = &[
     ("icons/arrow-down.svg", include_bytes!("../assets/icons/arrow-down.svg")),
     ("icons/arrow-up.svg", include_bytes!("../assets/icons/arrow-up.svg")),
+    ("icons/branch.svg", include_bytes!("../assets/icons/branch.svg")),
     ("icons/check-check.svg", include_bytes!("../assets/icons/check-check.svg")),
+    ("icons/check.svg", include_bytes!("../assets/icons/check.svg")),
+    ("icons/chevron-right.svg", include_bytes!("../assets/icons/chevron-right.svg")),
     ("icons/circle-dashed.svg", include_bytes!("../assets/icons/circle-dashed.svg")),
     ("icons/circle-dot.svg", include_bytes!("../assets/icons/circle-dot.svg")),
+    ("icons/claude.svg", include_bytes!("../assets/icons/claude.svg")),
+    ("icons/codex.svg", include_bytes!("../assets/icons/codex.svg")),
     ("icons/cog-6-tooth.svg", include_bytes!("../assets/icons/cog-6-tooth.svg")),
+    ("icons/corner-down-left.svg", include_bytes!("../assets/icons/corner-down-left.svg")),
+    ("icons/dray-logo.svg", include_bytes!("../assets/icons/dray-logo.svg")),
+    ("icons/folder-plus.svg", include_bytes!("../assets/icons/folder-plus.svg")),
+    ("icons/folder.svg", include_bytes!("../assets/icons/folder.svg")),
     ("icons/panel-left.svg", include_bytes!("../assets/icons/panel-left.svg")),
     ("icons/plus.svg", include_bytes!("../assets/icons/plus.svg")),
     ("icons/search.svg", include_bytes!("../assets/icons/search.svg")),
+    ("icons/server-filled.svg", include_bytes!("../assets/icons/server-filled.svg")),
 ];
 
 impl AssetSource for Assets {

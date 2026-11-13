@@ -34,6 +34,11 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "
 tokio-tungstenite = { version = "0.30", default-features = false }
 raw-window-handle = "0.6"
 
+# Linux opens no window without a backend feature, and says nothing about it.
+# X11 is what the boat sandboxes run, where the examples are screenshotted.
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["x11"] }
+
 # The window's glass: an NSVisualEffectView on the `sidebar` material, as
 # tauri.conf.json asks for. Same majors as the core's and GPUI's.
 [target.'cfg(target_os = "macos")'.dependencies]
