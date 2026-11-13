@@ -619,6 +619,7 @@ pub async fn settle_dead_child(
         LAST_REPLY.lock().unwrap().remove(session_id);
         POSTED.lock().unwrap().remove(session_id);
         report(session_id, format!("(the session's process exited mid-turn: {why})"), app);
+        crate::routines::turn_ended(session_id, None, false, app).await;
     }
 }
 

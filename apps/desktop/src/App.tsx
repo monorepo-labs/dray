@@ -3693,6 +3693,7 @@ function App() {
                 onPause={routines.setPaused}
                 onDelete={routines.remove}
                 onRunNow={routines.runNow}
+                error={routines.error}
               />
             </TabBody>
             <TabBody active={activeTab === "more"}>

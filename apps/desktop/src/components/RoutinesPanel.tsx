@@ -15,6 +15,7 @@ export default function RoutinesPanel({
   onPause,
   onDelete,
   onRunNow,
+  error,
 }: {
   routines: Routine[];
   /// The clock "next in" is read against, ticking once a minute.
@@ -22,16 +23,23 @@ export default function RoutinesPanel({
   onPause: (id: string, paused: boolean) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onRunNow: (id: string) => Promise<void>;
+  /// Why the last Pause, Resume, Run now or Delete failed.
+  error?: string | null;
 }) {
+  const failed = error && <p className="px-3 pb-1 text-ui text-destructive/80">{error}</p>;
   if (routines.length === 0) {
     return (
-      <p className="px-4 py-6 text-ui text-muted-foreground">
-        No routines yet. Ask this bot to check on something on a schedule, like “tell me when CI on my PR goes green”.
-      </p>
+      <div className="py-2">
+        {failed}
+        <p className="px-4 py-4 text-ui text-muted-foreground">
+          No routines yet. Ask this bot to check on something on a schedule, like “tell me when CI on my PR goes green”.
+        </p>
+      </div>
     );
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1 py-2">
+      {failed}
       {routines.map((r) => (
         <RoutineRow
           key={r.id}

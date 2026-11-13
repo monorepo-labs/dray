@@ -394,6 +394,7 @@ pub async fn run(sink: Sink) {
     if matches!(interrupted, Ok(true)) {
         sink.emit(ROUTINES_CHANGED, ()).ok();
     }
+    // Bots with a run between its check and its message landing.
     let firing: std::sync::Arc<std::sync::Mutex<HashSet<String>>> = Default::default();
     loop {
         tokio::select! {
@@ -422,7 +423,7 @@ async fn tick(sink: &Sink, firing: &std::sync::Arc<std::sync::Mutex<HashSet<Stri
     let candidates: Vec<Routine> = list(None)
         .await?
         .into_iter()
-        .filter(|r| (is_due(r) || forced.contains(&r.id)) && !firing.lock().unwrap().contains(&r.id))
+        .filter(|r| (is_due(r) || forced.contains(&r.id)) && !firing.lock().unwrap().contains(&r.bot_id))
         .collect();
     // Asked outside the lock: a turn's end records its result under it, and
     // this question waits on that session's slot.
@@ -458,11 +459,18 @@ async fn tick(sink: &Sink, firing: &std::sync::Arc<std::sync::Mutex<HashSet<Stri
             if !scheduled && !forced.contains(&r.id) {
                 continue;
             }
+            // One run per bot at a time: two would share its chat, and the
+            // first turn to end would be read as both. The other stays due.
+            if !firing.lock().unwrap().insert(r.bot_id.clone()) {
+                if forced.contains(&r.id) {
+                    FORCED.lock().unwrap().insert(r.id.clone());
+                }
+                continue;
+            }
             if scheduled {
                 r.next_run = r.schedule.next_after(now).map(rfc3339);
                 changed = true;
             }
-            firing.lock().unwrap().insert(r.id.clone());
             due.push((r.clone(), bot.clone()));
         }
         if changed {
@@ -476,12 +484,12 @@ async fn tick(sink: &Sink, firing: &std::sync::Arc<std::sync::Mutex<HashSet<Stri
         let sink = sink.clone();
         let firing = firing.clone();
         tokio::spawn(async move {
-            let id = routine.id.clone();
+            let (id, bot_id) = (routine.id.clone(), bot.id.clone());
             if let Err(e) = fire(routine, bot, &sink).await {
                 eprintln!("[routine {id}] {e:#}");
                 record(&id, result("failed", Some(format!("{e:#}"))), None, &sink).await;
             }
-            firing.lock().unwrap().remove(&id);
+            firing.lock().unwrap().remove(&bot_id);
         });
     }
     Ok(())
@@ -564,7 +572,8 @@ async fn fire(routine: Routine, bot: bots::Bot, sink: &Sink) -> Result<()> {
     }
 
     let Some(chat) = bots::chat_of(&bot).await else {
-        record(&routine.id, result("skipped", Some("The bot has no chat".into())), seen, sink).await;
+        // The check's new output is kept back, so the next run still sees it as new.
+        record(&routine.id, result("skipped", Some("The bot has no chat".into())), None, sink).await;
         return Ok(());
     };
     let prompt = format!(
@@ -584,10 +593,15 @@ async fn fire(routine: Routine, bot: bots::Bot, sink: &Sink) -> Result<()> {
         routine: Some(true),
     };
     RUNNING.lock().unwrap().insert(chat.session_id.clone(), routine.id.clone());
-    record(&routine.id, result("running", None), seen, sink).await;
+    record(&routine.id, result("running", None), None, sink).await;
     if let Err(e) = crate::orchestration::send_routine(chat.session_id.clone(), prompt, from, sink).await {
         RUNNING.lock().unwrap().remove(&chat.session_id);
         return Err(e);
+    }
+    // Only once the bot has it: saved before a send that failed, the change
+    // would read as old on every later run and the bot would never hear of it.
+    if let Some(seen) = seen {
+        save_check(&routine.id, seen).await;
     }
     Ok(())
 }
@@ -597,11 +611,8 @@ async fn record(id: &str, run: RunResult, seen: Option<(String, bool)>, sink: &S
     let saved = edit(|list| {
         if let Some(r) = list.iter_mut().find(|r| r.id == id) {
             r.last_result = Some(run);
-            if let Some((hash, failing)) = seen {
-                if !hash.is_empty() {
-                    r.check_hash = Some(hash);
-                }
-                r.check_failing = failing;
+            if let Some(seen) = seen {
+                apply_check(r, seen);
             }
         }
         Ok(())
@@ -612,6 +623,28 @@ async fn record(id: &str, run: RunResult, seen: Option<(String, bool)>, sink: &S
             sink.emit(ROUTINES_CHANGED, ()).ok();
         }
         Err(e) => eprintln!("[routine {id}] {e:#}"),
+    }
+}
+
+/// The check's state as of its last run: its output's hash, and whether it failed.
+fn apply_check(r: &mut Routine, (hash, failing): (String, bool)) {
+    if !hash.is_empty() {
+        r.check_hash = Some(hash);
+    }
+    r.check_failing = failing;
+}
+
+/// Saves the check's state alone, leaving the result the turn may already have written.
+async fn save_check(id: &str, seen: (String, bool)) {
+    let saved = edit(|list| {
+        if let Some(r) = list.iter_mut().find(|r| r.id == id) {
+            apply_check(r, seen);
+        }
+        Ok(())
+    })
+    .await;
+    if let Err(e) = saved {
+        eprintln!("[routine {id}] {e:#}");
     }
 }
 
