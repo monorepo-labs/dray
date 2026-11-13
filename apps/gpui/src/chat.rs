@@ -201,7 +201,7 @@ impl Chat {
         let gap = if matches!(row, Row::Tool(_)) && next_is_tool { 12. } else { 16. };
         let body: AnyElement = match row {
             Row::User { text } => user_bubble(text, &theme),
-            Row::Assistant { text, streaming, .. } => crate::slots::assistant(text, *streaming, &theme),
+            Row::Assistant { key, text, streaming, .. } => crate::slots::assistant(key, text, *streaming, &theme),
             Row::Tool(tool) => crate::slots::tool(tool, &theme),
             Row::Failed { text } => div().text_color(theme.destructive).child(text.clone()).into_any_element(),
         };

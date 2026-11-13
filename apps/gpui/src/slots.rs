@@ -10,8 +10,9 @@ use crate::theme::Theme;
 use crate::transcript::{Tool, label};
 
 /// Stand-in for the streaming markdown module: the text as written. Called
-/// on every change while `streaming`, with the whole text so far.
-pub fn assistant(text: &str, _streaming: bool, _theme: &Theme) -> AnyElement {
+/// on every change while `streaming`, with the whole text so far; `key` names
+/// the message for as long as its row lives, the commit included.
+pub fn assistant(_key: &str, text: &str, _streaming: bool, _theme: &Theme) -> AnyElement {
     div().whitespace_normal().child(text.to_string()).into_any_element()
 }
 

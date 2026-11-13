@@ -16,7 +16,10 @@ use serde_json::Value;
 pub enum Row {
     User { text: String },
     /// `block` names the stream this row previews, while it still streams.
-    Assistant { text: String, block: Option<BlockRef>, streaming: bool },
+    /// `key` is stable for the row's life, the commit and a page's refold
+    /// included: the stream's `message_id:index` where there is one, else
+    /// the event's id. The markdown view keeps its parse and selection by it.
+    Assistant { key: String, text: String, block: Option<BlockRef>, streaming: bool },
     Tool(Tool),
     /// A failed turn's own sentence, drawn red.
     Failed { text: String },
@@ -92,15 +95,16 @@ impl Transcript {
                 if let Some(b) = block {
                     self.committed.insert((b.message_id.clone(), b.index));
                 }
+                let key = block.as_ref().map(block_key).unwrap_or_else(|| event.id.clone());
                 let at = block.as_ref().and_then(|b| self.streaming(b));
                 match at {
                     Some(i) => {
-                        self.rows[i] = Row::Assistant { text: text.clone(), block: None, streaming: false };
+                        self.rows[i] = Row::Assistant { key, text: text.clone(), block: None, streaming: false };
                         change.changed.push(i);
                     }
                     // Blocks with nothing visible draw nothing in the web app either.
                     None if has_text(text) => {
-                        self.rows.push(Row::Assistant { text: text.clone(), block: None, streaming: false })
+                        self.rows.push(Row::Assistant { key, text: text.clone(), block: None, streaming: false })
                     }
                     None => {}
                 }
@@ -171,7 +175,12 @@ impl Transcript {
             DeltaEvent::BlockStart { block, block_type: BlockType::Text }
                 if !self.committed.contains(&(block.message_id.clone(), block.index)) =>
             {
-                self.rows.push(Row::Assistant { text: String::new(), block: Some(block.clone()), streaming: true });
+                self.rows.push(Row::Assistant {
+                    key: block_key(block),
+                    text: String::new(),
+                    block: Some(block.clone()),
+                    streaming: true,
+                });
             }
             // A tool call is drawn before its arguments arrive; the committed
             // `tool_call_started` fills the row in place.
@@ -190,7 +199,12 @@ impl Transcript {
                 // Opened mid-block: its `block_start` went by before the
                 // session was on screen, so the first delta seen opens it.
                 None if !self.committed.contains(&(block.message_id.clone(), block.index)) => {
-                    self.rows.push(Row::Assistant { text: text.clone(), block: Some(block.clone()), streaming: true });
+                    self.rows.push(Row::Assistant {
+                        key: block_key(block),
+                        text: text.clone(),
+                        block: Some(block.clone()),
+                        streaming: true,
+                    });
                 }
                 None => {}
             },
@@ -205,6 +219,10 @@ impl Transcript {
     fn tool(&self, call_id: &str) -> Option<usize> {
         self.rows.iter().rposition(|r| matches!(r, Row::Tool(t) if t.call_id == call_id))
     }
+}
+
+fn block_key(block: &BlockRef) -> String {
+    format!("{}:{}", block.message_id, block.index)
 }
 
 /// tools.ts's `toolSummary`: the argument that identifies the work.
@@ -300,7 +318,8 @@ mod tests {
             event("4", json!({ "type": "assistant_text", "block": block(), "text": "Hello" })),
         ]);
         assert_eq!(t.rows.len(), 2);
-        assert!(matches!(&t.rows[1], Row::Assistant { text, block: None, streaming: false } if text == "Hello"));
+        assert!(matches!(&t.rows[1], Row::Assistant { key, text, block: None, streaming: false }
+            if text == "Hello" && key == "m:0"));
     }
 
     #[test]
@@ -339,7 +358,7 @@ mod tests {
     #[test]
     fn a_delta_for_a_block_opened_before_the_session_was_seen_opens_a_preview() {
         let (t, _) = fold(&[event("1", json!({ "type": "delta", "delta": "text_delta", "block": block(), "text": "lo" }))]);
-        assert!(matches!(&t.rows[..], [Row::Assistant { text, block: Some(_), streaming: true }] if text == "lo"));
+        assert!(matches!(&t.rows[..], [Row::Assistant { text, block: Some(_), streaming: true, .. }] if text == "lo"));
     }
 
     #[test]
