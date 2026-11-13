@@ -617,6 +617,7 @@ pub async fn settle_dead_child(
     // reports; without this the bot would wait on a turn that is over.
     if died_mid_turn {
         LAST_REPLY.lock().unwrap().remove(session_id);
+        POSTED.lock().unwrap().remove(session_id);
         report(session_id, format!("(the session's process exited mid-turn: {why})"), app);
     }
 }
