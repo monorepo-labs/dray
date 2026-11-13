@@ -1225,8 +1225,8 @@ function App() {
   // Every server's list is first read with its projects, in `readServer`.
   useEffect(() => listenForBots(), []);
   const searchedSessions = useMemo(
-    () => filterSessions(inSidebar(visibleSessions, bots), search),
-    [visibleSessions, bots, search],
+    () => filterSessions(inSidebar(visibleSessions, bots, sessionIndexItems), search),
+    [visibleSessions, bots, sessionIndexItems, search],
   );
   // Off every session held, not the space-filtered list: a bot is no project and
   // belongs to no space, so filtering would hide its chat and open a new one.
