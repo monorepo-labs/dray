@@ -1649,22 +1649,37 @@ const retireCloudMachine = async (machine: ServerId): Promise<boolean> => {
 /// Deletes `machine` once nothing live is left on it. Run on every settled row
 /// the app hears of, so a settle from `dray session settle` counts too.
 const retireIfDone = async (sessionId: string, machine: ServerId) => {
-  if (!isCloud(machine) || retiring.current.has(machine) || flagWrites.current.has(machine)) return;
+  if (!isCloud(machine) || retiring.current.has(machine)) return;
+  if (flagWrites.current.has(machine)) {
+    deferredChecks.current.set(machine, sessionId);
+    return;
+  }
   const others = await othersLive(sessionId, machine);
   // Read again after the wait: a write that started meanwhile would lose its
   // reply with the connection.
-  if (others === false && !flagWrites.current.has(machine)) await retireCloudMachine(machine);
+  if (flagWrites.current.has(machine)) deferredChecks.current.set(machine, sessionId);
+  else if (others === false) await retireCloudMachine(machine);
 };
 
 /// Flag writes still waiting on each cloud machine's reply. The machine says
 /// `session_changed` before it answers, and deleting it then would turn a
 /// settle that landed into an error; the reply's own row checks again.
 const flagWrites = useRef(new Map<ServerId, number>());
+/// A check put off for a pending write, run once the machine's last one
+/// finishes — failed ones too, since a reply lost with the connection can
+/// still have settled the session.
+const deferredChecks = useRef(new Map<ServerId, string>());
 const countFlagWrite = (machine: ServerId | null, by: 1 | -1) => {
   if (!machine) return;
   const n = (flagWrites.current.get(machine) ?? 0) + by;
-  if (n > 0) flagWrites.current.set(machine, n);
-  else flagWrites.current.delete(machine);
+  if (n > 0) {
+    flagWrites.current.set(machine, n);
+    return;
+  }
+  flagWrites.current.delete(machine);
+  const sessionId = deferredChecks.current.get(machine);
+  deferredChecks.current.delete(machine);
+  if (sessionId) void retireIfDone(sessionId, machine);
 };
 
 /// Writes a session's flags — settled, pinned, hidden, set aside — and answers
