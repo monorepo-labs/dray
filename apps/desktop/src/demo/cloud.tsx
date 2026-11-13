@@ -1,22 +1,22 @@
 // The whole app on Dray Cloud (#857), in a plain browser: one real `dray-serve`
-// stands in for This Mac, and two or more others for cloud machines. Tauri's IPC
-// is mocked and the mock does in the page what `servers.rs` and `cloud.rs` do in
-// Rust — the control plane is faked here, and a panel in the corner stands in
-// for boat: stop a machine, or set the load its `machine_load` answers.
+// stands in for This Mac, and two or more others are spare cloud machines, one
+// handed to each task as it starts. Tauri's IPC is mocked and the mock does in
+// the page what `servers.rs` and `cloud.rs` do in Rust — the control plane is
+// faked here, and a panel in the corner stands in for boat: stop a machine, or
+// make the next start fail.
 //
 //   T=$(openssl rand -hex 32)          # one serve token, as the control plane derives
 //   for h in mac c1 c2; do mkdir -p /tmp/dray-cloud/$h && echo $T > /tmp/dray-cloud/$h/serve-token; done
 //   DRAY_HOME=/tmp/dray-cloud/mac dray-serve --port 7320 &
 //   DRAY_HOME=/tmp/dray-cloud/c1  dray-serve --port 7321 &
 //   DRAY_HOME=/tmp/dray-cloud/c2  dray-serve --port 7322 &
-//   open "/demo/cloud.html?serveToken=$T&machines=7321,7322&states=running,stopped"
+//   open "/demo/cloud.html?serveToken=$T&machines=7321,7322"
 //
 // Attach a project with a GitHub remote on This Mac, pick Cloud beside it and
 // send. A clone onto a cloud machine runs `gh repo clone` for real, into
 // `~/dray/<repo>`, which every machine here shares. `&key=` starts with a key
 // saved; without it, Settings → Servers asks for one, and any key but `bad` is
-// taken. `machine_load` is always the panel's, so this works against a
-// `dray-serve` that predates it.
+// taken.
 
 import { emit } from "@tauri-apps/api/event";
 import { mockConvertFileSrc, mockIPC } from "@tauri-apps/api/mocks";
@@ -45,10 +45,8 @@ type State = "running" | "stopped" | "starting";
 type Machine = {
   sandbox: string;
   state: State;
-  /// When it last stopped, which a resume for room picks by.
-  stoppedAt: number;
-  turns: number;
-  memAvailableMb: number;
+  /// Handed to a task. A spare one is no machine yet, and lists as none.
+  listed: boolean;
   info: ServerInfo;
   conn: Socket;
   /// Whether the socket is meant to be open. `connect` opens one on its own,
@@ -63,7 +61,7 @@ const changed = channel<void>();
 const announce = () => {
   void emit(
     "servers_changed",
-    machines.map((m) => m.info),
+    listed().map((m) => m.info),
   );
   changed.emit();
 };
@@ -75,7 +73,6 @@ const announceCloud = () => {
 /// `servers.rs`'s row for it: a stopped machine reads as a stopped boat row.
 function setState(m: Machine, state: State) {
   m.state = state;
-  if (state === "stopped") m.stoppedAt = Date.now();
   const phase = state === "running" ? "running" : state === "stopped" ? "stopped" : "resuming";
   m.info = { ...m.info, boat: { phase, stopsAt: null, warning: false, note: null } };
   const want = state === "running" && cloud.on;
@@ -101,14 +98,27 @@ async function resume(m: Machine) {
   await waitUp(m);
 }
 
-/// `POST /machines`: the most recently stopped resumes. With no spare
-/// `dray-serve` there is nothing to fork, so that case answers the cap.
-async function addRoom(): Promise<string> {
+const listed = () => machines.filter((m) => m.listed);
+/// The panel's switch: the next start fails as an unreachable control plane would.
+let failNext = false;
+const kept = new Map<string, unknown>();
+
+/// `POST /machines`: a spare `dray-serve` becomes this task's machine.
+async function start(): Promise<string> {
   if (!cloud.keyed) throw "Dray Cloud has no key. Add it in Settings, Servers.";
-  const stopped = machines.filter((m) => m.state === "stopped").sort((a, b) => b.stoppedAt - a.stoppedAt)[0];
-  if (!stopped) throw "Dray Cloud is at its limit of 3 running machines. Try again once one stops.";
-  await resume(stopped);
-  return stopped.info.id;
+  if (failNext) {
+    failNext = false;
+    changed.emit();
+    throw "Couldn't reach Dray Cloud: connection refused";
+  }
+  const spare = machines.find((m) => !m.listed);
+  if (!spare) throw "No spare dray-serve left in this demo.";
+  spare.listed = true;
+  setState(spare, "starting");
+  await new Promise((r) => setTimeout(r, WAKE_MS));
+  setState(spare, "running");
+  await waitUp(spare);
+  return spare.info.id;
 }
 
 mockConvertFileSrc("macos");
@@ -118,7 +128,7 @@ mockIPC(
     const byId = (id: unknown) => machines.find((m) => m.info.id === id);
     switch (cmd) {
       case "list_servers":
-        return cloud.keyed ? machines.map((m) => m.info) : [];
+        return cloud.keyed ? listed().map((m) => m.info) : [];
       case "local_server":
         return null;
       case "cloud_info":
@@ -135,8 +145,21 @@ mockIPC(
         announceCloud();
         for (const m of machines) setState(m, m.state);
         return null;
-      case "add_cloud_room":
-        return addRoom();
+      case "start_cloud_machine":
+        return start();
+      case "drop_cloud_machine": {
+        const m = byId(a.id);
+        if (m) {
+          m.listed = false;
+          setState(m, "stopped");
+        }
+        return null;
+      }
+      case "save_cloud_transcript":
+        kept.set(`${a.server}/${a.sessionId}`, a.snapshot);
+        return null;
+      case "cloud_transcript":
+        return kept.get(`${a.server}/${a.sessionId}`) ?? null;
       case "resume_boat": {
         const m = byId(a.id);
         if (!m) throw "This server is not a boat sandbox.";
@@ -149,7 +172,6 @@ mockIPC(
         if (a.server === "local") return local.call(String(a.cmd), a.args);
         const m = byId(a.server);
         if (!m) throw `no server named ${a.server}`;
-        if (a.cmd === "machine_load") return { turns: m.turns, memAvailableMb: m.memAvailableMb };
         return m.conn.call(String(a.cmd), a.args);
       }
       default:
@@ -161,16 +183,13 @@ mockIPC(
 
 // After the mock, since a row announces itself as it is made.
 const ports = (query.get("machines") ?? "7321,7322").split(",");
-const states = (query.get("states") ?? "").split(",");
 ports.forEach((port, i) => {
   const sandbox = `bx_demo${i + 1}`;
   const id = `cloud${i + 1}`;
   const m: Machine = {
     sandbox,
-    state: "running",
-    stoppedAt: 0,
-    turns: 0,
-    memAvailableMb: 6000,
+    state: "stopped",
+    listed: false,
     wanted: true,
     info: {
       id,
@@ -202,42 +221,32 @@ ports.forEach((port, i) => {
     ),
   };
   machines.push(m);
-  setState(m, (states[i] as State) || "running");
+  setState(m, "stopped");
 });
 
-/// Boat and the server's load, by hand. Drawn over the app's corner.
+/// Boat, by hand. Drawn over the app's corner.
 function ControlPlane() {
-  useSyncExternalStore(changed.subscribe, () => machines.map((m) => `${m.state}${m.turns}${m.memAvailableMb}${m.info.status}`).join());
-  const field = "w-14 rounded border border-border bg-transparent px-1 text-right";
+  useSyncExternalStore(changed.subscribe, () => `${failNext}${machines.map((m) => `${m.listed}${m.state}${m.info.status}`).join()}`);
   return (
     <div className="fixed right-3 bottom-3 z-[1000] flex flex-col gap-1.5 rounded-xl border border-border bg-popover p-3 text-ui shadow-lg">
       <span className="font-medium">Faked control plane</span>
-      {machines.map((m) => (
+      {listed().map((m) => (
         <div key={m.sandbox} className="flex items-center gap-2">
           <span className="w-24 truncate">{m.info.name}</span>
-          <span className="w-20 text-muted-foreground">{m.info.status === "connected" ? m.state : `${m.state} · ${m.info.status}`}</span>
+          <span className="w-28 text-muted-foreground">{m.info.status === "connected" ? m.state : `${m.state} · ${m.info.status}`}</span>
           <button
             className="w-16 rounded border border-border px-1"
             onClick={() => (m.state === "stopped" ? void resume(m) : setState(m, "stopped"))}
           >
             {m.state === "stopped" ? "Resume" : "Stop"}
           </button>
-          <label className="flex items-center gap-1">
-            turns
-            <input className={field} type="number" value={m.turns} onChange={(e) => ((m.turns = +e.target.value), changed.emit())} />
-          </label>
-          <label className="flex items-center gap-1">
-            MB
-            <input
-              className={field}
-              type="number"
-              step={500}
-              value={m.memAvailableMb}
-              onChange={(e) => ((m.memAvailableMb = +e.target.value), changed.emit())}
-            />
-          </label>
         </div>
       ))}
+      <span className="text-muted-foreground">{machines.filter((m) => !m.listed).length} spare</span>
+      <label className="flex items-center gap-1.5">
+        <input type="checkbox" checked={failNext} onChange={(e) => ((failNext = e.target.checked), changed.emit())} />
+        Fail the next start
+      </label>
     </div>
   );
 }

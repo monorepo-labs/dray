@@ -240,24 +240,23 @@ export default function ServersSettings() {
   );
 }
 
-/// Dray Cloud, as one row however many machines it runs: they come and go on
-/// their own, so a row each would be a list the reader cannot act on. The key
+/// Dray Cloud, as one row however many machines it runs: one per task, coming
+/// and going on their own, so a row each would be a list nobody acts on. The key
 /// is written once and never read back.
 function CloudRow({ machines }: { machines: ServerInfo[] }) {
   const cloud = useCloud();
   const [changing, setChanging] = useState(false);
-  const running = machines.filter((m) => m.status === "connected").length;
-  const waking = machines.some((m) => m.boat?.phase === "resuming");
-  const status: ServerStatus =
-    !cloud.on || !cloud.keyed || cloud.error ? "disconnected" : running ? "connected" : waking ? "connecting" : "disconnected";
+  // The service, never its machines: each one stops when its task goes idle,
+  // and that is Dray's business, not a state to show.
+  const status: ServerStatus = cloud.on && cloud.keyed && !cloud.error ? "connected" : "disconnected";
   const detail = !cloud.keyed
-    ? "Machines Dray starts for your tasks and stops once they're idle. Paste your key to turn it on."
+    ? "A machine of its own for each task, started by Dray and gone once the task settles. Paste your key to turn it on."
     : !cloud.on
       ? "Off"
       : (cloud.error ??
         (machines.length
-          ? `${machines.length} ${machines.length === 1 ? "machine" : "machines"} · ${running} running`
-          : "No machines yet. The first task on Cloud starts one."));
+          ? `${machines.length} ${machines.length === 1 ? "task" : "tasks"} on Dray Cloud`
+          : "No tasks on it yet. Pick Cloud beside a project to start one."));
 
   return (
     <Row

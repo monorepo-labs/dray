@@ -1,5 +1,5 @@
 //! Dray Cloud's control plane (#857), as the app speaks to it: list the
-//! machines, add room, resume one. The connections are `servers.rs`'s, each
+//! machines, start one for a task, resume one, delete a settled task's. The connections are `servers.rs`'s, each
 //! machine a `Saved` marked `cloud`; this file only talks HTTP.
 //!
 //! The contract is fixed in the issue and shared with `apps/web` and
@@ -85,7 +85,6 @@ async fn call(key: &str, method: reqwest::Method, path: &str, wait: Duration) ->
 /// no key set, so 404 and 401 both read as the key being wrong.
 pub fn refusal(status: u16, body: &Value) -> String {
     match (status, body["error"].as_str()) {
-        (409, Some("cap")) => "Dray Cloud is at its limit of 3 running machines. Try again once one stops.".into(),
         // A machine gone from the pool; a key it doesn't take is a bare 404.
         (404, Some("not_found")) => "Dray Cloud no longer has that machine.".into(),
         (401 | 403 | 404, _) => "Dray Cloud didn't accept this key.".into(),
@@ -99,9 +98,14 @@ pub async fn list(key: &str) -> Result<Listing, String> {
     serde_json::from_value(body).map_err(|e| format!("Dray Cloud answered in a shape this build can't read: {e}"))
 }
 
-/// Room for one more task: the control plane resumes, forks or creates.
-pub async fn add(key: &str) -> Result<Machine, String> {
+/// A new machine for one task, created from the saved snapshot.
+pub async fn start(key: &str) -> Result<Machine, String> {
     one(call(key, reqwest::Method::POST, "/machines", START).await?)
+}
+
+/// Deletes a machine for good. One already gone answers the same.
+pub async fn delete(key: &str, id: &str) -> Result<(), String> {
+    call(key, reqwest::Method::DELETE, &format!("/machines/{id}"), READ).await.map(drop)
 }
 
 pub async fn resume(key: &str, id: &str) -> Result<Machine, String> {
@@ -146,8 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn cap_and_bad_key_read_as_sentences() {
-        assert!(refusal(409, &json!({ "error": "cap" })).contains("limit of 3"));
+    fn refusals_read_as_sentences() {
         assert_eq!(refusal(404, &Value::Null), "Dray Cloud didn't accept this key.");
         assert_eq!(refusal(404, &json!({ "error": "not_found" })), "Dray Cloud no longer has that machine.");
         assert_eq!(refusal(500, &json!({ "error": "boat down" })), "Dray Cloud said: boat down");

@@ -951,7 +951,10 @@ pub fn run() {
             servers::cloud_info,
             servers::set_cloud_key,
             servers::set_cloud_on,
-            servers::add_cloud_room,
+            servers::start_cloud_machine,
+            servers::drop_cloud_machine,
+            servers::save_cloud_transcript,
+            servers::cloud_transcript,
             attachments::paste_attachments,
             // Here and not on the server: a video plays through this
             // webview's asset protocol, which only this process can widen.

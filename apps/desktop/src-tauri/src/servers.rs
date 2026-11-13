@@ -1094,7 +1094,7 @@ async fn wake_boat(id: String, sleeper: Sleeper) {
         Sleeper::Cloud { sandbox, started: false } => {
             let resumed = match cloud_key().await {
                 Some(key) => cloud::resume(&key, sandbox).await,
-                None => Err("Dray Cloud has no key. Add it in Settings, Servers.".into()),
+                None => Err(NO_CLOUD_KEY.into()),
             };
             match resumed {
                 Ok(machine) => cloud_moved(&id, machine.url.as_deref()).await,
@@ -1165,6 +1165,11 @@ static CLOUD_SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// Moved, under [`CLOUD_SYNC`], by everything that changes what a listing
 /// would be applied to: the key, the switch, and every listing applied.
 static CLOUD_GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Sandboxes this app deleted. Boat deletes in the background, so one can stay
+/// listed a while, and a listing must not bring its row back.
+static CLOUD_DROPPED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+const NO_CLOUD_KEY: &str = "Dray Cloud has no key. Add it in Settings, Servers.";
 
 /// How often the machines are listed while Dray Cloud is on. A stopped one is
 /// noticed resuming from elsewhere within this, as a parked boat row is.
@@ -1276,11 +1281,13 @@ async fn apply_listing(listing: cloud::Listing) {
         conns().iter().filter_map(|c| Some((c.saved.cloud.clone()?, c.saved.id.clone()))).collect();
     // Every machine listed keeps its row, but one boat has given no address
     // yet gets none until it has one: a fork's first listings come before it.
-    let listed: Vec<String> = listing.machines.iter().map(|m| m.id.clone()).collect();
+    let dropped = CLOUD_DROPPED.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let listed: Vec<String> =
+        listing.machines.iter().map(|m| m.id.clone()).filter(|id| !dropped.contains(id)).collect();
     let machines: Vec<(cloud::Machine, String, String)> = listing
         .machines
         .into_iter()
-        .filter(|m| valid_sandbox(&m.id))
+        .filter(|m| valid_sandbox(&m.id) && listed.contains(&m.id))
         .filter_map(|m| {
             let url = normalize(m.url.as_deref()?).ok()?;
             let id = known.get(&m.id).cloned().unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
@@ -1353,6 +1360,8 @@ async fn apply_listing(listing: cloud::Listing) {
     };
     for id in &gone {
         let _ = crate::issues::set_credential(&credential_name(id), None).await;
+        forget_cache(id).await;
+        forget_transcripts(id).await;
     }
     // Only on a change: the list is read every 30s, and each write tells the
     // Mac's server to read the file again.
@@ -1426,16 +1435,15 @@ async fn switch_cloud(on: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Room for a new task when no cloud machine has any: the control plane
-/// resumes, forks or creates one. Answers its server id once it is connected,
-/// so placement can clone onto it straight away.
+/// A new machine for one task. Answers its server id once it is connected,
+/// so the task can clone onto it straight away.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn add_cloud_room() -> Result<String, String> {
-    let key = cloud_key().await.ok_or("Dray Cloud has no key. Add it in Settings, Servers.")?;
-    let machine = cloud::add(&key).await?;
-    crate::analytics::track("feature_used", json!({ "feature": "cloud_room_added" }));
-    // A fork answers before boat gives it an address, and a machine without
-    // one draws no row, so the list is read until it has one.
+pub async fn start_cloud_machine() -> Result<String, String> {
+    let key = cloud_key().await.ok_or(NO_CLOUD_KEY)?;
+    let machine = cloud::start(&key).await?;
+    crate::analytics::track("feature_used", json!({ "feature": "cloud_machine_started" }));
+    // A create can answer before boat gives it an address, and a machine
+    // without one draws no row, so the list is read until it has one.
     let deadline = tokio::time::Instant::now() + cloud::START;
     let id = loop {
         sync_cloud().await?;
@@ -1448,6 +1456,70 @@ pub async fn add_cloud_room() -> Result<String, String> {
     };
     wake(id.clone(), true).await?;
     Ok(id)
+}
+
+/// Deletes a task's machine once nothing on it is wanted, and forgets it here:
+/// its row, token, kept lists and kept transcripts.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn drop_cloud_machine(id: String) -> Result<(), String> {
+    let sandbox = conns()
+        .iter()
+        .find(|c| c.saved.id == id)
+        .and_then(|c| c.saved.cloud.clone())
+        .ok_or("That is not a Dray Cloud machine.")?;
+    let key = cloud_key().await.ok_or(NO_CLOUD_KEY)?;
+    cloud::delete(&key, &sandbox).await?;
+    crate::analytics::track("feature_used", json!({ "feature": "cloud_machine_dropped" }));
+    {
+        let _one = CLOUD_SYNC.lock().await;
+        CLOUD_GENERATION.fetch_add(1, Ordering::SeqCst);
+        CLOUD_DROPPED.lock().unwrap_or_else(|e| e.into_inner()).push(sandbox);
+    }
+    forget_transcripts(&id).await;
+    remove_server(id).await
+}
+
+/// Where a cloud task's transcript is kept, so it opens while its machine is
+/// stopped. `None` for an id that could not be a file name.
+async fn transcript_path(server: &str, session: &str) -> Option<std::path::PathBuf> {
+    file_safe(session).then_some(())?;
+    Some(transcripts_dir(server).await?.join(format!("{session}.json")))
+}
+
+async fn transcripts_dir(server: &str) -> Option<std::path::PathBuf> {
+    (file_safe(server) && server != LOCAL).then_some(())?;
+    Some(store::app_subdir("cloud-transcripts").await.ok()?.join(server))
+}
+
+fn file_safe(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+async fn forget_transcripts(server: &str) {
+    if let Some(dir) = transcripts_dir(server).await {
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+}
+
+/// Keeps a cloud task's transcript as last seen. Refused for any other
+/// server, whose transcripts its own disk holds.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn save_cloud_transcript(server: String, session_id: String, snapshot: Value) -> Result<(), String> {
+    if !conns().iter().any(|c| c.saved.id == server && c.saved.cloud.is_some()) {
+        return Err(format!("{server} is not a Dray Cloud machine"));
+    }
+    let path = transcript_path(&server, &session_id).await.ok_or("no transcript file for that session")?;
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+    }
+    store::write_atomic(&path, snapshot.to_string()).await.map_err(|e| e.to_string())
+}
+
+/// A cloud task's kept transcript, or `None` where none was kept.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn cloud_transcript(server: String, session_id: String) -> Option<Value> {
+    let path = transcript_path(&server, &session_id).await?;
+    serde_json::from_str(&tokio::fs::read_to_string(path).await.ok()?).ok()
 }
 
 /// Retries a saved tunnel address until it answers, with `ssh` left alone: a
