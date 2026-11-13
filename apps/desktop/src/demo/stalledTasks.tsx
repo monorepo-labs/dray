@@ -150,7 +150,7 @@ function Demo() {
   }, [shown]);
   const readySince = useRef(new Map<string, number>());
   const prs = new Map(rows.map((r) => [r.row.item.sessionId, r.pr]));
-  const stalls = stalledTasks(rows.map((r) => r.row), (r) => prs.get(r.item.sessionId), readySince.current, NOW);
+  const stalls = stalledTasks(rows.map((r) => r.row), (r) => prs.get(r.item.sessionId), readySince.current, NOW, () => true);
   const card = stalls.filter(onCard);
   const nudges = stalls.filter((s) => s.kind !== "ready" && !needLine(s));
 

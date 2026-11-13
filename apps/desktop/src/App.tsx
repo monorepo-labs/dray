@@ -1361,6 +1361,7 @@ function App() {
     (row: CrewRow) => prMarks.prFor(row.item.projectPath, sessionBranch(row.item)),
     [prMarks.prFor],
   );
+  const taskPrReadAt = useCallback((row: CrewRow) => prMarks.readAt(row.item.projectPath), [prMarks.readAt]);
   const stalled = useStalledTasks({
     bots,
     items: sessionIndexItems,
@@ -1368,6 +1369,7 @@ function App() {
     askingSessions,
     tasksBySession,
     prOf: taskPr,
+    prReadAt: taskPrReadAt,
   });
   const stalls = (selectedBot && stalled.byBot.get(selectedBot.id)?.card) || NO_STALLS;
   // The card's row the reader last picked, which the bot's chat scrolls to.

@@ -38,6 +38,7 @@ export function useStalledTasks({
   askingSessions,
   tasksBySession,
   prOf,
+  prReadAt,
 }: {
   bots: readonly Bot[];
   items: SessionIndexItem[];
@@ -45,6 +46,7 @@ export function useStalledTasks({
   askingSessions: ReadonlySet<string>;
   tasksBySession: Record<string, BackgroundTask[]>;
   prOf: (row: CrewRow) => PrMark | undefined;
+  prReadAt: (row: CrewRow) => number | undefined;
 }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -54,14 +56,23 @@ export function useStalledTasks({
   }, [bots.length]);
 
   const readySince = useRef(new Map<string, number>());
+  // When this app saw each task's `modified` change, on its own clock: that
+  // stamp is the server's, and a remote one's clock running behind would let a
+  // mark read before the task's push pass as newer than it.
+  const movedAt = useRef(new Map<string, { modified: string; at: number }>());
   const byBot = useMemo(() => {
+    const markFresh = (row: CrewRow) => (prReadAt(row) ?? 0) > (movedAt.current.get(row.item.sessionId)?.at ?? Infinity);
     const out = new Map<string, { chatId: string; stalls: Stall[]; card: Stall[] }>();
     for (const { bot, chatId, rows } of botCrews(bots, items, { statusBySession, askingSessions, tasksBySession })) {
-      const stalls = stalledTasks(rows, prOf, readySince.current, now);
+      for (const { item } of rows) {
+        if (movedAt.current.get(item.sessionId)?.modified !== item.modified)
+          movedAt.current.set(item.sessionId, { modified: item.modified, at: Date.now() });
+      }
+      const stalls = stalledTasks(rows, prOf, readySince.current, now, markFresh);
       out.set(bot.id, { chatId, stalls, card: stalls.filter(onCard) });
     }
     return out;
-  }, [bots, items, statusBySession, askingSessions, tasksBySession, prOf, now]);
+  }, [bots, items, statusBySession, askingSessions, tasksBySession, prOf, prReadAt, now]);
 
   const mountedAt = useRef(Date.now());
   // Sent and not yet answered. A key is stored only once its nudge landed, so

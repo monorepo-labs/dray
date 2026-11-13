@@ -3,13 +3,15 @@ import { crewRows, type CrewRow } from "@/lib/crew";
 import { prStatus, type PrStatusKey } from "@/lib/pr";
 import type { BackgroundTask, Bot, PrMark, SessionIndexItem, SessionStatus } from "@/types/events";
 
-/// How long a bot's task sits untouched before anyone hears of it.
-export const STALL_MS = 15 * 60_000;
+/// How long a bot's task sits untouched before the reader hears of it. What
+/// the task can mend itself waits for none of it.
+export const STALL_MS = 5 * 60_000;
 
-/// A task of a bot's that has sat untouched for [STALL_MS]. `ready`: its pull
-/// request can land, and the reader merges it from the card. `fix`: something
-/// the task can mend on its own is in the way, said in `problem`, and the bot
-/// is told rather than the reader. `waiting`: the task is idle on the reader;
+/// A task of a bot's that has stalled. `ready`: its pull request has been
+/// able to land for [STALL_MS], and the reader merges it from the card. `fix`:
+/// something the task can mend on its own is in the way, said in `problem`, and
+/// the bot is told at once rather than the reader. `waiting`: the task has sat
+/// idle on the reader for [STALL_MS];
 /// the bot reads it and either answers it or writes the line the card draws.
 /// `key` names this one stall, so it is acted on once and comes back only
 /// after the task moves.
@@ -38,6 +40,11 @@ const FIXABLE: Partial<Record<PrStatusKey, (n: number) => string>> = {
 /// the task's last activity — waiting another [STALL_MS] of watching would hide
 /// one that has sat for a day.
 ///
+/// `markFresh` says whether a task's PR mark was asked for after the task last
+/// moved. A fix is called at once only on a fresh mark, and otherwise after
+/// [STALL_MS]: a mark read before the task's push would nudge the bot about
+/// checks the task had just fixed.
+///
 /// Left out: a task mid-turn or with a background shell or subagent still
 /// running, one behind a card (the card is in the chat already), one set aside
 /// or waiting on its usage limit, one whose PR is running checks or still being
@@ -48,6 +55,7 @@ export function stalledTasks(
   prOf: (row: CrewRow) => PrMark | undefined,
   readySince: Map<string, number>,
   now: number,
+  markFresh: (row: CrewRow) => boolean,
 ): Stall[] {
   const stalls: Stall[] = [];
   for (const row of rows) {
@@ -75,10 +83,12 @@ export function stalledTasks(
       if (now - since >= STALL_MS) stalls.push({ row, pr, kind: "ready", since, key: `${id}:ready:${pr.number}:${item.modified}` });
       continue;
     }
-    if (now - touched < STALL_MS) continue;
+    const idle = now - touched >= STALL_MS;
     const fix = pr && status && FIXABLE[status];
-    if (fix) stalls.push({ row, pr, kind: "fix", problem: fix(pr.number), since: touched, key: `${id}:${status}:${item.modified}` });
-    else stalls.push({ row, pr, kind: "waiting", since: touched, key: `${id}:waiting:${item.modified}` });
+    if (fix) {
+      if (idle || markFresh(row))
+        stalls.push({ row, pr, kind: "fix", problem: fix(pr.number), since: touched, key: `${id}:${status}:${item.modified}` });
+    } else if (idle) stalls.push({ row, pr, kind: "waiting", since: touched, key: `${id}:waiting:${item.modified}` });
   }
   return stalls.sort((a, b) => a.since - b.since);
 }
