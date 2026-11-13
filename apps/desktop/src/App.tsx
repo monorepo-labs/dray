@@ -1366,6 +1366,7 @@ function App() {
     (row: CrewRow) => prMarks.prFor(row.item.projectPath, sessionBranch(row.item)),
     [prMarks.prFor],
   );
+  const taskPrReadAt = useCallback((row: CrewRow) => prMarks.readAt(row.item.projectPath), [prMarks.readAt]);
   const stalled = useStalledTasks({
     bots,
     items: sessionIndexItems,
@@ -1373,12 +1374,18 @@ function App() {
     askingSessions,
     tasksBySession,
     prOf: taskPr,
+    prReadAt: taskPrReadAt,
   });
   const stalls = (selectedBot && stalled.byBot.get(selectedBot.id)?.card) || NO_STALLS;
   // The card's row the reader last picked, which the bot's chat scrolls to.
   // Named with its bot, so another bot's chat never acts on it.
   const [stallFocus, setStallFocus] = useState<{ botId: string; sessionId: string; at: number } | null>(null);
   const botFocus = stallFocus && stallFocus.botId === selectedBot?.id ? stallFocus : null;
+  // A pick is honoured once. Kept past leaving its bot, it came back as a new
+  // `botFocus` on every return and the chat jumped to it again.
+  useEffect(() => {
+    setStallFocus((focus) => (focus && focus.botId !== selectedBot?.id ? null : focus));
+  }, [selectedBot?.id]);
 
   // Read here rather than inside the panel: the tab row needs to know whether
   // there is an open PR before that tab has ever been shown, so ordering it

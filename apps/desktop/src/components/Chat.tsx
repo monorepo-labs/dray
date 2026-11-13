@@ -30,6 +30,7 @@ import { planAsked, setPlan } from "@/lib/plan";
 import { toolArgument } from "@/lib/tools";
 import { buildTranscript, type PendingAsk } from "@/lib/transcript";
 import { readerMessagesAfter } from "@/lib/mergeCard";
+import { isProvisional } from "@/lib/provisional";
 import { loadOlder } from "@/lib/olderPages";
 import { firstMount, grow, mountedTurns } from "@/lib/turnWindow";
 import type { Bot, SessionSnapshot } from "@/types/events";
@@ -410,12 +411,24 @@ export default function Chat({
   // counts must still land at the bottom. A preview *growing* is not a key: the
   // ResizeObserver below re-pins on every height it adds, where keying on the
   // text wrote `scrollTop` and read layout back on every delta.
+  //
+  // A send re-arms the pin first, whatever left it down: a scroll that stopped
+  // short of the end, a jump from the rail or the "Waiting on you" card, a
+  // smooth scroll cut short. Only the pin ever brought a send into view, so any
+  // of those left the reader's own message below the fold. A send is told by
+  // its provisional row *arriving*: every send here draws one, and the real
+  // message replacing it, or a queue or failure taking it back, only ever
+  // lowers the count, so a reader who scrolled up meanwhile stays put.
+  const sent = useMemo(() => session?.events.filter(isProvisional).length ?? 0, [session?.events]);
+  const sentRef = useRef(sent);
   useLayoutEffect(() => {
+    if (sent > sentRef.current) followRef.current = true;
+    sentRef.current = sent;
     const el = scrollRef.current;
     if (el && followRef.current) pin(el);
     syncAtBottom();
     syncActive();
-  }, [session?.sessionId, events.length, streamingKind]);
+  }, [session?.sessionId, events.length, streamingKind, sent]);
 
   // How many of the newest turns are drawn. Opening a long session mounts only
   // what fits on screen and backfills the rest above it in deferred steps, so

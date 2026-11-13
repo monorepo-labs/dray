@@ -11,13 +11,14 @@ import type { AgentEvent, PrMark, SessionIndexItem } from "@/types/events";
 import "../App.css";
 
 /// The stalled-tasks card at the foot of a bot's chat, run through the real
-/// `stalledTasks` and `onCard` on made-up tasks: a PR ready to merge, two idle
-/// tasks with a question, a PR waiting on review, one idle task the bot answers
+/// `stalledTasks` and `onCard` on made-up tasks: two PRs ready to merge, one of
+/// them asking to be tried first, two idle tasks with a question, a PR waiting on review, one idle task the bot answers
 /// itself, two PRs the task can mend (failing checks, a conflict), and three
 /// left out — working, checks running, and idle only ten minutes. The card
-/// starts with the ready PR alone; the rest go to the bot, listed under the
-/// chat as the nudges the app sends. **Bot writes needs** lands the lines a bot
-/// would write with `dray session need`, which puts those tasks on the card.
+/// starts with the ready PRs alone; every stall goes to the bot, listed under
+/// the chat as the nudges the app sends. **Bot writes needs** lands the lines a
+/// bot would write with `dray session need`, which puts the waiting tasks on
+/// the card and a line under the ready PR that asked to be tried.
 /// There is no server behind this page. Dismiss is stored for real; Reset
 /// clears it.
 const NOW = Date.now();
@@ -54,6 +55,7 @@ const ROWS: { row: CrewRow; pr?: PrMark; need?: string; answered?: boolean }[] =
   { row: row("1", "Add a rename button to the session header", 50), need: "Pick: keep the button or drop it" },
   { row: row("2", "Move the session index to SQLite", 125), need: "Approve the SQLite migration plan as written" },
   { row: row("3", "Fix the pricing page copy", 40), pr: pr(908) },
+  { row: row("a", "Show ⌥ hints on sidebar rows", 70), pr: pr(924), need: "Try the ⌥ hints in the dev app first" },
   {
     row: row("9", "Tighten the docs search ranking", 95),
     pr: pr(921, { mergeStateStatus: "BLOCKED", reviewDecision: "REVIEW_REQUIRED" }),
@@ -150,9 +152,9 @@ function Demo() {
   }, [shown]);
   const readySince = useRef(new Map<string, number>());
   const prs = new Map(rows.map((r) => [r.row.item.sessionId, r.pr]));
-  const stalls = stalledTasks(rows.map((r) => r.row), (r) => prs.get(r.item.sessionId), readySince.current, NOW);
+  const stalls = stalledTasks(rows.map((r) => r.row), (r) => prs.get(r.item.sessionId), readySince.current, NOW, () => true);
   const card = stalls.filter(onCard);
-  const nudges = stalls.filter((s) => s.kind !== "ready" && !needLine(s));
+  const nudges = stalls.filter((s) => !needLine(s));
 
   const writeNeeds = () =>
     setRows((all) =>
@@ -170,7 +172,7 @@ function Demo() {
       <div className="flex flex-col gap-4 p-10">
         <h1 className="text-lg font-medium">Stalled tasks in a bot's chat</h1>
         <p className="max-w-xl text-ui text-muted-foreground">
-          Ten tasks, seven stalled. A ready PR and a task idle on you reach the card; the rest go to the bot. A row
+          Eleven tasks, eight stalled. A ready PR and a task idle on you reach the card; every stall goes to the bot. A row
           scrolls the chat to the bot's reply about the task; Open task, on hover, opens it. Merge waits a
           second and takes the row away, as settling does.
         </p>
@@ -222,8 +224,10 @@ function Demo() {
           <span className="text-muted-foreground">Nudges sent to the bot, hidden from the reader</span>
           {nudges.map((s) => (
             <span key={s.key} className="font-mono text-[12px] text-foreground/80">
-              {s.row.item.title}: Stall nudge: this task has sat {s.kind === "fix" ? "untouched" : "idle"} for{" "}
-              {compactAge(s.row.item.modified, NOW)}. {s.problem ?? "Waiting on the user. Its last message: …"}
+              {s.row.item.title}: Stall nudge:{" "}
+              {s.kind === "ready"
+                ? `this task's PR #${s.pr?.number} is ready to merge and has sat for ${compactAge(s.row.item.modified, NOW)}. Its last message: …`
+                : `this task has sat ${s.kind === "fix" ? "untouched" : "idle"} for ${compactAge(s.row.item.modified, NOW)}. ${s.problem ?? "Waiting on the user. Its last message: …"}`}
             </span>
           ))}
         </div>
