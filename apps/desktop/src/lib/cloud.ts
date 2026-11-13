@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 
 import { readLocalStorage, writeLocalStorage } from "@/hooks/useLocalStorage";
 import { channel } from "@/lib/channel";
+import { accountReady, cloudAccountNow, refreshCloudAccount, subscribeCloudAccount } from "@/lib/cloudAccount";
 import { projectKey } from "@/lib/projectGroups";
 import { cloudServer, subscribeServers } from "@/lib/servers";
 import { invoke, listen, LOCAL, serverOfPath, type ServerId } from "@/lib/transport";
@@ -10,6 +11,13 @@ import type { CloudInfo, Project } from "@/types/events";
 /// Dray Cloud (#857): hosted machines, each a server marked `cloud`, one per
 /// task. A new task on Cloud starts its own and clones its repo there.
 
+/// Cloud offered to any reader with a Dray account, set up through
+/// `CloudSetup` (#1021). Dev builds only until billing, per-user machines and
+/// the GitHub App are live; a release offers Cloud on a key alone, as before.
+export const CLOUD_SIGNUP = import.meta.env.DEV;
+
+const FOCUS_GAP_MS = 30_000;
+
 let info: CloudInfo = { on: false, keyed: false, error: null };
 let started = false;
 const changed = channel<void>();
@@ -17,6 +25,12 @@ const changed = channel<void>();
 function start() {
   if (started) return;
   started = true;
+  if (CLOUD_SIGNUP) {
+    void refreshCloudAccount();
+    // A plan lapsing or a sign-out happens in the browser and says nothing
+    // here, so coming back to the window is when the pick is rechecked.
+    window.addEventListener("focus", () => void refreshCloudAccount(FOCUS_GAP_MS));
+  }
   let heard = false;
   void listen<CloudInfo>("cloud_changed", ({ payload, server }) => {
     if (server !== LOCAL) return;
@@ -38,9 +52,11 @@ function subscribe(listener: () => void): () => void {
   start();
   const off = changed.subscribe(listener);
   const offServers = subscribeServers(listener);
+  const offAccount = subscribeCloudAccount(listener);
   return () => {
     off();
     offServers();
+    offAccount();
   };
 }
 
@@ -48,8 +64,17 @@ export function useCloud(): CloudInfo {
   return useSyncExternalStore(subscribe, () => info);
 }
 
-/// On and keyed: the only state in which Cloud is offered as a place to run.
+/// On and keyed: the operator's way in, which needs no setup.
 export const cloudReady = (cloud: CloudInfo = info): boolean => cloud.on && cloud.keyed;
+
+/// Whether the composer offers Cloud at all. Without a key it is the way into
+/// setup, so it shows before anything is set up.
+export const cloudOffered = (cloud: CloudInfo = info): boolean => cloudReady(cloud) || CLOUD_SIGNUP;
+
+/// Whether a task in the repo `slug` can start on Cloud now: keyed, or every
+/// setup step done for that repo.
+export const cloudUsable = (slug: string | null, cloud: CloudInfo = info): boolean =>
+  cloudReady(cloud) || (CLOUD_SIGNUP && accountReady(cloudAccountNow(), slug));
 
 export { cloudServer as isCloud } from "@/lib/servers";
 
@@ -85,7 +110,8 @@ export function setCloudPick(key: string, on: boolean) {
 /// already on a cloud machine, since every one of those reads as Cloud.
 export function onCloud(projects: Project[], path: string | null): boolean {
   const project = path ? projects.find((p) => p.path === path) : undefined;
-  if (!project || !cloudReady() || !githubSlug(project.remote)) return false;
+  const slug = githubSlug(project?.remote);
+  if (!project || !slug || !cloudUsable(slug)) return false;
   return cloudPicked(projectKey(project)) || cloudServer(serverOfPath(project.path));
 }
 
