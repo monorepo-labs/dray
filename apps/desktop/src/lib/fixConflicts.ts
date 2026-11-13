@@ -1,3 +1,4 @@
+import { recordFixAsk } from "@/hooks/useFixAsks";
 import { invoke } from "@/lib/transport";
 import type { SessionIndexItem } from "@/types/events";
 
@@ -22,4 +23,5 @@ export async function askToFixConflicts(task: SessionIndexItem, number: number):
     baseRef: null,
     isNewSession: false,
   });
+  recordFixAsk(task.sessionId, number, "conflict");
 }

@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import type { CrewRow } from "@/lib/crew";
-import { STALL_MS, compactAge, freshStalls, needLine, onCard, stalledTasks, type Stall } from "@/lib/stalled";
+import {
+  STALL_MS,
+  compactAge,
+  fixAskDone,
+  fixLine,
+  freshStalls,
+  needLine,
+  onCard,
+  stalledTasks,
+  type Stall,
+} from "@/lib/stalled";
 import type { PrMark, SessionIndexItem } from "@/types/events";
 
 const T0 = Date.parse("2026-11-12T10:00:00Z");
@@ -127,6 +137,26 @@ describe("stalledTasks", () => {
     const stalls = stalledTasks([row("a"), row("b")], () => undefined, new Map(), T0 + STALL_MS, fresh);
     expect(freshStalls(seen, stalls)).toHaveLength(2);
     expect(freshStalls(seen, stalls)).toHaveLength(0);
+  });
+
+  it("says what a task is fixing and since when, while the PR still needs it", () => {
+    const conflicting = pr({ mergeable: "CONFLICTING" });
+    const [stall] = stalledTasks([row("a")], () => conflicting, new Map(), T0, fresh);
+    expect(stall.status).toBe("conflict");
+    const ask = { pr: 908, status: stall.status!, at: T0 };
+    expect(fixLine(ask, conflicting, T0 + 3 * 60_000)).toBe("Fixing merge conflicts · 3m");
+    expect(fixLine(ask, conflicting, T0 + 10_000)).toBe("Fixing merge conflicts · 1m");
+    // GitHub recomputing after the task's push holds the line.
+    expect(fixLine(ask, pr({ mergeable: "UNKNOWN" }), T0 + 60_000)).toBe("Fixing merge conflicts · 1m");
+    for (const moved of [pr(), pr({ state: "MERGED" }), pr({ checksState: "FAILING" }), { ...conflicting, number: 909 }]) {
+      expect(fixLine(ask, moved, T0)).toBeUndefined();
+      expect(fixAskDone(ask, moved)).toBe(true);
+    }
+    expect(fixLine(undefined, conflicting, T0)).toBeUndefined();
+    expect(fixLine(ask, undefined, T0)).toBeUndefined();
+    const failing = { pr: 908, status: "checksFailing" as const, at: T0 };
+    expect(fixLine(failing, pr({ checksState: "FAILING" }), T0 + 12 * 60_000)).toBe("Fixing failing checks · 12m");
+    expect(fixLine(failing, pr({ checksState: "RUNNING" }), T0)).toBeUndefined();
   });
 
   it("says its age the way an inbox row does", () => {

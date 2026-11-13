@@ -3666,6 +3666,7 @@ function App() {
                 onDetach={detachSession}
                 onFixConflicts={(row, pr) => askToFixConflicts(row.item, pr.number)}
                 onMerge={(row, pr, method) => mergeTask(row.item.projectPath, pr.number, method, row)}
+                now={stalled.now}
               />
             </TabBody>
             <TabBody active={activeTab === "more"}>
