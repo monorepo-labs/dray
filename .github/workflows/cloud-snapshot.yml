@@ -64,12 +64,18 @@ jobs:
 
       # Runs are serialised, not ordered: a release's run can come after a
       # newer one's and would move both names back. A run by hand may, which
-      # is how a rollback is done. A missing pointer is a first run.
+      # is how a rollback is done. A 404 is a first run; any other failure
+      # stops here, since reading it as a first run lets an older one through.
       - name: Skip a release older than the one machines run
         id: order
         if: github.event_name != 'workflow_dispatch'
         run: |
-          current=$(curl -fsS --max-time 10 --retry 3 https://downloads.drayhq.com/cloud/serve-version | tr -d '[:space:]' || :)
+          code=$(curl -sS --max-time 10 --retry 3 -o pointer -w '%{http_code}' https://downloads.drayhq.com/cloud/serve-version) || code=000
+          case "$code" in
+            200) current=$(tr -d '[:space:]' < pointer) ;;
+            404) current= ;;
+            *) echo "::error::could not read the cloud release pointer (HTTP $code)"; exit 1 ;;
+          esac
           top=$(printf '%s\n%s\n' "${VERSION#cli-v}" "${current#cli-v}" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
           if [ -n "$current" ] && [ "$current" != "$VERSION" ] && [ "$top" != "${VERSION#cli-v}" ]; then
             echo "::notice::Dray Cloud already runs $current; leaving it for $VERSION"
