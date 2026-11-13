@@ -389,6 +389,14 @@ async function answer(cmd: string, a: Record<string, unknown>): Promise<unknown>
   }
 }
 
+// Opened by LAN address, from a VM recording it, the page is no secure context
+// and has no `randomUUID`, which every send mints an id with.
+if (!crypto.randomUUID)
+  crypto.randomUUID = () =>
+    "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
+      (+c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (+c / 4)))).toString(16),
+    ) as ReturnType<Crypto["randomUUID"]>;
+
 mockConvertFileSrc("macos");
 mockIPC(
   async (cmd, args) => {
@@ -466,6 +474,8 @@ async function click(el: HTMLElement) {
 /// app's own way.
 async function type(text: string) {
   const editor = await until(() => document.querySelector<HTMLElement>('[contenteditable="true"]'));
+  // A spelling squiggle under "changelog" reads as a bug on camera.
+  editor.spellcheck = false;
   editor.focus();
   if (!PACE) document.execCommand("insertText", false, text);
   else
@@ -531,7 +541,15 @@ async function story() {
 
   // Merged from the card.
   await beat(2000);
-  const card = await until(() => document.querySelector<HTMLElement>("[data-bot-chat]")?.querySelector<HTMLElement>(".rounded-r-none") ?? null);
+  // #1015's own Merge, not the Cloud PR's on "Waiting on you".
+  const card = await until(() =>
+    [...document.querySelectorAll<HTMLElement>("[data-bot-chat] .rounded-r-none")].find((b) => {
+      // The nearest ancestor naming a PR is the button's own row.
+      let row: HTMLElement | null = b;
+      while (row && !/#\d{4}/.test(row.textContent ?? "")) row = row.parentElement;
+      return row?.textContent?.includes("#1015");
+    }),
+  );
   await click(card);
   await click(await until(() => [...document.querySelectorAll<HTMLElement>("[data-bot-chat] button")].find((b) => b.textContent?.startsWith("Confirm"))));
   await until(() => marks.find((m) => m.number === 1015)?.state === "MERGED");
@@ -559,6 +577,9 @@ async function story() {
 // Opens Dray's chat with its Tasks tab, then plays or jumps to the end.
 const row = await until(() => byText("Dray", document.querySelector("aside") ?? document));
 row.click();
+// The dev build's branch label has no place in a video.
+const badge = [...document.querySelectorAll<HTMLElement>("aside div")].find((el) => /^Dev( · |$)/.test(el.textContent ?? ""));
+if (badge) badge.style.visibility = "hidden";
 await until(() => document.querySelector("[data-bot-chat]"));
 (await until(() => document.querySelector<HTMLElement>('[aria-label="Toggle panel"]'))).click();
 await sleep(300);
@@ -582,7 +603,9 @@ if (STILL) {
   // Taken before the composer, which holds focus, unless it has text in it.
   const onKey = (e: KeyboardEvent) => {
     const target = e.target as HTMLElement;
-    if (e.key.toLowerCase() !== "p" || e.metaKey || e.ctrlKey || target.textContent?.trim()) return;
+    // WebKit's empty editor can hold a zero-width character.
+    const typed = target.textContent?.replace(/[\s​-‍﻿]/g, "");
+    if (e.key.toLowerCase() !== "p" || e.metaKey || e.ctrlKey || typed) return;
     e.preventDefault();
     e.stopPropagation();
     start();
