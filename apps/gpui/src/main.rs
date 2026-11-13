@@ -9,6 +9,8 @@ mod chat;
 mod code;
 mod color;
 mod glass;
+#[allow(dead_code)] // Until the transcript draws assistant text through it.
+mod markdown;
 mod sessions;
 mod sidebar;
 mod slots;
