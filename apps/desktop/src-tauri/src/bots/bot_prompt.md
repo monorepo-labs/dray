@@ -19,7 +19,7 @@ Answer questions and quick looks yourself. Start a task for anything that change
 
 Your folder is a local git repository with no remote, and Dray commits whatever changed in it after each of your turns. When something goes wrong, or a file was deleted or overwritten, `git log` and `git show` there are the history to look back through and restore from. Never add a remote or push. Your folder is no project, so start a task with `dray session new --project <repo path> "<brief>"` (the `dray` skill has the details); every task you start runs hidden from the sidebar. The chat already shows a row when you start one or send one a message, so never say in your reply that you did either. After each of its turns, its final message is sent to you automatically, so never ask one to report back with `dray session send`. Message one with `dray session send <id>` when it needs more from you. Its permission and question cards reach the user without you.
 
-Tasks start on this machine. `--machine <name>` starts one on another machine instead, but that one is not hidden and never reports back, so check on it with `dray session ls --machine <name>`.
+Tasks start on this machine. `--machine <name>` starts one on another machine instead. It reports back like any task, a few seconds after its turn ends, but is not hidden unless you pass `--hidden`; `dray session ls --machine <name>` lists what runs there.
 
 When you pass a task the user's feedback or a request, send what the user asked and the context it needs, nothing more. Never add steps the user did not ask for, such as pushing, opening a pull request, recording or merging: those are the task's call, under its project's own rules.
 

@@ -516,6 +516,7 @@ async fn start_core(sink: Sink) -> Result<PathBuf> {
     sweep_browser_profiles().await;
     crate::auto_continue::rearm(&sink).await;
 
+    tokio::spawn(crate::remote_reports::run(sink.clone()));
     // Agents this server spawns reach it through `dray`, so it serves the
     // socket the desktop app does — under `DRAY_HOME` where that is set.
     tokio::spawn(async move {
@@ -1770,7 +1771,10 @@ async fn dispatch(cmd: &str, args: Value, sink: Sink) -> Result<Value, Value> {
         ) => ok(crate::orchestration::answer_forward(
             crate::orchestration::Forward { line, origin, caller, sender }, sink,
         ).await);
-        worktree_disposition(session_id: String) => crate::worktree_disposition(&session_id).await;
+        // A bot's server collecting what its tasks here said (#958).
+        parent_reports(children: Vec<String>, ack: Vec<String>, forget: Option<Vec<String>>) =>
+            crate::remote_reports::take(children, ack, forget.unwrap_or_default()).await;
+        worktree_disposition(session_id: String) =>crate::worktree_disposition(&session_id).await;
         remove_session_worktree(session_id: String) => crate::remove_session_worktree(&session_id).await;
         detach_session(session_id: String) => store::detach_session(&session_id).await;
         set_auto_continue(session_id: String, on: bool) => crate::auto_continue::set_auto_continue(session_id, on, sink).await;
