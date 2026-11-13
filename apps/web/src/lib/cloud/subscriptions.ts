@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 
-import { pool } from "../db";
+import { pool, withLock } from "../db";
 import { prices, stripe } from "../stripe";
 import { billingOf, finishPeriod, type Billing } from "./billing";
 import { PAYING, PLANS, PLAN_IDS, type PlanId } from "./plans";
@@ -137,18 +137,9 @@ export async function syncSubscription(id: string) {
   const s = need();
   const first = await s.subscriptions.retrieve(id);
   const customer = typeof first.customer === "string" ? first.customer : first.customer.id;
-  const client = await pool.connect();
-  try {
-    await client.query("begin");
-    await client.query("select pg_advisory_xact_lock(hashtext($1))", [`dray-cloud-billing:${customer}`]);
-    await mirror(s, await s.subscriptions.retrieve(id), customer);
-    await client.query("commit");
-  } catch (e) {
-    await client.query("rollback").catch(() => {});
-    throw e;
-  } finally {
-    client.release();
-  }
+  await withLock(`dray-cloud-billing:${customer}`, async () =>
+    mirror(s, await s.subscriptions.retrieve(id), customer),
+  );
 }
 
 async function mirror(s: Stripe, sub: Stripe.Subscription, customer: string) {

@@ -68,7 +68,7 @@ export async function meter(userId: string, sandboxIds: string[], strict = false
     }
   }
   const now = standing(billing, await usedSeconds(userId, periodStart));
-  await report(billing.id, now.billableMinutes).catch((e) => console.error(`stripe report ${userId}:`, e));
+  await report(billing.id, now.billableMinutes, { start: periodStart, end: periodEnd }).catch((e) => console.error(`stripe report ${userId}:`, e));
   return now;
 }
 
@@ -139,7 +139,9 @@ export async function settledMachines(userId: string, periodStart: Date): Promis
 /// identifier, which Stripe drops as a duplicate, rather than folded into a
 /// larger report that would count it twice. A new report is claimed only
 /// while none is pending, so two heartbeats can't both send the same minutes.
-async function report(billingId: string, minutes: number) {
+/// `minutes` were measured over `period`; a renewal that moved the row on
+/// since leaves them unsent, `finishPeriod` having reported that period first.
+async function report(billingId: string, minutes: number, period: { start: Date; end: Date }) {
   const s = stripe();
   if (!s) return;
   let row = await reread(billingId);
@@ -147,16 +149,15 @@ async function report(billingId: string, minutes: number) {
     await send(s, row);
     row = await reread(billingId);
   }
-  const { periodStart, periodEnd } = row ?? {};
-  if (!row || !periodStart || !periodEnd || row.pendingFor) return;
-  const sent = row.reportedFor?.getTime() === periodStart.getTime() ? row.reportedMinutes : 0;
+  if (!row || row.pendingFor || row.periodStart?.getTime() !== period.start.getTime()) return;
+  const sent = row.reportedFor?.getTime() === period.start.getTime() ? row.reportedMinutes : 0;
   if (minutes <= sent) return;
   const claim = await pool.query(
     `update cloud_billing set "pendingTotal" = $1, "pendingFor" = $2, "pendingAt" = $3
-      where id = $4 and "pendingFor" is null
+      where id = $4 and "pendingFor" is null and "periodStart" = $2
         and "reportedMinutes" = $5 and "reportedFor" is not distinct from $6`,
     // Inside the period it belongs to, even when read just after it ended.
-    [minutes, periodStart, new Date(Math.min(Date.now(), periodEnd.getTime() - 1000)), row.id, row.reportedMinutes, row.reportedFor],
+    [minutes, period.start, new Date(Math.min(Date.now(), period.end.getTime() - 1000)), row.id, row.reportedMinutes, row.reportedFor],
   );
   if (!claim.rowCount) return;
   await send(s, (await reread(billingId))!);

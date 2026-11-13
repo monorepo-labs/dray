@@ -358,4 +358,16 @@ describe("Dray Cloud billing", { skip: !DB && "set TEST_DATABASE_URL to a scratc
     assert.deepEqual(stripe.cancelled, [{ id: "sub_dup", prorate: "true" }]);
     assert.equal((await billing()).stripeSubscriptionId, "sub_a");
   });
+
+  test("webhooks racing on one customer all finish, more of them than the pool has connections", async () => {
+    const payload = JSON.stringify({
+      id: "evt_3",
+      object: "event",
+      type: "customer.subscription.updated",
+      data: { object: { id: "sub_a", object: "subscription" } },
+    });
+    const answers = await Promise.all(Array.from({ length: 8 }, () => webhook(payload)));
+    assert.deepEqual(answers.map((a) => a.status), Array(8).fill(200));
+    assert.equal((await billing()).plan, "pro");
+  });
 });
