@@ -11,7 +11,7 @@ use gpui::{
 };
 
 use super::diff::{Diff, DiffItem, RowKind};
-use super::highlight::{Lang, Span, highlight, line_ranges, spans_in};
+use super::highlight::{Lang, Span, Token, highlight, line_ranges, spans_in};
 use super::palette::CodePalette;
 use crate::theme::{Mode, Theme};
 
@@ -95,6 +95,21 @@ fn styled_line(text: &str, spans: &[Span], marks: &[Range<usize>], mark: Hsla, p
             .map(|s| (s.range.clone(), HighlightStyle { color: Some(palette.token(s.token)), ..Default::default() }));
         return StyledText::new(text).with_highlights(runs);
     }
+    let runs = merge_runs(spans, marks).into_iter().map(|(range, token, marked)| {
+        let style = HighlightStyle {
+            color: token.map(|t| palette.token(t)),
+            background_color: marked.then_some(mark),
+            ..Default::default()
+        };
+        (range, style)
+    });
+    StyledText::new(text).with_highlights(runs)
+}
+
+/// Spans and marks, both sorted and disjoint, cut into runs that each carry
+/// at most one token and a marked flag. One pass with an index into each: a
+/// minified line can hold thousands of spans, and this runs on every repaint.
+fn merge_runs(spans: &[Span], marks: &[Range<usize>]) -> Vec<(Range<usize>, Option<Token>, bool)> {
     let mut cuts: Vec<usize> = spans
         .iter()
         .flat_map(|s| [s.range.start, s.range.end])
@@ -102,24 +117,44 @@ fn styled_line(text: &str, spans: &[Span], marks: &[Range<usize>], mark: Hsla, p
         .collect();
     cuts.sort_unstable();
     cuts.dedup();
+    let (mut si, mut mi) = (0, 0);
     let mut runs = Vec::new();
     for pair in cuts.windows(2) {
         let range = pair[0]..pair[1];
-        let color = spans.iter().find(|s| s.range.start <= range.start && range.end <= s.range.end);
-        let marked = marks.iter().any(|m| m.start <= range.start && range.end <= m.end);
-        if color.is_none() && !marked {
-            continue;
+        while si < spans.len() && spans[si].range.end <= range.start {
+            si += 1;
         }
-        runs.push((
-            range,
-            HighlightStyle {
-                color: color.map(|s| palette.token(s.token)),
-                background_color: marked.then_some(mark),
-                ..Default::default()
-            },
-        ));
+        while mi < marks.len() && marks[mi].end <= range.start {
+            mi += 1;
+        }
+        let token = spans.get(si).filter(|s| s.range.start <= range.start).map(|s| s.token);
+        let marked = marks.get(mi).is_some_and(|m| m.start <= range.start);
+        if token.is_some() || marked {
+            runs.push((range, token, marked));
+        }
     }
-    StyledText::new(text).with_highlights(runs)
+    runs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merges_tokens_and_marks_into_disjoint_runs() {
+        let spans = [Span { range: 0..4, token: Token::Keyword }, Span { range: 6..10, token: Token::String }];
+        let runs = merge_runs(&spans, &[2..8]);
+        assert_eq!(
+            runs,
+            vec![
+                (0..2, Some(Token::Keyword), false),
+                (2..4, Some(Token::Keyword), true),
+                (4..6, None, true),
+                (6..8, Some(Token::String), true),
+                (8..10, Some(Token::String), false),
+            ]
+        );
+    }
 }
 
 /// A gutter wide enough for the largest number, plus the library's
