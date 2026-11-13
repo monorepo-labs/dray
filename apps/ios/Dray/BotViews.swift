@@ -27,13 +27,14 @@ struct BotListRow: View {
     @Environment(Store.self) private var store
     let server: UUID
     let bot: Bot
-    let chat: SessionKey
+    /// None until its first message: Dray Bot opens on its welcome with no session behind it.
+    let chat: SessionKey?
 
     var body: some View {
-        let item = store.items[chat]
-        let asking = store.isAsking(chat)
+        let item = chat.flatMap { store.items[$0] }
+        let asking = chat.map(store.isAsking) ?? false
         let unread = item?.status == "completed"
-        let preview = store.previews[chat]
+        let preview = chat.flatMap { store.previews[$0] }
         HStack(spacing: Theme.Space.m) {
             BotFace(bot: bot, size: 40)
                 .overlay(alignment: .bottomTrailing) { badge(asking: asking, unread: unread, replies: preview?.replies ?? 0) }
@@ -103,6 +104,19 @@ func previewLine(_ text: String) -> String {
 
 /// A bot's chat: the conversation, a line where it started or messaged a task,
 /// merge cards, lessons, and a time label wherever 15 minutes passed between rows.
+/// Between two sessions of one bot chat: the agent the later one runs (`AGENT_LABELS`).
+struct SwitchLine: View {
+    let harness: String?
+
+    var body: some View {
+        let names = ["claude_code": "Claude Code", "codex": "Codex", "pi": "pi", "fx": "fx", "grok": "Grok"]
+        Text("Switched to \(harness.map { names[$0] ?? $0 } ?? "another agent")")
+            .font(Theme.Font.footnote)
+            .foregroundStyle(Theme.tertiary)
+            .frame(maxWidth: .infinity)
+    }
+}
+
 struct BotChatRows: View {
     @Environment(Store.self) private var store
     let key: SessionKey
@@ -302,11 +316,11 @@ struct MergeCardView: View {
     @State private var asked = false
 
     var body: some View {
-        let byBranch = store.marks[ProjectKey(server: server, path: card.projectPath)]
+        let byBranch = store.marks[ProjectKey(server: server, path: card.prPath)]
         let pr = byBranch?.values.first { $0.number == card.number }
-        let read = store.marksRead(server, card.projectPath)
-        let task = SessionKey(server: server, id: card.taskId)
-        let title = store.items[task]?.title.isEmpty == false ? store.items[task]!.title : card.title
+        let read = store.marksRead(server, card.prPath)
+        let task = taskKey
+        let title = task.flatMap { store.items[$0]?.title }.flatMap { $0.isEmpty ? nil : $0 } ?? card.title
         let verdict = pr.map(verdictOf)
         Group {
             if compact || pr?.state == "MERGED" || (read && pr == nil) {
@@ -315,8 +329,9 @@ struct MergeCardView: View {
                     Link(pr?.state == "MERGED" ? "Merged #\(card.number)" : "#\(card.number)", destination: URL(string: card.url)!)
                         .foregroundStyle(Theme.secondary)
                     Text("·").foregroundStyle(Theme.tertiary)
-                    Button { openTask?(task) } label: { Chip(face: BotFace(seed: card.taskId, size: 16), title: title) }
+                    Button { task.map { openTask?($0) } } label: { Chip(face: BotFace(seed: card.taskId, size: 16), title: title) }
                         .buttonStyle(.plain)
+                        .disabled(task == nil)
                     Spacer(minLength: 0)
                     if let pr, let verdict { control(pr, verdict) }
                 }
@@ -326,10 +341,11 @@ struct MergeCardView: View {
                 HStack(spacing: Theme.Space.m) {
                     BotFace(seed: card.taskId, size: 28)
                     VStack(alignment: .leading, spacing: 2) {
-                        Button { openTask?(task) } label: {
+                        Button { task.map { openTask?($0) } } label: {
                             Text(title).font(Theme.Font.body).foregroundStyle(Theme.text).lineLimit(1)
                         }
                         .buttonStyle(.plain)
+                        .disabled(task == nil)
                         HStack(spacing: 5) {
                             if let pr { PrGlyph(mark: pr, size: 14) }
                             Link("#\(card.number)", destination: URL(string: card.url)!)
@@ -351,17 +367,25 @@ struct MergeCardView: View {
                 .overlay(RoundedRectangle(cornerRadius: Theme.Radius.group, style: .continuous).strokeBorder(Theme.hairline))
             }
         }
-        .task { await store.ensureMarks(server, card.projectPath) }
+        .task { await store.ensureMarks(server, card.prPath) }
+    }
+
+    /// The task where the phone can reach it: the chat's server, or for a task on
+    /// another machine that machine as its server shares it. Nil where it is not shared.
+    private var taskKey: SessionKey? {
+        guard let machine = card.machine else { return SessionKey(server: server, id: card.taskId) }
+        return store.servers.first { $0.via?.parent == server && ($0.via?.machine == machine || $0.name == machine) }
+            .map { SessionKey(server: $0.id, id: card.taskId) }
     }
 
     @ViewBuilder private func control(_ pr: PrMark, _ verdict: MergeVerdict) -> some View {
         if pr.state == "OPEN" && !pr.isDraft && verdict == .ready {
-            MergeTaskButton(server: server, taskId: card.taskId, cwd: card.projectPath, number: card.number, branch: card.branch)
-        } else if pr.state == "OPEN" && verdict == .conflict {
+            MergeTaskButton(server: server, taskId: card.taskId, cwd: card.prPath, number: card.number, branch: card.branch)
+        } else if pr.state == "OPEN" && verdict == .conflict, let task = taskKey {
             Button(asked ? "Asked the task" : "Fix conflicts") {
                 asked = true
                 Task {
-                    let sent = await store.send(SessionKey(server: server, id: card.taskId),
+                    let sent = await store.send(task,
                                                 "PR #\(card.number) has merge conflicts with its base branch. Fix them and push.")
                     if !sent { asked = false }
                 }

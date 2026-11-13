@@ -497,6 +497,13 @@ struct MergeCard: Decodable, Hashable {
     let branch: String
     let number: Int
     let url: String
+    /// The machine holding the task, where it is not the chat's; `repo` comes with it.
+    var machine: String? = nil
+    var repo: String? = nil
+
+    /// Where `pr_marks` and `merge_pr` run on the chat's server: the checkout, or for a
+    /// task on another machine the GitHub slug, read through `gh` (`cardRepo`).
+    var prPath: String { repo.map { "github:\($0)" } ?? projectPath }
 }
 
 /// One file a bot's turn changed under its instructions, skills or memory.

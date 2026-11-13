@@ -68,7 +68,8 @@ final class NewTask {
     /// The server comes first and the project is picked from what it holds, so a
     /// machine with nothing attached yet is still a place to start: it attaches one.
     var server: UUID? {
-        connected.first { $0.id == pickedServer }?.id
+        if let bot, connected.contains(where: { $0.id == bot.server }) { return bot.server }
+        return connected.first { $0.id == pickedServer }?.id
             ?? connected.first { s in (store.projects[s.id] ?? []).contains { $0.name == projectName } }?.id
             ?? connected.first?.id
     }
@@ -79,8 +80,9 @@ final class NewTask {
     }
     private var held: [Project] { server.flatMap { store.projects[$0] } ?? [] }
     /// The picked project where this server has it, else the one picked last here.
-    var project: String? { projectName.flatMap { projectNames.contains($0) ? $0 : nil } ?? projectNames.first }
+    var project: String? { bot?.bot.name ?? projectName.flatMap { projectNames.contains($0) ? $0 : nil } ?? projectNames.first }
     var cwd: String? {
+        if let bot { return bot.bot.path }
         let named = held.filter { $0.name == project }
         return named.first { $0.path == projectPath }?.path ?? named.first?.path
     }
@@ -97,13 +99,23 @@ final class NewTask {
     }
 
     /// A new server keeps the project by name where it has one, as the old pick did across machines.
+    /// A bot with no chat yet: the send goes to its folder, which is what starts
+    /// the chat, the desktop's empty composer aimed at a bot. Any other pick leaves it.
+    var bot: (server: UUID, bot: Bot)?
+
+    func aim(at bot: Bot, on server: UUID) {
+        self.bot = (server, bot)
+    }
+
     func pick(server: UUID?) {
+        bot = nil
         pickedServer = server
         projectPath = nil
     }
 
     func pick(_ choice: ProjectChoice?) {
         guard let choice else { return }
+        bot = nil
         projectName = choice.name
         projectPath = choice.path
     }
@@ -205,12 +217,13 @@ final class NewTask {
                 "fast": .bool(fast && Picks.offersFast(harness, model)),
                 "cwd": .string(cwd),
                 "branch": nil,
-                "useWorktree": .bool(worktree),
+                "useWorktree": .bool(worktree && bot == nil),
                 "worktreeName": nil,
                 "baseRef": nil,
                 "isNewSession": true,
             ])
             if let item = outcome.snapshot { store.created(server, item) }
+            bot = nil
             await dropDraft(opened)
             // Words added while the start was out were never sent, so they stay.
             if text == sent { text = "" }

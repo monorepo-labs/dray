@@ -9,6 +9,8 @@ struct TranscriptView: View {
     @Environment(\.openTask) private var openTask
     /// The floating banner's height, kept clear above the first row so it never sits on "Load earlier".
     @State private var bannerHeight: CGFloat = 0
+    /// How many of a bot chat's earlier sessions are drawn above this one.
+    @State private var earlier = 0
 
     private var item: SessionItem? { store.items[key] }
     private var busy: Bool { item?.busy ?? false }
@@ -20,10 +22,11 @@ struct TranscriptView: View {
         let turns = bot == nil ? buildTurns(transcript?.events ?? [], busy: busy) : []
         let botTasks = bot.map { store.botTasks(store.botChat(key.server, $0)) } ?? []
         let asks = store.asks[key] ?? []
+        let segments = segments(bot)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 28) {
-                    if transcript?.olderBefore != nil { older }
+                    if store.transcripts[segments[0]]?.olderBefore != nil || hidden(bot, segments) != nil { older(bot, segments) }
                     if transcript == nil {
                         placeholder
                     } else if bot == nil && turns.isEmpty && !busy && (store.queued[key] ?? []).isEmpty {
@@ -33,8 +36,11 @@ struct TranscriptView: View {
                         }
                         .frame(minHeight: 420)
                     }
-                    if bot != nil, let events = transcript?.events {
-                        BotChatRows(key: key, events: events)
+                    if bot != nil {
+                        ForEach(Array(segments.enumerated()), id: \.element) { i, segment in
+                            if i > 0 { SwitchLine(harness: store.items[segment]?.harness) }
+                            if let events = store.transcripts[segment]?.events { BotChatRows(key: segment, events: events) }
+                        }
                     }
                     ForEach(turns) { TurnView(turn: $0) }
                     ForEach(store.queued[key] ?? [], id: \.id) { q in
@@ -172,15 +178,42 @@ struct TranscriptView: View {
         }
     }
 
+    /// A bot chat's sessions on screen, oldest first: this one, and the earlier ones an agent
+    /// switch left, each drawn only once the one after it is read back to its start (`drawnSegments`).
+    private func segments(_ bot: Bot?) -> [SessionKey] {
+        guard let bot else { return [key] }
+        let chat = store.botChat(key.server, bot)
+        guard let i = chat.firstIndex(of: key) else { return [key] }
+        return Array(chat[max(0, i - earlier)...i])
+    }
+
+    /// The session an agent switch left just above what is drawn, if any.
+    private func hidden(_ bot: Bot?, _ segments: [SessionKey]) -> SessionKey? {
+        guard let bot else { return nil }
+        let chat = store.botChat(key.server, bot)
+        return chat.firstIndex(of: segments[0]).flatMap { $0 > 0 ? chat[$0 - 1] : nil }
+    }
+
     /// Earlier turns are paged in by asking, so the screen never jumps under a reader mid-sentence.
-    @ViewBuilder private var older: some View {
+    /// Past the top session's start, the next ask draws the session before it.
+    @ViewBuilder private func older(_ bot: Bot?, _ segments: [SessionKey]) -> some View {
+        let top = segments[0]
         HStack {
-            if let error = store.olderErrors[key] {
+            if let error = store.olderErrors[top] {
                 Text("Couldn't load earlier messages. \(sentence(error))")
                     .font(Theme.Font.footnote).foregroundStyle(Theme.secondary)
                 Spacer(minLength: Theme.Space.s)
             }
-            Button(store.olderErrors[key] == nil ? "Load earlier" : "Retry") { Task { await store.loadOlder(key) } }
+            Button(store.olderErrors[top] == nil ? "Load earlier" : "Retry") {
+                Task {
+                    if store.transcripts[top]?.olderBefore != nil {
+                        await store.loadOlder(top)
+                    } else if let before = hidden(bot, segments) {
+                        await store.load(before)
+                        earlier += 1
+                    }
+                }
+            }
                 .font(Theme.Font.footnoteStrong)
                 .foregroundStyle(Theme.secondary)
                 .padding(.horizontal, Theme.Space.m)

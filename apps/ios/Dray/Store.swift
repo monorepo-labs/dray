@@ -569,7 +569,9 @@ final class Store {
     /// app is on screen, and once on coming back.
     func pollMarks() async {
         for s in servers where serverState[s.id] == .connected {
-            let open = repos(s.id).filter { path in
+            // Every repo whose marks are held, not the list's alone: a bot's tasks are hidden,
+            // and their merge cards read marks the list never asks for (`ensureMarks`).
+            let open = Set(marks.keys.filter { $0.server == s.id }.map(\.path)).filter { path in
                 let key = ProjectKey(server: s.id, path: path)
                 return marks[key]?.values.contains { $0.state == "OPEN" } == true
                     && Date().timeIntervalSince(marksAt[key] ?? .distantPast) >= 30
@@ -871,13 +873,16 @@ final class Store {
             let key = SessionKey(server: server, id: s.sessionId)
             statuses[key] = s
             notice(key)
+            let ended = items[key]?.busy == true && s.status != "in_progress"
             // A turn ending is when a pull request appears.
-            if items[key]?.busy == true, s.status != "in_progress", let path = items[key]?.projectPath {
+            if ended, let path = items[key]?.projectPath {
                 Task { await loadMarks(server, force: true, only: [path]) }
             }
             items[key]?.status = s.status
             if let m = s.modified { items[key]?.modified = m }
             if s.status != "in_progress" { strand(key) }
+            // Live events reach memory alone; the turn's end re-reads it so a cold open has the reply.
+            if ended, home == nil, transcripts[key] != nil { Task { await reload(key) } }
             // A bot's row shows its newest reply, which only its server can read.
             if s.status != "in_progress", bot(key) != nil { Task { await loadPreviews(server) } }
         case "session_title":
@@ -987,7 +992,11 @@ enum Cache {
         .appending(path: "dray", directoryHint: .isDirectory)
     static func folder(_ server: UUID) -> URL { root.appending(path: server.uuidString, directoryHint: .isDirectory) }
     static func list(_ server: UUID) -> URL { folder(server).appending(path: "list.json") }
-    static func transcript(_ key: SessionKey) -> URL { folder(key.server).appending(path: "t-\(key.id).json") }
+    /// The id is the server's to pick, so it is encoded down to one name that cannot leave the folder.
+    static func transcript(_ key: SessionKey) -> URL {
+        let name = key.id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "invalid"
+        return folder(key.server).appending(path: "t-\(name).json")
+    }
 
     /// Encodes and writes off the main thread; a failed write costs the next cold open, nothing else.
     static func write(_ url: URL, _ make: @escaping () throws -> Data) {

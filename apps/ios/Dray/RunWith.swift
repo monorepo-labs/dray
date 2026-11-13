@@ -78,7 +78,14 @@ struct RunWithSheet: View {
                 }
                 PickDivider()
             }
-            if task.projectChoices.isEmpty {
+            if let bot = task.bot {
+                // Its folder is not a repo: no worktree or branch to pick. A project picked here leaves the bot.
+                PickMenu("Project", value: bot.bot.name) {
+                    Picker("Project", selection: Binding<ProjectChoice?>(get: { nil }, set: task.pick)) {
+                        ForEach(task.projectChoices, id: \.self) { Text($0.label).tag(Optional($0)) }
+                    }
+                }
+            } else if task.projectChoices.isEmpty {
                 Button { attaching = true } label: {
                     HStack(spacing: Theme.Space.s) {
                         Image(systemName: "plus").font(.system(size: 14, weight: .semibold)).frame(width: 16)

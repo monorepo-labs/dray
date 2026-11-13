@@ -57,8 +57,8 @@ struct SessionList: View {
         let runs = page(all, shown)
         let more = runs.reduce(0) { $0 + $1.rows.count } < all.reduce(0) { $0 + $1.rows.count }
         // Bots lead the live list, as on the desktop: a bot belongs to no project, so no filter narrows them.
-        let botRows = mode == .live ? store.allBots.compactMap { b in
-            store.botChat(b.server, b.bot).last.map { (server: b.server, bot: b.bot, chat: $0) }
+        let botRows = mode == .live ? store.allBots.map { b in
+            (id: "\(b.server)/\(b.bot.id)", server: b.server, bot: b.bot, chat: store.botChat(b.server, b.bot).last)
         } : []
         let blank = mode == .live && runs.isEmpty && botRows.isEmpty
         VStack(spacing: 0) {
@@ -66,10 +66,28 @@ struct SessionList: View {
                 ProjectStrip(names: names, picked: filter) { project = $0 }
             }
             List(selection: $selection) {
-                ForEach(botRows, id: \.chat) { b in
-                    BotListRow(server: b.server, bot: b.bot, chat: b.chat)
-                        .tag(b.chat)
-                        .sessionRow(selected: selection == b.chat)
+                // Quiet about reconnects, never about a read that failed or a server waiting on the reader.
+                ForEach(store.live.filter { s in store.health(s.id).map { store.serverState[s.id] == .connected || $0.needsYou } ?? false }) { s in
+                    if let health = store.health(s.id) {
+                        HealthBanner(health: health,
+                                     retry: { Task { await store.retry(s.id) } },
+                                     fix: { sheet = .settings(server: s.id) })
+                            .bannerRow()
+                    }
+                }
+                ForEach(botRows, id: \.id) { b in
+                    if let chat = b.chat {
+                        BotListRow(server: b.server, bot: b.bot, chat: chat)
+                            .tag(chat)
+                            .sessionRow(selected: selection == chat)
+                    } else {
+                        // No chat yet: the dock aims at its folder, and the first message starts one.
+                        Button { task.aim(at: b.bot, on: b.server) } label: {
+                            BotListRow(server: b.server, bot: b.bot, chat: nil)
+                        }
+                        .buttonStyle(RowButtonStyle())
+                        .sessionRow(selected: task.bot?.bot.id == b.bot.id)
+                    }
                 }
                 if !botRows.isEmpty && !runs.isEmpty { Color.clear.frame(height: Theme.Space.l).plainRow() }
                 if mode == .drafts {
