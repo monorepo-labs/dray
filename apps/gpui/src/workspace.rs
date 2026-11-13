@@ -4,15 +4,17 @@
 use std::time::Duration;
 
 use dray_core::projects::Project;
+use dray_core::events::AgentEvent;
 use dray_core::store::SessionIndexItem;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::{
-    App, Context, IntoElement, MouseButton, ParentElement, PathBuilder, Pixels, Point, Render, ScrollHandle, Styled,
+    App, Context, Entity, IntoElement, MouseButton, ParentElement, PathBuilder, Pixels, Point, Render, ScrollHandle, Styled,
     Task, Window, canvas, div, point, prelude::*, px,
 };
 use serde_json::json;
 
+use crate::chat::Chat;
 use crate::store::{Read, Store};
 use crate::theme::{Mode, Theme};
 use crate::wire::{Signal, Wire};
@@ -41,6 +43,8 @@ pub struct Workspace {
     pub connection: Connection,
     pub sidebar_open: bool,
     pub sidebar_scroll: ScrollHandle,
+    /// The open session's transcript, made on selecting it.
+    chat: Option<Entity<Chat>>,
     _tasks: Vec<Task<()>>,
 }
 
@@ -75,6 +79,7 @@ impl Workspace {
             connection: Connection::Connecting,
             sidebar_open: true,
             sidebar_scroll: ScrollHandle::new(),
+            chat: None,
             _tasks: vec![listen, tick],
         }
     }
@@ -90,6 +95,9 @@ impl Workspace {
                 true
             }
             Signal::Event { name, payload } => {
+                if name == "agent_event" {
+                    self.to_chat(&payload, cx);
+                }
                 let applied = self.store.apply(&name, payload);
                 if applied.reload {
                     self.reload(cx);
@@ -144,8 +152,29 @@ impl Workspace {
         .detach();
     }
 
+    /// Hands an event to the open transcript when it is that session's. Only
+    /// then is it parsed, since deltas for every session stream through here.
+    fn to_chat(&self, payload: &serde_json::Value, cx: &mut Context<Self>) {
+        let Some(chat) = &self.chat else { return };
+        if payload["sessionId"].as_str() != Some(chat.read(cx).session_id.as_str()) {
+            return;
+        }
+        match serde_json::from_value::<AgentEvent>(payload.clone()) {
+            Ok(event) => chat.update(cx, |chat, cx| chat.on_event(event, cx)),
+            Err(e) => log::warn!("an agent_event this build cannot read: {e}"),
+        }
+    }
+
     pub fn select(&mut self, session_id: &str, cx: &mut Context<Self>) {
+        if self.selected.as_deref() == Some(session_id) {
+            return;
+        }
         self.selected = Some(session_id.to_string());
+        // One transcript at a time: reopening reads it again, so nothing
+        // missed while it was closed has to be caught up.
+        let wire = self.wire.clone();
+        let id = session_id.to_string();
+        self.chat = Some(cx.new(|cx| Chat::new(id, &wire, cx)));
         cx.notify();
     }
 
@@ -227,7 +256,10 @@ impl Render for Workspace {
                     .rounded(px(SHEET_RADIUS))
                     .bg(theme.sheet)
                     .overflow_hidden()
-                    .child(self.empty_state(&theme)),
+                    .map(|sheet| match &self.chat {
+                        Some(chat) => sheet.child(chat.clone()),
+                        None => sheet.child(self.empty_state(&theme)),
+                    }),
             )
             .child(self.header(&theme, cx))
     }

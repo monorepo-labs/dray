@@ -15,6 +15,9 @@ cd apps/gpui
 cargo run
 ```
 
+`rust-toolchain.toml` pins Rust 1.100: GPUI's mac crate uses
+`Option::map_or_default`, unstable before 1.98.
+
 That attaches to the release app's server. Against a server of your own:
 
 ```bash
@@ -91,8 +94,12 @@ cargo run --example spike_input
 - [x] Crate, pinned GPUI, glass window, titlebar drag row
 - [x] Wire client: hello, `invoke`, events, reconnect
 - [x] Sidebar session list, live: stages, pins, nesting rails, unread and asking rails
-- [ ] Virtualised transcript with streaming markdown
-- [ ] Tool rows, tree-sitter code and diffs
+- [x] Virtualised transcript, live: the newest turns read on select, events
+      folded on after, deltas streaming into a preview the committed event
+      takes over in place ([transcript.rs](src/transcript.rs), [chat.rs](src/chat.rs))
+- [ ] Streaming markdown (plugs into `chat.rs`'s `slots::assistant`)
+- [ ] Tool rows, tree-sitter code and diffs (`slots::tool` draws the
+      collapsed header until then)
 - [ ] Permission and question cards
 - [ ] Composer that sends
 - [ ] New-task composer with its pickers

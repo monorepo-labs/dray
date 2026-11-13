@@ -1350,7 +1350,7 @@ dependencies = [
 
 [[package]]
 name = "dray"
-version = "0.29.19"
+version = "0.30.3"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1361,6 +1361,7 @@ dependencies = [
  "flate2",
  "form_urlencoded",
  "futures-util",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "libc",

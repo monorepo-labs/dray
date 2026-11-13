@@ -47,3 +47,4 @@ pub fn load_fonts(cx: &App) {
 }
 
 pub const SANS: &str = "Geist";
+pub const MONO: &str = "Geist Mono";
