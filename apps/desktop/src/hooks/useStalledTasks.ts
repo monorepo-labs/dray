@@ -21,10 +21,11 @@ const NUDGE_HOLD_MS = 60_000;
 /// Every bot's stalled tasks, keyed by bot id: `card` is what the bot's chat
 /// draws, and the clock they were read at.
 ///
-/// Stalls the reader has no part in go to the bot instead, once each, as a
-/// hidden message from the task (`nudge_bot`): a PR the task can mend, or a
-/// task idle on the reader, which the bot either answers itself or names in a
-/// need line (`dray session need`) that puts it on the card.
+/// Each stall also goes to the bot, once, as a hidden message from the task
+/// (`nudge_bot`): a PR the task can mend; a task idle on the reader, which the
+/// bot either answers itself or names in a need line (`dray session need`)
+/// that puts it on the card; or a ready PR, which gets a need line only where
+/// the task asked the reader to try something before merging.
 ///
 /// Read for every bot rather than the one on screen, since the banner is for a
 /// bot the reader is not looking at: once new card rows land while the window
@@ -84,10 +85,16 @@ export function useStalledTasks({
     const nudged = new Set(readLocalStorage<string[]>(NUDGED_KEY, []));
     const due = [...byBot.values()]
       .flatMap((b) => b.stalls)
-      .filter((s) => s.kind !== "ready" && !needLine(s) && !nudged.has(s.key) && !sending.current.has(s.key));
+      // A ready stall is nudged even under a need, which a waiting stall
+      // wrote and `nudge_bot` clears for the bot to judge afresh.
+      .filter((s) => (s.kind === "ready" || !needLine(s)) && !nudged.has(s.key) && !sending.current.has(s.key));
     for (const s of due) {
       sending.current.add(s.key);
-      invoke("nudge_bot", { sessionId: s.row.item.sessionId, problem: s.problem ?? null })
+      invoke("nudge_bot", {
+        sessionId: s.row.item.sessionId,
+        problem: s.problem ?? null,
+        ready: s.kind === "ready" ? (s.pr?.number ?? null) : null,
+      })
         .then(() => {
           const stored = readLocalStorage<string[]>(NUDGED_KEY, []);
           writeLocalStorage(NUDGED_KEY, [...stored, s.key].slice(-NUDGED_CAP));
