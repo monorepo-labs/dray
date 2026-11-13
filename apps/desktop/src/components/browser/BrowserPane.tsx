@@ -5,6 +5,7 @@ import {
   Check,
   Copy,
   Bug,
+  Folder,
   ExternalLink,
   Globe,
   Maximize2,
@@ -18,12 +19,14 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { DocumentPlusIcon } from "@heroicons/react/16/solid";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import AgentBeam from "@/components/browser/AgentBeam";
 import Favicon, { hostOf } from "@/components/browser/Favicon";
 import GlobeFilledIcon from "@/components/icons/GlobeFilledIcon";
 import RecordingNotice from "@/components/browser/RecordingNotice";
+import { useTurnNewTab, type TurnKind } from "@/components/layout/ViewTabs";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import TabMenu from "@/components/browser/TabMenu";
 import { ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -258,7 +261,7 @@ export default function BrowserPane({
         )}
       >
         {empty ? (
-          <EmptyState sessionId={sessionId} active={active} />
+          <EmptyState sessionId={sessionId} active={active} turnable={mode === "full"} />
         ) : viewport ? (
           // Clamped to the stage on both axes rather than scrolled or scaled:
           // the page is a native view the DOM can neither clip nor shrink,
@@ -1100,25 +1103,30 @@ function SizeBar({ sessionId, viewport }: { sessionId: string; viewport: Viewpor
 /// What to open when nothing is: this checkout's dev servers, the session's
 /// own marked. Polled while on screen, since a server starting is the
 /// moment the list is looked at.
-function EmptyState({ sessionId, active }: { sessionId: string; active: boolean }) {
+///
+/// `turnable`: the blank is a tab of the row, so it can become Diff or Files.
+/// The panel's is not, and has no row slot to turn.
+function EmptyState({ sessionId, active, turnable }: { sessionId: string; active: boolean; turnable: boolean }) {
   const chromium = useChromium();
   // Nothing to open pages with yet: the download stands where the page would.
+  // Diff and Files need no Chromium, so the cards stay above it.
   if (chromium && chromium.state !== "ready") {
-    return <ChromiumState status={chromium} />;
+    return <ChromiumState status={chromium} cards={turnable && <TurnCards sessionId={sessionId} />} />;
   }
   // Keyed, so one session's servers and its share in flight are never drawn
   // under another: the list is read on a timer and a failed read keeps the old.
-  return <Servers key={sessionId} sessionId={sessionId} active={active} />;
+  return <Servers key={sessionId} sessionId={sessionId} active={active} turnable={turnable} />;
 }
 
 /// Chromium is fetched after install (see chromium.rs), and this is where the
 /// reader watches it land. Failed and removed both offer the download; the
 /// bar is only drawn while bytes are moving.
-function ChromiumState({ status }: { status: ChromiumStatus }) {
+function ChromiumState({ status, cards }: { status: ChromiumStatus; cards?: React.ReactNode }) {
   const percent = chromiumPercent(status);
   return (
     <div className="flex h-full items-center justify-center p-8 text-ui">
       <div className="flex w-full max-w-sm flex-col gap-3">
+        {cards}
         <p className="text-muted-foreground">{describeChromium(status)}</p>
         {status.state === "downloading" && (
           <div className="h-1 overflow-hidden rounded-full bg-foreground/20">
@@ -1140,7 +1148,37 @@ function ChromiumState({ status }: { status: ChromiumStatus }) {
   );
 }
 
-function Servers({ sessionId, active }: { sessionId: string; active: boolean }) {
+/// The tab row's own marks, so a card and the tab it turns into match.
+const TURN_CARDS: { kind: TurnKind; label: string; icon: React.ReactNode }[] = [
+  { kind: "changes", label: "Diff", icon: <DocumentPlusIcon className="size-4 shrink-0 text-muted-foreground" /> },
+  { kind: "files", label: "Files", icon: <Folder className="size-3.5 shrink-0 fill-current text-muted-foreground" /> },
+];
+
+/// Diff and Files, for a new tab that wanted a view rather than a page.
+/// Clicking one turns this tab into it, in the same slot of the row.
+function TurnCards({ sessionId }: { sessionId: string }) {
+  const { kinds, turn } = useTurnNewTab(sessionId);
+  const cards = TURN_CARDS.filter((c) => kinds.includes(c.kind));
+  if (cards.length === 0) return null;
+  return (
+    <section className={cn("grid gap-2", cards.length > 1 && "grid-cols-2")}>
+      {cards.map((c) => (
+        <button
+          key={c.kind}
+          type="button"
+          onClick={() => turn(c.kind)}
+          className="flex flex-col items-start gap-1.5 rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:bg-foreground/5"
+        >
+          {/* The two marks differ in size; one box keeps the labels level. */}
+          <span className="flex size-4 items-center justify-center">{c.icon}</span>
+          {c.label}
+        </button>
+      ))}
+    </section>
+  );
+}
+
+function Servers({ sessionId, active, turnable }: { sessionId: string; active: boolean; turnable: boolean }) {
   const [servers, setServers] = useState<LocalServer[]>([]);
   const recent = useHistory(sessionId, active).slice(0, RECENT);
   // Each read is a `ps` and two `lsof`s, and both mounts of this pane stay
@@ -1200,6 +1238,7 @@ function Servers({ sessionId, active }: { sessionId: string; active: boolean }) 
   return (
     <div className="flex h-full items-center justify-center p-8 text-ui">
       <div className="flex w-full max-w-sm flex-col gap-4">
+        {turnable && <TurnCards sessionId={sessionId} />}
         {servers.length > 0 && (
           <section className="flex flex-col gap-1.5">
             <h3 className="px-2 pb-1 text-muted-foreground">
