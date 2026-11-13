@@ -96,13 +96,17 @@ export function useStalledTasks({
       .filter((s) => (s.kind === "ready" || !needLine(s)) && !nudged.has(s.key) && !sending.current.has(s.key));
     for (const s of due) {
       sending.current.add(s.key);
-      invoke("nudge_bot", {
+      invoke<boolean | null>("nudge_bot", {
         sessionId: s.row.item.sessionId,
         problem: s.problem ?? null,
         ready: s.kind === "ready" ? (s.pr?.number ?? null) : null,
       })
-        .then(() => {
-          if (s.kind === "fix" && s.pr && s.status) recordFixAsk(s.row.item.sessionId, s.pr.number, s.status);
+        .then((sent) => {
+          // Only `true` reached a bot. A server from before it said so answers
+          // null, and one holding no bot for a task on another machine dropped
+          // every nudge that way.
+          if (sent === true && s.kind === "fix" && s.pr && s.status)
+            recordFixAsk(s.row.item.sessionId, s.pr.number, s.status);
           const stored = readLocalStorage<string[]>(NUDGED_KEY, []);
           writeLocalStorage(NUDGED_KEY, [...stored, s.key].slice(-NUDGED_CAP));
         })

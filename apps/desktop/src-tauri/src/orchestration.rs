@@ -2075,18 +2075,22 @@ const NUDGE_TAIL: usize = 4000;
 /// so the bot can name what to try first. Without either the task waits on the
 /// reader. Bar a problem, the task's last message rides along, since the bot
 /// has no way to read it.
+///
+/// Sent to the task's server, which for a task on another machine holds no
+/// bot: there the nudge waits with the task's reports for the bot's server to
+/// collect (#958). True once sent or kept, false where nobody will read it, so
+/// the app never says a task is fixing what its bot never heard of.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn nudge_bot(
     session_id: String,
     problem: Option<String>,
     ready: Option<u32>,
     sink: Sink,
-) -> Result<(), crate::Fail> {
+) -> Result<bool, crate::Fail> {
     let task = store::get_session_index_item(&session_id).await?.with_context(|| format!("no session {session_id}"))?;
-    let Some(chat) = bots::bot_chat_of(&task).await else { return Ok(()) };
-    if task.archived || chat.archived || chat.session_id == task.session_id {
-        return Ok(());
-    }
+    let chat = bots::bot_chat_of(&task).await;
+    let owed = chat.is_none() && crate::remote_reports::owed(&session_id).await;
+    let Some(route) = nudge_route(&task, chat.as_ref(), owed) else { return Ok(false) };
     // A need written while the PR waited on review would outlive the review
     // on the ready row, since approving a PR does not move its task.
     if ready.is_some() && problem.is_none() && task.need.is_some() {
@@ -2105,9 +2109,38 @@ pub async fn nudge_bot(
             last_message_tail(&session_id).await?
         ),
     };
-    let send = SendMessage { session_id: chat.session_id, prompt, from_session_id: Some(session_id) };
-    send_message(send, None, &sink).await?;
-    Ok(())
+    match route {
+        NudgeRoute::Chat(chat) => {
+            let send = SendMessage { session_id: chat, prompt, from_session_id: Some(session_id) };
+            send_message(send, None, &sink).await?;
+        }
+        NudgeRoute::Outbox => {
+            let parent = task.parent_session_id.as_deref().unwrap_or_default();
+            crate::remote_reports::keep(&session_id, parent, &task.title, prompt).await?;
+        }
+    }
+    Ok(true)
+}
+
+/// Where a stall nudge goes: into the bot's chat on this server, or into the
+/// outbox for a bot on another machine, which `owed` says the task reports to.
+#[derive(Debug, PartialEq)]
+enum NudgeRoute {
+    Chat(String),
+    Outbox,
+}
+
+/// None for a task set aside, a chat settled, the bot's own chat, or a task
+/// with no bot anywhere.
+fn nudge_route(task: &SessionIndexItem, chat: Option<&SessionIndexItem>, owed: bool) -> Option<NudgeRoute> {
+    if task.archived {
+        return None;
+    }
+    match chat {
+        Some(chat) if chat.archived || chat.session_id == task.session_id => None,
+        Some(chat) => Some(NudgeRoute::Chat(chat.session_id.clone())),
+        None => owed.then_some(NudgeRoute::Outbox),
+    }
 }
 
 /// The last [NUDGE_TAIL] characters of a task's last message.
@@ -2406,6 +2439,26 @@ mod tests {
         assert!(!resolve_fast(Some(false), Some(&parent), Harness::ClaudeCode));
         // No parent at all is the ordinary terminal call: off.
         assert!(!resolve_fast(None, None, Harness::ClaudeCode));
+    }
+
+    /// A task on another machine finds no bot on its own server, and was
+    /// answered as nudged with nothing sent, so the Tasks row said "Fixing"
+    /// for a conflict nobody was told about.
+    #[test]
+    fn a_nudge_for_a_task_on_another_machine_waits_for_its_bot() {
+        let task = item("t", Some("bot-chat"));
+        let chat = item("bot-chat", None);
+        assert_eq!(nudge_route(&task, Some(&chat), false), Some(NudgeRoute::Chat("bot-chat".into())));
+        assert_eq!(nudge_route(&task, None, true), Some(NudgeRoute::Outbox));
+        assert_eq!(nudge_route(&task, None, false), None);
+
+        let mut settled = chat.clone();
+        settled.archived = true;
+        assert_eq!(nudge_route(&task, Some(&settled), false), None);
+        assert_eq!(nudge_route(&chat, Some(&chat), false), None);
+        let mut aside = task.clone();
+        aside.archived = true;
+        assert_eq!(nudge_route(&aside, None, true), None);
     }
 
     #[test]
