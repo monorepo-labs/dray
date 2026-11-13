@@ -6,6 +6,7 @@ import { indexRow, loadServerCaches, saveServerCache, unreachable, withKept } fr
 import { boatAsleepById, holdThroughResume, resumeBoat } from "@/lib/boat";
 import { CloudError, cloudIo, isCloud, onCloud, placeTask, setCloudFailure, setPlacing } from "@/lib/cloud";
 import { keepCloudTranscript, keptCloudTranscript } from "@/lib/cloudTranscripts";
+import { readDraft, writeDraft } from "@/hooks/useDraft";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { flushSync } from "react-dom";
 import { restoreAttachments } from "@/hooks/useAttachments";
@@ -898,7 +899,13 @@ const handleSendMsg = async (
       setProjects((prev) => mergeFrom(prev, where.server, where.cloned, pathOfProject));
       placed = cwd = where.path;
     } catch (e) {
-      if (before === navGen.current) setCloudFailure({ sessionId: null, message: e instanceof Error ? e.message : String(e) });
+      setCloudFailure({ sessionId: null, message: e instanceof Error ? e.message : String(e) });
+      // The composer puts the prompt back only for a reader still on it; one
+      // who moved on finds it in the new-task composer, beside the failure.
+      if (before !== navGen.current) {
+        const there = readDraft(null);
+        writeDraft(null, there ? `${there}\n\n${message}` : message);
+      }
       return false;
     } finally {
       letGo();
@@ -1549,6 +1556,8 @@ const detachSession = async (sessionId: string) => {
 /// the ones `dray session settle` and friends make.
 const applyIndexItem = (updated: SessionIndexItem) => {
   const { sessionId } = updated;
+  // Settled from anywhere, the CLI included: its machine may be done with.
+  if (updated.archived) void retireIfDone(sessionId, serverOfPath(updated.cwd));
   indexWrites.set(sessionId, (indexWrites.get(sessionId) ?? 0) + 1);
   setSessionIndexItems((prev) => {
     // The ref, not the closure: this runs after the write, and the reader can
@@ -1606,23 +1615,43 @@ const cloudMachineOf = (sessionId: string): ServerId | null => {
   return isCloud(server) ? server : null;
 };
 
-/// Whether `sessionId` is the last live session on `machine`: a task's machine
-/// is its own, but a fork or a spawned child can share it.
-const lastOnMachine = (sessionId: string, machine: ServerId) =>
-  !sessionIndexItemsRef.current.some(
-    (i) => i.sessionId !== sessionId && !i.archived && serverOfPath(i.cwd) === machine,
-  );
+/// Whether a live session other than `sessionId` is on `machine` — a task's
+/// machine is its own, but a fork or a spawned child can share it. Asked of
+/// the machine where it answers and of its kept list where it doesn't: the
+/// sidebar holds one side of the settled split, so it cannot say. `null`
+/// where neither knows.
+const othersLive = async (sessionId: string, machine: ServerId): Promise<boolean | null> => {
+  const live = serverConnected(machine)
+    ? await invoke<SessionIndexItem[]>("list_session_index_items", { archived: false }, machine).catch(() => null)
+    : ((await loadServerCaches())[machine]?.sessions ?? null);
+  return live && live.some((i) => i.sessionId !== sessionId && !i.archived);
+};
+
+/// Machines a delete is out for, so a settle heard twice deletes once.
+const retiring = useRef(new Set<ServerId>());
 
 /// Deletes a settled task's machine. A failure says so, since the machine
 /// would otherwise sit there unseen.
-const retireCloudMachine = (machine: ServerId): Promise<boolean> =>
-  invoke("drop_cloud_machine", { id: machine }, LOCAL).then(
-    () => true,
-    (e) => {
-      setError(`Couldn't delete its cloud machine: ${e}`);
-      return false;
-    },
-  );
+const retireCloudMachine = async (machine: ServerId): Promise<boolean> => {
+  if (retiring.current.has(machine)) return true;
+  retiring.current.add(machine);
+  try {
+    await invoke("drop_cloud_machine", { id: machine }, LOCAL);
+    return true;
+  } catch (e) {
+    setError(`Couldn't delete its cloud machine: ${e}`);
+    return false;
+  } finally {
+    retiring.current.delete(machine);
+  }
+};
+
+/// Deletes `machine` once nothing live is left on it. Run on every settled row
+/// the app hears of, so a settle from `dray session settle` counts too.
+const retireIfDone = async (sessionId: string, machine: ServerId) => {
+  if (!isCloud(machine) || retiring.current.has(machine)) return;
+  if ((await othersLive(sessionId, machine)) === false) await retireCloudMachine(machine);
+};
 
 /// Writes a session's flags — settled, pinned, hidden, set aside — and answers
 /// whether it landed.
@@ -1643,7 +1672,7 @@ const setSessionFlags = async (
   const machine = cloudMachineOf(sessionId);
   // Its machine is deleted with it, so a stopped one is not woken just to
   // write a flag it is about to lose.
-  if (flags.archived && machine && !serverConnected(machine) && lastOnMachine(sessionId, machine)) {
+  if (flags.archived && machine && !serverConnected(machine) && (await othersLive(sessionId, machine)) === false) {
     return retireCloudMachine(machine);
   }
   try {
@@ -1668,7 +1697,6 @@ const setSessionFlags = async (
         ),
       );
     }
-    if (flags.archived && machine && lastOnMachine(sessionId, machine)) void retireCloudMachine(machine);
     return true;
   } catch (e) {
     fail(e);
@@ -1899,12 +1927,12 @@ const deleteSession = async (sessionId: string): Promise<boolean> => {
   // out and left its status behind for good.
   deletedRef.current.add(sessionId);
   const machine = cloudMachineOf(sessionId);
-  const last = !!machine && lastOnMachine(sessionId, machine);
+  // A stopped machine with nothing else on it is deleted whole, so it is not
+  // woken to delete one log first.
+  const whole = !!machine && !serverConnected(machine) && (await othersLive(sessionId, machine)) === false;
   try {
-    // A stopped machine is deleted whole below, so it is not woken to delete
-    // one log first.
-    if (!last || serverConnected(machine)) await invoke<boolean>("delete_session", { sessionId });
-    if (last) void retireCloudMachine(machine);
+    if (!whole) await invoke<boolean>("delete_session", { sessionId });
+    if (machine) void (whole ? retireCloudMachine(machine) : retireIfDone(sessionId, machine));
   } catch (e) {
     deletedRef.current.delete(sessionId);
     // A delete can stop the child and then fail, and the status that said so

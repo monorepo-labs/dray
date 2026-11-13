@@ -1448,12 +1448,24 @@ pub async fn start_cloud_machine() -> Result<String, String> {
     let key = cloud_key().await.ok_or(NO_CLOUD_KEY)?;
     let machine = cloud::start(&key).await?;
     crate::analytics::track("feature_used", json!({ "feature": "cloud_machine_started" }));
-    // A create can answer before boat gives it an address, and a machine
-    // without one draws no row, so the list is read until it has one.
+    let reached = reach_new_machine(&machine.id).await;
+    // Started but never reached: kept, it would run on unseen, and every
+    // Retry would start another beside it.
+    if reached.is_err() && cloud::delete(&key, &machine.id).await.is_ok() {
+        let row = conns().iter().find(|c| c.saved.cloud.as_deref() == Some(machine.id.as_str())).map(|c| c.saved.id.clone());
+        let _ = forget_cloud_machine(row, machine.id).await;
+    }
+    reached
+}
+
+/// The new machine's server id once it is connected. A create can answer
+/// before boat gives it an address, and a machine without one draws no row,
+/// so the list is read until it has one.
+async fn reach_new_machine(sandbox: &str) -> Result<String, String> {
     let deadline = tokio::time::Instant::now() + cloud::START;
     let id = loop {
         sync_cloud().await?;
-        let found = conns().iter().find(|c| c.saved.cloud.as_deref() == Some(machine.id.as_str())).map(|c| c.saved.id.clone());
+        let found = conns().iter().find(|c| c.saved.cloud.as_deref() == Some(sandbox)).map(|c| c.saved.id.clone());
         match found {
             Some(id) => break id,
             None if tokio::time::Instant::now() < deadline => tokio::time::sleep(Duration::from_secs(2)).await,
@@ -1476,11 +1488,18 @@ pub async fn drop_cloud_machine(id: String) -> Result<(), String> {
     let key = cloud_key().await.ok_or(NO_CLOUD_KEY)?;
     cloud::delete(&key, &sandbox).await?;
     crate::analytics::track("feature_used", json!({ "feature": "cloud_machine_dropped" }));
+    forget_cloud_machine(Some(id), sandbox).await
+}
+
+/// Forgets a deleted machine, and keeps a listing that still names it from
+/// bringing its row back.
+async fn forget_cloud_machine(id: Option<String>, sandbox: String) -> Result<(), String> {
     {
         let _one = CLOUD_SYNC.lock().await;
         CLOUD_GENERATION.fetch_add(1, Ordering::SeqCst);
         CLOUD_DROPPED.lock().unwrap_or_else(|e| e.into_inner()).push(sandbox);
     }
+    let Some(id) = id else { return Ok(()) };
     forget_transcripts(&id).await;
     remove_server(id).await
 }
