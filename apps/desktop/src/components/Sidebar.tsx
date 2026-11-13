@@ -1842,7 +1842,7 @@ function BotRow({
             )}
           </span>
           <span className="flex min-w-0 flex-1 flex-col">
-            <span className="flex items-baseline gap-2">
+            <span className="relative flex items-baseline gap-2">
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-ui text-sidebar-foreground",
@@ -1851,21 +1851,23 @@ function BotRow({
               >
                 {bot.name}
               </span>
-              {/* While the jump modifier is held, the row's digit takes the time's
-                  place; a bot whose server is offline shows the offline mark there. */}
-              {digit ? (
-                <Kbd>{digit}</Kbd>
-              ) : offline ? (
-                <span className="flex shrink-0 self-center" title={offline}>
+              {/* A bot whose server is offline shows the offline mark in the time's place. */}
+              {offline ? (
+                <span className={cn("flex shrink-0 self-center", digit && "invisible")} title={offline}>
                   <SignalSlashIcon className="size-3.5 text-muted-foreground" aria-label={offline} />
                 </span>
               ) : (
                 modified && (
-                  <span className="shrink-0 text-[11px] text-muted-foreground/70 tabular-nums">
+                  <span
+                    className={cn("shrink-0 text-[11px] text-muted-foreground/70 tabular-nums", digit && "invisible")}
+                  >
                     {relativeTime(modified)}
                   </span>
                 )
               )}
+              {/* Laid over the time, never in its place: the keycap is wider and
+                  taller than the time, and swapping them moved the whole row. */}
+              {digit && <Kbd className="absolute top-1/2 right-0 -translate-y-1/2">{digit}</Kbd>}
             </span>
             {/* A messenger's typing dots stand in for the last message while it works. */}
             {status === "in_progress" && !asking ? (
@@ -2872,7 +2874,7 @@ function SessionRow({
         <div className="flex shrink-0 items-center self-stretch pl-2 text-ui">
           <span
             className={cn(
-              "pointer-events-none flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150",
+              "pointer-events-none relative flex items-center whitespace-nowrap text-ui text-muted-foreground transition-opacity duration-150",
               // Only the timestamp gives way to the buttons. Something in
               // flight is still in flight under the cursor.
               !live && !digit && "row-reached:opacity-0",
@@ -2901,22 +2903,25 @@ function SessionRow({
                 `mr-[3px]` sits it on the orb's centre line: the glyph is 14px
                 against the orb's 20px box, and both are flush right, so without
                 it the mark shifts sideways row to row. */}
-            {digit ? (
-              <Kbd>{digit}</Kbd>
-            ) : offline ? (
-              // Ahead of the orb and the checks, which would animate a claim
-              // nobody can currently make. Hovered for the reason, since the
-              // fade alone cannot say a sandbox stopped.
-              <span className="pointer-events-auto mr-[3px] flex" title={offline}>
-                <SignalSlashIcon className="size-3.5" aria-label={offline} />
-              </span>
-            ) : marksLive && pr?.checksState === "RUNNING" ? (
-              <ChecksRunningIcon className="mr-[3px]" />
-            ) : status === "in_progress" ? (
-              <Orb state="working" label="Working" />
-            ) : (
-              relativeTime(item.modified)
-            )}
+            <span className={cn("flex items-center", digit && "invisible")}>
+              {offline ? (
+                // Ahead of the orb and the checks, which would animate a claim
+                // nobody can currently make. Hovered for the reason, since the
+                // fade alone cannot say a sandbox stopped.
+                <span className="pointer-events-auto mr-[3px] flex" title={offline}>
+                  <SignalSlashIcon className="size-3.5" aria-label={offline} />
+                </span>
+              ) : marksLive && pr?.checksState === "RUNNING" ? (
+                <ChecksRunningIcon className="mr-[3px]" />
+              ) : status === "in_progress" ? (
+                <Orb state="working" label="Working" />
+              ) : (
+                relativeTime(item.modified)
+              )}
+            </span>
+            {/* Over the slot rather than in it, so the slot keeps its width and
+                the title beside it doesn't re-truncate while the modifier is held. */}
+            {digit && <Kbd className="absolute top-1/2 right-0 -translate-y-1/2">{digit}</Kbd>}
           </span>
 
           {/* `pointer-events-none` keeps the invisible buttons unclickable. */}
