@@ -284,8 +284,10 @@ struct BoatExtendChoices: View {
 /// Sessions finished, in place of Dray's banner, newest first. One names
 /// itself and offers Open in app; several are a count that, under the pointer,
 /// grows a row each, five tall and then scrolling. A title opens the island on it.
-/// A bot's "waiting on you" grows its card's rows under the pointer, as the bot chat draws them.
+/// A bot's "waiting on you" grows its card's rows under the pointer, as the bot chat draws them;
+/// several bots waiting are one pill counting every task, grouped under each bot.
 struct DonePill: View {
+    @Environment(Store.self) private var store
     /// `note` stands in for "Done": what a bot's tasks wait on, drawn yellow as the app's rail draws waiting.
     /// `rows` are those tasks, as the app's card had them when it raised the note.
     typealias Item = (key: SessionKey, title: String, note: String?, rows: [WaitingTask])
@@ -317,7 +319,7 @@ struct DonePill: View {
             VStack(alignment: .leading, spacing: cards ? 8 : 6) {
                 HStack(spacing: 8) {
                     Circle().fill(tint).frame(width: 6, height: 6)
-                    Text(items.count == 1 ? Self.headline(items[0]) : waiting ? "\(items.count) updates" : "\(items.count) tasks done")
+                    Text(Self.headline(items, waiting: waiting))
                         .font(.system(size: 13, weight: .semibold))
                         // White outright: the pills' window takes the system's appearance, and light mode drew it black.
                         .foregroundStyle(.white)
@@ -337,7 +339,9 @@ struct DonePill: View {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(items, id: \.key) { item in
                                 // One item's own line is the pill's header already.
-                                if items.count > 1 { line(item) }
+                                if items.count > 1 {
+                                    if item.rows.isEmpty { line(item) } else { group(item) }
+                                }
                                 ForEach(item.rows, id: \.id) { task in
                                     WaitingCard(task: task, open: { openTask(item.key, task) }, merge: { await merge(item.key, task, $0) },
                                                 confirming: confirming == task.id)
@@ -377,6 +381,29 @@ struct DonePill: View {
     private static func headline(_ item: Item) -> String {
         let n = item.rows.count
         return n > 0 ? "\(n) \(n == 1 ? "task" : "tasks") waiting on you" : item.note ?? "Done"
+    }
+
+    /// The pill's own line: one item's, every bot's waiting tasks counted as one, else how many updates.
+    private static func headline(_ items: [Item], waiting: Bool) -> String {
+        if items.count == 1 { return headline(items[0]) }
+        if items.allSatisfy({ !$0.rows.isEmpty }) {
+            let n = items.reduce(0) { $0 + $1.rows.count }
+            return "\(n) tasks waiting on you"
+        }
+        return waiting ? "\(items.count) updates" : "\(items.count) tasks done"
+    }
+
+    /// A bot's name and face over its waiting cards, where several bots share the pill.
+    private func group(_ item: Item) -> some View {
+        HStack(spacing: 6) {
+            if let bot = store.bot(item.key) { BotFace(bot: bot, size: 16) }
+            Button { open(item.key) } label: { DoneTitle(title: item.title, cap: 240) }
+                .buttonStyle(.plain)
+            Spacer(minLength: 0)
+            OpenInAppButton { openInApp(item.key) }
+        }
+        .frame(height: Self.row)
+        .padding(.top, item.key == items.first?.key ? 0 : 6)
     }
 
     private func line(_ item: Item) -> some View {

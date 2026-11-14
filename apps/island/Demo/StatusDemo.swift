@@ -103,8 +103,8 @@ private struct Case: Identifiable {
     /// The session the panel is pinned to, when open on no card.
     var pinned: String? = nil
     var bots: [Bot] = []
-    /// The newest done session's waiting tasks, as Dray hands them over with its note.
-    var waiting: [WaitingTask] = []
+    /// Bot chats' waiting tasks by session id, as Dray hands them over with its note.
+    var waiting: [String: [WaitingTask]] = [:]
 }
 
 private let sections: [(String, [Case])] = [
@@ -118,9 +118,11 @@ private let sections: [(String, [Case])] = [
         Case(name: "A card waiting and a session done", note: "The card outranks the news; the done pill shows once it is answered.",
              items: [s1, s4], asks: [bash(s1)], done: [s4.sessionId]),
         Case(name: "A bot's tasks waiting on you", note: "Hover grows the bot card's rows; a click opens the task in Dray.",
-             items: [opsChat], done: [opsChat.sessionId], bots: bots, waiting: waitingRows),
+             items: [opsChat], done: [opsChat.sessionId], bots: bots, waiting: [opsChat.sessionId: waitingRows]),
+        Case(name: "Two bots waiting on you", note: "One pill counts every task; hover groups them under each bot.",
+             items: [opsChat, botChat], done: [botChat.sessionId, opsChat.sessionId], bots: bots, waiting: twoBots),
         Case(name: "Waiting beside a session done", items: [opsChat, s4], done: [s4.sessionId, opsChat.sessionId],
-             bots: bots, waiting: waitingRows),
+             bots: bots, waiting: [opsChat.sessionId: waitingRows]),
     ]),
     ("Permissions", [
         Case(name: "Run a command", open: true, items: [s1], asks: [bash(s1)]),
@@ -194,6 +196,8 @@ private let waitingRows = [
                 modified: stamp(ago: 5 * 60), need: nil, ready: false,
                 pr: PrMark(number: 581, headRefName: "worktree-swatches", isDraft: false, state: "OPEN", checksState: "CLEAR")),
 ]
+/// Ops waits on two tasks, Dray Bot on one.
+private let twoBots = [opsChat.sessionId: Array(waitingRows.prefix(2)), botChat.sessionId: [waitingRows[2]]]
 
 private func pr(_ state: String, _ checks: String) -> [String: [String: PrMark]] {
     ["/Users/me/dray": ["worktree-globe": PrMark(number: 573, headRefName: "worktree-globe", isDraft: false, state: state, checksState: checks)]]
@@ -280,20 +284,30 @@ private func stamp(ago: TimeInterval = 0) -> String {
 
 // MARK: Snapshot
 
-/// The bot's waiting pill grown, and again on the first card's merge confirm,
-/// each in an offscreen window: shown without a window on screen or the pointer moved.
+/// The waiting pill: one bot's grown, and on its first card's merge confirm; two bots'
+/// shut and grown. Each in an offscreen window: shown without a window on screen or the pointer moved.
 @MainActor private func snapshotWaiting(to dir: URL) {
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let shots: [(name: String, confirming: String?)] = [("waiting-grown", nil), ("waiting-confirm", waitingRows[0].id)]
+    let ops = [opsChat.sessionId: Array(waitingRows.prefix(2))]
+    let shots: [(name: String, waiting: [String: [WaitingTask]], grown: Bool, confirming: String?)] = [
+        ("waiting-grown", ops, true, nil), ("waiting-confirm", ops, true, waitingRows[0].id),
+        ("bots-shut", twoBots, false, nil), ("bots-grown", twoBots, true, nil),
+    ]
     var windows: [NSWindow] = []
     for shot in shots {
         let store = Store()
         let server = UUID()
-        store.seed(server, items: [opsChat], asks: [])
+        store.seed(server, items: [opsChat, botChat], asks: [])
         store.seed(home: server, bots: bots)
-        let key = SessionKey(server: server, id: opsChat.sessionId)
-        let pill = DonePill(notch: true, notchHeight: 32, items: [(key, "Ops", "2 tasks waiting on you", Array(waitingRows.prefix(2)))],
-                            open: { _ in }, openInApp: { _ in }, expanded: true, confirming: shot.confirming)
+        // Newest first, as the pill lists them.
+        let items: [DonePill.Item] = [opsChat, botChat].compactMap { chat in
+            shot.waiting[chat.sessionId].map { rows in
+                (SessionKey(server: server, id: chat.sessionId), store.bot(SessionKey(server: server, id: chat.sessionId))?.name ?? "",
+                 "\(rows.count) tasks waiting on you", rows)
+            }
+        }
+        let pill = DonePill(notch: true, notchHeight: 32, items: items,
+                            open: { _ in }, openInApp: { _ in }, expanded: shot.grown, confirming: shot.confirming)
             .environment(store)
             .padding(.horizontal, 36)
             .padding(.bottom, 24)
@@ -354,9 +368,10 @@ private struct CaseStage: View {
         if let id = c.pinned { composer.target = .session(SessionKey(server: server, id: id)) }
         composer.listShown = c.listShown
         composer.done = c.done.map { SessionKey(server: server, id: $0) }
-        if !c.waiting.isEmpty, let chat = composer.done.last {
-            composer.notes[chat] = "\(c.waiting.count) tasks waiting on you"
-            composer.waiting[chat] = c.waiting
+        for (id, rows) in c.waiting {
+            let chat = SessionKey(server: server, id: id)
+            composer.notes[chat] = "\(rows.count) tasks waiting on you"
+            composer.waiting[chat] = rows
         }
         // The app's hide also takes the window away; here the panel just shuts, so Dismiss can be seen to land.
         composer.hide = { [weak composer] in composer?.shown = false }
