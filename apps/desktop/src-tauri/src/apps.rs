@@ -631,29 +631,34 @@ pub async fn island_running() -> bool {
         .is_ok_and(|out| out.status.success())
 }
 
-/// Hands a finished session to Dray Island, which shows it in place of the
-/// banner. A Darwin notification carries no payload, so each session is an
-/// empty file named for it in `island_done_dir`: the island deletes only the
-/// files it read, where a shared list read and then cleared would drop one
-/// written between the two.
+/// Hands a session to Dray Island's done pill, which shows it in place of the
+/// banner: a finished one, or with `note`, what it says instead of "Done" — a
+/// bot's "2 tasks waiting on you". A Darwin notification carries no payload,
+/// so each session is a file named for it in `island_done_dir`, holding the
+/// note: the island deletes only the files it read, where a shared list read
+/// and then cleared would drop one written between the two.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn island_done(session_id: String) -> Result<(), String> {
+pub async fn island_done(session_id: String, note: Option<String>) -> Result<(), String> {
     // The id names a file, so nothing that could step out of the directory.
     if session_id.is_empty() || !session_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("not a session id".into());
     }
     // Linux's island is this app's child, and hears it on the pipe it holds.
+    // It has no note to draw, so a noted one is refused and the banner goes.
     #[cfg(all(feature = "desktop", target_os = "linux"))]
-    return crate::island::done(&session_id);
+    return match note {
+        None => crate::island::done(&session_id),
+        Some(_) => Err("Dray Island here shows finished sessions alone".into()),
+    };
     #[cfg(not(all(feature = "desktop", target_os = "linux")))]
-    island_done_mac(session_id).await
+    island_done_mac(session_id, note.unwrap_or_default()).await
 }
 
 #[cfg(not(all(feature = "desktop", target_os = "linux")))]
-async fn island_done_mac(session_id: String) -> Result<(), String> {
+async fn island_done_mac(session_id: String, note: String) -> Result<(), String> {
     let dir = island_done_dir().ok_or("no home directory")?;
     tokio::fs::create_dir_all(&dir).await.map_err(|err| format!("could not reach the island: {err}"))?;
-    tokio::fs::write(dir.join(&session_id), b"").await.map_err(|err| format!("could not reach the island: {err}"))?;
+    tokio::fs::write(dir.join(&session_id), note).await.map_err(|err| format!("could not reach the island: {err}"))?;
     tokio::process::Command::new("notifyutil").args(["-p", "com.yogesh.dray.island.done"]).output().await.ok();
     Ok(())
 }

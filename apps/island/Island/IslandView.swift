@@ -771,7 +771,7 @@ struct PillsView: View {
                     .transition(.scale(scale: 0.5, anchor: anchor).combined(with: .opacity))
             } else if !composer.shown, !composer.done.isEmpty {
                 DonePill(notch: composer.placement == .notch, notchHeight: composer.notchHeight,
-                         items: composer.done.reversed().map { ($0, store.items[$0]?.title ?? "") },
+                         items: composer.done.reversed().map { ($0, store.bot($0)?.name ?? store.items[$0]?.title ?? "", composer.notes[$0]) },
                          glowing: composer.glowing,
                          open: { composer.openDone($0) },
                          openInApp: { composer.openDoneInApp($0) },

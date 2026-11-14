@@ -11,13 +11,11 @@ import { seededAvatar } from "@/lib/botAvatar";
 import type { CrewRow } from "@/lib/crew";
 import { isModClick } from "@/lib/platform";
 import { prStatus } from "@/lib/pr";
-import { compactAge, needLine, type Stall } from "@/lib/stalled";
+import { cardRows, compactAge, DISMISSED_KEY, needLine, type Stall } from "@/lib/stalled";
 import { cn } from "@/lib/utils";
 import type { MergeMethod, PrMark } from "@/types/events";
 
-/// Dismissed stalls, by key. A key names one stall, so the list only grows by
-/// what the reader dismisses; the cap keeps a long life from filling the store.
-const DISMISSED_KEY = "ade.dismissedStalls";
+/// Keeps a long life from filling the store with dismissed stalls.
 const DISMISSED_CAP = 200;
 
 /// The foot of a bot's chat while any of its tasks waits on the reader: an
@@ -45,7 +43,7 @@ export default function StalledTasks({
   onMerge: (row: CrewRow, pr: PrMark, method: MergeMethod) => Promise<void>;
 }) {
   const [dismissed, setDismissed] = useLocalStorage<string[]>(DISMISSED_KEY, []);
-  const shown = stalls.filter((s) => !dismissed.includes(s.key));
+  const shown = cardRows(stalls, dismissed);
   if (shown.length === 0) return null;
 
   return (

@@ -405,15 +405,17 @@ final class Delegate: NSObject, NSApplicationDelegate {
     static let doneDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Caches/com.yogesh.dray.island/done")
 
-    /// Takes the finished sessions Dray dropped, oldest first, deleting only
-    /// the files read, so one landing meanwhile waits for its own notification.
+    /// Takes the sessions Dray dropped, oldest first, deleting only the files
+    /// read, so one landing meanwhile waits for its own notification. A file's
+    /// text is what the pill says in place of "Done"; empty, it is a finished turn.
     func sessionsDone() {
         let fm = FileManager.default
         let files = (try? fm.contentsOfDirectory(at: Self.doneDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         func stamp(_ url: URL) -> Date { (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast }
         for file in files.sorted(by: { stamp($0) < stamp($1) }) {
+            let note = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
             try? fm.removeItem(at: file)
-            composer?.finished(file.lastPathComponent)
+            composer?.finished(file.lastPathComponent, note: note.isEmpty ? nil : note)
         }
     }
 

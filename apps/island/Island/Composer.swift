@@ -414,6 +414,8 @@ final class Composer {
     /// Sessions that finished while Dray was out of sight, newest last: the
     /// done pill, in place of Dray's banner, until its clock runs out.
     var done: [SessionKey] = [] { didSet { pillChanged() } }
+    /// What a session in `done` says in place of "Done": a bot's "2 tasks waiting on you".
+    var notes: [SessionKey: String] = [:]
     /// Held while the pointer is on the pill, so it never goes from under a click.
     var doneHovered = false { didSet { if !doneHovered { startDoneClock() } } }
     @ObservationIgnored private var doneClock = 0
@@ -457,8 +459,8 @@ final class Composer {
         }
     }
 
-    /// Dray says a session finished where its banner would have.
-    func finished(_ id: String) {
+    /// Dray says a session finished, or with `note` what it waits on, where its banner would have.
+    func finished(_ id: String, note: String? = nil) {
         guard let key = store.items.keys.first(where: { $0.id == id }) else {
             // Dray reports a remote session over its own socket, which can be ahead
             // of this island's read of that machine. A pill keyed to a guess opens
@@ -466,13 +468,14 @@ final class Composer {
             Task {
                 for _ in 0..<20 {
                     try? await Task.sleep(for: .milliseconds(500))
-                    if store.items.keys.contains(where: { $0.id == id }) { return finished(id) }
+                    if store.items.keys.contains(where: { $0.id == id }) { return finished(id, note: note) }
                 }
             }
             return
         }
         done.removeAll { $0 == key }
         done.append(key)
+        notes[key] = note
         if shown || !attention.isEmpty { unseenDone.insert(key) } else { unseenDone.remove(key) }
         // Its pill only hangs while the panel is shut, so its clock starts then,
         // and one already running must not clear this with what it was timing.

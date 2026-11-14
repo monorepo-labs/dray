@@ -126,6 +126,15 @@ export function stalledTasks(
 /// idle on the reader. The rest are the bot's alone.
 export const onCard = (stall: Stall): boolean => stall.kind !== "fix";
 
+/// Dismissed stalls, by key. A key names one stall, so the list only grows by
+/// what the reader dismisses.
+export const DISMISSED_KEY = "ade.dismissedStalls";
+
+/// The rows the bot's card draws: what is on it and not dismissed. The card
+/// and its notice both count from here, or the notice names rows nobody sees.
+export const cardRows = (stalls: readonly Stall[], dismissed: readonly string[]): Stall[] =>
+  stalls.filter((s) => onCard(s) && !dismissed.includes(s.key));
+
 /// What a card row needs from the reader, as its bot wrote it since the task
 /// last moved: an answer for a waiting task, something to try before a ready
 /// PR is merged. Nothing while the bot is still on it, and for most ready PRs
