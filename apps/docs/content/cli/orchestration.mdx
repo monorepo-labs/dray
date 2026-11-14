@@ -1,6 +1,6 @@
 ---
 title: Orchestration
-description: Have one agent fan work out into several sessions, review its work with a second model, and pass messages between parent and child sessions.
+description: Fan work out into several sessions, run it from a bot that learns and hears back from tasks on other machines, and pass messages between sessions.
 sidebar:
   order: 3
 ---
@@ -44,12 +44,66 @@ A session started with `--hidden` stays out of the sidebar. You see it only when
 A bot is one ongoing chat you run everything from. It has its own instructions and its own memory, and everything it starts reports back to it on its own.
 
 - **Make one** with **New bot** in the sidebar: a name, a face, a colour, and the agent and model it runs on. Its chat opens with the bot introducing itself; tell it its job in reply. Bots sit above All Projects like an inbox, each with its face and its last message.
-- **It runs in its own folder**, not in a repository, and starts work in any project you name. Its folder holds `INSTRUCTIONS.md` and a `memory` folder, both empty at first. The bot writes down its job from what you tell it and reads it whenever its chat starts. It saves what is worth remembering as one dated file per memory, such as `2026-11-12-release-checklist.md`, and looks through them when it needs to.
+- **It runs in its own folder**, not in a repository, and starts work in any project you name. Its folder holds `INSTRUCTIONS.md` and a `memory` folder, both empty at first, and skills under `.claude/skills` once it has learned a how-to. Claude Code reads those skills in place. Codex and pi read the same files through `.agents/skills`, which points at that folder. The bot writes down its job from what you tell it and reads the instructions whenever its chat starts. It saves a fact as one dated file in `memory`, such as `2026-11-12-release-checklist.md`, and looks through them when it needs to.
 - **What it starts runs hidden.** Those sessions stay out of the sidebar. After every turn one of them ends, Dray sends its last message to the bot, so the bot always knows where its work stands. Their permission and question cards show in the bot's chat.
-- **The Tasks tab** in the bot's right panel lists everything it started, grouped Waiting on you, Working and Done. Click one to look inside.
 - **Right-click a bot** to start its chat fresh (instructions and memory stay) or to delete it.
 
 Bots live on this Mac.
+
+### Tasks
+
+The **Tasks** tab in the bot's right panel lists everything it started. Pinned tasks sit under **Pinned**. A row shows the task and its pull request number, and **Merge** when that pull request can merge. **Settle** shows on the row only once the pull request is merged. Until then it stays in the row's ⋯ menu. **Settle** stays hidden while a turn is running. **Merge** shows whenever the pull request can merge. Click a row to open the task as a tab in the bot's row.
+
+A task that is mending its pull request says so under the title, with how long it has been at it:
+
+| Line | Means |
+|---|---|
+| Fixing merge conflicts · 3m | The branch conflicts with its base. |
+| Fixing failing checks · 12m | A check failed. |
+| Updating from base · 5m | The branch is behind its base. |
+| Addressing review · 2m | A review asked for changes. |
+
+The time starts when the bot is asked to fix that problem, and it shows at least 1m. The line stays while GitHub is still working out the new state, and goes once the pull request has moved on.
+
+A task running on another machine carries a server mark on its row and on its tab. Hover the mark and it says "Runs on" and the machine's name. While that tab is open, the same name sits at the far end of the titlebar. A task on this Mac has neither.
+
+A task the bot starts on another machine reports back after each turn, the same as one on this Mac, within about ten seconds. If that machine does not answer, Dray tries again after five minutes. Update that server from its row in Settings → Servers. Turn reports need CLI 0.14.2 or newer on that machine. A stall there (failing checks, a merge conflict, a branch behind its base, or a review that asked for changes) reaches the bot only on CLI 0.14.3 or newer. An older server never sends them.
+
+When you merge, settle, stop or delete one of its tasks in the app, the bot is told on its next turn and treats the task accordingly. You never see that note. Settling, stopping or deleting a task that runs on another machine is not included, and neither is `dray session settle` from your own terminal. A merge you make from the chat is included, including a merge card for a task on another machine.
+
+### Waiting on you
+
+A card at the foot of the bot's chat, **Waiting on you**, lists a task that has sat waiting on you, or a pull request that has been ready to merge, for 5 minutes. A task that is just waiting shows a line once the bot has written what it needs from you. Until then that line is a skeleton, and it clears as soon as the task moves. A ready row shows **Merge**, and a line under the title only when the task asked you to try or check something before merging. Otherwise that row is **Merge** alone.
+
+Failing checks, a merge conflict, a branch behind its base and a review that asked for changes do not wait those 5 minutes. The bot is told as soon as the pull request says so, and it sends the task back to fix them. You see the fixing line on the Tasks row, not a card.
+
+The bot writes the line under a waiting task with `dray session need`. See [Sessions](/cli/sessions#need-line).
+
+With the window in the background, a new row on that card posts one macOS banner per bot. See [Notifications](/settings/notifications).
+
+### The chat
+
+The bot answers in short prose. Several things become a short list, and a comparison can be a table. It uses a heading only when you ask for one.
+
+It stays quiet about task progress that needs nothing from you: review rounds, pushes, a conflict or a bug the task fixed itself, waiting on checks. A turn with no reply draws nothing, and it raises no unread mark and no Done notice. A reply that is only spaces draws nothing either. A merge card still does. When a task's pull request can merge, the card appears in the chat on its own. See [Sessions](/cli/sessions#merge-card).
+
+A message you send while a card is waiting sits above that card, by the composer that answers it.
+
+A link in the bot's chat opens as a new page tab in the bot's row, and the main column switches to the browser. `⌘`-click opens it in your own browser. A link in a task you have open in that row opens in the task's own browser, in the side panel.
+
+A long chat opens on its recent messages. Scroll up and older ones load. Leave the chat open and it keeps drawing recent turns; scroll up again to read earlier ones. A card that is still waiting stays on screen either way.
+
+### What it learns
+
+When you correct a bot, or a task it started fails, it writes the lesson where it will be used next time.
+
+{/* screenshot: a lesson line in a bot chat, and the same line open with its diff and Undo */}
+
+- A standing rule goes in `INSTRUCTIONS.md`, which is read every time its chat starts. The bot can add a rule. A rule you wrote stays until you tell it to remove one.
+- How to do a kind of task goes in a skill under `.claude/skills` in the bot's folder.
+- A fact goes in `memory/`, one dated file, as above.
+
+Each lesson is a line in the chat: a grey word for the kind, then a short summary. The word is **Rule**, **Skill** or **Memory**, or **New** or **Removed** in front of one of those. The line is the record. The bot may also say so in one line, or say nothing. Click the line and the diff opens under it. **Undo** is under the diff. After you undo, the summary is struck through and **Undo** is replaced by **Undone**. The bot is told not to put that change back. A later edit to the same file survives the undo. An undo that would overlap a later edit is refused, and so is one while the bot is editing that file.
 
 ## Review with a second model
 
@@ -84,7 +138,7 @@ Each message costs the receiver a whole turn, so agents should send one when the
 dray session ls
 ```
 
-Lists the project's sessions with their status. Nothing reports back on its own. If you want to know when sessions finish, watch the sidebar, or ask the children to send a summary when they are done.
+Lists the project's sessions with their status. Nothing reports back on its own. A bot's tasks are the exception: Dray sends each finished turn to the bot. See [Bots](#bots). If you want to know when other sessions finish, watch the sidebar, or ask the children to send a summary when they are done.
 
 ## Permission prompts
 
@@ -100,3 +154,4 @@ Answer those cards above the parent's composer, or open the session. To have chi
 - **No reading transcripts.** A session can create, list and message others, but cannot read what another session wrote. Ask it to send a summary.
 - **No shared checkout.** Every spawned session gets its own worktree. Two sessions cannot run in one directory.
 - **No permission flag.** Children always take the parent's permission mode.
+- A report from a task on another machine is dropped after seven days if the bot's server never collects it.
