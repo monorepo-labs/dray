@@ -4068,6 +4068,10 @@ function App() {
               />
             }
             botFocus={botFocus}
+            onBotFocusMissed={(id) => {
+              setStallFocus(null);
+              void openTask(id);
+            }}
             unread={!!selectedSessionId && openedUnread === selectedSessionId}
             crowded={!collapsed && (panelShown || (crewDrawn && crewBeside) || (issuesOpen && !!pickedIssue))}
             // Its own chords only while the chat tab is on screen.

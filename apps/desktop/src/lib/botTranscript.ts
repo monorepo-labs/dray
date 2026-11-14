@@ -431,7 +431,8 @@ function undoneLessons(events: readonly AgentEvent[]): Set<string> {
 /// by item key: the bot's reply to the task's last report, everything it did
 /// before the next message came in. The report itself stays folded, since the
 /// reply already says what it held. A stall nudge is Dray's, not the task's, so
-/// it is skipped. With no reply to point at, the line that started the task.
+/// it is skipped. Empty where there is no reply to point at, and the card opens
+/// the task instead.
 export function taskContext(items: readonly BotItem[], sessionId: string): Set<string> {
   let at = items.length - 1;
   for (; at >= 0; at--) {
@@ -450,9 +451,7 @@ export function taskContext(items: readonly BotItem[], sessionId: string): Set<s
     if (item.kind === "user" || item.kind === "report" || item.kind === "botMessage") break;
     keys.add(itemKey(item));
   }
-  if (keys.size > 0) return keys;
-  const started = items.find((i) => i.kind === "task" && i.sessionId === sessionId);
-  return new Set(started ? [itemKey(started)] : []);
+  return keys;
 }
 
 /// An item's React key, as the chat draws it.

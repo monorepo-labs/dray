@@ -314,10 +314,10 @@ describe("taskContext", () => {
     expect([...taskContext(items, ID)]).toEqual([reply.id]);
   });
 
-  it("falls back to the line that started a task with no reply to point at", () => {
+  it("finds nothing for a task with no reply to point at", () => {
     const start = [call("c1", `dray session new "Pricing"`), result("c1", `${ID}\nStarted`)];
-    expect([...taskContext(botItems(start), ID)]).toEqual(["c1"]);
-    expect([...taskContext(botItems([...start, from("done")]), ID)]).toEqual(["c1"]);
+    expect([...taskContext(botItems(start), ID)]).toEqual([]);
+    expect([...taskContext(botItems([...start, from("done")]), ID)]).toEqual([]);
   });
 });
 

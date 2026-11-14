@@ -24,9 +24,10 @@ const DISMISSED_CAP = 200;
 /// inbox row per task — its face, title, PR and how long it has sat. A PR
 /// ready to merge carries Merge; a task idle on the reader carries the line its
 /// bot wrote for it (`dray session need`), and so does a ready PR the task
-/// asked the reader to try first. A click scrolls the chat to the
-/// task's last report and the bot's reply, so the reader has the whole story
-/// without leaving the bot; Open, shown on hover, opens the task. A row clears
+/// asked the reader to try first. A click scrolls the chat to the bot's reply
+/// to the task's last report, so the reader has the whole story without leaving
+/// the bot; with none in the chat, it opens the task in a tab, as ⌘-click and
+/// Open, shown on hover, do. A row clears
 /// the moment its task moves; dismissed, a stall stays gone until the task
 /// changes and stalls again.
 export default function StalledTasks({
@@ -97,7 +98,7 @@ function StalledRow({
     <div
       role="button"
       tabIndex={0}
-      onClick={() => onFocus(id)}
+      onClick={(e) => (isModClick(e) ? onOpen(id, false) : onFocus(id))}
       onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && onFocus(id)}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
