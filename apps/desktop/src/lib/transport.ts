@@ -190,6 +190,7 @@ export const APP_COMMANDS = new Set([
   "browser_move",
   "browser_nav",
   "browser_layout",
+  "browser_pins",
   "browser_shutter_ready",
   "browser_devtools",
   "browser_pick",

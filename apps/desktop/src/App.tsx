@@ -98,6 +98,8 @@ import { MergeCardHostContext, type MergeCardHost } from "@/components/chat/Merg
 import { cardRepos } from "@/lib/mergeCard";
 import BotWelcome from "@/components/chat/BotWelcome";
 import SplitView, { DragGhost, DropZone, type PaneChat } from "@/components/SplitView";
+import SplitPanes, { SplitFile } from "@/components/SplitPanes";
+import { pruneSplits, useSplitPanes } from "@/lib/splitPanes";
 import { DROP_ATTR, useSessionDrag, type DropTarget } from "@/lib/dragSession";
 import {
   closePane,
@@ -134,6 +136,7 @@ import {
   forgetOpenFilesUnder,
   openFilesFor,
   useOpenFiles,
+  type FilesScope,
 } from "@/hooks/useOpenFiles";
 import BotAvatar from "@/components/BotAvatar";
 import Orb from "@/components/Orb";
@@ -1197,14 +1200,6 @@ function App() {
   // `setOnScreen` takes the whole set rather than adding to it — two callers
   // would each wipe the other's.
   // A bot chat's earlier sessions are drawn with it, so they are on screen too.
-  const onScreenKey = [mainGroup ? memberKey : earlierIds.join("\n"), crewShown].filter(Boolean).join("\n");
-  useEffect(() => {
-    const ids = [...new Set(onScreenKey.split("\n").filter(Boolean))];
-    setOnScreen(ids);
-    ids.forEach((id) => void ensureLoaded(id));
-    // Both are rebuilt every render; the key is what changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onScreenKey]);
 
   // Every row the column would draw a card for, for `announce` alone — see
   // `crewSeen`. Wider than `crewShown` on purpose: that one loads and
@@ -3047,6 +3042,32 @@ function App() {
     selectedSession ?? sessionIndexItems.find((i) => i.sessionId === selectedSessionId) ?? null;
   // The session whose row the titlebar draws: the bot's chat over its lit task.
   const rowSession = stripOwner ?? shownSession;
+  // Tabs the row split out beside the main view. A task's transcript in one
+  // is on screen the way a grid pane's is.
+  const rowSplits = useSplitPanes(issuesOpen ? null : (rowSession?.sessionId ?? null));
+  const splitTasks = rowSplits.filter((k) => k.startsWith("task:")).map((k) => k.slice("task:".length));
+  // A pane whose tab went — a page the agent closed, a task or pick shut —
+  // goes with it.
+  const rowPages = useBrowserTabs(rowSession ? browserOf(rowSession.sessionId) : null);
+  useEffect(() => {
+    if (!rowSession || rowSplits.length === 0) return;
+    const tasksOpen = strip ? (taskTabs[strip.bot] ?? []) : null;
+    const picksOpen = strip ? (pickTabs[strip.bot] ?? []) : null;
+    pruneSplits(rowSession.sessionId, (key) => {
+      if (key.startsWith("page:")) return !rowPages || rowPages.some((p) => `page:${p.id}` === key);
+      if (key.startsWith("task:")) return !tasksOpen || tasksOpen.some((t) => `task:${t.sessionId}` === key);
+      if (key.startsWith("pick:")) return !picksOpen || picksOpen.some((t) => `pick:${t.id}` === key);
+      return true;
+    });
+  });
+  const onScreenKey = [mainGroup ? memberKey : earlierIds.join("\n"), crewShown, ...splitTasks].filter(Boolean).join("\n");
+  useEffect(() => {
+    const ids = [...new Set(onScreenKey.split("\n").filter(Boolean))];
+    setOnScreen(ids);
+    ids.forEach((id) => void ensureLoaded(id));
+    // Both are rebuilt every render; the key is what changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onScreenKey]);
   // The way back from a hidden session, where its bot's row is not drawn.
   const crumb = strip ? undefined : hiddenParent;
   // Off the index, never the snapshot: `session_changed` writes only there.
@@ -3238,7 +3259,7 @@ function App() {
   /// A lit Diff or Files pick: the view on the picked session, its side
   /// column led by the picker. Keyed on tab and target, so a repick or another
   /// pick of the same kind opens fresh rather than on the last one's place.
-  const pickBody = (tab: (typeof litPick) & object, bot: string) => {
+  const pickBody = (tab: (typeof litPick) & object, bot: string, watchScope?: FilesScope) => {
     const options: PickOption[] = [
       ...(tab.kind === "files" ? [bot] : []),
       ...botTasks.map((t) => t.sessionId),
@@ -3289,8 +3310,45 @@ function App() {
         active={!issuesOpen}
         revision={revision}
         picker={picker}
+        watchScope={watchScope}
       />
     );
+  };
+
+  // What a split pane draws, by the key its tab had in the row.
+  const splitBody = (key: string) => {
+    if (!rowSession) return null;
+    if (key.startsWith("page:")) {
+      return (
+        <BrowserPane
+          sessionId={browserOf(rowSession.sessionId)}
+          tab={Number(key.slice("page:".length))}
+          mode="full"
+          active={!issuesOpen}
+        />
+      );
+    }
+    if (key === "changes") {
+      return (
+        <ChangesView
+          cwd={rowSession.cwd}
+          active={!issuesOpen}
+          revision={turnRevision}
+          writeRevision={writeRevision}
+          busy={busy}
+        />
+      );
+    }
+    if (key.startsWith("file:")) {
+      return <SplitFile sessionId={rowSession.sessionId} path={key.slice("file:".length)} />;
+    }
+    if (key.startsWith("task:")) {
+      // Read here; the composer sends to the main view's session.
+      return <Chat {...paneState(key.slice("task:".length))} {...paneChat} crowded active={false} />;
+    }
+    const pick = strip && pickTabs[strip.bot]?.find((t) => `pick:${t.id}` === key);
+    // Its own watcher, since the lit pick in the main view holds `"pick"`.
+    return pick && strip ? pickBody(pick, strip.bot, key as `pick:${string}`) : null;
   };
 
   // Pages with no tabs for the strip: the sheet reaches up behind the header.
@@ -3358,6 +3416,7 @@ function App() {
       panelLeft={panelSide === "left"}
       panelOpen={issuesOpen ? !!pickedIssue : !!shownSession && panelShown}
       overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
+      beside={<SplitPanes sessionId={issuesOpen ? null : (rowSession?.sessionId ?? null)} body={splitBody} />}
       // Chat's alone, and not a `TabBody` — the other views answer questions
       // about a repository rather than about a conversation, and a split is
       // already several conversations side by side, where a crew beside one
