@@ -677,7 +677,9 @@ struct BotTasksSheet: View {
                     .foregroundStyle(asking ? Theme.accent : Theme.text)
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                if key.server != server {
+                // Asked of the bot's server, not `key`: a machine paired directly and shared too
+                // can hand `botTasks` the shared copy of a task that runs right here.
+                if store.items[SessionKey(server: server, id: key.id)] == nil {
                     ServerIcon().frame(width: 12, height: 12).foregroundStyle(Theme.secondary)
                         .accessibilityLabel("Runs on \(store.name(of: key.server))")
                 }
