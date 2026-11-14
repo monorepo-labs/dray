@@ -26,7 +26,7 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use dray_proto::{
     encode_line, CreateDraft, CreateSession, DraftSummary, Envelope, StartDraft, IssueInput, IssueLink, LinkIssues, ListSessions, Request,
-    Response, SendMessage, SendToBot, SessionSummary, MAX_LINE, OLDEST_SPOKEN, PROTOCOL_VERSION,
+    Response, SendMessage, SendToBot, SessionSummary, SetAside, MAX_LINE, OLDEST_SPOKEN, PROTOCOL_VERSION,
 };
 use std::path::Path;
 use tokio::{
@@ -422,13 +422,26 @@ async fn handle(stream: UnixStream, app: &Sink) -> Result<()> {
 /// bounce on to a third machine.
 async fn route(request: Request, app: &Sink) -> Result<Response> {
     if let Request::OnMachine(on) = request {
-        return on_machine(&on.machine, *on.request).await;
+        return on_machine(&on.machine, *on.request, app).await;
     }
     #[cfg(any(feature = "serve", feature = "desktop"))]
     if let Some(id) = session_named(&request) {
         if store::get_session_index_item(id).await?.is_none() {
+            // Where this server already knows the machine — a bot's task
+            // started there, or a flag held for it — asked straight, since a
+            // sweep cannot find one whose machine is down and set-aside holds
+            // it then (#1050).
+            if let Request::SetAside(aside) = &request {
+                let known = match crate::held_flags::machine_of(id).await {
+                    Some(machine) => Some(machine),
+                    None => crate::remote_reports::machine_of(id).await,
+                };
+                if let Some(machine) = known {
+                    return elsewhere::set_aside(&machine, aside.clone(), app).await;
+                }
+            }
             if let Some(machine) = elsewhere::locate(id).await {
-                return on_machine(&machine, request).await;
+                return on_machine(&machine, request, app).await;
             }
         }
     }
@@ -478,7 +491,7 @@ fn this_machine_only(request: &Request) -> bool {
 }
 
 #[cfg(any(feature = "serve", feature = "desktop"))]
-async fn on_machine(machine: &str, request: Request) -> Result<Response> {
+async fn on_machine(machine: &str, request: Request, app: &Sink) -> Result<Response> {
     if this_machine_only(&request) {
         bail!("`dray machine` and `dray server` act on this machine alone — drop --machine");
     }
@@ -488,6 +501,13 @@ async fn on_machine(machine: &str, request: Request) -> Result<Response> {
         };
         return elsewhere::list_everywhere(list).await;
     }
+    if let Request::SetAside(aside) = request {
+        return elsewhere::set_aside(machine, aside, app).await;
+    }
+    let sends = match &request {
+        Request::SendMessage(send) => Some(send.session_id.clone()),
+        _ => None,
+    };
     let creates = matches!(request, Request::CreateSession(_));
     let forward = elsewhere::prepare(request).await?;
     let response = elsewhere::forward(machine, &forward).await?;
@@ -499,12 +519,17 @@ async fn on_machine(machine: &str, request: Request) -> Result<Response> {
             crate::remote_reports::track(&saved.id, &session.session_id, &caller.session.session_id).await?;
         }
     }
+    // A message brings a set-aside session back, so a flag held from before
+    // it must not land after and put it away again.
+    if let (Some(id), Response::Sent { .. }) = (sends, &response) {
+        crate::held_flags::unhold(&id).await?;
+    }
     Ok(response)
 }
 
 /// A build with no serve wire has no client half to reach one with.
 #[cfg(not(any(feature = "serve", feature = "desktop")))]
-async fn on_machine(_machine: &str, _request: Request) -> Result<Response> {
+async fn on_machine(_machine: &str, _request: Request, _app: &Sink) -> Result<Response> {
     bail!("this build reaches no other machines")
 }
 
@@ -666,7 +691,10 @@ mod elsewhere {
     /// Runs a prepared request on `machine`, a name or an id, and marks every
     /// session it answers with as that machine's.
     pub async fn forward(machine: &str, forward: &Forward) -> Result<Response> {
-        let saved = machines::on(machine).await.map_err(anyhow::Error::msg)?;
+        forward_to(&machines::on(machine).await.map_err(anyhow::Error::msg)?, forward).await
+    }
+
+    async fn forward_to(saved: &machines::Saved, forward: &Forward) -> Result<Response> {
         let answer = machines::call(&saved, "orchestrate", serde_json::to_value(forward)?).await.map_err(|e| {
             match e.starts_with("unknown command") {
                 true => anyhow!("{}'s Dray server is too old to take dray requests — update it", saved.name),
@@ -683,6 +711,46 @@ mod elsewhere {
             row.machine = Some(saved.name.clone());
         }
         Ok(response)
+    }
+
+    /// `dray session set-aside` for a session on `machine`, a name or an id:
+    /// written there, or held here when that machine does not answer (#1050).
+    /// A machine turned off is held for too — turning it back on lands it.
+    pub async fn set_aside(machine: &str, aside: SetAside, app: &Sink) -> Result<Response> {
+        let saved = machines::find(&machines::load().await, machine).map_err(anyhow::Error::msg)?;
+        if !saved.off {
+            let forward = prepare(Request::SetAside(aside.clone())).await?;
+            match tokio::time::timeout(machines::SWEEP, forward_to(&saved, &forward)).await {
+                Ok(Ok(response)) => {
+                    // Written there, so an older flag held here is moot.
+                    if matches!(response, Response::Session { .. }) && crate::held_flags::unhold(&aside.session_id).await? {
+                        crate::held_flags::announce(app, Vec::new()).await;
+                    }
+                    return Ok(response);
+                }
+                Ok(Err(e)) if e.to_string().contains("too old") => return Err(e),
+                Ok(Err(e)) => eprintln!("[set aside] holding for {}: {e:#}", saved.name),
+                Err(_) => eprintln!("[set aside] holding for {}: no answer", saved.name),
+            }
+        }
+        let held = crate::held_flags::hold(&saved.id, &aside.session_id, aside.aside, None).await?;
+        crate::held_flags::announce(app, Vec::new()).await;
+        Ok(Response::Session {
+            session: SessionSummary {
+                session_id: held.session_id.clone(),
+                title: held.session_id,
+                cwd: String::new(),
+                project_path: String::new(),
+                branch: None,
+                worktree_name: None,
+                status: "idle".into(),
+                modified: held.at,
+                parent_session_id: None,
+                hidden: false,
+                machine: Some(saved.name),
+                held: true,
+            },
+        })
     }
 
     /// Fills in what only this machine's index knows before a request leaves:
@@ -2344,6 +2412,7 @@ fn summarize(item: SessionIndexItem) -> SessionSummary {
         parent_session_id: item.parent_session_id,
         hidden: item.hidden,
         machine: None,
+        held: false,
     }
 }
 

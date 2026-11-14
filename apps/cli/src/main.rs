@@ -513,6 +513,12 @@ fn session(command: SessionCommand) -> Result<(), String> {
         }
     };
     match send(request)? {
+        // Its machine did not answer, so all that is known is the id.
+        Response::Session { session } if session.held => {
+            let machine = session.machine.as_deref().unwrap_or("its machine");
+            eprintln!("{said} {}. {machine} is not reachable, so it lands there once it is.", session.session_id);
+            Ok(())
+        }
         Response::Session { session } => {
             eprintln!("{said} \"{}\".", session.title);
             Ok(())

@@ -950,6 +950,10 @@ pub struct SessionSummary {
     /// The machine the session runs on, where that is not the one answering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// That machine did not answer, so the change is held on this one and
+    /// written there once it does. Nothing but the id and machine is known then.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
 }
 
 /// One issue a session is tagged with, as the CLI prints it.

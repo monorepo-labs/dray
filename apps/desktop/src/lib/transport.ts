@@ -64,7 +64,7 @@ type Rec = Record<string, unknown>;
 
 /// Qualifies the path fields of a project, index item or snapshot, and of
 /// a send's or fork's `snapshot`. Events inside are left as the agent wrote them.
-function qualifyRecord(value: unknown, server: ServerId): unknown {
+export function qualifyRecord(value: unknown, server: ServerId): unknown {
   if (Array.isArray(value)) return value.map((v) => qualifyRecord(v, server));
   if (!value || typeof value !== "object") return value;
   const out: Rec = { ...(value as Rec) };
