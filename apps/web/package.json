@@ -12,8 +12,10 @@
     "db:migrate": "auth migrate --config src/lib/auth.ts -y"
   },
   "dependencies": {
+    "@blobatar/react": "^2.7.0",
     "@yogesharc/thinking-orbs": "^0.1.2",
     "better-auth": "^1.7.19",
+    "blobatar": "^2.7.0",
     "lucide-react": "^1.60.0",
     "next": "^16.4.2",
     "pg": "^8.23.1",
