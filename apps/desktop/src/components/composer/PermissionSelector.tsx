@@ -46,15 +46,12 @@ export default function PermissionSelector({
   value,
   onChange,
   locked = false,
-  inTitlebar = false,
 }: {
   harness: Harness;
   value: ApprovalPolicy;
   onChange: (mode: ApprovalPolicy) => void;
   /// A turn is running and this harness cannot change stance under it.
   locked?: boolean;
-  /// At the titlebar's right end: tooltip below, menu on the right edge.
-  inTitlebar?: boolean;
 }) {
   // Hidden rather than disabled: a dead entry in a four-item menu reads as a
   // bug, where a shorter menu reads as this harness having fewer stances.
@@ -97,12 +94,12 @@ export default function PermissionSelector({
         {/* No chord: Shift+Tab now cycles the model, which gets reached for far
             more often than a mode most sessions set once and leave. Effort took
             the chord first and gave it up to the model for the same reason. */}
-        <TooltipContent side={inTitlebar ? "bottom" : "top"}>
+        <TooltipContent side="top">
           {locked ? "Permission can't be changed mid-turn" : "Switch permission"}
         </TooltipContent>
       </Tooltip>
 
-      <DropdownMenuContent align={inTitlebar ? "end" : "start"} className="min-w-44">
+      <DropdownMenuContent align="start" className="min-w-44">
         <DropdownMenuRadioGroup
           value={stance}
           onValueChange={(v) => onChange(v as ApprovalPolicy)}
