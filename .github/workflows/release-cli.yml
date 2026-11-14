@@ -174,6 +174,9 @@ jobs:
     permissions:
       contents: write
 
+    outputs:
+      prerelease: ${{ steps.channel.outputs.prerelease }}
+
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -210,3 +213,13 @@ jobs:
           # here cannot reach the wrong channel.
           prerelease: ${{ steps.channel.outputs.prerelease }}
           generate_release_notes: true
+
+  # Dray Cloud machines must never run an old server (#1011). Stable releases
+  # alone: a beta reaches no cloud machine.
+  cloud:
+    needs: publish
+    if: needs.publish.outputs.prerelease == 'false'
+    uses: ./.github/workflows/cloud-snapshot.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets: inherit

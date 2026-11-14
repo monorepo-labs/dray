@@ -1,0 +1,131 @@
+# Puts a `dray-serve` release on Dray Cloud machines (#1011): rebuilds the
+# `dray-cloud` snapshot new machines start from, verifies a machine made from
+# it, and only then moves the release pointer resumed machines update to.
+#
+# Called by release-cli.yml for every stable `cli-v*` tag. Run it by hand to
+# rebuild for a release already out. An older release moves new machines back
+# to it, never running ones: a machine only ever updates forward.
+#
+#   gh workflow run cloud-snapshot.yml -f version=cli-v0.14.3
+#
+# Wants the BOAT_ORG variable (the Dray Cloud org) and the BOAT_API_KEY secret,
+# a key of that org's alone, never the control plane's, so either rotates on
+# its own. These are the actions the script uses:
+#
+#   boat --org Dray api-key create dray-cloud-snapshot --ttl 365d --actions \
+#     sandbox.create,sandbox.read,sandbox.stop,sandbox.delete-own,ssh,host,snapshot.read,snapshot.write
+#
+# R2_* are the release workflow's own.
+#
+# Third-party actions are pinned to commit SHAs, as in release-cli.yml.
+name: cloud-snapshot
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The cli-v* release Dray Cloud machines should run"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # One at a time, since every run saves the same names. A newer release
+    # queued behind a running one replaces any older one still waiting.
+    concurrency:
+      group: cloud-snapshot
+      cancel-in-progress: false
+    env:
+      VERSION: ${{ inputs.version }}
+      BOAT_API_KEY: ${{ secrets.BOAT_API_KEY }}
+      BOAT_ORG: ${{ vars.BOAT_ORG }}
+
+    steps:
+      # Cloud machines take the stable channel alone; a beta would be offered
+      # to nobody else and is never verified for them.
+      - name: Check the version
+        run: |
+          case "$VERSION" in
+            cli-v*-*) echo "::error::$VERSION is a beta; Dray Cloud runs stable releases"; exit 1 ;;
+            cli-v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::$VERSION is not a cli-v* release tag"; exit 1 ;;
+          esac
+          : "${BOAT_API_KEY:?the BOAT_API_KEY secret is not set}" "${BOAT_ORG:?the BOAT_ORG variable is not set}"
+
+      # Runs are serialised, not ordered: a release's run can come after a
+      # newer one's and would move both names back. A run by hand may, which
+      # is how a rollback is done. A 404 is a first run; any other failure
+      # stops here, since reading it as a first run lets an older one through.
+      - name: Skip a release older than the one machines run
+        id: order
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          code=$(curl -sS --max-time 10 --retry 3 -o pointer -w '%{http_code}' https://downloads.drayhq.com/cloud/serve-version) || code=000
+          case "$code" in
+            200) current=$(tr -d '[:space:]' < pointer) ;;
+            404) current= ;;
+            *) echo "::error::could not read the cloud release pointer (HTTP $code)"; exit 1 ;;
+          esac
+          top=$(printf '%s\n%s\n' "${VERSION#cli-v}" "${current#cli-v}" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+          if [ -n "$current" ] && [ "$current" != "$VERSION" ] && [ "$top" != "${VERSION#cli-v}" ]; then
+            echo "::notice::Dray Cloud already runs $current; leaving it for $VERSION"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.order.outputs.skip != 'true'
+
+      # cloud-verify.mjs speaks the serve wire through Node's own WebSocket.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.order.outputs.skip != 'true'
+        with:
+          node-version: 22
+
+      - name: Install the boat CLI
+        if: steps.order.outputs.skip != 'true'
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL "https://boat.dev/api/boat/cli/download?platform=linux-x64&channel=prod" \
+            -o "$HOME/.local/bin/boat"
+          chmod +x "$HOME/.local/bin/boat"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Sign in to boat
+        if: steps.order.outputs.skip != 'true'
+        run: printf '%s' "$BOAT_API_KEY" | boat login --key-stdin --json >/dev/null
+
+      - name: Build, verify and save the snapshot
+        if: steps.order.outputs.skip != 'true'
+        run: DRAY_VERSION="$VERSION" apps/desktop/scripts/cloud-snapshot.sh
+
+      # Only once a machine made from the release has passed. Machines move
+      # forward alone, so one made from the new snapshot before this lands
+      # keeps what it runs. Short cache: every start reads it.
+      - name: Point resumed machines at the release
+        if: steps.order.outputs.skip != 'true'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          # R2 refuses the checksum headers newer CLIs send by default.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          : "${AWS_ACCESS_KEY_ID:?}" "${R2_ACCOUNT_ID:?}" "${R2_BUCKET:?}"
+          printf '%s\n' "$VERSION" > serve-version
+          aws s3 cp serve-version "s3://${R2_BUCKET}/cloud/serve-version" \
+            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --content-type text/plain --cache-control "public, max-age=60"
