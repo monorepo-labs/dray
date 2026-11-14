@@ -128,6 +128,32 @@ export function markDisagrees(mark: PrMark | undefined, prs: PullRequest[]): boo
   return failing && !pending;
 }
 
+/// The GitHub repo a marks read answered for, `host/owner/name`, off its PRs'
+/// URLs. Nothing for a repo with no PRs: there is no URL to read it from.
+///
+/// What lets one read serve every key naming the same repo — this Mac's
+/// checkout, the same path on each Boat, a merge card's `github:` slug — since
+/// the marks are the repo's and not the checkout's.
+export function marksRepo(prs: readonly PrMark[]): string | undefined {
+  const match = prs[0]?.url.match(/^https?:\/\/([^/]+\/[^/]+\/[^/]+)\/pull\/\d+/);
+  return match?.[1].toLowerCase();
+}
+
+/// How long a marks read that failed `failures` times in a row waits before
+/// the next try: 15s, doubling, at most 10 minutes. Long enough apart that a
+/// spent rate limit is not hammered, short enough that a PR opened during one
+/// shows up soon after it resets.
+export function marksRetryDelay(failures: number): number {
+  return Math.min(15_000 * 2 ** Math.max(0, failures - 1), 10 * 60_000);
+}
+
+/// Whether a failed marks read is one no retry can mend: no `gh` here, or no
+/// GitHub remote. Logged out is retried, since logging in mends it.
+export function marksGaveUp(error: unknown): boolean {
+  const kind = (error as { kind?: unknown } | null)?.kind;
+  return kind === "no_cli" || kind === "no_remote";
+}
+
 /// What the tab's badge says, or nothing.
 ///
 /// Merged PRs are left out. Every other state on this panel has something the

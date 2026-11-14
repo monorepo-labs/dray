@@ -1906,15 +1906,21 @@ function App() {
   // opens a PR and then spends minutes on CI no longer hides it until the turn
   // ends. Marks for any session, since a row's glyph is on screen whichever is
   // selected; the panel and the handoff row for the selected one alone.
+  const indexRef = useRef(sessionIndexItems);
+  indexRef.current = sessionIndexItems;
   useEffect(
     () =>
       repoChanged.subscribe(({ sessionId, pullRequest }) => {
-        if (pullRequest) prMarks.refreshAfterWrite();
+        if (pullRequest) {
+          const repo = indexRef.current.find((i) => i.sessionId === sessionId)?.projectPath;
+          if (repo) prMarks.refreshRepo(repo);
+          else prMarks.refreshAfterWrite();
+        }
         if (sessionId !== selectedSessionId) return;
         refreshWorkStatus();
         if (pullRequest) pullRequests.refresh();
       }),
-    [selectedSessionId, prMarks.refreshAfterWrite, pullRequests.refresh, refreshWorkStatus],
+    [selectedSessionId, prMarks.refreshRepo, prMarks.refreshAfterWrite, pullRequests.refresh, refreshWorkStatus],
   );
 
   // A doc arriving on screen is re-read, because the watcher behind `DocsPanel`
