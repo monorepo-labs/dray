@@ -24,7 +24,6 @@ import RecordingNotice from "@/components/browser/RecordingNotice";
 import { useTurnNewTab, type TurnKind } from "@/components/layout/ViewTabs";
 import Spinner from "@/components/ui/spinner";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCopied } from "@/hooks/useCopied";
 import {
@@ -561,43 +560,26 @@ function Chrome({
           </Tooltip>
         )}
         {!pinned && <DeviceMenu sessionId={sessionId} disabled={!current} />}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className={TOOL_BTN}
-              aria-label="Developer tools"
-              disabled={!current}
-              onClick={() => void openDevTools(sessionId, tab)}
-            >
-              <Bug className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side={TIP_SIDE}>
-            Developer tools
-            <KbdGroup>
-              <Kbd>⌥</Kbd>
-              <Kbd>⌘</Kbd>
-              <Kbd>I</Kbd>
-            </KbdGroup>
-          </TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className={TOOL_BTN}
-              aria-label="Open in system browser"
-              disabled={!current}
-              onClick={() => void openUrl(url).catch(console.error)}
-            >
-              <ExternalLink className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side={TIP_SIDE}>Open in system browser</TooltipContent>
-        </Tooltip>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={TOOL_BTN}
+          aria-label="Developer tools"
+          disabled={!current}
+          onClick={() => void openDevTools(sessionId, tab)}
+        >
+          <Bug className="size-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={TOOL_BTN}
+          aria-label="Open in system browser"
+          disabled={!current}
+          onClick={() => void openUrl(url).catch(console.error)}
+        >
+          <ExternalLink className="size-3.5" />
+        </Button>
         {/* No tooltip: a cross says what it does. */}
         {onClose && (
           <Button variant="ghost" size="icon-sm" className={TOOL_BTN} onClick={onClose} aria-label="Close pane">
