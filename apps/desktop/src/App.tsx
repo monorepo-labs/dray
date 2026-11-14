@@ -248,6 +248,9 @@ import { buildTranscript, sessionMedia } from "@/lib/transcript";
 import { cn } from "@/lib/utils";
 import { playSwipeTick } from "@/lib/tick";
 
+/// What a project filter reopens when the reader comes back to it.
+type FilterPick = { session: string } | { bot: string } | null;
+
 /// Commits only with its Suspense siblings, so its layout effect says the lazy
 /// settings page is drawn, before paint.
 function SettingsReady({ onReady }: { onReady: (ready: boolean) => void }) {
@@ -2310,7 +2313,7 @@ function App() {
     // without this a space switch is the one way out of a filter that forgets
     // what was open in it. Nothing is restored: the effect below closes a
     // transcript that falls outside the space being entered.
-    filterSelection.current[projectFilter ?? ""] = selectedSessionId;
+    filterSelection.current[projectFilter ?? ""] = currentPick();
     filterGen.current++;
     setProjectFilter(null);
 
@@ -2336,7 +2339,15 @@ function App() {
   /// from a previous run would open a transcript nobody asked for on the first
   /// switch after launch, so the entry is written on the way out of a filter
   /// and nowhere else.
-  const filterSelection = useRef<Record<string, string | null>>({});
+  const filterSelection = useRef<Record<string, FilterPick>>({});
+  /// What is open, as a filter remembers it. A bot by its id rather than its
+  /// chat's: a bot with no chat yet has no session to name, and an agent
+  /// switch moves its chat to a new one.
+  const currentPick = (): FilterPick => {
+    const bot = selectedSessionId ? selectedBotId : projectPath && botAt(bots, projectPath)?.id;
+    if (bot) return { bot };
+    return selectedSessionId ? { session: selectedSessionId } : null;
+  };
   /// Bumped at every filter move, at call time, so a read across an await can
   /// tell the filter moved under it. Rendered state is a render behind.
   const filterGen = useRef(0);
@@ -2353,7 +2364,8 @@ function App() {
   /// delete that *failed*.
   const forgetFilterSelection = (sessionId: string) => {
     for (const key of Object.keys(filterSelection.current)) {
-      if (filterSelection.current[key] === sessionId) filterSelection.current[key] = null;
+      const pick = filterSelection.current[key];
+      if (pick && "session" in pick && pick.session === sessionId) filterSelection.current[key] = null;
     }
   };
 
@@ -2376,7 +2388,7 @@ function App() {
     // A selection made since the last step ends the run, so it is kept.
     const run = filterNav.current;
     if (!run || run.nav !== navGen.current) {
-      filterSelection.current[projectFilter ?? ""] = selectedSessionId;
+      filterSelection.current[projectFilter ?? ""] = currentPick();
     }
     const gen = ++filterGen.current;
     setProjectFilter(next);
@@ -2396,11 +2408,19 @@ function App() {
   };
 
   const openFilterSession = (next: string | null) => {
-    const remembered = filterSelection.current[next ?? ""] ?? null;
+    const pick = filterSelection.current[next ?? ""] ?? null;
+    // A bot is no project and the sidebar draws it under every filter. Not
+    // while the settled list is up, which has no bots and `openBot` would leave.
+    const bot = pick && "bot" in pick && !archivedShown ? bots.find((b) => b.id === pick.bot) : undefined;
+    if (bot) return openBot(bot);
+    const remembered = pick && "session" in pick ? pick.session : null;
+    // A task lit in a bot's row is restorable under any filter, like the bot.
     const restorable =
       remembered &&
       sessionIndexItems.some(
-        (i) => i.sessionId === remembered && (!next || sameProject(i.projectPath, next)),
+        (i) =>
+          i.sessionId === remembered &&
+          (!next || sameProject(i.projectPath, next) || inBotTree(bots, sessionIndexItems, remembered)),
       );
     goToSession(() => {
       if (restorable) void handleSelectSessionIndexItem(remembered);
@@ -2419,7 +2439,7 @@ function App() {
   /// only where no filter or space switch landed during the read — everything
   /// below is the click-time render's, and would undo that switch.
   const openFromNotice = async (sessionId: string) => {
-    const previous = selectedSessionId;
+    const previous = currentPick();
     const gen = filterGen.current;
     const selecting = handleSelectSessionIndexItem(sessionId);
     // Past this select's own move, so any later one is somebody else's.
