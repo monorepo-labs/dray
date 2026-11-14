@@ -62,6 +62,12 @@ pub struct Saved {
     /// control plane, never added by hand, and drawn as no row of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud: Option<String>,
+    /// Who listed that machine, `cloud::Cred::owner`. A listing drops only its
+    /// own owner's missing machines, so signing in as someone else parks the
+    /// last account's rows rather than deleting their kept transcripts. `None`
+    /// is the shared key, the only owner before accounts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_owner: Option<String>,
     /// Fields a newer build wrote, carried back untouched — the index's own
     /// `unknown` bargain, since this file is rewritten whole too.
     #[serde(flatten)]
@@ -556,6 +562,7 @@ pub async fn add(name: String, address: String, token: Option<String>) -> Result
                 ignored: None,
                 boat: None,
                 cloud: None,
+                cloud_owner: None,
                 unknown: Default::default(),
             };
             (saved, Some(token))
@@ -582,6 +589,7 @@ pub async fn add(name: String, address: String, token: Option<String>) -> Result
                 ignored: None,
                 boat: None,
                 cloud: None,
+                cloud_owner: None,
                 unknown: Default::default(),
             };
             (saved, token)
@@ -696,6 +704,7 @@ mod tests {
             ignored: None,
             boat: None,
             cloud: None,
+            cloud_owner: None,
             unknown: Default::default(),
         };
         let list = [saved("a1", "vps"), saved("b2", "box"), saved("c3", "box"), saved("d4", "a1")];
