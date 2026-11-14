@@ -134,6 +134,7 @@ struct BotStart: Hashable {
 /// That bot's page before its first message: its greeting, and the dock aimed
 /// at its folder. The send starts the chat, which `started` opens in its place.
 struct BotStartView: View {
+    @Environment(Store.self) private var store
     @Bindable var task: NewTask
     let server: UUID
     let bot: Bot
@@ -162,7 +163,14 @@ struct BotStartView: View {
         .toolbar { ToolbarItem(placement: .principal) { BotTitle(bot: bot, server: server) } }
         // Re-aimed on every visit: a pick in the dock leaves the bot, and Back is not a send.
         .onAppear { task.aim(at: bot, on: server) }
-        .onDisappear { if task.bot?.bot.id == bot.id { task.bot = nil } }
+        .onDisappear {
+            if task.bot?.bot.id == bot.id { task.bot = nil }
+            // The list draws no dock while sessions are hidden, so a recording left running
+            // would have no Stop: stopped and kept, as `ReplyDock` does, its words here next visit.
+            if Dictations.shared.state(.newSession) == .recording {
+                Task { await Dictations.shared.stop(store, draft: .newSession) }
+            }
+        }
     }
 }
 
