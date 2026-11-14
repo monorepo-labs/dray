@@ -634,7 +634,7 @@ pub async fn island_running() -> bool {
 /// Hands a session to Dray Island's done pill, which shows it in place of the
 /// banner: a finished one, or with `note`, what it says instead of "Done" — a
 /// bot's "2 tasks waiting on you". A Darwin notification carries no payload,
-/// so each session is a file named for it in `island_done_dir`, holding the
+/// so each event is a file named for its session in `island_done_dir`, holding the
 /// note: the island deletes only the files it read, where a shared list read
 /// and then cleared would drop one written between the two.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -660,13 +660,16 @@ async fn island_done_mac(session_id: String, note: String) -> Result<(), String>
     tokio::fs::create_dir_all(&dir).await.map_err(|err| format!("could not reach the island: {err}"))?;
     // Written beside the inbox and moved in whole, so the island never reads a
     // note half-written and takes it for an empty file, a finished turn.
-    // One name per call: a finish and a notice for one chat can overlap.
+    // One file per event, `<id>.<n>`: a finish and a notice for one chat can
+    // overlap, and sharing a name, one would replace the other unread.
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = dir.with_file_name(format!("{session_id}.{n}.tmp"));
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let name = format!("{session_id}.{stamp}-{n}");
+    let tmp = dir.with_file_name(&name);
     let reach = |err: std::io::Error| format!("could not reach the island: {err}");
     tokio::fs::write(&tmp, note).await.map_err(reach)?;
-    tokio::fs::rename(&tmp, dir.join(&session_id)).await.map_err(reach)?;
+    tokio::fs::rename(&tmp, dir.join(&name)).await.map_err(reach)?;
     tokio::process::Command::new("notifyutil").args(["-p", "com.yogesh.dray.island.done"]).output().await.ok();
     Ok(())
 }

@@ -401,7 +401,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Dray's inbox of finished sessions, one empty file each; `island_done_dir` in apps.rs names it too.
+    /// Dray's inbox, one file per event holding its note; `island_done_dir` in apps.rs names it too.
     static let doneDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Caches/com.yogesh.dray.island/done")
 
@@ -415,7 +415,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
         for file in files.sorted(by: { stamp($0) < stamp($1) }) {
             let note = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
             try? fm.removeItem(at: file)
-            composer?.finished(file.lastPathComponent, note: note.isEmpty ? nil : note)
+            // `<id>.<n>`, one file per event; a bare id is an older Dray's.
+            let id = String(file.lastPathComponent.prefix { $0 != "." })
+            composer?.finished(id, note: note.isEmpty ? nil : note)
         }
     }
 

@@ -413,7 +413,12 @@ final class Composer {
 
     /// Sessions that finished while Dray was out of sight, newest last: the
     /// done pill, in place of Dray's banner, until its clock runs out.
-    var done: [SessionKey] = [] { didSet { pillChanged() } }
+    var done: [SessionKey] = [] {
+        didSet {
+            notes = notes.filter { done.contains($0.key) }
+            pillChanged()
+        }
+    }
     /// What a session in `done` says in place of "Done": a bot's "2 tasks waiting on you".
     var notes: [SessionKey: String] = [:]
     /// Held while the pointer is on the pill, so it never goes from under a click.
@@ -473,9 +478,11 @@ final class Composer {
             }
             return
         }
+        // A bot's turn ending beside its waiting notice must not turn the notice into "Done".
+        let kept = note ?? notes[key]
         done.removeAll { $0 == key }
         done.append(key)
-        notes[key] = note
+        notes[key] = kept
         if shown || !attention.isEmpty { unseenDone.insert(key) } else { unseenDone.remove(key) }
         // Its pill only hangs while the panel is shut, so its clock starts then,
         // and one already running must not clear this with what it was timing.
