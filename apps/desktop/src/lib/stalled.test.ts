@@ -46,8 +46,8 @@ function pr(over: Partial<PrMark> = {}): PrMark {
 }
 
 describe("stalledTasks", () => {
-  it("waits five minutes before calling an idle task stalled", () => {
-    expect(STALL_MS).toBe(5 * 60_000);
+  it("waits two minutes before calling an idle task stalled", () => {
+    expect(STALL_MS).toBe(2 * 60_000);
     const rows = [row("a")];
     expect(stalledTasks(rows, () => undefined, new Map(), T0 + STALL_MS - 1, fresh)).toEqual([]);
     const [s] = stalledTasks(rows, () => undefined, new Map(), T0 + STALL_MS, fresh);
